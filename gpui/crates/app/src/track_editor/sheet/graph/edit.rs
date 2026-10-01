@@ -6,17 +6,19 @@
 use std::collections::BTreeSet;
 
 use luma_patterns as p;
-use p::clip_graph::{definition, ClipGraph, Input, InputType, Kind, Node, Unit};
+use p::clip_graph::{definition, ClipGraph, Input, InputDef, InputType, Kind, Node, Unit};
 
-/// "Curve 2" for `curve2`: the kind in sentence case, then its number.
+/// "Curve 2" for `curve2`: a kind's name then a number reads as the kind in
+/// sentence case and its number. Any other id is a name someone gave the
+/// node (`cut`, `bloom_far`) and reads as it is.
 pub(crate) fn label(id: &str) -> String {
     let split = id.find(|c: char| c.is_ascii_digit()).unwrap_or(id.len());
     let (word, number) = id.split_at(split);
-    let word = Kind::from_name(word).map_or_else(|| word.to_owned(), |kind| kind.label().into());
-    if number.is_empty() {
-        word
-    } else {
-        format!("{word} {number}")
+    match Kind::from_name(word) {
+        Some(kind) if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{} {number}", kind.label())
+        }
+        _ => id.to_owned(),
     }
 }
 
@@ -143,9 +145,10 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
         (Kind::Aim, "point") => Input::Vector([0., 0., 0.]),
         (Kind::Aim, "yaw" | "pitch") => Input::Number(0.),
         (Kind::Strobe, "rate") => Input::Number(0.5),
-        (Kind::Time, "phase") => Input::Number(0.),
-        (Kind::Space | Kind::Mirror, "offset") => Input::Number(0.),
-        (Kind::Space, "width") => Input::Number(1.),
+        (Kind::Time, "delay" | "phase") | (Kind::Space, "shift") | (Kind::Mirror, "offset") => {
+            Input::Number(0.)
+        }
+        (Kind::Time | Kind::Space, "length") => Input::Number(1.),
         (Kind::Noise, "speed") => Input::Number(4.),
         (Kind::Noise, "contrast") => Input::Number(0.),
         (Kind::Audio, "low_hz") => Input::Number(40.),
@@ -194,10 +197,11 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
     })
 }
 
-/// An input's value as shown: its own, or what empty stands for.
+/// An input's value as shown: its own, or what empty stands for. A list
+/// shows its items one by one.
 pub(crate) fn shown(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
     match graph.nodes.get(id)?.inputs.get(input) {
-        Some(Input::Wire(_)) => None,
+        Some(Input::Wire(_) | Input::List(_)) => None,
         Some(value) => Some(value.clone()),
         None => empty(graph, id, input),
     }
@@ -234,7 +238,7 @@ pub(crate) fn wires_in_order(graph: &ClipGraph) -> Vec<(String, String, String)>
             return;
         };
         for (name, _) in &definition(node.kind).inputs {
-            if let Some(to) = node.inputs.get(*name).and_then(Input::source) {
+            for to in node.inputs.get(*name).into_iter().flat_map(Input::sources) {
                 wires.push((id.to_owned(), (*name).to_owned(), to.to_owned()));
                 walk(graph, to, seen, wires);
             }
@@ -303,6 +307,16 @@ fn signature(graph: &ClipGraph, values: bool) -> String {
         for (name, input) in &node.inputs {
             match input {
                 Input::Wire(to) => out.push_str(&format!(" {name}<{to}")),
+                Input::List(items) => {
+                    out.push_str(&format!(" {name}["));
+                    for item in items {
+                        match item.source() {
+                            Some(to) => out.push_str(&format!("<{to}")),
+                            None => out.push('#'),
+                        }
+                    }
+                    out.push(']');
+                }
                 _ if values => out.push_str(&format!(" {name}")),
                 _ => {}
             }
@@ -464,27 +478,9 @@ fn promoted(spec: Spec, current: Option<&Input>) -> Node {
     }
 }
 
-/// Add a coordinate node of `kind`, with the defaults that make it show: a
-/// space's stroke 0.2 wide already moving over time.
-pub(crate) fn add_coordinate(graph: &mut ClipGraph, kind: Kind) -> String {
-    if kind != Kind::Space {
-        return add(graph, Node::new(kind));
-    }
-    let time = add(graph, Node::new(Kind::Time));
-    let offset = curve("number", "Ramp up")
-        .with_input("x", Input::wire(time))
-        .with_input("low", -0.2)
-        .with_input("high", 1.);
-    let offset = add(graph, offset);
-    let space = Node::new(Kind::Space)
-        .with_input("offset", Input::wire(offset))
-        .with_input("width", 0.2);
-    add(graph, space)
-}
-
 /// Promote a value input to `source`, a coordinate kind: a coordinate node
-/// and a curve wired into the input. Returns the value it held, for an
-/// unwire to give back.
+/// and a curve wired into the input, or into a list as one more item
+/// ([`link`]). Returns the value it held, for an unwire to give back.
 pub(crate) fn promote(graph: &mut ClipGraph, id: &str, input: &str, source: Kind) -> Option<Input> {
     let spec = spec(graph, id, input)?;
     let held = graph
@@ -492,26 +488,31 @@ pub(crate) fn promote(graph: &mut ClipGraph, id: &str, input: &str, source: Kind
         .get(id)?
         .inputs
         .get(input)
-        .filter(|held| held.source().is_none())
+        .filter(|held| !matches!(held, Input::Wire(_) | Input::List(_)))
         .cloned();
     let current = shown(graph, id, input);
-    let x = add_coordinate(graph, source);
-    let curve = add(
-        graph,
-        promoted(spec, current.as_ref()).with_input("x", Input::wire(x)),
-    );
-    graph
-        .nodes
-        .get_mut(id)?
-        .inputs
-        .insert(input.to_owned(), Input::wire(curve));
-    prune(graph);
+    let curve = if graph.nodes[id].kind == Kind::Space && input == "shift" {
+        // A shift that moves slides the band in from wholly before the axis
+        // to past its end: from minus its length to 1.
+        let length = match shown(graph, id, "length") {
+            Some(Input::Number(length)) => length,
+            _ => 1.,
+        };
+        curve("number", "Ramp up")
+            .with_input("low", -length)
+            .with_input("high", 1.)
+    } else {
+        promoted(spec, current.as_ref())
+    };
+    let x = add(graph, Node::new(source));
+    let curve = add(graph, curve.with_input("x", Input::wire(x)));
+    link(graph, id, input, &curve);
     held
 }
 
 /// Point a curve's `x` at a new coordinate node of `source`.
 pub(crate) fn recoordinate(graph: &mut ClipGraph, curve: &str, source: Kind) {
-    let x = add_coordinate(graph, source);
+    let x = add(graph, Node::new(source));
     if let Some(node) = graph.nodes.get_mut(curve) {
         node.inputs.insert("x".into(), Input::wire(x));
     }
@@ -532,12 +533,134 @@ pub(crate) fn insert(graph: &mut ClipGraph, id: &str, input: &str, kind: Kind) {
     prune(graph);
 }
 
-/// Wire an existing node into an input: the two places share it.
+/// Wire an existing node into an input: the two places share it. An input
+/// that holds a list takes the wire as one more item; any other input holds
+/// only the wire after.
 pub(crate) fn link(graph: &mut ClipGraph, id: &str, input: &str, target: &str) {
     if let Some(node) = graph.nodes.get_mut(id) {
-        node.inputs.insert(input.to_owned(), Input::wire(target));
+        match node.inputs.get_mut(input) {
+            Some(Input::List(items)) => items.push(Input::wire(target)),
+            _ => {
+                node.inputs.insert(input.to_owned(), Input::wire(target));
+            }
+        }
     }
     prune(graph);
+}
+
+/// Rename node `from` to `to`, and every wire into it, single or a list's
+/// item, with it. The checker says which names a node may take; a name
+/// another node has is refused here, since ids are the map's keys. On an
+/// error the graph is as it was, and the error says why in a sentence.
+pub(crate) fn rename(graph: &mut ClipGraph, from: &str, to: &str) -> Result<(), String> {
+    if from == to {
+        return Ok(());
+    }
+    if graph.nodes.contains_key(to) {
+        return Err(format!("Another node is named {to}"));
+    }
+    let mut renamed = graph.clone();
+    let Some(node) = renamed.nodes.remove(from) else {
+        return Err(format!("No node is named {from}"));
+    };
+    renamed.nodes.insert(to.to_owned(), node);
+    for node in renamed.nodes.values_mut() {
+        for input in node.inputs.values_mut() {
+            let items = match input {
+                Input::List(items) => items.as_mut_slice(),
+                one => std::slice::from_mut(one),
+            };
+            for item in items {
+                if item.source() == Some(from) {
+                    *item = Input::wire(to);
+                }
+            }
+        }
+    }
+    renamed.check().map_err(|error| {
+        let error = error.to_string();
+        let error = error.strip_prefix("graph: ").unwrap_or(&error);
+        let mut chars = error.chars();
+        chars.next().map_or_else(String::new, |first| {
+            first.to_uppercase().chain(chars).collect()
+        })
+    })?;
+    *graph = renamed;
+    Ok(())
+}
+
+/// Whether an input takes a list, whose items multiply.
+pub(crate) fn takes_list(graph: &ClipGraph, id: &str, input: &str) -> bool {
+    graph
+        .nodes
+        .get(id)
+        .and_then(|node| definition(node.kind).input(input))
+        .is_some_and(InputDef::takes_list)
+}
+
+/// Multiply an input by one more item, a value of 1: a value or a wire
+/// becomes a list of two.
+pub(crate) fn multiply(graph: &mut ClipGraph, id: &str, input: &str) {
+    let held = graph
+        .nodes
+        .get(id)
+        .and_then(|node| node.inputs.get(input).cloned())
+        .or_else(|| empty(graph, id, input));
+    let (Some(held), Some(node)) = (held, graph.nodes.get_mut(id)) else {
+        return;
+    };
+    let items = match held {
+        Input::List(mut items) => {
+            items.push(Input::Number(1.));
+            items
+        }
+        one => vec![one, Input::Number(1.)],
+    };
+    node.inputs.insert(input.to_owned(), Input::List(items));
+}
+
+/// Set item `index` of a list input.
+pub(crate) fn set_item(graph: &mut ClipGraph, id: &str, input: &str, index: usize, value: Input) {
+    if let Some(Input::List(items)) = graph
+        .nodes
+        .get_mut(id)
+        .and_then(|node| node.inputs.get_mut(input))
+    {
+        if let Some(item) = items.get_mut(index) {
+            *item = value;
+        }
+    }
+}
+
+/// Take item `index` out of a list input. A list left with one item holds
+/// that item alone.
+pub(crate) fn remove_item(graph: &mut ClipGraph, id: &str, input: &str, index: usize) {
+    if let Some(node) = graph.nodes.get_mut(id) {
+        if let Some(Input::List(items)) = node.inputs.get_mut(input) {
+            if index < items.len() {
+                items.remove(index);
+            }
+        }
+        settle(node, input);
+    }
+    prune(graph);
+}
+
+/// A list of one item holds that item alone; an empty list is empty.
+fn settle(node: &mut Node, input: &str) {
+    let Some(Input::List(items)) = node.inputs.get_mut(input) else {
+        return;
+    };
+    match items.len() {
+        0 => {
+            node.inputs.remove(input);
+        }
+        1 => {
+            let one = items.remove(0);
+            node.inputs.insert(input.to_owned(), one);
+        }
+        _ => {}
+    }
 }
 
 /// The nodes an input may link to: those of the wire type it takes, that it
@@ -546,15 +669,17 @@ pub(crate) fn link_candidates(graph: &ClipGraph, id: &str, input: &str) -> Vec<S
     let Some(spec) = spec(graph, id, input) else {
         return Vec::new();
     };
-    let held = graph
+    let held: Vec<&str> = graph
         .nodes
         .get(id)
         .and_then(|node| node.inputs.get(input))
-        .and_then(Input::source);
+        .into_iter()
+        .flat_map(Input::sources)
+        .collect();
     graph
         .ids_in_order()
         .into_iter()
-        .filter(|target| Some(*target) != held && !upstream(graph, target).contains(id))
+        .filter(|target| !held.contains(target) && !upstream(graph, target).contains(id))
         .filter(|target| {
             let node = &graph.nodes[*target];
             let curve = |kind| node.kind == Kind::Curve && node.setting("kind") == Some(kind);
@@ -579,8 +704,8 @@ fn needs_wire(graph: &ClipGraph, id: &str, input: &str) -> bool {
 }
 
 /// Delete node `id`. Each input it fed takes `restore`'s value (its last
-/// value, or empty); a curve whose `x` it was goes too. The output node
-/// stays.
+/// value, or empty), and a list loses the node's items; a curve whose `x`
+/// it was goes too. The output node stays.
 pub(crate) fn delete(
     graph: &mut ClipGraph,
     id: &str,
@@ -595,6 +720,13 @@ pub(crate) fn delete(
             if needs_wire(graph, &to, &input) {
                 doomed.push(to);
                 continue;
+            }
+            if let Some(node) = graph.nodes.get_mut(&to) {
+                if let Some(Input::List(items)) = node.inputs.get_mut(&input) {
+                    items.retain(|item| item.source() != Some(at.as_str()));
+                    settle(node, &input);
+                    continue;
+                }
             }
             let back = restore(graph, &to, &input);
             if let Some(node) = graph.nodes.get_mut(&to) {
@@ -734,6 +866,55 @@ mod tests {
     fn labels_read_as_kind_and_number() {
         assert_eq!(label("curve2"), "Curve 2");
         assert_eq!(label("color1"), "Color 1");
+        // A name someone gave reads as it is, digits and all.
+        for named in ["cut", "bloom_far", "cut2", "curve2b", "curve_2"] {
+            assert_eq!(label(named), named);
+        }
+    }
+
+    #[test]
+    fn a_rename_moves_every_wire_and_refuses_what_the_checker_refuses() {
+        let mut graph = wash();
+        promote(&mut graph, "color1", "brightness", Kind::Time);
+        let curve = wired(&graph, "color1", "brightness");
+        link(&mut graph, "color1", "alpha", &curve);
+        multiply(&mut graph, "color1", "brightness");
+        let before = graph.clone();
+        for bad in ["time", "2x", "class", "a-b", &"x".repeat(33), "color1"] {
+            assert!(rename(&mut graph, &curve, bad).is_err(), "{bad}");
+            assert_eq!(graph, before, "{bad} left the graph as it was");
+        }
+        rename(&mut graph, &curve, "cut").unwrap();
+        assert!(!graph.nodes.contains_key(&curve));
+        assert_eq!(wired(&graph, "color1", "alpha"), "cut");
+        let Some(Input::List(items)) = graph.nodes["color1"].inputs.get("brightness") else {
+            panic!("a list");
+        };
+        assert_eq!(items[0].source(), Some("cut"));
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        // A fresh node never takes a given name, and still counts from 1.
+        promote(&mut graph, "color1", "alpha", Kind::Time);
+        assert_eq!(wired(&graph, "color1", "alpha"), "curve1");
+    }
+
+    #[test]
+    fn a_space_shows_no_shift_over_a_whole_length_and_a_moving_shift_sweeps_through() {
+        let mut graph = chase();
+        let curve = wired(&graph, "color1", "brightness");
+        let space = wired(&graph, &curve, "x");
+        let number = |graph: &ClipGraph, id: &str, input: &str| match shown(graph, id, input) {
+            Some(Input::Number(v)) => v,
+            other => panic!("{id}.{input}: {other:?}"),
+        };
+        assert_eq!(number(&graph, &space, "shift"), 0.);
+        assert_eq!(number(&graph, &space, "length"), 1.);
+        set_input(&mut graph, &space, "length", Some(Input::Number(0.25)));
+        promote(&mut graph, &space, "shift", Kind::Time);
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        let sweep = wired(&graph, &space, "shift");
+        // From wholly before the axis to wholly past it.
+        assert!(number(&graph, &sweep, "low") <= -0.25);
+        assert!(number(&graph, &sweep, "high") >= 1.);
     }
 
     #[test]
@@ -792,10 +973,10 @@ mod tests {
     #[test]
     fn a_link_never_makes_a_cycle() {
         let mut graph = wash();
-        promote(&mut graph, "color1", "brightness", Kind::Space);
+        promote(&mut graph, "color1", "brightness", Kind::Noise);
         let above = wired(&graph, "color1", "brightness");
-        let space = wired(&graph, &above, "x");
-        assert!(!link_candidates(&graph, &space, "offset").contains(&above));
+        let noise = wired(&graph, &above, "x");
+        assert!(!link_candidates(&graph, &noise, "contrast").contains(&above));
     }
 
     fn chase() -> ClipGraph {
@@ -853,6 +1034,30 @@ mod tests {
         };
         assert_eq!(time, Kind::Time);
         assert_eq!(graph.nodes[&wired(&graph, &curve, "x")].kind, Kind::Noise);
+    }
+
+    #[test]
+    fn a_list_grows_by_multiply_and_link_and_settles_to_one_item() {
+        let mut graph = wash();
+        assert!(takes_list(&graph, "color1", "brightness"));
+        promote(&mut graph, "color1", "brightness", Kind::Time);
+        let curve = wired(&graph, "color1", "brightness");
+        multiply(&mut graph, "color1", "brightness");
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        // A second curve, shared from alpha, joins the list as an item.
+        promote(&mut graph, "color1", "alpha", Kind::Space);
+        let other = wired(&graph, "color1", "alpha");
+        link(&mut graph, "color1", "brightness", &other);
+        let Some(Input::List(items)) = graph.nodes["color1"].inputs.get("brightness") else {
+            panic!("a list");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(!link_candidates(&graph, "color1", "brightness").contains(&curve));
+        // Deleting a wired item's node takes only that item.
+        delete(&mut graph, &other, |_, _, _| None);
+        remove_item(&mut graph, "color1", "brightness", 1);
+        assert_eq!(wired(&graph, "color1", "brightness"), curve);
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
     }
 
     #[test]

@@ -179,7 +179,7 @@ pub(crate) fn test_clip(nodes: serde_json::Value, start: f64, duration: f64) -> 
         "selection": p::Selection::all(),
         "z_index": 0,
         "blend_mode": "replace",
-        "graph": {"version": 1, "nodes": nodes},
+        "graph": {"version": 2, "nodes": nodes},
     }))
     .unwrap_or_else(|error| panic!("a test clip: {error}"))
 }
@@ -263,17 +263,16 @@ mod tests {
         // Dissolve: a shuffled order that goes dark over the clip.
         let mut clip = test_clip(
             json!({
-                "time1": {"kind": "time"},
-                "curve1": {"kind": "curve", "settings": {"kind": "number"},
-                           "inputs": {"x": {"node": "time1"},
-                                      "shape": {"points": [[0, 1], [1, 0]]}}},
                 "shuffle1": {"kind": "shuffle"},
                 "space1": {"kind": "space", "settings": {"kind": "order", "wrap": "no"},
-                           "inputs": {"heads": {"node": "shuffle1"}, "offset": 0,
-                                      "width": {"node": "curve1"}}},
-                "curve2": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"heads": {"node": "shuffle1"}}},
+                "curve1": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "space1"},
-                                      "shape": {"points": [[0, 1], [1, 1]]}}},
+                                      "shape": {"points": [[0, 1], [1, 0]]}}},
+                "time1": {"kind": "time", "inputs": {"delay": {"node": "curve1"}}},
+                "curve2": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "time1"},
+                                      "shape": {"points": [[0, 1], [0, 0], [1, 0]]}}},
                 "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}},
             }),
             1.,

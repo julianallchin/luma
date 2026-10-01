@@ -140,9 +140,22 @@ pub(in crate::track_editor) struct State {
     pub wide: BTreeSet<String>,
     /// The add menu, at this window point.
     pub menu: Option<Point<Pixels>>,
+    /// A card's menu: its node, at this window point.
+    pub card_menu: Option<(String, Point<Pixels>)>,
+    /// The node whose name is being typed.
+    pub rename: Option<Rename>,
+    /// Why the last rename was refused, by the node it was for.
+    pub rename_error: Option<(String, String)>,
     pub geometry: Rc<RefCell<Geometry>>,
     /// Keyboard focus for the canvas's keys, made on the first sync.
     pub focus: Option<FocusHandle>,
+}
+
+/// A node's name being typed on its card.
+pub(in crate::track_editor) struct Rename {
+    pub id: String,
+    pub field: Entity<TextInput>,
+    _subs: Vec<Subscription>,
 }
 
 impl Default for State {
@@ -156,6 +169,9 @@ impl Default for State {
             drafts: Vec::new(),
             wide: BTreeSet::new(),
             menu: None,
+            card_menu: None,
+            rename: None,
+            rename_error: None,
             geometry: Rc::default(),
             focus: None,
         }
@@ -338,11 +354,11 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> 
     let signal = input_signal(cx.graph, id, input)?;
     let canvas = &cx.state.sheet.canvas;
     let key: Port = (id.to_owned(), input.to_owned());
-    let source = cx.graph.nodes[id]
-        .inputs
-        .get(input)
-        .and_then(Input::source)
-        .map(str::to_owned);
+    let held = cx.graph.nodes[id].inputs.get(input);
+    let wired = held.is_some_and(|held| held.sources().next().is_some());
+    // A single wire can be picked up; a list's wires come out one by one
+    // from the card.
+    let source = held.and_then(Input::source).map(str::to_owned);
     let detached = canvas
         .dragging()
         .is_some_and(|(_, detach)| detach == Some(&key));
@@ -362,7 +378,7 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> 
     );
     let recorded = key.clone();
     Some(
-        ring(signal, source.is_some() && !detached, tone, move |at| {
+        ring(signal, wired && !detached, tone, move |at| {
             geometry.borrow_mut().inputs.push((recorded.clone(), at));
         })
         .id(SharedString::from(format!("port-{id}-{input}")))
@@ -392,7 +408,8 @@ fn output_port(cx: &Ctx, from: Source, label: String) -> AnyElement {
     };
     let hovered = canvas.hover.as_ref().is_some_and(|(id, input)| {
         matches!(&from, Source::Node(node)
-            if cx.graph.nodes[id].inputs.get(input).and_then(Input::source) == Some(node))
+            if cx.graph.nodes[id].inputs.get(input)
+                .is_some_and(|held| held.sources().any(|source| source == node)))
     });
     let tone = match canvas.dragging() {
         Some((dragged, _)) if *dragged == from => Tone::Lit,
@@ -449,9 +466,21 @@ fn plate(width: f32, selected: bool) -> Div {
         .block_mouse_except_scroll()
 }
 
-/// A card's title row: the label, then its buttons, and on a node that feeds
+/// A card's title text, which takes the row up to the buttons.
+fn title_text(label: &str) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .text_size(rpx(13.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(ladder::foreground())
+        .child(label.to_owned())
+}
+
+/// A card's title row: its name, then its buttons, and on a node that feeds
 /// something its output port past the right edge.
-fn title(label: &str, buttons: Vec<AnyElement>, port: Option<AnyElement>) -> Div {
+fn title(name: AnyElement, buttons: Vec<AnyElement>, port: Option<AnyElement>) -> Div {
     div()
         .relative()
         .w_full()
@@ -460,14 +489,7 @@ fn title(label: &str, buttons: Vec<AnyElement>, port: Option<AnyElement>) -> Div
         .flex_row()
         .items_center()
         .gap(rpx(4.))
-        .child(
-            div()
-                .text_size(rpx(13.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(ladder::foreground())
-                .child(label.to_owned()),
-        )
-        .child(div().flex_1())
+        .child(name)
         .children(buttons)
         .children(port.map(|port| {
             div()
@@ -547,8 +569,19 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         .map(|(input, _)| row(cx, id, input))
         .collect();
     let selected = canvas.selected.as_deref() == Some(id);
-    let (select, grab) = (cx.app.clone(), cx.app.clone());
-    let (at, grabbed) = (id.to_owned(), id.to_owned());
+    let (select, grab, menu) = (cx.app.clone(), cx.app.clone(), cx.app.clone());
+    let (at, grabbed, menu_at) = (id.to_owned(), id.to_owned(), id.to_owned());
+    let refused = canvas
+        .rename_error
+        .as_ref()
+        .filter(|(at, _)| at == id)
+        .map(|(_, error)| {
+            div()
+                .text_size(rpx(12.))
+                .text_color(ladder::danger())
+                .child(error.clone())
+                .agent_node(Role::Text, error.clone())
+        });
     plate(if wide { NODE_W_WIDE } else { NODE_W }, selected)
         .id(SharedString::from(format!("node-{id}")))
         // A press anywhere on the card selects it; only its title takes the
@@ -557,16 +590,59 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
             let at = at.clone();
             select.update(cx, |this, cx| this.canvas_select(Some(at), false, cx));
         })
-        .child(
-            title(&label, buttons, port).on_mouse_down(MouseButton::Left, move |_, _, cx| {
+        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+            cx.stop_propagation();
+            let place = (menu_at.clone(), event.position);
+            menu.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| {
+                    editor.sheet.canvas.card_menu = Some(place);
+                })
+            });
+        })
+        .child(title(name(cx, id, &label), buttons, port).on_mouse_down(
+            MouseButton::Left,
+            move |_, _, cx| {
                 let at = grabbed.clone();
                 grab.update(cx, |this, cx| this.canvas_select(Some(at), true, cx));
-            }),
-        )
+            },
+        ))
+        .children(refused)
         .children(settings(cx, id, node))
         .children(rows)
         .children(cx.controls.noise.get(id).cloned())
         .agent_node(Role::Card, label)
+        .into_any_element()
+}
+
+/// A card's name: its title, which a double-click opens for typing, or the
+/// field while it is being typed. Presses in the field stay there, so the
+/// card does not take the keyboard from it.
+fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
+    let rename = cx.state.sheet.canvas.rename.as_ref();
+    if let Some(rename) = rename.filter(|rename| rename.id == id) {
+        return luma_ui::float::field()
+            .id(SharedString::from(format!("rename-{id}")))
+            .flex_1()
+            .min_w_0()
+            .key_context(text_input::DRAFT_CONTEXT)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().w_full().child(rename.field.clone()))
+            .agent_node(Role::Input, format!("Rename {label}"))
+            .into_any_element();
+    }
+    let app = cx.app.clone();
+    let at = id.to_owned();
+    title_text(label)
+        .id(SharedString::from(format!("title-{id}")))
+        .on_click(move |event, window, cx| {
+            if event.click_count() != 2 {
+                return;
+            }
+            cx.stop_propagation();
+            let at = at.clone();
+            app.update(cx, |this, cx| this.graph_rename_start(&at, window, cx));
+        })
+        .agent_node(Role::Text, label.to_owned())
         .into_any_element()
 }
 
@@ -596,7 +672,11 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
         .top(rpx(draft.at.y))
         .child(
             plate(NODE_W, false)
-                .child(title(&label, vec![discard], Some(port)))
+                .child(title(
+                    title_text(&label).into_any_element(),
+                    vec![discard],
+                    Some(port),
+                ))
                 .child(luma_ui::caption(
                     "Drag its output onto an input".to_string(),
                 )),
@@ -670,7 +750,8 @@ pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
             world,
         ))
         .child(toolbar(cx, wide))
-        .children(add_menu(cx));
+        .children(add_menu(cx))
+        .children(card_menu(cx));
     if let Some(focus) = &state.focus {
         let app = cx.app.clone();
         let own = focus.clone();
@@ -793,6 +874,37 @@ fn add_menu(cx: &Ctx) -> Option<AnyElement> {
             this.with_track_editor(cx, |editor| editor.sheet.canvas.menu = None)
         });
     }))
+}
+
+/// A card's menu, where the card was right-clicked: rename the node, and
+/// delete it unless it is the output.
+fn card_menu(cx: &Ctx) -> Option<AnyElement> {
+    let (id, at) = cx.state.sheet.canvas.card_menu.clone()?;
+    let node = cx.graph.nodes.get(&id)?;
+    let close = |this: &mut Luma, cx: &mut Context<Luma>| {
+        this.with_track_editor(cx, |editor| editor.sheet.canvas.card_menu = None)
+    };
+    let (app, at_id) = (cx.app.clone(), id.clone());
+    let mut menu =
+        luma_ui::menu::ContextMenu::new("graph-card-menu", at).item("Rename", move |window, cx| {
+            let at = at_id.clone();
+            app.update(cx, |this, cx| {
+                close(this, cx);
+                this.graph_rename_start(&at, window, cx);
+            });
+        });
+    if !node.kind.is_output() {
+        let app = cx.app.clone();
+        menu = menu.destructive("Delete", move |_, cx| {
+            let at = id.clone();
+            app.update(cx, |this, cx| {
+                close(this, cx);
+                this.graph_delete_node(&at, cx);
+            });
+        });
+    }
+    let app = cx.app.clone();
+    Some(menu.render(move |_, cx| app.update(cx, |this, cx| close(this, cx))))
 }
 
 /// One wire as painted: its ends' ports and its colour, or its colour ends.
@@ -1333,8 +1445,9 @@ impl Luma {
     }
 
     /// Wire `from` into an input: link a node already in the graph, or add
-    /// a draft with what it needs to check. A wire picked up from another
-    /// input leaves it in the same edit.
+    /// a draft with what it needs to check. An input that holds a list takes
+    /// the wire as one more item. A wire picked up from another input leaves
+    /// it in the same edit.
     fn canvas_connect(
         &mut self,
         from: &Source,
@@ -1360,7 +1473,7 @@ impl Luma {
                 .nodes
                 .get(id)
                 .and_then(|node| node.inputs.get(input))
-                .filter(|value| value.source().is_none())
+                .filter(|value| !matches!(value, Input::Wire(_) | Input::List(_)))
                 .cloned();
             match (from, draft) {
                 (Source::Node(from), _) => edit::link(graph, id, input, from),
@@ -1378,16 +1491,8 @@ impl Luma {
             .track_editor_ref()
             .and_then(primary_clip)
             .and_then(|clip| clip.core.as_ref())
-            .and_then(|core| {
-                core.graph
-                    .nodes
-                    .get(id)?
-                    .inputs
-                    .get(input)?
-                    .source()
-                    .map(str::to_owned)
-            })
-            .is_some();
+            .and_then(|core| core.graph.nodes.get(id)?.inputs.get(input).cloned())
+            .is_some_and(|held| held.sources().next().is_some());
         self.with_track_editor(cx, |editor| {
             if !linked {
                 return;
@@ -1414,6 +1519,114 @@ impl Luma {
                 kind,
                 at: point(f32::from(from.x) / zoom, f32::from(from.y) / zoom),
             });
+        });
+    }
+
+    /// Open node `id`'s name for typing on its card. Enter or a press
+    /// elsewhere commits it; Escape leaves it as it was.
+    fn graph_rename_start(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let field = cx.new(|cx| {
+            let mut input = TextInput::search("Node name", cx);
+            input.set_text(id.to_owned(), cx);
+            input
+        });
+        let keys = cx.subscribe_in(
+            &field,
+            window,
+            |this: &mut Luma, _, event: &text_input::Event, window, cx| match event {
+                text_input::Event::Submitted => this.graph_rename_finish(true, Some(window), cx),
+                text_input::Event::Cancelled => this.graph_rename_finish(false, Some(window), cx),
+                // A press elsewhere: focus goes where the press sends it.
+                text_input::Event::Blurred => this.graph_rename_finish(true, None, cx),
+                _ => {}
+            },
+        );
+        // Focus leaving by the keyboard; whichever of this and `Blurred`
+        // comes second finds nothing to commit.
+        let luma = cx.entity().downgrade();
+        let focus = field.read(cx).focus_handle(cx);
+        let blur = window.on_focus_out(&focus, cx, move |_, _, cx| {
+            luma.update(cx, |this, cx| this.graph_rename_finish(true, None, cx))
+                .ok();
+        });
+        self.with_track_editor(cx, |editor| {
+            let canvas = &mut editor.sheet.canvas;
+            canvas.rename_error = None;
+            canvas.rename = Some(Rename {
+                id: id.to_owned(),
+                field,
+                _subs: vec![keys, blur],
+            });
+        });
+        window.focus(&focus, cx);
+    }
+
+    /// End a rename. `save` renames the node when the typed name differs:
+    /// the node and every wire into it, as one graph edit. A name the graph
+    /// cannot take leaves the old one, and the card says why. `window` is
+    /// present when a key ended it, and the canvas then takes the keyboard
+    /// back; on a blur, focus has already gone where the person sent it.
+    fn graph_rename_finish(
+        &mut self,
+        save: bool,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut ended = None;
+        let mut focus = None;
+        self.with_track_editor(cx, |editor| {
+            ended = editor.sheet.canvas.rename.take();
+            focus = editor.sheet.canvas.focus.clone();
+        });
+        let Some(rename) = ended else {
+            return;
+        };
+        if let (Some(window), Some(focus)) = (window, focus) {
+            window.focus(&focus, cx);
+        }
+        let (from, to) = (rename.id, rename.field.read(cx).text().trim().to_owned());
+        if !save || to == from {
+            return;
+        }
+        let Some(mut graph) = self.track_editor_ref().and_then(shown_graph) else {
+            return;
+        };
+        if let Err(error) = edit::rename(&mut graph, &from, &to) {
+            self.with_track_editor(cx, |editor| {
+                editor.sheet.canvas.rename_error = Some((from, error));
+            });
+            return;
+        }
+        self.graph_live(cx, |graph| {
+            // Checked above on the primary clip; the others share its shape.
+            let _ = edit::rename(graph, &from, &to);
+        });
+        let renamed = self
+            .track_editor_ref()
+            .and_then(shown_graph)
+            .is_some_and(|graph| graph.nodes.contains_key(&to));
+        if !renamed {
+            return;
+        }
+        // What the sheet keeps by node follows the node to its new name.
+        self.with_track_editor(cx, |editor| {
+            let sheet = &mut editor.sheet;
+            sheet.last = std::mem::take(&mut sheet.last)
+                .into_iter()
+                .map(|((at, input), value)| {
+                    let at = if at == from { to.clone() } else { at };
+                    ((at, input), value)
+                })
+                .collect();
+            sheet.open = None;
+            let canvas = &mut sheet.canvas;
+            if canvas.selected.as_deref() == Some(from.as_str()) {
+                canvas.selected = Some(to.clone());
+            }
+            if canvas.wide.remove(&from) {
+                canvas.wide.insert(to.clone());
+            }
+            canvas.hover = None;
         });
     }
 

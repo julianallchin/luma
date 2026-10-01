@@ -147,6 +147,12 @@ impl InputDef {
         self
     }
 
+    /// Whether the input takes a list, whose items multiply: a number
+    /// input with range 0–1 (`brightness=[a, b]`).
+    pub fn takes_list(&self) -> bool {
+        self.ty == InputType::Number && self.range == Some([Some(0.), Some(1.)])
+    }
+
     /// Whether `value` is inside the range.
     pub fn in_range(&self, value: f64) -> bool {
         let Some([min, max]) = self.range else {
@@ -163,7 +169,7 @@ impl InputDef {
 
 impl Serialize for InputDef {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_struct("InputDef", 7)?;
+        let mut map = serializer.serialize_struct("InputDef", 8)?;
         map.serialize_field("type", &self.ty)?;
         if self.unit.is_some() {
             map.serialize_field("unit", &self.unit)?;
@@ -174,6 +180,9 @@ impl Serialize for InputDef {
         }
         if self.above_min {
             map.serialize_field("above_min", &true)?;
+        }
+        if self.takes_list() {
+            map.serialize_field("list", &true)?;
         }
         if self.nonzero {
             map.serialize_field("nonzero", &true)?;
@@ -315,7 +324,9 @@ fn build(kind: Kind) -> Definition {
             Produces::Coordinate,
             vec![
                 ("clock", wire(T::Clock, "clock(every=1)")),
-                ("phase", number(Unit::Turns, "0").range(0., 1.)),
+                ("delay", number(Unit::Turns, "0.25")),
+                ("length", number(Unit::Turns, "0.5").at_least(0.)),
+                ("phase", number(Unit::Turns, "0.25")),
             ],
             vec![],
         ),
@@ -327,8 +338,8 @@ fn build(kind: Kind) -> Definition {
                     "direction",
                     vector(Unit::Uvz, "(1, 0, 0)").nonzero().time_only(),
                 ),
-                ("offset", number(Unit::Share, "0")),
-                ("width", number(Unit::Share, "0.2").range(0., 4.)),
+                ("shift", number(Unit::Share, "0.25")),
+                ("length", number(Unit::Share, "0.5").at_least(0.)),
             ],
             vec![
                 (

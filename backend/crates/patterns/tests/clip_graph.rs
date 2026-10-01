@@ -5,7 +5,7 @@ use luma_patterns::{presets, BlendMode, Clip, Selection};
 use serde_json::{json, Value};
 
 fn graph(nodes: Value) -> ClipGraph {
-    serde_json::from_value(json!({"version": 1, "nodes": nodes})).expect("graph JSON")
+    serde_json::from_value(json!({"version": 2, "nodes": nodes})).expect("graph JSON")
 }
 
 fn error(nodes: Value) -> String {
@@ -75,17 +75,20 @@ fn score_json_example_round_trips() {
         "selection": {"expression": "led_bars_vertical"},
         "z_index": 0, "blend_mode": "replace",
         "graph": {
-            "version": 1,
+            "version": 2,
             "nodes": {
                 "clock1": {"kind": "clock", "inputs": {"every": 2}},
                 "time1":  {"kind": "time",  "inputs": {"clock": {"node": "clock1"}}},
+                "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
                 "curve1": {"kind": "curve", "settings": {"kind": "number"},
-                           "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0, 0], [1, 1]]}, "low": -0.2, "high": 1}},
-                "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
-                           "inputs": {"offset": {"node": "curve1"}, "width": 0.2}},
+                           "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 0]]}, "low": 0.1667, "high": 1}},
+                "time1":  {"kind": "time",  "inputs": {"clock": {"node": "clock1"}, "phase": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},
-                           "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 1]]}}},
-                "color1": {"kind": "color", "inputs": {"color": [1, 1, 1], "brightness": {"node": "curve2"}}}}}}}});
+                           "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0, 1], [0.1667, 1], [0.1667, 0], [1, 0]]}}},
+                "time2":  {"kind": "time",  "inputs": {"clock": {"node": "clock1"}}},
+                "curve3": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "time2"}, "shape": {"points": [[0, 1], [1, 0]]}}},
+                "color1": {"kind": "color", "inputs": {"color": [1, 1, 1], "brightness": [{"node": "curve2"}, {"node": "curve3"}, 0.8]}}}}}}});
     let score: luma_patterns::Score = serde_json::from_value(doc.clone()).unwrap();
     let clip = &score.clips["3f24"];
     assert_eq!(
@@ -93,8 +96,12 @@ fn score_json_example_round_trips() {
         Input::Color([1., 1., 1.])
     );
     assert_eq!(
-        clip.graph.nodes["space1"].inputs["width"],
-        Input::Number(0.2)
+        clip.graph.nodes["color1"].inputs["brightness"],
+        Input::List(vec![
+            Input::wire("curve2"),
+            Input::wire("curve3"),
+            Input::Number(0.8)
+        ])
     );
     clip_graph::check_clip(clip).unwrap();
     let again: luma_patterns::Score =
@@ -102,7 +109,7 @@ fn score_json_example_round_trips() {
     assert_eq!(again, score);
     let written: Value = serde_json::to_value(&score).unwrap();
     assert_eq!(
-        written["clips"]["3f24"]["graph"]["nodes"]["time1"],
+        written["clips"]["3f24"]["graph"]["nodes"]["time2"],
         json!({"kind": "time", "inputs": {"clock": {"node": "clock1"}}})
     );
 }
@@ -110,22 +117,27 @@ fn score_json_example_round_trips() {
 #[test]
 fn unknown_fields_and_shapes_are_refused_when_read() {
     let unknown_kind =
-        ClipGraph::from_json(r#"{"version": 1, "nodes": {"fog1": {"kind": "fog"}}}"#)
+        ClipGraph::from_json(r#"{"version": 2, "nodes": {"fog1": {"kind": "fog"}}}"#)
             .unwrap_err()
             .0;
     assert!(unknown_kind.contains("fog"), "{unknown_kind}");
     let extra = ClipGraph::from_json(
-        r#"{"version": 1, "nodes": {"color1": {"kind": "color", "wires": {}}}}"#,
+        r#"{"version": 2, "nodes": {"color1": {"kind": "color", "wires": {}}}}"#,
     )
     .unwrap_err()
     .0;
     assert!(extra.contains("wires"), "{extra}");
-    let pair = ClipGraph::from_json(
-        r#"{"version": 1, "nodes": {"color1": {"kind": "color", "inputs": {"color": [1, 1]}}}}"#,
+    let text = ClipGraph::from_json(
+        r#"{"version": 2, "nodes": {"color1": {"kind": "color", "inputs": {"color": [1, "red"]}}}}"#,
     )
     .unwrap_err()
     .0;
-    assert!(pair.contains("three numbers"), "{pair}");
+    assert!(text.contains("three numbers"), "{text}");
+    // Two numbers read as a list, which only a 0–1 number input takes.
+    assert_eq!(
+        error(json!({"color1": {"kind": "color", "inputs": {"color": [1, 1]}}})),
+        "color1.color: expected a color (r, g, b) with each channel 0–1 or a color curve; got a list of 2 items. Example: color=(1, 1, 1)"
+    );
 }
 
 // ---- rule 1: graph ----
@@ -137,15 +149,27 @@ fn rule_1_graph() {
         "graph: expected one output node; got color1 and strobe1. Example: one clip per output"
     );
     let mut wrong_version = graph(json!({"color1": {"kind": "color"}}));
-    wrong_version.version = 2;
+    wrong_version.version = 1;
     assert_eq!(
         wrong_version.check().unwrap_err().0,
-        r#"graph: expected version 1; got 2. Example: "version": 1"#
+        r#"graph: expected version 2; got 1. Example: "version": 2"#
     );
     assert_eq!(
-        error(json!({"Color": {"kind": "color"}})),
-        r#"graph: expected node ids such as curve2; got "Color". Example: curve2"#
+        error(json!({"Color 1": {"kind": "color"}})),
+        r#"graph: expected node ids that are Python names of at most 32 letters, digits and _, such as cut or curve2; got "Color 1". Example: cut"#
     );
+    assert_eq!(
+        error(
+            json!({"time": {"kind": "time"}, "color1": {"kind": "color", "inputs": {"alpha": {"node": "fade"}}},
+                     "fade": {"kind": "curve", "inputs": {"x": {"node": "time"}}}})
+        ),
+        r#"graph: expected node ids that are not a builder name or a Python keyword; got "time". Example: time_1"#
+    );
+    // Any other Python name is an id: code, graph and card say the same.
+    let named = graph(json!({"t": {"kind": "time"},
+                             "fade_in": {"kind": "curve", "inputs": {"x": {"node": "t"}}},
+                             "color1": {"kind": "color", "inputs": {"alpha": {"node": "fade_in"}}}}));
+    named.check().unwrap();
     assert_eq!(
         error(json!({"color1": {"kind": "color"}, "time1": {"kind": "time"}})),
         "time1: expected a wire into the output through other nodes; nothing reads it. Example: wire it into an input, or delete it"
@@ -223,8 +247,35 @@ fn rule_3_value() {
         "audio1.high_hz: expected Hz above low_hz (200); got 100. Example: high_hz=400"
     );
     assert_eq!(
-        error(json!({"color1": {"kind": "color", "inputs": {"brightness": [1, 0, 0]}}})),
-        "color1.brightness: expected a number 0–1 (share) or a number curve; got (1,0,0). Example: brightness=1"
+        error(json!({"aim1": {"kind": "aim", "inputs": {"yaw": [10, 20, 30]}}})),
+        "aim1.yaw: expected a number -180–180 (degrees) or a number curve; got (10,20,30). Example: yaw=0"
+    );
+    // A list multiplies only where the input's range is 0–1.
+    assert_eq!(
+        error(json!({"aim1": {"kind": "aim", "inputs": {"yaw": [10, 20]}}})),
+        "aim1.yaw: expected a number -180–180 (degrees) or a number curve; got a list of 2 items. Example: yaw=0. A list multiplies only on an input with range 0–1, such as brightness"
+    );
+    assert_eq!(
+        error(json!({"color1": {"kind": "color", "inputs": {"brightness": [0.5, 2]}}})),
+        "color1.brightness: expected list items a share between 0 and 1; got 2. Example: brightness=[curve1, 0.5]"
+    );
+    assert_eq!(
+        error(json!({"color1": {"kind": "color", "inputs": {"brightness": [0.5]}}})),
+        "color1.brightness: expected a list of two or more items; got 1. Example: brightness=[curve1, curve2]"
+    );
+    // A jump is two points at one x; three are refused.
+    let jump = |points: Value| {
+        json!({
+            "time1": {"kind": "time"},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "shape": {"points": points}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})
+    };
+    graph(jump(json!([[0, 0], [0, 1], [0.5, 1], [0.5, 0], [1, 0]])))
+        .check()
+        .unwrap();
+    assert_eq!(
+        error(jump(json!([[0, 0], [0.5, 1], [0.5, 0], [0.5, 1], [1, 0]]))),
+        r#"curve1.shape: expected points with v 0–1; got points[3]: at most two points share an x (a jump); x 0.5 has three. Example: shape="Ramp up""#
     );
 }
 
@@ -249,10 +300,10 @@ fn rule_4_wire() {
         error(json!({
             "time1": {"kind": "time"},
             "curve3": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
-            "space1": {"kind": "space", "inputs": {"width": {"node": "curve3"}}},
-            "curve4": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+            "time2": {"kind": "time", "inputs": {"delay": {"node": "curve3"}}},
+            "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}}},
             "aim1": {"kind": "aim", "inputs": {"yaw": {"node": "curve3"}, "alpha": {"node": "curve4"}}}})),
-        "curve3: expected one unit; it feeds aim1.yaw (degrees) and space1.width (share). Example: make two curves"
+        "curve3: expected one unit; it feeds aim1.yaw (degrees) and time2.delay (turns). Example: make two curves"
     );
     assert_eq!(
         error(json!({
@@ -261,16 +312,13 @@ fn rule_4_wire() {
             "color1": {"kind": "color", "inputs": {"color": {"node": "curve1"}}}})),
         r#"curve1.gradient: expected a gradient because kind is color; got nothing. Example: gradient="Rainbow""#
     );
-    // The spec's example reports this at space1.width; the checker names
-    // the curve bound to change instead.
+    // The checker names the curve bound to change, not the input.
     assert_eq!(
         error(json!({
             "time1": {"kind": "time"},
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": -1, "high": 0.5}},
-            "space1": {"kind": "space", "inputs": {"width": {"node": "curve1"}}},
-            "curve2": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
-            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}})),
-        "curve1.low: expected a share between 0 and 4 for space1.width; got -1. Example: low=0"
+            "color1": {"kind": "color", "inputs": {"alpha": {"node": "curve1"}}}})),
+        "curve1.low: expected a share between 0 and 1 for color1.alpha; got -1. Example: low=0"
     );
     assert_eq!(
         error(json!({
@@ -295,6 +343,17 @@ fn rule_4_wire() {
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise2"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
         "noise2.heads: expected a heads wire; got a coordinate wire from space1. Example: heads=group()"
+    );
+}
+
+#[test]
+fn rule_4_list_items_are_number_curves() {
+    assert_eq!(
+        error(json!({
+            "time1": {"kind": "time"},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": [{"node": "curve1"}, {"node": "time1"}]}}})),
+        r#"color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, "Ramp up")"#
     );
 }
 
@@ -334,6 +393,36 @@ fn rule_5_axes() {
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}, "color": {"node": "curve2"}}}}))
     .check()
     .unwrap();
+}
+
+#[test]
+fn rule_5_a_list_follows_one_clock() {
+    let nodes = |second: &str| {
+        json!({
+            "clock1": {"kind": "clock", "inputs": {"every": 1}},
+            "clock2": {"kind": "clock", "inputs": {"every": 2}},
+            "time1": {"kind": "time", "inputs": {"clock": {"node": "clock1"}}},
+            "time2": {"kind": "time", "inputs": {"clock": {"node": second}}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "curve2": {"kind": "curve", "inputs": {"x": {"node": "time2"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": [{"node": "curve1"}, {"node": "curve2"}], "alpha": {"node": "clock2"}}}})
+    };
+    let mut two = nodes("clock2");
+    two["color1"]["inputs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("alpha");
+    assert_eq!(
+        error(two),
+        "color1.brightness: expected list items of one clock; got clock1 and clock2. Example: use the same clock for every item"
+    );
+    let mut one = nodes("clock1");
+    one["color1"]["inputs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("alpha");
+    one.as_object_mut().unwrap().remove("clock2");
+    graph(one).check().unwrap();
 }
 
 // ---- rule 6: clip ----
@@ -431,7 +520,15 @@ fn definition_defaults_pass_the_checker() {
     let space = serde_json::to_value(clip_graph::definition(Kind::Space)).unwrap();
     assert_eq!(space["output"], "coordinate");
     assert_eq!(space["inputs"]["direction"]["axes"], json!(["T"]));
-    assert_eq!(space["inputs"]["width"]["range"], json!([0.0, 4.0]));
+    assert!(space["inputs"].get("width").is_none());
+    assert_eq!(space["inputs"]["shift"]["range"], json!(null));
+    assert_eq!(space["inputs"]["length"]["range"], json!([0.0, null]));
+    let time = serde_json::to_value(clip_graph::definition(Kind::Time)).unwrap();
+    assert_eq!(time["inputs"]["delay"]["range"], json!(null));
+    assert_eq!(time["inputs"]["length"]["range"], json!([0.0, null]));
+    let color = serde_json::to_value(clip_graph::definition(Kind::Color)).unwrap();
+    assert_eq!(color["inputs"]["brightness"]["list"], json!(true));
+    assert!(color["inputs"]["color"].get("list").is_none());
     assert_eq!(space["settings"]["kind"]["default"], "line");
 }
 

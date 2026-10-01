@@ -62,9 +62,12 @@ pub struct Clock {
 
 /// Reads the clock of a strip over time.
 pub type ClockSource = Rc<dyn Fn(&App) -> Option<Clock>>;
-/// Reads the place of each head on a strip's axis, 0–1, or `None` while x
-/// is not that axis.
+/// Reads the place of each head on a strip's axis, or `None` while x is not
+/// that axis. A place outside 0–1 is past an end of the curve.
 pub type HeadSource = Rc<dyn Fn(&App) -> Option<Rc<[f64]>>>;
+
+/// How strong a head past an end of the curve draws.
+const OUTSIDE_OPACITY: f32 = 0.35;
 
 /// What the x axis measures.
 #[derive(Clone, Default)]
@@ -277,9 +280,7 @@ impl CurveStrip {
                 } else if i == n - 1 {
                     1.
                 } else {
-                    let (a, b) = (curve.points[i - 1].x, curve.points[i + 1].x);
-                    let margin = (b - a) * 1e-6;
-                    p[0].clamp(a + margin, b - margin)
+                    inner_x(curve, i, p[0])
                 };
                 curve.move_point(i, [x, p[1]]).map_err(|e| e.to_string())
             }
@@ -865,10 +866,14 @@ impl Render for CurveStrip {
                 .w_full()
                 .h(rpx(TICK_H))
                 .children(heads.iter().enumerate().map(|(i, &x)| {
-                    let c = value.head_color(x);
+                    // A head past either end reads the curve's end value: it
+                    // sits at that end, faint.
+                    let at = x.clamp(0., 1.);
+                    let c = value.head_color(at);
                     div()
                         .absolute()
-                        .left(gpui::relative(x.clamp(0., 1.) as f32))
+                        .left(gpui::relative(at as f32))
+                        .when(at != x, |tick| tick.opacity(OUTSIDE_OPACITY))
                         .ml(rpx(-2.))
                         .w(rpx(4.))
                         .h_full()
@@ -1136,10 +1141,8 @@ impl StripValue {
                 if i == 0 || i + 1 >= n {
                     return;
                 }
-                let (a, b) = (curve.points[i - 1].x, curve.points[i + 1].x);
-                let margin = (b - a) * 1e-6;
                 let y = curve.points[i].value;
-                let _ = curve.move_point(i, [x.clamp(a + margin, b - margin), y]);
+                let _ = curve.move_point(i, [inner_x(curve, i, x), y]);
             }
             Self::Gradient(gradient) => {
                 if i < gradient.stops().len() {
@@ -1248,6 +1251,37 @@ impl StripValue {
     }
 }
 
+/// How near, as a share of the strip, a dragged point snaps onto its
+/// neighbour's x to make a jump.
+const JUMP_SNAP: f64 = 0.01;
+
+/// Where inner point `i` of `curve` goes for `x`: between its neighbours, or
+/// onto a neighbour's x, a jump. A neighbour already in a jump keeps a
+/// hair's gap, since three points never share an x.
+fn inner_x(curve: &Envelope, i: usize, x: f64) -> f64 {
+    let at = |j: usize| curve.points[j].x;
+    let (a, b) = (at(i - 1), at(i + 1));
+    let margin = (b - a) * 1e-6;
+    let low = if i >= 2 && at(i - 2) == a {
+        a + margin
+    } else {
+        a
+    };
+    let high = if i + 2 < curve.points.len() && at(i + 2) == b {
+        b - margin
+    } else {
+        b
+    };
+    let x = x.clamp(low, high);
+    if low == a && x - a < JUMP_SNAP {
+        a
+    } else if high == b && b - x < JUMP_SNAP {
+        b
+    } else {
+        x
+    }
+}
+
 /// The shipped gradients, as strip values.
 pub fn gradient_presets() -> Vec<(SharedString, StripValue)> {
     luma_patterns::presets()
@@ -1314,16 +1348,33 @@ mod tests {
         assert!(!gradient_presets().iter().any(|(_, p)| p.close(&edited)));
     }
 
-    /// A curve's ends stay put; its inner points move between neighbours.
+    /// A curve's ends stay put; its inner points move between neighbours and
+    /// may meet one, a jump.
     #[test]
     fn curve_points_move_between_their_neighbours() {
         let mut value = StripValue::Number(Envelope::linear(vec![[0., 0.], [1., 1.]]));
         let i = value.insert(0.5).unwrap();
         assert_eq!(i, 1);
         value.move_x(1, 2.);
-        let x = value.point(1)[0];
-        assert!(x < 1. && x > 0.99, "{x}");
+        assert_eq!(value.point(1)[0], 1.);
         value.move_x(0, 0.5);
         assert_eq!(value.point(0)[0], 0.);
+    }
+
+    /// A point meets its neighbour's x, but never makes three at one x.
+    #[test]
+    fn a_jump_takes_two_points_and_no_third() {
+        let mut value = StripValue::Number(Envelope::linear(vec![[0., 0.], [1., 1.]]));
+        value.insert(0.25).unwrap();
+        value.insert(0.5).unwrap();
+        value.move_x(1, 0.);
+        assert_eq!(value.point(1)[0], 0.);
+        value.move_x(2, 0.);
+        let x = value.point(2)[0];
+        assert!(x > 0., "{x}");
+        let StripValue::Number(curve) = &value else {
+            unreachable!()
+        };
+        assert!(curve.validate().is_ok());
     }
 }

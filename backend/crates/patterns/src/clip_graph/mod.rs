@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The graph JSON version this build reads and writes.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// The most nodes one graph may have.
 pub const MAX_NODES: usize = 64;
 
@@ -166,15 +166,22 @@ struct RawNode {
 
 impl From<RawNode> for Node {
     /// A bare 3-array reads as a vector; the definition turns it into a
-    /// color where the input is a color.
+    /// color where the input is a color, and into a list of three numbers
+    /// where the input takes a list.
     fn from(raw: RawNode) -> Self {
         let definition = definition(raw.kind);
         let inputs = raw
             .inputs
             .into_iter()
             .map(|(name, input)| {
-                let input = match (definition.input(&name).map(|def| def.ty), input) {
+                let def = definition.input(&name);
+                let input = match (def.map(|def| def.ty), input) {
                     (Some(InputType::Color), Input::Vector(rgb)) => Input::Color(rgb),
+                    (Some(InputType::Number), Input::Vector(items))
+                        if def.is_some_and(InputDef::takes_list) =>
+                    {
+                        Input::List(items.into_iter().map(Input::Number).collect())
+                    }
                     (_, input) => input,
                 };
                 (name, input)
@@ -237,17 +244,18 @@ impl Node {
             .map(|setting| setting.default)
     }
 
-    /// The wires into this node: (input, source node id).
+    /// The wires into this node, a list's one by one: (input, source node
+    /// id).
     pub fn wires(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.inputs.iter().filter_map(|(name, input)| match input {
-            Input::Wire(source) => Some((name.as_str(), source.as_str())),
-            _ => None,
-        })
+        self.inputs
+            .iter()
+            .flat_map(|(name, input)| input.sources().map(move |source| (name.as_str(), source)))
     }
 }
 
 /// What an input holds. JSON: a number, a 3-array (vector or color, by the
-/// definition), `{"points": …}`, `{"stops": …}` or `{"node": id}`.
+/// definition), `{"points": …}`, `{"stops": …}`, `{"node": id}`, or a list
+/// of numbers and wires whose values multiply (`[{"node": "curve1"}, 0.5]`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     Number(f64),
@@ -256,6 +264,9 @@ pub enum Input {
     Points(Curve<f64>),
     Gradient(Gradient),
     Wire(String),
+    /// Numbers and wires, multiplied. Only on a number input with range
+    /// 0–1 ([`InputDef::takes_list`]).
+    List(Vec<Input>),
 }
 
 impl Input {
@@ -268,6 +279,14 @@ impl Input {
             Input::Wire(source) => Some(source),
             _ => None,
         }
+    }
+    /// Every source node id: the wire's, or each wire of a list.
+    pub fn sources(&self) -> impl Iterator<Item = &str> {
+        let items: &[Input] = match self {
+            Input::List(items) => items,
+            one => std::slice::from_ref(one),
+        };
+        items.iter().filter_map(Input::source)
     }
 }
 
@@ -299,11 +318,12 @@ impl Serialize for Input {
                 map.serialize_entry("node", node)?;
                 map.end()
             }
+            Input::List(items) => items.serialize(serializer),
         }
     }
 }
 
-const INPUT_SHAPES: &str = r#"a number, [u, v, z], [r, g, b], {"points": [[0, 0], [1, 1]]}, {"stops": [{"t": 0, "color": [0, 0, 0]}]} or {"node": "time1"}"#;
+const INPUT_SHAPES: &str = r#"a number, [u, v, z], [r, g, b], {"points": [[0, 0], [1, 1]]}, {"stops": [{"t": 0, "color": [0, 0, 0]}]}, {"node": "time1"} or a list such as [{"node": "curve1"}, 0.5]"#;
 
 impl<'de> Deserialize<'de> for Input {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -314,12 +334,24 @@ impl<'de> Deserialize<'de> for Input {
             Json::Number(number) => number.as_f64().map(Input::Number).ok_or_else(wrong),
             Json::Array(items) => {
                 let numbers: Vec<f64> = items.iter().filter_map(Json::as_f64).collect();
-                match <[f64; 3]>::try_from(numbers) {
-                    Ok(triple) if items.len() == 3 => Ok(Input::Vector(triple)),
-                    _ => Err(de::Error::custom(format!(
-                        "a vector or a color has three numbers, such as [0, 0.766, -0.643]; got {json}"
-                    ))),
+                if let Ok(triple) = <[f64; 3]>::try_from(numbers) {
+                    if items.len() == 3 {
+                        return Ok(Input::Vector(triple));
+                    }
                 }
+                items
+                    .iter()
+                    .map(|item| match item {
+                        Json::Number(_) | Json::Object(_) => {
+                            match Input::deserialize(item).map_err(de::Error::custom)? {
+                                item @ (Input::Number(_) | Input::Wire(_)) => Ok(item),
+                                _ => Err(wrong_list(&json)),
+                            }
+                        }
+                        _ => Err(wrong_list(&json)),
+                    })
+                    .collect::<std::result::Result<_, _>>()
+                    .map(Input::List)
             }
             Json::Object(map) if map.contains_key("node") => match (map.len(), &map["node"]) {
                 (1, Json::String(node)) => Ok(Input::Wire(node.clone())),
@@ -336,6 +368,12 @@ impl<'de> Deserialize<'de> for Input {
             _ => Err(wrong()),
         }
     }
+}
+
+fn wrong_list<E: de::Error>(json: &serde_json::Value) -> E {
+    E::custom(format!(
+        r#"a list holds numbers and wires, such as [{{"node": "curve1"}}, 0.5]; a vector or a color has three numbers, such as [0, 0.766, -0.643]; got {json}"#
+    ))
 }
 
 impl ClipGraph {
@@ -386,10 +424,9 @@ impl ClipGraph {
     }
 
     /// Where each head of `frame.cells` falls on coordinate node `id` at
-    /// `frame.beat`, as playback computes it: the node's value, or `None`
-    /// where a `space` node's stroke leaves the head outside. With several
-    /// live events a head reads the first one it is inside. An editor reads
-    /// this to mark the heads along a curve's x.
+    /// `frame.beat`, as playback computes it. With several live events a
+    /// head reads the first. An editor reads this to mark the heads along a
+    /// curve's x.
     pub fn coordinate_at_heads(
         &self,
         id: &str,
@@ -400,34 +437,18 @@ impl ClipGraph {
         let root = lower::lower_coordinate(self, id, frame)?;
         let prepared = crate::PreparedGraph::lowered(&crate::standard_library(), &root, frame)?;
         let out = prepared.evaluate_batch(&[frame.beat])?;
-        fn signal(value: &crate::EvaluatedValue) -> Result<&crate::Signal> {
-            value
-                .signal()
-                .ok_or_else(|| Error("a coordinate gives a value per head".into()))
-        }
-        let x = signal(&out[lower::COORDINATE])?;
-        let inside = out.get(lower::INSIDE).map(signal).transpose()?;
+        let x = out[lower::COORDINATE]
+            .signal()
+            .ok_or_else(|| Error("a coordinate gives a value per head".into()))?;
         // A per-head signal lists its heads; a broadcast one has one row.
-        let row = |signal: &crate::Signal, id: &str| {
-            signal
-                .fixtures()
-                .map_or(Some(0), |ids| ids.iter().position(|f| f == id))
-        };
-        let events = x.values().dim().2;
         Ok(frame
             .cells
             .iter()
             .map(|cell| {
-                let n = row(x, &cell.id)?;
-                (0..events).find_map(|e| {
-                    let within = inside.is_none_or(|inside| {
-                        row(inside, &cell.id).is_some_and(|m| {
-                            let width = inside.values().dim().2;
-                            inside.values()[[m, 0, e.min(width - 1)]] > 0.5
-                        })
-                    });
-                    within.then(|| x.values()[[n, 0, e]])
-                })
+                let n = x
+                    .fixtures()
+                    .map_or(Some(0), |ids| ids.iter().position(|f| f == &cell.id))?;
+                Some(x.values()[[n, 0, 0]])
             })
             .collect())
     }

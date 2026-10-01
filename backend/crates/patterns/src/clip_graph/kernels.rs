@@ -20,7 +20,8 @@ pub enum Kernel {
     Events,
     /// Progress 0–1 over the clip.
     ClipProgress,
-    /// Progress plus a phase, wrapped.
+    /// Each head's own clock: progress less a delay, over a length, then
+    /// plus a phase, wrapped.
     Shift,
     /// Each unit's position: the centroid of its heads.
     Group,
@@ -30,9 +31,9 @@ pub enum Kernel {
     Rank,
     /// The raw axis coordinate of each head within its span.
     Axis,
-    /// The stroke along an axis: the coordinate inside it and whether the
-    /// head is inside.
-    Stroke,
+    /// A coordinate slid by a shift and read over a length, wrapped on a
+    /// ring: the shader's `(p - shift) / length`.
+    Slide,
     /// Coherent noise over normalized position and time.
     Noise4,
     /// A value over its clip range, 0–1.
@@ -43,6 +44,8 @@ pub enum Kernel {
     Pick,
     /// A value at the picked event.
     Gather,
+    /// Two values multiplied: a list input's items.
+    Product,
     ColorOut,
     StrobeOut,
     AimOut,
@@ -52,7 +55,7 @@ pub enum Kernel {
 pub(crate) const AIM_MIRRORS: usize = 4;
 
 impl Kernel {
-    pub const ALL: [Kernel; 18] = [
+    pub const ALL: [Kernel; 19] = [
         Kernel::ClockTable,
         Kernel::Clock,
         Kernel::Events,
@@ -62,12 +65,13 @@ impl Kernel {
         Kernel::Fold,
         Kernel::Rank,
         Kernel::Axis,
-        Kernel::Stroke,
+        Kernel::Slide,
         Kernel::Noise4,
         Kernel::Normalize,
         Kernel::Curve,
         Kernel::Pick,
         Kernel::Gather,
+        Kernel::Product,
         Kernel::ColorOut,
         Kernel::StrobeOut,
         Kernel::AimOut,
@@ -85,12 +89,13 @@ impl Kernel {
             Kernel::Fold => "kernel/fold",
             Kernel::Rank => "kernel/rank",
             Kernel::Axis => "kernel/axis",
-            Kernel::Stroke => "kernel/stroke",
+            Kernel::Slide => "kernel/slide",
             Kernel::Noise4 => "kernel/noise4",
             Kernel::Normalize => "kernel/normalize",
             Kernel::Curve => "kernel/curve",
             Kernel::Pick => "kernel/pick",
             Kernel::Gather => "kernel/gather",
+            Kernel::Product => "kernel/product",
             Kernel::ColorOut => "kernel/color_out",
             Kernel::StrobeOut => "kernel/strobe_out",
             Kernel::AimOut => "kernel/aim_out",
@@ -122,7 +127,11 @@ impl Kernel {
                 &["progress", "present", "index"],
             ),
             Kernel::ClipProgress => (vec![], &[], &["value"]),
-            Kernel::Shift => (names(&["progress", "phase"]), &[], &["value"]),
+            Kernel::Shift => (
+                names(&["progress", "delay", "length", "phase"]),
+                &[],
+                &["value"],
+            ),
             Kernel::Group => (names(&["positions", "unit"]), &[], &["positions"]),
             Kernel::Fold => (
                 names(&[
@@ -154,11 +163,7 @@ impl Kernel {
                 &["kind", "has_direction", "wrap"],
                 &["value"],
             ),
-            Kernel::Stroke => (
-                names(&["a", "offset", "width"]),
-                &["wrap"],
-                &["x", "inside"],
-            ),
+            Kernel::Slide => (names(&["a", "shift", "length"]), &["wrap"], &["value"]),
             Kernel::Noise4 => (
                 names(&["positions", "span", "turns", "scale", "contrast"]),
                 &["uniform", "salt_lo", "salt_hi"],
@@ -166,9 +171,7 @@ impl Kernel {
             ),
             Kernel::Normalize => (names(&["value", "minimum", "maximum"]), &[], &["value"]),
             Kernel::Curve => (
-                names(&[
-                    "x", "inside", "low_x", "low_y", "low_z", "high_x", "high_y", "high_z",
-                ]),
+                names(&["x", "low_x", "low_y", "low_z", "high_x", "high_y", "high_z"]),
                 &["kind"],
                 &["x", "y", "z"],
             ),
@@ -181,6 +184,7 @@ impl Kernel {
                 &["winner"],
             ),
             Kernel::Gather => (names(&["value", "winner"]), &[], &["value"]),
+            Kernel::Product => (names(&["a", "b"]), &[], &["value"]),
             Kernel::ColorOut => (
                 names(&["r", "g", "b", "brightness", "alpha"]),
                 &[],
@@ -437,14 +441,20 @@ pub(crate) fn run(
         }
         Kernel::Shift => {
             let progress = s("progress");
+            let delay = s("delay");
+            let length = s("length");
             let phase = s("phase");
-            let dims = shape(&[progress, phase])?;
+            let dims = shape(&[progress, delay, length, phase])?;
             let values = Array3::from_shape_fn(dims, |(n, t, e)| {
-                let (p, ph) = (progress.at(n, t, e), phase.at(n, t, e));
+                // Below 0 before the head's clock starts, above 1 after it
+                // ends; a length of 0 is a jump at the delay.
+                let length = length.at(n, t, e).max(1e-9);
+                let local = (progress.at(n, t, e) - delay.at(n, t, e)) / length;
+                let ph = phase.at(n, t, e);
                 if ph == 0. {
-                    p
+                    local
                 } else {
-                    (p + ph).rem_euclid(1.)
+                    (local + ph).rem_euclid(1.)
                 }
             });
             single("value", events(values, &batch)?)
@@ -673,29 +683,17 @@ pub(crate) fn run(
             }
             single("value", signal(values, Channels::Value, &batch)?)
         }
-        Kernel::Stroke => {
-            let a = s("a");
-            let offset = s("offset");
-            let width = s("width");
+        Kernel::Slide => {
+            let (a, shift, length) = (s("a"), s("shift"), s("length"));
             let wrap = f("wrap")? != 0.;
-            let dims = shape(&[a, offset, width])?;
-            let mut x = Array3::zeros(dims);
-            let mut inside = Array3::zeros(dims);
-            for ((n, t, e), out) in x.indexed_iter_mut() {
-                let w = width.at(n, t, e);
-                let d = a.at(n, t, e) - offset.at(n, t, e);
+            let dims = shape(&[a, shift, length])?;
+            let values = Array3::from_shape_fn(dims, |(n, t, e)| {
+                let d = a.at(n, t, e) - shift.at(n, t, e);
                 let d = if wrap { d.rem_euclid(1.) } else { d };
-                if w > 0. {
-                    *out = d / w;
-                    if (0. ..=1.).contains(out) {
-                        inside[[n, t, e]] = 1.;
-                    }
-                }
-            }
-            Ok(BTreeMap::from([
-                ("x".into(), events(x, &batch)?),
-                ("inside".into(), events(inside, &batch)?),
-            ]))
+                // A length of 0 is a jump at the shift, as `time.length`.
+                d / length.at(n, t, e).max(1e-9)
+            });
+            single("value", events(values, &batch)?)
         }
         Kernel::Noise4 => {
             let positions = s("positions");
@@ -779,33 +777,22 @@ pub(crate) fn run(
                 unreachable!("a curve gradient")
             };
             let kind = f("kind")? as u8;
-            let names = [
-                "x", "inside", "low_x", "low_y", "low_z", "high_x", "high_y", "high_z",
-            ];
+            let names = ["x", "low_x", "low_y", "low_z", "high_x", "high_y", "high_z"];
             let all: Vec<&Signal> = names.iter().map(|k| s(k)).collect();
             let dims = shape(&all)?;
-            let (x, inside) = (all[0], all[1]);
+            let x = all[0];
             let mut out: [Array3<f64>; 3] = std::array::from_fn(|_| Array3::zeros(dims));
             for n in 0..dims.0 {
                 for t in 0..dims.1 {
                     for e in 0..dims.2 {
-                        let lit = inside.at(n, t, e) > 0.5;
                         let v = shape_points.sample(x.at(n, t, e));
                         let value: [f64; 3] = if kind == 2 {
-                            if lit {
-                                gradient.sample(v)
-                            } else {
-                                [0.; 3]
-                            }
+                            gradient.sample(v)
                         } else {
                             std::array::from_fn(|c| {
-                                let low = all[2 + c].at(n, t, e);
-                                let high = all[5 + c].at(n, t, e);
-                                if lit {
-                                    low + v * (high - low)
-                                } else {
-                                    low
-                                }
+                                let low = all[1 + c].at(n, t, e);
+                                let high = all[4 + c].at(n, t, e);
+                                low + v * (high - low)
                             })
                         };
                         for c in 0..3 {
@@ -864,6 +851,12 @@ pub(crate) fn run(
                 }
             });
             single("value", signal(values, Channels::Value, &batch)?)
+        }
+        Kernel::Product => {
+            let (a, b) = (s("a"), s("b"));
+            let dims = shape(&[a, b])?;
+            let values = Array3::from_shape_fn(dims, |(n, t, e)| a.at(n, t, e) * b.at(n, t, e));
+            single("value", events(values, &batch)?)
         }
         Kernel::ColorOut => {
             let parts = [s("r"), s("g"), s("b"), s("brightness"), s("alpha")];

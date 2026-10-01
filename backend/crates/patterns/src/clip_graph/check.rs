@@ -99,9 +99,14 @@ fn structure(graph: &ClipGraph) -> Result<()> {
         ));
     }
     let ids = graph.ids_in_order();
-    if let Some(id) = ids.iter().find(|id| !is_id(id)) {
+    if let Some(id) = ids.iter().find(|id| !is_name(id)) {
         return fail(format!(
-            r#"graph: expected node ids such as curve2; got "{id}". Example: curve2"#
+            r#"graph: expected node ids that are Python names of at most {MAX_ID} letters, digits and _, such as cut or curve2; got "{id}". Example: cut"#
+        ));
+    }
+    if let Some(id) = ids.iter().find(|id| RESERVED.contains(id)) {
+        return fail(format!(
+            r#"graph: expected node ids that are not a builder name or a Python keyword; got "{id}". Example: {id}_1"#
         ));
     }
     let outputs: Vec<&str> = ids
@@ -153,9 +158,29 @@ fn structure(graph: &ClipGraph) -> Result<()> {
     Ok(())
 }
 
-fn is_id(id: &str) -> bool {
-    let digits = id.trim_start_matches(|c: char| c.is_ascii_lowercase());
-    digits.len() < id.len() && !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+/// The longest node id.
+const MAX_ID: usize = 32;
+
+/// Names a node id may not take: the Python builders, whose bare names a
+/// cell binds, and Python's keywords. `source()` assigns each node to a
+/// variable of its id.
+const RESERVED: &[&str] = &[
+    "clock", "time", "space", "noise", "audio", "curve", "mirror", "shuffle", "group", "split",
+    "color", "aim", "strobe", "preset", "False", "None", "True", "and", "as", "assert", "async",
+    "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally",
+    "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass",
+    "raise", "return", "try", "while", "with", "yield",
+];
+
+/// An ASCII Python identifier of at most [`MAX_ID`] characters: `cut`,
+/// `curve2`, `bloom_far`.
+fn is_name(id: &str) -> bool {
+    let mut chars = id.chars();
+    id.len() <= MAX_ID
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// A loop of wires, as the node ids that read each other, first id last
@@ -274,6 +299,7 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
         };
         match (def.ty, input) {
             (_, Input::Wire(_)) => {}
+            (_, Input::List(items)) => list_items(id, name, node.kind, def, items)?,
             (ty, _) if ty.is_wire_only() => return wrong_type(),
             (InputType::Number, Input::Number(value)) => {
                 if !value.is_finite() || !def.in_range(*value) {
@@ -373,6 +399,48 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
     Ok(())
 }
 
+/// A list multiplies its items: two or more numbers in the input's range
+/// or number curves, on an input that takes a list.
+fn list_items(id: &str, name: &str, kind: Kind, def: &InputDef, items: &[Input]) -> Result<()> {
+    if !def.takes_list() {
+        let note = if def.ty == InputType::Number {
+            ". A list multiplies only on an input with range 0–1, such as brightness"
+        } else {
+            ""
+        };
+        return fail(format!(
+            "{id}.{name}: expected {}; got a list of {} items. Example: {}{note}",
+            accepts(def),
+            items.len(),
+            example(kind, name)
+        ));
+    }
+    if items.len() < 2 {
+        return fail(format!(
+            "{id}.{name}: expected a list of two or more items; got {}. Example: {name}=[curve1, curve2]",
+            items.len()
+        ));
+    }
+    for item in items {
+        match item {
+            Input::Wire(_) => {}
+            Input::Number(value) if value.is_finite() && def.in_range(*value) => {}
+            Input::Number(value) => {
+                return fail(format!(
+                    "{id}.{name}: expected list items {}; got {value}. Example: {name}=[curve1, 0.5]",
+                    range_phrase(def)
+                ))
+            }
+            _ => {
+                return fail(format!(
+                    "{id}.{name}: expected list items that are numbers or number curves; got a list holding another shape. Example: {name}=[curve1, 0.5]"
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---- rule 4: wires ----
 
 fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
@@ -381,45 +449,48 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
     }
     let definition = definition(node.kind);
     for (name, def) in &definition.inputs {
-        let Some(input @ Input::Wire(source)) = node.inputs.get(*name) else {
+        let Some(given) = node.inputs.get(*name) else {
             continue;
         };
-        let source_node = &graph.nodes[source];
-        let produces = definition_of(source_node).output;
-        let fits = match def.ty {
-            InputType::Number => curve_kind(source_node) == Some("number"),
-            InputType::Vector => curve_kind(source_node) == Some("vector"),
-            InputType::Color => curve_kind(source_node) == Some("color"),
-            InputType::Bound => {
-                curve_kind(source_node).is_some() && curve_kind(source_node) == curve_kind(node)
+        for source in given.sources() {
+            let input = &Input::Wire(source.to_string());
+            let source_node = &graph.nodes[source];
+            let produces = definition_of(source_node).output;
+            let fits = match def.ty {
+                InputType::Number => curve_kind(source_node) == Some("number"),
+                InputType::Vector => curve_kind(source_node) == Some("vector"),
+                InputType::Color => curve_kind(source_node) == Some("color"),
+                InputType::Bound => {
+                    curve_kind(source_node).is_some() && curve_kind(source_node) == curve_kind(node)
+                }
+                InputType::Heads => produces == Produces::Heads,
+                InputType::Clock => produces == Produces::Clock,
+                InputType::Coordinate => produces == Produces::Coordinate,
+                InputType::Points | InputType::Gradient => false,
+            };
+            if fits {
+                continue;
             }
-            InputType::Heads => produces == Produces::Heads,
-            InputType::Clock => produces == Produces::Clock,
-            InputType::Coordinate => produces == Produces::Coordinate,
-            InputType::Points | InputType::Gradient => false,
-        };
-        if fits {
-            continue;
+            let expected = if def.ty == InputType::Bound {
+                let kind = curve_kind(node).unwrap_or("number");
+                format!("a {kind} or a {kind} curve")
+            } else {
+                accepts(def)
+            };
+            let example = match (def.ty, produces) {
+                (InputType::Number | InputType::Vector, Produces::Coordinate) => {
+                    format!("{name}=curve({source}, \"Ramp up\")")
+                }
+                (InputType::Color, Produces::Coordinate) => {
+                    format!("{name}=curve({source}, \"Ramp up\", gradient=\"Rainbow\")")
+                }
+                _ => example(node.kind, name),
+            };
+            return fail(format!(
+                "{id}.{name}: expected {expected}; got {}. Example: {example}",
+                describe(graph, Some(input))
+            ));
         }
-        let expected = if def.ty == InputType::Bound {
-            let kind = curve_kind(node).unwrap_or("number");
-            format!("a {kind} or a {kind} curve")
-        } else {
-            accepts(def)
-        };
-        let example = match (def.ty, produces) {
-            (InputType::Number | InputType::Vector, Produces::Coordinate) => {
-                format!("{name}=curve({source}, \"Ramp up\")")
-            }
-            (InputType::Color, Produces::Coordinate) => {
-                format!("{name}=curve({source}, \"Ramp up\", gradient=\"Rainbow\")")
-            }
-            _ => example(node.kind, name),
-        };
-        return fail(format!(
-            "{id}.{name}: expected {expected}; got {}. Example: {example}",
-            describe(graph, Some(input))
-        ));
     }
     Ok(())
 }
@@ -612,46 +683,61 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
         first = Some((id.to_string(), None));
     }
     for (name, def) in &definition.inputs {
-        let Some(source) = node.inputs.get(*name).and_then(Input::source) else {
+        let Some(given) = node.inputs.get(*name) else {
             continue;
         };
-        let carried = axes(graph, source, memo)?;
-        if def.time_only && carried.heads {
-            return fail(format!(
+        // The items of one list multiply, so they carry one clock, even
+        // on the output node.
+        let mut list_clocks = BTreeSet::new();
+        for source in given.sources() {
+            let carried = axes(graph, source, memo)?;
+            if matches!(given, Input::List(_)) {
+                list_clocks.extend(carried.clocks.iter().cloned());
+                if list_clocks.len() > 1 {
+                    let clocks: Vec<&String> = list_clocks.iter().collect();
+                    return fail(format!(
+                    "{id}.{name}: expected list items of one clock; got {}. Example: use the same clock for every item",
+                    list(&clocks)
+                ));
+                }
+            }
+            if def.time_only && carried.heads {
+                return fail(format!(
                 "{id}.{name}: expected one value for all heads (a value or a curve over time); got a wire that varies over heads from {source}. Example: {}",
                 example(node.kind, name)
             ));
-        }
-        if !node.kind.is_output() {
-            for clock in &carried.clocks {
-                match &first {
-                    None => first = Some((clock.clone(), Some(name))),
-                    Some((seen, _)) if seen == clock => {}
-                    Some((seen, from)) => {
-                        let through = if source == clock {
-                            String::new()
-                        } else {
-                            format!(" through {source}")
-                        };
-                        let (whose, fix) = match from {
-                            Some(input) => (
-                                format!("{input} follows {seen}"),
-                                "use the same clock for both",
-                            ),
-                            None => (
-                                format!("{seen} is a clock itself"),
-                                "leave clocks out of a clock's inputs",
-                            ),
-                        };
-                        return fail(format!(
+            }
+            if !node.kind.is_output() {
+                for clock in &carried.clocks {
+                    match &first {
+                        None => first = Some((clock.clone(), Some(name))),
+                        Some((seen, _)) if seen == clock => {}
+                        Some((seen, from)) => {
+                            let through = if source == clock {
+                                String::new()
+                            } else {
+                                format!(" through {source}")
+                            };
+                            let (whose, fix) = match from {
+                                Some(input) => (
+                                    format!("{input} follows {seen}"),
+                                    "use the same clock for both",
+                                ),
+                                None => (
+                                    format!("{seen} is a clock itself"),
+                                    "leave clocks out of a clock's inputs",
+                                ),
+                            };
+                            return fail(format!(
                             "{id}.{name}: expected wires of one clock; got {clock}{through} while {whose}. Example: {fix}"
                         ));
+                        }
                     }
                 }
             }
+            out.heads |= carried.heads;
+            out.clocks.extend(carried.clocks);
         }
-        out.heads |= carried.heads;
-        out.clocks.extend(carried.clocks);
     }
     match definition.output {
         Produces::Heads => out.heads = false,
@@ -715,6 +801,7 @@ fn describe(graph: &ClipGraph, input: Option<&Input>) -> String {
         Some(Input::Vector(value)) | Some(Input::Color(value)) => vector(*value),
         Some(Input::Points(_)) => "points".into(),
         Some(Input::Gradient(_)) => "a gradient".into(),
+        Some(Input::List(items)) => format!("a list of {} items", items.len()),
         Some(Input::Wire(source)) => match graph.nodes.get(source) {
             None => format!("a wire to {source}, which is not in the graph"),
             Some(node) => match definition(node.kind).output {

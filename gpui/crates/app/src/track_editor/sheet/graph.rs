@@ -69,6 +69,7 @@ const VECTOR_FIELD_W: f32 = (canvas::NODE_FIELD_W - 2. * VECTOR_GAP) / 3.;
 pub(super) struct Controls {
     /// The graph the widgets were last pointed at.
     synced: ClipGraph,
+    /// By node and [`item_key`]: an input, or one number of a list.
     fields: BTreeMap<(String, String), Field>,
     /// A preview per noise node.
     noise: BTreeMap<String, Entity<noise::NoisePreview>>,
@@ -157,6 +158,65 @@ fn describe(graph: &ClipGraph, id: &str) -> String {
 }
 
 // -- build and sync ------------------------------------------------------------
+
+/// The field key of item `index` of a list input.
+fn item_key(input: &str, index: usize) -> String {
+    format!("{input}#{index}")
+}
+
+/// What a field shows, by its key: the input's value, or a list item's
+/// number.
+fn field_value(graph: &ClipGraph, id: &str, key: &str) -> Option<Input> {
+    let Some((input, index)) = key.split_once('#') else {
+        return edit::shown(graph, id, key);
+    };
+    let Input::List(items) = graph.nodes.get(id)?.inputs.get(input)? else {
+        return None;
+    };
+    items
+        .get(index.parse::<usize>().ok()?)
+        .filter(|item| matches!(item, Input::Number(_)))
+        .cloned()
+}
+
+/// The field of number item `index` of a list input, which leaves room
+/// for the item's remove button.
+fn item_field(
+    graph: &ClipGraph,
+    id: &str,
+    input: &str,
+    index: usize,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Option<Field> {
+    let spec = edit::spec(graph, id, input)?;
+    let Some(Input::Number(value)) = field_value(graph, id, &item_key(input, index)) else {
+        return None;
+    };
+    let entity = number_field(
+        format!("{}: item {}", field_name(id, input), index + 1),
+        value,
+        spec,
+        canvas::NODE_FIELD_W - CONTROL_HEIGHT - VECTOR_GAP,
+        luma_ui::arg::number::DECIMALS,
+        window,
+        cx,
+    );
+    let scale = edit::scale(spec.unit);
+    let (at, name) = (id.to_owned(), input.to_owned());
+    subs.push(cx.subscribe(
+        &entity,
+        move |this: &mut Luma, _, event: &NumberEvent, cx| {
+            let NumberEvent::Committed(value) = *event;
+            let (at, name) = (at.clone(), name.clone());
+            this.graph_live(cx, move |graph| {
+                edit::set_item(graph, &at, &name, index, Input::Number(value / scale))
+            });
+        },
+    ));
+    Some(Field::Number(entity))
+}
 
 fn number_field(
     name: String,
@@ -331,6 +391,15 @@ pub(super) fn build(graph: &ClipGraph, window: &mut Window, cx: &mut Context<Lum
     let mut fields = BTreeMap::new();
     for (id, node) in &graph.nodes {
         for (input, _) in &definition(node.kind).inputs {
+            if let Some(Input::List(items)) = node.inputs.get(*input) {
+                for index in 0..items.len() {
+                    if let Some(field) = item_field(graph, id, input, index, window, cx, &mut subs)
+                    {
+                        fields.insert((id.clone(), item_key(input, index)), field);
+                    }
+                }
+                continue;
+            }
             let Some(value) = edit::shown(graph, id, input) else {
                 continue;
             };
@@ -359,14 +428,15 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
     if controls.synced == *graph {
         return;
     }
-    for ((id, input), field) in &controls.fields {
-        let before = edit::shown(&controls.synced, id, input);
-        let now = edit::shown(graph, id, input);
+    for ((id, key), field) in &controls.fields {
+        let before = field_value(&controls.synced, id, key);
+        let now = field_value(graph, id, key);
         let rescaled = matches!(field, Field::Strip(_))
             && strip_scale(&controls.synced, id) != strip_scale(graph, id);
         if before == now && !rescaled {
             continue;
         }
+        let input = key.split('#').next().unwrap_or(key);
         let scale = edit::spec(graph, id, input).map_or(1., |spec| edit::scale(spec.unit));
         match (field, now) {
             (Field::Number(entity), Some(Input::Number(v))) => {
@@ -405,8 +475,10 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
     controls.synced = graph.clone();
 }
 
-/// The clock of a curve over time, each frame its strip draws: the span one
-/// event lives and where the playhead is in it.
+/// The clock of a curve over time, each frame its strip draws: the span the
+/// curve's x covers and where the playhead is on it. Before the delay the
+/// playhead holds at 0 and after the length at 1, as the curve holds its
+/// ends there.
 fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Clock> {
     let app = app.upgrade()?;
     let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
@@ -417,11 +489,19 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
     let (_, length, elapsed) = clip_beats(editor, clip)?;
     let (time, _) = coordinate(graph, curve)?;
     let time = graph.nodes.get(&time)?;
-    let phase_shift = match time.inputs.get("phase") {
-        Some(Input::Number(v)) => *v,
-        None => 0.,
-        _ => return None,
+    let number = |name: &str, empty: f64| match time.inputs.get(name) {
+        Some(Input::Number(v)) => Some(*v),
+        None => Some(empty),
+        _ => None,
     };
+    let (delay, stretch, shift) = (
+        number("delay", 0.)?,
+        number("length", 1.)?,
+        number("phase", 0.)?,
+    );
+    if stretch <= 0. {
+        return None;
+    }
     let (span, phase) = match time.inputs.get("clock").and_then(Input::source) {
         None => (length, elapsed / length),
         Some(clock) => {
@@ -437,9 +517,15 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
         }
     };
     let inside = (0. ..=length).contains(&elapsed) && (0. ..=1.).contains(&phase);
+    let x = (phase - delay) / stretch;
+    let x = if shift == 0. {
+        x.clamp(0., 1.)
+    } else {
+        (x + shift).rem_euclid(1.)
+    };
     Some(strip::Clock {
-        beats: span,
-        phase: inside.then_some((phase + phase_shift).rem_euclid(1.)),
+        beats: span * stretch,
+        phase: inside.then_some(x),
         playing: editor.transport.playing,
     })
 }
@@ -456,8 +542,9 @@ fn clip_beats(editor: &Editor, clip: &Clip) -> Option<(f64, f64, f64)> {
     Some((start, length, now - start))
 }
 
-/// Where the clip's heads fall along a curve's space axis at the playhead:
-/// one place per head inside the stroke, as playback computes it.
+/// Where the clip's heads fall along a curve's space axis at the playhead,
+/// as playback computes it, after the space's shift and length: one place
+/// per head, outside 0–1 where a head is past an end of the curve.
 fn heads_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<Rc<[f64]>> {
     let app = app.upgrade()?;
     let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
@@ -615,6 +702,7 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                 (Some((to, _)), _) => coordinate(graph, to)
                     .map_or("Wired".into(), |(_, kind)| edit::source_label(kind).into()),
                 (None, None) if !showable => edit::empty_note(graph.nodes[id].kind, input).into(),
+                (None, Some(Input::List(_))) => "List".into(),
                 _ => "Value".into(),
             }
         }
@@ -689,7 +777,7 @@ impl Luma {
                 let wired = graph.nodes[&at]
                     .inputs
                     .get(&name)
-                    .is_some_and(|v| v.source().is_some());
+                    .is_some_and(|v| matches!(v, Input::Wire(_) | Input::List(_)));
                 if wired || graph.nodes[&at].inputs.get(&name).is_none() {
                     edit::set_input(graph, &at, &name, back);
                 }
@@ -721,7 +809,7 @@ impl Luma {
                 .nodes
                 .get(id)
                 .and_then(|node| node.inputs.get(input))
-                .filter(|value| value.source().is_none())
+                .filter(|value| !matches!(value, Input::Wire(_) | Input::List(_)))
                 .cloned();
             edit::link(graph, id, input, target);
         });
@@ -864,8 +952,12 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
         accessories.push(canvas::port_slot(port).into_any_element());
     }
     accessories.extend(chip(cx.graph, id, input).map(|chip| source_chip(cx, id, input, chip)));
+    if edit::takes_list(cx.graph, id, input) {
+        accessories.push(multiply_button(cx, id, input));
+    }
     let control = match node.inputs.get(input) {
         Some(Input::Wire(_)) => None,
+        Some(Input::List(items)) => Some(list_items(cx, id, input, items)),
         _ => Some(
             match cx.controls.fields.get(&(id.to_owned(), input.to_owned())) {
                 Some(field) => field_element(field),
@@ -887,6 +979,64 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
         Some(control) => sheet_row(&label, accessories, control),
         None => header_row(&label, accessories),
     }
+}
+
+/// The button that multiplies an input by one more item, a value of 1.
+fn multiply_button(cx: &Ctx, id: &str, input: &str) -> AnyElement {
+    let app = cx.app.clone();
+    let (at, name) = (id.to_owned(), input.to_owned());
+    icon_button(IconName::Plus, Enabled::Yes)
+        .id(SharedString::from(format!("multiply-{id}-{input}")))
+        .on_click(move |_, _, cx| {
+            let (at, name) = (at.clone(), name.clone());
+            app.update(cx, |this, cx| {
+                this.graph_live(cx, move |graph| edit::multiply(graph, &at, &name))
+            });
+        })
+        .agent_node(Role::Button, format!("Multiply {}", field_name(id, input)))
+        .into_any_element()
+}
+
+/// A list input's items, which multiply: each a value field or the name of
+/// the node wired there, with a button that takes it out.
+fn list_items(cx: &Ctx, id: &str, input: &str, items: &[Input]) -> Div {
+    let rows = items.iter().enumerate().map(|(index, item)| {
+        let control = match item.source() {
+            Some(from) => div().child(luma_ui::caption(describe(cx.graph, from))),
+            None => cx
+                .controls
+                .fields
+                .get(&(id.to_owned(), item_key(input, index)))
+                .map_or_else(div, field_element),
+        };
+        let app = cx.app.clone();
+        let (at, name) = (id.to_owned(), input.to_owned());
+        let remove = icon_button(IconName::Minus, Enabled::Yes)
+            .id(SharedString::from(format!(
+                "unmultiply-{id}-{input}-{index}"
+            )))
+            .on_click(move |_, _, cx| {
+                let (at, name) = (at.clone(), name.clone());
+                app.update(cx, |this, cx| {
+                    this.graph_live(cx, move |graph| edit::remove_item(graph, &at, &name, index))
+                });
+            })
+            .agent_node(
+                Role::Button,
+                format!("Remove {} item {}", field_name(id, input), index + 1),
+            );
+        div()
+            .w_full()
+            .min_h(rpx(CONTROL_HEIGHT))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(rpx(VECTOR_GAP))
+            .child(control)
+            .child(div().flex_1())
+            .child(remove)
+    });
+    div().w_full().flex().flex_col().gap(rpx(6.)).children(rows)
 }
 
 /// A row that is only its header line: a wired input, or one whose empty

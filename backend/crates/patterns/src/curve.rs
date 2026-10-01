@@ -210,8 +210,11 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for Written<V> {
     }
 }
 
-/// Points over x 0–1, strictly increasing, from x 0 to x 1. Before the first
-/// point and after the last, the end values hold.
+/// Points over x 0–1, from x 0 to x 1, in order. Two points may share an x:
+/// a jump, where x itself reads the second (as a shader's `step`). Before
+/// the first point and after the last, the end values hold. A jump at x 0
+/// or x 1 sets the value outside: x 0 and x 1 themselves read the inner
+/// point, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 on [0, 1] closed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve<V> {
     pub points: Vec<CurvePoint<V>>,
@@ -311,11 +314,17 @@ impl<V> Curve<V> {
             if !point.x.is_finite() || !(0. ..=1.).contains(&point.x) {
                 return Err(Error(format!("points[{i}]: x must be in 0..1")));
             }
-            if i > 0 && point.x <= self.points[i - 1].x {
+            if i > 0 && point.x < self.points[i - 1].x {
                 return Err(Error(format!(
-                    "points[{i}]: x {} must be above the previous x {}",
+                    "points[{i}]: x {} must not be below the previous x {}",
                     point.x,
                     self.points[i - 1].x
+                )));
+            }
+            if i > 1 && point.x == self.points[i - 2].x {
+                return Err(Error(format!(
+                    "points[{i}]: at most two points share an x (a jump); x {} has three",
+                    point.x
                 )));
             }
             if let Some(why) = value(&point.value) {
@@ -347,6 +356,13 @@ impl<V> Curve<V> {
             return (0, 0.);
         }
         if progress >= self.points[last].x {
+            // A jump at the end: x itself still reads the inner point, so
+            // the shape covers [0, 1] closed and the outer point is what
+            // it reads after it.
+            let end = self.points[last].x;
+            if progress == end && last >= 2 && self.points[last - 1].x == end {
+                return (last - 1, 0.);
+            }
             return (last - 1, 1.);
         }
         let i = self

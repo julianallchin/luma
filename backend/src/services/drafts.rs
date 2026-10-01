@@ -157,7 +157,7 @@ mod tests {
         Clip {
             name: "Strobe".into(),
             graph: serde_json::from_value(serde_json::json!(
-                {"version": 1, "nodes": {"strobe1": {"kind": "strobe"}}}
+                {"version": 2, "nodes": {"strobe1": {"kind": "strobe"}}}
             ))
             .expect("a strobe graph"),
             start,

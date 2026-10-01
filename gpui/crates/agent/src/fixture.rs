@@ -84,6 +84,10 @@ pub struct Clip {
     /// The clip's selection expression, when not the whole venue.
     #[serde(default)]
     pub selection: Option<String>,
+    /// A clip graph (`{"version": 1, "nodes": {...}}`) to play in place of
+    /// the preset's.
+    #[serde(default)]
+    pub graph: Option<Value>,
 }
 
 impl Clip {
@@ -97,6 +101,7 @@ impl Clip {
             preset: None,
             seed: 0,
             selection: None,
+            graph: None,
         }
     }
 
@@ -729,10 +734,11 @@ impl Fixture {
                     .expect("a selection expression");
             }
             placed.z_index = clip.z_index;
-            clips.insert(
-                clip.pattern.clone(),
-                serde_json::to_value(placed).expect("a serializable clip"),
-            );
+            let mut placed = serde_json::to_value(placed).expect("a serializable clip");
+            if let Some(graph) = &clip.graph {
+                placed["graph"] = graph.clone();
+            }
+            clips.insert(clip.pattern.clone(), placed);
         }
         json!({ "clips": clips })
     }
