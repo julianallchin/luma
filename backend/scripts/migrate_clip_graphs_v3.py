@@ -13,14 +13,19 @@ and version 2 graphs to version 3:
   wires. A shuffle's clock becomes `shuffle.time`: a time node of that clock
   with no delay or phase when there is one, else a new one. Time nodes with
   equal every/duration share their events, so shared clocks stay shared.
-- `time.delay` turns become beats: × the clock's duration (duration, else
-  every), or × the clip's duration with no clock. `time.length` other than
-  1 is refused.
+- `time.delay` turns with a clock become beats: × the clock's duration
+  (duration, else every). With no clock the delay meant a share of the
+  clip, so it must stretch with the clip: `curve(time(delay=D(s)), S)`
+  with D a straight line over a space s becomes S over that space shifted
+  by a curve over `time()` (`over_the_clip`); any other delay with no
+  clock is refused. `time.length` other than 1 is refused.
 - `space.length` becomes `scale`.
 - `mirror.offset` other than 0 is refused.
 - A list input becomes one `*` math node (a list of numbers, their product).
-- `color.alpha` folds into brightness and `strobe.alpha` into rate, so a
-  saved clip looks the same with alpha as opacity. Alpha is left empty.
+- Alpha stays alpha (a list becomes a math node like any other). Alpha is
+  opacity in version 3: alone a clip looks the same; over another clip a
+  fade now shows the clip below (with --new, report `fades_over_clips`
+  counts those clips).
 - A `line` space after a mirror whose normal is parallel to the space's
   direction now measures from the mirror plane over the unfolded span: its
   shift and scale are halved (exact when a head sits on the plane). With an
@@ -53,7 +58,6 @@ VERSION = 3
 # Inputs that took a list in version 1 and 2: number inputs with range 0–1.
 LISTS = {("color", "brightness"), ("color", "alpha"), ("aim", "alpha"),
          ("strobe", "rate"), ("strobe", "alpha"), ("noise", "contrast")}
-EMPTY = {("color", "brightness"): 1, ("strobe", "rate"): 0.5}
 
 
 class Refused(Exception):
@@ -66,6 +70,10 @@ def number(value):
 
 def wire(value):
     return isinstance(value, dict) and "node" in value
+
+
+def w(node_id):
+    return {"node": node_id}
 
 
 def clean(x):
@@ -206,21 +214,117 @@ def clock_of(nodes, node):
     return nodes[clock["node"]] if clock else None
 
 
-def delays_to_beats(nodes, clip_duration, notes):
-    for node in list(nodes.values()):
+def delays_to_beats(nodes, notes):
+    for node_id, node in list(nodes.items()):
         if node["kind"] != "time" or "delay" not in node.get("inputs", {}):
             continue
         clock = clock_of(nodes, node)
-        if clock:
-            inputs = clock.get("inputs", {})
-            duration = inputs.get("duration", inputs.get("every"))
-        elif clip_duration is None:
-            raise Refused("a delay with no clock and no clip duration")
-        else:
-            duration = clip_duration
+        if not clock:
+            over_the_clip(nodes, node_id, notes)
+            continue
+        inputs = clock.get("inputs", {})
+        duration = inputs.get("duration", inputs.get("every"))
         node["inputs"]["delay"] = times(nodes, node["inputs"]["delay"], duration, notes,
                                         consumed=False)
         notes.add("delay: turns to beats")
+
+
+# A hold reversed is a jump at the segment's start; the named eases pair up.
+REVERSED = {"ease-in": "ease-out", "ease-out": "ease-in", "sine-in": "sine-out",
+            "sine-out": "sine-in", "ease-in-out": "ease-in-out",
+            "sine-in-out": "sine-in-out", "linear": "linear"}
+
+
+def reversed_shape(shape):
+    """The curve u ↦ shape(1 − u): points mirrored and in reverse order,
+    each ease turned around (e'(s) = 1 − e(1 − s))."""
+    points = [list(p) for p in shape["points"]]
+    out = []
+    for i in range(len(points) - 1, 0, -1):
+        x, v = points[i][:2]
+        ease = points[i - 1][2] if len(points[i - 1]) > 2 else "linear"
+        if ease == "hold":
+            out += [[clean(1 - x), v], [clean(1 - x), points[i - 1][1]]]
+            continue
+        if isinstance(ease, list):
+            x1, y1, x2, y2 = ease
+            ease = [clean(1 - x2), clean(1 - y2), clean(1 - x1), clean(1 - y1)]
+        else:
+            ease = REVERSED[ease]
+        out.append([clean(1 - x), v] if ease == "linear" else [clean(1 - x), v, ease])
+    out.append([clean(1 - points[0][0]), points[0][1]])
+    xs = [p[0] for p in out]
+    if any(xs[i] == xs[i + 2] for i in range(len(xs) - 2)) or len(out) > 256:
+        raise Refused("a delay over the clip whose reversed curve has three points at one x")
+    return {"points": out}
+
+
+def straight_delay(nodes, delay):
+    """(c0, c1, space id) when `delay` (turns) is c0 + c1 · a for the raw
+    coordinate a of a plain space: a two-point linear curve over a space
+    with no shift, length or wrap."""
+    if not wire(delay):
+        raise Refused("a delay with no clock that is one number")
+    curve_node = nodes[delay["node"]]
+    inputs = curve_node.get("inputs", {})
+    points = inputs.get("shape", {"points": [[0, 0], [1, 1]]})["points"]
+    low, high = inputs.get("low", 0), inputs.get("high", 1)
+    x = inputs.get("x")
+    space = nodes[x["node"]] if wire(x) else None
+    settings = (space or {}).get("settings", {})
+    wraps = settings.get("wrap", "yes" if settings.get("kind") == "angle" else "no") == "yes"
+    if curve_node["kind"] != "curve" or len(points) != 2 or len(points[0]) > 2 \
+            or not (number(low) and number(high)) or not space or space["kind"] != "space" \
+            or wraps or {"shift", "length"} & set(space.get("inputs", {})):
+        raise Refused("a delay with no clock that is not a straight line over a plain space")
+    (_, y0), (_, y1) = points
+    return low + (high - low) * y0, (high - low) * (y1 - y0), x["node"]
+
+
+def over_the_clip(nodes, time_id, notes):
+    """A delay with no clock is a share of the clip: each head's clock is
+    τ = p − D(a), p the clip's progress. With D = c0 + c1·a this is the
+    space a shifted by a curve over time() and scaled by 1/|c1|:
+    x = (a − shift(p))·|c1| is τ when c1 < 0 and 1 − τ when c1 > 0 (then
+    each curve over the time reads its shape reversed). Plays the same, and
+    stretches with the clip."""
+    time_node = nodes[time_id]
+    if set(time_node["inputs"]) - {"delay"}:
+        raise Refused("a delay with no clock and a phase")
+    c0, c1, space_id = straight_delay(nodes, time_node["inputs"]["delay"])
+    if c1 == 0:
+        raise Refused("a delay with no clock that is the same for every head")
+    users = [i for i, n in nodes.items() for k, v in n.get("inputs", {}).items()
+             if time_id in sources(v)]
+    if any(nodes[i]["kind"] != "curve" or nodes[i]["inputs"].get("x") != w(time_id)
+           for i in users) or any(k != "x" and time_id in sources(v) for i in users
+                                  for k, v in nodes[i]["inputs"].items()):
+        raise Refused("a delayed time with no clock read by something other than a curve's x")
+    clip = next((i for i, n in nodes.items() if n["kind"] == "time" and not n.get("inputs")),
+                None)
+    if clip is None:
+        clip = free_id(nodes, "time")
+        nodes[clip] = {"kind": "time"}
+    k = abs(c1)
+    low, high = (c0 / k, (c0 - 1) / k) if c1 < 0 else (-(c0 + 1) / c1, -c0 / c1)
+    shift_id = free_id(nodes, "curve")
+    nodes[shift_id] = {"kind": "curve", "settings": {"kind": "number"},
+                       "inputs": {"x": w(clip), "shape": {"points": [[0, 0], [1, 1]]},
+                                  "low": clean(low), "high": clean(high)}}
+    old_space = nodes[space_id]
+    space = copy.deepcopy(old_space)
+    space["inputs"] = {**space.get("inputs", {}), "shift": w(shift_id), "length": clean(1 / k)}
+    new_id = free_id(nodes, "space")
+    nodes[new_id] = space
+    for i in users:
+        nodes[i]["inputs"]["x"] = w(new_id)
+        if c1 > 0:
+            nodes[i]["inputs"]["shape"] = reversed_shape(
+                nodes[i]["inputs"].get("shape", {"points": [[0, 0], [1, 1]]}))
+    for orphan in (time_id, time_node["inputs"]["delay"]["node"], space_id):
+        if orphan in nodes and not readers(nodes, orphan):
+            del nodes[orphan]
+    notes.add("delay over the clip: a space shifted by time()")
 
 
 def clocks_into_times(nodes, notes):
@@ -311,31 +415,7 @@ def halve_mirrored_lines(nodes, notes, best_fit):
             notes.add("mirrored line: wrapped")
 
 
-def fold_alpha(nodes, notes):
-    for node_id, node in list(nodes.items()):
-        name = {"color": "brightness", "strobe": "rate"}.get(node["kind"])
-        inputs = node.get("inputs", {})
-        if not name or "alpha" not in inputs:
-            continue
-        alpha, value = inputs["alpha"], inputs.get(name)
-        if wire(alpha) and wire(value):
-            a, b = carried(nodes, alpha), carried(nodes, value)
-            if a and b and a != b:
-                raise Refused(f"{node_id}.{name} and alpha follow different clocks")
-        # Alpha stays an input until its value has moved, so a wired alpha
-        # still counts its one reader.
-        folded = times(nodes, EMPTY[(node["kind"], name)] if value is None else value,
-                       alpha, notes)
-        del inputs["alpha"]
-        if alpha != 1:
-            inputs[name] = folded
-            notes.add("alpha: folded")
-    for node in nodes.values():
-        if not node.get("inputs", True):
-            del node["inputs"]
-
-
-def convert(graph, clip_duration=None, best_fit="keep"):
+def convert(graph, best_fit="keep"):
     """(version 3 graph, notes). Raises Refused."""
     if graph.get("version") == VERSION:
         return graph, set()
@@ -351,22 +431,21 @@ def convert(graph, clip_duration=None, best_fit="keep"):
     nodes = copy.deepcopy(graph["nodes"])
     refuse_unmapped(nodes)
     lists_to_math(nodes, notes)
-    delays_to_beats(nodes, clip_duration, notes)
+    delays_to_beats(nodes, notes)
     clocks_into_times(nodes, notes)
     lengths_to_scales(nodes)
     halve_mirrored_lines(nodes, notes, best_fit)
-    fold_alpha(nodes, notes)
     return {"version": VERSION, "nodes": nodes}, notes
 
 
 def convert_document(value, best_fit="keep"):
     """A score document (or any JSON) with every version 1 or 2 graph
-    converted; a clip's duration comes from the clip holding the graph."""
+    converted."""
     if isinstance(value, dict):
         graph = value.get("graph")
         if isinstance(graph, dict) and graph.get("version") in (1, 2) and "nodes" in graph:
             return {**{k: convert_document(v, best_fit) for k, v in value.items() if k != "graph"},
-                    "graph": convert(graph, value.get("duration"), best_fit)[0]}
+                    "graph": convert(graph, best_fit)[0]}
         return {k: convert_document(v, best_fit) for k, v in value.items()}
     if isinstance(value, list):
         return [convert_document(v, best_fit) for v in value]
@@ -436,12 +515,12 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
     notes, growth = collections.Counter(), collections.Counter()
     examples, mirrored = collections.defaultdict(list), collections.defaultdict(list)
     pairs = []
-    rows = db.execute("SELECT id, name, start, duration, seed, blend_mode, graph_json "
-                      "FROM clips ORDER BY id").fetchall()
+    rows = db.execute("SELECT id, score_id, name, start, duration, seed, blend_mode, z_index, "
+                      "selection_json, graph_json FROM clips ORDER BY id").fetchall()
     for row in rows:
         old = json.loads(row["graph_json"])
         try:
-            new, why = convert(old, row["duration"], best_fit)
+            new, why = convert(old, best_fit)
         except Refused as e:
             refusals[str(e)] += 1
             examples[f"refused: {e}"].append(row["id"])
@@ -491,12 +570,55 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
             else:
                 good.append((row, a, b))
         report["checker_errors"] = dict(errors)
+        report["fades_over_clips"] = fades_over_clips(new_bin, good, examples)
         if old_bin:
             report.update(parity(old_bin, new_bin, good, examples, best_fit))
     report["examples"] = {k: v[:5] for k, v in examples.items()}
     (out / "report.json").write_text(json.dumps(report, indent=1) + "\n")
     write_markdown(out / "report.md", report)
     return report
+
+
+def output(graph):
+    return next(n for n in graph["nodes"].values() if n["kind"] in ("color", "aim", "strobe"))
+
+
+def fades_over_clips(new_bin, triples, examples):
+    """Clips whose alpha is below 1 while another clip of the same score
+    and output kind lies under them (lower z, active at that beat): the
+    only clips whose look changes when alpha becomes opacity. `any
+    selection` ignores which heads each clip lights; `same selection`
+    counts only a clip under it with the same selection or `all`."""
+    by_score = collections.defaultdict(list)
+    for row, _, clip in triples:
+        by_score[row["score_id"]].append((row, clip))
+    fading = [(row, clip) for row, _, clip in triples
+              if output(clip["graph"])["kind"] != "aim"
+              and output(clip["graph"]).get("inputs", {}).get("alpha", 1) != 1]
+    frames = play(new_bin, [clip for _, clip in fading], CELLS)
+    counts = collections.Counter()
+    for (row, clip), result in zip(fading, frames):
+        if "error" in result:
+            continue
+        beats = [beat for beat, frame in zip(v2.beats(clip), result["ok"])
+                 if any(o.get("alpha", 1.0) < 1 - 1e-6
+                        for o in frame.get("lighting", {}).get("value", {}).values())]
+        if not beats:
+            continue
+        counts["alpha below 1"] += 1
+        kind = output(clip["graph"])["kind"]
+        under = [other for other, c in by_score[row["score_id"]]
+                 if other["id"] != row["id"] and other["z_index"] < row["z_index"]
+                 and output(c["graph"])["kind"] == kind
+                 and any(other["start"] <= b < other["start"] + other["duration"] for b in beats)]
+        if under:
+            counts["over a clip, any selection"] += 1
+            examples["fade over a clip"].append(f"{row['id']} {row['name']!r}")
+        expression = lambda r: json.loads(r["selection_json"]).get("expression")  # noqa: E731
+        if any(expression(o) == expression(row) or "all" in (expression(o), expression(row))
+               for o in under):
+            counts["over a clip, same selection or all"] += 1
+    return dict(counts)
 
 
 def nudged(clip):
@@ -547,7 +669,7 @@ def parity(old_bin, new_bin, good, examples, best_fit="keep"):
     retry = []
     for row, a, _ in again:
         a = nudged(a)
-        retry.append((row, a, {**a, "graph": convert(a["graph"], a["duration"], best_fit)[0]}))
+        retry.append((row, a, {**a, "graph": convert(a["graph"], best_fit)[0]}))
     edge = worst_over_rigs(old_bin, new_bin, retry, {}, shift=v2.NUDGE)
     classes, by_class = collections.Counter(), collections.defaultdict(list)
     for row, _, _ in good:
@@ -580,7 +702,8 @@ def parity(old_bin, new_bin, good, examples, best_fit="keep"):
 def write_markdown(path, report):
     lines = ["# Graph version 3", ""]
     lines += [f"- {k}: {v}" for k, v in report.items() if not isinstance(v, dict)]
-    for key in ("forms", "node_count_change", "refusals", "checker_errors", "parity"):
+    for key in ("forms", "node_count_change", "refusals", "checker_errors", "fades_over_clips",
+                "parity"):
         if key not in report:
             continue
         lines += ["", f"## {key}", ""]
