@@ -746,6 +746,117 @@ fn slash_cuts_across_blooms_outward_and_fades() {
     assert!(near_rise < far_rise, "{near_rise} then {far_rise}");
 }
 
+/// Checks `light` against a hand-computed lit set: head `n` (of
+/// `fine_grid`) at sample `t` is lit when `margin(n, t)` is above 0 and dark
+/// when it is below 0. Heads within `edge` of the boundary are skipped.
+fn matches_by_hand(light: &Array3<f64>, times: &[f64], edge: f64, margin: impl Fn(usize, usize) -> f64) {
+    let mut checked = 0;
+    for t in 0..times.len() {
+        for n in 0..light.dim().0 {
+            let m = margin(n, t);
+            if m.abs() < edge {
+                continue;
+            }
+            assert_eq!(dim(light, n, t) > 1e-6, m > 0., "head {n} at beat {}", times[t]);
+            checked += 1;
+        }
+    }
+    assert!(checked > light.dim().0 * times.len() / 2, "checked {checked}");
+}
+
+#[test]
+fn a_chase_along_plus_u_moves_toward_stage_right() {
+    // shift −0.2 → 1 over each 2-beat event, scale 0.2, hard pill: head
+    // g{u}{z} is lit while u/9 − shift is in [0, 0.2].
+    let cells = fine_grid();
+    let mut graph = preset("Chase");
+    graph.nodes.get_mut("place").unwrap().inputs.insert(
+        "direction".into(),
+        luma_patterns::clip_graph::Input::Vector([1., 0., 0.]),
+    );
+    let times: Vec<f64> = (0..40).map(|i| 2. + i as f64 * 0.05).collect();
+    let light = play(&graph, &cells, &times);
+    matches_by_hand(&light, &times, 1e-6, |n, t| {
+        let u = cells[n].uvz[0] / 9.;
+        let shift = -0.2 + 1.2 * (times[t] - 2.) / 2.;
+        let x = (u - shift) / 0.2;
+        x.min(1. - x)
+    });
+    // The pill's mean U rises over the event.
+    let mean_u = |t: usize| {
+        let on = lit(&light, t);
+        on.iter().map(|n| cells[*n].uvz[0]).sum::<f64>() / on.len() as f64
+    };
+    assert!(mean_u(2) < mean_u(20) && mean_u(20) < mean_u(38));
+}
+
+/// [`slash`] with brightness from `node` alone; nodes nothing reads go.
+fn slash_brightness(node: &str) -> ClipGraph {
+    let mut graph = slash();
+    graph.nodes.get_mut("color1").unwrap().inputs.insert(
+        "brightness".into(),
+        luma_patterns::clip_graph::Input::wire(node),
+    );
+    loop {
+        let read: std::collections::BTreeSet<String> = graph
+            .nodes
+            .values()
+            .flat_map(|n| n.wires().map(|(_, s)| s.to_string()).collect::<Vec<_>>())
+            .collect();
+        let dead: Vec<String> = graph
+            .nodes
+            .keys()
+            .filter(|id| *id != "color1" && !read.contains(*id))
+            .cloned()
+            .collect();
+        if dead.is_empty() {
+            return graph;
+        }
+        for id in dead {
+            graph.nodes.remove(&id);
+        }
+    }
+}
+
+#[test]
+fn the_slash_cut_sweeps_along_its_direction_and_the_bloom_widens_from_its_line() {
+    let cells = fine_grid();
+    let times: Vec<f64> = (0..40).map(|i| i as f64 * 0.05).collect();
+    let unit = |v: [f64; 3]| {
+        let l = v.iter().map(|c| c * c).sum::<f64>().sqrt();
+        v.map(|c| c / l)
+    };
+    let along = |d: [f64; 3]| -> Vec<f64> {
+        cells.iter().map(|c| (0..3).map(|a| c.uvz[a] * d[a]).sum()).collect()
+    };
+    // Cut alone: the coordinate along (−0.82, 0, 0.57), 0 at the lowest
+    // head and 1 at the highest; lit below the shift, which runs 0 → 1 over
+    // the first 0.2 of the event. The front starts at +U, low Z.
+    let light = play(&slash_brightness("cut"), &cells, &times);
+    let d = along(unit([-0.82, 0., 0.57]));
+    let (lo, hi) = d.iter().fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+    matches_by_hand(&light, &times, 1e-6, |n, t| {
+        let shift = (times[t] / 2. / 0.2).min(1.);
+        shift - (d[n] - lo) / (hi - lo)
+    });
+    let head = |id: &str| cells.iter().position(|c| c.id == id).unwrap();
+    let first_on = |n: usize| (0..times.len()).find(|t| dim(&light, n, *t) > 1e-6);
+    assert!(first_on(head("g90")) < first_on(head("g55")));
+    assert!(first_on(head("g55")).unwrap() < first_on(head("g18")).unwrap());
+    // The far corner sits at exactly 1, where the shift ends: never cut on.
+    assert_eq!(first_on(head("g09")), None);
+    // Bloom alone: lit within scale × extent of the line at 0.68 along
+    // (0.57, 0, 0.82); scale runs 0.04 → 0.74 over the event.
+    let light = play(&slash_brightness("bloom"), &cells, &times);
+    let b = along(unit([0.57, 0., 0.82]));
+    let (lo, hi) = b.iter().fold((f64::MAX, f64::MIN), |(a, c), v| (a.min(*v), c.max(*v)));
+    let line = lo + 0.68 * (hi - lo);
+    matches_by_hand(&light, &times, 1e-6, |n, t| {
+        let scale = 0.04 + 0.7 * times[t] / 2.;
+        scale - (b[n] - line).abs() / (hi - lo)
+    });
+}
+
 // ---- version 2 → 3: every preset plays as it did ----
 
 /// Light per head and time as version 2 played it: color × dimmer × alpha
