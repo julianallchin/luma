@@ -1124,12 +1124,8 @@ mod tests {
     fn columns_run_from_the_sources_to_the_output() {
         let mut graph = chase();
         multiply(&mut graph, "color1", "brightness");
-        promote(
-            &mut graph,
-            &wired(&graph, "color1", "brightness"),
-            "values",
-            Kind::Time,
-        );
+        let product = wired(&graph, "color1", "brightness");
+        promote(&mut graph, &product, "values", Kind::Time);
         let columns = columns(&graph);
         assert_eq!(columns[0], ["color1"]);
         let column = |id: &str| columns.iter().position(|c| c.iter().any(|n| n == id));
@@ -1145,7 +1141,6 @@ mod tests {
             graph.nodes.len()
         );
         // A product's items stand in its order.
-        let product = wired(&graph, "color1", "brightness");
         let Some(Input::List(items)) = graph.nodes[&product].inputs.get("values") else {
             panic!("no items");
         };
