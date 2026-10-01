@@ -16,7 +16,7 @@
 
 pub(crate) mod agent_execution;
 pub mod catalog;
-pub(crate) mod composable_patterns;
+pub mod composable_patterns;
 pub mod distribute;
 pub(crate) mod drafts;
 pub mod fixture_create;
