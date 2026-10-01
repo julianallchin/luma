@@ -1,0 +1,100 @@
+<title>Presets From Color</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+:root{--bg:#f6f7f9;--text:#1a1e25;--muted:#5d6574;--line:#dde1e8;--code:#eceff4;
+  --sans:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#0f1115;--text:#e4e7ed;--muted:#8d95a4;--line:#262c36;--code:#1a1f28}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0f1115;--text:#e4e7ed;--muted:#8d95a4;--line:#262c36;--code:#1a1f28}
+body{background:var(--bg);color:var(--text);font:15px/1.55 var(--sans);padding-inline:20px;padding-block:28px 60px}
+.wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font-size:24px;margin:0;text-wrap:balance}
+h2{font-size:18px;margin:26px 0 0;padding-top:18px;border-top:1px solid var(--line);text-wrap:balance}
+p,li{max-width:72ch;margin:0}
+ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px}
+.muted{color:var(--muted)}
+code{font:13px var(--mono);background:var(--code);padding:1px 5px;border-radius:4px}
+.chart{overflow-x:auto;border:1px solid var(--line);border-radius:8px;padding:12px}
+</style>
+
+<div class="wrap">
+<h1>Presets from Color</h1>
+<p class="muted">How to get from one <code>color@1</code> clip to each color preset that ships today. Each arrow is one change. Nothing that the old forms can do is lost.</p>
+
+<h2>Rules</h2>
+<ul>
+  <li><b>Every number can take a source.</b> Every, life, width, offset, coverage, scale, speed, contrast, brightness and alpha.</li>
+  <li><b>Choices are settings.</b> Axis, span, plane, grain, boundary, "width relative" and the curve points. These do not animate, the same as today.</li>
+  <li><b>Time is events.</b> An event starts every <i>every</i> beats and lives for <i>life</i> beats. The curve plays over the life of one event. Every = 0 is one event over the whole clip (today's Time source).</li>
+  <li><b>Events can overlap.</b> When life is longer than every, several events are live at once. The input is evaluated once per live event, and brightness takes the maximum. This gives several strokes at once and Shimmer.</li>
+  <li><b>Random picks per event.</b> Random selects a share (coverage) of the units again for each event of the Time source in the same input.</li>
+</ul>
+
+<h2>The parts</h2>
+<div class="chart"><pre class="mermaid">
+flowchart LR
+  C["Color target<br>color@1"] --> IC["color"]
+  C --> IB["brightness"]
+  C --> IA["alpha"]
+  IC & IB & IA --> S{"Each input takes<br>a fixed value or a source"}
+  S --> T["Time<br>every · life · curve"]
+  S --> SP["Space<br>axis · span · grain · boundary<br>width · offset · curve"]
+  S --> R["Random<br>coverage · grain"]
+  S --> N["Noise<br>scale · speed · contrast"]
+  S --> AU["Audio"]
+  SP -. "offset takes a source<br>usually Time: the path" .-> T
+  R -. "coverage takes a source" .-> T
+  T -. "every and life<br>take a source" .-> T
+</pre></div>
+
+<h2>From Wash to every color preset</h2>
+<p class="muted">Start: <b>Wash</b> = color fixed white, brightness fixed 100%.</p>
+<div class="chart"><pre class="mermaid">
+flowchart LR
+  W(["Wash<br>color: white<br>brightness: 100%"])
+
+  W -- "color ← Time<br>every 0, gradient" --> CF(["Color fade"])
+  CF -- "rainbow gradient" --> RB(["Rainbow"])
+  W -- "color ← Space<br>axis u, gradient" --> GR(["Gradient"])
+
+  W -- "brightness ← Time<br>every 1, life 1<br>curve: hold, then fall" --> PU(["Pulse"])
+
+  W -- "brightness ← Noise<br>scale 0.5, speed 8<br>contrast 0.3" --> DR(["Drift"])
+  DR -- "blue, alpha 0.7<br>speed 16, contrast 0.1<br>scale 1" --> AT(["Atmosphere"])
+  DR -- "green<br>speed 4, contrast 0.8<br>scale 0.3" --> AU(["Aurora"])
+
+  W -- "brightness ← Random coverage 50%<br>× Time every 1, life 1" --> RH(["Random heads"])
+  RH -- "every 1/8, life 1/2<br>curve 0 → 1 → 0<br>coverage 30%" --> SH(["Shimmer"])
+  RH -- "every 4, life 4<br>coverage ← Time 0 → 1" --> BU(["Build"])
+  BU -- "coverage ← Time 1 → 0" --> DI(["Dissolve"])
+
+  W -- "brightness ← Space<br>axis u, width 0.2 relative<br>boundary clip<br>offset ← Time every 2, life 2<br>path 0 → 1" --> CH(["Chase"])
+  CH -- "curve: soft bump<br>width 1" --> WA(["Wave"])
+  WA -- "axis radial<br>width 0.4 relative" --> RI(["Ripple"])
+  CH -- "axis angle, curve ramp<br>width 0.25, boundary wrap" --> SPN(["Spin"])
+  WA -- "every 4, life 4<br>path 0 → 1 → 0, width 0.2" --> BO(["Bounce"])
+  CH -- "path held at 0.25, 0.75<br>width 0.5" --> AL(["Alternating sides"])
+  CH -- "every 4, life 4<br>path held in 4 steps<br>width 0.25" --> ST(["Stepped chase"])
+  CH -- "every 0: over the clip<br>axis radial, span fixture<br>path 0 → 0.5, width 1.25" --> GW(["Grow"])
+</pre></div>
+
+<h2>The controls that must not be lost</h2>
+<div class="chart"><pre class="mermaid">
+flowchart LR
+  CH(["Chase<br>every 2, life 2"]) -- "life 6" --> K3(["3 strokes on the axis at once<br>events overlap, brightness max"])
+  CH -- "width ← Time<br>every 0, 0.1 → 0.6" --> KW(["Stroke grows over the clip"])
+  CH -- "boundary clip" --> KC(["Stroke enters from off the axis<br>and leaves it"])
+  CH -- "every ← Time<br>4 → 1 beats" --> KE(["Chase speeds up<br>over the clip"])
+  RH(["Random heads"]) -- "coverage ← Noise" --> KN(["Coverage wanders"])
+  SH(["Shimmer"]) -- "grain fixture" --> KG(["Whole fixtures sparkle"])
+</pre></div>
+
+<h2>What changes from today</h2>
+<ul>
+  <li><code>color.sparkle@1</code> goes: Sparkle = brightness from Random × Time. Its <code>every</code> and <code>duration</code> become the Time source's every and life.</li>
+  <li><code>color.noise@1</code> goes: Noise is a source on brightness or color. Contrast stays a number input of the Noise source.</li>
+  <li>The Space <code>move</code> block goes: <code>travel</code> is the life of the offset's Time source, <code>path</code> is its curve, width and boundary stay on Space.</li>
+  <li>The Hit source and the form's <code>every</code> go: they are Time with every and life on the source. Two inputs that must stay in step use the same every.</li>
+  <li>Grain moves from Sparkle to Space, Random and Noise.</li>
+</ul>
+<p class="muted">Open: when color itself takes overlapping events, which event wins. Today color uses the form's events too; the proposal is the newest live event.</p>
+</div>

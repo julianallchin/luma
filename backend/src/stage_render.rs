@@ -23,8 +23,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 use glam::Vec3;
+use luma_render::frame::{Frame, Moment};
 use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment, VenueHaze};
-use luma_render::{assets, build_frame_with, coords, Renderer, DEFAULT_SUBFRAMES};
+use luma_render::{assets, build_frame_at, coords, footage, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
 
@@ -315,9 +316,14 @@ pub fn primitive_state(
         .primitives
         .get(&format!("{id}:{head}"))
         .or_else(|| state.primitives.get(id))?;
+    // The renderer works in linear light with sRGB primaries and presents it
+    // in sRGB, SDR or HDR alike; a wider color is mapped into sRGB by the
+    // same rule a fixture's emitters use.
+    let (color, dimmer) =
+        luma_patterns::color_space::Gamut::SRGB.split(p.color.map(f64::from), f64::from(p.dimmer));
     Some(scene_desc::PrimitiveState {
-        dimmer: p.dimmer,
-        color: p.color,
+        dimmer: dimmer as f32,
+        color: color.map(|v| v as f32),
         strobe: p.strobe,
         position: p.position,
         // Fixture wheel slots are not in `UniverseState` yet. Open is the
@@ -545,7 +551,33 @@ impl Sequence {
         self.size
     }
 
-    /// One frame, tightly packed sRGB RGBA8. Blocks until it is back.
+    /// One frame of one moment, tightly packed sRGB RGBA8: [`Self::exposure`]
+    /// of `state` at `time`, a display frame's strobes integrated over the
+    /// [`luma_render::footage::FRAME_S`] before it.
+    ///
+    /// # Errors
+    /// As [`Self::exposure`].
+    pub fn frame(
+        &self,
+        state: Option<&UniverseState>,
+        time: f32,
+        subframes: u32,
+        continuity: Continuity,
+    ) -> Result<Vec<u8>, String> {
+        self.exposure(
+            vec![(state.cloned(), Moment::at(f64::from(time)))],
+            subframes,
+            continuity,
+        )
+    }
+
+    /// One frame exposed over `moments`, tightly packed sRGB RGBA8. Blocks
+    /// until it is back.
+    ///
+    /// Each moment is a light state and the [`Moment`] it is drawn at: a
+    /// shutter's worth from [`footage::moments`], as live and the show export
+    /// draw. The renderer adds them in linear light before the tone curve and
+    /// shares `subframes` out between them.
     ///
     /// `continuity` says whether this frame carries on from the last one drawn
     /// through *any* sequence on the render thread — the haze history is the
@@ -556,21 +588,22 @@ impl Sequence {
     /// # Errors
     /// Fails if the GPU device cannot be created, if a referenced mesh is
     /// missing, or if the frame cannot be read back.
-    pub fn frame(
+    pub fn exposure(
         &self,
-        state: Option<&UniverseState>,
-        time: f32,
+        moments: Vec<(Option<UniverseState>, Moment)>,
         subframes: u32,
         continuity: Continuity,
     ) -> Result<Vec<u8>, String> {
+        if moments.is_empty() {
+            return Err("a frame needs at least one moment".into());
+        }
         let (reply, answer) = mpsc::sync_channel(1);
         jobs()
             .send(Job::Frame {
                 id: self.id,
-                // Cloned rather than borrowed: the frame is built on the
+                // Owned rather than borrowed: the frame is built on the
                 // renderer's own thread, which outlives this call's stack.
-                state: state.cloned(),
-                time,
+                moments,
                 subframes,
                 continuity,
                 reply,
@@ -641,8 +674,7 @@ enum Job {
     Install(Box<Installed>),
     Frame {
         id: u64,
-        state: Option<UniverseState>,
-        time: f32,
+        moments: Vec<(Option<UniverseState>, Moment)>,
         subframes: u32,
         continuity: Continuity,
         reply: mpsc::SyncSender<Result<Vec<u8>, String>>,
@@ -678,7 +710,7 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
     let mut stage: Option<(Renderer, assets::Library, PathBuf)> = None;
     let mut installed: HashMap<u64, Installed> = HashMap::new();
     while let Ok(job) = rx.recv() {
-        let (id, state, time, subframes, continuity, reply) = match job {
+        let (id, moments, subframes, continuity, reply) = match job {
             Job::Install(scene) => {
                 installed.insert(scene.id, *scene);
                 continue;
@@ -689,12 +721,11 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
             }
             Job::Frame {
                 id,
-                state,
-                time,
+                moments,
                 subframes,
                 continuity,
                 reply,
-            } => (id, state, time, subframes, continuity, reply),
+            } => (id, moments, subframes, continuity, reply),
         };
         let Some(scene) = installed.get(&id) else {
             // Only reachable if the handle outlived its own `Drop`, which it
@@ -724,13 +755,7 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
         }
         let (renderer, library, _) = stage.as_mut().expect("the stage was just installed");
         let _ = reply.send(one_frame(
-            renderer,
-            library,
-            scene,
-            state.as_ref(),
-            time,
-            subframes,
-            continuity,
+            renderer, library, scene, &moments, subframes, continuity,
         ));
     }
 }
@@ -739,25 +764,37 @@ fn one_frame(
     renderer: &mut Renderer,
     library: &mut assets::Library,
     scene: &Installed,
-    state: Option<&UniverseState>,
-    time: f32,
+    moments: &[(Option<UniverseState>, Moment)],
     subframes: u32,
     continuity: Continuity,
 ) -> Result<Vec<u8>, String> {
     let (width, height) = scene.size;
-    let mut frame = build_frame_with(
-        &scene.scene,
-        &scene.definitions,
-        &|id, head| primitive_state(state, id, head),
-        time,
-        library,
-    )
-    .map_err(|error| format!("could not assemble the frame: {error}"))?;
-    frame.camera = luma_render::frame::Camera {
+    let camera = luma_render::frame::Camera {
         eye: scene.camera.position(),
         target: scene.camera.target,
         fov_y_deg: scene.camera.fov_y_deg,
     };
+    let frames = moments
+        .iter()
+        .map(|(state, moment)| {
+            let mut frame = build_frame_at(
+                &scene.scene,
+                &scene.definitions,
+                &|id, head| primitive_state(state.as_ref(), id, head),
+                *moment,
+                library,
+            )
+            .map_err(|error| format!("could not assemble the frame: {error}"))?;
+            // The fitted camera, turned by the footage look's shake at this
+            // moment as `build_frame_at` turns the scene's own.
+            frame.camera = footage::turned(
+                camera,
+                footage::shake(&scene.scene.render.look.footage, moment),
+            );
+            Ok(frame)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let frame = Frame::exposure(frames);
     match continuity {
         Continuity::Next => renderer.render_next(&frame, width, height, subframes),
         Continuity::Cut => renderer.render(&frame, width, height, subframes),
@@ -1024,6 +1061,45 @@ mod tests {
         assert!(geometry.pieces().is_empty());
     }
 
+    /// Light is linear Rec. 2020; the renderer draws linear sRGB. An sRGB
+    /// red is the renderer's red at the same light, and a red deeper than
+    /// sRGB is the nearest red it has, never a negative channel.
+    #[test]
+    fn head_color_reaches_the_renderer_in_srgb() {
+        let head = |color: [f64; 3], dimmer: f32| {
+            let state = UniverseState {
+                primitives: [(
+                    "par".to_string(),
+                    PrimitiveState {
+                        dimmer,
+                        color: color.map(|v| v as f32),
+                        strobe: 0.0,
+                        position: [0.0, 0.0],
+                        speed: 1.0,
+                        aim: None,
+                    },
+                )]
+                .into(),
+            };
+            primitive_state(Some(&state), "par", 0).unwrap()
+        };
+        let red = luma_patterns::color_space::from_srgb([1., 0., 0.]);
+        let peak = red.iter().copied().fold(0., f64::max);
+        let drawn = head(red.map(|v| v / peak), (0.5 * peak) as f32);
+        assert!((drawn.dimmer - 0.5).abs() < 1e-5);
+        assert!(drawn.color[0] == 1.0 && drawn.color[1].max(drawn.color[2]) < 1e-5);
+        // A stored clip's color, converted by primaries only, draws as the
+        // renderer drew its old numbers.
+        let orange = luma_patterns::color_space::from_linear_srgb([1., 0.5, 0.]);
+        let peak = orange.iter().copied().fold(0., f64::max);
+        let drawn = head(orange.map(|v| v / peak), (0.5 * peak) as f32);
+        assert!((drawn.dimmer - 0.5).abs() < 1e-5);
+        assert!((drawn.color[0] - 1.0).abs() < 1e-5 && (drawn.color[1] - 0.5).abs() < 1e-5);
+        let deep = head([1., 0., 0.], 0.5);
+        assert!(deep.color.iter().all(|v| (0.0..=1.0).contains(v)) && deep.color[0] == 1.0);
+        assert!(deep.dimmer > 0.5 && deep.dimmer <= 1.0);
+    }
+
     #[test]
     fn head_state_falls_back_to_the_bare_fixture_id() {
         let mut state = UniverseState::default();
@@ -1031,7 +1107,7 @@ mod tests {
             "par".into(),
             PrimitiveState {
                 dimmer: 0.5,
-                color: [1.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0],
                 strobe: 0.0,
                 position: [0.0, 0.0],
                 speed: 1.0,

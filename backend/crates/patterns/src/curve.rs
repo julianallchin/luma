@@ -18,6 +18,9 @@ const EASES: &str = r#""linear", "ease-in", "ease-out", "ease-in-out", "hold" or
 pub enum Ease {
     #[default]
     Linear,
+    SineIn,
+    SineOut,
+    SineInOut,
     EaseIn,
     EaseOut,
     EaseInOut,
@@ -25,13 +28,17 @@ pub enum Ease {
     Hold,
     /// CSS `cubic-bezier(x1, y1, x2, y2)`, local to the segment: x is a share
     /// of the segment's length, y a share of the change to the next value.
-    /// Every number is in 0..1, so the curve stays between its two values.
+    /// x1 and x2 are in 0..1, so x only grows; y1 and y2 may be any number,
+    /// so the curve may overshoot its two values (outputs clamp).
     Bezier([f64; 4]),
 }
 
 impl Ease {
-    const NAMED: [(&'static str, Ease); 5] = [
+    const NAMED: [(&'static str, Ease); 8] = [
         ("linear", Ease::Linear),
+        ("sine-in", Ease::SineIn),
+        ("sine-out", Ease::SineOut),
+        ("sine-in-out", Ease::SineInOut),
         ("ease-in", Ease::EaseIn),
         ("ease-out", Ease::EaseOut),
         ("ease-in-out", Ease::EaseInOut),
@@ -43,6 +50,9 @@ impl Ease {
     pub fn handles(self) -> Option<[f64; 4]> {
         Some(match self {
             Self::Linear => [1. / 3., 1. / 3., 2. / 3., 2. / 3.],
+            Self::SineIn => [0.47, 0., 0.745, 0.715],
+            Self::SineOut => [0.39, 0.575, 0.565, 1.],
+            Self::SineInOut => [0.445, 0.05, 0.55, 0.95],
             Self::EaseIn => [0.42, 0., 1., 1.],
             Self::EaseOut => [0., 0., 0.58, 1.],
             Self::EaseInOut => [0.42, 0., 0.58, 1.],
@@ -55,6 +65,9 @@ impl Ease {
     pub fn apply(self, t: f64) -> f64 {
         match self {
             Self::Linear => t,
+            Self::SineIn => 1. - (std::f64::consts::FRAC_PI_2 * t).cos(),
+            Self::SineOut => (std::f64::consts::FRAC_PI_2 * t).sin(),
+            Self::SineInOut => (1. - (std::f64::consts::PI * t).cos()) / 2.,
             Self::Hold => 0.,
             _ => {
                 let [x1, y1, x2, y2] = self.handles().expect("a curved ease");
@@ -66,9 +79,12 @@ impl Ease {
 
     fn is_valid(self) -> bool {
         match self {
-            Self::Bezier(handles) => handles
-                .iter()
-                .all(|v| v.is_finite() && (0. ..=1.).contains(v)),
+            Self::Bezier([x1, y1, x2, y2]) => {
+                (0. ..=1.).contains(&x1)
+                    && (0. ..=1.).contains(&x2)
+                    && y1.is_finite()
+                    && y2.is_finite()
+            }
             _ => true,
         }
     }
@@ -198,8 +214,11 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for Written<V> {
     }
 }
 
-/// Points over x 0–1, strictly increasing, from x 0 to x 1. Before the first
-/// point and after the last, the end values hold.
+/// Points over x 0–1, from x 0 to x 1, in order. Two points may share an x:
+/// a jump, where x itself reads the value after it, as a shader's `step`
+/// and a hold keyframe: each piece covers [a, b). The same at x 0 and x 1.
+/// Before the first point and after the last, the end values hold, so
+/// `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 on [0, 1) and 0 elsewhere.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve<V> {
     pub points: Vec<CurvePoint<V>>,
@@ -299,11 +318,17 @@ impl<V> Curve<V> {
             if !point.x.is_finite() || !(0. ..=1.).contains(&point.x) {
                 return Err(Error(format!("points[{i}]: x must be in 0..1")));
             }
-            if i > 0 && point.x <= self.points[i - 1].x {
+            if i > 0 && point.x < self.points[i - 1].x {
                 return Err(Error(format!(
-                    "points[{i}]: x {} must be above the previous x {}",
+                    "points[{i}]: x {} must not be below the previous x {}",
                     point.x,
                     self.points[i - 1].x
+                )));
+            }
+            if i > 1 && point.x == self.points[i - 2].x {
+                return Err(Error(format!(
+                    "points[{i}]: at most two points share an x (a jump); x {} has three",
+                    point.x
                 )));
             }
             if let Some(why) = value(&point.value) {
@@ -311,7 +336,7 @@ impl<V> Curve<V> {
             }
             if !point.ease.is_valid() {
                 return Err(Error(format!(
-                    "points[{i}]: a Bézier ease [x1, y1, x2, y2] needs each number in 0..1, such as [0.42, 0, 0.58, 1]"
+                    "points[{i}]: a Bézier ease [x1, y1, x2, y2] needs x1 and x2 in 0..1 (y1 and y2 may overshoot), such as [0.34, 1.56, 0.64, 1]"
                 )));
             }
         }
@@ -328,7 +353,8 @@ impl<V> Curve<V> {
         Ok(())
     }
 
-    /// The segment at `progress` and the share of its change done there.
+    /// The segment at `progress` and the share of its change done there; at
+    /// a jump, the segment after it.
     pub(crate) fn locate(&self, progress: f64) -> (usize, f64) {
         let last = self.points.len() - 1;
         if progress < self.points[0].x {

@@ -140,6 +140,11 @@ use prodjlink::DiscoveredDevice;
 
 commands! {
     composable_patterns::preview_composable_pattern(request: Value) -> Value;
+    composable_patterns::selection_cells(
+        venue_id: String,
+        selection: Selection,
+        seed: u64,
+    ) -> Vec<luma_patterns::Cell>;
 
     agent_threads::agent_thread_list(
         agent_kind: Option<String>,
@@ -270,6 +275,8 @@ commands! {
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
     scores::apply_score_document(score_id: String, score: luma_patterns::Score) -> ();
     scores::preview_score_clip(score_id: String, clip_id: String, score: Option<luma_patterns::Score>) -> AnnotationPreview;
+    scores::clip_graph_definitions() -> Value;
+    scores::clip_presets() -> Value;
 
     distribute::distribute(
         venue_id: String,

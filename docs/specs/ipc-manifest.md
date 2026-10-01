@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**150 commands** across **26 domains** · **13 events**
+**153 commands** across **26 domains** · **13 events**
 
 ## Domains
 
@@ -17,7 +17,7 @@ name.
 | `agent_threads` | 8 | `backend/src/dispatch/handlers/agent_threads.rs` |
 | `artnet` | 6 | `backend/src/dispatch/handlers/artnet.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
-| `composable_patterns` | 1 | `backend/src/dispatch/handlers/composable_patterns.rs` |
+| `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
@@ -31,7 +31,7 @@ name.
 | `perform` | 8 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
-| `scores` | 9 | `backend/src/dispatch/handlers/scores.rs` |
+| `scores` | 11 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `stage` | 13 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
@@ -39,7 +39,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **150** | |
+| **total** | **153** | |
 
 ## Commands
 
@@ -93,6 +93,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `preview_composable_pattern` | `request: Value` | `Value` |
+| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64` | `Vec<luma_patterns::Cell>` |
 
 ### `compositor`
 
@@ -259,6 +260,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `apply_score_document` | `scoreId: String`<br>`score: luma_patterns::Score` | `()` |
 | `preview_score_clip` | `scoreId: String`<br>`clipId: String`<br>`score: Option<luma_patterns::Score>` | `AnnotationPreview` |
+| `clip_graph_definitions` | — | `Value` |
+| `clip_presets` | — | `Value` |
 
 ### `settings`
 

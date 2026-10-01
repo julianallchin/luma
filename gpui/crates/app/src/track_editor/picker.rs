@@ -252,8 +252,7 @@ fn fetch(app: &mut Luma, menu: InsertMenu, choice: InsertChoice, cx: &mut Contex
         luma_lib::models::composable_patterns::ComposablePreviewRequest {
             venue_id: editor.venue_id.clone(),
             track_id: editor.track_id.clone(),
-            definition: choice.0.form.clone(),
-            inputs: choice.0.inputs.clone(),
+            graph: choice.graph(),
             targets: vec![luma_lib::models::selection::Selection::new("all")],
             times: (0..count)
                 .map(|i| start + i as f64 * (end - start) / count as f64)

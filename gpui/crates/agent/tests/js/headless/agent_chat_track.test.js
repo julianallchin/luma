@@ -16,8 +16,8 @@ test("a track keeps its chat until an explicit new or history choice", () => {
   const composer = (s) => s.find({ role: "input", label: "Do anything…" });
   nav.trackEditor("Test Venue", "Aurora");
   header("Luma");
-  // A clip is labelled by its form; the fixture's clips play Constant color.
-  until("the score's clip", (s) => s.find({ role: "card", label: "Constant color" }));
+  // A clip is labelled by its name; the fixture's clip is a Wash.
+  until("the score's clip", (s) => s.find({ role: "card", label: "Wash" }));
   // Picking the track opened its most recent chat, a seeded one.
   until("the track's chat", (s) => s.findAll({ role: "text" }).some((n) => n.label.startsWith(SEEDED)));
   app.type(composer(until("the composer", composer)), "keep this draft");

@@ -18,7 +18,7 @@ A `Clip` has these fields:
 
 | Field | Meaning |
 |-------|---------|
-| `graph` | The form the clip plays, with its version, for example `color.chase@1` |
+| `graph` | The form the clip plays, with its version, for example `color@1` |
 | `start` | Start position, in beats |
 | `duration` | Length, in beats |
 | `seed` | Seed for random choices |
@@ -129,8 +129,13 @@ inputs are `color`, `pan`, `tilt`, `strobe` and `speed`. All are optional. An
 unwired input leaves that capability unchanged for lower layers. This is
 different from writing zero.
 
-There is no dimmer input. The dimmer is the peak channel of the RGB color. The
+There is no dimmer input. The dimmer is the peak channel of the color. The
 color is normalized by that value (`FixtureOutput::from_rgb` in `output.rs`).
+
+Every light color is linear Rec. 2020, 0–1 per channel. Gradients blend in
+OKLab. A fixture or the visualizer converts the color to its own emitters;
+`backend/crates/patterns/src/color_space.rs` holds the conversions and the
+gamut mapping.
 
 ## Host side
 

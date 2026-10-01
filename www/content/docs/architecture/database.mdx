@@ -70,7 +70,8 @@ A clip id is `score_id:key`. Loading a score reads the two tables into a
 `luma_patterns::Score`. Saving a score compares it with the
 rows and writes only the rows that changed (`backend/src/database/local/scores/rows.rs`).
 
-A clip's `graph` names a shipped form, such as `color.chase@1`. Migration
+A clip's `graph` names a shipped form, such as `color@1`. A clip that names
+anything else is refused. Migration
 `20260923100000_drop_cues_and_pattern_library.sql` dropped the old `patterns`,
 `implementations`, `cues` and `pattern_categories` tables. Migration
 `20260923200000_drop_score_definitions.sql` dropped `score_definitions`.

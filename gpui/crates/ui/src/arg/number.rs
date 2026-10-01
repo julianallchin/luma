@@ -12,9 +12,10 @@
 //! `escape` to cancel ahead of every binding around the field, and this
 //! wrapper gives them their meaning.
 
+use crate::rpx;
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    div, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
     Subscription, Window,
 };
 
@@ -33,10 +34,32 @@ pub fn parse_draft(draft: &str, min: f64, max: f64) -> Option<f64> {
 }
 
 /// The one spelling a committed value shows as — also what a revert restores,
-/// so draft-vs-value comparison is string equality on this.
+/// so draft-vs-value comparison is string equality on this. At most
+/// [`DECIMALS`] decimals, trailing zeros trimmed: a value that is not round
+/// shows rounded, and a commit of the unchanged text keeps the exact value.
 #[must_use]
 pub fn format_value(value: f64) -> String {
-    format!("{value}")
+    format_decimals(value, DECIMALS)
+}
+
+/// The decimals a number field shows unless its host asks for fewer.
+pub const DECIMALS: usize = 4;
+
+/// `value` with at most `decimals` decimals, trailing zeros trimmed, and no
+/// negative zero.
+#[must_use]
+pub fn format_decimals(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    let text = if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        text.as_str()
+    };
+    if text == "-0" {
+        "0".to_owned()
+    } else {
+        text.to_owned()
+    }
 }
 
 /// A reciprocal as the field shows it: four decimals at most, as 1/3 beat
@@ -69,6 +92,11 @@ pub trait DraftValue: Copy + PartialEq + std::fmt::Display + 'static {
     fn fractional(self) -> bool {
         false
     }
+    /// The value as the field shows it, with at most `decimals` decimals
+    /// where the domain has any.
+    fn show(self, _decimals: usize) -> String {
+        self.to_string()
+    }
 }
 impl DraftValue for f64 {
     fn clamp_value(self, min: Self, max: Self) -> Self {
@@ -89,6 +117,9 @@ impl DraftValue for f64 {
     }
     fn fractional(self) -> bool {
         self > 0. && self < 1.
+    }
+    fn show(self, decimals: usize) -> String {
+        format_decimals(self, decimals)
     }
 }
 impl DraftValue for u64 {
@@ -122,6 +153,8 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     /// The other unit a press on the unit switches to, and whether the field
     /// shows it now: "per beat" for a field in beats.
     per: Option<(&'static str, bool)>,
+    /// The most decimals the field shows.
+    decimals: usize,
     _subs: [Subscription; 2],
 }
 
@@ -140,7 +173,7 @@ impl<T: DraftValue> DraftedNumber<T> {
         let value = value.clamp_value(min, max);
         let input = cx.new(|cx| {
             let mut input = TextInput::search("", cx);
-            input.set_text(value.to_string(), cx);
+            input.set_text(value.show(DECIMALS), cx);
             input
         });
         // Blur is a commit point. The subscription lives on this entity, so a
@@ -174,8 +207,19 @@ impl<T: DraftValue> DraftedNumber<T> {
             width,
             unit: None,
             per: None,
+            decimals: DECIMALS,
             _subs,
         }
+    }
+
+    /// Show at most `decimals` decimals: a vector component reads 0.566,
+    /// not 0.56583.
+    #[must_use]
+    pub fn with_decimals(mut self, decimals: usize, cx: &mut Context<Self>) -> Self {
+        self.decimals = decimals;
+        let text = self.shown();
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        self
     }
 
     /// Show `unit` after the digits, inside the field.
@@ -209,7 +253,7 @@ impl<T: DraftValue> DraftedNumber<T> {
     fn shown(&self) -> String {
         match self.per {
             Some((_, true)) => format_per(self.value.per()),
-            _ => self.value.to_string(),
+            _ => self.value.show(self.decimals),
         }
     }
 
@@ -297,14 +341,17 @@ impl<T: DraftValue> Render for DraftedNumber<T> {
         let drafting = self.input.read(cx).text() != self.shown();
         float::field()
             .when(drafting, |field| field.key_context(DRAFT_CONTEXT))
-            .w(px(self.width))
+            .w(rpx(self.width))
+            // Never wider than its column: a field nested under a source's
+            // rule gives up the rule's indent.
+            .max_w_full()
             .font_family(crate::fonts::MONO)
-            .gap(px(4.))
+            .gap(rpx(4.))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .when_some(self.unit, |field, unit| {
                 let label = div()
                     .flex_none()
-                    .text_size(px(11.))
+                    .text_size(rpx(11.))
                     .text_color(crate::ladder::foreground_alpha(0.45));
                 match self.per {
                     None => field.child(label.child(unit)),
@@ -360,6 +407,9 @@ mod tests {
         assert_eq!(format_value(42.), "42");
         assert_eq!(format_value(3.5), "3.5");
         assert_eq!(format_value(-0.25), "-0.25");
+        assert_eq!(format_value(0.1 + 0.2), "0.3");
+        assert_eq!(format_decimals(0.56583, 3), "0.566");
+        assert_eq!(format_decimals(-0.0001, 3), "0");
     }
 
     /// Beats show as hits per beat, rounded, and zero stays zero.

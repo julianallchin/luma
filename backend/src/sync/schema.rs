@@ -409,7 +409,9 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "blend_mode",
             "inputs_json",
             "created_at",
-            "updated_at"
+            "updated_at",
+            "name",
+            "graph_json"
         ]
     ),
     table!(

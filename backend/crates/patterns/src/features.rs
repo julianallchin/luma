@@ -12,33 +12,22 @@ pub struct FeatureRequest {
 pub trait FeatureSource: std::fmt::Debug + Send + Sync {
     /// The band's energy at `beat`.
     fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<f64>;
+    /// The band's lowest and highest energy over the whole track. Band
+    /// energy reads 0–1 between them, so every clip on the track reads the
+    /// same level at the same moment.
+    fn range(&self, request: &FeatureRequest) -> Result<(f64, f64)>;
 }
 
-pub(crate) fn definition(op: Primitive) -> Option<Definition> {
-    use crate::signals::port;
-    let fixed = |name, kind, value| Input {
-        optional: false,
+pub(crate) fn definition() -> Definition {
+    let fixed = |name: &str, value| Input {
         rate: Rate::Fixed,
-        ..port(name, kind, Some(value))
+        ..crate::graph::port(name, ValueType::Number, Some(value))
     };
-    if op != Primitive::BandEnergy {
-        return None;
-    }
     let inputs = [
-        (
-            "low_hz",
-            fixed("Low frequency (Hz)", ValueType::Number, Value::Number(20.0)),
-        ),
-        (
-            "high_hz",
-            fixed(
-                "High frequency (Hz)",
-                ValueType::Number,
-                Value::Number(60.0),
-            ),
-        ),
+        ("low_hz", fixed("Low frequency (Hz)", Value::Number(20.0))),
+        ("high_hz", fixed("High frequency (Hz)", Value::Number(60.0))),
     ];
-    Some(Definition {
+    Definition {
         name: "Frequency energy".into(),
         inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         outputs: BTreeMap::from([(
@@ -48,8 +37,8 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 rate: Rate::Frame,
             },
         )]),
-        body: Body::Primitive(op),
-    })
+        body: Body::Primitive(Primitive::BandEnergy),
+    }
 }
 
 pub(crate) fn request(

@@ -1,74 +1,109 @@
 ---
 name: composing-patterns
-description: How to choose forms and place them as clips, in the fewest calls. The working order, a complete audio-reactive example, how to measure the result as numbers, and the API rules that cost the most retries. Read before placing clips.
+description: How to build clip graphs and place them as clips, in the fewest calls. The working order, a complete audio-reactive example, how to measure the result as numbers, how to read the checker's errors, and the API rules that cost the most retries. Read before placing clips.
 ---
 # Composing patterns
 
-A clip plays one form on one selection for one time range. Layers combine
-clips by blend mode. Pick the form, set its inputs, check, place, measure,
-apply. There are no custom graphs.
+A clip has one graph on one selection for one time range. You build the
+graph in Python with bare builder functions. Layers combine clips by blend
+mode. Build, add, measure, apply.
 
 ## The working order
 
 1. **Read the rig.** `luma.venue.describe()` for the shape, `luma.venue.groups()`
-   for the exact group names. Use those names as written. Never build a name
+   for the exact group names. Use those names as written. Never make a name
    from a fixture label.
-2. **Read the form cards.** Load the `node-cards` skill. It lists every form
-   with its inputs, sources and presets.
-3. **Set the inputs.** Start from the form's defaults and change what the look
-   needs. A clip needs every input of its form.
-4. **Place** with `edit.add_clip(form, seconds=(0, duration), selection="name", inputs=inputs)`.
-5. **Check** with `edit.check()`. It takes no arguments.
-6. **Measure** with `edit.window(...)`. Read the numbers before you look at a
+2. **Find the effect.** Load the `effect-catalog` skill. It gives each effect
+   as Python. Load `node-cards` for what each node and input does.
+3. **Build the graph.** Start from a catalog row or `preset("Chase")`. Change
+   the numbers that the music asks for.
+4. **Add** with `edit.add_clip(graph, name="Kick chase", beats=(32, 48), selection="name")`.
+   The checker runs at once. A `ClipError` tells you the node, the input and
+   an example fix.
+5. **Measure** with `edit.window(...)`. Read the numbers before you look at a
    picture.
-7. **Look once** with `luma.venue.render(edit=edit, only=clip, t=...)`.
-8. **Apply** with `edit.apply()`, then tell the user what the room will feel like.
+6. **Look once** with `luma.venue.render(edit=edit, only=clip, t=...)`.
+7. **Apply** with `edit.apply()`, then tell the user what the room will feel like.
 
 ## A complete example: a kick-driven chase over a wash
 
-A dim blue wash, with a white chase above it whose brightness follows the kick.
+A dim blue wash, with a white chase above it. The kick makes the chase
+brighter.
 
 ```python
 edit = luma.track.edit()
+end = luma.track.duration_s
 
-def defaults(form):
-    return {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
+edit.add_clip(color(color="#1030ff", brightness=0.3),
+              name="Blue wash", seconds=(0.0, end), selection="all")
 
-wash = defaults("color.constant@1")
-wash.update(color="#1030ff", alpha=.3)
-edit.add_clip("color.constant@1", seconds=(0.0, luma.track.duration_s),
-              selection="all", inputs=wash)
-
-chase = defaults("color.chase@1")
-chase.update(axis="z", every=1, travel=2, width=.3,
-             alpha={"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": 0.2}})
-clip = edit.add_clip("color.chase@1", seconds=(0.0, luma.track.duration_s),
-                     selection="led_bars_vertical", inputs=chase, blend="screen")
+t = time(every=1, duration=2)
+place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
+pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]])
+kick = curve(audio("Kick"), "Ramp up", low=0.3, high=1)
+chase = color(brightness=pill * kick)
+clip = edit.add_clip(chase, name="Kick chase", seconds=(0.0, end),
+                     selection="led_bars_vertical", blend="screen")
 edit.check()
 ```
 
+`clip.graph.source()` prints Python that builds the same graph. Use it to
+read a clip that is already in the score, change a line, and pass the new
+graph to `edit.update_clip(clip, graph=...)`.
+
 ## Rules that cost the most retries
 
-- **Every input, every time.** `add_clip` needs a value for every input of the
-  form. Start from `luma.track.definition(form)["inputs"]` defaults.
+- **A coordinate goes through a curve.** `brightness=time()` is an error.
+  Write `brightness=curve(time(), "Ramp up")`.
+- **A clip needs a name.** `add_clip(graph, name="...")`. A preset graph
+  keeps its preset name.
+- **One output per clip.** Color and strobe together are two clips.
+- **Events come from `time(every=...)`.** For once over the clip, give
+  `time()` no every. Every, duration and delay are beats; phase is turns.
+- **Reuse a variable to share a node.** `t = time(every=2)` used twice is one
+  time node. Two `noise(...)` calls are two streams.
+- **Two ways to move.** Slide the place: a curve over time or audio on
+  `space(shift=...)` moves a shape along the heads with its own ease
+  (chase, bounce, meter); on `space(scale=...)` it grows (bloom). Or give
+  each head its own clock: a curve over space on `time(...)`, on `phase` for
+  a loop (wave, spin), on `delay` for a one-shot (wipe, dissolve).
+- **Variable names are node names.** `pill = curve(...)` is node `pill` on
+  its card and in errors. Name the nodes that matter.
+- **A region is a jump.** Two points at the same x make a step:
+  `[[0, 1], [0.5, 1], [0.5, 0], [1, 0]]`. "Step up" and "Step down" are
+  presets.
+- **Multiply with `*`.** `brightness=cut * bloom * fade` is one math node.
+  `+`, `-`, `max(a, b)` and `min(a, b)` work too, with numbers on either
+  side (`1 - fade`, `0.5 * pill`). A list such as `[a, b]` is an error.
+- **Brightness is the pattern; alpha is opacity.** Put the chase, pulse or
+  cut on `brightness` (or strobe `rate`). `alpha` mixes the whole clip with
+  the light below: use it for a fade in or out of the clip.
+- **Settings are not wired.** `kind`, `wrap`, `base` and `by` are plain words.
 - **`edit.check()` takes no arguments.** So do `edit.diff()` and `edit.apply()`.
 - **`luma.track.document` is a property.** Do not call it.
-- **Python calls need `purpose`.** The tool rejects a cell without it.
+- **Python calls need `purpose`.** The tool refuses a cell without it.
 - **Selection is a group expression.** Operators: `&` and, `|` or, `^` xor,
   `~` not, `>` fallback, parentheses. `"all"` is the whole venue. Names are
-  lower case with underscores, exactly as `luma.venue.groups()` prints them.
-- **Axis spans.** An axis normalizes over the clip's whole selection. Set
-  `"span": "fixture"` or `"span": "group"` in the axis value to give each
-  fixture or group its own axis in one clip.
-- **Axis shorthand.** `axis="z"` is the same as
-  `{"source": {"kind": "z"}, "per_group": False, "reverse": False}`. Radial
-  and angle also need `"plane"`; the shorthand gives the Auto plane.
-- **Inputs keep units.** Proportions are 0..1. Colors are RGB triples in 0..1
-  or `#RRGGBB`. Curves are points `[x, value]` or `[x, value, ease]`,
-  x from 0 to 1, for example
-  `{"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}`. An
-  envelope's values are 0..1.
-- **Preserve the seed** when you update a clip.
+  lower case with underscores, as `luma.venue.groups()` prints them.
+- **A separate axis per fixture or group.** Put `split()` or
+  `split(by="group")` into `heads`.
+- **Values keep units.** Shares are 0–1. Degrees for yaw and pitch. Colors
+  are linear Rec. 2020 triples 0–1, or `"#RRGGBB"` (sRGB, converted for
+  you). Rec. 2020 holds colors sRGB cannot: `(0, 1, 0)` is a deeper green
+  than any hex code.
+- **Keep the seed** when you update a clip. `update_clip` keeps it unless you
+  give one.
+
+## Read an error
+
+A `ClipError` has this form:
+
+```
+clip Kick chase (3f24…): color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, "Ramp up")
+```
+
+The node id (`color1`, `time1`) is the same as the Python variable name in
+`clip.graph.source()`. Do the example and add the clip again.
 
 ## Measure before you look
 
@@ -78,30 +113,36 @@ The composited output is available as numbers:
 ```python
 view = edit.window(seconds=(55.0, 65.0))
 out = view.output
-vals = out.values          # numpy, shape [light, time, rgb], 0..1
-ids = out.light_ids        # "fixture_id:head_index", same order as axis 0
-t = out.times_s            # seconds, same order as axis 1
-bright = vals.max(axis=2)  # [light, time]
+vals = out.values             # numpy, [light, time, rgb], linear Rec. 2020 0..1
+ids = out.light_ids           # "fixture_id:head_index", same order as axis 0
+t = out.times_s               # seconds, same order as axis 1
+bright = vals.max(axis=2)     # [light, time]
 lit_fraction = (bright > 0.05).mean()
+aim = out.aim.values          # [light, time, 3] unit vectors in U, V, Z
+weight = out.aim.weight       # [light, time]
+shutter = out.strobe.values   # [light, time]
 ```
 
 Use this to check three things fast:
 
 - Which heads are on at a loud moment and at a quiet moment.
 - The order of heads along an axis. Sort by the fixture's position from
-  `luma.venue.nodes(...)` and confirm brightness changes in that order.
+  `luma.venue.nodes(...)` and make sure brightness changes in that order.
 - Whether a color band reaches the top only at peaks.
 
 Then render once at the loudest second to confirm the look.
 
-## Calibrating a level
+## Calibrate a level
 
-Find a loud second and a quiet second from `luma.audio.mix` RMS. Sweep the
-`floor` and `threshold` of an audio source and measure the lit fraction at
-both. Pick the values where the quiet section shows a little and the loud section reaches the top some of the
-time, not all of the time. Set it with `edit.update_clip(clip, inputs={"alpha": source})`.
+Find a loud second and a quiet second from `luma.audio.mix` RMS. Change the
+shape, `low` and `high` of the audio curve, and measure the lit fraction at
+both. A floor is a shape that starts above 0, such as `[[0, 0.2], [1, 1]]`.
+A threshold is a held start, such as `[[0, 0, "hold"], [0.3, 0.2], [1, 1]]`.
+Pick the values where the quiet section shows a little and the loud section
+reaches the top some of the time, not all of the time. Set it with
+`edit.update_clip(clip, graph=...)`.
 
 ## Batches
 
-Build several clips in one edit and apply once. `edit.check()` validates all
-of them. Do not apply after every clip.
+Build several clips in one edit and apply once. `edit.check()` checks all of
+them. Do not apply after every clip.

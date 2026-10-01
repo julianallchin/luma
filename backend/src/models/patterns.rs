@@ -6,7 +6,9 @@ pub struct AnnotationPreview {
     pub annotation_id: String,
     pub width: u32,
     pub height: u32,
+    /// RGBA8, sRGB: the light mapped for a screen.
     pub pixels: Vec<u8>,
+    /// The mean of `pixels`, sRGB 0–1.
     pub dominant_color: [f32; 3],
     /// An aim clip's pan and tilt, when any of its heads can move: the
     /// timeline draws these curves instead of `pixels`.

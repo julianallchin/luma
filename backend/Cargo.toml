@@ -37,6 +37,10 @@ name = "dump_venue"
 path = "src/bin/dump_venue.rs"
 
 [[bin]]
+name = "clip_cells"
+path = "src/bin/clip_cells.rs"
+
+[[bin]]
 name = "luma-record"
 path = "src/bin/luma-record.rs"
 

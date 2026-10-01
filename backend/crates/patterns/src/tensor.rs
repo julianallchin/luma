@@ -1,7 +1,7 @@
 //! Numerical signals use fixture × time × channel arrays. Event kernels may
 //! introduce a temporary event axis, reduced before returning an output signal.
 use crate::{Error, Result};
-use ndarray::{Array3, Zip};
+use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -62,56 +62,6 @@ impl SignalType {
                 .zip(other.channels)
                 .is_none_or(|(a, b)| a.accepts(b))
     }
-    pub(crate) fn binary(self, other: Self, math: crate::FieldMath) -> Result<Self> {
-        let channels = match (self.channels, other.channels) {
-            (None, _) | (_, None) => None,
-            (Some(a), Some(b)) => Some(a.merge(b)?),
-        };
-        let unit = match (self.unit, other.unit) {
-            (Some(a), Some(b)) => Some(match math {
-                crate::FieldMath::Multiply if matches!(a, Unit::Number | Unit::Proportion) => b,
-                crate::FieldMath::Multiply if matches!(b, Unit::Number | Unit::Proportion) => a,
-                crate::FieldMath::Divide if a == b => Unit::Number,
-                crate::FieldMath::Divide if matches!(b, Unit::Number | Unit::Proportion) => a,
-                crate::FieldMath::Add
-                | crate::FieldMath::Subtract
-                | crate::FieldMath::Minimum
-                | crate::FieldMath::Maximum
-                    if a == b || a == Unit::Number || b == Unit::Number =>
-                {
-                    if a == Unit::Number {
-                        b
-                    } else {
-                        a
-                    }
-                }
-                _ => return Err(Error(format!("cannot {math:?} {a:?} and {b:?} signals"))),
-            }),
-            _ => None,
-        };
-        Ok(Self { unit, channels })
-    }
-
-    pub(crate) fn join(self, other: Self) -> Result<Self> {
-        let unit = Self {
-            channels: None,
-            ..self
-        }
-        .binary(
-            Self {
-                channels: None,
-                ..other
-            },
-            crate::FieldMath::Maximum,
-        )?
-        .unit;
-        let channels = self
-            .channels
-            .zip(other.channels)
-            .map(|(a, b)| Channels::components(a.count() + b.count()))
-            .transpose()?;
-        Ok(Self { unit, channels })
-    }
 }
 
 impl Channels {
@@ -140,22 +90,6 @@ impl Channels {
                     (self, other),
                     (Self::Components(_), _) | (_, Self::Components(_))
                 ))
-    }
-    fn merge(self, other: Self) -> Result<Self> {
-        if self.count() == 1 {
-            return Ok(other);
-        }
-        if other.count() == 1 {
-            return Ok(self);
-        }
-        if !self.accepts(other) {
-            return Err(Error("signal channel meanings differ".into()));
-        }
-        Ok(if matches!(self, Self::Components(_)) {
-            other
-        } else {
-            self
-        })
     }
 }
 
@@ -285,31 +219,6 @@ impl Signal {
             if c == 1 { 0 } else { channel },
         ]]
     }
-    pub(crate) fn zip3(
-        &self,
-        b: &Self,
-        c: &Self,
-        unit: Unit,
-        operation: impl Fn(f64, f64, f64) -> f64,
-    ) -> Result<Self> {
-        let layout = self.layout().merge(b)?.merge(c)?;
-        let values = Zip::from(
-            self.values
-                .broadcast(layout.shape)
-                .expect("checked broadcast"),
-        )
-        .and(b.values.broadcast(layout.shape).expect("checked broadcast"))
-        .and(c.values.broadcast(layout.shape).expect("checked broadcast"))
-        .map_collect(|a, b, c| operation(*a, *b, *c));
-        Self::new(values, unit, layout.channels, layout.fixtures)
-    }
-    fn layout(&self) -> Layout {
-        Layout {
-            shape: self.values.dim(),
-            channels: self.channels,
-            fixtures: self.fixtures.clone(),
-        }
-    }
     pub fn new(
         values: Array3<f64>,
         unit: Unit,
@@ -350,105 +259,5 @@ impl Signal {
     }
     pub fn fixtures(&self) -> Option<&[String]> {
         self.fixtures.as_deref()
-    }
-
-    /// Equal axes or singleton broadcasting only; incompatible channel widths
-    /// never repeat the last component, as the older evaluator did.
-    pub fn zip(
-        &self,
-        other: &Self,
-        unit: Unit,
-        operation: impl Fn(f64, f64) -> f64,
-    ) -> Result<Self> {
-        let layout = self.layout().merge(other)?;
-        let values = Zip::from(
-            self.values
-                .broadcast(layout.shape)
-                .expect("checked broadcast"),
-        )
-        .and(
-            other
-                .values
-                .broadcast(layout.shape)
-                .expect("checked broadcast"),
-        )
-        .map_collect(|a, b| operation(*a, *b));
-        Self::new(values, unit, layout.channels, layout.fixtures)
-    }
-
-    /// Concatenate channel vectors, broadcasting only the fixture and time
-    /// axes. This is also the channel constructor used by editable graph nodes.
-    pub fn join_channels(&self, other: &Self) -> Result<Self> {
-        let metadata = SignalType::new(self.unit, self.channels)
-            .join(SignalType::new(other.unit, other.channels))?;
-        let channels = metadata.channels.expect("concrete channel layouts");
-        let layout = self.layout().combine(other, channels)?;
-        let a = self
-            .values
-            .broadcast((layout.shape.0, layout.shape.1, self.channels.count()))
-            .expect("checked broadcast");
-        let b = other
-            .values
-            .broadcast((layout.shape.0, layout.shape.1, other.channels.count()))
-            .expect("checked broadcast");
-        let values = ndarray::concatenate(ndarray::Axis(2), &[a, b])
-            .map_err(|e| Error(format!("cannot join channels: {e}")))?;
-        Self::new(
-            values,
-            metadata.unit.expect("concrete signal units"),
-            channels,
-            layout.fixtures,
-        )
-    }
-}
-
-struct Layout {
-    shape: (usize, usize, usize),
-    channels: Channels,
-    fixtures: Option<Arc<[String]>>,
-}
-impl Layout {
-    fn merge(self, other: &Signal) -> Result<Self> {
-        let channels = self.channels.merge(other.channels)?;
-        self.combine(other, channels)
-    }
-    fn combine(self, other: &Signal, channels: Channels) -> Result<Self> {
-        let fixtures = match (&self.fixtures, &other.fixtures) {
-            (Some(a), Some(b)) if a != b => {
-                return Err(Error("signal fixture domains differ".into()))
-            }
-            (Some(a), _) | (_, Some(a)) => Some(a.clone()),
-            _ => None,
-        };
-        let axis = |a, b| {
-            if a == b || b == 1 {
-                Ok(a)
-            } else if a == 1 {
-                Ok(b)
-            } else {
-                Err(Error("signal axes must match or broadcast from one".into()))
-            }
-        };
-        let (a, b, _) = other.values.dim();
-        let shape = (
-            axis(self.shape.0, a)?,
-            axis(self.shape.1, b)?,
-            channels.count(),
-        );
-        if shape
-            .0
-            .checked_mul(shape.1)
-            .and_then(|v| v.checked_mul(shape.2))
-            .is_none_or(|v| v > 16_777_216)
-        {
-            return Err(Error(
-                "signal tensor exceeds 16,777,216 elements; request fewer time samples".into(),
-            ));
-        }
-        Ok(Self {
-            shape,
-            channels,
-            fixtures,
-        })
     }
 }

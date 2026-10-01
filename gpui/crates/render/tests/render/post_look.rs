@@ -78,6 +78,7 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens { radius: 0.05 },
+        strobe: luma_render::strobe::Rows::STEADY,
     }];
     frame
 }
@@ -137,6 +138,7 @@ fn ring(pixels: &[u8], centre: (u32, u32), radius: f32) -> f32 {
 
 fn manual(glare: Glare) -> Look {
     Look {
+        footage: luma_render::scene_desc::Footage::OFF,
         tone: ToneCurve::Agx,
         exposure: Exposure {
             auto: false,
@@ -417,6 +419,7 @@ fn a_sun_off_the_frame_still_glares() {
         ..Glare::STAGE
     };
     let look = |glare| Look {
+        footage: luma_render::scene_desc::Footage::OFF,
         tone: ToneCurve::Agx,
         exposure: Exposure::STAGE,
         glare,

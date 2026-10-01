@@ -51,8 +51,11 @@ struct Instance {
     base_color: vec4<f32>,
     // rgb: emissive radiance, a: roughness.
     emissive: vec4<f32>,
-    // x: unused, y: normal-map scale, z: occlusion strength.
+    // x: 1 for the ground, y: normal-map scale, z: occlusion strength,
+    // w: the emitter's rolling-shutter strobe `norm` (`strobe.rs`, `Rows`).
     flags: vec4<f32>,
+    // The emitter's rolling-shutter strobe: phase, span, readout, duty.
+    strobe: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -107,10 +110,16 @@ struct FixtureLightRest {
     // Virtual apex to lens plane, metres; zero for a point source. The core's
     // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
     lens_distance: f32,
-    // Tail padding to the 80-byte stride; a beam-waist profile would take it.
-    lens_reserved0: f32,
-    lens_reserved1: f32,
-    lens_reserved2: f32,
+    // How a rolling shutter bands this cone's strobe (`strobe.rs`, `Rows`):
+    // `strobe_row_ratio`'s arguments. Zeros for a cone every row sees alike.
+    strobe_phase: f32,
+    strobe_span: f32,
+    strobe_readout: f32,
+    strobe_duty: f32,
+    strobe_norm: f32,
+    // Tail padding to the 96-byte stride.
+    reserved0: f32,
+    reserved1: f32,
 };
 
 struct SurfaceClusterParams {

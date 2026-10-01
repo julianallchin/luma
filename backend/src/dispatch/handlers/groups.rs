@@ -327,8 +327,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO clips (id,uid,score_id,graph,start,duration,seed,selection_json,blend_mode)
-             VALUES (?2 || ':flash',?1,?2,'chase',0,4,'0',
+            "INSERT INTO clips (id,uid,score_id,graph_json,graph,start,duration,seed,selection_json,blend_mode)
+             VALUES (?2 || ':flash',?1,?2,'{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}','',0,4,'0',
                      '{\"expression\":\"missing_wash\"}','replace')",
         )
         .bind(uid.clone().unwrap_or_default())

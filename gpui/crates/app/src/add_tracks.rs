@@ -65,16 +65,18 @@ pub(crate) enum ImportChoice {
     EngineDj,
     Rekordbox,
     Files,
+    Folder,
 }
 
 impl ImportChoice {
-    const ALL: [Self; 3] = [Self::EngineDj, Self::Rekordbox, Self::Files];
+    const ALL: [Self; 4] = [Self::EngineDj, Self::Rekordbox, Self::Files, Self::Folder];
 
     fn label(self) -> &'static str {
         match self {
             Self::EngineDj => "Engine DJ",
             Self::Rekordbox => "Rekordbox",
             Self::Files => "Files…",
+            Self::Folder => "Folder…",
         }
     }
 
@@ -83,6 +85,7 @@ impl ImportChoice {
             Self::EngineDj => "Playlists from an Engine DJ database",
             Self::Rekordbox => "Playlists and crates from Rekordbox",
             Self::Files => "Audio files from this computer",
+            Self::Folder => "Every audio file in a folder",
         }
     }
 
@@ -91,6 +94,7 @@ impl ImportChoice {
             Self::EngineDj => "add-tracks-engine",
             Self::Rekordbox => "add-tracks-rekordbox",
             Self::Files => "add-tracks-files",
+            Self::Folder => "add-tracks-folder",
         }
     }
 }
@@ -528,17 +532,21 @@ impl Luma {
         match choice {
             ImportChoice::EngineDj => self.choose_source(true, cx),
             ImportChoice::Rekordbox => self.choose_source(false, cx),
-            ImportChoice::Files => self.import_track_files(cx),
+            ImportChoice::Files => self.import_track_files(false, cx),
+            ImportChoice::Folder => self.import_track_files(true, cx),
         }
     }
 
     /// The platform's own file picker, then the same import pipeline the DJ
     /// sources feed. A cancelled prompt is not an error: it is a person
     /// changing their mind, and it leaves the dialog exactly as it was.
-    fn import_track_files(&mut self, cx: &mut Context<Self>) {
+    fn import_track_files(&mut self, folder: bool, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: true,
+            // The Linux portal picker is folder-only when `directories` is
+            // set, which greys out every file, so files and folders are two
+            // separate prompts.
+            files: !folder,
+            directories: folder,
             multiple: true,
             prompt: Some("Import".into()),
         });
@@ -546,6 +554,7 @@ impl Luma {
             let Ok(Ok(Some(paths))) = paths.await else {
                 return;
             };
+            let paths = audio_files_in(paths);
             if paths.is_empty() {
                 return;
             }
@@ -1738,4 +1747,41 @@ fn source_title(track: &SourceTrack) -> String {
         .clone()
         .or_else(|| track.filename.clone())
         .unwrap_or_else(|| "Untitled".to_string())
+}
+
+const AUDIO_EXTENSIONS: [&str; 9] = [
+    "mp3", "wav", "flac", "aif", "aiff", "m4a", "aac", "ogg", "opus",
+];
+
+/// Files stay as picked; a folder becomes the audio files under it, sorted so
+/// the import order is stable.
+fn audio_files_in(paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| AUDIO_EXTENSIONS.iter().any(|a| ext.eq_ignore_ascii_case(a)))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            let mut found = Vec::new();
+            walk(&path, &mut found);
+            found.sort();
+            out.extend(found);
+        } else {
+            out.push(path);
+        }
+    }
+    out
 }

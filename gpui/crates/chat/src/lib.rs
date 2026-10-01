@@ -1654,6 +1654,22 @@ impl Render for AgentChat {
         div()
             .size_full()
             .track_focus(&self.focus)
+            // A press in the transcript focuses this root, not the composer,
+            // so the transcript's copy lives here too (as comet's pane does).
+            .on_key_down(|event, _, cx| {
+                let keys = &event.keystroke;
+                let copy = keys.key == "c"
+                    && (keys.modifiers.control || keys.modifiers.platform)
+                    && !keys.modifiers.shift
+                    && !keys.modifiers.alt;
+                if !copy {
+                    return;
+                }
+                if let Some(text) = luma_md::selection::selected_text() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    cx.stop_propagation();
+                }
+            })
             .child(self.body(window, cx))
     }
 }

@@ -1,20 +1,31 @@
-//! A form clip's alpha on the timeline, the way a DAW shows clip fades.
+//! A clip's alpha on the timeline, the way a DAW shows clip fades.
 //!
 //! Alpha is how much a clip counts. The timeline draws it as a line across
 //! the clip body and dims the body above the line. Handles on the line edit
 //! it: a fade-in and a fade-out handle at the top corners, a bend handle in
 //! the middle of each fade, and the flat part of the line for the level.
 //!
-//! The handles edit the same stored `alpha` input that the clip sheet shows.
-//! A simple fade shape is a [`Fades`]. Any other curve is drawn but has no
-//! handles; the sheet's curve editor edits it.
+//! The handles edit the output node's `alpha` input, the clip's opacity,
+//! which the clip sheet shows too: a value, or a curve over the clip
+//! (`curve(time(), shape)`, the time with no events, delay or phase). A
+//! simple fade shape is a [`Fades`]. Any other such curve is drawn but has
+//! no handles; the sheet's curve editor edits it. An alpha wired any other
+//! way has no one line to draw.
 
 use super::*;
-use luma_lib::node_graph::lighting::decode;
 use luma_patterns as p;
+use p::clip_graph::{ClipGraph, Input, Kind, Node};
 
-/// The input every form clip has.
-pub(super) const ALPHA: &str = "alpha";
+/// The input every output node has.
+const ALPHA: &str = "alpha";
+
+/// An alpha the timeline writes: a level, or a curve over the clip whose
+/// values are the alpha itself.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Level {
+    Flat(f64),
+    Curve(p::Envelope),
+}
 
 /// The gap between the body's edges and the line at alpha 1 and alpha 0.
 const INSET: f32 = 3.;
@@ -79,17 +90,14 @@ impl Fades {
     }
 
     /// The fade shape `curve` draws, or `None` for any other curve.
-    pub fn of_curve(curve: &p::Keyframes) -> Option<Self> {
-        if curve.is_color() || curve.points.is_empty() {
+    pub fn of_curve(curve: &p::Envelope) -> Option<Self> {
+        if curve.points.is_empty() {
             return None;
         }
         let points: Vec<(f64, f64)> = curve
             .points
             .iter()
-            .map(|point| match point.value {
-                p::Key::Number(v) => (point.x, v),
-                p::Key::Color(_) => (point.x, 0.),
-            })
+            .map(|point| (point.x, point.value))
             .collect();
         let zero = |v: f64| v.abs() <= EPSILON;
         let last = points.len() - 1;
@@ -122,14 +130,14 @@ impl Fades {
         Some(fades)
     }
 
-    /// The stored alpha: a plain proportion when there is no fade, a curve
-    /// over the clip otherwise.
-    pub fn value(self) -> p::Value {
+    /// The stored alpha: a plain level when there is no fade, a curve over
+    /// the clip otherwise.
+    pub fn value(self) -> Level {
         let level = self.level.clamp(0., 1.);
         let fade_in = self.fade_in.clamp(0., 1.);
         let fade_out = self.fade_out.clamp(0., 1. - fade_in);
         if fade_in <= EPSILON && fade_out <= EPSILON {
-            return p::Value::Proportion(level);
+            return Level::Flat(level);
         }
         let mut points = Vec::with_capacity(4);
         let mut eases = Vec::with_capacity(3);
@@ -152,7 +160,7 @@ impl Fades {
             eases.push(p::Ease::Linear);
             points.push([1., level]);
         }
-        p::Value::Time(p::Keyframes::numbers(&points, &eases))
+        Level::Curve(p::Envelope::eased(points, &eases))
     }
 
     /// Set the fade-in, leaving the fade-out room.
@@ -172,67 +180,136 @@ impl Fades {
     }
 }
 
-/// A form clip's alpha, as far as the timeline can show it.
+/// A clip's alpha, as far as the timeline can show it.
 pub(super) enum Alpha {
     /// A plain value or a simple fade shape: drawn, with handles.
     Fades(Fades),
     /// Any other number curve over the clip: drawn, no handles.
-    Custom(p::Keyframes),
+    Custom(p::Envelope),
 }
 
 impl Alpha {
     fn sample(&self, progress: f64) -> f64 {
-        match self {
-            Self::Fades(fades) => match fades.value() {
-                p::Value::Time(curve) => curve.sample(progress)[0],
-                _ => fades.level,
-            },
-            Self::Custom(curve) => curve.sample(progress)[0],
-        }
+        self.curve().sample(progress)
     }
 }
 
-/// The alpha of a form clip. `None` for a clip with its own graph, and for an
-/// alpha that is noise, audio or a per-hit curve: those change on their own
-/// and have no one line to draw.
-pub(super) fn alpha(clip: &Clip) -> Option<Alpha> {
-    let input = document::form_definition(&clip.pattern)?
-        .inputs
-        .get(ALPHA)?;
-    let value = match clip.args.get(ALPHA) {
-        Some(stored) => decode(input.value_type, stored).ok()?,
-        None => input.default.clone()?,
-    };
-    match value {
-        p::Value::Proportion(v) | p::Value::Number(v) => Some(Alpha::Fades(Fades::flat(v))),
-        p::Value::Time(curve) if !curve.is_color() => Some(match Fades::of_curve(&curve) {
-            Some(fades) => Alpha::Fades(fades),
-            None => Alpha::Custom(curve),
-        }),
-        _ => None,
+/// The curve an alpha of `graph`'s output `out` is wired to, when the
+/// timeline may edit it: a number curve over the clip — `x` a time with no
+/// `every` or `duration` and no delay or phase — that nothing else shares.
+fn over_clip<'a>(graph: &'a ClipGraph, out: &str) -> Option<(&'a str, &'a Node)> {
+    let id = graph.nodes.get(out)?.inputs.get(ALPHA)?.source()?;
+    let curve = graph.nodes.get(id)?;
+    let shared = graph
+        .nodes
+        .iter()
+        .flat_map(|(at, node)| node.wires().map(move |(name, from)| (at, name, from)))
+        .any(|(at, name, from)| from == id && (at != out || name != ALPHA));
+    if curve.kind != Kind::Curve || curve.setting("kind") != Some("number") || shared {
+        return None;
     }
+    let time = graph.nodes.get(curve.inputs.get("x")?.source()?)?;
+    let zero = |name: &str| match time.inputs.get(name) {
+        None => true,
+        Some(Input::Number(v)) => *v == 0.,
+        Some(_) => false,
+    };
+    let once = !time.inputs.contains_key("every") && !time.inputs.contains_key("duration");
+    (time.kind == Kind::Time && once && zero("delay") && zero("phase")).then_some((id, curve))
+}
+
+/// The alpha of a clip. `None` for an alpha that is noise, audio, space or
+/// a per-hit curve: those change on their own and have no one line to draw.
+pub(super) fn alpha(clip: &Clip) -> Option<Alpha> {
+    alpha_of(&clip.core.as_ref()?.graph)
+}
+
+fn alpha_of(graph: &ClipGraph) -> Option<Alpha> {
+    let (out, node) = graph.output()?;
+    match node.inputs.get(ALPHA) {
+        None => return Some(Alpha::Fades(Fades::flat(1.))),
+        Some(Input::Number(v)) => return Some(Alpha::Fades(Fades::flat(*v))),
+        _ => {}
+    }
+    let (_, curve) = over_clip(graph, out)?;
+    let bound = |name: &str, empty: f64| match curve.inputs.get(name) {
+        None => Some(empty),
+        Some(Input::Number(v)) => Some(*v),
+        Some(_) => None,
+    };
+    let (low, high) = (bound("low", 0.)?, bound("high", 1.)?);
+    let shape = match curve.inputs.get("shape") {
+        None => p::Envelope::linear(vec![[0., 0.], [1., 1.]]),
+        Some(Input::Points(points)) => points.clone(),
+        Some(_) => return None,
+    };
+    let line = shape.map(|v| low + v * (high - low));
+    Some(match Fades::of_curve(&line) {
+        Some(fades) => Alpha::Fades(fades),
+        None => Alpha::Custom(line),
+    })
 }
 
 /// Write `value` as `clip`'s alpha in the working copy. `false` when it is
 /// already stored, so an idle drag records no edit.
-pub(super) fn store(clips: &mut [Clip], id: &str, value: &p::Value) -> bool {
+pub(super) fn store(clips: &mut [Clip], id: &str, value: &Level) -> bool {
     clips
         .iter_mut()
         .find(|clip| clip.id.as_ref() == id)
         .is_some_and(|clip| set(clip, value))
 }
 
-fn set(clip: &mut Clip, value: &p::Value) -> bool {
-    let wire = document::wire_value(value);
-    if clip.args.get(ALPHA) == Some(&wire) {
+/// Write `value` as the alpha of `graph`'s output: a level as a value, a
+/// curve into the curve over the clip already there, or a new time and
+/// curve.
+fn write(graph: &mut ClipGraph, value: &Level) {
+    let Some(out) = graph.output().map(|(id, _)| id.to_owned()) else {
+        return;
+    };
+    let points = match value {
+        Level::Flat(level) => {
+            if let Some(node) = graph.nodes.get_mut(&out) {
+                node.inputs.insert(ALPHA.into(), Input::Number(*level));
+            }
+            super::sheet::graph::edit::prune(graph);
+            return;
+        }
+        Level::Curve(points) => Input::Points(points.clone()),
+    };
+    if let Some(id) = over_clip(graph, &out).map(|(id, _)| id.to_owned()) {
+        let curve = graph.nodes.get_mut(&id).expect("the alpha curve");
+        curve.inputs.insert("shape".into(), points);
+        curve.inputs.remove("low");
+        curve.inputs.remove("high");
+        return;
+    }
+    let time = graph.next_id(Kind::Time);
+    graph.nodes.insert(time.clone(), Node::new(Kind::Time));
+    let curve = graph.next_id(Kind::Curve);
+    graph.nodes.insert(
+        curve.clone(),
+        Node::new(Kind::Curve)
+            .with_setting("kind", "number")
+            .with_input("x", Input::wire(time))
+            .with_input("shape", points),
+    );
+    if let Some(node) = graph.nodes.get_mut(&out) {
+        node.inputs.insert(ALPHA.into(), Input::wire(curve));
+    }
+    super::sheet::graph::edit::prune(graph);
+}
+
+fn set(clip: &mut Clip, value: &Level) -> bool {
+    let Some(core) = clip.core.as_mut() else {
+        return false;
+    };
+    let mut graph = core.graph.clone();
+    write(&mut graph, value);
+    if graph == core.graph {
         return false;
     }
-    match &mut clip.args {
-        serde_json::Value::Object(map) => {
-            map.insert(ALPHA.to_string(), wire);
-        }
-        other => *other = serde_json::json!({ ALPHA: wire }),
-    }
+    core.graph = graph;
+    clip.refresh();
     true
 }
 
@@ -278,7 +355,7 @@ impl Part {
             Self::FadeOut => "fade out".into(),
             Self::BendIn => "fade in bend".into(),
             Self::BendOut => "fade out bend".into(),
-            Self::Segment(index) => format!("alpha {}", index + 1),
+            Self::Segment(index) => format!("fade {}", index + 1),
         }
     }
 
@@ -298,18 +375,18 @@ impl Part {
 pub(super) struct Grab {
     pub part: Part,
     /// The line as a curve: a plain value is one flat segment.
-    curve: p::Keyframes,
+    curve: p::Envelope,
     /// The fade shape, when the line is one.
     fades: Option<Fades>,
 }
 
 impl Alpha {
     /// The line as a curve over the clip.
-    fn curve(&self) -> p::Keyframes {
+    fn curve(&self) -> p::Envelope {
         match self {
             Self::Fades(fades) => match fades.value() {
-                p::Value::Time(curve) => curve,
-                _ => p::Keyframes::numbers(&[[0., fades.level], [1., fades.level]], &[]),
+                Level::Curve(curve) => curve,
+                Level::Flat(level) => p::Envelope::linear(vec![[0., level], [1., level]]),
             },
             Self::Custom(curve) => curve.clone(),
         }
@@ -356,13 +433,13 @@ fn handles(frame: Frame, fades: Fades) -> Vec<(Part, Point<f32>)> {
     let top = frame.y(fades.level);
     // A bend handle sits on the line, halfway along its fade.
     let curve = match fades.value() {
-        p::Value::Time(curve) => Some(curve),
-        _ => None,
+        Level::Curve(curve) => Some(curve),
+        Level::Flat(_) => None,
     };
     let on_line = |x: f64| {
         frame.y(curve
             .as_ref()
-            .map_or(fades.level / 2., |curve| curve.sample(x)[0]))
+            .map_or(fades.level / 2., |curve| curve.sample(x)))
     };
     let mut handles = vec![
         (Part::FadeIn, point(frame.x(fades.fade_in), top)),
@@ -415,7 +492,7 @@ pub(super) fn hit(box_: Bounds<Pixels>, clip: &Clip, at: Point<Pixels>) -> Optio
         return grab(part);
     }
     let progress = f64::from((x - frame.left) / frame.width);
-    if (y - frame.y(curve.sample(progress.clamp(0., 1.))[0])).abs() > LINE_GRAB {
+    if (y - frame.y(curve.sample(progress.clamp(0., 1.)))).abs() > LINE_GRAB {
         return None;
     }
     let index = curve
@@ -428,29 +505,27 @@ pub(super) fn hit(box_: Bounds<Pixels>, clip: &Clip, at: Point<Pixels>) -> Optio
 /// The alpha a drag leaves, from `grab` at the press. `span` is the clip's
 /// seconds, `time` the pointer's time, snapped; `rise` is how far the pointer
 /// went up and `height` the line's travel from 0 to 1, in pixels.
-pub(super) fn moved(grab: &Grab, span: (f64, f64), time: f64, rise: f32, height: f32) -> p::Value {
+pub(super) fn moved(grab: &Grab, span: (f64, f64), time: f64, rise: f32, height: f32) -> Level {
     match (grab.part, grab.fades) {
         (Part::Segment(index), _) => lift(&grab.curve, index, f64::from(rise / height.max(1.))),
         (part, Some(fades)) => {
             dragged(part, fades, span, time, f64::from(rise / height.max(1.))).value()
         }
-        (_, None) => p::Value::Time(grab.curve.clone()),
+        (_, None) => Level::Curve(grab.curve.clone()),
     }
 }
 
 /// `curve` with segment `index` moved up by `by`: both of its points, each
 /// kept in 0–1. Eases are local to their segments, so every segment keeps
 /// its shape. A line that is a fade shape again is stored as one.
-pub(super) fn lift(curve: &p::Keyframes, index: usize, by: f64) -> p::Value {
+pub(super) fn lift(curve: &p::Envelope, index: usize, by: f64) -> Level {
     let mut curve = curve.clone();
     for point in curve.points.iter_mut().skip(index).take(2) {
-        if let p::Key::Number(value) = &mut point.value {
-            *value = (*value + by).clamp(0., 1.);
-        }
+        point.value = (point.value + by).clamp(0., 1.);
     }
     match Fades::of_curve(&curve) {
         Some(fades) => fades.value(),
-        None => p::Value::Time(curve),
+        None => Level::Curve(curve),
     }
 }
 
@@ -584,8 +659,8 @@ fn outline(frame: Frame, alpha: &Alpha) -> Vec<Point<f32>> {
     // and enough even samples between them for bends to read as curves.
     let mut xs: Vec<f64> = match alpha {
         Alpha::Fades(fades) => match fades.value() {
-            p::Value::Time(curve) => curve.points.iter().map(|point| point.x).collect(),
-            _ => Vec::new(),
+            Level::Curve(curve) => curve.points.iter().map(|point| point.x).collect(),
+            Level::Flat(_) => Vec::new(),
         },
         Alpha::Custom(curve) => curve.points.iter().map(|point| point.x).collect(),
     };
@@ -638,7 +713,7 @@ pub(super) fn register(box_: Bounds<Pixels>, clip: &Clip, window: &mut Window, c
         agent_paint_node(
             Role::Slider,
             format!("{} {}", clip.label, Part::Segment(index).label()),
-            square(point(frame.x(at), frame.y(curve.sample(at)[0]))),
+            square(point(frame.x(at), frame.y(curve.sample(at)))),
             window,
             cx,
         );
@@ -671,7 +746,7 @@ impl Editor {
         changed
     }
 
-    /// Take hold of a form clip's alpha line if the press at `at` is on it.
+    /// Take hold of a clip's alpha line if the press at `at` is on it.
     /// Selects the clip.
     pub(super) fn press_alpha(&mut self, at: Point<Pixels>) -> bool {
         let Some((clip, box_, grab)) = self.alpha_under(at) else {
@@ -781,29 +856,31 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::{dragged, lift, Fades, Part};
+    use super::{alpha_of, dragged, lift, write, Alpha, Fades, Level, Part};
     use luma_patterns as p;
+    use p::clip_graph::{ClipGraph, Kind, Node};
 
-    fn curve(value: p::Value) -> p::Keyframes {
+    fn curve(value: Level) -> p::Envelope {
         match value {
-            p::Value::Time(curve) => curve,
+            Level::Curve(curve) => curve,
             other => panic!("expected a curve, got {other:?}"),
         }
     }
 
+    fn numbers(points: &[[f64; 2]], eases: &[p::Ease]) -> p::Envelope {
+        p::Envelope::eased(points.to_vec(), eases)
+    }
+
     #[test]
     fn no_fade_is_a_plain_value() {
-        assert_eq!(Fades::flat(0.7).value(), p::Value::Proportion(0.7));
+        assert_eq!(Fades::flat(0.7).value(), Level::Flat(0.7));
     }
 
     #[test]
     fn a_fade_in_rises_holds_and_reads_back() {
         let fades = Fades::flat(0.8).with_fade_in(0.25);
         let curve = curve(fades.value());
-        assert_eq!(
-            curve,
-            p::Keyframes::numbers(&[[0., 0.], [0.25, 0.8], [1., 0.8]], &[])
-        );
+        assert_eq!(curve, numbers(&[[0., 0.], [0.25, 0.8], [1., 0.8]], &[]));
         assert_eq!(Fades::of_curve(&curve), Some(fades));
     }
 
@@ -833,8 +910,8 @@ mod tests {
             [curve.ease(1), curve.ease(2)],
             [p::Ease::Linear, p::Ease::Linear]
         );
-        assert!((curve.sample(0.1)[0] - 0.5).abs() < 1e-9);
-        assert!((curve.sample(0.85)[0] - 0.5).abs() < 1e-9);
+        assert!((curve.sample(0.1) - 0.5).abs() < 1e-9);
+        assert!((curve.sample(0.85) - 0.5).abs() < 1e-9);
         let back = Fades::of_curve(&curve).unwrap();
         assert!(same(back, fades), "{back:?}");
     }
@@ -849,7 +926,7 @@ mod tests {
 
     #[test]
     fn shipped_ramps_and_swells_are_fades() {
-        let ramp = p::Keyframes::numbers(&[[0., 0.], [1., 1.]], &[]);
+        let ramp = numbers(&[[0., 0.], [1., 1.]], &[]);
         let fades = Fades::of_curve(&ramp).unwrap();
         assert_eq!((fades.fade_in, fades.fade_out, fades.level), (1., 0., 1.));
         let swell = p::presets().curve("Swell").unwrap();
@@ -859,16 +936,16 @@ mod tests {
         let back = curve(fades.value());
         for i in 0..=20 {
             let x = f64::from(i) / 20.;
-            assert!((back.sample(x)[0] - swell.sample(x)[0]).abs() < 1e-9, "{x}");
+            assert!((back.sample(x) - swell.sample(x)).abs() < 1e-9, "{x}");
         }
     }
 
     #[test]
     fn other_curves_are_custom() {
         for curve in [
-            p::Keyframes::numbers(&[[0., 0.2], [0.5, 0.9], [1., 0.2]], &[]),
-            p::Keyframes::numbers(&[[0., 0.], [0.5, 1.], [1., 0.]], &[p::Ease::Hold; 2]),
-            p::Keyframes::numbers(&[[0., 1.], [0.4, 0.5], [1., 0.5]], &[]),
+            numbers(&[[0., 0.2], [0.5, 0.9], [1., 0.2]], &[]),
+            numbers(&[[0., 0.], [0.5, 1.], [1., 0.]], &[p::Ease::Hold; 2]),
+            numbers(&[[0., 1.], [0.4, 0.5], [1., 0.5]], &[]),
         ] {
             assert_eq!(Fades::of_curve(&curve), None, "{curve:?}");
         }
@@ -887,10 +964,10 @@ mod tests {
         assert_eq!(dragged(Part::FadeIn, fade_in, span, 9., 0.).fade_in, 0.);
         assert_eq!(
             dragged(Part::FadeIn, fade_in, span, 10., 0.).value(),
-            p::Value::Proportion(1.)
+            Level::Flat(1.)
         );
         // A partial bend: the middle of the fade follows the pointer up.
-        let middle = |fades: Fades| curve(fades.value()).sample(fades.fade_in / 2.)[0];
+        let middle = |fades: Fades| curve(fades.value()).sample(fades.fade_in / 2.);
         let bent = dragged(Part::BendIn, fade_in, span, 0., 0.1);
         assert!(
             (middle(bent) - (middle(fade_in) + 0.1)).abs() < 1e-3,
@@ -913,7 +990,7 @@ mod tests {
         );
         // A fade-out bends up the same way.
         let fade_out = dragged(Part::FadeOut, flat, span, 13., 0.);
-        let end = |fades: Fades| curve(fades.value()).sample(1. - fades.fade_out / 2.)[0];
+        let end = |fades: Fades| curve(fades.value()).sample(1. - fades.fade_out / 2.);
         let lifted = dragged(Part::BendOut, fade_out, span, 0., 0.1);
         assert!(
             (end(lifted) - (end(fade_out) + 0.1)).abs() < 1e-3,
@@ -924,9 +1001,9 @@ mod tests {
 
     #[test]
     fn lifting_a_segment_moves_both_its_points() {
-        let flat = p::Keyframes::numbers(&[[0., 1.], [1., 1.]], &[]);
-        assert_eq!(lift(&flat, 0, -0.25), p::Value::Proportion(0.75));
-        assert_eq!(lift(&flat, 0, -2.), p::Value::Proportion(0.));
+        let flat = numbers(&[[0., 1.], [1., 1.]], &[]);
+        assert_eq!(lift(&flat, 0, -0.25), Level::Flat(0.75));
+        assert_eq!(lift(&flat, 0, -2.), Level::Flat(0.));
         // The hold of a fade moves the level and keeps the fade.
         let fade = curve(Fades::flat(1.).with_fade_in(0.25).value());
         let lowered = Fades::flat(0.5).with_fade_in(0.25).value();
@@ -942,10 +1019,51 @@ mod tests {
         // The ramp lifts off zero: a custom curve, each point kept in 0–1.
         assert_eq!(
             lift(&curve(lowered), 0, 0.75),
-            p::Value::Time(p::Keyframes::numbers(
-                &[[0., 0.75], [0.25, 1.], [1., 0.5]],
-                &[]
-            ))
+            Level::Curve(numbers(&[[0., 0.75], [0.25, 1.], [1., 0.5]], &[]))
         );
+    }
+
+    #[test]
+    fn an_alpha_over_events_or_a_shifted_time_has_no_one_line() {
+        let mut graph = ClipGraph::new([("color1".to_owned(), Node::new(Kind::Color))]);
+        write(&mut graph, &Fades::flat(1.).with_fade_in(0.25).value());
+        assert!(alpha_of(&graph).is_some());
+        let time = graph
+            .nodes
+            .iter()
+            .find(|(_, node)| node.kind == Kind::Time)
+            .map(|(id, _)| id.clone())
+            .unwrap();
+        for (name, value) in [
+            ("every", 1.),
+            ("duration", 2.),
+            ("delay", 0.5),
+            ("phase", 0.25),
+        ] {
+            let mut moved = graph.clone();
+            let node = moved.nodes.get_mut(&time).unwrap();
+            node.inputs
+                .insert(name.into(), p::clip_graph::Input::Number(value));
+            assert!(alpha_of(&moved).is_none(), "a time with {name} has a line");
+        }
+    }
+
+    #[test]
+    fn a_fade_is_stored_as_a_curve_over_the_clip_and_a_level_takes_it_back() {
+        let mut graph = ClipGraph::new([("color1".to_owned(), Node::new(Kind::Color))]);
+        let fades = Fades::flat(0.8).with_fade_in(0.25);
+        write(&mut graph, &fades.value());
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        assert_eq!(graph.nodes.len(), 3);
+        match alpha_of(&graph) {
+            Some(Alpha::Fades(back)) => assert_eq!(back, fades),
+            _ => panic!("the fade does not read back"),
+        }
+        // A second write edits the same curve.
+        write(&mut graph, &fades.with_fade_out(0.25).value());
+        assert_eq!(graph.nodes.len(), 3);
+        write(&mut graph, &Level::Flat(0.5));
+        assert_eq!(graph.nodes.len(), 1);
+        assert!(matches!(alpha_of(&graph), Some(Alpha::Fades(f)) if f == Fades::flat(0.5)));
     }
 }

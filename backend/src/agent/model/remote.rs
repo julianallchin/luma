@@ -70,7 +70,6 @@ pub fn url(provider: Provider) -> Option<&'static str> {
             "https://openrouter.ai/api/v1/models?supported_parameters=tools&output_modalities=text&limit=1000",
         ),
         Provider::VercelAiGateway => Some("https://ai-gateway.vercel.sh/v1/models"),
-        Provider::Anthropic => None,
     }
 }
 
@@ -135,7 +134,6 @@ pub fn parse(provider: Provider, body: &Value) -> Vec<RemoteModel> {
         .filter_map(|entry| match provider {
             Provider::OpenRouter => openrouter(entry),
             Provider::VercelAiGateway => vercel(entry),
-            Provider::Anthropic => None,
         })
         .filter(|model| is_wire_id(&model.id))
         .collect();
@@ -452,9 +450,6 @@ mod tests {
         assert_eq!(unlisted.context_window(), FALLBACK_CONTEXT_WINDOW);
 
         assert!(ensure(Provider::OpenRouter, "not a model", &path)
-            .await
-            .is_err());
-        assert!(ensure(Provider::Anthropic, "acme/model", &path)
             .await
             .is_err());
         // The static table still wins.

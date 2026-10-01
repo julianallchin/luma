@@ -110,7 +110,6 @@ async fn prepare_scene_data(
         let prepared = match luma_patterns::PreparedGraph::new(
             &library,
             &clip.graph,
-            &clip.inputs,
             luma_patterns::Frame {
                 cells: &cells,
                 features: None,
@@ -152,22 +151,15 @@ async fn prepare_scene_data(
             },
             None => prepared,
         };
-        let output = library.definitions[&clip.graph]
-            .lighting_output()
-            .ok_or("clip graph must produce fixture output")?;
-        let plan = match crate::eval::lighting::compile_clip(
-            clip,
-            clock.clone(),
-            cells.clone(),
-            prepared,
-            output,
-        ) {
-            Ok(plan) => plan,
-            Err(error) => {
-                skip(format!("clip {id}: {error}"))?;
-                continue;
-            }
-        };
+        let plan =
+            match crate::eval::lighting::compile_clip(clip, clock.clone(), cells.clone(), prepared)
+            {
+                Ok(plan) => plan,
+                Err(error) => {
+                    skip(format!("clip {id}: {error}"))?;
+                    continue;
+                }
+            };
         clip_cells.insert(id.clone(), cells);
         compiled.push(crate::eval::CompiledAnnotation {
             span: plan.span,
@@ -281,7 +273,7 @@ fn strip(
     cells: &[luma_patterns::Cell],
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
     let width = (clip.duration * 16.0).ceil().clamp(8.0, 512.0) as usize;
-    let aim = clip.graph == "aim@1";
+    let aim = aims(&clip.graph);
     let mut frames = Vec::new();
     if let Some(annotation) = scene.annotations.first() {
         if (annotation.plan.primitive_ids.len()).saturating_mul(width) > 1_000_000 {
@@ -312,15 +304,18 @@ fn strip(
             .and_then(|rig| crate::annotation_preview::aim_curves(&frames, cells, rig));
         return Ok(preview);
     }
-    // A form clip's strip orders heads along a line through the rig; a clip
-    // with its own graph keeps the brightness order it always had.
-    let order = luma_patterns::is_form(&clip.graph)
-        .then(|| crate::annotation_preview::head_order(clip, cells));
+    // The strip orders heads along a line through the rig.
+    let order = crate::annotation_preview::head_order(cells);
     Ok(crate::annotation_preview::render_preview(
         clip_id.to_owned(),
         &frames,
-        order.as_ref(),
+        Some(&order),
     ))
+}
+
+/// Whether the graph's output node is an aim.
+fn aims(graph: &luma_patterns::ClipGraph) -> bool {
+    graph.output_kind() == Some(luma_patterns::clip_graph::Kind::Aim)
 }
 
 /// Heads in the stand-in rig of [`stand_in_strip`].
@@ -329,24 +324,39 @@ const STAND_IN_HEADS: usize = 16;
 /// common moving head's.
 const STAND_IN_RANGE: [f64; 2] = [540., 270.];
 
-/// The strip of `preset` over `beats` beats on a stand-in rig: a straight
-/// line of moving heads at 120 BPM. It needs no venue, track or score, so a
-/// preset browser always has a picture to show before, or without, the real
-/// rig's.
+/// The strip of a clip `graph`, such as a preset's, over `beats` beats on a
+/// stand-in rig: a straight line of moving heads at 120 BPM. It needs no
+/// venue, track or score, so a preset browser always has a picture to show
+/// before, or without, the real rig's.
 pub fn stand_in_strip(
-    preset: &luma_patterns::FormPreset,
+    graph: &luma_patterns::ClipGraph,
     beats: f64,
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
     let mut cells = line_cells(STAND_IN_HEADS);
     // An aim reads against the room: the line hangs a metre up and a metre
     // upstage of center stage, so a point at the origin is in front of it.
-    if preset.form == "aim@1" {
+    if aims(graph) {
         for cell in &mut cells {
             cell.uvz = [cell.uvz[0] - 0.5, -1., 1.];
             cell.world = [cell.uvz[0], 1., 1.];
         }
     }
-    synthetic_strip(&preset.clip(0.0, beats), &cells)
+    synthetic_strip(&stand_in_clip(graph, beats), &cells)
+}
+
+/// A clip of `graph` from beat 0 for `beats` beats over every head.
+fn stand_in_clip(graph: &luma_patterns::ClipGraph, beats: f64) -> luma_patterns::Clip {
+    luma_patterns::Clip {
+        name: String::new(),
+        start: 0.,
+        duration: beats,
+        seed: 0,
+        selection_seed: None,
+        selection: luma_patterns::Selection::all(),
+        z_index: 0,
+        blend_mode: luma_patterns::BlendMode::Replace,
+        graph: graph.clone(),
+    }
 }
 
 /// `heads` heads evenly along U, in order.
@@ -381,9 +391,27 @@ fn stand_in_rig(cells: &[luma_patterns::Cell]) -> crate::eval::aim::Rig {
     rig
 }
 
+/// A stand-in track for a clip that follows a band: every band hits on
+/// each beat and decays until the next, like a four-on-the-floor kick.
+#[derive(Debug)]
+struct BeatPulse;
+
+impl luma_patterns::FeatureSource for BeatPulse {
+    fn sample(
+        &self,
+        _request: &luma_patterns::FeatureRequest,
+        beat: f64,
+    ) -> luma_patterns::Result<f64> {
+        Ok((1. - beat.rem_euclid(1.)).powi(2))
+    }
+    fn range(&self, _request: &luma_patterns::FeatureRequest) -> luma_patterns::Result<(f64, f64)> {
+        Ok((0., 1.))
+    }
+}
+
 /// A single clip's strip over `cells` as stand-in heads (see
-/// [`stand_in_rig`]), on a 120 BPM grid, with no track features. Only the
-/// scene is made up: [`strip`] samples it as it does a real clip's.
+/// [`stand_in_rig`]), on a 120 BPM grid, with [`BeatPulse`] for every band.
+/// Only the scene is made up: [`strip`] samples it as it does a real clip's.
 fn synthetic_strip(
     clip: &luma_patterns::Clip,
     cells: &[luma_patterns::Cell],
@@ -396,7 +424,6 @@ fn synthetic_strip(
     let prepared = luma_patterns::PreparedGraph::new(
         &library,
         &clip.graph,
-        &clip.inputs,
         luma_patterns::Frame {
             cells,
             features: None,
@@ -407,12 +434,14 @@ fn synthetic_strip(
         },
     )
     .map_err(|error| error.to_string())?;
-    let output = library
-        .definitions
-        .get(&clip.graph)
-        .and_then(|definition| definition.lighting_output())
-        .ok_or("clip graph must produce fixture output")?;
-    let plan = crate::eval::lighting::compile_clip(clip, clock, cells.to_vec(), prepared, output)
+    let prepared = if prepared.feature_requests().is_empty() {
+        prepared
+    } else {
+        prepared
+            .with_features(std::sync::Arc::new(BeatPulse))
+            .map_err(|error| error.to_string())?
+    };
+    let plan = crate::eval::lighting::compile_clip(clip, clock, cells.to_vec(), prepared)
         .map_err(|error| error.to_string())?;
     let span = plan.span;
     let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
@@ -429,27 +458,23 @@ fn synthetic_strip(
 mod tests {
     use super::*;
 
-    /// The strip of a shipped preset over `heads` heads in a row along U,
-    /// shuffled so selection order says nothing about where a head is.
-    fn preset_strip(
-        form: &str,
-        preset: &str,
+    /// The strip of `graph` over `heads` heads in a row along U, shuffled
+    /// so selection order says nothing about where a head is.
+    fn graph_strip(
+        graph: serde_json::Value,
         heads: usize,
     ) -> crate::models::patterns::AnnotationPreview {
         let mut cells = line_cells(heads);
         cells.reverse();
         cells.swap(1, heads / 2);
-        let clip = luma_patterns::presets()
-            .preset(form, preset)
-            .expect("a shipped preset")
-            .clip(0.0, 4.0);
-        synthetic_strip(&clip, &cells).unwrap()
+        let graph: luma_patterns::ClipGraph = serde_json::from_value(graph).unwrap();
+        synthetic_strip(&stand_in_clip(&graph, 4.0), &cells).unwrap()
     }
 
     #[test]
     fn every_shipped_preset_has_a_stand_in_strip() {
-        for preset in &luma_patterns::presets().presets {
-            let strip = stand_in_strip(preset, 8.0)
+        for preset in &luma_patterns::presets().clips {
+            let strip = stand_in_strip(&preset.graph, 8.0)
                 .unwrap_or_else(|error| panic!("{}: {error}", preset.name));
             assert_eq!(strip.width, 128, "{}", preset.name);
         }
@@ -475,7 +500,20 @@ mod tests {
 
     #[test]
     fn a_chase_strip_is_a_diagonal() {
-        let preview = preset_strip("color.chase@1", "Chase", 48);
+        let preview = graph_strip(
+            serde_json::json!({"version": 3, "nodes": {
+                "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+                "curve1": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "space1"},
+                                      "shape": {"points": [[0, 1], [1, 0]]}, "low": 0.1667}},
+                "time1": {"kind": "time",
+                          "inputs": {"every": 2, "phase": {"node": "curve1"}}},
+                "curve2": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "time1"},
+                                      "shape": {"points": [[0, 1], [0.1667, 1], [0.1667, 0], [1, 0]]}}},
+                "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}}),
+            48,
+        );
         assert_eq!((preview.width, preview.height), (64, 32));
         // One stroke crosses the rig over the first two beats: 32 columns.
         let rows: Vec<u32> = brightest(&preview)[..32]
@@ -491,8 +529,8 @@ mod tests {
     #[test]
     fn an_aim_strip_shows_where_the_beams_point_and_how_they_move() {
         let picture = |name: &str| {
-            let preset = luma_patterns::presets().preset("aim@1", name).unwrap();
-            let strip = stand_in_strip(preset, 16.0).unwrap();
+            let preset = luma_patterns::presets().clip(name).unwrap();
+            let strip = stand_in_strip(&preset.graph, 16.0).unwrap();
             assert_eq!((strip.width, strip.height), (128, 28), "{name}");
             strip.pixels
         };
@@ -504,7 +542,9 @@ mod tests {
         for name in ["Fan", "Converge", "Bloom"] {
             assert_ne!(picture(name), still, "{name}");
         }
-        for name in ["Bloom", "Sweep", "Wave", "Circle", "Figure-8", "Ballyhoo"] {
+        for name in [
+            "Bloom", "Sweep", "Nod wave", "Circle", "Figure-8", "Ballyhoo",
+        ] {
             assert!(moves(&picture(name)), "{name}");
         }
     }
@@ -512,8 +552,8 @@ mod tests {
     #[test]
     fn an_aim_stand_in_has_pan_and_tilt_curves() {
         let aim = |name: &str| {
-            let preset = luma_patterns::presets().preset("aim@1", name).unwrap();
-            stand_in_strip(preset, 16.0)
+            let preset = luma_patterns::presets().clip(name).unwrap();
+            stand_in_strip(&preset.graph, 16.0)
                 .unwrap()
                 .aim
                 .unwrap_or_else(|| panic!("{name} has no curves"))
@@ -526,15 +566,21 @@ mod tests {
         let position = aim("Position");
         assert_eq!((position.pan.len(), position.tilt.len()), (1, 1));
         // A colour preset aims nothing.
-        let wash = luma_patterns::presets()
-            .preset("color.constant@1", "Wash")
-            .unwrap();
-        assert!(stand_in_strip(wash, 16.0).unwrap().aim.is_none());
+        let wash = luma_patterns::presets().clip("Wash").unwrap();
+        assert!(stand_in_strip(&wash.graph, 16.0).unwrap().aim.is_none());
     }
 
     #[test]
     fn a_gradient_strip_is_bands_constant_over_time() {
-        let preview = preset_strip("color.space@1", "Gradient", 48);
+        let preview = graph_strip(
+            serde_json::json!({"version": 3, "nodes": {
+                "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+                "curve1": {"kind": "curve", "settings": {"kind": "color"},
+                           "inputs": {"x": {"node": "space1"}, "gradient": {"stops": [
+                               {"t": 0, "color": [1, 0, 1]}, {"t": 1, "color": [0, 0, 1]}]}}},
+                "color1": {"kind": "color", "inputs": {"color": {"node": "curve1"}}}}}),
+            48,
+        );
         let pixel = |row: u32, col: u32| {
             let i = ((row * preview.width + col) * 4) as usize;
             preview.pixels[i..i + 3].to_vec()
@@ -542,7 +588,12 @@ mod tests {
         for row in 0..preview.height {
             assert_eq!(pixel(row, 0), pixel(row, preview.width - 1), "row {row}");
         }
-        // Magenta at one end of the rig, blue at the other.
-        assert!(pixel(0, 0)[0] > 200 && pixel(preview.height - 1, 0)[2] > 200);
+        // Magenta at one end of the rig, blue at the other. Rec. 2020 blue
+        // leaves the display gamut, so it shows as the strongest channel.
+        let (first, last) = (pixel(0, 0), pixel(preview.height - 1, 0));
+        assert!(
+            first[0] > 200 && last[2] > last[0] && last[2] > last[1],
+            "{first:?} … {last:?}"
+        );
     }
 }

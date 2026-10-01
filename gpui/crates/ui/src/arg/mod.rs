@@ -13,7 +13,7 @@
 //! # Values in, typed change events out
 //!
 //! No widget persists anything. Stateless widgets ([`select::luma_arg_select`],
-//! [`gradient::luma_gradient_stops`], [`color::luma_hsv_picker`]) are free
+//! [`preset_picker::luma_preset_picker`], [`color::luma_hsv_picker`]) are free
 //! functions in the crate's usual shape: the caller passes the value and a
 //! closure hears a typed event. Widgets that buffer *drafts* — text being
 //! typed is not a value yet — are entities, for the same reason
@@ -26,21 +26,22 @@
 //! existing status and label inks, and nothing here mints a grey.
 
 pub mod color;
-pub mod envelope;
 pub mod expression;
 pub mod gradient;
-pub mod gradient_editor;
+pub mod noise;
 pub mod number;
 pub mod preset_picker;
 pub mod select;
 pub mod signal;
+pub mod strip;
 
+use crate::rpx;
 use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, point, px, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
+    canvas, div, point, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
 };
 
 /// Where a stateless control's box landed, readable by its own mouse
@@ -71,17 +72,6 @@ pub fn bounds_into(cell: &Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement 
     canvas(move |bounds, _, _| write.set(Some(bounds)), |_, _, _, _| {})
         .absolute()
         .size_full()
-}
-
-/// A window-space x mapped to a fraction of `bounds`' width, clamped into
-/// `0..=1`. `None` while the probe has not painted yet.
-pub(crate) fn fraction_of(bounds: &Cell<Option<Bounds<Pixels>>>, x: Pixels) -> Option<f32> {
-    let bounds = bounds.get()?;
-    let span = f32::from(bounds.size.width);
-    if span <= 0. {
-        return None;
-    }
-    Some((f32::from(x - bounds.left()) / span).clamp(0., 1.))
 }
 
 /// A drag payload that names the control it started on.
@@ -145,7 +135,7 @@ pub fn arg_row(label: &str, control: impl IntoElement) -> Div {
         .flex()
         .flex_col()
         .items_start()
-        .gap(px(LABEL_GAP))
+        .gap(rpx(LABEL_GAP))
         .w_full()
         .child(crate::caption(label.to_string()))
         .child(control)

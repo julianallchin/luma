@@ -126,7 +126,7 @@ except (ImportError, ValueError, OSError):
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from luma_exec import bindings, display, figures  # noqa: E402
+from luma_exec import bindings, clip, display, figures  # noqa: E402
 from luma_exec.host_errors import LumaHostCallError  # noqa: E402
 
 #: Per-stream capture cap, per contract C2.
@@ -352,6 +352,10 @@ class Worker:
             )
         if self._current is not None:
             self.namespace["luma"] = self._current
+        # The clip graph builders are bare names in every cell (decision 23:
+        # bare `time` shadows the stdlib module here).
+        for name in clip.BUILDERS:
+            self.namespace[name] = getattr(clip, name)
 
     # -- host capabilities ---------------------------------------------
 

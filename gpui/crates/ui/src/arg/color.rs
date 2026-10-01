@@ -21,16 +21,31 @@
 //! it emits. An external [`ColorArgEditor::set_value`] resyncs the working
 //! state, accepting that loss — the host is telling us the value changed under
 //! us, and a stale hue would be a lie.
+//!
+//! # Colors are light, in linear Rec. 2020
+//!
+//! An rgb here is a light color in the pattern engine's working space:
+//! linear Rec. 2020, each channel `0..=1` ([`luma_patterns::color_space`]).
+//! The picker addresses Rec. 2020's own channels, encoded with the sRGB
+//! transfer curve so its value steps look even, so its corners are Rec.
+//! 2020's primaries and every stored color is reachable, including the deep
+//! reds, greens and cyans sRGB cannot show. Everything painted goes through
+//! [`Light::display`], which maps such a color to the nearest one the screen
+//! has. Hex stays sRGB, the form people know: a color outside sRGB shows the
+//! hex of the nearest sRGB color and says so, and a typed hex is an sRGB
+//! color.
 
+use crate::rpx;
 use gpui::prelude::*;
 use gpui::{
-    div, linear_color_stop, linear_gradient, px, App, Context, Div, ElementId, Entity,
-    EventEmitter, Focusable, Hsla, Rgba, SharedString, Subscription, Window,
+    div, linear_color_stop, linear_gradient, App, Context, Div, ElementId, Entity, EventEmitter,
+    Focusable, Hsla, Rgba, SharedString, Subscription, Window,
 };
 
 use crate::drag::DragGhost;
 use crate::ladder;
 use crate::node::{AgentNode, Instrument, Role};
+use luma_patterns::color_space;
 
 use super::number::{DraftValue, DraftedNumber, NumberEvent};
 use super::select::luma_arg_select;
@@ -51,8 +66,8 @@ pub enum ColorMode {
     Mix(f32),
 }
 
-/// A color arg as a widget or host handles it: an rgb (each channel `0..=1`)
-/// plus a [`ColorMode`]. The rgb is meaningful in every mode — switching
+/// A color arg as a widget or host handles it: an rgb (linear Rec. 2020,
+/// each channel `0..=1`) plus a [`ColorMode`]. The rgb is meaningful in every mode — switching
 /// inherit → override must restore the color that was there before.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColorArg {
@@ -177,13 +192,77 @@ impl Hsv {
     }
 }
 
-fn paint(rgb: [f32; 3], alpha: f32) -> Rgba {
-    Rgba {
-        r: rgb[0],
-        g: rgb[1],
-        b: rgb[2],
-        a: alpha,
+/// A light color with an opacity. `rgb` is linear Rec. 2020, each channel
+/// `0..=1`: the pattern engine's working space
+/// ([`luma_patterns::color_space`]). It is never a screen color; paint it
+/// through [`Light::display`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Light {
+    pub rgb: [f32; 3],
+    pub a: f32,
+}
+
+impl Light {
+    pub const WHITE: Self = Self {
+        rgb: [1.; 3],
+        a: 1.,
+    };
+    pub const BLACK: Self = Self {
+        rgb: [0.; 3],
+        a: 1.,
+    };
+
+    /// An opaque light of `rgb` (linear Rec. 2020).
+    #[must_use]
+    pub fn opaque(rgb: [f64; 3]) -> Self {
+        Self {
+            rgb: rgb.map(|v| v as f32),
+            a: 1.,
+        }
     }
+
+    /// The color on an sRGB screen: gamut-mapped when sRGB cannot show it.
+    #[must_use]
+    pub fn display(self) -> Rgba {
+        let [r, g, b] = color_space::to_display_srgb(self.rgb.map(f64::from)).map(|v| v as f32);
+        Rgba { r, g, b, a: self.a }
+    }
+
+    /// The channels as the engine stores them.
+    #[must_use]
+    pub fn channels(self) -> [f64; 3] {
+        self.rgb.map(f64::from)
+    }
+}
+
+/// A light (linear Rec. 2020) as the picker addresses it: its channels
+/// encoded with the sRGB transfer curve.
+fn picker_rgb(light: [f32; 3]) -> [f32; 3] {
+    light.map(|v| color_space::srgb_encode(f64::from(v)) as f32)
+}
+
+/// The light at a picker position: the inverse of [`picker_rgb`].
+fn light_rgb(picked: [f32; 3]) -> [f32; 3] {
+    picked.map(|v| color_space::srgb_decode(f64::from(v)) as f32)
+}
+
+impl Hsv {
+    /// Where the picker shows `light` (linear Rec. 2020).
+    #[must_use]
+    pub fn of_light(light: [f32; 3]) -> Self {
+        Self::from_rgb(picker_rgb(light))
+    }
+
+    /// The light (linear Rec. 2020) at this picker position.
+    #[must_use]
+    pub fn light(self) -> [f32; 3] {
+        light_rgb(self.to_rgb())
+    }
+}
+
+/// A light (linear Rec. 2020) painted on the screen.
+fn paint(rgb: [f32; 3], alpha: f32) -> Rgba {
+    Light { rgb, a: alpha }.display()
 }
 
 // -- the picker --------------------------------------------------------------
@@ -237,7 +316,7 @@ pub fn luma_hsv_picker(
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(rpx(6.))
         .child(sv_square(&id, hsv, on_change.clone()))
         .child(hue_strip(&id, hsv, on_change))
 }
@@ -256,7 +335,7 @@ fn sv_square(
             s: 1.,
             v: 1.,
         }
-        .to_rgb(),
+        .light(),
         1.,
     );
     let drag_id = id.clone();
@@ -264,9 +343,9 @@ fn sv_square(
     div()
         .id(ElementId::Name(format!("{id}:sv").into()))
         .relative()
-        .w(px(PICKER_WIDTH))
-        .h(px(SV_HEIGHT))
-        .rounded(px(crate::radius::CONTROL))
+        .w(rpx(PICKER_WIDTH))
+        .h(rpx(SV_HEIGHT))
+        .rounded(rpx(crate::radius::CONTROL))
         .bg(linear_gradient(
             90.,
             linear_color_stop(gpui::white(), 0.),
@@ -276,7 +355,7 @@ fn sv_square(
             div()
                 .absolute()
                 .inset_0()
-                .rounded(px(crate::radius::CONTROL))
+                .rounded(rpx(crate::radius::CONTROL))
                 .bg(linear_gradient(
                     180.,
                     linear_color_stop(
@@ -297,9 +376,9 @@ fn sv_square(
                 .absolute()
                 .left(gpui::relative(hsv.s))
                 .top(gpui::relative(1. - hsv.v))
-                .ml(px(-4.))
-                .mt(px(-4.))
-                .size(px(8.))
+                .ml(rpx(-4.))
+                .mt(rpx(-4.))
+                .size(rpx(8.))
                 .rounded_full()
                 .border_1()
                 .border_color(gpui::white()),
@@ -332,7 +411,7 @@ fn hue_strip(
     let segment = |from_deg: f32| {
         let stop = |h: f32| {
             linear_color_stop(
-                paint(Hsv { h, s: 1., v: 1. }.to_rgb(), 1.),
+                paint(Hsv { h, s: 1., v: 1. }.light(), 1.),
                 if h == from_deg { 0. } else { 1. },
             )
         };
@@ -347,15 +426,15 @@ fn hue_strip(
         .id(ElementId::Name(format!("{id}:hue").into()))
         .relative()
         .flex()
-        .w(px(PICKER_WIDTH))
-        .h(px(HUE_HEIGHT))
-        .rounded(px(crate::radius::CONTROL))
+        .w(rpx(PICKER_WIDTH))
+        .h(rpx(HUE_HEIGHT))
+        .rounded(rpx(crate::radius::CONTROL))
         // A content mask is a rectangle, so the end segments round themselves.
         .children([0., 60., 120., 180., 240., 300.].map(|from_deg| {
             segment(from_deg)
-                .when(from_deg == 0., |s| s.rounded_l(px(crate::radius::CONTROL)))
+                .when(from_deg == 0., |s| s.rounded_l(rpx(crate::radius::CONTROL)))
                 .when(from_deg == 300., |s| {
-                    s.rounded_r(px(crate::radius::CONTROL))
+                    s.rounded_r(rpx(crate::radius::CONTROL))
                 })
         }))
         .child(
@@ -363,8 +442,8 @@ fn hue_strip(
                 .absolute()
                 .left(gpui::relative(hsv.h.rem_euclid(360.) / 360.))
                 .top_0()
-                .ml(px(-1.))
-                .w(px(2.))
+                .ml(rpx(-1.))
+                .w(rpx(2.))
                 .h_full()
                 .rounded_full()
                 .bg(gpui::white()),
@@ -400,15 +479,25 @@ pub enum ColorArgEvent {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColorOpacity(pub f32);
 
-/// A color typed as hex: `#rrggbb`, `rrggbb` or `#rgb`.
+/// A color typed as hex: `#rrggbb`, `rrggbb` or `#rgb`. Hex is sRGB.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hex(pub [u8; 3]);
 impl Hex {
-    /// The nearest 8-bit color.
-    pub fn of_rgb(rgb: [f32; 3]) -> Self {
-        let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
-        Self(rgb.map(byte))
+    /// The nearest 8-bit sRGB color to `light` (linear Rec. 2020).
+    pub fn of_light(light: [f32; 3]) -> Self {
+        let byte = |v: f64| (v.clamp(0., 1.) * 255.).round() as u8;
+        Self(color_space::to_display_srgb(light.map(f64::from)).map(byte))
     }
+
+    /// The light (linear Rec. 2020) of this sRGB color.
+    pub fn light(self) -> [f32; 3] {
+        color_space::from_srgb(self.0.map(|v| f64::from(v) / 255.)).map(|v| v as f32)
+    }
+}
+
+/// Whether sRGB, and so a hex code, can hold `light` (linear Rec. 2020).
+fn in_srgb(light: [f32; 3]) -> bool {
+    color_space::in_srgb(light.map(f64::from))
 }
 impl std::fmt::Display for Hex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -465,7 +554,7 @@ impl ColorArgEditor {
             rgb_only: false,
             id: id.into(),
             value,
-            hsv: Hsv::from_rgb(value.rgb),
+            hsv: Hsv::of_light(value.rgb),
             mode_menu_open: false,
             picker_open: false,
             opacity: None,
@@ -502,7 +591,7 @@ impl ColorArgEditor {
             let hex = cx.new(|cx| {
                 DraftedNumber::new(
                     format!("{id} hex"),
-                    Hex::of_rgb(self.value.rgb),
+                    Hex::of_light(self.value.rgb),
                     Hex([0; 3]),
                     Hex([255; 3]),
                     HEX_W,
@@ -524,9 +613,9 @@ impl ColorArgEditor {
             });
             let subscriptions = [
                 cx.subscribe(&hex, |editor, _, event: &NumberEvent<Hex>, cx| {
-                    let NumberEvent::Committed(Hex(bytes)) = *event;
-                    let rgb = bytes.map(|v| f32::from(v) / 255.);
-                    editor.hsv = Hsv::from_rgb(rgb);
+                    let NumberEvent::Committed(hex) = *event;
+                    let rgb = hex.light();
+                    editor.hsv = Hsv::of_light(rgb);
                     let value = ColorArg {
                         rgb,
                         ..editor.value
@@ -550,7 +639,7 @@ impl ColorArgEditor {
         let Some(fields) = &self.fields else {
             return;
         };
-        let hex = Hex::of_rgb(self.value.rgb);
+        let hex = Hex::of_light(self.value.rgb);
         if fields.hex.read(cx).value() != hex && !fields.hex.focus_handle(cx).is_focused(window) {
             fields.hex.update(cx, |field, cx| field.set_value(hex, cx));
         }
@@ -589,7 +678,7 @@ impl ColorArgEditor {
             return;
         }
         self.value = value;
-        self.hsv = Hsv::from_rgb(value.rgb);
+        self.hsv = Hsv::of_light(value.rgb);
         cx.notify();
     }
 
@@ -603,8 +692,8 @@ impl ColorArgEditor {
         let inherit = self.value.mode == ColorMode::Inherit;
         let base = div()
             .flex_shrink_0()
-            .size(px(CONTROL_HEIGHT))
-            .rounded(px(crate::radius::CHIP))
+            .size(rpx(CONTROL_HEIGHT))
+            .rounded(rpx(crate::radius::CHIP))
             .border_1()
             .border_color(crate::glass::hairline(0.12));
         if inherit {
@@ -637,7 +726,7 @@ impl ColorArgEditor {
             this.update(cx, |editor, cx| {
                 editor.hsv = hsv;
                 let value = ColorArg {
-                    rgb: hsv.to_rgb(),
+                    rgb: hsv.light(),
                     ..editor.value
                 };
                 editor.commit(value, cx);
@@ -650,17 +739,33 @@ impl ColorArgEditor {
                 .flex()
                 .items_center()
                 .justify_between()
-                .w(px(PICKER_WIDTH))
-                .child(fields.hex.clone())
+                .w(rpx(PICKER_WIDTH))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(rpx(4.))
+                        .child(fields.hex.clone())
+                        // The hex is the nearest sRGB color, not this one.
+                        .when(!in_srgb(self.value.rgb), |hex| {
+                            hex.child(
+                                div()
+                                    .text_size(rpx(11.))
+                                    .text_color(ladder::foreground_alpha(0.5))
+                                    .child("Outside sRGB")
+                                    .agent_node(Role::Text, format!("{} outside srgb", self.id)),
+                            )
+                        }),
+                )
                 .when(self.opacity.is_some(), |row| {
                     row.child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.))
+                            .gap(rpx(4.))
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(rpx(11.))
                                     .text_color(ladder::foreground_alpha(0.5))
                                     .child("Opacity"),
                             )
@@ -669,8 +774,8 @@ impl ColorArgEditor {
                 })
         });
         let plate = crate::float::popover_card()
-            .gap(px(6.))
-            .p(px(8.))
+            .gap(rpx(6.))
+            .p(rpx(8.))
             .child(picker)
             .children(fields);
         if let ColorMode::Mix(amount) = mode {
@@ -737,7 +842,7 @@ impl Render for ColorArgEditor {
             .relative()
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(rpx(4.))
             .when(!self.rgb_only, |el| el.child(select))
             .child(self.swatch(cx))
             .children(plate)
@@ -887,6 +992,40 @@ mod tests {
         for (hsv, rgb) in cases {
             assert_eq!(hsv.to_rgb(), rgb);
         }
+    }
+
+    /// The picker reaches Rec. 2020's own primaries, which sRGB cannot show,
+    /// and a light survives the picker space.
+    #[test]
+    fn the_picker_reaches_rec2020() {
+        let green = Hsv {
+            h: 120.,
+            s: 1.,
+            v: 1.,
+        };
+        assert_eq!(green.light(), [0., 1., 0.]);
+        assert!(!in_srgb(green.light()));
+        for light in [[0.2, 0.4, 0.6], [0.9, 0.01, 0.5], [0.05, 0.05, 0.05]] {
+            let back = Hsv::of_light(light).light();
+            for (a, b) in light.iter().zip(back.iter()) {
+                assert!((a - b).abs() < 1e-5, "{light:?} came back as {back:?}");
+            }
+        }
+    }
+
+    /// Hex is sRGB: a typed hex is the light of that sRGB color, and an sRGB
+    /// color shows its own hex again.
+    #[test]
+    fn hex_is_srgb() {
+        let orange = Hex([255, 128, 0]);
+        let light = orange.light();
+        assert!(in_srgb(light));
+        assert!(light[1] < 0.3, "green is linear: {light:?}");
+        assert_eq!(Hex::of_light(light), orange);
+        // A color outside sRGB shows the hex of the nearest sRGB color: for
+        // Rec. 2020's green, a green of its own hue.
+        let [r, g, b] = Hex::of_light([0., 1., 0.]).0;
+        assert!(g > 200 && g > r.max(b) + 64, "{r} {g} {b}");
     }
 
     /// RGB→HSV→RGB round-trips within float noise on arbitrary colors.

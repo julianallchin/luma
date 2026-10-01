@@ -10,19 +10,19 @@
 // many clips are selected and what the cursor spans. A change that moved only
 // the picture, or only the state, disagrees with one of the two.
 
-// The editor labels a clip by its form, so each clip plays its own form.
+// The editor labels a clip by its name, so each clip plays its own preset.
 // Wash and Strobe share a span in different lanes, so a rectangle over both
 // selects two clips and over one selects one. Haze sits early and alone.
-const HAZE = "Noise";
+const HAZE = "Clouds";
 const STROBE = "Strobe";
-const WASH = "Chase";
+const WASH = "Random heads";
 fixture({
   // Twenty seconds at 120 bpm: a beat every half-second.
   seconds: 20,
   clips: [
-    { pattern: "pattern-haze", name: "Haze", start: 2, end: 6, lane: 0, preset: ["color.noise@1", "Drift"] },
-    { pattern: "pattern-strobe", name: "Strobe", start: 14, end: 18, lane: 0, preset: ["strobe.constant@1", "Strobe"] },
-    { pattern: "pattern-wash", name: "Wash", start: 14, end: 18, lane: 1, preset: ["color.chase@1", "Chase"] },
+    { pattern: "pattern-haze", name: "Haze", start: 2, end: 6, lane: 0, preset: "Clouds" },
+    { pattern: "pattern-strobe", name: "Strobe", start: 14, end: 18, lane: 0, preset: "Strobe" },
+    { pattern: "pattern-wash", name: "Wash", start: 14, end: 18, lane: 1, preset: "Random heads" },
   ],
   // The pixel premises below were authored against a 1200-wide canvas; in
   // takeover the shell and the inspector spend the rest.
@@ -372,7 +372,7 @@ test("the insertion menu lists presets and answers pointer and keyboard", () => 
   expect(menu.slice(0, 2)).toEqual(shipped.slice(0, 2));
   assert(!menu.includes("Haze"), "the insertion menu offered a score pattern");
 
-  // The first preset is Wash, a clip of Constant color.
+  // The first preset is Wash.
   app.type(node("input", "Search patterns…"), shipped[0]);
   app.frames(2);
   // The dialog's row, painted last: the browser behind it has one too.
@@ -380,7 +380,7 @@ test("the insertion menu lists presets and answers pointer and keyboard", () => 
   app.frames(20);
   reopen();
   expect(total()).toBe(before + 1);
-  const placed = spans("Constant color");
+  const placed = spans(shipped[0]);
   expect(placed.length).toBe(1);
   // Row 0 opened a lane of its own above the rest.
   assert(placed[0].y < span(WASH).y - laneHeight() + 1, "an insertion on row 0 did not open a lane above the rest");
@@ -388,7 +388,7 @@ test("the insertion menu lists presets and answers pointer and keyboard", () => 
   // ArrowDown moves the active row and Enter commits that one: the second
   // preset, read back from the score by its values.
   const presets = library.presets();
-  const isPreset = (clip, preset) => clip.graph === preset.form && JSON.stringify(clip.inputs) === JSON.stringify(preset.inputs);
+  const isPreset = (clip, preset) => JSON.stringify(clip.graph) === JSON.stringify(preset.graph);
   const copies = (preset) => Object.values(library.score().clips).filter((clip) => isPreset(clip, preset)).length;
   const chosen = copies(presets[1]);
   fitLanes();

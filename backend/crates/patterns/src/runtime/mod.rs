@@ -121,7 +121,7 @@ impl EvaluatedValue {
             Value::Signal(signal) => signal.clone(),
             Value::Degrees(value) => Signal::scalar(*value, Unit::Degrees)?,
             Value::Seconds(value) => Signal::scalar(*value, Unit::Seconds)?,
-            Value::Number(v) | Value::Beats(v) | Value::Proportion(v) | Value::Position(v) => {
+            Value::Number(v) | Value::Beats(v) | Value::Proportion(v) => {
                 Signal::scalar(*v, unit(kind).unwrap())?
             }
             Value::Color(rgb) => Signal::new(
@@ -131,23 +131,6 @@ impl EvaluatedValue {
                 None,
             )?,
             Value::Vector(uvz) => Signal::vector(uvz.to_vec(), Unit::Number)?,
-            Value::Field(values) | Value::Mask(values) => Signal::new(
-                Array3::from_shape_vec((values.len(), 1, 1), values.values().copied().collect())
-                    .unwrap(),
-                unit(kind).unwrap(),
-                Channels::Value,
-                Some(values.keys().cloned().collect::<Vec<_>>().into()),
-            )?,
-            Value::ColorField(values) => Signal::new(
-                Array3::from_shape_vec(
-                    (values.len(), 1, 3),
-                    values.values().flatten().copied().collect(),
-                )
-                .unwrap(),
-                Unit::Proportion,
-                Channels::Rgb,
-                Some(values.keys().cloned().collect::<Vec<_>>().into()),
-            )?,
             Value::Lighting(values) => return Ok(Self::output(LightingSignal::literal(values)?)),
             _ => return Self::controls(kind, vec![value.clone()]),
         };
@@ -167,41 +150,16 @@ impl EvaluatedValue {
         if signal.values().dim().1 != 1 && time >= signal.values().dim().1 {
             return Err(Error("signal sample outside batch".into()));
         }
-        if matches!(self.kind, ValueType::Signal(_)) {
+        if matches!(self.kind, ValueType::Signal(_)) || signal.fixtures().is_some() {
             return Ok(Value::Signal(signal.sample(time)?));
         }
         let scalar = || signal.at(0, time, 0);
-        let field = || {
-            signal
-                .fixtures()
-                .expect("field domain")
-                .iter()
-                .enumerate()
-                .map(|(n, id)| (id.clone(), signal.at(n, time, 0)))
-                .collect()
-        };
-        let value = match (self.kind, signal.fixtures().is_some()) {
-            (ValueType::Number | ValueType::Field, false) => Value::Number(scalar()),
-            (ValueType::Beats, false) => Value::Beats(scalar()),
-            (ValueType::Proportion | ValueType::Mask, false) => Value::Proportion(scalar()),
-            (ValueType::Position, false) => Value::Position(scalar()),
-            (ValueType::Color | ValueType::ColorField, false) => {
-                Value::Color(std::array::from_fn(|ch| signal.at(0, time, ch)))
-            }
-            (ValueType::Vector, false) => {
-                Value::Vector(std::array::from_fn(|ch| signal.at(0, time, ch)))
-            }
-            (ValueType::Number | ValueType::Field, true) => Value::Field(field()),
-            (ValueType::Proportion | ValueType::Mask, true) => Value::Mask(field()),
-            (ValueType::Color | ValueType::ColorField, true) => Value::ColorField(
-                signal
-                    .fixtures()
-                    .unwrap()
-                    .iter()
-                    .enumerate()
-                    .map(|(n, id)| (id.clone(), std::array::from_fn(|ch| signal.at(n, time, ch))))
-                    .collect(),
-            ),
+        let value = match self.kind {
+            ValueType::Number => Value::Number(scalar()),
+            ValueType::Beats => Value::Beats(scalar()),
+            ValueType::Proportion => Value::Proportion(scalar()),
+            ValueType::Color => Value::Color(std::array::from_fn(|ch| signal.at(0, time, ch))),
+            ValueType::Vector => Value::Vector(std::array::from_fn(|ch| signal.at(0, time, ch))),
             _ => return Ok(Value::Signal(signal.sample(time)?)),
         };
         // An unbounded intermediate signal is valid computation, even when its
@@ -225,6 +183,5 @@ fn unit(kind: ValueType) -> Option<Unit> {
 pub(crate) struct Batch<'a> {
     pub frame: Frame<'a>,
     pub times: &'a [f64],
-    pub clock: &'a Signal,
     pub fixtures: &'a [String],
 }

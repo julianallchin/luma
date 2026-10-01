@@ -417,6 +417,11 @@ pub struct Look {
     pub exposure: Exposure,
     /// Bloom, star streaks and lens glow around hot sources.
     pub glare: Glare,
+    /// What a film camera adds: shutter, rolling readout, sensor noise and a
+    /// hand on the camera. Absent in a look stored before it existed, which
+    /// means off.
+    #[serde(default)]
+    pub footage: Footage,
 }
 
 impl Look {
@@ -430,6 +435,7 @@ impl Look {
             max_ev: Exposure::STAGE.max_ev,
         },
         glare: Glare::OFF,
+        footage: Footage::OFF,
     };
 
     /// The live stage's default: metered exposure, a punchier curve and a
@@ -438,13 +444,19 @@ impl Look {
         tone: ToneCurve::AgxPunchy,
         exposure: Exposure::STAGE,
         glare: Glare::STAGE,
+        footage: Footage::OFF,
     };
 
     /// Whether this look needs the post chain rather than the single
-    /// composite pass.
+    /// composite pass. Footage settings count only while footage is on: the
+    /// shutter's mean and the noise both live in the post chain.
     #[must_use]
     pub fn needs_post(&self) -> bool {
-        *self != Self::NEUTRAL
+        self.footage.enabled
+            || Self {
+                footage: Footage::OFF,
+                ..*self
+            } != Self::NEUTRAL
     }
 }
 
@@ -510,6 +522,74 @@ impl Exposure {
     };
     /// The range the exposure control offers, in stops.
     pub const RANGE: std::ops::RangeInclusive<f32> = -4.0..=4.0;
+}
+
+/// The footage look: the picture a video camera in the room would record.
+///
+/// Off, a frame is one moment, and only its strobes are integrated over the
+/// frame (`strobe.rs`). On, every subframe is a whole moment of the shutter,
+/// the rows read out one after another, the sensor adds noise and the camera
+/// is held by hand. See `footage.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Footage {
+    /// Whether the camera records footage at all.
+    pub enabled: bool,
+    /// How much of each frame interval the shutter is open, in degrees:
+    /// 180 is the film convention, 360 always open.
+    pub shutter_deg: f32,
+    /// Milliseconds from the top row opening to the bottom row, the rolling
+    /// shutter. Zero is a global shutter.
+    pub readout_ms: f32,
+    /// Sensor noise, 0..=1. Scaled by the auto-exposure gain like a real
+    /// sensor's ISO.
+    pub noise: f32,
+    /// Handheld sway, 0..=1: 1 is about half a degree.
+    pub handheld: f32,
+    /// Shake driven by the track's bass, 0..=1.
+    pub bass: f32,
+}
+
+impl Footage {
+    /// Footage off, with the settings it turns on with.
+    pub const OFF: Self = Self {
+        enabled: false,
+        shutter_deg: 180.0,
+        readout_ms: 10.0,
+        noise: 0.3,
+        handheld: 0.3,
+        bass: 0.0,
+    };
+    /// The shutter angle's range, in degrees.
+    pub const SHUTTER_DEG: std::ops::RangeInclusive<f32> = 1.0..=360.0;
+    /// The readout's range, in milliseconds.
+    pub const READOUT_MS: std::ops::RangeInclusive<f32> = 0.0..=40.0;
+
+    /// Every value inside the range the renderer has an answer for.
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        let clamp = |value: f32, range: std::ops::RangeInclusive<f32>, fallback: f32| {
+            if value.is_finite() {
+                value.clamp(*range.start(), *range.end())
+            } else {
+                fallback
+            }
+        };
+        Self {
+            enabled: self.enabled,
+            shutter_deg: clamp(self.shutter_deg, Self::SHUTTER_DEG, Self::OFF.shutter_deg),
+            readout_ms: clamp(self.readout_ms, Self::READOUT_MS, Self::OFF.readout_ms),
+            noise: clamp(self.noise, 0.0..=1.0, 0.0),
+            handheld: clamp(self.handheld, 0.0..=1.0, 0.0),
+            bass: clamp(self.bass, 0.0..=1.0, 0.0),
+        }
+    }
+}
+
+impl Default for Footage {
+    fn default() -> Self {
+        Self::OFF
+    }
 }
 
 /// Glare around hot sources, added after the tone curve so full white stays
@@ -1898,7 +1978,8 @@ pub struct PrimitiveState {
     pub dimmer: f32,
     /// Linear RGB.
     pub color: [f32; 3],
-    /// 0..1 rate, not a boolean; the display clock turns it into on/off.
+    /// 0..1 rate, not a boolean: `strobe.rs` turns it into flashes on the
+    /// frame's free-running clock.
     pub strobe: f32,
     /// `[pan_deg, tilt_deg]`.
     pub position: [f32; 2],

@@ -1,36 +1,22 @@
-"""Form clips over the same typed document GPUI edits.
+"""Clips over the same typed score document GPUI edits.
 
     edit = luma.track.edit()
-    form = edit.definition("color.chase@1")  # every input, with its default
-    clip = edit.add_clip("color.chase@1", beats=(32, 48), selection="bars",
-                         inputs={key: spec["default"] for key, spec in form["inputs"].items()})
-    edit.check()
+    t = time(every=2)
+    place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
+    pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]])
+    clip = edit.add_clip(color(brightness=pill), name="Chase", beats=(32, 48), selection="bars")
     edit.window(beats=(32, 36)).output.heatmap()
     edit.apply()
 
-A clip plays one form: color.constant@1, color.time@1, color.space@1,
-color.chase@1, color.sparkle@1, color.noise@1, strobe.constant@1 or aim@1. It holds
-a value for every input of its form. source() is the exact score document,
-suitable for an agent workspace or a one-shot model.
+A clip has a name, a time range, a selection, a blend mode, a seed and one
+graph. Build the graph with the bare builders (time, space, noise, audio,
+curve, mirror, shuffle, group, split, then color, aim or strobe) and math on
+curves (cut * fade, max(a, b)), or start from preset("Chase"). add_clip and update_clip run the Rust checker on
+that clip at once and raise ClipError with its text.
 
-Every curve has one format: a list of points, each [x, value] or
-[x, value, ease]:
-    {"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}
-x goes from 0 to 1: the first point has x 0, the last x 1, and x strictly
-increases. A curve has 2–256 points. The ease says how the value moves from
-this point to the next; with no ease it is "linear". The last point has no
-ease. Eases are "linear", "ease-in", "ease-out", "ease-in-out", "hold" (stay
-at this value and jump at the next point) or [x1, y1, x2, y2], a CSS
-cubic-bezier local to the segment: x is a share of the segment's length, y a
-share of the change to the next value, every number in 0..1.
-
-A plain "envelope" input, such as color.time@1's curve, holds values 0..1:
-    {"type": "envelope", "value": {"points": [[0, 0, "ease-in-out"], [1, 1]]}}
-A signal socket takes the same curve as a "time" source (over the clip) or a
-"hit" source (over each event), with numbers in the input's unit or colors:
-    {"type": "time", "value": {"points": [[0, 2, "ease-out"], [1, 0.5]]}}
-Tag a curve on a signal socket "time" or "hit", never "envelope"; the core
-rejects an envelope there.
+A color is light in linear Rec. 2020, three channels 0..1. "#RRGGBB" is sRGB
+and is converted. clip.graph.source() gives Python that rebuilds a clip's
+graph; edit.source() is the exact score document.
 """
 from __future__ import annotations
 
@@ -38,10 +24,12 @@ import bisect
 import copy
 import json
 import math
-import re
 import uuid
 from dataclasses import dataclass
 
+from .clip import ClipError, Graph, preset
+from .color import from_srgb
+from .host_errors import LumaHostCallError
 from .track import (TrackOutput, TrackError, TrackReadOnlyError,
                     TrackClosedError, TrackHostUnavailableError,
                     _ImmutableSnapshot, _field, _items,
@@ -57,95 +45,57 @@ def _plain(value):
     return copy.deepcopy(value)
 
 
-def _typed(kind, value):
-    """Units come from the port schema; explicit typed values are also accepted."""
-    value = _plain(value)
-    kind = _plain(kind)
-    if isinstance(kind, dict) and "signal" in kind:
-        spec = kind["signal"]
-        if isinstance(value, dict) and "type" in value:
-            if value["type"] not in {"signal", "number", "beats", "proportion", "position", "degrees", "seconds", "color", "field", "mask", "color_field",
-                                     "time", "hit", "noise", "audio"}:
-                raise TrackError(
-                    f"a signal socket needs a numerical value or a source, not {value['type']!r}; "
-                    'a curve here is a "time" (over the clip) or "hit" (over each event) source, '
-                    'e.g. {"type": "time", "value": {"points": [[0, 0, "ease-in"], [1, 1]]}} '
-                    '— not "envelope", which is a different, unrelated value kind'
-                )
-            return value  # The core validates units, channels and fixture domains.
-        if isinstance(value, dict):
-            raise TrackError(
-                'a signal socket needs a numerical value or a tagged source, not a bare dict; '
-                'tag a curve explicitly, e.g. {"type": "time", "value": {"points": [[0, 0, "ease-in"], [1, 1]]}} '
-                'for one curve over the clip, or "hit" for one per event'
-            )
-        rgb = spec.get("channels") == "rgb" or isinstance(value, (list, tuple)) or (isinstance(value, str) and value.startswith("#"))
-        literal = "color" if rgb else spec.get("unit") or "number"
-        return _typed(literal, value)
-    if isinstance(value, dict) and "type" in value:
-        if value["type"] != kind:
-            raise TrackError(f"expected {kind}, got {value['type']}")
-        if kind == "seed":
-            return _typed(kind, value.get("value"))
+def _graph(value):
+    """A Graph from a Graph, or a preset name."""
+    if isinstance(value, Graph):
         return value
-    if kind == "seed":
-        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
-            value = int(value)
-        if type(value) is not int or not 0 <= value < (1 << 64):
-            raise TrackError("seed needs an integer from 0 through 18446744073709551615")
-        value = str(value)
-    if kind == "color" and isinstance(value, str):
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-            raise TrackError("color must be #RRGGBB or three normalized channels")
-        value = [int(value[index:index+2], 16) / 255 for index in (1, 3, 5)]
-    if kind == "gradient":
-        if isinstance(value, list):
-            value = {"stops": [{"t": stop[0], "color": stop[1]} for stop in value]}
-        if not isinstance(value, dict) or "stops" not in value:
-            raise TrackError("gradient needs stops with position and color")
-        value = dict(value, stops=[dict(stop, color=_typed("color", stop["color"])["value"])
-                                   for stop in value["stops"]])
-    if kind == "mapping" and isinstance(value, str):
-        source = {"kind": value}
-        if value == "major_axis":
-            source["toward"] = [0.0, 0.0, 1.0]
-        if value == "vector":
-            source["direction"] = [1.0, 0.0, 1.0]
-        value = {"source": source, "reverse": False, "per_group": False}
-        if value["source"]["kind"] in ("radial", "angle"):
-            value["plane"] = {"kind": "auto"}
-    if kind == "envelope" and isinstance(value, list):
-        value = {"points": value}
-    return {"type": kind, "value": value}
+    if isinstance(value, str):
+        return preset(value)
+    raise TrackError("graph must be a Graph from color(), aim() or strobe(), preset(\"Chase\"), "
+                     "or a preset name")
 
 
-def _label(nodes, key):
-    return nodes.get(key, {}).get("name") or key
+def _seed(value):
+    if value is None:
+        return uuid.uuid4().int & ((1 << 64) - 1)
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < (1 << 64):
+        raise TrackError("seed needs an integer from 0 through 18446744073709551615")
+    return value
 
 
 @dataclass(frozen=True)
 class Clip:
-    """One clip: id, graph, start/duration in beats, selection, z, blend, inputs.
+    """One clip: id, name, start/duration in beats, selection, seed, z, blend, graph.
 
     This is a read-only value. Use edit.update_clip(clip, ...) to change it.
-    The canonical JSON spells z and blend as z_index and blend_mode.
+    clip.graph.source() is Python that rebuilds the graph. The stored JSON
+    spells z and blend as z_index and blend_mode.
     """
     id: str
-    graph: str
+    name: str
     start: float
     duration: float
     selection: object
     seed: int
     z: int
     blend: str
-    inputs: object
+    graph: Graph
 
     @classmethod
     def read(cls, id, value):
-        return cls(id, value["graph"], value["start"], value["duration"],
+        name = value.get("name", "")
+        return cls(id, name, value["start"], value["duration"],
                    _freeze(value.get("selection", {"expression": "all"})), value["seed"],
                    value.get("z_index", 0), value.get("blend_mode", "replace"),
-                   _freeze(value.get("inputs", {})))
+                   Graph.from_json(value.get("graph") or {}, name=name or None))
+
+
+def _definitions(nodes):
+    """Definitions keyed by kind; the binding may be a map or a list of records."""
+    nodes = _plain(nodes) or {}
+    if isinstance(nodes, list):
+        return {record["kind"]: record for record in nodes}
+    return nodes
 
 
 class GraphTrack(_ImmutableSnapshot):
@@ -154,7 +104,7 @@ class GraphTrack(_ImmutableSnapshot):
     def __init__(self, values, *, nodes, features=None, host_call=None, artifact_store=None):
         self._values, self._features = values, features
         self._host_call, self._artifact_store = host_call, artifact_store
-        self._nodes = _plain(nodes)
+        self._nodes = _definitions(nodes)
         self._active = True
         self.id = str(_field(values, "id", default=""))
         self.title = str(_field(values, "title", default=""))
@@ -168,6 +118,15 @@ class GraphTrack(_ImmutableSnapshot):
     def _require_active(self):
         if not self._active:
             raise TrackClosedError("this score is no longer in scope; use the current luma.track")
+
+    @staticmethod
+    def color(srgb):
+        """An sRGB color, "#RRGGBB" or three channels 0..1, as the linear
+        Rec. 2020 triple a score stores."""
+        try:
+            return from_srgb(srgb)
+        except ValueError as error:
+            raise TrackError(str(error)) from None
 
     def _call(self, method, payload):
         self._require_active()
@@ -243,16 +202,17 @@ class GraphTrack(_ImmutableSnapshot):
         return tuple(Clip.read(id, clip) for id, clip in sorted(
             self._document["clips"].items(), key=lambda item: (item[1]["start"], item[1].get("z_index", 0), item[0])))
 
-    def definition(self, id):
-        """Copy a built-in definition, such as a form, with typed inputs and body."""
-        if id not in self._nodes:
-            raise TrackError(f"unknown node definition {id!r}")
-        return copy.deepcopy(self._nodes[id])
+    def definition(self, kind):
+        """The definition record of a node kind: its inputs (type, unit,
+        range, default) and settings (options, default). A default of None
+        means the input is empty."""
+        if kind not in self._nodes:
+            raise TrackError(f"unknown node kind {kind!r}; luma.track.nodes() lists them")
+        return copy.deepcopy(self._nodes[kind])
 
-    def nodes(self, search=""):
-        """Map matching node IDs to names. Read definition(id) for input schemas."""
-        return {id: _label(self._nodes, id) for id in sorted(self._nodes)
-                if search.casefold() in (id + " " + _label(self._nodes, id)).casefold()}
+    def nodes(self):
+        """The node kinds a clip graph is built from."""
+        return list(self._nodes)
 
     def source(self):
         """The complete saved score as canonical JSON text."""
@@ -350,9 +310,9 @@ class Edit:
         """All candidate Clip values: unchanged saved clips plus staged edits."""
         return tuple(Clip.read(id, clip) for id, clip in self._candidate["clips"].items())
 
-    def definition(self, id):
-        """Copy a built-in definition; a form's inputs are what its clips set."""
-        return self._track.definition(id)
+    def definition(self, kind):
+        """The definition record of a node kind (inputs, settings, defaults)."""
+        return self._track.definition(kind)
 
     def replace_source(self, source):
         """Stage an exact score source. check/apply run Rust's validator."""
@@ -366,32 +326,41 @@ class Edit:
         """The complete candidate as JSON text, including unchanged saved clips."""
         return json.dumps(self._candidate, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
-    def _inputs(self, graph, inputs):
-        schema = self.definition(graph)["inputs"]
-        result = {}
-        for key, value in (inputs or {}).items():
-            if key not in schema:
-                raise TrackError(f"{graph} has no input {key!r}")
-            result[key] = _typed(schema[key]["value_type"], value)
-        return result
+    def _check_clip(self, id, value):
+        """Run the Rust checker on one clip; raise ClipError with its text."""
+        label = value.get("name") or id
+        try:
+            result = self._track._call("track.clip_check", {"id": id, "clip": copy.deepcopy(value)})
+        except LumaHostCallError as error:
+            if error.code in ("invalid_clip", "invalid_score", "invalid_request"):
+                raise ClipError(_prefixed(label, id, str(error))) from None
+            raise
+        if isinstance(result, dict) and result.get("error"):
+            raise ClipError(_prefixed(label, id, str(result["error"])))
+        result = _check_result(result)
+        if not result.ok:
+            raise ClipError("\n".join(_prefixed(label, id, message) for message in result.errors))
 
-    def add_clip(self, form, *, id=None, beats=None, bars=None, seconds=None,
-                 selection="all", z=None, blend="replace", seed=None, inputs=None):
-        """Stage a clip of a form ID, such as "color.chase@1", and return it.
+    def add_clip(self, graph, *, name=None, beats=None, bars=None, seconds=None,
+                 selection="all", z=None, blend=None, seed=None, id=None):
+        """Stage a clip and return it. The checker runs on it at once.
 
-        inputs must give a value for every input of the form; read
-        definition(form)["inputs"] for their types and defaults. A missing or
-        unknown input fails check(). Supply exactly one half-open range:
-        beats=(0,32), bars=(1,9), or seconds=(0,16). Beats start at zero; bars
-        at one. selection is a group expression; it always lights the whole
-        group. Clips composite bottom-up by integer z.
-        Omit z to place above clips overlapping this time range (or at zero
-        when the range is empty). Supply z explicitly to choose layer order.
-        replace covers the lower layer; add sums/clamps; screen brightens
-        without replacing the base color. Inspect overlaps before applying.
+        graph is a Graph from color(), aim() or strobe(), preset("Chase"),
+        or a preset name. name is required unless the graph is a preset;
+        a preset also gives its blend mode (motion presets are offset).
+        With no blend and no preset, the blend is replace.
+        Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
+        seconds=(0,16). Beats start at zero; bars at one. selection is a
+        group expression. Clips composite bottom-up by integer z; omit z to
+        place above clips overlapping this range. replace covers the lower
+        layer; add sums; screen brightens; an aim clip takes replace or
+        offset (offset adds its yaw and pitch to the aim underneath).
         """
         self._open()
-        graph = str(form)
+        graph = _graph(graph)
+        name = name if name is not None else graph.name
+        if not name:
+            raise ClipError('clip: expected a name; got none. Example: name="Kick chase"')
         start, end = self._track._range(beats=beats, bars=bars, seconds=seconds)
         id = id or str(uuid.uuid4())
         if id in self._candidate["clips"]:
@@ -400,28 +369,37 @@ class Edit:
             z = max((clip.get("z_index", 0) for clip in self._candidate["clips"].values()
                      if clip["start"] < end and start < clip["start"] + clip["duration"]),
                     default=-1) + 1
-        value = {"graph": graph, "start": start, "duration": end-start,
-                 "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend),
-                 "seed": seed if seed is not None else uuid.uuid4().int & ((1 << 64)-1),
-                 "inputs": self._inputs(graph, inputs)}
+        value = {"name": str(name), "start": start, "duration": end - start, "seed": _seed(seed),
+                 "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend or graph.blend or "replace"),
+                 "graph": graph.json()}
+        self._check_clip(id, value)
         self._candidate["clips"][id] = value
         return Clip.read(id, value)
 
-    def update_clip(self, clip, *, beats=None, bars=None, seconds=None,
-                    selection=None, z=None, blend=None, seed=None, inputs=None):
+    def update_clip(self, clip, *, graph=None, name=None, beats=None, bars=None, seconds=None,
+                    selection=None, z=None, blend=None, seed=None):
         """Update a Clip or clip ID and return its new value; other fields stay.
 
-        Ranges, selection, z and blend use add_clip's conventions. inputs
-        merges values; inputs={key: None} restores that input's default.
+        graph, name, range, selection, z, blend and seed use add_clip's
+        conventions. The checker runs on the updated clip at once.
         """
         self._open()
         id = clip.id if isinstance(clip, Clip) else str(clip)
         if id not in self._candidate["clips"]:
             raise TrackError(f"unknown clip {id!r}")
         value = copy.deepcopy(self._candidate["clips"][id])
-        if any(value is not None for value in (beats, bars, seconds)):
+        if graph is not None:
+            graph = _graph(graph)
+            value["graph"] = graph.json()
+            if name is None and not value.get("name") and graph.name:
+                value["name"] = graph.name
+        if name is not None:
+            if not str(name):
+                raise ClipError('clip: expected a name; got none. Example: name="Kick chase"')
+            value["name"] = str(name)
+        if any(item is not None for item in (beats, bars, seconds)):
             start, end = self._track._range(beats=beats, bars=bars, seconds=seconds)
-            value.update(start=start, duration=end-start)
+            value.update(start=start, duration=end - start)
         if selection is not None:
             value["selection"] = _selection(selection)
         if z is not None:
@@ -429,16 +407,8 @@ class Edit:
         if blend is not None:
             value["blend_mode"] = _blend(blend)
         if seed is not None:
-            value["seed"] = seed
-        if inputs is not None:
-            overrides = value.setdefault("inputs", {})
-            overrides.update(self._inputs(value["graph"], {key: item for key, item in inputs.items() if item is not None}))
-            for key, item in inputs.items():
-                if item is None:
-                    spec = self.definition(value["graph"])["inputs"].get(key)
-                    if spec is None:
-                        raise TrackError(f"form has no input {key!r}")
-                    overrides[key] = spec["default"]
+            value["seed"] = _seed(seed)
+        self._check_clip(id, value)
         self._candidate["clips"][id] = value
         return Clip.read(id, value)
 
@@ -453,8 +423,7 @@ class Edit:
     def check(self):
         """Run the native score validator; return CheckResult without saving.
 
-        Reports non-form clips and missing or invalid inputs.
-        The validation verb is check(), not validate().
+        Reports every clip the checker refuses. The verb is check(), not validate().
         """
         self._open()
         return _check_result(self._track._call("track.score_check", {"candidate": self.candidate}))
@@ -509,7 +478,12 @@ class Edit:
 
 
 # Discovery and validation use the same mode vocabulary.
-Edit.add_clip.__doc__ += "\nAvailable blend modes: " + ", ".join(sorted(BLEND_MODES)) + "."
+Edit.add_clip.__doc__ += ("\nAvailable blend modes: " + ", ".join(sorted(BLEND_MODES)) + "."
+                          " An aim clip takes replace or offset; offset is for aim only.")
+
+
+def _prefixed(label, id, message):
+    return message if message.startswith("clip ") else f"clip {label} ({id}): {message}"
 
 
 class Window(_ImmutableSnapshot):
@@ -533,8 +507,9 @@ class Window(_ImmutableSnapshot):
         for clip in self.clips:
             start = max(self.start_s, self._track.seconds_at(clip.start))
             end = min(self.end_s, self._track.seconds_at(clip.start+clip.duration))
-            ax.barh(clip.z, end-start, left=start, color=_pattern_color(clip.graph), height=.7)
-            ax.text((start+end)/2, clip.z, _label(self._track._nodes, clip.graph), ha="center", va="center", fontsize=8)
+            kind = clip.graph.output.kind if clip.graph.output is not None else "empty"
+            ax.barh(clip.z, end-start, left=start, color=_pattern_color(kind), height=.7)
+            ax.text((start+end)/2, clip.z, clip.name or kind, ha="center", va="center", fontsize=8)
         ax.set(xlim=(self.start_s, self.end_s), xlabel="time (s)", ylabel="stack", title="Score clips")
         fig.tight_layout()
         return fig

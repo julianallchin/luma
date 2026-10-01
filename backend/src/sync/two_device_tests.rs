@@ -392,9 +392,10 @@ async fn seed(pool: &SqlitePool, user: &str, venue: &str, score: &str, clips: &[
 
 async fn clip(pool: &SqlitePool, user: &str, score: &str, id: &str, start: f64, duration: f64) {
     sqlx::query(
-        "INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_json,
-             z_index, blend_mode, inputs_json)
-         VALUES (?, ?, ?, 'strobe', ?, ?, '1', '{\"expression\":\"all\"}', 0, 'replace', '{}')",
+        "INSERT INTO clips (id, uid, score_id, name, graph_json, graph, start, duration, seed,
+             selection_json, z_index, blend_mode)
+         VALUES (?, ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', ?, ?, '1', '{\"expression\":\"all\"}', 0,
+                 'replace')",
     )
     .bind(format!("{score}:{id}"))
     .bind(user)
@@ -681,7 +682,11 @@ async fn a_merged_draft_arrives_as_clips() {
     state.clips.insert(
         "two".into(),
         luma_patterns::Clip {
-            graph: "strobe".into(),
+            name: "Strobe".into(),
+            graph: serde_json::from_value(serde_json::json!(
+                {"version": 3, "nodes": {"strobe1": {"kind": "strobe"}}}
+            ))
+            .expect("a strobe graph"),
             start: 8.0,
             duration: 4.0,
             seed: 7,
@@ -689,7 +694,6 @@ async fn a_merged_draft_arrives_as_clips() {
             selection: luma_patterns::Selection::all(),
             z_index: 0,
             blend_mode: luma_patterns::BlendMode::Replace,
-            inputs: Default::default(),
         },
     );
     crate::services::drafts::apply(&mut writer, &draft, &state)

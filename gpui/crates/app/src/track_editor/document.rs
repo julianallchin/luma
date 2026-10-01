@@ -1,11 +1,7 @@
 //! The canonical score behind the native timeline. Seconds are a view of its
 //! beat positions.
 use super::*;
-use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
 use luma_patterns as p;
-use std::collections::BTreeMap;
-
-pub(super) const SELECTION_INPUT: &str = "@clip/selection";
 
 /// Is `stored` the document `ours` wrote, as far as storage can tell?
 ///
@@ -43,26 +39,6 @@ pub(super) fn close(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     }
 }
 
-/// A shipped form's definition. `standard_library()` hands back a copy of all
-/// of it, so the forms are read from it once.
-pub(super) fn form_definition(id: &str) -> Option<&'static p::Definition> {
-    static FORMS: std::sync::OnceLock<BTreeMap<&'static str, p::Definition>> =
-        std::sync::OnceLock::new();
-    FORMS
-        .get_or_init(|| {
-            let library = p::standard_library();
-            p::FORMS
-                .iter()
-                .map(|form| (*form, library.definitions[*form].clone()))
-                .collect()
-        })
-        .get(id)
-}
-
-pub(super) fn wire_value(value: &p::Value) -> serde_json::Value {
-    luma_lib::node_graph::lighting::wire_value(value)
-}
-
 pub(super) fn resolve_document(
     score: &p::Score,
     beats: Option<&BeatGrid>,
@@ -74,16 +50,16 @@ pub(super) fn resolve_document(
         .ok_or("Waiting for the track's beat grid")?
         .timeline()
         .map_err(|error| error.to_string())?;
-    let library = p::standard_library();
     let mut clips = score
         .clips
         .iter()
         .map(|(id, clip)| {
-            Ok(Clip {
+            let mut resolved = Clip {
                 id: id.clone().into(),
-                pattern: clip.graph.clone().into(),
-                label: library.display_name(&clip.graph).into(),
-                color: ladder::pattern(&clip.graph),
+                output: SharedString::default(),
+                label: SharedString::default(),
+                summary: SharedString::default(),
+                color: ladder::pattern(""),
                 start: clock
                     .seconds_at(clip.start)
                     .map_err(|error| error.to_string())?,
@@ -93,14 +69,10 @@ pub(super) fn resolve_document(
                 row: 0,
                 z: clip.z_index,
                 blend: clip.blend_mode,
-                args: serde_json::Value::Object(
-                    clip.inputs
-                        .iter()
-                        .map(|(key, value)| (key.clone(), wire_value(value)))
-                        .collect(),
-                ),
                 core: Some(clip.clone()),
-            })
+            };
+            resolved.refresh();
+            Ok(resolved)
         })
         .collect::<Result<Vec<_>, String>>()?;
     assign_rows(&mut clips);
@@ -119,7 +91,7 @@ impl Editor {
         self.clips = resolve_document(&score, beats.as_ref())?;
         self.beats = beats.map(Rc::new);
         self.graph_score = Some(score);
-        self.sheet.invalidate_defs();
+        self.sheet.invalidate();
         self.previews.borrow_mut().clear();
         self.preview_errors.clear();
         self.composited = Some(self.clips.clone());
@@ -162,69 +134,14 @@ impl Editor {
                 clock.beat_at(clip.end).map_err(|error| error.to_string())?
             };
             authored.duration = end - authored.start;
-            authored.graph = clip.pattern.to_string();
             authored.z_index = clip.z;
             authored.blend_mode = clip.blend;
-            let definition = form_definition(&authored.graph).ok_or("clip graph is not a form")?;
-            authored.inputs = clip
-                .args
-                .as_object()
-                .ok_or("clip inputs must be an object")?
-                .iter()
-                .map(|(key, value)| {
-                    let input = definition
-                        .inputs
-                        .get(key)
-                        .ok_or_else(|| format!("unknown input {key}"))?;
-                    Ok((
-                        key.clone(),
-                        luma_lib::node_graph::lighting::decode(input.value_type, value)?,
-                    ))
-                })
-                .collect::<Result<_, String>>()?;
             score.clips.insert(clip.id.to_string(), authored);
         }
         // Not checked as a whole: one stale clip must not stop the rest from
         // playing, previewing or saving. The backend checks each clip it
         // saves, and a scene leaves out a clip that fails.
         Ok(score)
-    }
-
-    pub(super) fn graph_input_defs(&self, id: &str) -> Option<Vec<PatternArgDef>> {
-        let definition = form_definition(id)?;
-        let mut inputs = vec![PatternArgDef {
-            id: SELECTION_INPUT.into(),
-            name: "Selection".into(),
-            arg_type: PatternArgType::Selection,
-            default_value: p::Selection::all().to_value(),
-        }];
-        // A form lists its inputs in its own order, under the engine's names.
-        let order = p::input_order(id);
-        let mut entries: Vec<_> = definition.inputs.iter().collect();
-        if let Some(order) = order {
-            entries.sort_by_key(|(key, _)| order.iter().position(|at| at == key));
-        }
-        for (id, input) in entries {
-            let Some(arg_type) = luma_lib::node_graph::lighting::arg_type(input.value_type) else {
-                continue;
-            };
-            let name = if order.is_some() {
-                input.name.clone()
-            } else {
-                luma_lib::node_graph::lighting::input_label(input)
-            };
-            inputs.push(PatternArgDef {
-                id: id.clone(),
-                name,
-                arg_type,
-                default_value: input
-                    .default
-                    .as_ref()
-                    .map(wire_value)
-                    .unwrap_or(serde_json::Value::Null),
-            });
-        }
-        Some(inputs)
     }
 }
 
@@ -417,9 +334,7 @@ impl Editor {
                 }
             }
         }
-        score
-            .clips
-            .insert(id.clone(), choice.0.clip(start, duration));
+        score.clips.insert(id.clone(), choice.clip(start, duration));
         let clip = score.clips.get_mut(&id).unwrap();
         clip.z_index = z;
         clip.selection = selection;
@@ -452,7 +367,7 @@ mod tests {
     use super::{p, same_document};
 
     /// A clip as the editor wrote it, from a session that blinked.
-    const CLIP: &str = r#"{"graph": "267688a9-e19d-4e62-aad8-a7d4e31e4097", "start": 73.0, "duration": 0.99988652, "seed": 1029648076447695423, "selection": {"expression": "led_bars_vertical"}, "z_index": 1, "blend_mode": "replace", "inputs": {"color": {"type": "color", "value": [0.38823529411764707, 0.38823529411764707, 0.38823529411764707]}, "mapping": {"type": "mapping", "value": {"source": {"kind": "z"}, "per_group": false, "reverse": true}}, "path": {"type": "envelope", "value": {"points": [[0.0, 0.0, [0.4920748472213745, 0.0070618391036987305, 0.4920748472213745, 0.9999237060546875]], [1.0, 1.0]]}}, "travel": {"type": "beats", "value": 0.75}}}"#;
+    const CLIP: &str = r#"{"name": "Chase", "start": 73.0, "duration": 0.99988652, "seed": 1029648076447695423, "selection": {"expression": "led_bars_vertical"}, "z_index": 1, "blend_mode": "replace", "graph": {"version": 2, "nodes": {"time1": {"kind": "time"}, "curve1": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0.0, 0.0, [0.4920748472213745, 0.0070618391036987305, 0.4920748472213745, 0.9999237060546875]], [1.0, 1.0]]}}}, "color1": {"kind": "color", "inputs": {"color": [0.38823529411764707, 0.38823529411764707, 0.38823529411764707], "brightness": {"node": "curve1"}}}}}}"#;
 
     fn score(clip: serde_json::Value) -> p::Score {
         serde_json::from_value(serde_json::json!({
@@ -466,7 +381,7 @@ mod tests {
         let ours: serde_json::Value = serde_json::from_str(CLIP).unwrap();
         let mut stored = ours.clone();
         // What storage handed back: one ulp on a handle, a last digit on a beat.
-        stored["inputs"]["path"]["value"]["points"][0][2][3] =
+        stored["graph"]["nodes"]["curve1"]["inputs"]["shape"]["points"][0][2][3] =
             serde_json::json!(0.9999237060546876);
         stored["duration"] = serde_json::json!(ours["duration"].as_f64().unwrap() + 1e-15);
         assert!(same_document(&score(ours.clone()), &score(stored)));

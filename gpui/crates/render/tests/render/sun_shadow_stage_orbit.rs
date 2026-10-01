@@ -92,6 +92,7 @@ fn frame(eye: Vec3, target: Vec3, azimuth: f32) -> Frame {
             },
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: luma_render::strobe::Rows::STEADY,
         })
         .collect();
     frame.draws.splice(at..at, draws);

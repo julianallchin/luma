@@ -1,29 +1,29 @@
-//! Shipped presets: named input values of a form, named curves for `time`
-//! and `hit` sources, named gradients, and named frequency ranges for
-//! `audio` sources. The data lives in `presets.json`.
-use crate::{BlendMode, Clip, Error, Gradient, Keyframes, Library, Result, Selection, Value};
+//! Shipped presets: clip graphs named as the effect, curve shapes,
+//! gradients, and frequency bands for `audio`. The data lives in
+//! `presets.json` (spec section 9).
+use crate::clip_graph::{ClipGraph, Kind};
+use crate::{BlendMode, Clip, Curve, Gradient, Selection};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
-/// A named look: a form and a value for every one of its inputs.
+/// A named clip: a graph and the blend mode it ships with.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FormPreset {
+pub struct ClipPreset {
     pub name: String,
-    pub form: String,
-    pub inputs: BTreeMap<String, Value>,
+    pub blend_mode: BlendMode,
+    /// What the preset needs from the rig to look right, such as "needs
+    /// vertical bars".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub graph: ClipGraph,
 }
 
-/// A named curve over progress 0–1, with values 0–1. A caller scales the
-/// values to the input's range before it stores the source.
+/// A named curve shape: points over x 0–1 with values 0–1.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CurvePreset {
     pub name: String,
-    /// The input key this curve is made for. `None` is the general set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<String>,
-    pub curve: Keyframes,
+    pub curve: Curve<f64>,
 }
 
 /// A named gradient.
@@ -34,26 +34,25 @@ pub struct GradientPreset {
     pub gradient: Gradient,
 }
 
+/// A named frequency band of the full mix for an `audio` node.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BandPreset {
+    pub name: String,
+    pub low_hz: f64,
+    pub high_hz: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Presets {
-    pub presets: Vec<FormPreset>,
+    pub clips: Vec<ClipPreset>,
     pub curves: Vec<CurvePreset>,
     pub gradients: Vec<GradientPreset>,
-    pub frequencies: Vec<FrequencyPreset>,
+    pub bands: Vec<BandPreset>,
 }
 
-/// A named frequency range of the full mix for an `audio` source. Picking
-/// one only fills `from_hz` and `to_hz`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FrequencyPreset {
-    pub name: String,
-    pub from_hz: f64,
-    pub to_hz: f64,
-}
-
-/// The shipped presets and curves, in menu order.
+/// The shipped presets, in menu order.
 pub fn presets() -> &'static Presets {
     static PRESETS: std::sync::OnceLock<Presets> = std::sync::OnceLock::new();
     PRESETS.get_or_init(|| {
@@ -62,56 +61,54 @@ pub fn presets() -> &'static Presets {
 }
 
 impl Presets {
-    /// The preset of `form` called `name`. A name is unique within its form
-    /// only: Chase and Aim each have a Wave.
-    pub fn preset(&self, form: &str, name: &str) -> Option<&FormPreset> {
-        self.presets
-            .iter()
-            .find(|preset| preset.form == form && preset.name == name)
+    /// The clip preset called `name`. Names are unique across kinds.
+    pub fn clip(&self, name: &str) -> Option<&ClipPreset> {
+        self.clips.iter().find(|preset| preset.name == name)
     }
-    /// The general curve called `name`.
-    pub fn curve(&self, name: &str) -> Option<&Keyframes> {
+    /// The curve shape called `name`.
+    pub fn curve(&self, name: &str) -> Option<&Curve<f64>> {
         self.curves
             .iter()
-            .find(|curve| curve.input.is_none() && curve.name == name)
-            .map(|curve| &curve.curve)
+            .find(|preset| preset.name == name)
+            .map(|preset| &preset.curve)
     }
-    /// The curves offered for `input`: its own set where it has one, the
-    /// general set otherwise. In menu order.
-    pub fn curves_for<'a>(&'a self, input: &'a str) -> impl Iterator<Item = &'a CurvePreset> {
-        let own = self
-            .curves
+    /// The gradient called `name`.
+    pub fn gradient(&self, name: &str) -> Option<&Gradient> {
+        self.gradients
             .iter()
-            .any(|curve| curve.input.as_deref() == Some(input));
-        let wanted = own.then_some(input);
-        self.curves
+            .find(|preset| preset.name == name)
+            .map(|preset| &preset.gradient)
+    }
+    /// The band called `name`, as `(low_hz, high_hz)`.
+    pub fn band(&self, name: &str) -> Option<(f64, f64)> {
+        self.bands
             .iter()
-            .filter(move |curve| curve.input.as_deref() == wanted)
+            .find(|preset| preset.name == name)
+            .map(|preset| (preset.low_hz, preset.high_hz))
     }
 }
 
-impl FormPreset {
-    /// A new clip of this preset: the form and a copy of every value.
+impl ClipPreset {
+    /// The output kind of the preset's graph.
+    pub fn output_kind(&self) -> Kind {
+        self.graph
+            .output_kind()
+            .expect("a shipped preset has an output")
+    }
+
+    /// A new clip of this preset: its name, blend mode and a copy of its
+    /// graph, over all heads.
     pub fn clip(&self, start: f64, duration: f64) -> Clip {
         Clip {
-            graph: self.form.clone(),
+            name: self.name.clone(),
             start,
             duration,
             seed: 0,
             selection_seed: None,
             selection: Selection::all(),
             z_index: 0,
-            blend_mode: BlendMode::Replace,
-            inputs: self.inputs.clone(),
+            blend_mode: self.blend_mode,
+            graph: self.graph.clone(),
         }
-    }
-    pub fn validate(&self, library: &Library) -> Result<()> {
-        let definition = library
-            .definitions
-            .get(&self.form)
-            .filter(|_| crate::is_form(&self.form))
-            .ok_or_else(|| Error(format!("{}: unknown form {}", self.name, self.form)))?;
-        crate::forms::check_inputs(&self.form, definition, &self.inputs)
-            .map_err(|error| Error(format!("{}: {error}", self.name)))
     }
 }

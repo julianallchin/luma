@@ -243,7 +243,7 @@ fn quad_interpolate_scalar(sum_in: f32) -> f32 {
 fn quad_scale_shared(li: u32, sum: f32) -> vec3<f32> {
     let rest = light_rest[li];
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
-    return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
+    return tint * (sum * rest.intensity * light_row_ratio(li) * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
 // Current output preserves the original conditional add: a clean lane does

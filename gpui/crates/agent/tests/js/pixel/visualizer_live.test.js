@@ -11,13 +11,13 @@
 
 // The clip spans the whole track, so an unlit frame is never a legitimate
 // outcome. Rainbow cycles through saturated hues every four beats (two
-// seconds at the fixture's 120 bpm), and it is labelled by its form.
+// seconds at the fixture's 120 bpm), and it is labelled by its name.
 fixture({
   seconds: 20,
   rig: 4,
-  clips: [{ pattern: "pattern-rainbow", name: "Rainbow", start: 0, end: 20, preset: ["color.time@1", "Rainbow"] }],
+  clips: [{ pattern: "pattern-rainbow", name: "Rainbow", start: 0, end: 20, preset: "Rainbow" }],
 });
-const CLIP = "Color over time";
+const CLIP = "Rainbow";
 
 const stageShot = () => app.screenshot({ node: app.snapshot().find({ role: "card", label: "Stage" }) });
 
@@ -50,6 +50,25 @@ test("the rig is lit by the playing track", () => {
 
   // The pattern has a two-second period, so a second of playback is half a
   // cycle: a sample pinned to one time, or a cached frame, cannot move.
+  nav.step("the Play button", "button", "Play");
+  app.frames(20, { waitMs: 55 });
+  expect(image.diff(first, stageShot())).toBeGreaterThan(0.01);
+});
+
+// The footage look draws each frame as several whole moments of a shutter;
+// the rig must still be lit by the score and still move with it.
+test("the footage look still draws the rig lit and moving with the track", () => {
+  openLitStage();
+  nav.step("the view settings", "toggle", "Render settings");
+  until("the footage switch", (s) => s.find({ role: "toggle", label: "Footage look" }) !== undefined);
+  nav.step("footage on", "toggle", "Footage look");
+  until("its dials", (s) => s.findAll({ role: "slider" }).some((n) => n.label.startsWith("Shutter angle")));
+  app.key("escape");
+  until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
+  app.frames(10, { waitMs: 60 });
+  const first = stageShot();
+  expect(chroma(first)).toBeGreaterThan(2);
+
   nav.step("the Play button", "button", "Play");
   app.frames(20, { waitMs: 55 });
   expect(image.diff(first, stageShot())).toBeGreaterThan(0.01);

@@ -155,7 +155,11 @@ mod tests {
 
     fn clip(start: f64) -> Clip {
         Clip {
-            graph: "strobe.constant@1".into(),
+            name: "Strobe".into(),
+            graph: serde_json::from_value(serde_json::json!(
+                {"version": 3, "nodes": {"strobe1": {"kind": "strobe"}}}
+            ))
+            .expect("a strobe graph"),
             start,
             duration: 4.0,
             seed: 7,
@@ -163,7 +167,6 @@ mod tests {
             selection: Selection::all(),
             z_index: 0,
             blend_mode: BlendMode::Replace,
-            inputs: Default::default(),
         }
     }
 
