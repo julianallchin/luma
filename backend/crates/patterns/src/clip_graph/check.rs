@@ -14,6 +14,11 @@ pub fn check(graph: &ClipGraph) -> Result<()> {
         node_shape(id, &graph.nodes[*id])?;
     }
     for id in &ids {
+        if graph.nodes[*id].kind == Kind::Value {
+            value_node(graph, id)?;
+        }
+    }
+    for id in &ids {
         values(graph, id, &graph.nodes[*id])?;
     }
     for id in &ids {
@@ -165,11 +170,11 @@ const MAX_ID: usize = 32;
 /// cell binds, and Python's keywords. `source()` assigns each node to a
 /// variable of its id.
 const RESERVED: &[&str] = &[
-    "time", "space", "noise", "audio", "curve", "math", "max", "min", "mirror", "shuffle", "group",
-    "split", "color", "aim", "strobe", "preset", "False", "None", "True", "and", "as", "assert",
-    "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except",
-    "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not",
-    "or", "pass", "raise", "return", "try", "while", "with", "yield",
+    "time", "space", "noise", "audio", "curve", "math", "value", "max", "min", "mirror", "shuffle",
+    "group", "split", "color", "aim", "strobe", "preset", "False", "None", "True", "and", "as",
+    "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else",
+    "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
+    "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
 ];
 
 /// An ASCII Python identifier of at most [`MAX_ID`] characters: `cut`,
@@ -265,6 +270,105 @@ fn node_shape(id: &str, node: &Node) -> Result<()> {
     Ok(())
 }
 
+// ---- value nodes ----
+
+/// A value node: the inputs it feeds agree on one type (a number, a vector
+/// or a color) and one unit, and its value has as many numbers as that
+/// type. A wire through a curve's low or high, or a math node, counts by
+/// the input the curve or the math feeds.
+fn value_node(graph: &ClipGraph, id: &str) -> Result<()> {
+    let asked = graph.asked(id);
+    let mut kinds: Vec<&str> = Vec::new();
+    for (_, _, kind) in &asked {
+        if !kinds.contains(kind) {
+            kinds.push(kind);
+        }
+    }
+    let held = graph.nodes[id].inputs.get("value");
+    let literal = held.map_or_else(|| "0.5".to_string(), python_value);
+    if kinds.len() > 1 {
+        let named: Vec<String> = asked
+            .iter()
+            .map(|(to, input, kind)| format!("{to}.{input} ({kind})"))
+            .collect();
+        let examples: Vec<String> = kinds
+            .iter()
+            .enumerate()
+            .map(|(n, kind)| {
+                let name = if n == 0 {
+                    id.to_string()
+                } else {
+                    format!("{id}_{}", n + 1)
+                };
+                let value = match *kind {
+                    "number" => "0.5",
+                    "color" => "(1, 1, 1)",
+                    _ => "(1, 0, 0)",
+                };
+                format!("{name} = value({value})")
+            })
+            .collect();
+        return fail(format!(
+            "{id}: expected one type; it feeds {}. Example: one value per type, such as {}",
+            list(&named),
+            list(&examples)
+        ));
+    }
+    let mut dests = Vec::new();
+    destinations(graph, id, false, &mut dests, 0);
+    let mut units: Vec<Option<Unit>> = Vec::new();
+    for dest in &dests {
+        if !units.contains(&dest.def.unit) {
+            units.push(dest.def.unit);
+        }
+    }
+    if units.len() > 1 {
+        let named: Vec<String> = dests
+            .iter()
+            .map(|dest| {
+                format!(
+                    "{} ({})",
+                    dest.name(),
+                    dest.def.unit.map_or("no unit", Unit::name)
+                )
+            })
+            .collect();
+        return fail(format!(
+            "{id}: expected one unit; it feeds {}. Example: one value per unit, such as {id} = value({literal}) and {id}_2 = value({literal})",
+            list(&named)
+        ));
+    }
+    let (Some(kind), Some(held)) = (kinds.first(), held) else {
+        return Ok(());
+    };
+    let (to, input, _) = asked[0];
+    let fits = match held {
+        Input::Number(_) => *kind == "number",
+        Input::Vector(_) | Input::Color(_) => *kind != "number",
+        _ => true,
+    };
+    if !fits {
+        let (wanted, example) = match *kind {
+            "number" => ("a number", "0.5"),
+            "color" => ("a color (r, g, b)", "(1, 1, 1)"),
+            _ => ("a vector (u, v, z)", "(1, 0, 0)"),
+        };
+        return fail(format!(
+            "{id}.value: expected {wanted} because {id} feeds {to}.{input}; got {literal}. Example: {id} = value({example})"
+        ));
+    }
+    Ok(())
+}
+
+/// A value as Python writes it: `0.5`, `(0.57, 0, 0.82)`.
+fn python_value(input: &Input) -> String {
+    match input {
+        Input::Number(value) => format!("{value}"),
+        Input::Vector(v) | Input::Color(v) => format!("({}, {}, {})", v[0], v[1], v[2]),
+        _ => "0.5".into(),
+    }
+}
+
 // ---- rule 3: values ----
 
 fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
@@ -273,7 +377,7 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
         let input = node.inputs.get(*name);
         let required = matches!(
             (node.kind, *name),
-            (Kind::Curve, "x") | (Kind::Math, "values")
+            (Kind::Curve, "x") | (Kind::Math, "values") | (Kind::Value, "value")
         );
         let Some(input) = input else {
             if required {
@@ -289,111 +393,33 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
             }
             continue;
         };
-        let wrong_type = || {
-            fail(format!(
-                "{id}.{name}: expected {}; got {}. Example: {}",
-                accepts(def),
-                describe(graph, Some(input)),
-                example(node.kind, name)
-            ))
+        // A wire from a value node is checked as the value it holds.
+        let from_value = input
+            .source()
+            .filter(|source| {
+                graph
+                    .nodes
+                    .get(*source)
+                    .is_some_and(|n| n.kind == Kind::Value)
+            })
+            .filter(|_| {
+                matches!(
+                    def.ty,
+                    InputType::Number | InputType::Vector | InputType::Color
+                )
+            });
+        let Some(source) = from_value else {
+            value_input(graph, id, node, name, def, input)?;
+            continue;
         };
-        match (def.ty, input) {
-            (InputType::Values, Input::List(items)) => math_values(id, node, items)?,
-            (InputType::Values, _) => return wrong_type(),
-            (_, Input::Wire(_)) => {}
-            (_, Input::List(items)) => {
-                let note = if def.ty == InputType::Number {
-                    format!(". Items multiply in a math node: {name}=a * b")
-                } else {
-                    String::new()
-                };
-                return fail(format!(
-                    "{id}.{name}: expected {}; got a list of {} items. Example: {}{note}",
-                    accepts(def),
-                    items.len(),
-                    example(node.kind, name)
-                ));
-            }
-            (ty, _) if ty.is_wire_only() => return wrong_type(),
-            (InputType::Number, Input::Number(value)) => {
-                if !value.is_finite() || !def.in_range(*value) {
-                    return fail(format!(
-                        "{id}.{name}: expected {}; got {value}. Example: {}",
-                        range_phrase(def),
-                        example(node.kind, name)
-                    ));
-                }
-            }
-            (InputType::Vector, Input::Vector(value)) => {
-                if value.iter().any(|v| !v.is_finite()) {
-                    return fail(format!(
-                        "{id}.{name}: expected a vector of finite numbers; got {}. Example: {}",
-                        vector(*value),
-                        example(node.kind, name)
-                    ));
-                }
-                if let Some(why) = def.geometry.and_then(|g| g.refuse(*value)) {
-                    return fail(format!(
-                        "{id}.{name}: expected {why}; got {}. Example: {}",
-                        vector(*value),
-                        example(node.kind, name)
-                    ));
-                }
-            }
-            (InputType::Color, Input::Color(value)) => {
-                if value
-                    .iter()
-                    .any(|v| !v.is_finite() || !(0. ..=1.).contains(v))
-                {
-                    return fail(format!(
-                        "{id}.{name}: expected a color with each channel 0–1; got {}. Example: {}",
-                        vector(*value),
-                        example(node.kind, name)
-                    ));
-                }
-            }
-            (InputType::Points, Input::Points(points)) => {
-                points
-                    .check(|v| {
-                        (!v.is_finite() || !(0. ..=1.).contains(v))
-                            .then(|| format!("v {v} must be in 0–1"))
-                    })
-                    .or_else(|error| {
-                        fail(format!(
-                            "{id}.{name}: expected points with v 0–1; got {error}. Example: {}",
-                            example(node.kind, name)
-                        ))
-                    })?;
-            }
-            (InputType::Gradient, Input::Gradient(gradient)) => {
-                let checked = if gradient.stops.is_empty() {
-                    Err(Error("no stops".into()))
-                } else {
-                    gradient.validate()
-                };
-                checked.or_else(|error| {
-                    fail(format!(
-                        "{id}.{name}: expected a gradient with 1–64 stops in order; got {error}. Example: {}",
-                        example(node.kind, name)
-                    ))
-                })?;
-            }
-            (InputType::Bound, Input::Number(value)) if !value.is_finite() => {
-                return fail(format!(
-                    "{id}.{name}: expected a finite number; got {value}. Example: {}",
-                    example(node.kind, name)
-                ))
-            }
-            (InputType::Bound, Input::Vector(value)) if value.iter().any(|v| !v.is_finite()) => {
-                return fail(format!(
-                    "{id}.{name}: expected a vector of finite numbers; got {}. Example: {}",
-                    vector(*value),
-                    example(node.kind, name)
-                ))
-            }
-            (InputType::Bound, Input::Number(_) | Input::Vector(_)) => {}
-            _ => return wrong_type(),
-        }
+        let held = match (def.ty, graph.resolve(input)) {
+            (InputType::Color, Input::Vector(v)) => Input::Color(*v),
+            (InputType::Vector, Input::Color(v)) => Input::Vector(*v),
+            (_, held) => held.clone(),
+        };
+        value_input(graph, id, node, name, def, &held).map_err(|Error(message)| {
+            Error(message.replacen("; got ", &format!("; got {source} = "), 1))
+        })?;
     }
     if node.kind == Kind::Audio {
         let hz = |name: &str, empty: f64| match node.inputs.get(name) {
@@ -409,6 +435,127 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Rule 3 for one input that holds `input` (not empty).
+fn value_input(
+    graph: &ClipGraph,
+    id: &str,
+    node: &Node,
+    name: &str,
+    def: &InputDef,
+    input: &Input,
+) -> Result<()> {
+    let wrong_type = || {
+        fail(format!(
+            "{id}.{name}: expected {}; got {}. Example: {}",
+            accepts(def),
+            describe(graph, Some(input)),
+            example(node.kind, name)
+        ))
+    };
+    match (def.ty, input) {
+        (InputType::Values, Input::List(items)) => math_values(id, node, items)?,
+        (InputType::Values, _) => return wrong_type(),
+        (InputType::Constant, Input::Number(value)) if value.is_finite() => {}
+        (InputType::Constant, Input::Vector(value) | Input::Color(value))
+            if value.iter().all(|v| v.is_finite()) => {}
+        (InputType::Constant, _) => return wrong_type(),
+        (_, Input::Wire(_)) => {}
+        (_, Input::List(items)) => {
+            let note = if def.ty == InputType::Number {
+                format!(". Items multiply in a math node: {name}=a * b")
+            } else {
+                String::new()
+            };
+            return fail(format!(
+                "{id}.{name}: expected {}; got a list of {} items. Example: {}{note}",
+                accepts(def),
+                items.len(),
+                example(node.kind, name)
+            ));
+        }
+        (ty, _) if ty.is_wire_only() => return wrong_type(),
+        (InputType::Number, Input::Number(value)) => {
+            if !value.is_finite() || !def.in_range(*value) {
+                return fail(format!(
+                    "{id}.{name}: expected {}; got {value}. Example: {}",
+                    range_phrase(def),
+                    example(node.kind, name)
+                ));
+            }
+        }
+        (InputType::Vector, Input::Vector(value)) => {
+            if value.iter().any(|v| !v.is_finite()) {
+                return fail(format!(
+                    "{id}.{name}: expected a vector of finite numbers; got {}. Example: {}",
+                    vector(*value),
+                    example(node.kind, name)
+                ));
+            }
+            if let Some(why) = def.geometry.and_then(|g| g.refuse(*value)) {
+                return fail(format!(
+                    "{id}.{name}: expected {why}; got {}. Example: {}",
+                    vector(*value),
+                    example(node.kind, name)
+                ));
+            }
+        }
+        (InputType::Color, Input::Color(value)) => {
+            if value
+                .iter()
+                .any(|v| !v.is_finite() || !(0. ..=1.).contains(v))
+            {
+                return fail(format!(
+                    "{id}.{name}: expected a color with each channel 0–1; got {}. Example: {}",
+                    vector(*value),
+                    example(node.kind, name)
+                ));
+            }
+        }
+        (InputType::Points, Input::Points(points)) => {
+            points
+                .check(|v| {
+                    (!v.is_finite() || !(0. ..=1.).contains(v))
+                        .then(|| format!("v {v} must be in 0–1"))
+                })
+                .or_else(|error| {
+                    fail(format!(
+                        "{id}.{name}: expected points with v 0–1; got {error}. Example: {}",
+                        example(node.kind, name)
+                    ))
+                })?;
+        }
+        (InputType::Gradient, Input::Gradient(gradient)) => {
+            let checked = if gradient.stops.is_empty() {
+                Err(Error("no stops".into()))
+            } else {
+                gradient.validate()
+            };
+            checked.or_else(|error| {
+                fail(format!(
+                    "{id}.{name}: expected a gradient with 1–64 stops in order; got {error}. Example: {}",
+                    example(node.kind, name)
+                ))
+            })?;
+        }
+        (InputType::Bound, Input::Number(value)) if !value.is_finite() => {
+            return fail(format!(
+                "{id}.{name}: expected a finite number; got {value}. Example: {}",
+                example(node.kind, name)
+            ))
+        }
+        (InputType::Bound, Input::Vector(value)) if value.iter().any(|v| !v.is_finite()) => {
+            return fail(format!(
+                "{id}.{name}: expected a vector of finite numbers; got {}. Example: {}",
+                vector(*value),
+                example(node.kind, name)
+            ))
+        }
+        (InputType::Bound, Input::Number(_) | Input::Vector(_)) => {}
+        _ => return wrong_type(),
     }
     Ok(())
 }
@@ -472,7 +619,7 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                 InputType::Heads => produces == Produces::Heads,
                 InputType::Time => source_node.kind == Kind::Time,
                 InputType::Coordinate => produces == Produces::Coordinate,
-                InputType::Points | InputType::Gradient => false,
+                InputType::Points | InputType::Gradient | InputType::Constant => false,
             };
             if fits {
                 continue;
@@ -631,7 +778,7 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
     match kind {
         "number" => {
             for (bound, empty) in [("low", 0.), ("high", 1.)] {
-                let (value, given) = match node.inputs.get(bound) {
+                let (value, given) = match node.inputs.get(bound).map(|held| graph.resolve(held)) {
                     None => (empty, format!("nothing, which reads as {empty}")),
                     Some(Input::Number(value)) => (*value, format!("{value}")),
                     Some(Input::Vector(value)) => {
@@ -664,7 +811,7 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
             };
             let mut ends = Vec::new();
             for bound in ["low", "high"] {
-                match node.inputs.get(bound) {
+                match node.inputs.get(bound).map(|held| graph.resolve(held)) {
                     Some(Input::Vector(value)) => {
                         for dest in &dests {
                             if let Some(why) = dest.def.geometry.and_then(|g| g.refuse(*value)) {
@@ -878,6 +1025,7 @@ fn accepts(def: &InputDef) -> String {
         InputType::Values => "a list of two or more numbers and value wires".into(),
         InputType::Coordinate => "a coordinate wire".into(),
         InputType::Bound => "a number or a vector".into(),
+        InputType::Constant => "a finite number, or three, such as 0.5 or (0.57, 0, 0.82)".into(),
     }
 }
 

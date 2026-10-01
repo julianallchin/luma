@@ -191,6 +191,23 @@ of 2, 36 of 3; 151 curves, one math node added each, no node removed),
 1 draft; presets unchanged; every clip plays bit for bit as before on both
 stand-in rigs (audio read as `time()`).
 
+### Value node (2026-10-01)
+
+Julian's decision: everything is a tensor, and a `value` node is a named
+constant signal that any number, vector or color input can be wired to.
+`value.value` holds a number or three numbers (`InputType::Constant`, value
+only). Its type (1 or 3 channels, vector or color) and unit are inferred
+from the inputs it feeds (`ClipGraph::asked`; through a curve's low or high
+by the curve's kind and destination; a math node asks no type). Two types or
+two units are a checker error with an example; each destination checks the
+value as if written there (`got d = 1.5`). Time-only inputs take a value.
+Python: `d = value((0.57, 0, 0.82))`; plain literals are never linked;
+`source()` writes each value on its own line. The editor shows a compact
+card: the name and one field of the inferred type; a draft value (unwired)
+shows only its name. Deleting a value writes its value back into the inputs
+it fed. Saved clips are unchanged; presets that use one quantity twice share
+it (Circle and Pinwheel: the swing; Ballyhoo: speed, scale and swing).
+
 ---
 
 ## 1. Grammar in 10 lines

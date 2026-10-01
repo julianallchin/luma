@@ -1,6 +1,6 @@
 ---
 name: node-cards
-description: The clip graph node reference. The grammar in ten lines, every one of the 13 nodes (math included) with its inputs, units, ranges, empty values and settings, the wire types, the curve presets, and the checker's error format. Read this before you build a clip graph.
+description: The clip graph node reference. The grammar in ten lines, every one of the 14 nodes (math and value included) with its inputs, units, ranges, empty values and settings, the wire types, the curve presets, and the checker's error format. Read this before you build a clip graph.
 ---
 
 # Clip graph nodes
@@ -306,6 +306,29 @@ result wires like a curve: into any number, vector or color input, or into a
 curve's `low` or `high`. A coordinate is not a value: `time() * 2` is an
 error; write `curve(time(), low=0, high=2)`. On plain numbers `max` and `min`
 are Python's own.
+
+## value
+
+`value(x)` is a named constant: a number, a `(u, v, z)` vector or an
+`(r, g, b)` color. Wire it into every input that means the same quantity,
+so one edit changes all of them:
+
+```python
+d = value((0.57, 0, 0.82))
+at = value(0.68)
+line = mirror(direction=d, at=at)
+dist = space(heads=line, direction=d, shift=at)
+```
+
+Its type and unit come from the inputs it feeds (through a curve's `low` or
+`high`, from what the curve feeds). Inputs of two units or two types are an
+error: `d: expected one unit; it feeds place.shift (share) and t.delay
+(beats). Example: one value per unit, such as d = value(0.5) and d_2 =
+value(0.5)`. Each input checks the value as if it were written there. A
+value goes into inputs that change only over time (a mirror's direction).
+Plain numbers stay plain: equal numbers are never linked unless you wire one
+value into both. `source()` writes each value on its own line. `value` is a
+builder name, so no node may take it as an id.
 
 ## Shapers
 

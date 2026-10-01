@@ -546,6 +546,10 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
             nodes.push(("curve9".into(), curve_of("time9")));
             nodes.push(("color9".into(), color(&id)));
         }
+        Kind::Value => {
+            node.inputs.insert("value".into(), Input::Number(0.5));
+            nodes.push(("color9".into(), color(&id)));
+        }
         Kind::Mirror | Kind::Shuffle | Kind::Group | Kind::Split => {
             nodes.push((
                 "space9".into(),
@@ -585,6 +589,106 @@ fn definition_defaults_pass_the_checker() {
     let mirror = serde_json::to_value(clip_graph::definition(Kind::Mirror)).unwrap();
     assert_eq!(mirror["inputs"]["at"]["range"], json!([0.0, 1.0]));
     assert_eq!(space["settings"]["kind"]["default"], "line");
+}
+
+// ---- value nodes ----
+
+/// A value node takes its type from the inputs it feeds: a number input, a
+/// vector input or a color input; through a curve's low or high, the
+/// curve's kind. Unwired inputs that only change over time take it too.
+#[test]
+fn a_value_takes_its_type_from_what_it_feeds() {
+    let slash = graph(json!({
+        "d": {"kind": "value", "inputs": {"value": [0.57, 0, 0.82]}},
+        "at": {"kind": "value", "inputs": {"value": 0.68}},
+        "line": {"kind": "mirror", "inputs": {"direction": {"node": "d"}, "at": {"node": "at"}}},
+        "dist": {"kind": "space", "inputs": {"heads": {"node": "line"}, "direction": {"node": "d"}, "shift": {"node": "at"}}},
+        "bloom": {"kind": "curve", "inputs": {"x": {"node": "dist"}}},
+        "red": {"kind": "value", "inputs": {"value": [1, 0, 0]}},
+        "low": {"kind": "value", "inputs": {"value": 0.2}},
+        "t": {"kind": "time"},
+        "fade": {"kind": "curve", "inputs": {"x": {"node": "t"}, "low": {"node": "low"}}},
+        "color1": {"kind": "color", "inputs": {"color": {"node": "red"}, "brightness": {"node": "bloom"}, "alpha": {"node": "fade"}}}}));
+    slash.check().unwrap();
+    assert_eq!(slash.value_kind("d"), Some("vector"));
+    assert_eq!(slash.value_kind("at"), Some("number"));
+    // Stored as a bare 3-array, read as a color because it feeds one.
+    assert_eq!(slash.value_kind("red"), Some("color"));
+    assert_eq!(slash.value_kind("low"), Some("number"));
+    let json = slash.to_json();
+    assert_eq!(ClipGraph::from_json(&json).unwrap(), slash);
+    assert!(
+        json.contains(r#""d":{"kind":"value","inputs":{"value":[0.57,0.0,0.82]}}"#),
+        "{json}"
+    );
+}
+
+#[test]
+fn a_value_feeding_two_units_or_two_types_is_refused_with_an_example() {
+    let units = error(json!({
+        "d": {"kind": "value", "inputs": {"value": 0.5}},
+        "t": {"kind": "time", "inputs": {"delay": {"node": "d"}}},
+        "place": {"kind": "space", "inputs": {"shift": {"node": "d"}}},
+        "a": {"kind": "curve", "inputs": {"x": {"node": "t"}}},
+        "b": {"kind": "curve", "inputs": {"x": {"node": "place"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "a"}, "alpha": {"node": "b"}}}}));
+    assert_eq!(
+        units,
+        "d: expected one unit; it feeds place.shift (share) and t.delay (beats). Example: one value per unit, such as d = value(0.5) and d_2 = value(0.5)"
+    );
+    let types = error(json!({
+        "d": {"kind": "value", "inputs": {"value": [1, 0, 0]}},
+        "line": {"kind": "mirror", "inputs": {"direction": {"node": "d"}}},
+        "dist": {"kind": "space", "inputs": {"heads": {"node": "line"}}},
+        "bloom": {"kind": "curve", "inputs": {"x": {"node": "dist"}}},
+        "color1": {"kind": "color", "inputs": {"color": {"node": "d"}, "brightness": {"node": "bloom"}}}}));
+    assert_eq!(
+        types,
+        "d: expected one type; it feeds color1.color (color) and line.direction (vector). Example: one value per type, such as d = value((1, 1, 1)) and d_2 = value((1, 0, 0))"
+    );
+    let shape = error(json!({
+        "d": {"kind": "value", "inputs": {"value": [1, 0, 0]}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "d"}}}}));
+    assert_eq!(
+        shape,
+        "d.value: expected a number because d feeds color1.brightness; got (1, 0, 0). Example: d = value(0.5)"
+    );
+    // A value is checked in every input it feeds, as if written there.
+    let range = error(json!({
+        "d": {"kind": "value", "inputs": {"value": 1.5}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "d"}}}}));
+    assert_eq!(
+        range,
+        "color1.brightness: expected a share between 0 and 1; got d = 1.5. Example: brightness=1"
+    );
+    let bound = error(json!({
+        "d": {"kind": "value", "inputs": {"value": 2}},
+        "t": {"kind": "time"},
+        "fade": {"kind": "curve", "inputs": {"x": {"node": "t"}, "high": {"node": "d"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "fade"}}}}));
+    assert!(
+        bound.starts_with(
+            "fade.high: expected a share between 0 and 1 for color1.brightness; got 2."
+        ),
+        "{bound}"
+    );
+}
+
+#[test]
+fn a_value_holds_a_value_and_no_wire() {
+    let wired = error(json!({
+        "t": {"kind": "time"},
+        "c": {"kind": "curve", "inputs": {"x": {"node": "t"}}},
+        "d": {"kind": "value", "inputs": {"value": {"node": "c"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "d"}}}}));
+    assert!(
+        wired.starts_with("d.value: expected a finite number, or three"),
+        "{wired}"
+    );
+    let empty = error(json!({
+        "d": {"kind": "value"},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "d"}}}}));
+    assert!(empty.starts_with("d.value: expected"), "{empty}");
 }
 
 // ---- summary ----

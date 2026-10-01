@@ -222,6 +222,11 @@ impl Lowering<'_> {
             Kind::Audio => self.audio(id)?,
             Kind::Curve => self.curve(id)?,
             Kind::Math => self.math(id)?,
+            Kind::Value => match self.node(id).inputs.get("value") {
+                Some(Input::Number(value)) => constant(*value),
+                Some(Input::Vector(value) | Input::Color(value)) => constant3(*value),
+                _ => return Err(Error(format!("{id}.value: expected a number or three"))),
+            },
             kind => {
                 return Err(Error(format!(
                     "{id}: a {} node gives no value",
@@ -449,7 +454,7 @@ impl Lowering<'_> {
 
     fn audio(&mut self, id: &str) -> Result<Lowered> {
         let hz = |this: &Self, input: &str, empty: f64| {
-            match this.node(id).inputs.get(input) {
+            match this.node(id).inputs.get(input).map(|held| this.graph.resolve(held)) {
             None => Ok(empty),
             Some(Input::Number(hz)) => Ok(*hz),
             Some(_) => Err(Error(format!(
@@ -633,7 +638,7 @@ impl Lowering<'_> {
                 });
             }
             Kind::Group => {
-                let size = match node.inputs.get("size") {
+                let size = match node.inputs.get("size").map(|held| self.graph.resolve(held)) {
                     None => None,
                     Some(Input::Number(size)) => Some(size.round().max(1.) as usize),
                     Some(_) => {
