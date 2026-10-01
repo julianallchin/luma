@@ -58,8 +58,8 @@ impl Session {
         // Without this, the CLI freezes the system prompt at a conversation's
         // first turn and reuses that snapshot verbatim on every later resume
         // — including a hydrated one — no matter what `--system-prompt` this
-        // call passed. Luma's system prompt carries this turn's editor
-        // context, so a resumed turn needs it applied, not the first turn's.
+        // call passed. Luma's system prompt is the same for every turn of a
+        // thread, but a newer build's prompt should reach an older thread.
         cmd.arg("--system-prompt-snapshot").arg("off");
         cmd.arg("--mcp-config")
             .arg(json!({"mcpServers":{"luma":{"type":"sdk","name":"luma"}}}).to_string());
@@ -145,7 +145,7 @@ impl Session {
                             frame["response"]
                         )));
                     }
-                    self.process.send(json!({"type":"user","message":{"role":"user","content":self.request.prompt}})).await?;
+                    self.process.send(json!({"type":"user","message":{"role":"user","content":text_blocks(&self.request.prompt)}})).await?;
                 }
                 "control_request" => {
                     let request = &frame["request"];
@@ -344,11 +344,24 @@ pub(in crate::agent) struct Steerer {
 }
 
 impl Steerer {
-    pub async fn steer(&self, id: &str, text: &str, tools_open: bool) -> Result<(), AgentError> {
+    pub async fn steer(
+        &self,
+        id: &str,
+        blocks: &[String],
+        tools_open: bool,
+    ) -> Result<(), AgentError> {
         // Recorded before the write, so a replay can never outrun it.
         self.steers.lock().expect("steers").push_back(id.to_owned());
-        self.input.send(steer_frame(text, id, !tools_open)).await
+        self.input.send(steer_frame(blocks, id, !tools_open)).await
     }
+}
+
+/// A user message's content: one text block each.
+fn text_blocks(blocks: &[String]) -> Value {
+    blocks
+        .iter()
+        .map(|text| json!({"type":"text","text":text}))
+        .collect()
 }
 
 // Adapted from Comet, MIT, (c) 2026 Wing.
@@ -356,9 +369,9 @@ impl Steerer {
 /// and the steer is answered next. But `now` also aborts an in-flight MCP tool
 /// call, so while any tool is open the steer goes as `next`: the tool
 /// finishes and the steer lands right after its result, in the same turn.
-fn steer_frame(text: &str, id: &str, immediate: bool) -> Value {
+fn steer_frame(blocks: &[String], id: &str, immediate: bool) -> Value {
     json!({"type":"user", "uuid":id, "priority": if immediate { "now" } else { "next" },
-        "message":{"role":"user","content":text}, "parent_tool_use_id":null})
+        "message":{"role":"user","content":text_blocks(blocks)}, "parent_tool_use_id":null})
 }
 
 fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
@@ -763,12 +776,12 @@ def request(start,end):
 assert read()['request']['subtype']=='initialize'
 send({'type':'control_response','response':{'request_id':'initialize','subtype':'success','response':{}}})
 first=read()
-assert first['type']=='user'
+assert first['message']=={'role':'user','content':[{'type':'text','text':'Echo hi.'}]}, first
 send({'type':'system','subtype':'init','session_id':'native'})
 send({'type':'user','uuid':'cli-own','isReplay':True,'parent_tool_use_id':None,'message':first['message']})
 request({'input_tokens':10,'cache_read_input_tokens':4000,'output_tokens':1},{'output_tokens':30})
 steer=read()
-assert steer=={'type':'user','uuid':'s1','priority':'now','message':{'role':'user','content':'darker'},'parent_tool_use_id':None}, steer
+assert steer=={'type':'user','uuid':'s1','priority':'now','message':{'role':'user','content':[{'type':'text','text':'darker'},{'type':'text','text':'<editor-context>'}]},'parent_tool_use_id':None}, steer
 send({'type':'result','subtype':'error_during_execution','is_error':True,'errors':['[ede_diagnostic] interrupted']})
 send({'type':'system','subtype':'init','session_id':'native'})
 send({'type':'user','uuid':'s1','isReplay':True,'parent_tool_use_id':None,'message':steer['message']})
@@ -793,7 +806,11 @@ send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_t
             (first.cache_read_input_tokens, first.output_tokens),
             (4000, 30)
         );
-        steerer.steer("s1", "darker", false).await.unwrap();
+        // The typed text and the editor context go as separate blocks.
+        steerer
+            .steer("s1", &["darker".into(), "<editor-context>".into()], false)
+            .await
+            .unwrap();
         // The interrupted turn's end is not the run's end.
         assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
         assert!(matches!(
@@ -818,8 +835,9 @@ send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_t
     /// A steer written while a tool runs must not abort it.
     #[test]
     fn a_steer_waits_behind_an_open_tool() {
-        assert_eq!(steer_frame("x", "id", false)["priority"], "next");
-        assert_eq!(steer_frame("x", "id", true)["priority"], "now");
+        let blocks = ["x".to_string()];
+        assert_eq!(steer_frame(&blocks, "id", false)["priority"], "next");
+        assert_eq!(steer_frame(&blocks, "id", true)["priority"], "now");
     }
 }
 

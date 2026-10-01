@@ -189,9 +189,36 @@ impl Luma {
             return;
         };
         let state = ChatHistory::loading(generation, running, cx);
-        let pending = self.library.agent().history(subject);
         self.overlay.open(Overlay::ChatHistory(Box::new(state)));
         cx.notify();
+        self.read_chat_history(subject, generation, cx);
+    }
+
+    /// Read the list again under the open dialog, when rows have changed.
+    ///
+    /// The dialog stays as it is — query, focus and the rows already shown —
+    /// until the new read lands. Reopening it would put the skeleton back over
+    /// a list that was already there, once for every sync.
+    pub(crate) fn refresh_chat_history(&mut self, cx: &mut Context<Self>) {
+        let Some(subject) = crate::agent::chat_subject(self) else {
+            return;
+        };
+        self.chat_history_generation = self.chat_history_generation.wrapping_add(1);
+        let generation = self.chat_history_generation;
+        let Some(Overlay::ChatHistory(state)) = self.overlay.open_mut() else {
+            return;
+        };
+        state.generation = generation;
+        self.read_chat_history(subject, generation, cx);
+    }
+
+    fn read_chat_history(
+        &mut self,
+        subject: luma_lib::agent::ThreadScope,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = self.library.agent().history(subject);
         cx.spawn(async move |this, cx| {
             let listed = pending.await;
             this.update(cx, |this, cx| {

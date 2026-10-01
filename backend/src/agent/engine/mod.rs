@@ -72,7 +72,9 @@ pub(super) struct Request {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub system: String,
-    pub prompt: String,
+    /// The user message as text blocks: what was typed, then the
+    /// `<editor-context>` block. Kept apart so the typed text stays one block.
+    pub prompt: Vec<String>,
     pub tools: Vec<ToolSpec>,
     pub cwd: std::path::PathBuf,
     pub resume: Option<state::NativeSession>,
@@ -186,10 +188,16 @@ impl Steerer {
     /// `tools_open`: whether one of the session's tool calls is still running.
     /// The session answers with [`Event::Steered`] naming `id` once its model
     /// has the message.
-    pub async fn steer(&self, id: &str, text: &str, tools_open: bool) -> Result<(), AgentError> {
+    /// `blocks` are the message's text blocks, as [`Request::prompt`].
+    pub async fn steer(
+        &self,
+        id: &str,
+        blocks: &[String],
+        tools_open: bool,
+    ) -> Result<(), AgentError> {
         match self {
-            Self::Codex(steerer) => steerer.steer(id, text).await,
-            Self::Claude(steerer) => steerer.steer(id, text, tools_open).await,
+            Self::Codex(steerer) => steerer.steer(id, blocks).await,
+            Self::Claude(steerer) => steerer.steer(id, blocks, tools_open).await,
         }
     }
 }
@@ -357,7 +365,7 @@ mod tests {
             model: None,
             effort: None,
             system: "Use the echo tool.".into(),
-            prompt: "Echo hi.".into(),
+            prompt: vec!["Echo hi.".into()],
             tools: vec![ToolSpec {
                 name: "echo".into(),
                 description: "Echo input".into(),
@@ -375,7 +383,7 @@ mod tests {
                 .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let mut request = request(engine, directory.path());
-        request.prompt = "Call echo with value hi, then reply DONE. Do nothing else.".into();
+        request.prompt = vec!["Call echo with value hi, then reply DONE. Do nothing else.".into()];
         request.tools[0].schema = serde_json::json!({"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false});
         let work = async {
             let mut resume = None;

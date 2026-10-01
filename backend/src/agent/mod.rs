@@ -33,6 +33,9 @@ pub mod tools;
 pub mod transcript;
 mod turn;
 
+pub use context::{
+    BarBeat, ClipSpan, CursorSpan, EditorClip, EditorCursor, EditorState, TimePoint,
+};
 pub use transcript::{
     apply, to_model_messages, AgentChatMessage, AgentChatPart, Applied, RequestUsage, Role,
     ToolPart, ToolState, Transcript,
@@ -404,6 +407,10 @@ impl ThreadScope {
 #[serde(rename_all = "camelCase")]
 pub struct TurnContext {
     pub scope: Option<ThreadScope>,
+    /// The track editor, when one is open. Absent from rows written before
+    /// messages carried it.
+    #[serde(default)]
+    pub editor: Option<EditorState>,
 }
 
 /// What the user asked for.
@@ -421,6 +428,12 @@ impl From<String> for UserPrompt {
             text,
             context: None,
         }
+    }
+}
+
+impl From<&str> for UserPrompt {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
     }
 }
 
@@ -887,7 +900,7 @@ impl AgentService {
 pub struct TurnStream {
     events: mpsc::UnboundedReceiver<TurnEvent>,
     run: Option<BoxFuture<'static, ()>>,
-    steer: mpsc::UnboundedSender<String>,
+    steer: mpsc::UnboundedSender<UserPrompt>,
 }
 
 impl TurnStream {
@@ -902,7 +915,7 @@ impl TurnStream {
     /// step — after the running tool results for the API, through the CLI's
     /// own mid-turn input for Claude and Codex — and a
     /// [`TurnEvent::Steered`] marks where.
-    pub fn steer(&self, message: impl Into<String>) {
+    pub fn steer(&self, message: impl Into<UserPrompt>) {
         let _ = self.steer.send(message.into());
     }
 }
@@ -910,18 +923,18 @@ impl TurnStream {
 /// Steers a turn that someone else is driving. Sending to a finished turn is
 /// a no-op, not an error: the turn ending first is a race, not a mistake.
 #[derive(Clone)]
-pub struct TurnSteer(mpsc::UnboundedSender<String>);
+pub struct TurnSteer(mpsc::UnboundedSender<UserPrompt>);
 
 impl TurnSteer {
     /// A handle, and the end its messages arrive at — for a host that stands
     /// in for a turn, as a test of the host does.
     #[must_use]
-    pub fn channel() -> (Self, mpsc::UnboundedReceiver<String>) {
+    pub fn channel() -> (Self, mpsc::UnboundedReceiver<UserPrompt>) {
         let (steer, steered) = mpsc::unbounded_channel();
         (Self(steer), steered)
     }
 
-    pub fn send(&self, message: impl Into<String>) {
+    pub fn send(&self, message: impl Into<UserPrompt>) {
         let _ = self.0.send(message.into());
     }
 }

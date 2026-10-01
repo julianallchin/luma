@@ -49,6 +49,11 @@ const STDERR_TAIL_BYTES: usize = 8 * 1024;
 /// A semantic binding should batch work rather than turn the worker protocol
 /// into a chatty RPC bus. This also bounds the damage from a buggy loop.
 const MAX_HOST_CALLS_PER_CELL: usize = 64;
+/// `track.clip_check` counts on its own: it is a pure check with no I/O, one
+/// per staged clip, and the authoring rule is many plain clips. Sharing the
+/// budget above capped a cell at about sixty clips, which pushed agents to
+/// pack hits into curves instead. Still bounded, for a runaway loop.
+const MAX_CLIP_CHECKS_PER_CELL: usize = 1024;
 
 // The two rungs of the ladder. Spelled out so the module compiles on platforms
 // without a `libc` signal set; `signal_group` ignores them there.
@@ -569,6 +574,7 @@ impl WorkerHandle {
         let mut stderr = String::new();
         let mut host_call_ids = HashSet::new();
         let mut host_call_count = 0usize;
+        let mut clip_check_count = 0usize;
         // SIGINT is meaningful only after the worker has entered its protected
         // execution region. A cancel may be requested after we write `exec` but
         // before Python reads it; signalling in that gap is deliberately ignored
@@ -601,7 +607,15 @@ impl WorkerHandle {
                             }
                         }
                         Some("host_call") if frame_id == Some(id) => {
-                            host_call_count += 1;
+                            let check = frame.get("method").and_then(Value::as_str)
+                                == Some("track.clip_check");
+                            let (count, cap) = if check {
+                                clip_check_count += 1;
+                                (clip_check_count, MAX_CLIP_CHECKS_PER_CELL)
+                            } else {
+                                host_call_count += 1;
+                                (host_call_count, MAX_HOST_CALLS_PER_CELL)
+                            };
                             if let Err(e) = self.answer_host_call(
                                 id,
                                 &frame,
@@ -610,7 +624,7 @@ impl WorkerHandle {
                                 cancel,
                                 deadline,
                                 &mut host_call_ids,
-                                host_call_count,
+                                (count, cap),
                             ) {
                                 self.mark_dead();
                                 let mut outcome = ExecOutcome::failed(e, true, started);
@@ -702,7 +716,7 @@ impl WorkerHandle {
         cancel: &CancelToken,
         deadline: Instant,
         seen: &mut HashSet<String>,
-        count: usize,
+        (count, cap): (usize, usize),
     ) -> Result<(), String> {
         let context = HostCallContext::new(cancel.clone(), deadline, operation_scope.cloned());
         let call_id = frame
@@ -721,10 +735,15 @@ impl WorkerHandle {
                 "duplicate_call",
                 format!("host call id '{call_id}' was already used in this cell"),
             ))
-        } else if count > MAX_HOST_CALLS_PER_CELL {
+        } else if count > cap {
             Err(HostCallError::new(
                 "call_limit",
-                format!("a cell may make at most {MAX_HOST_CALLS_PER_CELL} host calls"),
+                match cap {
+                    MAX_CLIP_CHECKS_PER_CELL => {
+                        format!("a cell may stage at most {cap} clips")
+                    }
+                    _ => format!("a cell may make at most {cap} host calls"),
+                },
             ))
         } else if cancel.is_cancelled() {
             Err(HostCallError::new(

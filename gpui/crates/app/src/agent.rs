@@ -3,15 +3,21 @@
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::{AgentChat, RunningEvent, RunningTurns};
-use luma_lib::agent::{ThreadScope, TurnEvent};
+use luma_lib::agent::{ThreadScope, TurnContext, TurnEvent};
 
 use crate::shell::Body;
 use crate::tabs::Target;
+use crate::track_editor::Editor;
 use crate::Luma;
 
-/// Working context for the next turn, independent of the conversation.
-pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
-    current_track(app)
+/// What a message sent now is about, independent of the conversation: the
+/// open track and how its timeline stands.
+pub(crate) fn turn_context(app: &Luma) -> TurnContext {
+    let editor = current_editor(app);
+    TurnContext {
+        scope: editor.and_then(editor_scope),
+        editor: editor.map(Editor::agent_context),
+    }
 }
 
 /// Whose chats the thread shows: the score the picked track's editor has
@@ -20,53 +26,69 @@ pub(crate) fn chat_subject(app: &Luma) -> Option<ThreadScope> {
     current_track(app)
 }
 
-/// An open track remains available while another editor tab is in front.
-fn track_scope(body: &Body) -> Option<ThreadScope> {
+/// A track editor with a score open.
+fn track_editor(body: &Body) -> Option<&Editor> {
     let Body::TrackEditor(state) = body else {
         return None;
     };
-    let (track, venue, score) = state.subject()?;
+    state.subject().map(|_| &**state)
+}
+
+fn editor_scope(editor: &Editor) -> Option<ThreadScope> {
+    let (track, venue, score) = editor.subject()?;
     Some(ThreadScope::track(track, venue, score))
 }
 
-fn current_track(app: &Luma) -> Option<ThreadScope> {
+/// An open track remains available while another editor tab is in front.
+fn current_editor(app: &Luma) -> Option<&Editor> {
     app.workspace
         .active_body()
-        .and_then(track_scope)
+        .and_then(track_editor)
         .or_else(|| {
             app.workspace
                 .iter()
-                .filter_map(|tab| track_scope(&tab.body))
+                .filter_map(|tab| track_editor(&tab.body))
                 .last()
         })
 }
 
+fn current_track(app: &Luma) -> Option<ThreadScope> {
+    current_editor(app).and_then(editor_scope)
+}
+
 impl Luma {
-    /// Keep one chat entity on the open score's chats, and refresh its
-    /// working context for the next turn.
+    /// Keep one chat entity on the open score's chats. Each message reads
+    /// the editor when it is sent, through [`turn_context`].
     ///
     /// The venue page hides the thread and leaves it alone, so the score's
     /// chat, and any turn it is running, is there when the reader comes back.
     pub(crate) fn sync_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let context = scope_for(self);
         let subject = chat_subject(self);
         let follow = !self.venue_mode();
         if let Some(chat) = &self.chat {
-            chat.update(cx, |chat, cx| {
-                chat.set_editor_context(context, cx);
-                if follow {
-                    chat.set_subject(subject, cx);
-                }
-            });
+            if follow {
+                chat.update(cx, |chat, cx| chat.set_subject(subject, cx));
+            }
             return;
         }
         let agent = self.library.agent();
         // Owned by the chat, which lives as long as the app: quitting drops it,
         // and with it every running turn.
         let running = cx.new(|_| RunningTurns::default());
+        // Weak, so the chat the app owns does not own the app back. The chat
+        // sends from its own handlers, never while the app is being updated.
+        let app = cx.weak_entity();
         let chat = cx.new(|cx| {
             let mut chat = AgentChat::new(agent, running.clone(), None, cx);
-            chat.set_editor_context(context, cx);
+            chat.set_context_source(Box::new(move |cx| {
+                app.upgrade().map_or(
+                    TurnContext {
+                        scope: None,
+                        editor: None,
+                    },
+                    |app| turn_context(app.read(cx)),
+                )
+            }));
             chat.set_subject(subject, cx);
             chat
         });
@@ -136,7 +158,7 @@ impl Luma {
             self.overlay.get(),
             Some(crate::shell::Overlay::ChatHistory(_))
         ) {
-            self.show_chat_history(cx);
+            self.refresh_chat_history(cx);
         }
     }
 

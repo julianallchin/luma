@@ -839,19 +839,22 @@ pub fn to_model_messages(transcript: &Transcript, registry: &ToolRegistry) -> Ve
     for message in &transcript.messages {
         match message.role {
             Role::User => {
-                let text = message.text();
-                if text.is_empty() {
+                let blocks: Vec<ContentBlock> = super::context::message_blocks(message)
+                    .into_iter()
+                    .map(ContentBlock::Text)
+                    .collect();
+                if blocks.is_empty() {
                     continue;
                 }
                 // A steer lands right after a step's tool results: one user
                 // turn, results first, as the providers require.
                 match out.last_mut() {
                     Some(previous) if previous.role == ModelRole::User => {
-                        previous.content.push(ContentBlock::Text(text));
+                        previous.content.extend(blocks);
                     }
                     _ => out.push(ModelMessage {
                         role: ModelRole::User,
-                        content: vec![ContentBlock::Text(text)],
+                        content: blocks,
                     }),
                 }
             }

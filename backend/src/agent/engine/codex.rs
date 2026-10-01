@@ -30,9 +30,9 @@ struct Steers {
     /// `turn/completed`.
     turn: Option<String>,
     /// `turn/steer` requests awaiting an answer, by request id.
-    requests: HashMap<String, (String, String)>,
+    requests: HashMap<String, (String, Vec<String>)>,
     /// Steers no running turn took, delivered as the next `turn/start`.
-    queued: VecDeque<(String, String)>,
+    queued: VecDeque<(String, Vec<String>)>,
 }
 
 impl Session {
@@ -141,7 +141,7 @@ impl Session {
                         .to_string();
                     self.process
                         .send(json!({"id":3,"method":"turn/start","params":{
-                            "threadId":thread,"effort":self.request.effort,"input":[{"type":"text","text":self.request.prompt}]
+                            "threadId":thread,"effort":self.request.effort,"input":text_items(&self.request.prompt)
                         }}))
                         .await?;
                     self.steers.lock().expect("steers").thread = Some(thread.clone());
@@ -299,13 +299,15 @@ impl Session {
                 .pop_front()
                 .map(|steer| (steer, steers.thread.clone()))
         };
-        let Some(((id, text), Some(thread))) = next else {
+        let Some(((id, blocks), Some(thread))) = next else {
             return Ok(Event::Done);
         };
         self.process
-            .send(json!({"id":format!("{TURN_REQUEST}{id}"),"method":"turn/start","params":{
-                "threadId":thread,"effort":self.request.effort,"input":[{"type":"text","text":text}]
-            }}))
+            .send(
+                json!({"id":format!("{TURN_REQUEST}{id}"),"method":"turn/start","params":{
+                    "threadId":thread,"effort":self.request.effort,"input":text_items(&blocks)
+                }}),
+            )
             .await?;
         Ok(Event::Steered(vec![id]))
     }
@@ -330,7 +332,7 @@ pub(in crate::agent) struct Steerer {
 }
 
 impl Steerer {
-    pub async fn steer(&self, id: &str, text: &str) -> Result<(), AgentError> {
+    pub async fn steer(&self, id: &str, blocks: &[String]) -> Result<(), AgentError> {
         let request = {
             let mut steers = self.steers.lock().expect("steers");
             match (steers.thread.clone(), steers.turn.clone()) {
@@ -338,20 +340,28 @@ impl Steerer {
                     let request = format!("{STEER_REQUEST}{id}");
                     steers
                         .requests
-                        .insert(request.clone(), (id.to_owned(), text.to_owned()));
+                        .insert(request.clone(), (id.to_owned(), blocks.to_vec()));
                     json!({"id":request,"method":"turn/steer","params":{
                         "threadId":thread,"expectedTurnId":turn,
-                        "input":[{"type":"text","text":text}]
+                        "input":text_items(blocks)
                     }})
                 }
                 _ => {
-                    steers.queued.push_back((id.to_owned(), text.to_owned()));
+                    steers.queued.push_back((id.to_owned(), blocks.to_vec()));
                     return Ok(());
                 }
             }
         };
         self.input.send(request).await
     }
+}
+
+/// A user message's input: one text item each.
+fn text_items(blocks: &[String]) -> Value {
+    blocks
+        .iter()
+        .map(|text| json!({"type":"text","text":text}))
+        .collect()
 }
 
 fn isolated_config() -> Value {
@@ -417,6 +427,7 @@ assert start['params']['sandbox']=='read-only'
 send({'id':2,'result':{'thread':{'id':'native'}}})
 turn=read()
 assert turn['method']=='turn/start'
+assert turn['params']['input']==[{'type':'text','text':'Echo hi.'}], turn
 assert turn['params']['effort']=='high'
 send({'id':3,'result':{}})
 send({'id':'call','method':'item/tool/call','params':{'callId':'tool-1','tool':'echo','arguments':{'value':'hi'}}})
@@ -508,7 +519,7 @@ send({'id':3,'result':{'turn':{'id':'turn-1'}}})
 send({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'total':{'inputTokens':100,'cachedInputTokens':0,'outputTokens':10},'last':{'inputTokens':100,'cachedInputTokens':0,'outputTokens':10}}}})
 steer=read()
 assert steer['method']=='turn/steer', steer
-assert steer['params']=={'threadId':'native','expectedTurnId':'turn-1','input':[{'type':'text','text':'darker'}]}, steer
+assert steer['params']=={'threadId':'native','expectedTurnId':'turn-1','input':[{'type':'text','text':'darker'},{'type':'text','text':'<editor-context>'}]}, steer
 send({'id':steer['id'],'result':{'turnId':'turn-1'}})
 late=read()
 assert late['method']=='turn/steer', late
@@ -516,7 +527,7 @@ send({'method':'turn/completed','params':{'turn':{'id':'turn-1','status':'comple
 send({'id':late['id'],'error':{'code':-32600,'message':'no active turn'}})
 start=read()
 assert start['method']=='turn/start', start
-assert start['params']['threadId']=='native' and start['params']['input']==[{'type':'text','text':'and blue'}], start
+assert start['params']['threadId']=='native' and start['params']['input']==[{'type':'text','text':'and blue'},{'type':'text','text':'<editor-context>'}], start
 send({'id':start['id'],'result':{'turn':{'id':'turn-2'}}})
 send({'method':'turn/completed','params':{'turn':{'id':'turn-2','status':'completed'}}})
 "#;
@@ -533,9 +544,18 @@ send({'method':'turn/completed','params':{'turn':{'id':'turn-2','status':'comple
         ));
         assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
         assert!(matches!(session.next().await.unwrap(), Event::Step(_)));
-        steerer.steer("s1", "darker").await.unwrap();
+        // The typed text and the editor context go as separate items, in a
+        // steer and in the turn a late steer starts.
+        let context = "<editor-context>".to_string();
+        steerer
+            .steer("s1", &["darker".into(), context.clone()])
+            .await
+            .unwrap();
         assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s1"]));
-        steerer.steer("s2", "and blue").await.unwrap();
+        steerer
+            .steer("s2", &["and blue".into(), context])
+            .await
+            .unwrap();
         assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s2"]));
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
