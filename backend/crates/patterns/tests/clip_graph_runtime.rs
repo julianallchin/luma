@@ -1125,6 +1125,82 @@ fn three_mirrors_through_the_centre_make_six_fold_symmetry() {
     assert!(moved, "the chase moves");
 }
 
+/// A disc of `rings` rings around (0, 0) on the U–Z wall, ring `i` of
+/// radius `i` holding 6·i heads at half-steps off 0°: the set maps onto
+/// itself under the three mirror lines at 0°, 60° and 120°. Ids sort in
+/// rig order; returns the cells and each head's (ring, step).
+fn disc(rings: usize) -> (Vec<Cell>, Vec<(usize, usize)>) {
+    let mut cells = Vec::new();
+    let mut place = Vec::new();
+    for i in 1..=rings {
+        let count = 6 * i;
+        for k in 0..count {
+            let angle = std::f64::consts::TAU * (k as f64 + 0.5) / count as f64;
+            let r = i as f64;
+            cells.push(cell(format!("d{i:02}{k:03}"), [r * angle.cos(), 0., r * angle.sin()]));
+            place.push((i, k));
+        }
+    }
+    (cells, place)
+}
+
+#[test]
+fn the_kaleidoscope_example_repeats_one_slice_six_times_on_a_disc() {
+    // Three mirrors through the centre with normals (0, 0, 1),
+    // (−0.866, 0, 0.5), (0.866, 0, 0.5), stacked: every head folds into the
+    // 60°–120° slice. Each slice is a mirror image of its neighbour, so a
+    // head at θ matches θ + 120°, θ + 240° and the mirror angles −θ,
+    // 120° − θ, 240° − θ; θ + 60° is a mirror image, not a copy.
+    let (cells, place) = disc(8);
+    let s = 3_f64.sqrt() / 2.;
+    let graph = chase_with(
+        json!({"node": "third"}),
+        json!({
+            "first": {"kind": "mirror", "inputs": {"normal": [0, 0, 1]}},
+            "second": {"kind": "mirror", "inputs": {"heads": {"node": "first"}, "normal": [-s, 0, 0.5]}},
+            "third": {"kind": "mirror", "inputs": {"heads": {"node": "second"}, "normal": [s, 0, 0.5]}}}),
+        json!([[0, 0, [0.4, 0, 0.6, 1]], [0.5, 1, [0.4, 0, 0.6, 1]], [1, 0]]),
+    );
+    let times: Vec<f64> = (0..40).map(|i| i as f64 * 0.05).collect();
+    let light = play(&graph, &cells, &times);
+    let index = |ring: usize, k: i64| {
+        let count = 6 * ring as i64;
+        let first = 3 * (ring - 1) * ring; // heads on the inner rings
+        first + k.rem_euclid(count) as usize
+    };
+    let mut sixty_differs = false;
+    let mut moved = false;
+    for t in 0..times.len() {
+        for (n, (ring, k)) in place.iter().enumerate() {
+            let (count, k) = (6 * *ring as i64, *k as i64);
+            // Steps are half-offset: angle −θ is step count − 1 − k.
+            let third = count / 3;
+            let images = [
+                k + third,
+                k + 2 * third,
+                count - 1 - k,
+                third + count - 1 - k,
+                2 * third + count - 1 - k,
+            ];
+            for m in images {
+                let m = index(*ring, m);
+                assert!(
+                    (dim(&light, n, t) - dim(&light, m, t)).abs() < 1e-9,
+                    "beat {}: {} vs {}",
+                    times[t],
+                    cells[n].id,
+                    cells[m].id
+                );
+            }
+            let m = index(*ring, k + count / 6);
+            sixty_differs |= (dim(&light, n, t) - dim(&light, m, t)).abs() > 0.1;
+        }
+        moved |= t > 0 && lit(&light, t) != lit(&light, t - 1);
+    }
+    assert!(moved, "the chase moves");
+    assert!(sixty_differs, "θ + 60° is a mirror image, not a copy");
+}
+
 /// A pill 10 % of the ring long on a wrapped space along U, its shift
 /// running 0 → 1 over each event of `every`/`duration`.
 fn wrapping(every: f64, duration: f64) -> ClipGraph {
