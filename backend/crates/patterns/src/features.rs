@@ -12,6 +12,10 @@ pub struct FeatureRequest {
 pub trait FeatureSource: std::fmt::Debug + Send + Sync {
     /// The band's energy at `beat`.
     fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<f64>;
+    /// The band's lowest and highest energy over the whole track. Band
+    /// energy reads 0–1 between them, so every clip on the track reads the
+    /// same level at the same moment.
+    fn range(&self, request: &FeatureRequest) -> Result<(f64, f64)>;
 }
 
 pub(crate) fn definition() -> Definition {

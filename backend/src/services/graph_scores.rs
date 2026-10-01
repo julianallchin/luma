@@ -404,6 +404,9 @@ impl luma_patterns::FeatureSource for BeatPulse {
     ) -> luma_patterns::Result<f64> {
         Ok((1. - beat.rem_euclid(1.)).powi(2))
     }
+    fn range(&self, _request: &luma_patterns::FeatureRequest) -> luma_patterns::Result<(f64, f64)> {
+        Ok((0., 1.))
+    }
 }
 
 /// A single clip's strip over `cells` as stand-in heads (see

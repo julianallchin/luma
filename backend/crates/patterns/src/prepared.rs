@@ -5,7 +5,7 @@ use crate::{
     Binding, Body, Cell, Definition, Error, Frame, Graph, Library, Primitive, Result, Value,
 };
 use std::collections::BTreeMap;
-mod clip_range;
+mod fixed;
 
 #[derive(Clone, Debug)]
 enum Source {
@@ -282,16 +282,6 @@ impl PreparedGraph {
         }
         match &definition.body {
             Body::Primitive(primitive) => {
-                let constants: BTreeMap<_, _> = inputs
-                    .iter()
-                    .filter_map(|(name, source)| match source {
-                        Source::Constant(value) => {
-                            Some(value.sample(0).map(|value| (name.clone(), value)))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Result<_>>()?;
-                validate_parameters(*primitive, &constants)?;
                 if !primitive.reads_track()
                     && !primitive.reads_time()
                     && inputs
@@ -393,16 +383,6 @@ impl PreparedGraph {
     }
 }
 
-/// Relations involving fixed controls are checked even when a graph's dynamic
-/// branch requires track data that is deliberately absent during source validation.
-fn validate_parameters(op: Primitive, inputs: &BTreeMap<String, Value>) -> Result<()> {
-    if op == Primitive::ClipRange {
-        if let Some(samples) = inputs.get("samples").map(Value::scalar) {
-            crate::clip_range::sample_count(samples)?;
-        }
-    }
-    Ok(())
-}
 impl Source {
     fn read(&self, slots: &[Option<EvaluatedValue>]) -> Result<EvaluatedValue> {
         match self {

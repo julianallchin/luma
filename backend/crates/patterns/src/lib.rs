@@ -4,7 +4,6 @@ pub mod aim;
 mod blend;
 mod catalog;
 pub mod clip_graph;
-mod clip_range;
 mod clock;
 mod color;
 pub mod color_space;
