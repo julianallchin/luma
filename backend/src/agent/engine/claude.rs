@@ -381,55 +381,127 @@ fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
     cmd
 }
 
+/// The Claude models Luma names itself, ported from zeron's
+/// `crates/harness/src/claude/catalog.rs`: id, name, effort levels. The CLI's
+/// own list only adds ids missing here, because its names and descriptions
+/// change between releases.
+const CURATED: &[(&str, &str, &[&str])] = &[
+    ("claude-fable-5-1", "Fable 5.1", FULL_EFFORT),
+    ("claude-fable-5", "Fable 5", FULL_EFFORT),
+    ("claude-opus-5-5", "Opus 5.5", FULL_EFFORT),
+    ("claude-opus-4-8", "Opus 4.8", FULL_EFFORT),
+    ("claude-opus-4-7", "Opus 4.7", FULL_EFFORT),
+    ("claude-sonnet-5", "Sonnet 5", FULL_EFFORT),
+    ("claude-haiku-4-5", "Haiku 4.5", &[]),
+];
+
+const FULL_EFFORT: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+/// CLI aliases that are not model ids. A saved selection must name a model.
+const ALIASES: &[&str] = &["default", "opus", "sonnet", "haiku", "fable"];
+
 pub(super) async fn models(
     cwd: &std::path::Path,
 ) -> Result<Vec<super::catalog::ModelChoice>, AgentError> {
+    // A CLI that cannot start or is logged out still gets the curated list.
+    let live = match discover(cwd).await {
+        Ok(live) => live,
+        Err(error) => {
+            log::warn!("[agent] Claude model discovery failed, using the built-in list: {error}");
+            Vec::new()
+        }
+    };
+    Ok(catalog(&live))
+}
+
+async fn discover(cwd: &std::path::Path) -> Result<Vec<Value>, AgentError> {
     let mut process = Process::start(stream_command(cwd))?;
     initialize(&mut process).await?;
     loop {
         let frame = process.read().await?;
         if frame["type"] == "control_response" && frame["response"]["request_id"] == "initialize" {
-            let models = frame
+            return frame
                 .pointer("/response/response/models")
                 .and_then(Value::as_array)
-                .ok_or_else(|| protocol("Claude did not return its model catalog"))?;
-            return models
-                .iter()
-                .map(|model| {
-                    Ok(super::catalog::ModelChoice {
-                        id: model["value"]
-                            .as_str()
-                            .filter(|id| *id != "default")
-                            .map(str::to_string),
-                        label: {
-                            let label = model["description"]
-                                .as_str()
-                                .and_then(|text| text.split('·').next())
-                                .map(str::trim)
-                                .filter(|text| !text.is_empty())
-                                .or_else(|| model["displayName"].as_str())
-                                .ok_or_else(|| protocol("Claude model has no name"))?;
-                            if model["value"] == "default" {
-                                format!("Default · {label}")
-                            } else {
-                                label.into()
-                            }
-                        },
-                        resolved_model: model["resolvedModel"].as_str().map(str::to_string),
-                        effort_levels: model["supportedEffortLevels"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect(),
-                        context_window: None,
-                        price: None,
-                    })
-                })
-                .collect();
+                .cloned()
+                .ok_or_else(|| protocol("Claude did not return its model catalog"));
         }
     }
+}
+
+/// The curated rows, then each live model id they miss, with the CLI's
+/// default model first behind a "Default" row.
+fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
+    let choice = |id: &str, label: &str, efforts: Vec<String>| super::catalog::ModelChoice {
+        id: Some(id.into()),
+        label: label.into(),
+        resolved_model: Some(id.into()),
+        effort_levels: efforts,
+        context_window: None,
+        price: None,
+    };
+    let mut models: Vec<_> = CURATED
+        .iter()
+        .map(|(id, label, efforts)| {
+            choice(id, label, efforts.iter().map(|e| e.to_string()).collect())
+        })
+        .collect();
+    let mut default = None;
+    for entry in live {
+        let text = |key: &str| {
+            entry[key]
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        };
+        let Some(id) = text("resolvedModel").or_else(|| text("value")) else {
+            continue;
+        };
+        if ALIASES.contains(&id.strip_suffix("[1m]").unwrap_or(id)) {
+            continue;
+        }
+        if text("value") == Some("default") {
+            default = Some(id.to_string());
+        }
+        let label = text("displayName").unwrap_or(id);
+        // A dated id such as `claude-haiku-4-5-20251001` is the curated row
+        // under another name.
+        if models.iter().any(|m| m.id.as_deref() == Some(id) || m.label == label) {
+            continue;
+        }
+        let efforts = entry["supportedEffortLevels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        models.push(choice(id, label, efforts));
+    }
+    let default_label = default.as_deref().and_then(|default| {
+        let index = models
+            .iter()
+            .position(|m| m.id.as_deref() == Some(default))?;
+        let model = models.remove(index);
+        let label = model.label.clone();
+        models.insert(0, model);
+        Some(label)
+    });
+    models.insert(
+        0,
+        super::catalog::ModelChoice {
+            id: None,
+            label: match default_label {
+                Some(label) => format!("Default · {label}"),
+                None => "Default".into(),
+            },
+            resolved_model: default,
+            effort_levels: FULL_EFFORT.iter().map(|e| e.to_string()).collect(),
+            context_window: None,
+            price: None,
+        },
+    );
+    models
 }
 
 async fn initialize(process: &mut Process) -> Result<(), AgentError> {
@@ -515,6 +587,37 @@ mod tests {
         assert!(claude_error(&json!({"error":"invalid_request"}))
             .to_string()
             .contains("invalid_request"));
+    }
+
+    /// Rows are named by model, not by the CLI's taglines. Aliases and dated
+    /// ids of curated models add no rows; a model the list lacks is added.
+    #[test]
+    fn catalog_names_models_and_drops_aliases() {
+        let live = [
+            json!({"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)","description":"Opus 5.5 · Best for everyday, complex tasks"}),
+            json!({"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5","description":"For complex work and everyday tasks"}),
+            json!({"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet 5.5","description":"Most efficient for simpler tasks","supportedEffortLevels":["low","high"]}),
+            json!({"value":"haiku","resolvedModel":"claude-haiku-4-5-20251001","displayName":"Haiku 4.5"}),
+        ];
+        let models = catalog(&live);
+        let labels: Vec<_> = models.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Default · Opus 5.5",
+                "Opus 5.5",
+                "Fable 5.1",
+                "Fable 5",
+                "Opus 4.8",
+                "Opus 4.7",
+                "Sonnet 5",
+                "Haiku 4.5",
+                "Sonnet 5.5",
+            ]
+        );
+        assert_eq!(models[0].id, None);
+        assert_eq!(models[8].effort_levels, ["low", "high"]);
+        assert_eq!(catalog(&[])[0].label, "Default");
     }
 
     #[tokio::test]
