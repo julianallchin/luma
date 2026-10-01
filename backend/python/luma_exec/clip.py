@@ -25,6 +25,10 @@ Each is a `math` node; a chain of one operator is one node with all its
 items. Coordinates (time, space, noise, audio) are not values: wrap them in
 curve(...) first.
 
+A value used in more than one place is a value node: `d = value((0.57, 0,
+0.82))`, then `direction=d` wherever that direction is meant. Plain numbers
+stay plain; equal numbers are never linked on their own.
+
 A node's id is the variable it is assigned to (`place` above), so code,
 graph and the card in the UI say the same name; `source()` writes the ids
 back as variables. A node with no variable (or a name that cannot be an id:
@@ -49,7 +53,7 @@ from types import MappingProxyType
 from .color import from_srgb
 
 
-BUILDERS = ("time", "space", "noise", "audio", "curve", "mirror", "shuffle", "group",
+BUILDERS = ("time", "space", "noise", "audio", "curve", "value", "mirror", "shuffle", "group",
             "split", "color", "aim", "strobe", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
@@ -65,6 +69,7 @@ _INPUTS = {
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
     "math": ("values",),
+    "value": ("value",),
     "mirror": ("heads", "direction", "at"),
     "shuffle": ("heads", "time"),
     "group": ("heads", "size"),
@@ -245,7 +250,8 @@ class Coordinate(Node):
 
 
 class Value(Node):
-    """A curve's or a math node's output: a number, vector or color wire."""
+    """A curve's, a math node's or a value node's output: a number, vector or
+    color wire."""
 
 
 class Heads(Node):
@@ -257,7 +263,7 @@ class _Output(Node):
 
 
 _CLASSES = {"time": Coordinate, "space": Coordinate, "noise": Coordinate, "audio": Coordinate,
-            "curve": Value, "math": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
+            "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
             "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output}
 
 
@@ -480,6 +486,28 @@ def curve(x, shape=None, low=None, high=None, gradient=None) -> Value:
         "x": _input(x, "curve.x"), "shape": _shape(shape, "curve.shape"),
         "low": _input(low, "curve.low"), "high": _input(high, "curve.high"),
         "gradient": _gradient(gradient, "curve.gradient")})
+
+
+def value(x) -> Value:
+    """A named constant: a number, a (u, v, z) vector or an (r, g, b) color
+    ("#RRGGBB" too). Wire it into every input that means the same quantity,
+    so one edit changes them all:
+
+        d = value((0.57, 0, 0.82))
+        line = mirror(direction=d, at=0.68)
+        dist = space(heads=line, direction=d)
+
+    Its type and unit are those of the inputs it feeds; inputs of two units
+    or two types are an error. A plain number stays a plain number: equal
+    numbers are never linked unless you wire one value into both.
+    """
+    if isinstance(x, Node) or x is None:
+        raise ClipError(f"value: expected a number, (u, v, z) or (r, g, b); got {x!r}. "
+                        "Example: d = value((0.57, 0, 0.82))")
+    held = _input(x, "value.value")
+    if isinstance(held, list) and len(held) != 3:
+        raise ClipError(f"value: expected one number or three; got {len(held)}. Example: value(0.5)")
+    return Value("value", None, {"value": held})
 
 
 def mirror(heads=None, direction=None, at=None) -> Heads:
@@ -970,8 +998,8 @@ def _arguments(node, ids, inline, order):
     args = []
     names = list(_INPUTS.get(node.kind, ())) + sorted(set(node.inputs) - set(_INPUTS.get(node.kind, ())))
     names = [name for name in names if name in node.inputs]
-    # curve(x, shape, ...): x and shape go by position, as people write them.
-    positional = ("x", "shape") if node.kind == "curve" else ()
+    # curve(x, shape, ...) and value(x): these go by position, as people write them.
+    positional = {"curve": ("x", "shape"), "value": ("value",)}.get(node.kind, ())
     for name in names:
         text = _value_text(name, node.inputs[name], ids, inline, order)
         if positional and name == positional[0]:

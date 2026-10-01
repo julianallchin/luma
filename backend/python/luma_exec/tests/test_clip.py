@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec import clip as clip_module  # noqa: E402
 from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, curve, group,  # noqa: E402
-                            mirror, noise, preset, shuffle, space, split, strobe, time)
+                            mirror, noise, preset, shuffle, space, split, strobe, time, value)
 from luma_exec.clip import max as clip_max, min as clip_min  # noqa: E402
 from luma_exec.score import GraphTrack  # noqa: E402
 
@@ -92,6 +92,20 @@ fade = curve(t, [[0, 1, 'hold'], [0.2, 1, 'sine-out'], [1, 0]])
 heat = curve(t, gradient=[(0, (1, 1, 1)), (0.2, (1, 1, 1)), (0.5, (1, 0, 0.01)), (1, (1, 0, 0.01))])
 color(color=heat, brightness=cut * bloom * fade)"""
 
+# Slash with its shared quantities as value nodes: one line direction, and
+# one place on it for the mirror's plane and the bloom's shift.
+EXAMPLE_SLASH_VALUES = """t = time(every=2)
+diag = space(direction=(-0.82, 0, 0.57), shift=curve(t, [[0, 0], [0.2, 1], [1, 1]]))
+cut = curve(diag, [[0, 1], [0, 0]])
+d = value((0.57, 0, 0.82))
+at = value(0.68)
+line = mirror(direction=d, at=at)
+dist = space(heads=line, direction=d, shift=at, scale=curve(t, 'Ramp up', low=0.04, high=0.74))
+bloom = curve(dist, [[0, 1], [0.76, 1], [1, 0]])
+fade = curve(t, [[0, 1, 'hold'], [0.2, 1, 'sine-out'], [1, 0]])
+heat = curve(t, gradient=[(0, (1, 1, 1)), (0.2, (1, 1, 1)), (0.5, (1, 0, 0.01)), (1, (1, 0, 0.01))])
+color(color=heat, brightness=cut * bloom * fade)"""
+
 
 def close(a, b):
     """Equal JSON, with numbers equal to 1e-6."""
@@ -161,17 +175,18 @@ CATALOG = {
     'Tunnel': "aim(point=(0, 25, 1.5), base='point')",
     'Sweep': "t = time(every=8); aim(direction=D, yaw=curve(t, 'Sine', low=-45, high=45))",
     'Nod wave': "place = space(); t = time(every=4, phase=curve(place, 'Ramp up', high=0.6)); aim(direction=D, pitch=curve(t, 'Sine', low=-25, high=25))",
-    'Circle': "t = time(every=4); aim(direction=D, yaw=curve(t, 'Cosine', low=-18, high=18), pitch=curve(t, 'Sine', low=-18, high=18))",
+    'Circle': "t = time(every=4); low = value(-18); high = value(18); aim(direction=D, yaw=curve(t, 'Cosine', low=low, high=high), pitch=curve(t, 'Sine', low=low, high=high))",
     'Figure-8': "t = time(every=4); aim(direction=D, yaw=curve(t, 'Sine', low=-25, high=25), pitch=curve(t, 'Double sine', low=-12.5, high=12.5))",
-    'Pinwheel': "turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp up')); aim(direction=D, yaw=curve(t, 'Cosine', low=-20, high=20), pitch=curve(t, 'Sine', low=-20, high=20))",
+    'Pinwheel': "turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp up')); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, 'Cosine', low=low, high=high), pitch=curve(t, 'Sine', low=low, high=high))",
     'Scissor': "halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, 'Sine', low=-30, high=30))",
     'Up/down flip': "t = time(every=2); aim(direction=D, pitch=curve(t, 'Square', low=-30, high=30))",
-    'Ballyhoo': "drift = noise(speed=4, scale=0.02); wander = noise(speed=4, scale=0.02); aim(direction=D, yaw=curve(drift, 'Ramp up', low=-40, high=40), pitch=curve(wander, 'Ramp up', low=-40, high=40))",
+    'Ballyhoo': "speed = value(4); scale = value(0.02); drift = noise(speed=speed, scale=scale); wander = noise(speed=speed, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=low, high=high), pitch=curve(wander, 'Ramp up', low=low, high=high))",
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
     'Strobe follows a band': "kick = audio(low_hz=40, high_hz=100); strobe(rate=curve(kick, 'Ramp up', low=0.3, high=1))",
     # Not shipped presets.
     "Slash": EXAMPLE_SLASH,
+    "Slash with values": EXAMPLE_SLASH_VALUES,
     "Shifted chase": EXAMPLE_SHIFT,
     "Wobble strobe": "strobe(rate=curve(time(every=0.25), 'Square'))",
     "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('Kick'), 'Ramp up', low=0.2, high=1))",
@@ -318,6 +333,30 @@ class ClipBuilderTests(unittest.TestCase):
                          ["bloom", "curve1", "curve2", "cut", "fade", "heat", "math1"])
         self.assertEqual(Graph.from_json(run(EXAMPLE_SHIFT).json()).source(), EXAMPLE_SHIFT)
 
+    def test_a_value_is_one_node_on_its_own_line_and_round_trips(self):
+        graph = run(EXAMPLE_SLASH_VALUES)
+        self.assertEqual(graph.source(), EXAMPLE_SLASH_VALUES)
+        self.assertEqual(graph.nodes["d"].inputs, {"value": [0.57, 0, 0.82]})
+        self.assertEqual(graph.nodes["line"].inputs["direction"], {"node": "d"})
+        self.assertEqual(graph.nodes["dist"].inputs["direction"], {"node": "d"})
+        self.assertEqual(graph.nodes["dist"].inputs["shift"], {"node": "at"})
+        loaded = Graph.from_json(json.loads(json.dumps(graph.json())))
+        self.assertEqual(run(loaded.source()).json(), graph.json())
+        # An unnamed value still gets its own line, never an inline call.
+        lone = color(brightness=value(0.5))
+        self.assertEqual(lone.source(), "value1 = value(0.5)\ncolor(brightness=value1)")
+        self.assertEqual(run(lone.source()).json(), lone.json())
+        self.assertTrue(close(value("#ffffff").inputs["value"], [1, 1, 1]))
+
+    def test_equal_literals_stay_plain(self):
+        plain = run(EXAMPLE_SLASH)
+        self.assertNotIn("value", [node.kind for node in plain.nodes.values()])
+        self.assertEqual(plain.nodes["line"].inputs["direction"], [0.57, 0, 0.82])
+        with self.assertRaisesRegex(ClipError, "value"):
+            value(curve(time()))
+        with self.assertRaisesRegex(ClipError, "one number or three"):
+            value((1, 2))
+
     def test_source_writes_shared_and_named_curves_on_lines(self):
         t = time(every=2)
         shared = curve(t, "Ramp up")
@@ -421,8 +460,8 @@ class ClipBuilderTests(unittest.TestCase):
 
     def test_definition_defaults_build(self):
         for kind, inputs in clip_module._INPUTS.items():
-            if kind == "math":
-                continue  # operators, not a builder
+            if kind in ("math", "value"):
+                continue  # operators, not a builder; a value needs its value
             with self.subTest(kind):
                 node = getattr(clip_module, kind)(**{name: None for name in inputs})
                 graph = node if isinstance(node, Graph) else color(brightness=node) if kind == "curve" else None

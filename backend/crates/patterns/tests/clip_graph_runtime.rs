@@ -2,7 +2,7 @@
 //! version 2 form did, the key presets light the heads they should, and
 //! shuffle, curve, per-head clocks, math, overlap, mirrors, wrapping,
 //! turning line and noise behave as the spec says.
-use luma_patterns::clip_graph::{ClipGraph, OUTPUT};
+use luma_patterns::clip_graph::{ClipGraph, Input, Kind, OUTPUT};
 use luma_patterns::{presets, standard_library, Cell, FeatureRequest, FeatureSource, Frame};
 use luma_patterns::{PreparedGraph, Result};
 use ndarray::Array3;
@@ -1023,6 +1023,81 @@ fn slash() -> ClipGraph {
         "heat": {"kind": "curve", "settings": {"kind": "color"}, "inputs": {"x": {"node": "t"}, "gradient": {"stops": [{"t": 0, "color": [1, 1, 1]}, {"t": 0.2, "color": [1, 1, 1]}, {"t": 0.5, "color": [1, 0, 0.01]}, {"t": 1, "color": [1, 0, 0.01]}]}}},
         "math1": {"kind": "math", "inputs": {"values": [{"node": "cut"}, {"node": "bloom"}, {"node": "fade"}]}},
         "color1": {"kind": "color", "inputs": {"color": {"node": "heat"}, "brightness": {"node": "math1"}}}}))
+}
+
+/// Slash with its shared quantities as value nodes: one line direction for
+/// the mirror and the bloom's space, and one place on it (0.68) for the
+/// mirror's plane and the space's shift.
+fn slash_with_values() -> ClipGraph {
+    let mut graph = slash();
+    let mut nodes = serde_json::to_value(&graph.nodes).unwrap();
+    nodes["d"] = json!({"kind": "value", "inputs": {"value": [0.57, 0, 0.82]}});
+    nodes["at"] = json!({"kind": "value", "inputs": {"value": 0.68}});
+    nodes["line"]["inputs"]["direction"] = json!({"node": "d"});
+    nodes["line"]["inputs"]["at"] = json!({"node": "at"});
+    nodes["dist"]["inputs"]["direction"] = json!({"node": "d"});
+    nodes["dist"]["inputs"]["shift"] = json!({"node": "at"});
+    graph = self::graph(nodes);
+    graph.check().unwrap();
+    graph
+}
+
+/// `graph` with every value node written into the inputs it feeds.
+fn inline_values(graph: &ClipGraph) -> ClipGraph {
+    let mut out = graph.clone();
+    let values: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.kind == Kind::Value)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for node in out.nodes.values_mut() {
+        for input in node.inputs.values_mut() {
+            let items = match input {
+                Input::List(items) => items.as_mut_slice(),
+                one => std::slice::from_mut(one),
+            };
+            for item in items {
+                let held = graph.resolve(item).clone();
+                *item = held;
+            }
+        }
+    }
+    for id in values {
+        out.nodes.remove(&id);
+    }
+    out.check().unwrap();
+    out
+}
+
+#[test]
+fn value_nodes_play_exactly_as_the_values_written_in_place() {
+    let cells = fine_grid();
+    let times: Vec<f64> = (0..80).map(|i| i as f64 * 0.025).collect();
+    let linked = slash_with_values();
+    assert_eq!(inline_values(&linked), slash());
+    assert_eq!(
+        play(&linked, &cells, &times),
+        play(&slash(), &cells, &times)
+    );
+    let beats = beats(0.25);
+    let mut deduped = 0;
+    for preset in &presets().clips {
+        let inline = inline_values(&preset.graph);
+        if inline == preset.graph {
+            continue;
+        }
+        deduped += 1;
+        for cells in [bars(), grid()] {
+            assert_eq!(
+                run(&preset.graph, &cells, &beats),
+                run(&inline, &cells, &beats),
+                "{}",
+                preset.name
+            );
+        }
+    }
+    assert!(deduped > 0, "some presets share a value");
 }
 
 #[test]

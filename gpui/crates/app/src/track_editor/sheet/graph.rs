@@ -118,11 +118,17 @@ fn color_arg(rgb: [f64; 3]) -> ColorArg {
 }
 
 /// A curve's low and high as the strip's scale, with their unit, when both
-/// are plain numbers.
+/// are plain numbers or values.
 fn strip_scale(graph: &ClipGraph, curve: &str) -> ([f64; 2], Option<&'static str>) {
-    let bound = |name: &str| match edit::shown(graph, curve, name) {
-        Some(Input::Number(v)) => Some(v),
-        _ => None,
+    let bound = |name: &str| {
+        let held = graph.nodes.get(curve)?.inputs.get(name);
+        match held
+            .map(|held| graph.resolve(held).clone())
+            .or_else(|| edit::shown(graph, curve, name))
+        {
+            Some(Input::Number(v)) => Some(v),
+            _ => None,
+        }
     };
     let unit = edit::spec(graph, curve, "low").and_then(|spec| spec.unit);
     match (bound("low"), bound("high")) {
@@ -148,6 +154,20 @@ fn describe(graph: &ClipGraph, id: &str) -> String {
     };
     if node.kind == Kind::Math {
         return format!("{label} · {}", math_summary(graph, id));
+    }
+    if node.kind == Kind::Value {
+        return match node.inputs.get("value") {
+            Some(Input::Number(v)) => format!("{label} · {}", short(*v)),
+            Some(Input::Vector(v) | Input::Color(v)) => {
+                format!(
+                    "{label} · ({}, {}, {})",
+                    short(v[0]),
+                    short(v[1]),
+                    short(v[2])
+                )
+            }
+            _ => label,
+        };
     }
     if node.kind != Kind::Curve {
         return label;
@@ -499,7 +519,7 @@ pub(super) fn build(graph: &ClipGraph, window: &mut Window, cx: &mut Context<Lum
         .nodes
         .iter()
         .filter(|(_, node)| node.kind == Kind::Noise)
-        .map(|(id, node)| (id.clone(), noise_preview(id, node, cx)))
+        .map(|(id, node)| (id.clone(), noise_preview(graph, id, node, cx)))
         .collect();
     Controls {
         synced: graph.clone(),
@@ -554,7 +574,7 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
     }
     for (id, preview) in &controls.noise {
         if let Some(node) = graph.nodes.get(id) {
-            let settings = noise_settings(node);
+            let settings = noise_settings(graph, node);
             preview.update(cx, |preview, cx| preview.set_value(settings, cx));
         }
     }
@@ -577,7 +597,7 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
     let (_, length, elapsed) = clip_beats(editor, clip)?;
     let (time, _) = coordinate(graph, curve)?;
     let time = graph.nodes.get(&time)?;
-    let number = |name: &str| match time.inputs.get(name) {
+    let number = |name: &str| match time.inputs.get(name).map(|held| graph.resolve(held)) {
         Some(Input::Number(v)) => Some(Some(*v)),
         None => Some(None),
         _ => None,
@@ -646,11 +666,15 @@ fn heads_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<Rc<[f64]>> 
     Some(places.into_iter().flatten().collect())
 }
 
-/// A noise node's settings as the preview draws them: a wired one is held
-/// at its empty value, and the preview says so.
-fn noise_settings(node: &Node) -> noise::Settings {
+/// A noise node's settings as the preview draws them: a value node's value,
+/// and a wired one held at its empty value, which the preview says.
+fn noise_settings(graph: &ClipGraph, node: &Node) -> noise::Settings {
     let mut held = Vec::new();
-    let mut number = |input: &str, empty: f64, note: &str| match node.inputs.get(input) {
+    let mut number = |input: &str, empty: f64, note: &str| match node
+        .inputs
+        .get(input)
+        .map(|input| graph.resolve(input))
+    {
         Some(Input::Number(v)) => Some(*v),
         Some(_) => {
             held.push(note.to_owned());
@@ -670,7 +694,12 @@ fn noise_settings(node: &Node) -> noise::Settings {
 }
 
 /// The noise preview of node `id`, sampled as playback samples it.
-fn noise_preview(id: &str, node: &Node, cx: &mut Context<Luma>) -> Entity<noise::NoisePreview> {
+fn noise_preview(
+    graph: &ClipGraph,
+    id: &str,
+    node: &Node,
+    cx: &mut Context<Luma>,
+) -> Entity<noise::NoisePreview> {
     let at = id.to_owned();
     let sampler: noise::Sampler = Rc::new(move |settings, seed, place, beats| {
         p::clip_graph::sample_noise(
@@ -705,7 +734,7 @@ fn noise_preview(id: &str, node: &Node, cx: &mut Context<Luma>) -> Entity<noise:
         };
         transport(cx).unwrap_or_default()
     });
-    let settings = noise_settings(node);
+    let settings = noise_settings(graph, node);
     cx.new(|cx| {
         let mut preview = noise::NoisePreview::new(edit::label(id), sampler, transport);
         preview.set_value(settings, cx);
@@ -1074,12 +1103,25 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
 }
 
 /// A card's body under its title: its settings, then one row per input; a
-/// curve's and a math node's are their own ([`curve_rows`], [`math_rows`]).
+/// curve's and a math node's are their own ([`curve_rows`], [`math_rows`]),
+/// and a value's is its one field.
 pub(super) fn body(cx: &Ctx, id: &str) -> Vec<AnyElement> {
     let node = &cx.graph.nodes[id];
     match node.kind {
         Kind::Curve => curve_rows(cx, id),
         Kind::Math => math_rows(cx, id),
+        Kind::Value => cx
+            .controls
+            .fields
+            .get(&(id.to_owned(), "value".to_owned()))
+            .map(|field| {
+                field_element(field)
+                    .w_full()
+                    .agent_node(Role::Row, "Value")
+                    .into_any_element()
+            })
+            .into_iter()
+            .collect(),
         _ => settings(cx, id, node)
             .into_iter()
             .chain(
