@@ -339,7 +339,7 @@ mod tests {
             "selection": Selection::all(),
             "z_index": 0,
             "blend_mode": BlendMode::Replace,
-            "graph": {"version": 2, "nodes": {
+            "graph": {"version": 3, "nodes": {
                 "strobe1": {"kind": "strobe", "inputs": {"rate": rate}}}},
         }))
         .expect("a valid clip")
@@ -435,15 +435,14 @@ mod tests {
             "start": 32.0, "duration": 8.0, "seed": 6_348_896_133_488_684_926_u64,
             "selection": Selection::all(),
             "z_index": 0, "blend_mode": "replace",
-            "graph": {"version": 2, "nodes": {
-                "clock1": {"kind": "clock", "inputs": {"every": 2}},
+            "graph": {"version": 3, "nodes": {
                 "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
                 "curve1": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "space1"},
                                       "shape": {"points": [[0, 1], [1, 0]]},
                                       "low": 0.1667, "high": 1}},
                 "time1": {"kind": "time",
-                          "inputs": {"clock": {"node": "clock1"}, "phase": {"node": "curve1"}}},
+                          "inputs": {"every": 2, "phase": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "time1"},
                                       "shape": {"points": [[0, 1], [0.1667, 1], [0.1667, 0], [1, 0]]}}},

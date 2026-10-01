@@ -2,7 +2,10 @@
 use super::{Arena, OutputBinding, Plan};
 use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
 use luma_patterns as p;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 #[derive(Clone, Debug)]
 pub struct Program {
     prepared: p::PreparedGraph,
@@ -98,12 +101,13 @@ impl Program {
             .collect())
     }
 
-    pub(crate) fn render(
+    /// The clip's frames at `times`, each with the clip's opacity per head.
+    pub(crate) fn layers(
         &self,
         times: &[f32],
         bindings: &OutputBinding,
         scratch: &mut Arena,
-    ) -> Result<Vec<UniverseState>, String> {
+    ) -> Result<Vec<Layer>, String> {
         if times.is_empty() {
             return Ok(vec![]);
         }
@@ -132,6 +136,17 @@ impl Program {
         Ok((0..times.len())
             .map(|k| {
                 let t = if tensor.dim().1 == 1 { 0 } else { k };
+                // Channel 11 is the aim's weight for aim and the clip's
+                // opacity for color and strobe.
+                let alpha = if bindings.aim {
+                    HashMap::new()
+                } else {
+                    self.ids
+                        .iter()
+                        .zip(&rows)
+                        .map(|(id, &row)| (id.clone(), tensor[[row, t, 11]] as f32))
+                        .collect()
+                };
                 let primitives = self
                     .ids
                     .iter()
@@ -162,9 +177,34 @@ impl Program {
                         )
                     })
                     .collect();
-                UniverseState { primitives }
+                Layer {
+                    frame: UniverseState { primitives },
+                    alpha,
+                }
             })
             .collect())
+    }
+}
+
+/// One clip's frame and its opacity per head: the compositor mixes the
+/// clip's light and strobe with what is under it by it. A head missing
+/// from `alpha` is opaque.
+#[derive(Clone, Debug)]
+pub struct Layer {
+    pub frame: UniverseState,
+    pub alpha: HashMap<String, f32>,
+}
+
+impl Layer {
+    /// The frame over no light: each head's light and strobe scaled by its
+    /// opacity.
+    pub fn over_nothing(mut self) -> UniverseState {
+        for (id, head) in &mut self.frame.primitives {
+            let alpha = self.alpha.get(id).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+            head.dimmer *= alpha;
+            head.strobe *= alpha;
+        }
+        self.frame
     }
 }
 /// A clip over every head from `start` for `duration` beats whose graph is
@@ -179,7 +219,7 @@ pub(crate) fn test_clip(nodes: serde_json::Value, start: f64, duration: f64) -> 
         "selection": p::Selection::all(),
         "z_index": 0,
         "blend_mode": "replace",
-        "graph": {"version": 2, "nodes": nodes},
+        "graph": {"version": 3, "nodes": nodes},
     }))
     .unwrap_or_else(|error| panic!("a test clip: {error}"))
 }

@@ -15,7 +15,7 @@
 
 use crate::eval::aim::{Aiming, Rig};
 use crate::eval::composite::{blank_frame, composite_frame, offset_frame};
-use crate::eval::{try_eval, try_turns, Arena, BlendMode, Plan};
+use crate::eval::{try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
 use std::sync::Arc;
 
@@ -163,9 +163,9 @@ pub(crate) fn composite(
             }
             continue;
         }
-        let got = try_eval(ann.plan.as_ref(), &sample_times, scratch)?;
-        for ((k, _), frame) in slots.zip(got) {
-            composite_frame(&mut frames[k], &frame, &ann.plan.outputs, ann.blend_mode);
+        let got = try_layers(ann.plan.as_ref(), &sample_times, scratch)?;
+        for ((k, _), layer) in slots.zip(got) {
+            composite_frame(&mut frames[k], &layer, &ann.plan.outputs, ann.blend_mode);
         }
     }
     Ok(frames)
