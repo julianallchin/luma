@@ -12,11 +12,7 @@ use sqlx::SqlitePool;
 /// Services the agents can be pointed at, as `(stored value, label)`. Both
 /// speak the same "creator/model" model ids; only the key and routing differ.
 ///
-/// A gateway is the only thing offered here because a gateway key reaches every
-/// model in [`crate::agent::model::MODELS`]. The first-party Anthropic API is
-/// reachable too — write `agent_provider = "anthropic"` by hand — but it serves
-/// a subset with a key nobody here is assumed to hold, so it is not a choice
-/// the picker can strand someone on.
+/// A gateway key reaches every model in [`crate::agent::model::MODELS`].
 pub const AGENT_PROVIDERS: &[(&str, &str)] = &[
     ("vercel-ai-gateway", "Vercel AI Gateway"),
     ("openrouter", "OpenRouter"),
