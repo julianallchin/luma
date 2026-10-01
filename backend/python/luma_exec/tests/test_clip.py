@@ -85,8 +85,8 @@ color(brightness=curve(x, [[0, 0], [0, 1], [0.25, 1], [0.25, 0], [1, 0]]))"""
 EXAMPLE_SLASH = """t = time(every=2)
 diag = space(direction=(-0.82, 0, 0.57), shift=curve(t, [[0, 0], [0.2, 1], [1, 1]]))
 cut = curve(diag, [[0, 1], [0, 0]])
-line = mirror(normal=(0.57, 0, 0.82), at=0.68)
-dist = space(heads=line, direction=(0.57, 0, 0.82), scale=curve(t, 'Ramp up', low=0.04, high=0.74))
+line = mirror(direction=(0.57, 0, 0.82), at=0.68)
+dist = space(heads=line, direction=(0.57, 0, 0.82), shift=0.68, scale=curve(t, 'Ramp up', low=0.04, high=0.74))
 bloom = curve(dist, [[0, 1], [0.76, 1], [1, 0]])
 fade = curve(t, [[0, 1, 'hold'], [0.2, 1, 'sine-out'], [1, 0]])
 heat = curve(t, gradient=[(0, (1, 1, 1)), (0.2, (1, 1, 1)), (0.5, (1, 0, 0.01)), (1, (1, 0, 0.01))])
@@ -151,8 +151,8 @@ CATALOG = {
     'Grow': "clip = time(); radius = space(shift=curve(clip, 'Ramp up', high=1.1), kind='radial'); color(brightness=curve(radius, 'Step down'))",
     'Turning line': "turn = space(kind='angle'); t = time(every=2, duration=4, phase=curve(turn, 'Ramp down')); color(brightness=curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]))",
     'Spiral': "radius = space(kind='radial'); turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp down', low=curve(radius, 'Ramp up'), high=curve(radius, 'Ramp up', low=1, high=2))); color(brightness=curve(t, [[0, 0], [0.7, 0, [0.4, 0, 0.6, 1]], [0.85, 1, [0.4, 0, 0.6, 1]], [1, 0]]))",
-    'Mirror': "halves = mirror(); t = time(every=2); place = space(heads=halves, shift=curve(t, 'Ramp up', low=-0.1, high=0.5), scale=0.1); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))",
-    'Kaleidoscope': "sides = mirror(normal=(1, 0, 0)); quarters = mirror(heads=sides, normal=(0, 0, 1)); turn = space(heads=quarters, kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp down')); color(brightness=curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]))",
+    'Mirror': "halves = mirror(); t = time(every=2); place = space(heads=halves, shift=curve(t, 'Ramp up', low=0.4, high=1), scale=0.1); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))",
+    'Kaleidoscope': "sides = mirror(direction=(1, 0, 0)); quarters = mirror(heads=sides, direction=(0, 0, 1)); turn = space(heads=quarters, centre=(0.75, 0.5, 0.75), kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp down')); color(brightness=curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]))",
     'Position': 'aim(direction=D)',
     'Fan': "place = space(); aim(direction=D, yaw=curve(place, 'Ramp up', low=-25, high=25))",
     'Converge': "aim(point=(0, 3, 0), base='point')",
@@ -213,14 +213,14 @@ class ClipBuilderTests(unittest.TestCase):
         self.assertEqual(dict(t.inputs), {"every": 2, "duration": 4, "delay": -0.5, "phase": lag})
         order = shuffle(group(), time=t)
         place = space(order, direction=(1, 0, 0), shift=0.25, scale=0.5, kind="order")
-        line = mirror(normal=(0, 0, 1), at=0.68)
+        line = mirror(direction=(0, 0, 1), at=0.68)
         graph = color(brightness=curve(place, "Ramp up") * curve(space(line), "Ramp down"))
         nodes = graph.json()["nodes"]
         self.assertEqual(graph.json()["version"], 3)
         self.assertEqual(nodes["order"]["inputs"], {"heads": {"node": "group1"}, "time": {"node": "t"}})
         self.assertEqual(nodes["place"]["inputs"]["scale"], 0.5)
         self.assertNotIn("length", nodes["place"]["inputs"])
-        self.assertEqual(nodes["line"]["inputs"], {"normal": [0, 0, 1], "at": 0.68})
+        self.assertEqual(nodes["line"]["inputs"], {"direction": [0, 0, 1], "at": 0.68})
         self.assertEqual(nodes["math1"], {"kind": "math", "settings": {"op": "*"},
                                           "inputs": {"values": [{"node": "curve1"}, {"node": "curve2"}]}})
         self.assertEqual(run(graph.source()).json(), graph.json())

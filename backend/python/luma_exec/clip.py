@@ -60,12 +60,12 @@ VERSION = 3  # clip_graph::VERSION
 # Input order per kind: the builder signature order, used by source().
 _INPUTS = {
     "time": ("every", "duration", "delay", "phase"),
-    "space": ("heads", "direction", "at", "shift", "scale"),
+    "space": ("heads", "direction", "centre", "at", "shift", "scale"),
     "noise": ("heads", "speed", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
     "math": ("values",),
-    "mirror": ("heads", "normal", "at"),
+    "mirror": ("heads", "direction", "at"),
     "shuffle": ("heads", "time"),
     "group": ("heads", "size"),
     "split": ("heads",),
@@ -428,28 +428,30 @@ def _wrap(wrap, kind):
     return "yes" if wrap else "no"
 
 
-def space(heads=None, direction=None, at=None, shift=None, scale=None, kind="line",
-          wrap=None) -> Coordinate:
-    """Place of each head: (a - shift) / scale, where a is 0-1 per head.
+def space(heads=None, direction=None, centre=None, at=None, shift=None, scale=None,
+          kind="line", wrap=None) -> Coordinate:
+    """Place of each head: x = at + (a - at - shift) / scale, where a is the
+    head's place on a 0-1 ruler over the clip's selection.
 
-    kind: "line" (along direction; empty = best fit: the stage axis the
-    heads spread along most), "order" (rank), "radial" (distance from the
-    centre over the largest distance), "angle" (turns around the centre).
-    `at` (u, v, z), each 0-1 within the selection's box, is the centre of
-    radial and angle; empty = the middle (0.5, 0.5, 0.5).
-    A region is a curve with jumps: the left half is
-    curve(space(), [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]).
-    `shift` (share) slides the coordinate, as a shader's p - offset: a curve
-    over time on shift moves the curve along the heads (a chase, a sweep with
-    its own ease), audio on shift makes a meter. `scale` (share, 0 or more)
-    is how much of the axis reads as 0-1. With wrap, x tiles as a shader's
-    fract((a - shift) / scale): the shape repeats every `scale` (0.25 = four
-    copies); one pill per turn is a narrow curve with scale 1.
-    A line space after a mirror with the same direction measures from the
-    mirror's plane.
+    The ruler is always measured on the selection before any fold: a mirror
+    moves the heads along it, never the ruler. kind: "line" (along
+    direction; empty = best fit: the stage axis the heads spread along
+    most), "order" (rank), "radial" (distance from `centre` over the largest
+    distance), "angle" (turns around `centre`). `centre` (u, v, z), each 0-1
+    of the selection's box, is read by radial and angle only; empty = the
+    middle (0.5, 0.5, 0.5).
+    As CSS: `at` (0-1 along the ruler, empty = 0) is the transform origin,
+    the place that stays put as `scale` changes; `shift` the translate;
+    `scale` (0 or more) how much of the ruler reads as 0-1; wrap is
+    background-repeat: x tiles as fract(x), the shape repeats every `scale`
+    (0.25 = four copies). A curve over time on shift moves the curve along
+    the heads (a chase), audio on shift makes a meter. A region is a curve
+    with jumps: the left half is curve(space(), [[0, 1], [0.5, 1], [0.5, 0],
+    [1, 0]]).
     """
     return _make("space", {"kind": kind, "wrap": _wrap(wrap, kind)},
-                 heads=heads, direction=direction, at=at, shift=shift, scale=scale)
+                 heads=heads, direction=direction, centre=centre, at=at, shift=shift,
+                 scale=scale)
 
 
 def noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate:
@@ -480,11 +482,13 @@ def curve(x, shape=None, low=None, high=None, gradient=None) -> Value:
         "gradient": _gradient(gradient, "curve.gradient")})
 
 
-def mirror(heads=None, normal=None, at=None) -> Heads:
-    """Fold heads across a plane (empty normal = best fit). `at` (share 0-1)
-    places the plane along the normal within the selection; empty = 0.5, the
-    centre. Heads on the low side reflect; aim yaw and pitch mirror too."""
-    return _make("mirror", heads=heads, normal=normal, at=at)
+def mirror(heads=None, direction=None, at=None) -> Heads:
+    """Fold heads across a plane across `direction` (empty = best fit), as a
+    shader's reflect. `at` (0-1) places the plane along the direction within
+    the selection before any fold; empty = 0.5, the middle. Heads on the low
+    side reflect; aim yaw and pitch mirror too. A mirror moves heads, never
+    a space's ruler."""
+    return _make("mirror", heads=heads, direction=direction, at=at)
 
 
 def shuffle(heads=None, time=None) -> Heads:
