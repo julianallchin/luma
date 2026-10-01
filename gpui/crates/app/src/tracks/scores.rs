@@ -322,10 +322,12 @@ impl Luma {
         cx.notify();
     }
 
-    /// Show `score` on the track's timeline, opening the tab if it is not up.
+    /// Show `score` on the track's timeline, opening the tab if it is not up,
+    /// and hide the sidebar so the timeline has the room.
     ///
-    /// Stays on this level: choosing a score is reading the list, and a list
-    /// that dismissed itself on the first choice could not be compared.
+    /// A score the tab already shows is only brought forward, and the sidebar
+    /// stays. Loading it again would drop its selection and undo, and the first
+    /// click of a rename double-click lands here.
     pub(crate) fn open_sidebar_score(
         &mut self,
         track_id: SharedString,
@@ -336,6 +338,10 @@ impl Luma {
         let Some(browser) = &self.sidebar else {
             return;
         };
+        if self.open_score_id(&track_id, browser.venue_id()).as_deref() == Some(score.id.as_str()) {
+            return;
+        }
+        self.sidebar_hidden = true;
         let target = crate::tabs::Target::TrackEditor {
             track: track_id.to_string(),
             venue: browser.venue_id().to_string(),
@@ -924,9 +930,8 @@ fn score_row(
 /// The score's name, or its owner when it has none. A double-click on it
 /// starts a rename when `renamer` is present — this venue's own score.
 ///
-/// The first click of the pair has already opened the score through the row,
-/// which is the same score, so it does no harm. The second click stops here so
-/// the row does not open it again on top of the rename.
+/// The first click of the pair goes to the row, which leaves an open score as
+/// it is. The second click stops here so the row does not see it at all.
 fn name_label(
     row: &ScoreRow,
     open: bool,

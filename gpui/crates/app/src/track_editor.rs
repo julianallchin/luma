@@ -129,7 +129,7 @@ pub struct Editor {
     /// The track's audio file, which playback decodes from the top.
     audio_path: std::path::PathBuf,
     /// The venue whose score is open. Half of what a conversation about this
-    /// track is scoped by — see [`crate::agent::scope_for`].
+    /// track is scoped by — see [`crate::agent::turn_context`].
     venue_id: String,
     /// The score whose clips are on the timeline, and whether this host may
     /// write to it. `None` until the lookup lands, and still `None` for a
@@ -147,8 +147,6 @@ pub struct Editor {
     /// listing taken before it was.
     score_chosen: bool,
     waveform: Option<Rc<TrackWaveform>>,
-    /// The waveform's bass envelope, shared with the stage.
-    bass: Option<crate::visualizer::Bass>,
     gpu_waveform: Rc<RefCell<waveform::Resource>>,
     timeline_waveform: waveform::Strip,
     overview_waveform: waveform::Strip,
@@ -163,8 +161,8 @@ pub struct Editor {
     beat_validation_error: Option<String>,
     /// The **working copy**: every clip as the screen currently has it, with
     /// its lane resolved. Rebuilt whenever the clips change and never during a
-    /// draw. Rows depend on layer priority and overlapping time spans, so
-    /// rebuilding them per frame would repeat work for unchanged clips.
+    /// draw. Rows depend on every clip's layer priority, so rebuilding them
+    /// per frame would repeat work for unchanged clips.
     ///
     /// Every gesture and every command edits this list and nothing else;
     /// [`Luma::commit_clips`] is the only thing that writes, and it writes the
@@ -321,7 +319,7 @@ struct Clip {
     start: f64,
     end: f64,
     /// Which lane it sits in, counting down from the empty insertion lane at
-    /// row 0. Overlaps at one lighting priority get separate rows — see [`lanes`].
+    /// row 0. One row is one lighting priority — see [`lanes`].
     row: usize,
     z: i64,
     blend: BlendMode,
@@ -579,13 +577,18 @@ struct Cursor {
 }
 
 impl Cursor {
-    /// The time range, lowest first, or `None` for a point cursor.
+    /// The time range, lowest first, or `None` for a point cursor. A sweep
+    /// that ends where it began — straight down the lanes, or snapped back
+    /// to its start — is a point too: a line over its lane band, never a
+    /// range that holds no time.
     fn span(self) -> Option<(f64, f64)> {
         self.end
+            .filter(|&end| end != self.start)
             .map(|end| (self.start.min(end), self.start.max(end)))
     }
 
-    /// The lane band, lowest first. A point cursor is one lane.
+    /// The lane band, lowest first. A point cursor is one lane unless a
+    /// vertical sweep gave it a band.
     fn rows(self) -> (usize, usize) {
         let end = self.row_end.unwrap_or(self.row);
         (self.row.min(end), self.row.max(end))
@@ -853,6 +856,8 @@ enum Gesture {
         /// move.
         layers: Rc<[i64]>,
         moved: bool,
+        /// Alt left copies of the held clips where they stood.
+        cloned: bool,
     },
     /// Dragging one part of a form clip's alpha line — see [`fades`]. Every
     /// move is computed from the press, like a clip drag.
@@ -1022,6 +1027,38 @@ impl Editor {
         ))
     }
 
+    /// The timeline as a chat message reports it: the playhead, the cursor,
+    /// and the clips they touch. Read once per message sent.
+    pub(crate) fn agent_context(&self) -> luma_lib::agent::EditorState {
+        let cursor = self.cursor.map(|cursor| {
+            let (first_lane, last_lane) = cursor.rows();
+            let (start, end) = match cursor.span() {
+                Some((start, end)) => (start, Some(end)),
+                None => (cursor.start, None),
+            };
+            luma_lib::agent::CursorSpan {
+                start,
+                end,
+                first_lane,
+                last_lane,
+            }
+        });
+        let clips = self.clips.iter().map(|clip| luma_lib::agent::ClipSpan {
+            id: clip.id.to_string(),
+            name: clip.label.to_string(),
+            lane: clip.row,
+            start: clip.start,
+            end: clip.end,
+            selected: self.selected.contains(&clip.id),
+        });
+        luma_lib::agent::EditorState::capture(
+            f64::from(self.transport.position),
+            cursor,
+            clips,
+            self.beats.as_deref(),
+        )
+    }
+
     /// The room this timeline is being worked on in.
     pub(crate) fn venue_id(&self) -> &str {
         &self.venue_id
@@ -1037,10 +1074,9 @@ impl Editor {
         })
     }
 
-    /// The track's bass, for the stage's footage look to shake the camera
-    /// with. `None` until the waveform has loaded.
-    pub(crate) fn bass(&self) -> Option<crate::visualizer::Bass> {
-        self.bass.clone()
+    /// The track this timeline edits.
+    pub(crate) fn track_id(&self) -> &str {
+        &self.track_id
     }
 
     /// The range on screen, from the canvas the last frame painted.
@@ -1170,7 +1206,7 @@ impl Editor {
                     // captured, so recomputing it every move from that is
                     // idempotent and there is no second, visual-only
                     // representation to keep in step with this one.
-                    clip.z = lanes::drag_z(layers, was.row as i32 - 1, rows);
+                    clip.z = row_to_z(layers, was.row as i32 - 1 + rows);
                 }
                 Drag::Resize(Edge::Start) => {
                     let moved = shift(was.start).max(0.);
@@ -1197,13 +1233,22 @@ impl Editor {
     ///
     /// **The only way the clip list changes.** Every gesture and every command
     /// funnels through here, which is what makes "a lane is a function of
-    /// every clip's priority and time span" a fact rather than a convention.
+    /// every clip's priority" a fact rather than a convention.
     /// This also keeps
     /// [`Editor::dirty`] from being something a caller can forget to set.
     fn replace_clips(&mut self, mut clips: Vec<Clip>) {
         assign_rows(&mut clips);
         self.clips = clips.into();
         self.dirty = true;
+    }
+
+    /// Let the clips a drag held cut away what they cover in their layers —
+    /// see [`lanes::settle`] — except the `kept` ones.
+    fn settle(&mut self, held: &[Initial], kept: &[SharedString]) {
+        let placed: Vec<SharedString> = held.iter().map(|clip| clip.id.clone()).collect();
+        if let Some(clips) = lanes::settle(&self.clips, &placed, kept) {
+            self.replace_clips(clips);
+        }
     }
 
     /// Where the timeline is now, as something an undo could return to.
@@ -1399,7 +1444,9 @@ impl Editor {
         match self.cursor.and_then(Cursor::span) {
             Some(span) => {
                 let rows = self.cursor.unwrap().rows();
-                let clips = clear_region(&self.clips, span, rows.0..=rows.1);
+                let clips = clear_region(&self.clips, span, |clip| {
+                    (rows.0..=rows.1).contains(&clip.row)
+                });
                 self.replace_clips(clips);
                 self.selected.clear();
                 self.cursor = None;
@@ -1450,7 +1497,9 @@ impl Editor {
         self.replace_clips(clips);
     }
 
-    /// `moveAnnotationsVertical`: shift the selection one lane up or down.
+    /// `moveAnnotationsVertical`: shift the selection one lane up or down,
+    /// into that lane's layer. What it lands on there is cut away — see
+    /// [`lanes::settle`].
     ///
     /// Up is unbounded — it mints a z above the current top. Down is
     /// all-or-nothing: if any selected clip is already on the floor the whole
@@ -1460,22 +1509,22 @@ impl Editor {
         if self.selected.is_empty() {
             return;
         }
-        let mut layers = z_ladder(&self.clips);
-        layers.dedup();
-        let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
+        let layers = z_ladder(&self.clips);
+        let held = |clip: &Clip| self.selected.contains(&clip.id);
         if down
-            && clips
+            && self
+                .clips
                 .iter()
-                .any(|clip| self.selected.contains(&clip.id) && Some(&clip.z) == layers.last())
+                .any(|clip| held(clip) && clip.row == layers.len())
         {
             return;
         }
-        for clip in &mut clips {
-            if self.selected.contains(&clip.id) {
-                let row = layers.iter().position(|z| *z == clip.z).unwrap() as i32;
-                clip.z = row_to_z(&layers, row + if down { 1 } else { -1 });
-            }
+        let step = if down { 1 } else { -1 };
+        let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
+        for clip in clips.iter_mut().filter(|clip| held(clip)) {
+            clip.z = row_to_z(&layers, clip.row as i32 - 1 + step);
         }
+        let clips = lanes::settle(&clips, &self.selected, &[]).unwrap_or(clips);
         self.replace_clips(clips);
         self.sync_cursor();
     }
@@ -1570,7 +1619,9 @@ impl Editor {
             return;
         }
         let bottom = top + board.items.iter().map(|(row, _)| *row).max().unwrap_or(0);
-        let mut clips = clear_region(&self.clips, (at, end), top..=bottom);
+        let mut clips = clear_region(&self.clips, (at, end), |clip| {
+            (top..=bottom).contains(&clip.row)
+        });
         self.selected = minted.iter().map(|clip| clip.id.clone()).collect();
         clips.extend(minted);
         self.replace_clips(clips);
@@ -1620,7 +1671,8 @@ impl Editor {
 
     /// `cloneAnnotationsInPlace`: leave a copy of everything the drag is
     /// holding exactly where it is, so the clips that move away are the
-    /// originals and the copies stay put.
+    /// originals and the copies stay put. On release the originals cut the
+    /// copies where they still cover them.
     fn clone_in_place(&mut self, ids: &[SharedString]) {
         let copies: Vec<Clip> = self
             .clips
@@ -1727,8 +1779,7 @@ impl Editor {
     }
 }
 
-/// Lighting priority for each visible row, from top to bottom. Overlapping
-/// clips at one priority occupy separate rows without changing the score.
+/// Lighting priority for each visible row, from top to bottom.
 fn z_ladder(clips: &[Clip]) -> Vec<i64> {
     let mut layers = vec![0; clips.iter().map(|clip| clip.row).max().unwrap_or(0)];
     for clip in clips {
@@ -1760,22 +1811,18 @@ fn row_to_z(layers: &[i64], row: i32) -> i64 {
 }
 
 /// `resolveOverlaps` + `applyOverlapActions`: the clip list with `span`
-/// cleared out of the visible rows the cursor covers.
+/// cleared out of the clips `hit` picks.
 ///
 /// One function rather than a plan-then-apply pair, because no caller inspects
 /// the plan. What survives is the
 /// interesting part: a clip the region *partly* covers is trimmed or split
 /// rather than deleted, and a remnant shorter than [`MIN_CLIP`] is dropped
 /// instead of being left as a sliver nothing can grab.
-fn clear_region(
-    clips: &[Clip],
-    span: (f64, f64),
-    rows: std::ops::RangeInclusive<usize>,
-) -> Vec<Clip> {
+fn clear_region(clips: &[Clip], span: (f64, f64), hit: impl Fn(&Clip) -> bool) -> Vec<Clip> {
     let (from, to) = span;
     let mut out = Vec::with_capacity(clips.len());
     for clip in clips {
-        let touched = rows.contains(&clip.row) && clip.start < to && clip.end > from;
+        let touched = hit(clip) && clip.start < to && clip.end > from;
         if !touched {
             out.push(clip.clone());
             continue;
@@ -1888,7 +1935,6 @@ impl Luma {
             venue_id: venue_id.clone(),
             score: None,
             waveform: None,
-            bass: None,
             gpu_waveform: Rc::new(RefCell::new(waveform::Resource::default())),
             timeline_waveform: waveform::Strip::default(),
             overview_waveform: waveform::Strip::default(),
@@ -1964,7 +2010,6 @@ impl Luma {
                     match waveform {
                         Ok(waveform) => {
                             editor.transport.duration = waveform.duration_seconds as f32;
-                            editor.bass = crate::visualizer::Bass::of(&waveform);
                             editor.waveform = Some(Rc::new(waveform));
                         }
                         Err(error) => editor.error = Some(error.to_string()),
@@ -2050,6 +2095,7 @@ impl Luma {
             let contents = pending.await;
             this.update(cx, |this, cx| {
                 let mut previews = Vec::new();
+                let mut split = false;
                 this.edit_track_tab(&target, cx, |editor| {
                     // The tab may have moved on — onto another score, or off
                     // every score because this one was deleted while the read
@@ -2065,6 +2111,7 @@ impl Luma {
                             Ok(()) => {
                                 previews =
                                     editor.clips.iter().map(|clip| clip.id.clone()).collect();
+                                split = editor.dirty;
                             }
                             Err(error) => editor.error = Some(error),
                         },
@@ -2075,6 +2122,9 @@ impl Luma {
                     this.refresh_clip_preview_for(target.clone(), id, cx);
                 }
                 this.refresh_working_scene_for(&target, cx);
+                if split {
+                    this.commit_graph_score_for(target, cx);
+                }
             })
             .ok();
         })
@@ -2618,7 +2668,8 @@ impl Luma {
             // stand *now* and the originals are what the pointer takes away,
             // so the picture under the cursor is continuous and the copy is
             // the thing left behind.
-            if alt && drag == Drag::Move {
+            let cloned = alt && drag == Drag::Move;
+            if cloned {
                 editor.clone_in_place(&held);
             }
             let initial: Rc<[Initial]> = editor
@@ -2640,6 +2691,7 @@ impl Luma {
                 initial,
                 layers: z_ladder(&editor.clips).into(),
                 moved: false,
+                cloned,
             });
         });
         if let Some(seconds) = seek {
@@ -2703,8 +2755,11 @@ impl Luma {
                         end: Some(end),
                     };
                     editor.cursor = Some(cursor);
-                    if let Some(span) = cursor.span() {
-                        editor.select_within(cursor.rows(), span);
+                    // A sweep brought back to zero width holds no clips, so
+                    // it drops what its wider moments had selected.
+                    match cursor.span() {
+                        Some(span) => editor.select_within(cursor.rows(), span),
+                        None => editor.selected.clear(),
                     }
                 }
                 &Gesture::Clips { origin, .. } => {
@@ -2735,16 +2790,22 @@ impl Luma {
         self.with_track_editor(cx, |editor| {
             match editor.gesture.take() {
                 Some(Gesture::Clips {
-                    drag: Drag::Move,
+                    drag,
                     initial,
-                    moved: true,
+                    moved,
+                    cloned,
                     ..
                 }) => {
-                    touched = editor.crossfade(&initial);
-                    editor.abandon_checkpoint();
-                    save = editor.dirty;
-                }
-                Some(Gesture::Clips { .. }) => {
+                    // A crossfade lives on the overlap of two clips in one
+                    // layer, so the clips it crossed are not cut.
+                    if drag == Drag::Move && moved {
+                        touched = editor.crossfade(&initial);
+                    }
+                    // A press that only selected places nothing, unless Alt
+                    // left copies under the held clips.
+                    if moved || cloned {
+                        editor.settle(&initial, &touched);
+                    }
                     editor.abandon_checkpoint();
                     save = editor.dirty;
                 }
@@ -5068,7 +5129,20 @@ fn label(
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_snap, shift_time, Grid, Labels, MIN_GRID_SPACING};
+    use super::{bar_snap, shift_time, Cursor, Grid, Labels, MIN_GRID_SPACING};
+
+    #[test]
+    fn a_vertical_sweep_is_a_line_over_its_lanes() {
+        let sweep = |end: f64| Cursor {
+            row: 1,
+            row_end: Some(3),
+            start: 4.,
+            end: Some(end),
+        };
+        assert_eq!(sweep(4.).span(), None);
+        assert_eq!(sweep(4.).rows(), (1, 3));
+        assert_eq!(sweep(2.).span(), Some((2., 4.)));
+    }
 
     #[test]
     fn bar_numbers_and_shading_change_without_a_jump() {

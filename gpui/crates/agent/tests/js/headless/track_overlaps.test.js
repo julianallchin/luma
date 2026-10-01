@@ -1,5 +1,5 @@
-// Clips that overlap exactly get separate rows and separate hit targets, and
-// an edit to one leaves the others alone.
+// Clips that overlap exactly in one layer open as separate tracks, with
+// separate hit targets, and an edit to one leaves the others alone.
 
 // Three clips of one form, deliberately: identical spans are the case.
 const chase = (pattern, seed) =>
