@@ -211,8 +211,10 @@ so give a moving pill jumps at its ends, `[[0, 0], [0, 1], [1, 1], [1, 0]]`.
 Setting `kind`:
 - `line`: the position along `direction`, lowest head 0, highest 1. Empty
   direction = the stage axis (+U, +V or +Z) the heads spread along most.
-- `order`: the rank of the head, `(rank + 0.5) / n`. After `shuffle` it is
-  the shuffled rank.
+- `order`: the heads sorted along `direction` (empty = the same best fit
+  as `line`). Heads at one place along it share a slot and light together:
+  each reads `(slot + 0.5) / slots`. After `shuffle` it is a random slot
+  per head instead, and the direction is not read.
 - `radial`: distance from `centre` over the largest distance: 0 at the
   centre, 1 at the farthest head. `centre` is a point, each of u, v, z 0–1
   within the selection's box (as CSS `radial-gradient(at x y)`); empty = its
@@ -343,8 +345,9 @@ builder name, so no node may take it as an id.
 Folds the heads across a plane, as a shader's reflect. `at` places the plane
 along the direction, across the positions of the selection before any fold:
 0.5 is always the centre, also for stacked mirrors. Heads on the low side
-reflect. A mirror moves heads, never a space's ruler. Order does
-not change. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
+reflect. A mirror moves heads, never a space's ruler. An `order` space
+reads a folded head at the slot it folds onto; a shuffled order does not
+change. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
 symmetry.
 
 **shuffle** `shuffle(heads=None, time=None)` → heads
