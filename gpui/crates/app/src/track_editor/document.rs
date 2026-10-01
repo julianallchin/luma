@@ -88,9 +88,15 @@ impl Editor {
         contents: crate::library::ScoreContents,
     ) -> Result<(), String> {
         let crate::library::ScoreContents { score, beats } = contents;
-        self.clips = resolve_document(&score, beats.as_ref())?;
+        // One row is one track. A stored score whose clips overlap in one
+        // z_index is shown split into tracks, and the split is written back
+        // once. The saved base stays the stored score, so the write sees it.
+        let mut tracks = score.clone();
+        let split = tracks.separate_tracks();
+        self.clips = resolve_document(&tracks, beats.as_ref())?;
         self.beats = beats.map(Rc::new);
         self.graph_score = Some(score);
+        self.dirty = split && self.writable();
         self.sheet.invalidate();
         self.previews.borrow_mut().clear();
         self.preview_errors.clear();
@@ -246,6 +252,7 @@ impl Luma {
             this.update(cx, |this, cx| {
                 let mut previews = Vec::new();
                 let mut changed = false;
+                let mut split = false;
                 this.edit_track_tab(&target, cx, |editor| {
                     if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
                         return;
@@ -278,6 +285,7 @@ impl Luma {
                                 return;
                             }
                             changed = true;
+                            split = editor.dirty;
                             editor.composited = composited;
                             editor.history = History::default();
                             // A clip that is still there stays selected: the
@@ -299,6 +307,9 @@ impl Luma {
                 }
                 if changed {
                     this.refresh_working_scene_for(&target, cx);
+                }
+                if split {
+                    this.commit_graph_score_for(target, cx);
                 }
             })
             .ok();
@@ -342,8 +353,12 @@ impl Editor {
         p::Score::validate_clip(&p::standard_library(), &id, clip)
             .map_err(|error| error.to_string())?;
         self.edit_graph_score(score)?;
+        let id = SharedString::from(id);
+        if let Some(clips) = lanes::settle(&self.clips, std::slice::from_ref(&id), &[]) {
+            self.replace_clips(clips);
+        }
         self.menu = None;
-        self.selected = vec![id.into()];
+        self.selected = vec![id];
         self.cursor = Some(Cursor {
             row: menu.row.max(1),
             row_end: None,

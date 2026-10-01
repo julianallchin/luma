@@ -36,6 +36,10 @@ from .track import (TrackOutput, TrackError, TrackReadOnlyError,
                     _freeze, _range_pair, _selection, _blend, _z,
                     _downbeat_values, _check_result, _pattern_color, BLEND_MODES)
 
+# How far, in beats, one clip may run past the start of the next on its track
+# and still count as ending where it starts.
+_TOUCH = 1e-6
+
 
 def _plain(value):
     if hasattr(value, "items"):
@@ -352,7 +356,8 @@ class Edit:
         Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
         seconds=(0,16). Beats start at zero; bars at one. selection is a
         group expression. Clips composite bottom-up by integer z; omit z to
-        place above clips overlapping this range. replace covers the lower
+        place above clips overlapping this range. One z is one track: a clip
+        given a z cuts away the part of any clip it covers at that z. replace covers the lower
         layer; add sums; screen brightens; an aim clip takes replace or
         offset (offset adds its yaw and pitch to the aim underneath).
         """
@@ -373,15 +378,41 @@ class Edit:
                  "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend or graph.blend or "replace"),
                  "graph": graph.json()}
         self._check_clip(id, value)
+        self._cut(id, value)
         self._candidate["clips"][id] = value
         return Clip.read(id, value)
+
+    def _cut(self, id, value):
+        """Cut away the part of every other clip at value's z that value covers.
+
+        A z is one track and its clips never overlap. A clip the range covers
+        whole is removed; one it covers in part is trimmed, or split in two
+        with the far piece as a new clip.
+        """
+        z, start = value.get("z_index", 0), value["start"]
+        end = start + value["duration"]
+        clips = self._candidate["clips"]
+        for other_id, other in list(clips.items()):
+            other_start = other["start"]
+            other_end = other_start + other["duration"]
+            if (other_id == id or other.get("z_index", 0) != z
+                    or not (other_start < end - _TOUCH and start < other_end - _TOUCH)):
+                continue
+            del clips[other_id]
+            head, tail = start - other_start, other_end - end
+            if head > _TOUCH:
+                clips[other_id] = dict(other, duration=head)
+            if tail > _TOUCH:
+                piece = dict(copy.deepcopy(other), start=end, duration=tail)
+                clips[str(uuid.uuid4()) if head > _TOUCH else other_id] = piece
 
     def update_clip(self, clip, *, graph=None, name=None, beats=None, bars=None, seconds=None,
                     selection=None, z=None, blend=None, seed=None):
         """Update a Clip or clip ID and return its new value; other fields stay.
 
         graph, name, range, selection, z, blend and seed use add_clip's
-        conventions. The checker runs on the updated clip at once.
+        conventions, so the clip cuts what it covers at its z. The checker
+        runs on the updated clip at once.
         """
         self._open()
         id = clip.id if isinstance(clip, Clip) else str(clip)
@@ -409,6 +440,7 @@ class Edit:
         if seed is not None:
             value["seed"] = _seed(seed)
         self._check_clip(id, value)
+        self._cut(id, value)
         self._candidate["clips"][id] = value
         return Clip.read(id, value)
 

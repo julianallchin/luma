@@ -26,6 +26,29 @@ class ScoreTests(unittest.TestCase):
         saved = self.calls[-1][1]["candidate"]["clips"]
         self.assertEqual(saved["second"]["z_index"], 1)
         self.assertEqual(saved["explicit"]["z_index"], 0)
+        # The explicit clip covers first whole in its z.
+        self.assertNotIn("first", saved)
+
+    def test_a_clip_written_at_a_z_cuts_what_it_covers_there(self):
+        track = self.track()
+        edit = track.edit()
+        graph = color()
+        edit.add_clip(graph, name="Wash", id="around", beats=(0, 8), z=0)
+        edit.add_clip(graph, name="Wash", id="before", beats=(8, 12), z=1)
+        edit.add_clip(graph, name="Wash", id="after", beats=(12, 16), z=1)
+        edit.add_clip(graph, name="Wash", id="other", beats=(0, 16), z=2)
+        edit.add_clip(graph, name="Wash", id="placed", beats=(2, 4), z=0)
+        edit.update_clip("placed", beats=(10, 14), z=1)
+        spans = {id: (clip["start"], clip["start"] + clip["duration"], clip["z_index"])
+                 for id, clip in edit.candidate["clips"].items()}
+        # Split in two, trimmed at each end, and left alone in another z.
+        tail = next(id for id in spans if id not in {"around", "before", "after", "other", "placed"})
+        self.assertEqual(spans.pop(tail), (4, 8, 0))
+        self.assertEqual(spans, {"around": (0, 2, 0), "before": (8, 10, 1), "after": (14, 16, 1),
+                                 "other": (0, 16, 2), "placed": (10, 14, 1)})
+        # A clip that only touches another cuts nothing.
+        edit.add_clip(graph, name="Wash", id="touching", beats=(16, 20), z=1)
+        self.assertEqual(edit.candidate["clips"]["after"]["duration"], 2)
 
     def track(self):
         nodes = [{"kind": "color", "output": "color", "inputs": {

@@ -1038,7 +1038,7 @@ mod tests {
             ("every", 1.),
             ("duration", 2.),
             ("delay", 0.5),
-            ("phase", 0.25),
+            ("phase", 90.),
         ] {
             let mut moved = graph.clone();
             let node = moved.nodes.get_mut(&time).unwrap();

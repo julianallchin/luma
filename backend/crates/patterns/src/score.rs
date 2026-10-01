@@ -34,6 +34,11 @@ fn replace_blend() -> crate::BlendMode {
     crate::BlendMode::Replace
 }
 
+/// How far, in beats, one clip may run past the start of the next on its
+/// track and still count as ending where it starts. Stored beats do not come
+/// back bit for bit.
+const TOUCH: f64 = 1e-6;
+
 /// Canonical score document: clips keyed by their stable identity. Every clip
 /// owns one graph.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -93,6 +98,56 @@ impl Score {
         )
         .map_err(prefix)?;
         Ok(())
+    }
+    /// Make each z_index one track: no two clips at one z_index overlap in
+    /// time. Clips that only share a boundary do not overlap.
+    ///
+    /// Where clips at one z_index overlap, they move onto new z_index values
+    /// directly above it. At equal z_index the clip with the greater id paints
+    /// on top, so it gets the higher value, and playback stays the same. The
+    /// order of all z_index values stays; a value moves up only as far as it
+    /// must. Returns whether any clip changed.
+    pub fn separate_tracks(&mut self) -> bool {
+        // In id order. A clip's level in its z_index is one above the highest
+        // level of the clips with a smaller id that it overlaps.
+        let spans: Vec<(i64, f64, f64)> = self
+            .clips
+            .values()
+            .map(|clip| (clip.z_index, clip.start, clip.start + clip.duration))
+            .collect();
+        let mut levels = vec![0usize; spans.len()];
+        for (index, &(z, start, end)) in spans.iter().enumerate() {
+            levels[index] = spans[..index]
+                .iter()
+                .zip(&levels)
+                .filter(|((other, from, to), _)| {
+                    *other == z && start < to - TOUCH && *from < end - TOUCH
+                })
+                .map(|(_, level)| level + 1)
+                .max()
+                .unwrap_or(0);
+        }
+        let mut tracks: Vec<(i64, usize)> = spans
+            .iter()
+            .zip(&levels)
+            .map(|(span, level)| (span.0, *level))
+            .collect();
+        tracks.sort_unstable();
+        tracks.dedup();
+        let mut renumbered = BTreeMap::new();
+        let mut below: Option<i64> = None;
+        for track in tracks {
+            let z = below.map_or(track.0, |below| track.0.max(below + 1));
+            renumbered.insert(track, z);
+            below = Some(z);
+        }
+        let mut changed = false;
+        for ((clip, span), level) in self.clips.values_mut().zip(&spans).zip(&levels) {
+            let z = renumbered[&(span.0, *level)];
+            changed |= clip.z_index != z;
+            clip.z_index = z;
+        }
+        changed
     }
     pub fn to_json(&self, base: &Library) -> Result<String> {
         self.validate(base)?;
@@ -160,5 +215,79 @@ impl PreparedClip {
             return Ok(BTreeMap::new());
         }
         self.program.evaluate(beat)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn score(clips: &[(&str, f64, f64, i64)]) -> Score {
+        Score {
+            clips: clips
+                .iter()
+                .map(|&(id, start, end, z)| {
+                    let clip = Clip {
+                        name: id.into(),
+                        start,
+                        duration: end - start,
+                        seed: 0,
+                        selection_seed: None,
+                        selection: crate::Selection::all(),
+                        z_index: z,
+                        blend_mode: crate::BlendMode::Replace,
+                        graph: ClipGraph::default(),
+                    };
+                    (id.to_owned(), clip)
+                })
+                .collect(),
+        }
+    }
+
+    fn zs(score: &Score) -> Vec<(&str, i64)> {
+        score
+            .clips
+            .iter()
+            .map(|(id, clip)| (id.as_str(), clip.z_index))
+            .collect()
+    }
+
+    #[test]
+    fn separate_tracks_leaves_a_score_without_overlaps_alone() {
+        // The end comes back from storage a hair past the next start.
+        let mut separate = score(&[
+            ("a", 0., 2.000_000_000_001, 0),
+            ("b", 2., 4., 0),
+            ("c", 0., 4., 3),
+        ]);
+        let before = separate.clone();
+        assert!(!separate.separate_tracks());
+        assert_eq!(separate, before);
+    }
+
+    #[test]
+    fn the_clip_that_paints_on_top_gets_the_higher_track() {
+        // At one z the greater id paints on top.
+        let mut overlapping = score(&[
+            ("a", 0., 8., 0),
+            ("b", 2., 4., 0),
+            ("c", 4., 6., 0),
+            ("d", 0., 8., 1),
+            ("e", 0., 8., 5),
+        ]);
+        assert!(overlapping.separate_tracks());
+        assert_eq!(
+            zs(&overlapping),
+            vec![("a", 0), ("b", 1), ("c", 1), ("d", 2), ("e", 5)]
+        );
+        assert!(!overlapping.separate_tracks());
+    }
+
+    #[test]
+    fn a_smaller_id_on_top_of_the_time_stays_below() {
+        let mut overlapping = score(&[("a", 2., 4., 0), ("b", 0., 8., 0), ("c", 3., 5., 0)]);
+        overlapping.separate_tracks();
+        // b paints over a, and c over both.
+        assert_eq!(zs(&overlapping), vec![("a", 0), ("b", 1), ("c", 2)]);
     }
 }
