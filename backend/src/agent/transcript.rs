@@ -469,6 +469,12 @@ impl RequestUsage {
                         .and_then(Value::as_str)
                         .and_then(super::model::ModelId::parse)
                         .map(|model| u64::from(model.context_window()))
+                })
+                .or_else(|| {
+                    object
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .and_then(super::engine::known_window)
                 }),
             duration: object
                 .get("durationMs")
