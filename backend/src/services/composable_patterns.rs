@@ -117,7 +117,7 @@ pub(crate) async fn preview(
 }
 /// Resolve the authored head domain once, shared by saved-score playback and
 /// previews.
-pub(crate) async fn resolve_cells(
+pub async fn resolve_cells(
     access: &mut impl AuthorizedVenue,
     fixtures_root: &Path,
     targets: &[Selection],
