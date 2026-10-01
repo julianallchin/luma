@@ -254,6 +254,12 @@ impl Session {
                     let message = &frame["message"];
                     if let Some(model) = message["model"].as_str() {
                         self.model = Some(model.to_owned());
+                        // The CLI reports the window only in the turn's
+                        // closing `result`, after every step has been
+                        // recorded; until then each step uses the picker's.
+                        if self.context_window.is_none() {
+                            self.context_window = window(model).map(u64::from);
+                        }
                     }
                     if let Some(usage) = message.get("usage") {
                         self.last_usage = Some(usage_of(usage));
