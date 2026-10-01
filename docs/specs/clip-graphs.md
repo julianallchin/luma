@@ -35,7 +35,7 @@ Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
 | alpha | Opacity. `color`: light = color × brightness; then the clip's light blends with the light below by its blend mode, and the result mixes with the light below by alpha: `out = below + (blend(below, clip) − below) × alpha`. `strobe` the same on the shutter (shutter = rate). `aim` unchanged (alpha is the aim's weight). Alpha 0 shows the clip below, in every blend mode. The overlap ranking (5.3) still multiplies all factors, alpha included. The lighting tensor's channel 11 is the clip's alpha for color and strobe (the aim weight for aim); `FixtureOutput.alpha`. |
 | time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` turns, any (T, H). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase, `τ = (τ + phase) mod 1`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
 | shuffle | `shuffle(heads, time)`: `time` is a wire from a time node; with `every`, a new order per event; without, one order. |
-| space | `space(heads, direction, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0), same math: `x = (a − shift) / scale`, wrapped first when `wrap`. A `line` space whose direction is parallel to the normal of a mirror in its heads (the latest such mirror) measures from that mirror's plane: `a = (p − plane) · direction / R`, `R` the span's extent along the direction before any fold; 0 is on the plane. |
+| space | `space(heads, direction, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0), same math: `x = (a − shift) / scale`; with `wrap` it tiles, `x = fract((a − shift) / scale)` (changed 2026-09-30, decision 50). A `line` space whose direction is parallel to the normal of a mirror in its heads (the latest such mirror) measures from that mirror's plane: `a = (p − plane) · direction / R`, `R` the span's extent along the direction before any fold; 0 is on the plane. |
 | mirror | `mirror(heads, normal, at)`. `at` share (0–1, T): the plane sits at `at` along the normal across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. |
 | math | `math`: setting `op` = `*` \| `+` \| `-` \| `max` \| `min` (default `*`); input `values`: a list of numbers and value wires (curves or math). `*`, `+`, `max`, `min` take 2 or more items, `-` exactly 2 (`a − b`). Tensors broadcast: a number times a color is a color. The output is a value of the widest input kind (color > vector > number; color with vector is an error). A math result wires like a curve, into any value input or a curve's low or high. Its inputs carry at most one clock. |
 | lists | Gone from outputs. `brightness=[a, b]` is `brightness=a * b` (one math node). |
@@ -69,7 +69,12 @@ now shows the clip below, and the dry run counts those clips); a
 `mirror.offset` other than 0 is refused (none in the 2026-09-30 copy). A line space after a
 mirror along the same direction now measures from the plane: the converter
 halves its shift and scale (exact when a head sits on the plane, close
-otherwise; listed).
+otherwise; listed). A wrapped space now tiles (decision 50): one with a
+number scale other than 0 and 1 takes scale 1 and each curve over it reads
+its points at x × scale (cut at x 1 when the scale is above 1; a cut inside
+an eased segment is refused). Dry run on a copy, 2026-09-30: 103 clips have
+such a space (101 angle, 2 line; scales 0.15–1.124); all 103 play exactly
+as before, and all 103 fail without the rewrite.
 
 ---
 
@@ -269,8 +274,17 @@ The raw axis coordinate `a` of a head, within its span:
 The output is each head's field, the shader's `(p − offset) / scale`:
 
 ```
-x = (a − shift) / length          (wrap yes: (a − shift) mod 1, then / length)
+x = (a − shift) / length          (wrap yes: fract((a − shift) / length))
 ```
+
+Wrapped, the space tiles like a shader's texture coordinate: it is scaled
+first, then repeats, so the shape over 0–1 appears once every `length`
+(length 0.25 = four copies). The ring spacing above is applied to `a`
+before the shift and the scale. One pill per turn of the ring is a narrow
+curve with length 1. A curve over time on a wrapped length zooms: 0.5 →
+0.125 turns 2 copies into 8, and no head jumps, as long as the curve's
+values at x 0 and x 1 agree. A length of 0 is a jump at the shift, wrapped
+or not.
 
 With no shift and no length, `x = a`, 0–1. A space has no band: `x` runs
 past 0 and 1 and a curve holds its end values there, or the value a jump at
@@ -1129,7 +1143,8 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Diagonal slash | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.15, high=1); place = space(direction=(1, 0, 1), shift=move, length=0.15); line = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=line)` | Chase along a diagonal direction |
 | Slash | `k=clock(every=2); cut=curve(time(k, delay=curve(space(direction=(-0.82,0,0.57)), "Ramp up", low=0, high=0.2)), "Step up"); d=space(direction=(0.57,0,0.82)); v=[[0,1],[0.68,0],[1,0.47]]; bloom=curve(time(k, delay=curve(d, v, low=0, high=0.9), length=curve(d, v, low=0.05, high=0.4)), "Ramp up"); fade=curve(time(k), [[0,1,"hold"],[0.2,1,"sine-out"],[1,0]]); color(brightness=[cut, bloom, fade])` | not a shipped preset. cut × bloom × fade: a fast cut across one axis, a bloom out from a line with a fade-in that grows with distance, then a fade for all |
 | Ripple | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.4, high=1); radius = space(shift=move, length=0.4, kind="radial"); ring = curve(radius, "Soft"); color(brightness=ring)` | Chase over radius: rings go out from the centre |
-| Wrapping ripple | `k = clock(every=2); radius = space(kind="radial", wrap=True); lag = curve(radius, "Ramp down", low=-0.4, high=0.6); t = time(k, length=0.7143, phase=lag); ring = curve(t, [[0, 0], [0.6, 0, [0.4, 0, 0.6, 1]], [0.8, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=ring)` | rings come in again at the centre |
+| Wrapping ripple | `t = time(every=2); radius = space(shift=curve(t, "Ramp up", low=-0.4, high=1), kind="radial", wrap=True); ring = curve(radius, [[0, 0, [0.4, 0, 0.6, 1]], [0.2, 1, [0.4, 0, 0.6, 1]], [0.4, 0], [1, 0]]); color(brightness=ring)` | rings come in again at the centre; one ring per turn, its width 0.4 in the curve points (a wrapped scale tiles) |
+| Zoom out | `clip = time(); x = space(direction=(1, 0, 0), shift=curve(clip, [[0, 0, "ease-out"], [1, 1]]), scale=curve(clip, "Ramp up", low=0.5, high=0.125), wrap=True); color(brightness=curve(x, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))` | not a preset: a wrapped space tiles, so its scale 0.5 → 0.125 turns 2 soft pills into 8 with no head jump |
 | Spin | `k = clock(every=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.75, 0], [0.7625, 1], [1, 0]]); color(brightness=arm)` | angle wraps by default |
 | Grow | `clip = time(); radius = space(shift=curve(clip, "Ramp up"), kind="radial"); color(brightness=curve(radius, "Step down"))` | radius shifted by progress over the clip: heads turn on from the centre out |
 | Turning line | `k = clock(every=2, duration=4); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]); color(brightness=arm)` | duration = 2 × every: two opposite arms alive |
@@ -1344,3 +1359,4 @@ One line each; the alternative after "alt:".
 47. "VU meter" and "Bounce" are presets again (changed 2026-09-30): the VU meter shifts the space by the audio level under a step; Bounce shifts it by a there-and-back time curve. alt: leave them out.
 48. `space.shift` and `space.length` give `(a − shift) / length`, the shader's UV offset and scale; motion is either a per-head clock (`time`) or a shifted field (`space`), and nothing else (2026-09-30). Length divides so a moving width stays one curve. alt: a delay per head for every sweep, which needs inverted eases and curve chains.
 49. A node's id is its Python variable name (any ASCII Python name up to 32 characters, not a builder name or keyword); unnamed nodes are `<kind><n>`; the card shows the id as-is, or "Curve 2" for a numbered id; the UI renames by editing the card title and rewrites every wire (2026-09-30). alt: numbered ids only.
+50. A wrapped space tiles like a shader texture: `x = fract((a − shift) / scale)`, scale first, then repeat, so a curve over time on scale zooms (0.5 → 0.125: 2 copies → 8); the ring spacing applies to `a` first (changed 2026-09-30; before, `((a − shift) mod 1) / scale`, one copy). Migrated clips move the scale into their curve points. alt: keep one copy and zoom by curve points.

@@ -735,9 +735,17 @@ pub(crate) fn run(
             let dims = shape(&[a, shift, scale])?;
             let values = Array3::from_shape_fn(dims, |(n, t, e)| {
                 let d = a.at(n, t, e) - shift.at(n, t, e);
-                let d = if wrap { d.rem_euclid(1.) } else { d };
-                // A scale of 0 is a jump at the shift.
-                d / scale.at(n, t, e).max(1e-9)
+                let scale = scale.at(n, t, e);
+                // Wrapped, the space tiles as a shader's fract(p / scale):
+                // scale first, then repeat, so a copy every `scale`. A
+                // scale of 0 is a jump at the shift, wrapped or not.
+                if scale <= 1e-9 {
+                    (if wrap { d.rem_euclid(1.) } else { d }) / 1e-9
+                } else if wrap {
+                    (d / scale).rem_euclid(1.)
+                } else {
+                    d / scale
+                }
             });
             single("value", events(values, &batch)?)
         }

@@ -187,8 +187,9 @@ the spread: beats for delay, turns for phase.
 | scale | number | share | 0 or more (0 is a jump) | 1 |
 
 The place of each head `a`, 0–1 within the selection (within each span after
-a `split`), then `x = (a − shift) / scale`. With `wrap`, `a − shift` wraps to
-0–1 first. `shift` slides the place (the shader's UV offset): a curve over
+a `split`), then `x = (a − shift) / scale`. With `wrap`, x tiles as a
+shader's `fract`: `x = fract((a − shift) / scale)`, so the shape repeats
+every `scale` (scale 0.25 = four copies across the heads). `shift` slides the place (the shader's UV offset): a curve over
 time on shift moves the shape along the heads, with the ease of that time
 curve. `scale` is how much of the axis reads as 0–1; a curve over time on
 scale grows the shape (a bloom). There is no band: past 0 and 1 a curve holds its end values,
@@ -217,7 +218,10 @@ enters at one end and leaves at the other. To run the other way, use
 "Ramp down" on the move, or the reverse `direction`.
 
 A wrapped axis (`wrap=True`, and `angle`) is a ring: its ends do not meet,
-so a phase curve over it loops with no seam.
+so a phase curve over it loops with no seam. One pill per turn of the ring
+is a narrow curve with scale 1 (`[[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]`),
+not a smaller scale, which tiles. A curve over time on a wrapped scale
+zooms: `scale` 0.5 → 0.125 turns 2 copies into 8.
 
 **noise** `noise(heads=None, speed=None, scale=None, contrast=None)` → coordinate
 
