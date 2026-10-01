@@ -21,6 +21,11 @@ use crate::strobe::Slice;
 /// The frame interval a caller without a display assumes: 60 frames a second.
 pub const FRAME_S: f64 = 1.0 / 60.0;
 
+/// Moments in one frame's shutter with the footage look on, for a render that
+/// is not paced to a display: the show export and `luma-record`. Each is a
+/// whole render.
+pub const EXPORT_SUBFRAMES: u32 = 8;
+
 /// The moments of one frame that ends at `end` on the free-running clock,
 /// `interval` seconds after the frame before it. `subframes` is how many the
 /// renderer can afford when the footage look is on. `bass` is the playing
