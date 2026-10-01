@@ -80,6 +80,16 @@ fn play(graph: &ClipGraph, cells: &[Cell], beats: &[f64]) -> Array3<f64> {
 }
 
 fn run(graph: &ClipGraph, cells: &[Cell], beats: &[f64]) -> (Array3<f64>, Option<Array3<f64>>) {
+    run_for(graph, cells, beats, 16.)
+}
+
+/// [`run`] for a clip over beats 0 to `clip_duration`.
+fn run_for(
+    graph: &ClipGraph,
+    cells: &[Cell],
+    beats: &[f64],
+    clip_duration: f64,
+) -> (Array3<f64>, Option<Array3<f64>>) {
     let prepared = PreparedGraph::new(
         &standard_library(),
         graph,
@@ -88,7 +98,7 @@ fn run(graph: &ClipGraph, cells: &[Cell], beats: &[f64]) -> (Array3<f64>, Option
             cells,
             beat: 0.,
             clip_start: 0.,
-            clip_duration: 16.,
+            clip_duration,
             seed: 7,
         },
     )
@@ -1045,9 +1055,29 @@ fn dim(light: &Array3<f64>, n: usize, t: usize) -> f64 {
 }
 
 #[test]
-fn dissolve_keeps_each_light_on_until_its_own_delay() {
-    // Delays run 0–16 beats over a random order; a waiting light reads the
-    // curve's first value (on) until its clock starts.
+fn presets_over_the_clip_stretch_with_it() {
+    // Build, Dissolve and Grow run once over the clip from time(): on a
+    // 16-beat and a 32-beat clip they show the same picture at the same
+    // share of the clip.
+    let fractions: Vec<f64> = (0..=64).map(|i| i as f64 / 64.).collect();
+    for name in ["Build", "Dissolve", "Grow"] {
+        let cells = if name == "Grow" { grid() } else { bars() };
+        let at = |length: f64| {
+            let beats: Vec<f64> = fractions.iter().map(|f| f * length).collect();
+            run_for(&preset(name), &cells, &beats, length).0
+        };
+        let (short, long) = (at(16.), at(32.));
+        assert_eq!(short, long, "{name}");
+        // Half way, some heads are lit and some are not.
+        let half = lit(&short, 32).len();
+        assert!(half > 0 && half < cells.len(), "{name}: {half} lit at half");
+    }
+}
+
+#[test]
+fn dissolve_keeps_each_light_on_until_progress_passes_its_number() {
+    // Each light's number is its shuffled rank; it is on until the clip's
+    // progress passes that number, then off.
     let times: Vec<f64> = (0..64).map(|i| i as f64 * 0.25).collect();
     let cells = bars();
     let light = play(&preset("Dissolve"), &cells, &times);
