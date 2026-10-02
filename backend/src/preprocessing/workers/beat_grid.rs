@@ -20,7 +20,7 @@ impl Preprocessor for BeatGridPreprocessor {
         "beat_grid"
     }
     fn version(&self) -> u32 {
-        8
+        9
     }
     fn inputs(&self) -> &'static [Artifact] {
         &[Artifact::Audio]

@@ -7,12 +7,14 @@ Pipeline:
   2. Build a tempogram (windowed autocorrelation with a 120-BPM log-prior) and
      find anchor regions — long stretches with a confident, stable tempo.
      Octave-related anchors share one consensus BPM.
-  3. Merge anchors with the same tempo into sections. A single-tempo song is
-     one section that spans the whole track; only a real tempo change makes a
-     second section.
-  4. Fit each section as a fixed grid `t0 + n * period` against a fine onset
-     envelope (1.45 ms hops). beat_this runs at 20 ms frames, which is too
-     coarse to place a beat on its onset. No beat or bar moves on its own.
+  3. Fold each tempo into 90-180 BPM, the DJ convention, then merge anchors
+     with the same tempo into sections. A single-tempo song is one section
+     that spans the whole track; only a real tempo change makes a second
+     section.
+  4. Fit each section as a fixed grid `t0 + n * period`. beat_this places the
+     beats; a fine onset envelope (1.45 ms hops) then moves them at most a
+     quarter beat onto the exact hit. beat_this runs at 20 ms frames, which is
+     too coarse to place a beat on its onset. No beat or bar moves on its own.
   5. Pick the downbeat phase from the downbeat-probability curve.
 """
 
@@ -46,13 +48,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bpm-min",
         type=float,
-        default=70.0,
+        default=60.0,
         help="Lower BPM bound for the fixed-grid search.",
     )
     parser.add_argument(
         "--bpm-max",
         type=float,
-        default=170.0,
+        default=180.0,
         help="Upper BPM bound for the fixed-grid search.",
     )
     return parser.parse_args()
@@ -292,32 +294,6 @@ def _fit_anchor(beat_logits, db_logits, hop, anchor, target_bpm=None):
 
 
 
-def _is_octave_halved(downbeats_abs, db_probs, hop, tol_ms=60.0, ratio=0.65):
-    """Detect the 'we fit half the true tempo' case by checking downbeat-prob
-    at midpoints between detected downbeats.
-
-    If the real tempo is 2×, every midpoint is itself a real downbeat that
-    we missed — its db-prob will be comparable to the on-beat db-prob. If we
-    fit the correct tempo, midpoints land on snares (low db-prob).
-    """
-    if len(downbeats_abs) < 4:
-        return False
-    tol_frames = max(1, int(tol_ms / 1000 / hop))
-
-    def peak_at(t):
-        idx = int(round(t / hop))
-        lo = max(0, idx - tol_frames)
-        hi = min(len(db_probs), idx + tol_frames + 1)
-        return float(db_probs[lo:hi].max()) if hi > lo else 0.0
-
-    on_peaks = [peak_at(d) for d in downbeats_abs]
-    mids = [(downbeats_abs[i] + downbeats_abs[i + 1]) / 2 for i in range(len(downbeats_abs) - 1)]
-    mid_peaks = [peak_at(m) for m in mids]
-    on_med = float(np.median(on_peaks))
-    mid_med = float(np.median(mid_peaks))
-    return mid_med > ratio * on_med and on_med > 0.3
-
-
 def _consensus_bpms(anchors):
     """Cluster anchors by octave-equivalent BPM, return per-anchor target.
 
@@ -486,21 +462,6 @@ def _tempo_regions(beat_logits, downbeat_logits, hop_seconds, bpm_min, bpm_max):
         for idx in anchor_order
     }
 
-    # Global doubling vote, weighted by anchor duration. Short intros with a
-    # different rhythmic feel don't get to override a long main section.
-    yes_dur = no_dur = 0.0
-    for idx in anchor_order:
-        a = anchors[idx]
-        fit = fits[idx]
-        halved = (fit["bpm"] * 2 < 200.0) and _is_octave_halved(
-            fit["downbeats_abs"], db_probs, hop_seconds
-        )
-        if halved:
-            yes_dur += a["t_end"] - a["t_start"]
-        else:
-            no_dur += a["t_end"] - a["t_start"]
-    needs_doubling = yes_dur > no_dur
-
     regions = []
 
     def overlaps(t0, t1):
@@ -511,9 +472,6 @@ def _tempo_regions(beat_logits, downbeat_logits, hop_seconds, bpm_min, bpm_max):
         if overlaps(a["t_start"], a["t_end"]):
             continue
         fit = fits[idx]
-        if needs_doubling and fit["bpm"] * 2 < 200.0:
-            fit = _fit_anchor(beat_logits, downbeat_logits, hop_seconds, a,
-                              target_bpm=fit["bpm"] * 2)
         beats, _ = _extend_anchor(fit, db_probs, hop_seconds, duration)
         if not beats:
             continue
@@ -572,19 +530,20 @@ def onset_envelope(audio_path):
     )
 
 
-def _comb(strength, bpms, t_start, t_end, step_sec=0.001):
-    """(bpm, t0) whose grid t0 + k*period over [t_start, t_end) collects the
-    most onset strength."""
-    best = (-np.inf, float(bpms[0]), t_start)
+def _comb(strength, fps, bpms, t_start, t_end, center, reach, step_sec=0.001):
+    """(bpm, line) whose grid line + k*period over [t_start, t_end) collects
+    the most strength. The grid line is searched within `reach` of `center`."""
+    best = (-np.inf, float(bpms[0]), center)
     for bpm in bpms:
         period = 60.0 / bpm
-        k = np.arange(max(1, int((t_end - t_start) / period)))
-        phases = t_start + np.arange(0.0, period, step_sec)
-        idx = np.rint((phases[:, None] + k[None, :] * period) * ONSET_FPS).astype(int)
+        k = np.arange(int(np.ceil((t_start - center) / period)),
+                      int(np.ceil((t_end - center) / period)))
+        lines = center + np.arange(-reach, reach, step_sec)
+        idx = np.rint((lines[:, None] + k[None, :] * period) * fps).astype(int)
         score = strength[np.clip(idx, 0, len(strength) - 1)].sum(axis=1)
         j = int(np.argmax(score))
         if score[j] > best[0]:
-            best = (float(score[j]), float(bpm), float(phases[j]))
+            best = (float(score[j]), float(bpm), float(lines[j]))
     return best[1], best[2]
 
 
@@ -620,11 +579,19 @@ def _refine(envelope, period, t0, t_start, t_end):
     return float(period), float(t0)
 
 
-def fit_section(envelope, bpm_hint, t_start, t_end):
-    """Fixed (period, t0) for one tempo section."""
+def fit_section(envelope, beat_probs, hop_seconds, bpm_hint, t_start, t_end):
+    """Fixed (period, t0) for one tempo section. beat_this places the beats;
+    the onsets then move them at most a quarter beat, onto the exact hit.
+    Loud off-beat hats or bass cannot pull the grid off the beat."""
+    period = 60.0 / bpm_hint
+    _, line = _comb(beat_probs, 1.0 / hop_seconds, [bpm_hint], t_start, t_end,
+                    0.5 * (t_start + t_end), period / 2)
     strength = np.log1p(envelope / (np.median(envelope[envelope > 0]) + 1e-9))
-    bpm, t0 = _comb(strength, np.arange(bpm_hint - 0.6, bpm_hint + 0.6, 0.02), t_start, t_end)
-    bpm, t0 = _comb(strength, np.arange(bpm - 0.03, bpm + 0.03, 0.001), t_start, t_end)
+    reach = period / 4
+    bpm, _ = _comb(strength, ONSET_FPS, np.arange(bpm_hint - 0.6, bpm_hint + 0.6, 0.02),
+                   t_start, t_end, line, reach)
+    bpm, t0 = _comb(strength, ONSET_FPS, np.arange(bpm - 0.03, bpm + 0.03, 0.001),
+                    t_start, t_end, line, reach)
     return _refine(envelope, 60.0 / bpm, t0, t_start, t_end)
 
 
@@ -638,6 +605,18 @@ def _downbeat_index(beats, db_probs, hop_seconds, beats_per_bar):
     return int(np.argmax(scores))
 
 
+OCTAVE_LOW = 90.0
+
+
+def fold(bpm):
+    """Double or halve into [OCTAVE_LOW, 2 * OCTAVE_LOW), the DJ convention."""
+    while bpm < OCTAVE_LOW:
+        bpm *= 2.0
+    while bpm >= 2.0 * OCTAVE_LOW:
+        bpm /= 2.0
+    return bpm
+
+
 def fixed_grid(beat_logits, downbeat_logits, hop_seconds, envelope,
                bpm_min=70.0, bpm_max=170.0):
     """Top-level entry. Returns (bpm, downbeat_offset, beats_per_bar, beats,
@@ -649,12 +628,14 @@ def fixed_grid(beat_logits, downbeat_logits, hop_seconds, envelope,
             beat_logits, downbeat_logits, hop_seconds, bpm_min=bpm_min, bpm_max=bpm_max,
         )
         regions = [(0.0, duration, grid.bpm, grid.beats_per_bar)]
+    regions = [(s, e, fold(bpm), bpb) for s, e, bpm, bpb in regions]
     db_probs = _sigmoid_array(downbeat_logits)
+    beat_probs = _sigmoid_array(beat_logits)
 
     all_beats, all_downbeats = [], []
     primary = (0.0, 0.0, 4)  # (length, bpm, beats_per_bar)
     for t_start, t_end, bpm_hint, bpb in _sections(regions, duration):
-        period, t0 = fit_section(envelope, bpm_hint, t_start, t_end)
+        period, t0 = fit_section(envelope, beat_probs, hop_seconds, bpm_hint, t_start, t_end)
         n = np.arange(int(np.ceil((t_start - t0) / period)),
                       int(np.ceil((t_end - t0) / period)))
         beats = t0 + n * period
