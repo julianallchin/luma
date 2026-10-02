@@ -22,7 +22,7 @@ use luma_ui::text_input::{self, TextInput, DRAFT_CONTEXT};
 
 use luma_lib::models::folders::Folder;
 
-use super::{slot, Tracks, GAP, ROW_HEIGHT};
+use super::{slot, Tracks};
 use crate::agent::TabStatus;
 use crate::library::LibraryError;
 use crate::tabs::Target;
@@ -365,22 +365,9 @@ pub(super) fn folder_row(
     let (toggle_id, menu_id) = (folder.id.clone(), folder.id.clone());
     let label = format!("Folder {}", folder.name);
     slot(
-        div()
-            .id(key.clone())
+        float::nav_row(RowState::Rest, key.clone())
+            .id(key)
             .w_full()
-            .h(px(ROW_HEIGHT))
-            .flex()
-            .items_center()
-            .gap(px(GAP))
-            .px(px(float::ROW_INSET))
-            .rounded(px(luma_ui::radius::ROW))
-            .cursor_pointer()
-            .bg(luma_ui::motion::hover_blend(
-                &key,
-                glass::wash(0.),
-                glass::glass_hover(),
-            ))
-            .on_hover(luma_ui::motion::hover_listener(key.clone()))
             .on_click(move |_, _, cx| {
                 toggled.update(cx, |this, cx| this.toggle_folder(&toggle_id, cx));
             })
@@ -407,7 +394,6 @@ pub(super) fn folder_row(
                     .flex_1()
                     .min_w(px(0.))
                     .truncate()
-                    .text_size(px(12.))
                     .text_color(glass::ink(0.85))
                     .child(folder.name.clone())
                     .into_any_element(),
@@ -448,7 +434,7 @@ fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
 pub(super) fn new_folder_row(app: &Entity<Luma>) -> AnyElement {
     let app = app.clone();
     slot(
-        float::menu_row(RowState::Rest, "new-folder")
+        float::nav_row(RowState::Rest, "new-folder")
             .id("new-folder")
             .w_full()
             .on_click(move |_, window, cx| {
@@ -459,13 +445,7 @@ pub(super) fn new_folder_row(app: &Entity<Luma>) -> AnyElement {
                     .size(px(11.))
                     .text_color(glass::ink(0.55)),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(12.))
-                    .text_color(glass::ink(0.7))
-                    .child(NEW_FOLDER),
-            )
+            .child(div().flex_1().text_color(glass::ink(0.7)).child(NEW_FOLDER))
             .agent_node(Role::Button, NEW_FOLDER),
     )
     .into_any_element()

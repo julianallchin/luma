@@ -83,6 +83,10 @@ test("the sidebar pushes to a track's scores and pops back", { timeoutMs: 180000
 
   app.click(scoreRows().find((n) => n.label.startsWith("#2 ")));
   until("the timeline on #2", (s) => s.findAll({ role: "text" }).some((n) => n.label === "Score #2"), { timeoutMs: 15000 });
+  // The sidebar goes one double-click interval after the click; bring it back.
+  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined, { timeoutMs: 15000 });
+  app.action("luma::ToggleSidebar");
+  until("the sidebar back", (s) => s.find({ role: "card", label: "Sidebar" })?.bounds.width >= 255.5, { timeoutMs: 15000 });
   app.frames(6, { waitMs: 16 });
   const scoresBounds = sidebar().bounds;
   const scores = app.screenshot({ node: sidebar() });

@@ -122,9 +122,10 @@ impl Ownership {
     }
 }
 
-/// One line of the list. Every kind is [`ROW_HEIGHT`] tall: the list is a
-/// `uniform_list`, which sizes every item like its first.
-#[derive(Clone, Copy)]
+/// One line of the list. A song is two lines of text, [`ROW_HEIGHT`] tall;
+/// every other kind is one. The list measures each row as it draws it, so a
+/// row's height is written only on the row.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Entry {
     /// A folder; `folder` indexes [`Tracks::folders`], and `songs` is how
     /// many of its songs the filters admit.
@@ -200,16 +201,13 @@ pub struct Tracks {
     /// Which level the column is on, and the change taking it there.
     pub(crate) level: Level,
     push: Option<Push>,
-    /// The row list's scroll offset, which the shared element's start position
-    /// is measured against — a row's `y` is its index times [`ROW_HEIGHT`]
-    /// plus this.
-    list_scroll: UniformListScrollHandle,
-    /// The pushing region's box and the list viewport's, as they painted last.
-    /// A click carries a window position but not the boxes it landed in, so
-    /// the two that the flight's arithmetic needs are probed — see
-    /// [`luma_ui::arg::bounds_probe`].
+    /// The row list's measured heights and scroll position, one item per
+    /// entry. The shared element's start position is read back out of it.
+    list: ListState,
+    /// The pushing region's box, as it painted last. A row's box is in window
+    /// space, and the flight is drawn in the region's, so the region is probed
+    /// — see [`luma_ui::arg::bounds_probe`].
     region: Rc<Cell<Option<Bounds<Pixels>>>>,
-    list_box: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 impl Tracks {
@@ -314,6 +312,24 @@ impl Tracks {
                 .into_iter()
                 .map(|row| Entry::Song { row, folder: None }),
         );
+        self.set_entries(entries);
+    }
+
+    /// Adopt `entries`, telling the list only which run of rows changed: the
+    /// rows around it keep their measured heights, and a folder opening keeps
+    /// the scroll where it was.
+    fn set_entries(&mut self, entries: Vec<Entry>) {
+        let old = &self.entries;
+        let same = |(a, b): &(&Entry, &Entry)| a == b;
+        let head = old.iter().zip(&entries).take_while(same).count();
+        let tail = old[head..]
+            .iter()
+            .rev()
+            .zip(entries[head..].iter().rev())
+            .take_while(same)
+            .count();
+        self.list
+            .splice(head..old.len() - tail, entries.len() - head - tail);
         self.entries = entries.into();
     }
 
@@ -360,7 +376,7 @@ impl Tracks {
             return;
         }
         let row_top = self.push.as_ref().map_or_else(
-            || self.row_top(self.flying_index().unwrap_or(0)),
+            || self.flying_index().map_or(0., |index| self.row_top(index)),
             |push| push.row_top,
         );
         self.push = Some(Push {
@@ -404,13 +420,14 @@ impl Tracks {
 
     /// Where the flying row's list position is, in pixels from the top of the
     /// pushing region. `index` is a position in [`Self::entries`], which is
-    /// what the list draws.
+    /// what the list draws. A row the list has not laid out — scrolled above
+    /// the viewport, or new since — flies from the region's top.
     fn row_top(&self, index: usize) -> f32 {
-        let (Some(region), Some(list)) = (self.region.get(), self.list_box.get()) else {
+        let (Some(region), Some(row)) = (self.region.get(), self.list.bounds_for_item(index))
+        else {
             return 0.;
         };
-        let offset = f32::from(self.list_scroll.0.borrow().base_handle.offset().y);
-        f32::from(list.origin.y - region.origin.y) + index as f32 * ROW_HEIGHT + offset
+        f32::from(row.origin.y - region.origin.y)
     }
 
     /// The scores level's track, as an index into the entries currently
@@ -498,9 +515,8 @@ impl Luma {
             search_focus,
             level: Level::Tracks,
             push: None,
-            list_scroll: UniformListScrollHandle::new(),
+            list: ListState::new(0, ListAlignment::Top, px(0.)),
             region: Rc::new(Cell::new(None)),
-            list_box: Rc::new(Cell::new(None)),
         });
         // The arriving venue's set goes on screen now, so a tab opened before
         // the next draw opens into it.
@@ -618,7 +634,7 @@ impl Luma {
     }
 
     /// Mirror an edit of the sidebar filter. Filtering is immediate, with no
-    /// debounce: the work is one pass over a `Vec` and a `uniform_list` that
+    /// debounce: the work is one pass over a `Vec` and a virtualized list that
     /// redraws a screenful either way.
     fn track_search_changed(&mut self, query: String, cx: &mut Context<Self>) {
         self.with_tracks(cx, |state| {
@@ -1232,14 +1248,12 @@ fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
         }))
 }
 
-/// The scrolling rows. `uniform_list` virtualizes them, so a library of
-/// thousands costs one screenful of elements. Everything the closure needs is refcounted, so a redraw
-/// copies two pointers rather than the library.
+/// The scrolling rows. `list` virtualizes them, so a library of thousands
+/// costs one screenful of elements, and measures each as it draws it, so a
+/// song and a folder can be different heights. Everything the closure needs is
+/// refcounted, so a redraw copies pointers rather than the library.
 ///
-/// The viewport's box is probed rather than derived from the chrome above it:
-/// the push measures a row's `y` against it, and a constant restating the
-/// head's and the filters' heights is a constant that drifts the first time
-/// either is retuned.
+/// Set off from the venue row by the gap the header's rows keep.
 fn body(
     state: &Tracks,
     statuses: &HashMap<Target, TabStatus>,
@@ -1263,56 +1277,50 @@ fn body(
     } else {
         "No matching tracks"
     };
-    div()
-        .flex_1()
-        .min_h(px(0.))
-        .relative()
-        .overflow_hidden()
-        .child(luma_ui::arg::bounds_into(&state.list_box))
-        .child(
-            uniform_list("tracks", entries.len(), move |range, _, _| {
-                range
-                    .map(|index| match entries[index] {
-                        Entry::Folder {
-                            folder,
-                            songs,
-                            open,
-                        } => {
-                            let folder_row = &folders[folder];
-                            let field = renaming
-                                .as_ref()
-                                .filter(|(id, _)| *id == folder_row.id)
-                                .map(|(_, field)| field);
-                            folders::folder_row(folder_row, songs, open, dots[folder], field, &app)
-                        }
-                        Entry::NewFolder => folders::new_folder_row(&app),
-                        Entry::AllSongs { songs } => all_songs(songs),
-                        Entry::NoSongs => slot(
-                            div()
-                                .px(px(float::ROW_INSET))
-                                .text_size(px(12.))
-                                .text_color(ladder::muted_foreground())
-                                .child(no_songs)
-                                .agent_node(Role::Text, no_songs),
-                        )
-                        .into_any_element(),
-                        Entry::Song { row, folder } => {
-                            let track = &rows[row];
-                            track_row(
-                                track,
-                                index,
-                                folder.map(|folder| folders[folder].id.as_str()),
-                                selected.as_deref() == Some(track.id.as_str()),
-                                flying == Some(index),
-                                &app,
-                            )
-                        }
-                    })
-                    .collect()
-            })
-            .track_scroll(&state.list_scroll)
-            .size_full(),
-        )
+    div().flex_1().min_h(px(0.)).pt(px(HEADER_GAP)).child(
+        list(state.list.clone(), move |index, _, _| {
+            match entries[index] {
+                Entry::Folder {
+                    folder,
+                    songs,
+                    open,
+                } => {
+                    let folder_row = &folders[folder];
+                    let field = renaming
+                        .as_ref()
+                        .filter(|(id, _)| *id == folder_row.id)
+                        .map(|(_, field)| field);
+                    folders::folder_row(folder_row, songs, open, dots[folder], field, &app)
+                }
+                Entry::NewFolder => folders::new_folder_row(&app),
+                Entry::AllSongs { songs } => all_songs(songs),
+                Entry::NoSongs => slot(
+                    div()
+                        .h(px(float::NAV_ROW_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .px(px(float::ROW_INSET))
+                        .text_size(px(12.))
+                        .text_color(ladder::muted_foreground())
+                        .child(no_songs)
+                        .agent_node(Role::Text, no_songs),
+                )
+                .into_any_element(),
+                Entry::Song { row, folder } => {
+                    let track = &rows[row];
+                    track_row(
+                        track,
+                        index,
+                        folder.map(|folder| folders[folder].id.as_str()),
+                        selected.as_deref() == Some(track.id.as_str()),
+                        flying == Some(index),
+                        &app,
+                    )
+                }
+            }
+        })
+        .size_full(),
+    )
 }
 
 /// One track as the column draws it wherever it appears: in the list, at the
@@ -1361,10 +1369,9 @@ fn track_face(track: &TrackBrowserRow, lit: bool) -> Div {
                 .flex_col()
                 .gap(px(2.))
                 // Both lines truncate rather than wrap. The row's height is
-                // declared, not measured — `uniform_list` gives every row
-                // exactly [`ROW_HEIGHT`] — so a title allowed to take a second
-                // line does not make its row taller, it pushes the artist line
-                // out of the bottom of it.
+                // declared — every song is exactly [`ROW_HEIGHT`] — so a title
+                // allowed to take a second line does not make its row taller,
+                // it pushes the artist line out of the bottom of it.
                 .child(
                     div()
                         .truncate()
@@ -1484,15 +1491,10 @@ fn track_row(
 /// How far a folder's songs sit in from the folder.
 const FOLDER_INDENT: f32 = 14.;
 
-/// One line of the list: [`ROW_HEIGHT`] tall, inset by the sidebar's gutter.
+/// One line of the list, inset by the sidebar's gutter. As tall as what it
+/// holds.
 fn slot(content: impl IntoElement) -> Div {
-    div()
-        .w_full()
-        .h(px(ROW_HEIGHT))
-        .flex()
-        .items_center()
-        .px(px(PAD_X))
-        .child(content)
+    div().w_full().flex().px(px(PAD_X)).child(content)
 }
 
 /// The heading over every song, with how many the filters admit, over a
@@ -1514,8 +1516,7 @@ fn all_songs(songs: usize) -> AnyElement {
             )
             .child(float::divider()),
     )
-    .items_end()
-    .pb(px(6.))
+    .py(px(HEADER_GAP))
     .into_any_element()
 }
 
