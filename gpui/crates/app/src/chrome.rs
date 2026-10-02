@@ -58,7 +58,7 @@ use gpui::*;
 use gpui_component::Icon;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
-use luma_ui::{float, glass, motion, radius};
+use luma_ui::{glass, motion, radius};
 
 use crate::tab_chrome::{PointerRegion, TabDescriptor, CHIP_GAP};
 use crate::tabs::Target;
@@ -496,22 +496,12 @@ pub(crate) fn tab_strip(
     rail = rail.child(controls);
 
     let mut strip = strip.child(rail);
-    // The combo box hangs off the strip through the house floating layer:
-    // `deferred(…).priority(1)` lifts it above everything painted in normal
-    // order — the window controls included — and `anchored` owns the
-    // off-screen fitting. An overlay up means the combo box yields.
-    if let Some(new_tab) = app.new_tab.as_ref().filter(|_| show_plus) {
-        if app.overlay.get().is_none() {
-            let dismiss = entity.clone();
-            strip = strip.child(float::anchored_at(
-                "new-tab-combo",
-                point(px(window_x + frame.controls_x), px(HEIGHT - 3.0)),
-                float::Dismiss::on_press_out(move |window, cx| {
-                    dismiss.update(cx, |this, cx| this.close_new_tab(window, cx));
-                }),
-                new_tab.combo().into_any_element(),
-            ));
-        }
+    // The combo box hangs off the strip through the house floating layer,
+    // above everything painted in normal order — the window controls
+    // included. An overlay up means the combo box yields.
+    if show_plus && app.overlay.get().is_none() {
+        let at = point(px(window_x + frame.controls_x), px(HEIGHT - 3.0));
+        strip = strip.children(app.new_tab_popover(at, window, cx));
     }
     strip.agent_node(Role::Card, "Tab strip")
 }

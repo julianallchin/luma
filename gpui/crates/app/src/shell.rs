@@ -328,8 +328,8 @@ impl Luma {
         }
         if self.overlay.as_open().is_none() {
             if let Some(visualizer) = self.visualizer_mut() {
-                if visualizer.settings_open {
-                    visualizer.settings_open = false;
+                if visualizer.settings.is_open() {
+                    visualizer.settings.close();
                     cx.notify();
                     return;
                 }

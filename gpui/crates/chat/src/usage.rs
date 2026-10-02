@@ -29,8 +29,8 @@
 
 use gpui::{div, prelude::*, px, Entity, Hsla, PathBuilder, Pixels, Point, SharedString, Window};
 use luma_lib::agent::RequestUsage;
-use luma_ui::arg::select::MenuVisibility;
 use luma_ui::float;
+use luma_ui::float::MenuVisibility;
 use luma_ui::node::{Instrument as _, Role as NodeRole};
 
 use crate::theme::{self, Theme};

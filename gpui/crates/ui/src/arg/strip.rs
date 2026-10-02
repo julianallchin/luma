@@ -22,7 +22,7 @@ use super::color::{ColorArg, ColorArgEditor, ColorArgEvent, ColorOpacity};
 use super::gradient::{gradient_fill, Gradient, GradientStop, Light};
 use super::number::{format_value, DraftedNumber, NumberEvent};
 use super::preset_picker::{luma_preset_picker, Thumb};
-use super::select::MenuVisibility;
+use crate::float::MenuVisibility;
 use crate::{
     ladder,
     node::{Instrument, Role},

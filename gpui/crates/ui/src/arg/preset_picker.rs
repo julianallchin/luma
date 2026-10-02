@@ -14,8 +14,8 @@ use gpui_component::tooltip::Tooltip;
 use luma_patterns::Envelope;
 
 use super::gradient::{gradient_fill, Gradient};
-use super::select::MenuVisibility;
 use super::strip::paint_envelope;
+use crate::float::MenuVisibility;
 use crate::node::{Instrument, Role};
 use crate::{float, glass, ladder, select, CONTROL_HEIGHT};
 
@@ -111,7 +111,6 @@ pub fn luma_preset_picker(
     on_pick: impl Fn(Option<usize>, &mut Window, &mut App) + Clone + 'static,
 ) -> Div {
     let visibility = visibility.into();
-    let open = visibility.is_open();
     let closing = visibility.exit();
     let id = id.into();
     let shown = label(options, current);
@@ -142,7 +141,7 @@ pub fn luma_preset_picker(
         .relative()
         .flex()
         .child(trigger)
-        .when(open || closing.is_some_and(|t| t < 1.0), |el| {
+        .when(visibility.is_shown(), |el| {
             let tile = |pick: Option<usize>, name: SharedString, picture: &Thumb| {
                 let on_pick = on_pick.clone();
                 let tip = name.clone();
@@ -180,11 +179,7 @@ pub fn luma_preset_picker(
                     )
                     .id(ElementId::Name(format!("{id}:{key}").into()))
                     .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                    .on_click(move |_, window, cx| {
-                        if open {
-                            on_pick(pick, window, cx);
-                        }
-                    })
+                    .on_click(move |_, window, cx| on_pick(pick, window, cx))
                     .agent_node(Role::Button, name.to_string())
             };
             let mut tiles: Vec<_> = options

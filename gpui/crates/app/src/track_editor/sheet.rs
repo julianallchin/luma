@@ -12,7 +12,8 @@ use luma_ui::arg::color::{ColorArg, ColorArgEditor, ColorArgEvent};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
 use luma_ui::arg::gradient::{Gradient, GradientStop, Light};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
-use luma_ui::arg::select::{luma_arg_select, MenuVisibility};
+use luma_ui::arg::select::luma_arg_select;
+use luma_ui::float::MenuVisibility;
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::CONTROL_HEIGHT;
 

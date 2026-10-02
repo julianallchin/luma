@@ -146,7 +146,7 @@ pub struct Editor {
     beats: Option<Rc<BeatGrid>>,
     beat_verdict: BeatValidationVerdict,
     beat_reason: Option<BeatValidationReason>,
-    beat_reason_menu: luma_ui::arg::select::MenuVisibility,
+    beat_reason_menu: luma_ui::float::MenuVisibility,
     beat_validation_pending: bool,
     beat_validation_error: Option<String>,
     /// The **working copy**: every clip as the screen currently has it, with

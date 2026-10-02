@@ -194,7 +194,7 @@ pub(crate) struct AddTracks {
     source_scroll: UniformListScrollHandle,
     /// The import-source menu hanging off the header chip. A [`Popup`] so it
     /// leaves the same way a dialog does, rather than blinking out.
-    source_menu: luma_ui::dialog::Popup<()>,
+    source_menu: float::MenuVisibility,
     /// Kept so the field subscriptions die with the dialog rather than firing
     /// into an overlay that has closed.
     _filter_subscriptions: [Subscription; 2],
@@ -260,7 +260,7 @@ impl AddTracks {
             source_active: 0,
             browser_scroll: UniformListScrollHandle::new(),
             source_scroll: UniformListScrollHandle::new(),
-            source_menu: luma_ui::dialog::Popup::default(),
+            source_menu: float::MenuVisibility::Closed,
             _filter_subscriptions: subscriptions,
         }
     }
@@ -507,11 +507,7 @@ impl Luma {
         let Some(crate::shell::Overlay::AddTracks(state)) = self.overlay.open_mut() else {
             return;
         };
-        if state.source_menu.is_open() {
-            state.source_menu.begin_close(cx);
-        } else {
-            state.source_menu.open(());
-        }
+        state.source_menu.toggle();
         cx.notify();
     }
 
@@ -520,7 +516,7 @@ impl Luma {
     /// list to show first.
     fn choose_import_source(&mut self, choice: ImportChoice, cx: &mut Context<Self>) {
         if let Some(crate::shell::Overlay::AddTracks(state)) = self.overlay.open_mut() {
-            state.source_menu.begin_close(cx);
+            state.source_menu.close();
         }
         match choice {
             ImportChoice::EngineDj => self.choose_source(true, cx),
@@ -981,9 +977,10 @@ pub(crate) fn tick(
     if state.morph.tick(now, luma_ui::motion::reduced_motion(cx)) {
         window.request_animation_frame();
     }
-    // The source menu leaves the same way the dialog does, and is reaped from
-    // the same frame — see `Popup::tick_close`.
-    if state.source_menu.tick_close() {
+    if state
+        .source_menu
+        .tick_close(luma_ui::motion::reduced_motion(cx))
+    {
         window.request_animation_frame();
     }
     // Route controls are deliberately absent from paint-only morph copies.
@@ -1264,8 +1261,9 @@ const SUBMIT_CHIP_HEIGHT: f32 = float::KEY_CAP_HEIGHT;
 /// An actions menu, not a value picker: each row goes somewhere. It lives as a
 /// child of the trigger so `anchored_below` can find the edge to hang from.
 fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
-    state.source_menu.get()?;
-    let closing = state.source_menu.closing_since();
+    if !state.source_menu.is_shown() {
+        return None;
+    }
     let dismiss = app.clone();
     let mut card = float::popover_card().w(px(248.0));
     for choice in ImportChoice::ALL {
@@ -1273,10 +1271,8 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
         card = card.child(
             float::menu_row(RowState::Rest, choice.id())
                 .id(choice.id())
-                .when(closing.is_none(), |row| {
-                    row.on_click(move |_, _, cx| {
-                        pick.update(cx, |this, cx| this.choose_import_source(choice, cx))
-                    })
+                .on_click(move |_, _, cx| {
+                    pick.update(cx, |this, cx| this.choose_import_source(choice, cx))
                 })
                 .child(
                     div()
@@ -1297,12 +1293,12 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
                 .agent_node(Role::Row, choice.label()),
         );
     }
-    Some(match closing {
-        Some(since) => float::anchored_below_closing(
+    Some(match state.source_menu.exit() {
+        Some(progress) => float::anchored_below_closing(
             "add-tracks-source-menu",
             SUBMIT_CHIP_HEIGHT,
             card.into_any_element(),
-            luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since),
+            progress,
         ),
         None => float::anchored_below(
             "add-tracks-source-menu",

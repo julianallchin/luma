@@ -3,10 +3,9 @@ use super::*;
 use luma_ui::node::AgentNode as _;
 use luma_ui::{float, glass};
 
-/// Persistent clocks survive render calls and retain the popover for its exit.
+/// Persistent clocks survive render calls.
 #[derive(Default)]
 pub(super) struct DockMotion {
-    popup: Transition,
     tooltip: Transition,
     pub(super) switches: [Transition; 8],
     knob_hovered: bool,
@@ -21,7 +20,6 @@ impl DockMotion {
             ..Transition::default()
         };
         Self {
-            popup: transition(),
             tooltip: transition(),
             switches: std::array::from_fn(|_| transition()),
             knob_hovered: false,
@@ -86,13 +84,6 @@ impl Transition {
 pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
     let toggle = app.clone();
     let close = app.clone();
-    let camera_bounds = Rc::new(std::cell::Cell::new(gpui::Bounds::default()));
-    let measured_camera = camera_bounds.clone();
-    let openness = state
-        .settings_motion
-        .borrow_mut()
-        .popup
-        .sample(state.settings_open);
     let mut content = float::popover_card()
         .w(px(268.))
         .p(px(14.))
@@ -104,80 +95,66 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
     if let Some(error) = &state.view_setting_error {
         content = content.child(float::error_row(error.clone()));
     }
-    let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, state.settings_open)
+    let open = state.settings.is_open();
+    let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, open)
         .id("visualizer-settings")
-        .relative()
-        // The open wash follows the popup's own motion.
-        .bg(glass::wash(glass::WASH_REST * openness))
-        .child(
-            canvas(
-                move |bounds, _, _| measured_camera.set(bounds),
-                |_, (), _, _| {},
-            )
-            .absolute()
-            .inset_0(),
-        )
         .on_click(move |_, _, cx| {
             toggle.update(cx, |this, cx| {
                 if let Some(state) = this.visualizer_mut() {
-                    state.settings_open = !state.settings_open;
+                    state.settings.toggle();
                 }
                 cx.notify();
             });
         })
         .agent_node(Role::Toggle, "Render settings")
-        .agent_focused(state.settings_open);
+        .agent_focused(open);
+    let dock = float::popover_card()
+        .w(px(DOCK_WIDTH))
+        .p(px(6.))
+        .items_center()
+        .gap(px(10.))
+        .occlude()
+        .child(camera)
+        .child(light_slider(state, app));
+    let content = content
+        .agent_node(Role::Card, "Render settings")
+        .into_any_element();
     div()
         .absolute()
         .right(px(16.))
         .bottom(TOOLBAR_OVERLAY_BOTTOM)
-        .child(float::frosted_card(
-            float::popover_card()
-                .w(px(40.))
-                .p(px(6.))
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(10.))
-                .occlude()
-                .child(camera)
-                .child(light_slider(state, app)),
-        ))
-        .when(state.settings_open || openness > 0., |d| {
-            let card = content
-                .id("view-settings-card")
-                .occlude()
-                .on_mouse_down_out(move |event, _, cx| {
-                    if camera_bounds.get().contains(&event.position) {
-                        return;
-                    }
-                    close.update(cx, |this, cx| {
-                        if let Some(state) = this.visualizer_mut() {
-                            state.settings_open = false;
-                        }
-                        cx.notify();
-                    });
-                })
-                .agent_node(Role::Card, "Render settings");
-            let animated = div()
-                .pr(px(8.))
-                .relative()
-                .left(px(4. * (1. - openness)))
-                .opacity(openness)
-                .child(float::frosted_card(card));
-            d.child(
-                div().absolute().left_0().bottom_0().size_0().child(
-                    gpui::deferred(
-                        gpui::anchored()
-                            .anchor(gpui::Anchor::BottomRight)
-                            .child(animated),
-                    )
-                    .priority(1),
+        .child(float::frosted_card(dock))
+        .when(state.settings.is_shown(), |d| {
+            d.child(match state.settings.exit() {
+                Some(progress) => float::anchored_left_closing(
+                    "view-settings-card",
+                    DOCK_WIDTH,
+                    content,
+                    progress,
                 ),
-            )
+                // A press on the camera lands outside the card, so the
+                // dismissal takes it and the toggle never runs: one press,
+                // closed.
+                None => float::anchored_left(
+                    "view-settings-card",
+                    DOCK_WIDTH,
+                    float::Dismiss::on_press_out(move |_, cx| {
+                        close.update(cx, |this, cx| {
+                            if let Some(state) = this.visualizer_mut() {
+                                state.settings.close();
+                            }
+                            cx.notify();
+                        });
+                    }),
+                    content,
+                ),
+            })
         })
         .into_any_element()
 }
+
+/// The dock's width, which the settings card hangs to the left of.
+const DOCK_WIDTH: f32 = 40.;
 
 /// How wide the environment panel beside the stage is. The shell sizes the
 /// panel's cached region with it, since a cached region is not measured.
