@@ -62,13 +62,13 @@ pub fn build_bar_boundaries(
 /// compounds bar by bar.
 ///
 /// Detection is cheap because each worker persists its first bar's
-/// `start`/`end`: compare that span against `60/bpm * beats_per_bar` of the
+/// start and end: compare that span against `60/bpm * beats_per_bar` of the
 /// *current* `track_beats` row and re-queue on disagreement. The worker's
 /// normal run-and-upsert path then overwrites the stale row.
 ///
 /// `first_bar_start` / `first_bar_end` are SQLite JSON paths into `json_column`
-/// (e.g. `$[0].start`, `$.bars[0].start`), which keeps the parse out of Rust so
-/// the bulk reconcile query stays a single round-trip.
+/// (e.g. `$.first_bar[0]`, `$.bars[0].start`), which keeps the parse out of
+/// Rust so the bulk reconcile query stays a single round-trip.
 pub async fn list_pending_bar_aligned(
     pool: &SqlitePool,
     preprocessor: &str,

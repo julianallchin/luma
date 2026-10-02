@@ -20,15 +20,12 @@ use crate::agent_execution::artifacts::{
 };
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::{AxisSpec, Provenance, TensorRef};
-use crate::classifier_worker::BarClassification;
+use crate::classifier_worker::StoredBarClassifications;
 use crate::database::local;
+use crate::preprocessing::workers::build_bar_boundaries;
 
 /// Drum-onset classes the n2n worker emits.
 pub const DRUM_CLASSES: [&str; 4] = ["kick", "snare", "hat", "cymbal"];
-
-/// The one continuous regression head hiding among the classifier's sigmoid
-/// tags. It must be split out: averaging it with probabilities is nonsense.
-const INTENSITY_KEY: &str = "intensity";
 
 /// MERT-95M layer 7 runs at 75 frames per second.
 const MERT_FRAME_RATE_HZ: f64 = 75.0;
@@ -226,7 +223,7 @@ async fn bars(
         let reason = missing_reason(ctx.pool, track_id, "classifier", "bar classification").await;
         return unavailable(b, "features.bars", reason);
     };
-    let parsed: Vec<BarClassification> = match serde_json::from_str(&classifications_json) {
+    let parsed: StoredBarClassifications = match serde_json::from_str(&classifications_json) {
         Ok(v) => v,
         Err(e) => {
             return unavailable(
@@ -238,19 +235,33 @@ async fn bars(
     };
     let tags: Vec<String> = serde_json::from_str(&tag_order_json).unwrap_or_default();
 
-    let n_bars = parsed.len();
+    // Bar i is bar i of the beat grid, which is where its start and end live.
+    let bounds = match local::tracks::get_track_beats_raw(ctx.pool, track_id).await? {
+        Some(beats) => {
+            let downbeats: Vec<f64> =
+                serde_json::from_str(&beats.downbeats_json).unwrap_or_default();
+            build_bar_boundaries(&downbeats, beats.bpm, beats.beats_per_bar)
+        }
+        None => Vec::new(),
+    };
+    let n_bars = parsed.scores.len();
+    if bounds.len() < n_bars {
+        return unavailable(
+            b,
+            "features.bars",
+            "the bar classifications cover more bars than the current beat grid has",
+        );
+    }
+    let bounds = &bounds[..n_bars];
+
     // The UI numbers bars from 1; so does every bar the agent sees.
-    let numbers: Vec<i64> = parsed.iter().map(|bar| bar.bar_idx as i64 + 1).collect();
-    let starts: Vec<f64> = parsed.iter().map(|bar| bar.start).collect();
-    let ends: Vec<f64> = parsed.iter().map(|bar| bar.end).collect();
+    let numbers: Vec<i64> = (1..=n_bars as i64).collect();
+    let starts: Vec<f64> = bounds.iter().map(|bar| bar.0).collect();
+    let ends: Vec<f64> = bounds.iter().map(|bar| bar.1).collect();
     let intensity: Vec<f64> = parsed
+        .intensity
         .iter()
-        .map(|bar| {
-            bar.predictions
-                .get(INTENSITY_KEY)
-                .copied()
-                .unwrap_or(f64::NAN)
-        })
+        .map(|v| v.unwrap_or(f64::NAN))
         .collect();
 
     let version = version_of("track_bar_classifications");
@@ -298,18 +309,13 @@ async fn bars(
         ),
     )?;
 
-    // [bar, tag] in tag_order. NaN marks a tag the classifier did not emit for
-    // that bar, which is distinguishable from a confident zero.
+    // [bar, tag] in tag_order. NaN marks a bar the classifier could not score,
+    // which is distinguishable from a confident zero.
     let mut predictions = Vec::with_capacity(n_bars * tags.len());
-    for bar in &parsed {
-        for tag in &tags {
-            predictions.push(
-                bar.predictions
-                    .get(tag)
-                    .copied()
-                    .map(|v| v as f32)
-                    .unwrap_or(f32::NAN),
-            );
+    for bar in &parsed.scores {
+        for i in 0..tags.len() {
+            let score = bar.as_ref().and_then(|scores| scores.get(i));
+            predictions.push(score.map_or(f32::NAN, |v| *v as f32));
         }
     }
     put_f32(
