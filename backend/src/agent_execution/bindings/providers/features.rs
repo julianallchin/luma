@@ -37,7 +37,7 @@ const MERT_FRAME_RATE_HZ: f64 = 75.0;
 /// different models. Renaming either would break stored data, so the mismatch is
 /// documented where the agent will actually read it.
 const DRUM_CLASS_NOTE: &str = "onset classes are kick/snare/hat/cymbal; \
-    hi-hat uses 'hat' in drum_onsets, 'hats' in bar tags, and 'hihat' in score graph drum inputs";
+    hi-hat uses 'hat' in drum_onsets and 'hats' in bar tags";
 
 /// The stored mel spectrogram is a display asset, not an analysis product.
 pub const MEL_UNAVAILABLE: &str = "not exposed: Luma's stored mel spectrogram is \
@@ -255,14 +255,16 @@ async fn bars(
 
     let version = version_of("track_bar_classifications");
     let provenance = Provenance::new("bar_window_classifier").with_version(version);
-    let bar_axis = || AxisSpec::coordinates("bar", starts.clone(), Some("s".into()));
+    // Every bar axis is an index: position i is bar features.bars.numbers[i],
+    // which starts at features.bars.starts_s[i].
+    let bar_axis = || AxisSpec::index("bar", n_bars);
 
     put_i64(
         b,
         store,
         "features.bars.numbers",
         &numbers,
-        vec![AxisSpec::index("bar", n_bars)],
+        vec![bar_axis()],
         provenance.clone().with_note("UI bar numbers, from 1"),
     )?;
     put_f64(
@@ -270,7 +272,7 @@ async fn bars(
         store,
         "features.bars.starts_s",
         &starts,
-        vec![AxisSpec::index("bar", n_bars)],
+        vec![bar_axis()],
         Some("s"),
         provenance.clone(),
     )?;
@@ -279,7 +281,7 @@ async fn bars(
         store,
         "features.bars.ends_s",
         &ends,
-        vec![AxisSpec::index("bar", n_bars)],
+        vec![bar_axis()],
         Some("s"),
         provenance.clone(),
     )?;
@@ -390,7 +392,6 @@ async fn genres(
     let labels: Vec<String> = serde_json::from_str(&labels_json).unwrap_or_default();
 
     let n_bars = parsed.bars.len();
-    let starts: Vec<f64> = parsed.bars.iter().map(|bar| bar.start).collect();
     let provenance = Provenance::new("discogs_effnet").with_version(version_of("track_genres"));
 
     // [bar, genre] over the present labels. NaN marks a label that missed this
@@ -410,7 +411,7 @@ async fn genres(
         "features.genres.predictions",
         &predictions,
         vec![
-            AxisSpec::coordinates("bar", starts, Some("s".into())),
+            AxisSpec::index("bar", n_bars),
             AxisSpec::labels("genre", labels.clone()),
         ],
         None,

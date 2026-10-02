@@ -764,7 +764,6 @@ legs = luma.venue.nodes(label="*leg")
     round(right.at[0] - beam.at[0], 2) > 0,
     row.ok and len(row.fixtures) == 6,
     len(legs),
-    len(luma.venue.unplaced()),
 )
 "#
             .replace("MOVER", &format!("{MOVER:?}"))
@@ -775,7 +774,7 @@ legs = luma.venue.nodes(label="*leg")
     expect_ok(&out, "build the rig");
     let repr = out.repr.clone().unwrap_or_default();
     assert!(
-        repr.starts_with("(True, 11.0, True, True, True, 2, 0)"),
+        repr.starts_with("(True, 11.0, True, True, True, 2)"),
         "the rig did not come out as asked: {repr}\n{}",
         out.stdout
     );
@@ -790,14 +789,14 @@ legs = luma.venue.nodes(label="*leg")
             "tree = luma.venue.describe(detail=True)\n\
              plan = luma.venue.tiles()\n\
              (tree.count('truss/straight'), tree.count('fixture'), \
-              'unplaced: none' in tree, len(plan.splitlines()) > 3, \
+              len(plan.splitlines()) > 3, \
               '+v toward the crowd' in tree)",
         )
         .await;
     expect_ok(&out, "describe the rig");
     assert_eq!(
         out.repr.as_deref(),
-        Some("(3, 6, True, True, True)"),
+        Some("(3, 6, True, True)"),
         "{}",
         out.stdout
     );
@@ -867,12 +866,12 @@ flown = luma.venue.distribute(head.path, 1, on=hanging, face=(0, 0, -1),
                               mode=head.mode(18))
 
 tree = luma.venue.describe(detail=True)
-rest = (beam(on_floor.fixtures[0].node_id, tree),
-        beam(flown.fixtures[0].node_id, tree))
+rest = (beam(on_floor.fixtures[0].id, tree),
+        beam(flown.fixtures[0].id, tree))
 
 # An aim is stated, not dialled: point it at the crowd and read the word back.
 luma.venue.aim(flown.fixtures[0], direction=(0, 1, 0))
-(rest, beam(flown.fixtures[0].node_id, luma.venue.describe(detail=True)))
+(rest, beam(flown.fixtures[0].id, luma.venue.describe(detail=True)))
 "#,
         )
         .await;
@@ -928,7 +927,7 @@ for i in range(3):
 rig = luma.venue.extent(luma.venue.nodes())
 rows = luma.venue.nodes(kind="fixture")
 (untouched, span.count, round(span.size[0], 1), round(rig.size[1], 1),
- len(rows), len(luma.venue.unplaced()))
+ len(rows))
 "#
             .replace("MOVER", &format!("{MOVER:?}"))
             .replace("MODE", &format!("{MOVER_MODE:?}")),
@@ -943,10 +942,7 @@ rows = luma.venue.nodes(kind="fixture")
         "the draft did not preview as asked: {repr}\n{}",
         out.stdout
     );
-    assert!(
-        repr.ends_with(", 12, 0)"),
-        "the stamps did not land: {repr}"
-    );
+    assert!(repr.ends_with(", 12)"), "the stamps did not land: {repr}");
 
     f.service.shutdown_all();
 }
@@ -970,7 +966,7 @@ async fn a_piece_the_catalog_does_not_have_is_refused() {
             \x20   refusal = None\n\
              except luma.VenueRefused as error:\n\
             \x20   refusal = str(error)\n\
-             (refusal, luma.venue.describe(detail=True).count('\\n'))",
+             (refusal, len(luma.venue.nodes()))",
         )
         .await;
     expect_ok(&out, "unknown piece");
@@ -979,10 +975,9 @@ async fn a_piece_the_catalog_does_not_have_is_refused() {
         repr.contains("neither a catalog piece nor a fixture") && repr.contains("truss"),
         "the refusal did not name what the catalog has: {repr}"
     );
-    // Nothing was written: an empty room describes as root plus its two
-    // always-present sections.
+    // Nothing was written: the room still has no nodes.
     assert!(
-        repr.ends_with(", 4)"),
+        repr.ends_with(", 0)"),
         "a refused place left rows behind: {repr}"
     );
 
@@ -1098,7 +1093,7 @@ along = [f.along_m for f in row.fixtures]
 # solved from where that head actually hangs.
 aimed = luma.venue.aim(row.fixtures, at=(0.0, 6.0, 0.0))
 tree = luma.venue.describe(detail=True)
-line = [l for l in tree.splitlines() if row.fixtures[0].node_id in l][0]
+line = [l for l in tree.splitlines() if row.fixtures[0].id in l][0]
 
 # The row comes back in face order, which is what indexing it means.
 (head.path, head.moves, head.mode(18), row.ok, along == sorted(along),
@@ -1165,9 +1160,9 @@ except luma.VenueRefused as error:
             &thread,
             &venue_id,
             "bridge = luma.venue.extend(a, \"end_b\")\n\
-             open_ends = {f'{d.node_id}.{d.socket}' for d in luma.venue.dangling()}\n\
-             (bridge.placed, f'{a.node_id}.end_b' in open_ends, \
-              f'{b.node_id}.end_a' in open_ends, 'satisfied' in bridge.describe())",
+             open_ends = {f'{d.node}.{d.socket}' for d in luma.venue.dangling()}\n\
+             (bridge.parent_id == a.id, f'{a.id}.end_b' in open_ends, \
+              f'{b.id}.end_a' in open_ends, 'satisfied' in bridge.describe())",
         )
         .await;
     expect_ok(&out, "bridging extend");
@@ -1219,7 +1214,11 @@ async fn venue_groups_are_authored_atomically_and_highlight_names_are_checked() 
         return;
     };
     let (venue_id, thread) = f.empty_venue().await;
-    let out = f.run_in_venue(&thread, &venue_id, r#"
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
 import numpy as np
 from PIL import Image
 from luma_exec.host_errors import LumaHostCallError
@@ -1260,7 +1259,9 @@ suggested = v.generate_groups()
 assert len(suggested) > 2 and suggested['back_movers'].fixture_ids == before
 assert v.generate_groups().names() == suggested.names(), 'generation duplicated saved collections'
 'groups and highlights verified'
-"#).await;
+"#,
+        )
+        .await;
     expect_ok(
         &out,
         "author groups and identify them through public render",

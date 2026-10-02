@@ -61,7 +61,21 @@ fn preset_names_are_unique_and_shapes_resolve() {
         assert!(shipped.curve(name).is_some(), "{name}");
     }
     assert!(shipped.gradient("Rainbow").is_some());
-    assert_eq!(shipped.band("Kick"), Some((40., 100.)));
+    // luma.music splits the mix by these bands too: sub, low, mid and high,
+    // each starting where the last ends, over the audio node's 20–20000 Hz.
+    let names: Vec<&str> = shipped.bands.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["sub", "low", "mid", "high"]);
+    assert_eq!(shipped.bands[0].low_hz, 20.);
+    assert_eq!(shipped.bands[3].high_hz, 20000.);
+    for pair in shipped.bands.windows(2) {
+        assert_eq!(
+            pair[0].high_hz, pair[1].low_hz,
+            "{} to {}",
+            pair[0].name, pair[1].name
+        );
+    }
+    // An empty band is the low band.
+    assert_eq!(Some(luma_patterns::empty_band()), shipped.band("low"));
     let aim = shipped.clip("Circle").unwrap();
     assert_eq!(aim.output_kind(), Kind::Aim);
     assert_eq!(aim.blend_mode, BlendMode::Offset);
@@ -242,10 +256,10 @@ fn rule_3_value() {
     );
     assert_eq!(
         error(json!({
-            "audio1": {"kind": "audio", "inputs": {"low_hz": 200}},
+            "audio1": {"kind": "audio", "inputs": {"low_hz": 400}},
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "audio1"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
-        "audio1.high_hz: expected Hz above low_hz (200); got 100. Example: high_hz=400"
+        "audio1.high_hz: expected Hz above low_hz (400); got 300. Example: high_hz=800"
     );
     assert_eq!(
         error(json!({"aim1": {"kind": "aim", "inputs": {"yaw": [10, 20, 30]}}})),
@@ -495,7 +509,7 @@ fn rule_6_clip() {
     empty.duration = 0.;
     assert_eq!(
         clip_graph::check_clip(&empty).unwrap_err().0,
-        "clip: expected a finite start and a duration above 0; got start 32 and duration 0. Example: beats=(32, 40)"
+        "clip: expected a finite start and a duration above 0; got start 32 and duration 0. Example: at=(\"9\", \"11\")"
     );
     let score = luma_patterns::Score {
         clips: [("c1".to_string(), unnamed)].into(),
@@ -703,6 +717,6 @@ fn summary_names_the_moving_parts() {
     let summary = |name: &str| presets().clip(name).unwrap().graph.summary();
     assert_eq!(summary("Chase"), "line · every 2");
     assert_eq!(summary("Wash"), "still");
-    assert_eq!(summary("Follows a band"), "audio 40–100 Hz");
+    assert_eq!(summary("Follows a band"), "audio 60–300 Hz");
     assert_eq!(summary("Sparkle"), "order · every 0.125");
 }

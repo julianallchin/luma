@@ -34,7 +34,9 @@ pub struct GradientPreset {
     pub gradient: Gradient,
 }
 
-/// A named frequency band of the full mix for an `audio` node.
+/// A named frequency band. The bands are the one band table: `audio("low")`
+/// reads them, and `luma.music` splits the mix by them. They run low to
+/// high, and each starts where the last ends.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BandPreset {
@@ -50,6 +52,11 @@ pub struct Presets {
     pub curves: Vec<CurvePreset>,
     pub gradients: Vec<GradientPreset>,
     pub bands: Vec<BandPreset>,
+}
+
+/// The band an `audio` node reads when its band inputs are empty: "low".
+pub fn empty_band() -> (f64, f64) {
+    presets().band("low").expect("the shipped low band")
 }
 
 /// The shipped presets, in menu order.

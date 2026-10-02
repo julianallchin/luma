@@ -41,12 +41,12 @@ pub type TransportSource = Rc<dyn Fn(&App) -> Transport>;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
     /// Beats per turn of the noise clock.
-    pub speed: f64,
+    pub period: f64,
     /// The blob size, a share of the rig; `None` is one value for all heads.
     pub scale: Option<f64>,
     pub contrast: f64,
     /// The settings that follow a wire, each with the stand-in it is shown
-    /// at, such as "speed at 4 beats".
+    /// at, such as "period at 4 beats".
     pub held: Vec<String>,
 }
 

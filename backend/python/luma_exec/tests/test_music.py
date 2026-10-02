@@ -15,8 +15,17 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from luma_exec import clip
 from luma_exec.bindings import LumaRecord, Unavailable
-from luma_exec.music import Frame, Music, detect_feel
+from luma_exec.music import Frame, Music, _bands, detect_feel
+
+
+def setUpModule():
+    """Install the band table from Rust, as the worker does. Other test
+    modules install their own presets, so this runs before this module."""
+    clip.install_presets(json.loads((Path(__file__).resolve().parents[3]
+                                     / "crates/patterns/src/presets.json").read_text()))
+
 
 LIBRARY = Path.home() / ".config" / "com.luma.luma"
 SKANKA = ("8bafe654-419b-441f-89a3-7051f2d450f3",
@@ -53,17 +62,50 @@ class MusicUnitTests(unittest.TestCase):
         self.assertEqual((plain.ratio, plain.snare_period), (1, 2.0))
         self.assertIn("140 bpm = 2x the 70 grid", repr(halftime))
 
-    def test_bars_count_from_one_and_positions_read_bar_beat_sixteenth(self):
+    def test_bands_are_the_rust_band_table_with_open_outer_edges(self):
+        bands = _bands()
+        self.assertEqual([name for name, _, _ in bands], ["sub", "low", "mid", "high"])
+        self.assertIsNone(bands[0][1])
+        self.assertIsNone(bands[-1][2])
+        for (_, _, top), (_, bottom, _) in zip(bands, bands[1:]):
+            self.assertEqual(top, bottom)
+        self.assertEqual(dict(clip.audio("mid").inputs), {"low_hz": bands[2][1], "high_hz": bands[2][2]})
+
+    def test_positions_count_from_one_and_ranges_exclude_their_end(self):
         music = synthetic()
-        self.assertEqual(music.label(0), "1.0.0")
-        self.assertEqual(music.label(16 * 2 + 4 + 3), "3.1.3")
-        self.assertEqual(music._bars("9-12"), (9, 12))
+        self.assertEqual(music.label(0), "1.1.1")
+        self.assertEqual(music.label(16 * 2 + 4 + 3), "3.2.4")
+        self.assertEqual(music._bars("9-13"), (9, 12))
         self.assertEqual(music._bars((9, 13)), (9, 12))
         self.assertEqual(music._bars(13), (13, 13))
-        with self.assertRaises(ValueError):
-            music._bars(0)
+        for bad in (0, "9.2-13", "9-12-13"):
+            with self.assertRaises(ValueError):
+                music._bars(bad)
         kick = music.onsets["kick"]
-        self.assertEqual((kick.bar[0], kick.beat[0], kick.sixteenth[0]), (1, 0, 0))
+        self.assertEqual((kick.at[0], kick.bar[0], kick.beat[0], kick.sixteenth[0]), ("1.1.1", 1, 1, 1))
+        # A lone position spans what it names; a range excludes its end.
+        self.assertEqual(music._span("13"), (48, 4))
+        self.assertEqual(music._span("13.2"), (49, 1))
+        self.assertEqual(music._span("13.1-13.3"), (48, 2))
+        self.assertEqual(music._span_label(48, 2), "13.1.1-13.3.1")
+
+    def test_bars_start_at_the_detected_downbeats_as_on_the_ruler(self):
+        music = synthetic()
+        # Bar 2 is three beats long: every later bar starts a beat early.
+        downbeats = np.concatenate([music._beats[[0, 4]], music._beats[7:-1:4]])
+        short = Music(beats=music._beats, downbeats=downbeats, beats_per_bar=4, bpm=120.0,
+                      onsets={name: music._raw_onsets[name] for name in ("kick", "snare")}, rest=music._rest,
+                      sample_rate=music._rate)
+        kick = short.onsets["kick"]
+        self.assertEqual(list(kick.at[4:9]), ["2.1.1", "2.2.1", "2.3.1", "3.1.1", "3.2.1"])
+        self.assertEqual(short._span("3"), (8, 4))
+        self.assertIn("|3.1 |3.2 |3.3 |3.4 ", short.listen("3-5"))
+
+    def test_a_felt_sixteenth_at_double_feel_is_half_a_sixteenth(self):
+        music = synthetic()
+        object.__setattr__(music, "feel", detect_feel(70.0, np.arange(1, 200, 2.0)))
+        self.assertEqual(music.label(1), "1.1.1.5")
+        self.assertEqual(music.label(8 + 3), "1.2.2.5")
 
     def test_arrays_are_read_only_frames_with_one_line_reprs(self):
         music = synthetic()
@@ -76,12 +118,12 @@ class MusicUnitTests(unittest.TestCase):
 
     def test_deviations_name_the_missing_kick_by_bar_beat_sixteenth(self):
         text = synthetic(missing_kick_bar=6).deviations("1-12")
-        self.assertIn("6.2.0 kick missing (100%)", text)
+        self.assertIn("6.3.1 kick missing (100%)", text)
         self.assertEqual(len(re.findall(r"kick missing", text)), 1, text)
 
     def test_listen_is_one_block_per_two_bars(self):
-        text = synthetic().listen("1-4")
-        self.assertIn("|1.0 |1.1 |1.2 |1.3 ", text)
+        text = synthetic().listen("1-5")
+        self.assertIn("|1.1 |1.2 |1.3 |1.4 ", text)
         self.assertIn("kick   |x...|x...|x...|x...", text)
         self.assertLessEqual(len(text.splitlines()), 20)
 
@@ -137,12 +179,12 @@ def library_track(track_id, track_hash):
 
 
 def segment_lines(text):
-    """modulation() output as {"10.0": "line plus its ! flags"}."""
+    """modulation() output as {10: "line plus its ! flags"}, one line per bar."""
     lines, current = {}, None
     for line in text.splitlines():
-        match = re.match(r"^(\d+\.\d)\s", line)
+        match = re.match(r"^(\d+)\.1\.1\s", line)
         if match:
-            current = match[1]
+            current = int(match[1])
             lines[current] = line
         elif current and line.strip().startswith("!"):
             lines[current] += "\n" + line
@@ -162,48 +204,49 @@ class SkankaAnswerKey(unittest.TestCase):
         self.assertEqual((round(self.music.feel.bpm), self.music.feel.ratio), (140, 2))
 
     def test_the_scoop_opens_every_odd_bar_in_the_low_band(self):
-        cycle = self.music.deviations("9-32").splitlines()[2]
-        self.assertRegex(cycle, r"\b0\.\d(-\d\.\d)? low \+", cycle)
+        cycle = self.music.deviations("9-33").splitlines()[2]
+        self.assertRegex(cycle, r"\b9\.1\.[\d.]+(-9\.\d\.[\d.]+)? low \+", cycle)
 
     def test_wobble_switches_to_eighths_at_10_and_back_at_11(self):
-        lines = segment_lines(self.music.modulation("9-16"))
+        lines = segment_lines(self.music.modulation("9-17"))
         for bar in (10, 12, 14):
-            self.assertIn("mid 1/8 wobble", lines[f"{bar}.0"])
-            self.assertIn("! mid 1/8 wobble (was kick-gap sweeps)", lines[f"{bar}.0"])
+            self.assertIn("mid 1/8 wobble", lines[bar])
+            self.assertIn("! mid 1/8 wobble (was kick-gap sweeps)", lines[bar])
         for bar in (9, 11, 13):
-            self.assertNotIn("mid 1/8 wobble", lines[f"{bar}.0"])
+            self.assertNotIn("mid 1/8 wobble", lines[bar])
         for bar in (11, 13):
-            self.assertIn("mid kick-gap sweeps (was 1/8 wobble)", lines[f"{bar}.0"])
+            self.assertIn("mid kick-gap sweeps (was 1/8 wobble)", lines[bar])
 
-    def test_bar_13_drops_the_kick_at_16th_6_and_cuts_hats_for_the_first_beat(self):
-        text = self.music.deviations("9-32")
-        self.assertIn("13.0.6 kick missing", text)
-        self.assertRegex(text, r"13\.0\.0-0\.[5-7] high -")
+    def test_bar_13_drops_the_kick_at_16th_4_and_cuts_hats_for_the_first_beat(self):
+        text = self.music.deviations("9-33")
+        self.assertIn("13.1.4 kick missing", text)
+        self.assertRegex(text, r"13\.1\.1-13\.1\.(3\.5|4|4\.5) high -")
 
     def test_the_same_notch_is_in_21_and_53_but_not_29_45_61(self):
-        text = self.music.deviations("9-32") + self.music.deviations("41-64")
+        text = self.music.deviations("9-33") + self.music.deviations("41-65")
         for bar in (21, 53):
-            self.assertIn(f"{bar}.0.6 kick missing", text)
+            self.assertIn(f"{bar}.1.4 kick missing", text)
         for bar in (29, 45, 61):
-            self.assertNotIn(f"{bar}.0.6 kick missing", text)
+            self.assertNotIn(f"{bar}.1.4 kick missing", text)
 
     def test_drops_at_9_and_41_and_the_second_half_repeats_the_first(self):
         text = self.music.sections()
-        self.assertEqual(re.findall(r"(\d+) DROP", text), ["9", "41"])
-        repeats = [tuple(map(int, m)) for m in re.findall(r"(\d+)-(\d+) ≈ (\d+)-(\d+)", text)]
-        self.assertTrue(any(a <= 41 and b >= 63 and a - c == 32 for a, b, c, _ in repeats), text)
+        self.assertEqual(re.findall(r"(\d+)\.1\.1 DROP", text), ["9", "41"])
+        repeats = [tuple(map(int, m)) for m in
+                   re.findall(r"(\d+)\.1\.1-(\d+)\.1\.1 ≈ (\d+)\.1\.1-(\d+)\.1\.1", text)]
+        self.assertTrue(any(a <= 41 and b >= 64 and a - c == 32 for a, b, c, _ in repeats), text)
 
     def test_similar_to_13_is_21_and_53_before_the_hat_cut_bars(self):
-        ranked = [int(line.split()[0]) for line in self.music.similar("13").splitlines()[2:]]
+        ranked = [int(line.split(".")[0]) for line in self.music.similar("13").splitlines()[2:]]
         self.assertEqual(set(ranked[:2]), {21, 53}, ranked)
         for bar in (29, 45, 61):
             self.assertGreater(ranked.index(bar), 1)
 
     def test_similar_to_the_first_drop_phrase_is_the_second(self):
-        self.assertEqual(self.music.similar("9-16").splitlines()[2].split()[0], "41-48")
+        self.assertEqual(self.music.similar("9-17").splitlines()[2].split()[0], "41.1.1-49.1.1")
 
     def test_listen_fits_a_phrase_in_about_thirty_lines(self):
-        text = self.music.listen("9-12")
+        text = self.music.listen("9-13")
         self.assertLessEqual(len(text.splitlines()), 30)
         self.assertIn("kick   |x.....x.|....x...|x.....x.|....x...", text)
 
@@ -223,16 +266,18 @@ class BackboneAnswerKey(unittest.TestCase):
     def test_modulation_places_three_eighth_swells_where_julian_put_chases(self):
         found = 0
         for bar in WOMP_BARS:
-            line = segment_lines(self.music.modulation(bar))[f"{bar}.0"]
+            line = segment_lines(self.music.modulation(bar))[bar]
             match = re.search(r"low [^|]*@ ([\d. ]+)", line)
-            peaks = [float(x) for x in match[1].split()] if match else []
+            # Peaks as felt 16ths from the bar's downbeat: 8 to a beat at 2x feel.
+            peaks = [(int(p.split(".")[1]) - 1) * 8 + (float(p.split(".", 2)[2]) - 1) * 2
+                     for p in match[1].split()] if match else []
             if all(any(abs(p - womp) <= 0.6 for p in peaks) for womp in (5, 7, 9)):
                 found += 1
         self.assertGreaterEqual(found / len(WOMP_BARS), 0.8, found)
 
     def test_similar_to_a_womp_cell_returns_the_other_womp_cells(self):
-        text = self.music.similar("18.0-18.1", top=8)
-        ranked = [int(line.split()[0].split(".")[0]) for line in text.splitlines()[2:]]
+        text = self.music.similar("18.1-18.3", top=8)
+        ranked = [int(line.split(".")[0]) for line in text.splitlines()[2:]]
         self.assertTrue(set(ranked) <= set(WOMP_BARS), text)
 
 

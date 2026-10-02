@@ -45,7 +45,7 @@ pub struct TimePoint {
 }
 
 /// A position in bars. Bar 1 beat 1.00 is the first downbeat; a pickup before
-/// it is bar 0 or lower.
+/// it is bar 0 or lower. The model reads it as `bar.beat.16th`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BarBeat {
@@ -71,6 +71,9 @@ pub struct EditorClip {
     pub id: String,
     pub name: String,
     pub lane: usize,
+    /// The clip's layer. Rows written before z was captured have none.
+    #[serde(default)]
+    pub z: Option<i64>,
     pub start: TimePoint,
     pub end: TimePoint,
     pub selected: bool,
@@ -91,6 +94,7 @@ pub struct ClipSpan {
     pub id: String,
     pub name: String,
     pub lane: usize,
+    pub z: i64,
     pub start: f64,
     pub end: f64,
     pub selected: bool,
@@ -145,6 +149,7 @@ impl EditorState {
                     id: clip.id,
                     name: clip.name,
                     lane: clip.lane,
+                    z: Some(clip.z),
                     selected: clip.selected,
                 })
                 .collect(),
@@ -153,9 +158,14 @@ impl EditorState {
     }
 }
 
-/// A beat grid read as bars.
+/// A beat grid read as bars, as the editor ruler draws them: bar n starts at
+/// the n-th detected downbeat, and beats inside a bar are the detected beats.
+/// Before the first downbeat and after the last, bars are `beats_per_bar`
+/// beats long. `luma_exec/track.py` `BarGrid` is the same rule.
 struct Bars {
     timeline: luma_patterns::BeatTimeline,
+    /// Where each bar starts, in beats from the first downbeat.
+    starts: Vec<f64>,
     beats_per_bar: f64,
 }
 
@@ -164,21 +174,61 @@ impl Bars {
         if grid.beats_per_bar <= 0 {
             return None;
         }
+        let timeline = grid.timeline().ok()?;
+        let mut starts = grid
+            .downbeats
+            .iter()
+            .map(|time| timeline.beat_at(f64::from(*time)).ok())
+            .collect::<Option<Vec<f64>>>()?;
+        if starts.is_empty() {
+            starts.push(0.0);
+        }
         Some(Self {
-            timeline: grid.timeline().ok()?,
+            timeline,
+            starts,
             beats_per_bar: f64::from(grid.beats_per_bar),
         })
     }
 
+    /// The beat where a bar (from 1) starts.
+    #[allow(clippy::cast_precision_loss)]
+    fn start(&self, bar: i64) -> f64 {
+        let (first, last) = (self.starts[0], self.starts[self.starts.len() - 1]);
+        let index = bar - 1;
+        let count = self.starts.len() as i64;
+        match usize::try_from(index) {
+            Err(_) => first + index as f64 * self.beats_per_bar,
+            Ok(i) if i < self.starts.len() => self.starts[i],
+            Ok(_) => last + (index - count + 1) as f64 * self.beats_per_bar,
+        }
+    }
+
+    /// The bar (from 1) that holds a beat.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    fn bar_at(&self, beat: f64) -> i64 {
+        let (first, last) = (self.starts[0], self.starts[self.starts.len() - 1]);
+        if beat < first {
+            1 - ((first - beat) / self.beats_per_bar - 1e-9).ceil() as i64
+        } else if beat >= last {
+            self.starts.len() as i64 + ((beat - last) / self.beats_per_bar + 1e-9).floor() as i64
+        } else {
+            self.starts.partition_point(|start| *start <= beat) as i64
+        }
+    }
+
     fn at(&self, seconds: f64) -> Option<BarBeat> {
-        // Rounded to what is shown first, so 3.999 beats never prints as
-        // beat 5.00 of the bar before.
-        let beat = (self.timeline.beat_at(seconds).ok()? * 100.0).round() / 100.0;
-        #[allow(clippy::cast_possible_truncation)]
-        let bar = (beat / self.beats_per_bar).floor() as i64 + 1;
+        let beat = self.timeline.beat_at(seconds).ok()?;
+        let mut bar = self.bar_at(beat);
+        // Rounded to what is shown (a hundredth of a 16th) first, so the end
+        // of a bar never prints as 16th 5 of its last beat.
+        let mut within = ((beat - self.start(bar)) * 400.0).round() / 400.0;
+        if within >= ((self.start(bar + 1) - self.start(bar)) * 400.0).round() / 400.0 {
+            bar += 1;
+            within = 0.0;
+        }
         Some(BarBeat {
             bar,
-            beat: beat.rem_euclid(self.beats_per_bar) + 1.0,
+            beat: within + 1.0,
         })
     }
 }
@@ -281,9 +331,10 @@ fn render_editor(out: &mut String, editor: &EditorState) {
     }
     let _ = writeln!(out, "{heading} ({total}):");
     for clip in &editor.clips {
+        let z = clip.z.map(|z| format!(" z {z}")).unwrap_or_default();
         let _ = writeln!(
             out,
-            "- {} {:?} lane {}, {}{}",
+            "- {} {:?} lane {}{z}, {}{}",
             clip.id,
             clip.name,
             clip.lane,
@@ -300,11 +351,17 @@ fn seconds(at: TimePoint) -> String {
     format!("{:.2} s", at.seconds)
 }
 
+/// `bar.beat.16th`, all three from 1, as the Python tools print it: `17.2.3`,
+/// or `17.2.3.5` between two 16ths.
 fn bar(at: BarBeat) -> String {
-    format!("bar {} beat {:.2}", at.bar, at.beat)
+    let sixteenths = ((at.beat - 1.0) * 400.0).round() / 100.0;
+    let beat = (sixteenths / 4.0).floor();
+    let sixteenth = format!("{:.2}", sixteenths - beat * 4.0 + 1.0);
+    let sixteenth = sixteenth.trim_end_matches('0').trim_end_matches('.');
+    format!("{}.{}.{sixteenth}", at.bar, beat + 1.0)
 }
 
-/// `63.42 s (bar 17 beat 2.10)`.
+/// `63.42 s (17.2.3)`.
 fn point(at: TimePoint) -> String {
     match at.bar {
         Some(position) => format!("{} ({})", seconds(at), bar(position)),
@@ -312,11 +369,12 @@ fn point(at: TimePoint) -> String {
     }
 }
 
-/// `60.00 s to 75.50 s (bar 16 beat 1.00 to bar 20 beat 1.00)`.
+/// `60.00 s to 75.50 s (16.1.1-20.1.1)`. A range includes its start and
+/// excludes its end.
 fn range(start: TimePoint, end: TimePoint) -> String {
     let times = format!("{} to {}", seconds(start), seconds(end));
     match (start.bar, end.bar) {
-        (Some(from), Some(to)) => format!("{times} ({} to {})", bar(from), bar(to)),
+        (Some(from), Some(to)) => format!("{times} ({}-{})", bar(from), bar(to)),
         _ => times,
     }
 }
@@ -394,6 +452,7 @@ mod tests {
             id: id.into(),
             name: format!("Clip {id}"),
             lane,
+            z: 10 - lane as i64,
             start,
             end,
             selected,
@@ -427,7 +486,7 @@ mod tests {
         // 1 s is the first downbeat; 3.25 s is 4.5 beats after it.
         let editor = EditorState::capture(3.25, None, [], Some(&grid));
         assert_eq!(editor.playhead.bar, Some(BarBeat { bar: 2, beat: 1.5 }));
-        assert!(render(&track_context(editor)).contains("Playhead: 3.25 s (bar 2 beat 1.50)"));
+        assert!(render(&track_context(editor)).contains("Playhead: 3.25 s (2.1.3)"));
         let downbeat = EditorState::capture(1.0, None, [], Some(&grid));
         assert_eq!(downbeat.playhead.bar, Some(BarBeat { bar: 1, beat: 1.0 }));
     }
@@ -449,9 +508,35 @@ mod tests {
     #[test]
     fn a_beat_that_rounds_up_stays_in_its_bar() {
         let grid = grid();
-        // 2.999 s is 3.998 beats in: shown as the next downbeat, not beat 5.
-        let editor = EditorState::capture(2.999, None, [], Some(&grid));
+        // 2.9999 s is 3.9998 beats in: shown as the next downbeat, not 16th 5.
+        let editor = EditorState::capture(2.9999, None, [], Some(&grid));
         assert_eq!(editor.playhead.bar, Some(BarBeat { bar: 2, beat: 1.0 }));
+    }
+
+    #[test]
+    fn bars_start_at_the_detected_downbeats_as_on_the_ruler() {
+        // Bar 1 is two beats long: the downbeats say so, not the meter.
+        let mut grid = grid();
+        grid.downbeats = vec![1.0, 2.0, 4.0];
+        let at = |seconds| {
+            EditorState::capture(seconds, None, [], Some(&grid))
+                .playhead
+                .bar
+        };
+        assert_eq!(at(1.5), Some(BarBeat { bar: 1, beat: 2.0 }));
+        assert_eq!(at(2.0), Some(BarBeat { bar: 2, beat: 1.0 }));
+        assert_eq!(at(3.5), Some(BarBeat { bar: 2, beat: 4.0 }));
+        assert_eq!(at(6.0), Some(BarBeat { bar: 4, beat: 1.0 }));
+        assert_eq!(at(0.5), Some(BarBeat { bar: 0, beat: 4.0 }));
+    }
+
+    #[test]
+    fn positions_read_bar_beat_sixteenth_from_one() {
+        let at = |bar, beat| super::bar(BarBeat { bar, beat });
+        assert_eq!(at(17, 1.0), "17.1.1");
+        assert_eq!(at(17, 2.5), "17.2.3");
+        assert_eq!(at(17, 4.875), "17.4.4.5");
+        assert_eq!(at(0, 3.0), "0.3.1");
     }
 
     #[test]
@@ -475,10 +560,12 @@ mod tests {
         assert!(text.contains("Cursor: 5.00 s, lane 2\n"), "{text}");
         assert!(text.contains("Clips at the cursor (2):\n"), "{text}");
         assert!(
-            text.contains("- under \"Clip under\" lane 2, 4.00 s to 6.00 s\n"),
+            text.contains("- under \"Clip under\" lane 2 z 8, 4.00 s to 6.00 s\n"),
             "{text}"
         );
-        assert!(text.contains("- picked \"Clip picked\" lane 3, 20.00 s to 30.00 s, selected\n"));
+        assert!(
+            text.contains("- picked \"Clip picked\" lane 3 z 7, 20.00 s to 30.00 s, selected\n")
+        );
     }
 
     #[test]
@@ -501,9 +588,7 @@ mod tests {
         assert_eq!(ids, ["early", "late"], "sorted by start");
         let text = render(&track_context(editor));
         assert!(
-            text.contains(
-                "Selection: 3.00 s to 5.00 s (bar 2 beat 1.00 to bar 3 beat 1.00), lanes 1 to 3\n"
-            ),
+            text.contains("Selection: 3.00 s to 5.00 s (2.1.1-3.1.1), lanes 1 to 3\n"),
             "{text}"
         );
         assert!(text.contains("Clips in the selection (2):\n"), "{text}");

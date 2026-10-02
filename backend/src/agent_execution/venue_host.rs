@@ -98,9 +98,9 @@ impl VenueHost {
         }
         let view = View::from_str(&request.view)
             .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
-        let width = clamp_dimension("width", request.width)?;
-        let height = clamp_dimension("height", request.height)?;
-        let time = self.clamp_time(request.t).await?;
+        let width = checked_dimension("width", request.width)?;
+        let height = checked_dimension("height", request.height)?;
+        let time = self.checked_time(request.t).await?;
         let lighting = dialed(request.house, request.sun)?;
 
         // One venue snapshot for the geometry *and* the selection: a mark on a
@@ -452,14 +452,14 @@ impl VenueHost {
         Ok(json!({ "text": text }))
     }
 
-    /// Everything the solve left open: unplaced branches and dangling sockets.
+    /// Everything the solve left open: the dangling sockets.
     ///
     /// Live, not the cell's binding snapshot: a build script asks this *after*
     /// it has changed the rig, and a manifest assembled before the cell ran
     /// would answer about the room it walked into.
     async fn open(&self) -> Result<Value, HostCallError> {
         let venue = self.stage().resolved().await?;
-        Ok(json!({ "unplaced": venue.unplaced, "dangling": venue.dangling }))
+        Ok(json!({ "dangling": venue.dangling }))
     }
 
     /// Saved fixture collections, read live after the cell's edits.
@@ -589,13 +589,8 @@ impl VenueHost {
         self.placed(report).await
     }
 
-    async fn detach(&self, request: NodeRequest) -> Result<Value, HostCallError> {
-        let report = self.stage().detach(&request.node_id).await?;
-        self.placed(report).await
-    }
-
-    /// Delete nodes and everything structural under them. Their fixtures are
-    /// trayed, not deleted — the same rule the page's context menu follows.
+    /// Delete nodes and everything under them, lights and their patch rows
+    /// included — the same rule the page's context menu follows.
     ///
     /// A node that is not there is **satisfied**: removing a subtree removes
     /// everything under it, so a caller holding a list of ids from before is
@@ -668,7 +663,6 @@ impl VenueHost {
                         "recorded in the draft — the row is patched when the draft is stamped"
                     ],
                     "dangling": [],
-                    "unplaced": [],
                 },
                 "describe": draft.summary(supply),
             }));
@@ -900,8 +894,8 @@ impl VenueHost {
     async fn draft_render(&self, request: DraftRenderRequest) -> Result<Value, HostCallError> {
         let view = View::from_str(&request.view)
             .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
-        let width = clamp_dimension("width", request.width)?;
-        let height = clamp_dimension("height", request.height)?;
+        let width = checked_dimension("width", request.width)?;
+        let height = checked_dimension("height", request.height)?;
         let venue = {
             let drafts = self.drafts();
             let draft = Self::draft(&drafts, &request.draft_id)?;
@@ -994,11 +988,13 @@ impl VenueHost {
             .next())
     }
 
-    /// `t` inside the track's own span, so a camera can never be asked for a
-    /// moment the score does not have.
-    async fn clamp_time(&self, requested: f64) -> Result<f32, HostCallError> {
-        if !requested.is_finite() {
-            return Err(HostCallError::new("invalid_time", "t must be finite"));
+    /// `t` clamped to the track's end; a non-finite or negative `t` is refused.
+    async fn checked_time(&self, requested: f64) -> Result<f32, HostCallError> {
+        if !requested.is_finite() || requested < 0.0 {
+            return Err(HostCallError::new(
+                "invalid_time",
+                format!("t must be a finite number of seconds from 0, not {requested}"),
+            ));
         }
         let end = match self.lighting.as_ref() {
             Some(track) => {
@@ -1008,8 +1004,9 @@ impl VenueHost {
             }
             None => None,
         };
-        let clamped = requested.max(0.0).min(end.unwrap_or(f64::from(f32::MAX)));
-        Ok(clamped as f32)
+        // Past the end clamps to the end, as a score window does; the
+        // response's `t` says where the frame was taken.
+        Ok(end.map_or(requested, |end| requested.min(end)) as f32)
     }
 
     /// Put the PNG in the workspace's output area and return its
@@ -1061,7 +1058,6 @@ impl HostCallHandler for VenueHost {
                     "venue.attach" => self.attach(decode(payload)?).await,
                     "venue.extend" => self.extend(decode(payload)?).await,
                     "venue.duplicate" => self.duplicate(decode(payload)?).await,
-                    "venue.detach" => self.detach(decode(payload)?).await,
                     "venue.remove" => self.remove(decode(payload)?).await,
                     "venue.params" => self.params(decode(payload)?).await,
                     "venue.distribute" => self.distribute(decode(payload)?).await,
@@ -1090,14 +1086,15 @@ impl HostCallHandler for VenueHost {
     }
 }
 
-fn clamp_dimension(name: &str, value: u32) -> Result<u32, HostCallError> {
-    if value == 0 {
+/// A frame side from 1 to [`MAX_DIMENSION`] pixels; any other value is refused.
+fn checked_dimension(name: &str, value: u32) -> Result<u32, HostCallError> {
+    if !(1..=MAX_DIMENSION).contains(&value) {
         return Err(HostCallError::new(
             "invalid_size",
-            format!("{name} must be at least 1 pixel"),
+            format!("{name} must be from 1 to {MAX_DIMENSION} pixels, not {value}"),
         ));
     }
-    Ok(value.min(MAX_DIMENSION))
+    Ok(value)
 }
 
 /// Which of the two lighting models a call is talking about.
@@ -1148,36 +1145,33 @@ impl Mode {
 /// One `house=` or `sun=` as an environment; `None` when neither was given.
 ///
 /// The dial *is* the mode — a room is lit by its house rig or by the sky, so
-/// naming a level names a room, and naming both names two rooms. Values out of
-/// range are clamped by the constructors rather than refused: a caller asking
-/// for the sun at 200° means noon, and there is nothing for it to fix.
-/// Non-finite is the one value with no nearest legal answer *and* no JSON
-/// spelling, so it falls back to the mode's default rather than poisoning the
-/// record it would be written to.
+/// naming a level names a room, and naming both names two rooms. A value that
+/// is not finite or is outside its range is refused.
 fn dialed(house: Option<f64>, sun: Option<f64>) -> Result<Option<VenueEnvironment>, HostCallError> {
     match (house, sun) {
         (Some(_), Some(_)) => Err(HostCallError::new(
             "invalid_argument",
             "a room is lit by its house rig or by the sky, not both: pass house= or sun=",
         )),
-        (Some(level), None) => Ok(Some(VenueEnvironment::indoor(finite(
-            level,
-            VenueEnvironment::default().house_level(),
-        )))),
-        (None, Some(deg)) => Ok(Some(VenueEnvironment::outdoor(finite(
-            deg,
-            SkyParams::DUSK.sun_elevation_deg,
-        )))),
+        (Some(level), None) => Ok(Some(VenueEnvironment::indoor(in_range(
+            "house", level, 0.0, 1.0,
+        )?))),
+        (None, Some(deg)) => Ok(Some(VenueEnvironment::outdoor(in_range(
+            "sun", deg, -90.0, 90.0,
+        )?))),
         (None, None) => Ok(None),
     }
 }
 
-fn finite(value: f64, fallback: f32) -> f32 {
-    let value = value as f32;
-    if value.is_finite() {
-        value
+/// `value` when it is finite and inside `min..=max`; any other value is refused.
+fn in_range(name: &str, value: f64, min: f64, max: f64) -> Result<f32, HostCallError> {
+    if value.is_finite() && (min..=max).contains(&value) {
+        Ok(value as f32)
     } else {
-        fallback
+        Err(HostCallError::new(
+            "invalid_argument",
+            format!("{name} must be a finite number from {min} to {max}, not {value}"),
+        ))
     }
 }
 
@@ -1235,8 +1229,9 @@ fn described_haze(haze: VenueHaze) -> Value {
     let mut value = haze_record(haze);
     value["describe"] = Value::String(if haze.enabled {
         format!(
-            "haze at {:.0}% density, clouds {:.1} m, drifting {:.2} m/s",
-            haze.density / VenueHaze::MAX_DENSITY * 100.0,
+            "haze density {:.2} (0 to {}), clouds {:.1} m, drifting {:.2} m/s",
+            haze.density,
+            VenueHaze::MAX_DENSITY,
             haze.appearance.cloud_size,
             haze.appearance.wind_speed,
         )
@@ -1262,8 +1257,10 @@ struct EnvironmentRequest {
     /// `"indoor"` or `"outdoor"`. Alone, it switches without moving a dial.
     mode: Option<String>,
     /// How far up the house rig is, 0 to 1. Implies an indoor room.
+    /// Out of range is refused.
     house: Option<f64>,
-    /// Degrees the sun stands above the horizon. Implies an open-air room.
+    /// Degrees the sun stands above the horizon, -90 to 90. Implies an
+    /// open-air room. Out of range is refused.
     sun: Option<f64>,
 }
 
@@ -1359,13 +1356,6 @@ struct FixturesRequest {
 #[serde(rename_all = "camelCase")]
 struct TilesRequest {
     cell_m: f64,
-}
-
-/// One node, named. `detach` and `remove` take nothing else.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NodeRequest {
-    node_id: String,
 }
 
 /// The nodes a `remove` names. A list, because a removal is a *goal state* and
@@ -1637,20 +1627,15 @@ struct StampRequest {
 /// op grows from.
 fn placement_json(report: &crate::models::venue_graph::PlacementReport) -> Value {
     json!({
-        "nodeId": report.node_id, "outcome": report.outcome,
+        "nodeId": report.node_id,
         "parentId": report.parent_id, "warnings": report.warnings,
         "dangling": report.dangling, "constraints": report.constraints,
     })
 }
 
 fn placement_text(report: &crate::models::venue_graph::PlacementReport) -> String {
-    let state = if report.outcome.is_placed() {
-        "placed"
-    } else {
-        "unplaced"
-    };
     let mut text = format!(
-        "{} {state} on {}\n",
+        "{} placed on {}\n",
         report.node_id,
         report.parent_id.as_deref().unwrap_or("no host")
     );

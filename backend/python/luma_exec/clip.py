@@ -3,7 +3,7 @@
     t = time(every=2)
     place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
     graph = color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))
-    edit.add_clip(graph, name="Chase", beats=(32, 48), selection="bars")
+    edit.add_clip(graph, name="Chase", at=("9", "13"), selection="bars")
 
 Every builder is a bare function. It returns one node. A node goes into an
 input of another node: that is a wire. The same Python object wired twice is
@@ -65,7 +65,7 @@ VERSION = 3  # clip_graph::VERSION
 _INPUTS = {
     "time": ("every", "duration", "delay", "phase"),
     "space": ("heads", "direction", "centre", "at", "shift", "scale"),
-    "noise": ("heads", "speed", "scale", "contrast"),
+    "noise": ("heads", "period", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
     "math": ("values",),
@@ -165,7 +165,7 @@ class Presets:
     bands      name -> (low_hz, high_hz)
 
     A name works where a shape, a gradient or a band goes:
-    curve(t, "Comet"), curve(t, gradient="Fire"), audio("Kick").
+    curve(t, "Comet"), curve(t, gradient="Fire"), audio("low").
     """
 
     @property
@@ -412,7 +412,8 @@ def time(every=None, duration=None, delay=None, phase=None) -> Coordinate:
     """Each head's own clock, 0-1 over the clip or over each event.
 
     `every` (beats): an event starts every `every` beats from the clip
-    start; empty = once over the clip. `duration` (beats): each event's
+    start; empty = once over the clip, so one clip per hit uses `time()`.
+    `duration` (beats): each event's
     life; empty = every (the clip with no every). A duration above every
     makes events overlap on purpose (tails, many pills).
     `delay` (beats, any sign): the head starts this much later. Before its
@@ -464,15 +465,27 @@ def space(heads=None, direction=None, centre=None, at=None, shift=None, scale=No
                  scale=scale)
 
 
-def noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate:
-    """Coherent value noise 0-1. No scale = one value for all heads; 0.02 = each head its own."""
-    return _make("noise", heads=heads, speed=speed, scale=scale, contrast=contrast)
+def noise(heads=None, period=None, scale=None, contrast=None) -> Coordinate:
+    """Coherent value noise, 0-1 at each head.
+
+    period: beats (above 0) for the noise to move to a new value. Default 4.
+    scale: the blob size, as a share (above 0) of the largest extent of the
+    heads. No scale gives one value for all heads; 0.02 gives each head its own.
+    contrast: 0-1. 0 is plain noise; 1 spreads the values 4 times wider
+    about 0.5 and clips them to 0-1. Default 0.
+    """
+    return _make("noise", heads=heads, period=period, scale=scale, contrast=contrast)
 
 
 def audio(low_hz=None, high_hz=None) -> Coordinate:
-    """Energy of a band of the full mix, 0-1 over the whole track. `audio("Kick")` takes a band preset."""
+    """Energy of a band of the full mix in Hz, 0-1 over the whole track.
+
+    A band name gives both edges: audio("low"). Empty edges are the low band.
+    luma.presets.bands lists the bands (sub, low, mid, high). luma.music
+    uses the same bands.
+    """
     if isinstance(low_hz, str) and high_hz is None:
-        low_hz, high_hz = _lookup("bands", low_hz, "band preset", 'audio("Kick")')[1]
+        low_hz, high_hz = _lookup("bands", low_hz, "band", 'audio("low")')[1]
     return _make("audio", low_hz=low_hz, high_hz=high_hz)
 
 
@@ -550,10 +563,13 @@ def color(color=None, brightness=None, alpha=None) -> "Graph":
 
 
 def aim(heads=None, base="direction", direction=None, point=None, yaw=None, pitch=None, alpha=None) -> "Graph":
-    """Aim output. base: "direction" (along the vector), "point" (at the point),
-    "away" (from the point through each head). Then yaw turns right and pitch
-    up, in degrees. Heads from a mirror take the mirror image of yaw and pitch.
-    `alpha` is the aim's weight.
+    """Aim output. `point` is metres in the venue frame: +u stage right, +v
+    toward the crowd, +z up. `direction` uses the same axes. base:
+    "direction" (along the vector), "point" (at the point), "away" (from the
+    point through each head). Then yaw and pitch turn the aim, in degrees.
+    Positive yaw turns counter-clockwise seen from above (the right-hand rule
+    about +z, as in the venue). Positive pitch turns up. Heads from a mirror
+    take the mirror image of yaw and pitch. `alpha` is the aim's weight.
     """
     return Graph(_make("aim", {"base": base}, heads=heads, direction=direction, point=point,
                        yaw=yaw, pitch=pitch, alpha=alpha))

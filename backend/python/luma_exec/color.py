@@ -5,11 +5,12 @@ working space (``backend/crates/patterns/src/color_space.rs``). A light's
 brightness is its peak channel. Hex codes and CSS colors are sRGB, so convert
 them before writing a triple:
 
-    luma.track.color("#ff8000")      # -> [0.70, 0.27, 0.04], linear Rec. 2020
-    luma.track.color([1, 0.5, 0])    # the same color as sRGB 0..1
+    luma.track.from_srgb("#ff8000")      # -> [0.70, 0.27, 0.04], linear Rec. 2020
+    luma.track.from_srgb([1, 0.5, 0])    # the same color as sRGB 0..1
 
 A plain color value or a gradient stop may also be written as "#RRGGBB"; the
-tool converts it. Rec. 2020 holds colors sRGB cannot: [0, 1, 0] is a deeper
+tool converts it. A tuple is not converted: color=(1, 0.5, 0) is already
+linear Rec. 2020. Rec. 2020 holds colors sRGB cannot: [0, 1, 0] is a deeper
 green than any hex code.
 
 The matrix is derived as the Rust one is: from the BT.709 and BT.2020

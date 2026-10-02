@@ -666,11 +666,13 @@ async fn bar_intensity_is_split_out_of_the_tag_predictions() {
     assert_eq!(tags["kind"], "labels");
     assert_eq!(tags["labels"], json!(["kick", "hats"]));
 
-    // The bar axis carries start times, so a bar row can be placed in time.
+    // Every bar axis is an index; features.bars.starts_s places a row in time.
     let bar_axis = &at(&v, "features.bars.predictions")["axes"][0];
-    assert_eq!(bar_axis["kind"], "coordinates");
-    assert_eq!(bar_axis["values"], json!([0.032, 1.81]));
-    assert_eq!(bar_axis["unit"], "s");
+    assert_eq!(bar_axis["kind"], "index");
+    assert_eq!(bar_axis["count"], 2);
+    for path in ["features.bars.intensity", "features.bars.starts_s"] {
+        assert_eq!(&at(&v, path)["axes"][0], bar_axis, "{path}");
+    }
 
     assert_eq!(
         read_f64(&manifest, &store, "features.bars.starts_s"),
@@ -694,7 +696,7 @@ async fn genres_share_the_bar_axis_with_bar_classifications() {
     let bar_axis = at(&v, "features.bars.predictions")["axes"][0].clone();
     let genre_axis = at(&v, "features.genres.predictions")["axes"][0].clone();
     assert_eq!(bar_axis, genre_axis);
-    assert_eq!(genre_axis["values"], json!([0.032, 1.81]));
+    assert_eq!(genre_axis["count"], 2);
 
     let genre_labels = at(&v, "features.genres.predictions")["axes"][1].clone();
     assert_eq!(genre_labels["kind"], "labels");
@@ -979,6 +981,12 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
         "array",
         Some("stage_lab/speaker_dbr15.glb"),
         Some("PA"),
+        &crate::models::venue_graph::NodePlacement {
+            parent,
+            my_socket: "mount".into(),
+            their_socket: "floor".into(),
+            roll: 0.0,
+        },
     )
     .await
     .unwrap();
@@ -992,9 +1000,6 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
     )
     .await
     .unwrap();
-    venue_graph_db::upsert_edge(&mut access, &array, &parent, "mount", "floor", 0.0)
-        .await
-        .unwrap();
     access.commit().await.unwrap();
 
     let (manifest, _store) = f.assemble(&f.scope()).await;
@@ -1016,39 +1021,6 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
         .unwrap();
     assert_eq!(array_row["member_count"], 3);
     assert_eq!(pieces.as_array().unwrap().len(), before + 1);
-}
-
-/// The tray and anything a detach left hanging: rows with no pose, named
-/// rather than silently absent.
-#[tokio::test]
-async fn an_unplaced_node_is_named_in_the_venue_binding() {
-    use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
-    use crate::database::local::venue_graph as venue_graph_db;
-
-    let f = Fixture::new().await;
-    f.assemble(&f.scope()).await;
-    let mut access = VenueAccess::<Write>::write(&f.pool, VenueResource::Venue(&f.venue_id))
-        .await
-        .unwrap();
-    let stray = venue_graph_db::insert_node(
-        &mut access,
-        "piece",
-        Some("stage_lab/speaker_dbr15.glb"),
-        Some("Spare PA"),
-    )
-    .await
-    .unwrap();
-    access.commit().await.unwrap();
-
-    let (manifest, _store) = f.assemble(&f.scope()).await;
-    let v = root(&manifest);
-    let unplaced = at(&v, "venue.unplaced_snapshot");
-    let rows = unplaced.as_array().unwrap();
-    assert_eq!(rows.len(), 1, "{unplaced}");
-    assert_eq!(rows[0]["id"], json!(stray));
-    assert_eq!(rows[0]["kind"], json!("piece"));
-    assert_eq!(rows[0]["label"], json!("Spare PA"));
-    assert_eq!(rows[0]["descendants"], json!(0));
 }
 
 #[tokio::test]
@@ -1148,7 +1120,6 @@ async fn venue_context_explains_that_no_track_is_open() {
     let v = root(&manifest);
 
     at(&v, "venue.pieces");
-    at(&v, "venue.unplaced_snapshot");
     assert_eq!(reason(&v, "track"), "no track is open");
     assert!(v.get("nodes").is_some());
     assert!(v.get("audio").is_some());

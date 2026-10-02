@@ -250,7 +250,7 @@ try {
 				"span = (0.0, min(8.0, luma.track.duration_s))",
 				"k = clock(every=1)",
 				'pos = curve(time(k), "Ramp up", low=-0.2, high=1)',
-				'width = curve(audio("Kick"), "Ramp up", low=0.05, high=0.4)',
+				'width = curve(audio("low"), "Ramp up", low=0.05, high=0.4)',
 				'graph = color(brightness=curve(space(offset=pos, width=width), "On"))',
 				"z = max((c.z for c in luma.track.clips), default=-1) + 1",
 				'kick = draft.add_clip(graph, name="Kick chase", seconds=span, selection="all", z=z)',

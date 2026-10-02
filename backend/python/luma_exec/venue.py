@@ -1,10 +1,14 @@
 """`luma.venue` — the room, plus a camera over it.
 
 The binding snapshot exposes `fixtures` (this room's patch), `pieces`,
-`positions`, and `uv`. `fixture_library(query)` searches available light models.
-Live `groups()`, `unplaced()`, `environment()`, and `haze()` have explicitly
-named `group_snapshot`, `unplaced_snapshot`, `environment_snapshot`, and
-`haze_snapshot` counterparts.
+`positions`, and `uv`. `positions` is stage metres `(u, v, z)`. `uv` is a
+different, normalized rig space with coordinates `along` and `height`, both
+0..1. A fixture's `id` is also its venue-graph node id: the
+same string is `.id` on every handle and `"id"` in every snapshot row. A head
+id (`<fixture id>:<head index>`) labels `positions` and `uv`; it is a
+different thing. `fixture_library(query)` searches available light models.
+Live `groups()`, `environment()`, and `haze()` have explicitly named
+`group_snapshot`, `environment_snapshot`, and `haze_snapshot` counterparts.
 Aliases such as `v = luma.venue` refresh between cells; extracted records and
 lists such as `fx = v.fixtures` remain snapshots. Use live queries after edits
 in the same cell.
@@ -24,8 +28,10 @@ Render results
 
 `render()` returns a `StageImage` with `.path`, `.width`, `.height`, `.view`,
 and `.t`. The image is also delivered as a figure. Camera names come from
-`venue.views`; an unknown name is refused. The returned time is clamped to
-nonnegative seconds and, when a track duration is known, to that duration.
+`venue.views`; an unknown name is refused. `quarter_left` and
+`quarter_right` are the audience's left and right: `quarter_left` looks from
+stage right (+u). A time before 0 is refused; a time after the track ends
+is clamped to the end, and render() prints that it did.
 
 Use `highlight=group_name` for full-brightness group identification. Use
 `edit=score_edit` to see an uncommitted lighting draft, optionally `only=clip`
@@ -141,9 +147,9 @@ Reading this surface
 
 Everything that *asks the room* is a verb and takes parentheses: `render()`,
 `tiles()`, `catalog()`, `fixture_library()`, `describe()`, `nodes()`, `extent()`,
-`tip()`, `dangling()`, `unplaced()`, `groups()`, `group()`, `generate_groups()`, and the build verbs. Everything already
+`tip()`, `dangling()`, `groups()`, `group()`, `generate_groups()`, and the build verbs. Everything already
 *in your hand* is a plain attribute — `venue.views`, `cursor.at`,
-`cursor.size`, `placement.placed`, `distribution.ok`, `head.path`.
+`cursor.size`, `placement.parent_id`, `distribution.ok`, `head.path`.
 `draft.extent` is a convenience property that queries the whole draft. A
 machine-extracted listing of this module shows several of the second kind as if
 they were the first; they are properties.
@@ -153,7 +159,7 @@ is no other unit.
 
 `describe()` is a compact spatial summary. `nodes()` returns footprint centres,
 sizes, and faces in the same frame you build in. `extent()` measures the shape.
-A verb reporting `placed` means the graph accepted it; inspect a headless render
+A verb that returns means the graph accepted it; inspect a headless render
 to decide whether it is the shape you wanted.
 
 Socket operations
@@ -245,24 +251,21 @@ def _pixels(name: str, value: Any) -> int:
 
 
 def _node(value: Any) -> str:
-    """A node id out of whatever the caller is holding.
+    """The node id from a string, a handle with `.id`, or a row with `"id"`.
 
-    A verb returns a `Placement`, and the next verb wants the node it placed, so
-    every argument that names a node accepts the report as well as the id. The
-    alternative is `deck.node_id` at every call site, which is the caller doing
-    the facade's job.
+    A fixture's id and its venue-graph node id are the same string.
     """
-    for attribute in ("node_id", "id"):
-        found = getattr(value, attribute, None)
-        if isinstance(found, str):
-            return found
-    if isinstance(value, Mapping):
-        for key in ("nodeId", "node_id", "id"):
-            found = value.get(key)
-            if isinstance(found, str):
-                return found
+    if isinstance(value, (Group, Draft)):
+        raise LumaHostCallError(
+            "invalid_argument",
+            f"{value!r} is not a node; its .id is not a node id"
+            + (" — pass group.fixtures" if isinstance(value, Group) else ""),
+        )
     if isinstance(value, str):
         return value
+    found = value.get("id") if isinstance(value, Mapping) else getattr(value, "id", None)
+    if isinstance(found, str):
+        return found
     raise LumaHostCallError(
         "invalid_argument", f"{value!r} is not a node or a node id"
     )
@@ -386,11 +389,12 @@ class Tip:
     vectors you can read, compare and state elsewhere.
     """
 
-    __slots__ = ("node_id", "direction", "at", "_row")
+    __slots__ = ("node", "direction", "at", "_row")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
         self._row = dict(row)
-        self.node_id = str(row["node"])
+        #: The id of the node this end belongs to.
+        self.node = str(row["node"])
         #: Unit facade vector the end faces.
         self.direction = tuple(float(c) for c in row["direction"])
         #: Where the end is, facade metres.
@@ -402,22 +406,25 @@ class Tip:
 
     def __repr__(self) -> str:
         d = self.direction
-        return f"<tip of {self.node_id} facing ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f})>"
+        return f"<tip of {self.node} facing ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f})>"
 
 
 class NodeInfo:
     """One node as the read side reports it, in the frame you build in.
 
+    `.id` is the node id. For a fixture it is also the `venue.fixtures` row id.
     `.at` is the world plan centre, suitable for a free `place(at=)`;
     a hosted placement instead expects host-local coordinates. `.z` is the
-    centre height, not bottom clearance (`trim`). `.size` is the world-axis
-    bounding span, not a run's construction `length`. Faces and tip directions
-    use stage vectors, as the write verbs do.
+    world centre height. `.trim` is the node's own `trim=` parameter: bottom
+    clearance above the floor for a free piece, lift off the mounting surface
+    for a hosted one. `.size` is the world-axis bounding span, not a run's
+    construction `length`. Faces and tip directions use stage vectors, as the
+    write verbs do.
     """
 
     __slots__ = (
-        "id", "kind", "piece", "catalog_ref", "label", "host", "at", "z", "size",
-        "face", "tips", "member_count",
+        "id", "kind", "piece", "catalog_ref", "label", "host", "at", "z", "trim",
+        "size", "face", "tips", "member_count",
     )
 
     def __init__(self, row: Mapping[str, Any]) -> None:
@@ -433,6 +440,8 @@ class NodeInfo:
         self.at = tuple(float(c) for c in row["at"])
         #: Centre height, facade metres.
         self.z = float(row["z"])
+        #: The `trim=` parameter, metres. Not the centre height.
+        self.trim = float(row["trim"])
         #: How far it reaches on `(u, v, z)`, facade metres. `(0, 0, 0)` for a
         #: fixture: a light's size is a patch row rather than a mesh, so it
         #: counts as the point it hangs at — in `extent()` too.
@@ -442,11 +451,6 @@ class NodeInfo:
         self.face = None if row.get("face") is None else tuple(float(c) for c in row["face"])
         self.tips = tuple(Tip(t) for t in row.get("tips") or ())
         self.member_count = int(row.get("member_count", 0))
-
-    @property
-    def node_id(self) -> str:
-        """The same id, under the name every verb's `node` argument takes."""
-        return self.id
 
     def __repr__(self) -> str:
         name = self.label or self.piece or self.kind
@@ -518,10 +522,6 @@ class Cursor:
         self._placement = Placement(response)
 
     @property
-    def node_id(self) -> str:
-        return self.id
-
-    @property
     def tip(self) -> Tip | None:
         """The free end a chain continues from, or `None` where the piece left
         several open and no one of them is *the* next one (a four-way block)."""
@@ -578,44 +578,31 @@ class Cursor:
 class OpenSocket:
     """A structural socket no relation accounts for."""
 
-    __slots__ = ("node_id", "socket", "socket_type")
+    __slots__ = ("node", "socket", "socket_type")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
-        self.node_id = str(row["nodeId"])
+        #: The id of the node the socket is on.
+        self.node = str(row["nodeId"])
         self.socket = str(row["socket"])
         self.socket_type = str(row["socketType"])
 
     def __repr__(self) -> str:
-        return f"<open {self.node_id}.{self.socket} {self.socket_type}>"
-
-
-class UnplacedBranch:
-    """A subtree the solve never reached, by its root."""
-
-    __slots__ = ("node_id", "kind", "label", "descendants")
-
-    def __init__(self, row: Mapping[str, Any]) -> None:
-        self.node_id = str(row["nodeId"])
-        self.kind = str(row["kind"])
-        self.label = row.get("label")
-        self.descendants = int(row.get("descendants") or 0)
-
-    def __repr__(self) -> str:
-        return f"<unplaced {self.node_id} {self.kind} +{self.descendants}>"
+        return f"<open {self.node}.{self.socket} {self.socket_type}>"
 
 
 class Reach:
     """What an extend ray met, and how far away it is."""
 
-    __slots__ = ("node_id", "socket", "gap_m")
+    __slots__ = ("node", "socket", "gap_m")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
-        self.node_id = str(row["nodeId"])
+        #: The id of the node the ray met.
+        self.node = str(row["nodeId"])
         self.socket = str(row["socket"])
         self.gap_m = float(row["gapM"])
 
     def __repr__(self) -> str:
-        return f"<reach {self.node_id}.{self.socket} gap={self.gap_m:g} m>"
+        return f"<reach {self.node}.{self.socket} gap={self.gap_m:g} m>"
 
 
 class DistributedFixture:
@@ -625,12 +612,11 @@ class DistributedFixture:
     the order they hang in, not the order their labels are numbered in.
     """
 
-    __slots__ = ("node_id", "label", "universe", "address", "along_m", "group_path")
+    __slots__ = ("id", "label", "universe", "address", "along_m", "group_path")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
-        #: The `fixtures` row id, which is also its venue-graph node id — what
-        #: `aim` and `trim` take.
-        self.node_id = str(row["id"])
+        #: The fixture id. It is also its venue-graph node id.
+        self.id = str(row["id"])
         self.label = str(row["label"])
         self.universe = int(row["universe"])
         self.address = int(row["address"])
@@ -641,7 +627,7 @@ class DistributedFixture:
 
     def __repr__(self) -> str:
         return (
-            f"<{self.label} u{self.universe}/{self.address} "
+            f"<{self.label} {self.id} u{self.universe}/{self.address} "
             f"at {self.along_m:+.2f} m>"
         )
 
@@ -649,35 +635,28 @@ class DistributedFixture:
 class Placement:
     """What one verb did, in the resolver's own words.
 
-    `outcome` is a fact about the *graph*, not a verdict on the call: `detach`
-    reports `unplaced` and did exactly what it was asked. A call that was
-    refused raises `VenueRefused` and produces no `Placement` at all.
+    A call that was refused raises `VenueRefused` and produces no `Placement`
+    at all.
 
     `warnings` are the things the solve decided for the caller — a roll a joint
     does not have, a catalog entry that is gone. They never mean the call
     failed.
     """
 
-    __slots__ = ("node_id", "outcome", "parent_id", "warnings", "dangling",
-                 "constraints", "_tree")
+    __slots__ = ("id", "parent_id", "warnings", "dangling", "constraints", "_tree")
 
     def __init__(self, response: Mapping[str, Any]) -> None:
         report = response.get("placement") or {"nodeId": response.get("node", "")}
-        self.node_id = str(report["nodeId"])
-        self.outcome = str(report.get("outcome") or "placed")
+        #: The id of the node this verb placed or edited.
+        self.id = str(report["nodeId"])
         self.parent_id = report.get("parentId")
         self.warnings = tuple(str(w) for w in report.get("warnings") or ())
         self.dangling = tuple(OpenSocket(d) for d in report.get("dangling") or ())
         self.constraints = tuple(report.get("constraints") or ())
         self._tree = str(response.get("describe") or "")
 
-    @property
-    def placed(self) -> bool:
-        """Whether the solve reached it — whether it is in the room."""
-        return self.outcome == "placed"
-
     def describe(self) -> str:
-        """This operation's outcome, warnings and constraints. No extra solve.
+        """This operation's result, warnings and constraints. No extra solve.
 
         Read `venue.describe()` for a fresh room summary.
         """
@@ -685,7 +664,7 @@ class Placement:
 
     def __repr__(self) -> str:
         warned = f" {len(self.warnings)} warnings" if self.warnings else ""
-        return f"<Placement {self.node_id} {self.outcome}{warned}>"
+        return f"<Placement {self.id} on {self.parent_id}{warned}>"
 
     def __str__(self) -> str:
         # The summary, not the tree. A verb's report is printed constantly and
@@ -711,7 +690,7 @@ class Distribution:
     """
 
     __slots__ = (
-        "fixtures", "refusal", "warnings", "dangling", "unplaced", "draft_row", "_tree",
+        "fixtures", "refusal", "warnings", "dangling", "draft_row", "_tree",
     )
 
     def __init__(self, response: Mapping[str, Any]) -> None:
@@ -726,7 +705,6 @@ class Distribution:
         self.refusal = report.get("refusal")
         self.warnings = tuple(str(w) for w in report.get("warnings") or ())
         self.dangling = tuple(OpenSocket(d) for d in report.get("dangling") or ())
-        self.unplaced = tuple(UnplacedBranch(u) for u in report.get("unplaced") or ())
         self._tree = str(response.get("describe") or "")
 
     @property
@@ -1064,20 +1042,20 @@ class Catalog:
 class GroupFixture:
     """One fixture in a group, and which of its heads the group holds."""
 
-    __slots__ = ("node_id", "label", "heads", "head_count")
+    __slots__ = ("id", "label", "heads", "head_count")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
-        #: The `fixtures` row id, which is also its venue-graph node id.
-        self.node_id = str(row["id"])
+        #: The fixture id. It is also its venue-graph node id.
+        self.id = str(row["id"])
         self.label = str(row["label"])
         #: Primitive ids (`<fixture>:<head>`) of the heads in the group. Shorter
         #: than `head_count` means only part of the fixture is in it.
         self.heads = tuple(str(h) for h in row.get("heads") or ())
-        self.head_count = int(row.get("headCount") or 0)
+        self.head_count = int(row.get("head_count") or 0)
 
     def __repr__(self) -> str:
         part = "" if len(self.heads) == self.head_count else f" {len(self.heads)}/{self.head_count} heads"
-        return f"<{self.node_id} {self.label}{part}>"
+        return f"<{self.id} {self.label}{part}>"
 
 
 class Group:
@@ -1107,21 +1085,21 @@ class Group:
         self.name = str(row.get("name") or "")
         self.label = str(row.get("label") or "")
         self.path = str(row.get("path") or self.label)
-        self.parent_id = row.get("parentId")
+        self.parent_id = row.get("parent_id")
         #: `derived`, `edited` or `manual`.
         self.origin = str(row.get("origin") or "derived")
         #: `wash`, `spot`, `beam`, `strobe`, `blinder`, `pixel`, `fx`, `other`
         #: — the role branch this sits under. `None` for a hand-made group.
         self.role = row.get("role")
-        self.axis_lr = row.get("axisLr")
-        self.axis_fb = row.get("axisFb")
-        self.axis_ab = row.get("axisAb")
+        self.axis_lr = row.get("axis_lr")
+        self.axis_fb = row.get("axis_fb")
+        self.axis_ab = row.get("axis_ab")
         self.fixtures = tuple(GroupFixture(f) for f in row.get("fixtures") or ())
 
     @property
     def fixture_ids(self) -> tuple[str, ...]:
         """The `fixtures` row ids in this group, in creation order."""
-        return tuple(f.node_id for f in self.fixtures)
+        return tuple(f.id for f in self.fixtures)
 
     @property
     def heads(self) -> tuple[str, ...]:
@@ -1273,8 +1251,8 @@ class Venue:
     def views(self) -> tuple[str, ...]:
         """Every name `render(view=...)` accepts, in the order they are offered.
 
-        Comes from the manifest, which gets it from the renderer's own `View`
-        enum — there is no second list of view names in Python.
+        `quarter_left` and `quarter_right` are named from the audience: the
+        audience's left is stage right (+u).
         """
         return tuple(object.__getattribute__(self, "_values")["views"])
 
@@ -1314,14 +1292,15 @@ class Venue:
             v.render(edit=edit, only=clip, t=32)
             v.render(edit=edit, t=32)  # full composite
 
-        `view` is one of `luma.venue.views`. `t` is absolute track time, clamped
-        to the track's span. The room is drawn under its own environment — see
+        `view` is one of `luma.venue.views`. `t` is absolute track time in
+        seconds, from 0 to the track's end. The room is drawn under its own environment — see
         `environment()` — with a ground grid over the floor, so the hardware
         stays legible next to whatever the score is doing at `t`.
 
-        `house` and `sun` light *this frame only*. They are a camera setting,
-        not an edit: pass `house=0.2` to see the rig in a dim room, or `sun=10`
-        to see it in daylight, and the venue is exactly as it was afterwards.
+        `house` (0 to 1) and `sun` (-90 to 90 degrees) light *this frame only*.
+        They are a camera setting, not an edit: pass `house=0.2` to see the rig
+        in a dim room, or `sun=10` to see it in daylight, and the venue is
+        exactly as it was afterwards.
         Pass one or the other — a frame has one sky. `environment()` is the way
         to change the room itself.
 
@@ -1332,8 +1311,8 @@ class Venue:
         is not drawn; `t` still only picks the moment, and the view still picks
         the camera.
 
-        Raises `LumaHostCallError` if `t` is not finite or a frame side is
-        under one pixel.
+        Raises `LumaHostCallError` for a value that is not finite or is out of
+        range: `t`, `house`, `sun`, or a frame side outside 1 to 2000 pixels.
         """
         self._require_active()
         host_call = object.__getattribute__(self, "_host_call")
@@ -1354,8 +1333,8 @@ class Venue:
             "width": width,
             "height": height,
             "highlight": None if highlight is None else str(highlight),
-            "house": None if house is None else float(house),
-            "sun": None if sun is None else float(sun),
+            "house": None if house is None else _finite("house", house),
+            "sun": None if sun is None else _finite("sun", sun),
         }
         if edit is not None:
             from .score import Edit
@@ -1374,6 +1353,8 @@ class Venue:
             artifact_rel=str(response["artifactRel"]),
             workspace=object.__getattribute__(self, "_workspace"),
         )
+        if shot.t < float(t) - 1e-3:
+            print(f"render: clamped to the end of the track: {shot.t:.3f} s")
         figures = object.__getattribute__(self, "_figures")
         if figures is not None:
             figures.register(shot.artifact_rel, shot.width, shot.height)
@@ -1383,7 +1364,7 @@ class Venue:
         """The room as a top-down text map, one character per `cell_m` square.
 
         A compact plan of the venue as the house sees it, with a header naming
-        the convention and the unplaced branches listed below it. Use it to
+        the convention. Use it to
         compare layouts; use `render()` to judge the actual 3D scene and lights.
 
         Raises `LumaHostCallError` if `cell_m` is not a finite number of metres.
@@ -1418,7 +1399,7 @@ class Venue:
         setting it makes the room indoor. `sun` is how far the sun stands above
         the horizon in degrees, -90 to 90, and setting it makes the room open
         air. A room is lit by one or the other, so passing both is an error.
-        Values outside those ranges are clamped, not refused.
+        A value that is not finite or is outside its range is refused.
 
         `mode` on its own — `"indoor"` or `"outdoor"` — switches without moving
         a dial: the room keeps the level it last had in that mode.
@@ -1430,8 +1411,8 @@ class Venue:
             "venue.environment",
             {
                 "mode": None if mode is None else str(mode),
-                "house": None if house is None else float(house),
-                "sun": None if sun is None else float(sun),
+                "house": None if house is None else _finite("house", house),
+                "sun": None if sun is None else _finite("sun", sun),
             },
         )
         return Environment(response)
@@ -1542,7 +1523,7 @@ class Venue:
     def describe(self, *, detail: bool = False) -> str:
         """Compact live spatial summary, ordered upstage to downstage.
 
-        Reports bounds, depth/height rows, unplaced counts and warnings.
+        Reports bounds, depth/height rows, open sockets and warnings.
         `detail=True` requests the full attachment tree; narrow `nodes()` first
         for large venues to keep results within the model context.
         Use `nodes(kind=, label=, on=, region=)` and `extent()` for details;
@@ -1558,17 +1539,6 @@ class Venue:
         sockets rather than leaving them open.
         """
         return tuple(OpenSocket(row) for row in self._verb("venue.open", {})["dangling"])
-
-    def unplaced(self) -> tuple[UnplacedBranch, ...]:
-        """Every branch the solve never reached, by its root.
-
-        A patched fixture nobody has hung is the ordinary case; `detach` is the
-        other. Read live, so it answers about the room as this cell has left it
-        rather than as it found it.
-        """
-        return tuple(
-            UnplacedBranch(row) for row in self._verb("venue.open", {})["unplaced"]
-        )
 
     def groups(self) -> GroupTree:
         """Saved fixture collections, read live. New venues start with none.
@@ -1599,7 +1569,7 @@ class Venue:
             if isinstance(fixtures, Distribution) and not fixtures.ok:
                 raise LumaHostCallError("invalid_argument", "cannot group a refused distribution")
             fixtures = fixtures.fixtures
-        elif isinstance(fixtures, (str, Mapping)) or hasattr(fixtures, "node_id") or hasattr(fixtures, "id"):
+        elif isinstance(fixtures, (str, Mapping)) or hasattr(fixtures, "id"):
             fixtures = (fixtures,)
         ids = list(dict.fromkeys(_node(fixture) for fixture in fixtures))
         return Group(self._verb("venue.group", {
@@ -1849,6 +1819,9 @@ class Venue:
         footprint centre, and `ids` is a node, a group, or a list of either —
         `v.nodes(ids=groups["drum_uplighters"])` is every fixture in that group.
 
+        `region` is inclusive at both ends: a centre exactly on an edge is
+        inside. Most other ranges in Luma are half-open; this one is not.
+
             for tower in v.nodes(kind="tower"):
                 print(tower.id, tower.at, tower.size)
 
@@ -1889,7 +1862,8 @@ class Venue:
             print(v.extent(v.groups()["drum_uplighters"]))   # one group's rig geometry
 
         `selection` is a node, a group, a list of either, or anything
-        `nodes()` returned; the keyword filters are the same as `nodes()`.
+        `nodes()` returned; the keyword filters are the same as `nodes()`,
+        and `region` is inclusive at both ends there too.
         `None` back means nothing matched — including an **empty**
         selection, which is a question about no nodes and not a question
         about the room.
@@ -2102,13 +2076,6 @@ class Venue:
             )
         )
 
-    def detach(self, node: Any) -> Placement:
-        """Unplace a node and its subtree. The rows stay — that is the whole
-        difference between unplaced and deleted — so `attach`ing it somewhere
-        else restores the branch intact. It shows up in `unplaced()` meanwhile.
-        """
-        return Placement(self._verb("venue.detach", {"nodeId": _node(node)}))
-
     def remove(self, node: Any) -> str:
         """Delete nodes and everything structural under them, and return the
         tree that is left.
@@ -2118,10 +2085,8 @@ class Venue:
         with its parent) is **satisfied**, not an error: removing a node that is
         not there is the state the call was asking for.
 
-        Pulling a truss down loses the rig its shape, not its lights: every
-        fixture under it is **trayed**, so it turns up in `unplaced()` and can be
-        hung somewhere else. Only a fixture named here directly is deleted, and
-        then its patch row goes with it.
+        A light never exists without a place, so pulling a truss down deletes
+        every fixture under it too, patch rows included.
         """
         items = node if isinstance(node, (list, tuple, set)) else [node]
         return str(

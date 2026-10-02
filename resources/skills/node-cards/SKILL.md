@@ -135,7 +135,10 @@ edit it). Blend modes: `replace` (the clip's light, as is), `add`,
 
 Setting `base`: `direction` aims along the vector. `point` aims each head at
 the point. `away` aims each head from the point through the head (a fan that
-opens). Then yaw turns right and pitch turns up, in the aim's own frame. A
+opens). `point` is metres in the venue frame: +u stage right, +v toward the
+crowd, +z up; `direction` uses the same axes. Then yaw and pitch turn the
+aim, in degrees. Positive yaw turns counter-clockwise seen from above (the
+right-hand rule about +z, as in the venue). Positive pitch turns up. A
 head that a `mirror` folded takes the mirror image of yaw and pitch. Alpha
 is the weight. Blend modes: `replace` sets the aim; `offset` adds yaw and
 pitch to the aim underneath.
@@ -245,29 +248,32 @@ is a narrow curve with scale 1 (`[[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]`),
 not a smaller scale, which tiles. A curve over time on a wrapped scale
 zooms: `scale` 0.5 → 0.125 turns 2 copies into 8.
 
-**noise** `noise(heads=None, speed=None, scale=None, contrast=None)` → coordinate
+**noise** `noise(heads=None, period=None, scale=None, contrast=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
-| speed | number | beats | above 0 | 4 |
+| period | number | beats | above 0 | 4 |
 | scale | number | share | above 0 | one value for all heads |
 | contrast | number | share | 0–1 | 0 |
 
 Smooth noise 0–1 over head position and time. `scale` is a share of the
 rig's largest extent: 0.5 gives slow clouds, 0.02 gives each head its own
-wander. Each noise node has its own stream.
+wander. `period` is the beats for the noise to move to a new value.
+`contrast` 1 spreads the values 4 times wider about 0.5, clipped to 0–1.
+Each noise node has its own stream.
 
 **audio** `audio(low_hz=None, high_hz=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
-| low_hz | number | hz | 20–20000 | 40 |
-| high_hz | number | hz | above low_hz | 100 |
+| low_hz | number | hz | 20–20000 | the low band |
+| high_hz | number | hz | above low_hz | the low band |
 
 The energy of the band in the full mix, scaled 0–1 by its lowest and highest
 value over the whole track: every clip reads the same level at the same
-moment. `audio("Kick")` takes a band preset. Put a threshold or a
+moment. `audio("low")` takes a band: sub, low, mid or high. `luma.music`
+splits the mix by the same bands. Put a threshold or a
 floor in the curve's shape and low/high. It needs track analysis.
 
 ## curve
@@ -393,8 +399,7 @@ Curves (`v` 0–1): On, Ramp up, Ramp down, Step up, Step down, Triangle, Soft, 
 Drop, Swell, Fade in, Fade out, Square, Sine, Cosine, Double sine, Steps 2,
 Steps 3, Steps 4, Steps 8. "Step up" is `[[0, 0], [0, 1], [1, 1]]`: 0 below
 x = 0, then 1. "Step down" is its reverse. Gradients: Rainbow, Warm, Cool, Fire, Ocean,
-Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
-4000–16000, Full 20–16000. Read the exact values from `luma.presets.curves`,
+Sunset, B/W. Bands: sub, low, mid, high, the same bands as `luma.music`. Read the exact values from `luma.presets.curves`,
 `luma.presets.gradients` and `luma.presets.bands`. Clip presets are in
 `luma.presets.clips`; `preset("Chase")` gives a copy with its name.
 

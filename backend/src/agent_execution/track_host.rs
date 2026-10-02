@@ -110,8 +110,8 @@ impl TrackHost {
     ) -> Result<Value, HostCallError> {
         let resolved =
             resolve_primitive_ids(&self.pool, &self.scope.venue_id, &self.resource_root).await;
-        let light_ids: Vec<String> = resolved.into_iter().map(|(id, _)| id).collect();
-        if light_ids.is_empty() {
+        let primitive_ids: Vec<String> = resolved.into_iter().map(|(id, _)| id).collect();
+        if primitive_ids.is_empty() {
             return Err(HostCallError::new(
                 "invalid_venue",
                 "the selected venue has no patched lights",
@@ -132,7 +132,7 @@ impl TrackHost {
         let times: Vec<f64> = render_times.iter().map(|time| f64::from(*time)).collect();
         let mut arena = Arena::default();
         let frames = scene.render(&render_times, Scope::Composite, &mut arena);
-        let values = lighting_tensor(&frames, &light_ids);
+        let values = lighting_tensor(&frames, &primitive_ids);
 
         let descriptor = {
             let store = self.workspace.store();
@@ -148,9 +148,9 @@ impl TrackHost {
         let tensor = TensorRef::new(
             descriptor.id.clone(),
             DType::F32,
-            vec![light_ids.len(), times.len(), LIGHTING_CHANNELS.len()],
+            vec![primitive_ids.len(), times.len(), LIGHTING_CHANNELS.len()],
             vec![
-                AxisSpec::labels("light", light_ids),
+                AxisSpec::labels("primitive", primitive_ids),
                 AxisSpec::coordinates("time", times, Some("s".into())),
                 AxisSpec::labels(
                     "channel",
@@ -161,7 +161,7 @@ impl TrackHost {
                 ),
             ],
             Provenance::new("track_candidate_compositor").with_note(
-                "production Scene composite; r, g, b are normalized RGB multiplied by dimmer",
+                "production Scene composite; r, g, b are light in linear Rec. 2020, already multiplied by dimmer",
             ),
         );
 
@@ -277,13 +277,14 @@ pub(crate) const LIGHTING_CHANNELS: [&str; 12] = [
     "aim_weight",
 ];
 
-/// Row-major `[light, time, channel]` over [`LIGHTING_CHANNELS`]. A missing
+/// Row-major `[primitive, time, channel]` over [`LIGHTING_CHANNELS`]. A missing
 /// primitive is all zero: black, no strobe, no aim.
-fn lighting_tensor(frames: &[UniverseState], light_ids: &[String]) -> Vec<f32> {
-    let mut values = Vec::with_capacity(light_ids.len() * frames.len() * LIGHTING_CHANNELS.len());
-    for light_id in light_ids {
+fn lighting_tensor(frames: &[UniverseState], primitive_ids: &[String]) -> Vec<f32> {
+    let mut values =
+        Vec::with_capacity(primitive_ids.len() * frames.len() * LIGHTING_CHANNELS.len());
+    for primitive_id in primitive_ids {
         for frame in frames {
-            let Some(state) = frame.primitives.get(light_id) else {
+            let Some(state) = frame.primitives.get(primitive_id) else {
                 values.extend([0.0; LIGHTING_CHANNELS.len()]);
                 continue;
             };

@@ -36,7 +36,8 @@ impl ClipGraph {
                 None => Some(empty),
                 _ => None,
             };
-            parts.push(match (hz("low_hz", 40.), hz("high_hz", 100.)) {
+            let (empty_low, empty_high) = crate::presets::empty_band();
+            parts.push(match (hz("low_hz", empty_low), hz("high_hz", empty_high)) {
                 (Some(low), Some(high)) => format!("audio {low}–{high} Hz"),
                 _ => "audio".into(),
             });

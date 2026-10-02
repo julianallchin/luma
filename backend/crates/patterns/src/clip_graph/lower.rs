@@ -430,11 +430,14 @@ impl Lowering<'_> {
 
     fn noise(&mut self, id: &str) -> Result<Lowered> {
         let heads = self.heads_input(id)?;
-        let speed = self.number(id, "speed", 4.)?;
+        let period = self.number(id, "period", 4.)?;
         let uniform = !self.node(id).inputs.contains_key("scale");
         let scale = self.number(id, "scale", 1.)?;
         let contrast = self.number(id, "contrast", 0.)?;
-        let table = self.kernel(Kernel::ClockTable, vec![("period", speed.parts[0].clone())]);
+        let table = self.kernel(
+            Kernel::ClockTable,
+            vec![("period", period.parts[0].clone())],
+        );
         let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
         let salt = super::noise::fnv(id);
         let span = self.index_field(&heads.units.span)?;
@@ -467,8 +470,9 @@ impl Lowering<'_> {
             ))),
         }
         };
-        let low = hz(self, "low_hz", 40.)?;
-        let high = hz(self, "high_hz", 100.)?;
+        let (empty_low, empty_high) = crate::presets::empty_band();
+        let low = hz(self, "low_hz", empty_low)?;
+        let high = hz(self, "high_hz", empty_high)?;
         // The band's level, 0–1 over the whole track.
         let energy = self.library_node(
             "band_energy",

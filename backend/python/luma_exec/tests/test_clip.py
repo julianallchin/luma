@@ -52,7 +52,7 @@ FIXTURE = {
     },
     "gradients": {name: [{"t": 0, "color": [0, 0, 0]}, {"t": 1, "color": [1, 1, 1 - index / 10]}]
                   for index, name in enumerate(["Rainbow", "Warm", "Cool", "Fire", "Ocean", "Sunset", "B/W"])},
-    "bands": {"Kick": [40, 100], "Bass": [20, 250], "Mids": [250, 4000], "Highs": [4000, 16000], "Full": [20, 16000]},
+    "bands": {"sub": [20, 60], "low": [60, 300], "mid": [300, 4000], "high": [4000, 20000]},
 }
 # The binding's shape: lists of named records, as presets.json ships them.
 PRESETS = {
@@ -137,14 +137,14 @@ CATALOG = {
     'Gradient': "place = space(); color(color=curve(place, 'Ramp up', gradient='Sunset'))",
     'Stepped palette': "t = time(every=4); color(color=curve(t, 'Steps 4', gradient='Rainbow'))",
     'Two-color swap': "t = time(every=2); color(color=curve(t, 'Square', gradient=[(0, '#ff2a00'), (1, '#0040ff')]))",
-    'Follows a band': "kick = audio(low_hz=40, high_hz=100); color(brightness=curve(kick, 'Ramp up'))",
-    'VU meter': "bars = split(); bass = audio(low_hz=20, high_hz=250); height = space(heads=bars, direction=(0, 0, 1), shift=curve(bass, 'Ramp up', high=1.1)); color(brightness=curve(height, 'Step down'))",
+    'Follows a band': "bass = audio(low_hz=60, high_hz=300); color(brightness=curve(bass, 'Ramp up'))",
+    'VU meter': "bars = split(); bass = audio(low_hz=60, high_hz=300); height = space(heads=bars, direction=(0, 0, 1), shift=curve(bass, 'Ramp up', high=1.1)); color(brightness=curve(height, 'Step down'))",
     'Random heads': "k = time(every=1); order = shuffle(time=k); rank = space(heads=order, kind='order'); color(brightness=curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]))",
     'Random bars': "bars = group(); k = time(every=1); order = shuffle(heads=bars, time=k); rank = space(heads=order, kind='order'); color(brightness=curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]))",
     'Sparkle': "k = time(every=0.125, duration=0.5); order = shuffle(time=k); rank = space(heads=order, kind='order'); color(brightness=curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]) * curve(k, 'Spike'))",
     'Build': "clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, 'Ramp up'), kind='order'); color(brightness=curve(rank, 'Step down'))",
     'Dissolve': "clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, 'Ramp down'), kind='order'); color(brightness=curve(rank, 'Step down'))",
-    'Clouds': "cloud = noise(speed=8, scale=0.5); color(color=curve(cloud, 'Ramp up', gradient='Ocean'), brightness=curve(cloud, 'Ramp up', low=0.2, high=1))",
+    'Clouds': "cloud = noise(period=8, scale=0.5); color(color=curve(cloud, 'Ramp up', gradient='Ocean'), brightness=curve(cloud, 'Ramp up', low=0.2, high=1))",
     'Sparkle rain': "bars = group(); columns = split(); k = time(every=0.25, duration=1); order = shuffle(heads=bars, time=k); drop = space(heads=columns, direction=(0, 0, -1), shift=curve(k, 'Ramp up', low=-0.3, high=1), scale=0.3); rank = space(heads=order, kind='order'); color(brightness=curve(drop, 'Comet') * curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]))",
     'Chase': "t = time(every=2); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))",
     'Wave': "place = space(); t = time(every=2, phase=curve(place, 'Ramp down', low=180, high=360)); color(brightness=curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))",
@@ -168,28 +168,28 @@ CATALOG = {
     'Mirror': "halves = mirror(); t = time(every=2); place = space(heads=halves, shift=curve(t, 'Ramp up', low=0.4, high=1), scale=0.1); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))",
     'Kaleidoscope': "sides = mirror(direction=(1, 0, 0)); quarters = mirror(heads=sides, direction=(0, 0, 1)); turn = space(heads=quarters, centre=(0.75, 0.5, 0.75), kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp down', high=360)); color(brightness=curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]))",
     'Position': 'aim(direction=D)',
-    'Fan': "place = space(); aim(direction=D, yaw=curve(place, 'Ramp up', low=-25, high=25))",
+    'Fan': "place = space(); aim(direction=D, yaw=curve(place, 'Ramp up', low=25, high=-25))",
     'Converge': "aim(point=(0, 3, 0), base='point')",
     'Follow': "t = time(); aim(point=curve(t, 'Ramp up', low=(-3, 3, 0), high=(3, 3, 0)), base='point')",
     'Bloom': "t = time(); aim(point=curve(t, 'Ramp up', low=(0, 0, 40), high=(0, 0, 7)), base='away')",
     'Tunnel': "aim(point=(0, 25, 1.5), base='point')",
-    'Sweep': "t = time(every=8); aim(direction=D, yaw=curve(t, 'Sine', low=-45, high=45))",
+    'Sweep': "t = time(every=8); aim(direction=D, yaw=curve(t, 'Sine', low=45, high=-45))",
     'Nod wave': "place = space(); t = time(every=4, phase=curve(place, 'Ramp up', high=216)); aim(direction=D, pitch=curve(t, 'Sine', low=-25, high=25))",
-    'Circle': "t = time(every=4); low = value(-18); high = value(18); aim(direction=D, yaw=curve(t, 'Cosine', low=low, high=high), pitch=curve(t, 'Sine', low=low, high=high))",
-    'Figure-8': "t = time(every=4); aim(direction=D, yaw=curve(t, 'Sine', low=-25, high=25), pitch=curve(t, 'Double sine', low=-12.5, high=12.5))",
-    'Pinwheel': "turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp up', high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, 'Cosine', low=low, high=high), pitch=curve(t, 'Sine', low=low, high=high))",
-    'Scissor': "halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, 'Sine', low=-30, high=30))",
+    'Circle': "t = time(every=4); low = value(-18); high = value(18); aim(direction=D, yaw=curve(t, 'Cosine', low=high, high=low), pitch=curve(t, 'Sine', low=low, high=high))",
+    'Figure-8': "t = time(every=4); aim(direction=D, yaw=curve(t, 'Sine', low=25, high=-25), pitch=curve(t, 'Double sine', low=-12.5, high=12.5))",
+    'Pinwheel': "turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp up', high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, 'Cosine', low=high, high=low), pitch=curve(t, 'Sine', low=low, high=high))",
+    'Scissor': "halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, 'Sine', low=30, high=-30))",
     'Up/down flip': "t = time(every=2); aim(direction=D, pitch=curve(t, 'Square', low=-30, high=30))",
-    'Ballyhoo': "speed = value(4); scale = value(0.02); drift = noise(speed=speed, scale=scale); wander = noise(speed=speed, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=low, high=high), pitch=curve(wander, 'Ramp up', low=low, high=high))",
+    'Ballyhoo': "period = value(4); scale = value(0.02); drift = noise(period=period, scale=scale); wander = noise(period=period, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=high, high=low), pitch=curve(wander, 'Ramp up', low=low, high=high))",
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
-    'Strobe follows a band': "kick = audio(low_hz=40, high_hz=100); strobe(rate=curve(kick, 'Ramp up', low=0.3, high=1))",
+    'Strobe follows a band': "bass = audio(low_hz=60, high_hz=300); strobe(rate=curve(bass, 'Ramp up', low=0.3, high=1))",
     # Not shipped presets.
     "Slash": EXAMPLE_SLASH,
     "Slash with values": EXAMPLE_SLASH_VALUES,
     "Shifted chase": EXAMPLE_SHIFT,
     "Wobble strobe": "strobe(rate=curve(time(every=0.25), 'Square'))",
-    "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('Kick'), 'Ramp up', low=0.2, high=1))",
+    "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('low'), 'Ramp up', low=0.2, high=1))",
     "Named steps": "t = time(every=2); cut = curve(t, 'Step down'); fade = curve(t, 'Fade out'); glow = cut * fade; color(brightness=max(glow, 0.1), alpha=1 - curve(t, 'Ramp up'))",
 }
 
@@ -444,7 +444,7 @@ class ClipBuilderTests(unittest.TestCase):
         vector = curve(time(), low=(0, 0, 1), high=(0, 1, 0))
         self.assertEqual(vector.settings["kind"], "vector")
         self.assertEqual(curve(time(), gradient="Fire").settings["kind"], "color")
-        self.assertEqual(audio("kick").inputs, {"low_hz": 40, "high_hz": 100})
+        self.assertEqual(audio("Low").inputs, {"low_hz": 60, "high_hz": 300})
         self.assertEqual(space(kind="angle").settings["wrap"], "yes")
         self.assertEqual(space().settings, {"kind": "line", "wrap": "no"})
         with self.assertRaises(TypeError):
@@ -523,27 +523,27 @@ class ClipEditTests(unittest.TestCase):
     def test_add_clip_without_a_name_raises_before_the_host(self):
         edit = self.track().edit()
         with self.assertRaisesRegex(ClipError, "clip: expected a name; got none"):
-            edit.add_clip(color(), beats=(0, 4))
+            edit.add_clip(color(), at=("1", "2"))
         self.assertEqual(self.calls, [])
         self.assertEqual(edit.clips, ())
 
     def test_a_preset_clip_inherits_the_name(self):
         edit = self.track().edit()
-        first = edit.add_clip(preset("Chase"), beats=(0, 4))
-        second = edit.add_clip("Chase", beats=(4, 8), name="Other")
+        first = edit.add_clip(preset("Chase"), at=("1", "2"))
+        second = edit.add_clip("Chase", at=("2", "3"), name="Other")
         self.assertEqual((first.name, second.name), ("Chase", "Other"))
         stored = edit.candidate["clips"][first.id]
         self.assertEqual(stored["graph"], CHASE_JSON)
         self.assertEqual(stored["name"], "Chase")
         self.assertEqual(first.graph, preset("Chase"))
         self.assertEqual(first.blend, "replace")
-        sweep = edit.add_clip("Sweep", beats=(0, 4))
+        sweep = edit.add_clip("Sweep", at=("1", "2"))
         self.assertEqual((sweep.name, sweep.blend), ("Sweep", "offset"))
-        self.assertEqual(edit.add_clip("Sweep", beats=(0, 4), blend="replace").blend, "replace")
+        self.assertEqual(edit.add_clip("Sweep", at=("1", "2"), blend="replace").blend, "replace")
 
     def test_add_and_update_check_the_one_clip(self):
         edit = self.track().edit()
-        clip = edit.add_clip(color(), name="Wash", beats=(0, 4), id="wash")
+        clip = edit.add_clip(color(), name="Wash", at=("1", "2"), id="wash")
         self.assertEqual(self.calls[-1][0], "track.clip_check")
         self.assertEqual(self.calls[-1][1]["clip"]["name"], "Wash")
         self.refuse = "color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, \"Ramp up\")"
@@ -559,10 +559,10 @@ class ClipEditTests(unittest.TestCase):
     def test_clips_read_back_with_source(self):
         track = self.track()
         edit = track.edit()
-        edit.add_clip(run(CATALOG["Circle"]), name="Circle", beats=(0, 8), blend="offset")
-        edit.add_clip(run(EXAMPLE_SLASH), name="Slash", beats=(8, 16))
+        edit.add_clip(run(CATALOG["Circle"]), name="Circle", at=("1", "3"), blend="offset")
+        edit.add_clip(run(EXAMPLE_SLASH), name="Slash", at=("3", "5"))
         edit.apply()
-        circle, slash = sorted(track.clips, key=lambda clip: clip.start)
+        circle, slash = track.clips  # sorted by start
         self.assertEqual(circle.name, "Circle")
         self.assertEqual(run(circle.graph.source()).json(), run(CATALOG["Circle"]).json())
         self.assertEqual(run(slash.graph.source()).json(), run(EXAMPLE_SLASH).json())
@@ -576,10 +576,10 @@ class ClipEditTests(unittest.TestCase):
         values[:, :, 6] = 0.25    # strobe
         values[:, :, 9] = 1.0     # aim v
         values[:, :, 11] = 0.75   # weight
-        self.render = {"values": values, "lightIds": ["a", "b"], "timesS": [0, 0.5, 1],
+        self.render = {"values": values, "primitiveIds": ["a", "b"], "timesS": [0, 0.5, 1],
                        "channels": ["r", "g", "b", "dimmer", "pan", "tilt", "strobe", "speed",
                                     "aim_u", "aim_v", "aim_z", "aim_weight"]}
-        output = edit.window(beats=(0, 2)).output
+        output = edit.window(at=("1", "1.3")).output
         self.assertEqual(output.values.shape, (2, 3, 3))
         self.assertTrue(np.allclose(output.values[..., 0], 0.5))
         self.assertEqual(output.aim.values.shape, (2, 3, 3))
@@ -587,7 +587,7 @@ class ClipEditTests(unittest.TestCase):
         self.assertTrue(np.allclose(output.aim.weight, 0.75))
         self.assertTrue(np.allclose(output.strobe.values, 0.25))
         self.render = {"values": np.ones((2, 3, 3), dtype=np.float32)}
-        rgb = edit.window(beats=(0, 2)).output
+        rgb = edit.window(at=("1", "1.3")).output
         self.assertEqual(rgb.values.shape, (2, 3, 3))
         with self.assertRaisesRegex(Exception, "RGB only"):
             rgb.aim
@@ -599,7 +599,7 @@ class ClipEditTests(unittest.TestCase):
                                      "scope": {}, "root": {"presets": PRESETS}},
                                     Path(tempfile.mkdtemp(prefix="luma-clip-")))
         self.assertEqual(namespace.presets.clips["Chase"].json(), CHASE_JSON)
-        self.assertEqual(namespace.presets.bands["Kick"], (40.0, 100.0))
+        self.assertEqual(namespace.presets.bands["low"], (60.0, 300.0))
         self.assertIs(namespace.clip.curve, curve)
         self.assertIs(namespace.clip.max, clip_max)
 
