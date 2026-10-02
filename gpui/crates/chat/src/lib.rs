@@ -69,7 +69,7 @@ use luma_lib::agent::{
     AgentService, ThreadScope, Transcript, TurnContext, TurnEvent, TurnOutcome, UserPrompt,
 };
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
-use luma_ui::arg::select::MenuVisibility;
+use luma_ui::float::MenuVisibility;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
 

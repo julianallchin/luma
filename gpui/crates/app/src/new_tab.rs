@@ -13,7 +13,7 @@ use gpui::*;
 use gpui_component::Icon;
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_ui::combo::{self, Combo, Level};
-use luma_ui::float;
+use luma_ui::float::{self, MenuVisibility};
 use luma_ui::icons::IconName;
 use luma_ui::{glass, radius};
 
@@ -120,9 +120,11 @@ fn glyph(icon: IconName) -> AnyElement {
         .into_any_element()
 }
 
-/// The open box, and where the keyboard was when it opened.
+/// The box, open or playing its exit, and where the keyboard was when it
+/// opened.
 pub(crate) struct NewTab {
     combo: Entity<Combo<Entry>>,
+    visibility: MenuVisibility,
     /// The keyboard goes back here when the box closes without opening a
     /// tab. The box's field is the only focus inside it, so closing it would
     /// otherwise leave the keyboard on an element no frame draws.
@@ -130,16 +132,10 @@ pub(crate) struct NewTab {
     _events: Subscription,
 }
 
-impl NewTab {
-    pub(crate) fn combo(&self) -> Entity<Combo<Entry>> {
-        self.combo.clone()
-    }
-}
-
 impl Luma {
     /// Press the `+`: open the box on the venue's songs, or close it.
     pub(crate) fn toggle_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.new_tab.is_some() {
+        if self.new_tab_open() {
             self.close_new_tab(window, cx);
             return;
         }
@@ -161,22 +157,74 @@ impl Luma {
         let events = cx.subscribe_in(&combo, window, Self::new_tab_event);
         self.new_tab = Some(NewTab {
             combo,
+            visibility: MenuVisibility::Open,
             return_focus: window.focused(cx).map(|focus| focus.downgrade()),
             _events: events,
         });
         cx.notify();
     }
 
-    /// Close the box and hand the keyboard back to where it was.
+    fn new_tab_open(&self) -> bool {
+        self.new_tab
+            .as_ref()
+            .is_some_and(|new_tab| new_tab.visibility.is_open())
+    }
+
+    /// Close the box and hand the keyboard back to where it was. The box
+    /// stays up, inert, while its exit plays.
     pub(crate) fn close_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(new_tab) = self.new_tab.take() else {
+        let Some(new_tab) = self
+            .new_tab
+            .as_mut()
+            .filter(|new_tab| new_tab.visibility.is_open())
+        else {
             return;
         };
-        match new_tab.return_focus.and_then(|focus| focus.upgrade()) {
+        new_tab.visibility.close();
+        match new_tab
+            .return_focus
+            .take()
+            .and_then(|focus| focus.upgrade())
+        {
             Some(focus) => window.focus(&focus, cx),
             None => window.focus(&self.focus, cx),
         }
         cx.notify();
+    }
+
+    /// The box as a popover hung at `at`, the `+`'s foot: open, leaving, or
+    /// nothing once its exit has played.
+    pub(crate) fn new_tab_popover(
+        &mut self,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let new_tab = self.new_tab.as_mut()?;
+        if new_tab
+            .visibility
+            .tick_close(luma_ui::motion::reduced_motion(cx))
+        {
+            window.request_animation_frame();
+        }
+        let content = new_tab.combo.clone().into_any_element();
+        let popover = if new_tab.visibility.is_open() {
+            let entity = cx.entity();
+            float::anchored_at(
+                "new-tab-combo",
+                at,
+                float::Dismiss::on_press_out(move |window, cx| {
+                    entity.update(cx, |this, cx| this.close_new_tab(window, cx));
+                }),
+                content,
+            )
+        } else if let Some(progress) = new_tab.visibility.exit() {
+            float::anchored_at_closing("new-tab-combo", at, content, progress)
+        } else {
+            self.new_tab = None;
+            return None;
+        };
+        Some(popover)
     }
 
     fn new_tab_event(

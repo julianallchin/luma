@@ -449,8 +449,10 @@ test("view settings persist per device and per venue", () => {
   openView();
   const before = all();
   expect([before.grid, before.gizmos]).toEqual([true, true]);
-  // Haze is on the venue page, outside the popover: pressing it closes the
-  // popover, so it goes first.
+  // Haze is on the venue page, outside the popover, and a press outside a
+  // popover only closes it: close it first.
+  app.key("escape");
+  until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
   const density = scrub("Haze density").bounds;
   app.drag({ x: density.x + 2, y: density.y + density.height / 2 }, { dx: (density.width - 4) * 0.8, dy: 0 }, { steps: 8 });
   openView();

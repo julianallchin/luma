@@ -1024,31 +1024,52 @@ const SCRUB_FILL: f32 = 0.07;
 // Anchored menus
 // ---------------------------------------------------------------------------
 
-/// The surface a floating *menu* is drawn on — smaller and one corner-step
-/// tighter than a dialog card, because it hangs off a control rather than
-/// standing on its own.
-///
-/// It sets its own text colour. A menu is often a child of its trigger, and a
-/// light chip would otherwise give the menu its dark ink.
+/// The padded column a popover's rows sit in: a menu's, a select's, a
+/// picker's. Layout only — the surface under it is [`frosted_card`], which
+/// every anchored host already draws, so a combo box or any other content
+/// that wants its edges flush skips this and gets the same card.
 pub fn popover_card() -> Div {
     div()
         .flex()
         .flex_col()
         .gap(rpx(2.0))
         .p(rpx(4.0))
-        .rounded(rpx(radius::CARD))
-        .border_1()
-        .border_color(glass::hairline(0.10))
-        .bg(glass::overlay())
         .text_size(rpx(13.0))
-        .text_color(ladder::foreground())
-        .overflow_hidden()
 }
 
-/// Apply the shared floating-card material. Anchored hosts do this already;
-/// viewport overlays use it directly, outside their positioned card contents.
+/// The one floating surface: the backdrop blur, the [`glass::overlay`] fill
+/// and the hairline rim, at the popover corner. Anchored hosts draw it around
+/// their content; a viewport overlay with no trigger to hang from (a toolbar,
+/// a notice, a drag ghost) calls it directly.
+///
+/// The rim is painted over the content and takes no layout, so a width set
+/// on the content is the card's width, and content that runs to the edge —
+/// a combo box's header band — still gets an edge.
+///
+/// It sets its own text colour. A popover is often a child of its trigger,
+/// and a light chip would otherwise give it its dark ink.
 pub fn frosted_card(content: impl IntoElement) -> crate::dialog::Frosted {
-    crate::dialog::frosted(radius::CARD, crate::dialog::CARD_BLUR, content)
+    crate::dialog::frosted(
+        radius::CARD,
+        crate::dialog::CARD_BLUR,
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .rounded(rpx(radius::CARD))
+            .bg(glass::overlay())
+            .text_color(ladder::foreground())
+            .overflow_hidden()
+            .child(content)
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(rpx(radius::CARD))
+                    .border_1()
+                    .border_color(glass::hairline(0.10)),
+            ),
+    )
 }
 
 /// What a press outside a float means.
@@ -1148,7 +1169,17 @@ pub fn anchored_below(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    hang(id, Side::Below, trigger, dismiss, content, None)
+    hang(id, Side::Below, trigger, content, Phase::Open(dismiss))
+}
+
+/// [`anchored_below`] while its exit plays, `progress` from 0 to 1.
+pub fn anchored_below_closing(
+    id: impl Into<SharedString>,
+    trigger: f32,
+    content: AnyElement,
+    progress: f32,
+) -> AnyElement {
+    hang(id, Side::Below, trigger, content, Phase::Closing(progress))
 }
 
 /// Hang `content` off the *top* of the trigger it is a child of — the mirror
@@ -1172,85 +1203,103 @@ pub fn anchored_above(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    hang(id, Side::Above, trigger, dismiss, content, None)
+    hang(id, Side::Above, trigger, content, Phase::Open(dismiss))
 }
 
-/// Keep an upward-opening popover mounted while its exit finishes.
+/// [`anchored_above`] while its exit plays, `progress` from 0 to 1.
 pub fn anchored_above_closing(
     id: impl Into<SharedString>,
     trigger: f32,
     content: AnyElement,
     progress: f32,
 ) -> AnyElement {
-    hang(
-        id,
-        Side::Above,
-        trigger,
-        Dismiss::Never,
-        content,
-        Some(progress),
-    )
+    hang(id, Side::Above, trigger, content, Phase::Closing(progress))
 }
 
-/// Which edge of the trigger a menu hangs from. The only thing that differs
-/// between [`anchored_below`] and [`anchored_above`] — everything else about
-/// hanging a menu (the floating layer, the reserved air, the occlusion) is one
-/// implementation below.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Below,
-    Above,
+/// Hang `content` to the *left* of the trigger it is a child of, bottom edges
+/// aligned — for a dock on the right edge of a viewport, which has room
+/// neither under it nor beside it on the right.
+///
+/// The same reasoning as [`anchored_below`], turned a quarter: `trigger` is
+/// how *wide* the control is, reserved as padding on the card's left so that
+/// gpui's flip at the window's left edge clears the control.
+pub fn anchored_left(
+    id: impl Into<SharedString>,
+    trigger: f32,
+    dismiss: Dismiss,
+    content: AnyElement,
+) -> AnyElement {
+    hang(id, Side::Left, trigger, content, Phase::Open(dismiss))
 }
 
-/// A closing dropdown stays mounted until its exit reaches zero opacity.
-pub fn anchored_below_closing(
+/// [`anchored_left`] while its exit plays, `progress` from 0 to 1.
+pub fn anchored_left_closing(
     id: impl Into<SharedString>,
     trigger: f32,
     content: AnyElement,
     progress: f32,
 ) -> AnyElement {
-    hang(
-        id,
-        Side::Below,
-        trigger,
-        Dismiss::Never,
-        content,
-        Some(progress),
-    )
+    hang(id, Side::Left, trigger, content, Phase::Closing(progress))
+}
+
+/// Which edge of the trigger a popover hangs from. The only thing that
+/// differs between the `anchored_*` hosts — everything else about hanging a
+/// popover (the floating layer, the reserved air, the occlusion, the motion)
+/// is one implementation below.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Below,
+    Above,
+    Left,
+}
+
+/// Where a popover is in its life.
+enum Phase {
+    /// Up, and what a press outside it means.
+    Open(Dismiss),
+    /// Leaving: how far the exit has run, from 0 to 1. Kept mounted only so
+    /// the exit can play — see [`MenuVisibility`].
+    Closing(f32),
 }
 
 fn hang(
     id: impl Into<SharedString>,
     side: Side,
     trigger: f32,
-    dismiss: Dismiss,
     content: AnyElement,
-    closing: Option<f32>,
+    phase: Phase,
 ) -> AnyElement {
-    let id = id.into();
     let reserved = rpx(trigger + MENU_GAP);
     let gap = rpx(MENU_GAP);
-    let mut origin = div().absolute().size_0();
-    let (anchor, card) = match side {
-        Side::Below => {
-            origin = origin.bottom_0().left_0();
-            (gpui::Anchor::TopLeft, div().pt(gap).pb(reserved))
-        }
-        Side::Above => {
-            origin = origin.top_0().right_0();
-            (gpui::Anchor::BottomRight, div().pb(gap).pt(reserved))
-        }
+    let origin = div().absolute().size_0();
+    let (origin, anchor, air, axis) = match side {
+        Side::Below => (
+            origin.bottom_0().left_0(),
+            gpui::Anchor::TopLeft,
+            div().pt(gap).pb(reserved),
+            gpui::Axis::Vertical,
+        ),
+        Side::Above => (
+            origin.top_0().right_0(),
+            gpui::Anchor::BottomRight,
+            div().pb(gap).pt(reserved),
+            gpui::Axis::Vertical,
+        ),
+        Side::Left => (
+            origin.bottom_0().left_0(),
+            gpui::Anchor::BottomRight,
+            div().pr(gap).pl(reserved),
+            gpui::Axis::Horizontal,
+        ),
     };
-    let card = card.child(dismiss.apply(div().occlude().child(frosted_card(content))));
+    let (card, closing) = card(content, phase);
     origin
-        .child(
-            gpui::deferred(crate::node::deferred_content(animate_popover(
-                id,
-                gpui::anchored().anchor(anchor).child(card),
-                closing,
-            )))
-            .priority(1),
-        )
+        .child(lift(
+            id.into(),
+            gpui::anchored().anchor(anchor).child(air.child(card)),
+            axis,
+            closing,
+        ))
         .into_any_element()
 }
 
@@ -1270,33 +1319,81 @@ pub fn anchored_at(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    gpui::deferred(crate::node::deferred_content(animate_popover(
+    at_point(id, at, content, Phase::Open(dismiss))
+}
+
+/// [`anchored_at`] while its exit plays, `progress` from 0 to 1.
+pub fn anchored_at_closing(
+    id: impl Into<SharedString>,
+    at: gpui::Point<gpui::Pixels>,
+    content: AnyElement,
+    progress: f32,
+) -> AnyElement {
+    at_point(id, at, content, Phase::Closing(progress))
+}
+
+fn at_point(
+    id: impl Into<SharedString>,
+    at: gpui::Point<gpui::Pixels>,
+    content: AnyElement,
+    phase: Phase,
+) -> AnyElement {
+    let (card, closing) = card(content, phase);
+    lift(
         id.into(),
         gpui::anchored()
             .position(at)
             .anchor(gpui::Anchor::TopLeft)
-            .child(dismiss.apply(div().occlude().child(frosted_card(content)))),
-        None,
-    )))
-    .priority(1)
-    .into_any_element()
+            .child(card),
+        gpui::Axis::Vertical,
+        closing,
+    )
 }
 
-/// Position first; animate toward the trigger using the anchor GPUI actually chose.
-fn animate_popover(id: SharedString, anchored: gpui::Anchored, closing: Option<f32>) -> AnyElement {
+/// The occluding card every host positions: [`frosted_card`] around
+/// `content`, wired for its phase. Open, a press outside means what the
+/// [`Dismiss`] says. Leaving, the card is inert: a shield over it takes the
+/// pointer, so a row that is fading out can be neither hovered nor chosen.
+fn card(content: AnyElement, phase: Phase) -> (Div, Option<f32>) {
+    let card = div().occlude().child(frosted_card(content));
+    match phase {
+        Phase::Open(dismiss) => (dismiss.apply(card), None),
+        Phase::Closing(progress) => (
+            card.relative().child(div().absolute().inset_0().occlude()),
+            Some(progress),
+        ),
+    }
+}
+
+/// Lift a positioned card onto the floating layer and play the popover
+/// motion: in, it rises from the trigger's side as it fades up; out, it sinks
+/// back toward the trigger as it fades away. The side is the anchor GPUI
+/// actually chose, so a flipped card still moves toward its trigger; `axis`
+/// says whether the trigger is above or below it, or beside it.
+fn lift(
+    id: SharedString,
+    anchored: gpui::Anchored,
+    axis: gpui::Axis,
+    closing: Option<f32>,
+) -> AnyElement {
     let displacement = std::rc::Rc::new(std::cell::Cell::new(0.0));
     let offset = displacement.clone();
     let anchored = anchored.resolved_offset(move |anchor| {
-        let distance = gpui::px(offset.get());
-        match anchor {
-            gpui::Anchor::TopLeft | gpui::Anchor::TopRight | gpui::Anchor::TopCenter => {
-                gpui::point(gpui::px(0.0), -distance)
-            }
-            gpui::Anchor::BottomLeft | gpui::Anchor::BottomRight | gpui::Anchor::BottomCenter => {
-                gpui::point(gpui::px(0.0), distance)
-            }
-            gpui::Anchor::LeftCenter => gpui::point(-distance, gpui::px(0.0)),
-            gpui::Anchor::RightCenter => gpui::point(distance, gpui::px(0.0)),
+        use gpui::Anchor::*;
+        let (x, y) = match anchor {
+            TopLeft => (-1.0, -1.0),
+            TopCenter => (0.0, -1.0),
+            TopRight => (1.0, -1.0),
+            LeftCenter => (-1.0, 0.0),
+            RightCenter => (1.0, 0.0),
+            BottomLeft => (-1.0, 1.0),
+            BottomCenter => (0.0, 1.0),
+            BottomRight => (1.0, 1.0),
+        };
+        let distance = offset.get();
+        match axis {
+            gpui::Axis::Horizontal => gpui::point(gpui::px(x * distance), gpui::px(0.0)),
+            gpui::Axis::Vertical => gpui::point(gpui::px(0.0), gpui::px(y * distance)),
         }
     });
     let spec = if closing.is_some() {
@@ -1307,9 +1404,10 @@ fn animate_popover(id: SharedString, anchored: gpui::Anchored, closing: Option<f
     // Switching phase resets the entrance clock if a closing popup is reopened.
     let animation_id: SharedString =
         format!("{id}-{}", if closing.is_some() { "exit" } else { "enter" }).into();
-    div()
-        .child(anchored)
-        .with_animation(animation_id, spec.animation(), move |element, progress| {
+    let animated = div().child(anchored).with_animation(
+        animation_id,
+        spec.animation(),
+        move |element, progress| {
             let amount = closing.unwrap_or(1.0 - progress);
             displacement.set(2.0 * amount);
             element.opacity(if closing.is_some() {
@@ -1317,8 +1415,79 @@ fn animate_popover(id: SharedString, anchored: gpui::Anchored, closing: Option<f
             } else {
                 1.0 - 0.7 * amount
             })
-        })
+        },
+    );
+    gpui::deferred(crate::node::deferred_content(animated))
+        .priority(1)
         .into_any_element()
+}
+
+/// Whether a popover is up, and — after it is dismissed — how far its exit
+/// has run. The owner keeps one per popover and picks the host from it:
+/// `anchored_*` while [`Self::is_open`], `anchored_*_closing` with
+/// [`Self::exit`] while it leaves. The exit is [`motion::MENU_OUT`], the same
+/// clock the hosts animate on, so the card is unmounted the frame it is gone.
+#[derive(Clone, Copy, Default)]
+pub enum MenuVisibility {
+    #[default]
+    Closed,
+    Open,
+    Closing(std::time::Instant),
+}
+
+impl From<bool> for MenuVisibility {
+    fn from(open: bool) -> Self {
+        if open {
+            Self::Open
+        } else {
+            Self::Closed
+        }
+    }
+}
+
+impl MenuVisibility {
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Open)
+    }
+
+    pub fn close(&mut self) {
+        if self.is_open() {
+            *self = Self::Closing(std::time::Instant::now());
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        if self.is_open() {
+            self.close();
+        } else {
+            *self = Self::Open;
+        }
+    }
+
+    /// Retire an exit that has run its course; `true` while it still plays.
+    pub fn tick_close(&mut self, reduced_motion: bool) -> bool {
+        if let Some(t) = self.exit() {
+            if reduced_motion || t >= 1.0 {
+                *self = Self::Closed;
+            } else {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// How far the exit has run, while it is leaving.
+    pub fn exit(self) -> Option<f32> {
+        match self {
+            Self::Closing(since) => Some(motion::exit_progress(&motion::MENU_OUT, since)),
+            _ => None,
+        }
+    }
+
+    /// Whether there is anything to draw: open, or leaving and not yet gone.
+    pub fn is_shown(self) -> bool {
+        self.is_open() || self.exit().is_some_and(|t| t < 1.0)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1570,6 +1739,24 @@ mod tests {
             "a row that is both is selected, not doubly painted"
         );
         assert_ne!(glass::card_cursor_bg(), glass::card_selected_bg());
+    }
+
+    #[test]
+    fn a_closing_popover_is_retained_then_removed_and_can_reopen() {
+        let mut state = MenuVisibility::Open;
+        state.close();
+        assert!(!state.is_open());
+        assert!(state.tick_close(false));
+        state.toggle();
+        assert!(state.is_open());
+        state.close();
+        assert!(!state.tick_close(true));
+        assert!(matches!(state, MenuVisibility::Closed));
+        state =
+            MenuVisibility::Closing(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert!(!state.is_shown());
+        assert!(!state.tick_close(false));
+        assert!(matches!(state, MenuVisibility::Closed));
     }
 
     /// A skeleton pulses between two states that are both visibly placeholder.

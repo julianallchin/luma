@@ -133,7 +133,7 @@ pub struct Luma {
     /// Visual-only state for keyed chip reflow. Logical tab identity and
     /// teardown remain owned by `workspace`.
     pub(crate) tab_chrome: tab_chrome::TabChrome,
-    /// The `+`'s combo box, while it is open — see [`new_tab`].
+    /// The `+`'s combo box, while it is open or leaving — see [`new_tab`].
     pub(crate) new_tab: Option<new_tab::NewTab>,
     pub(crate) workspace_hidden: bool,
     pub(crate) shell_presented: bool,

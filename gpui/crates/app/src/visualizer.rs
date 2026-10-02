@@ -576,7 +576,8 @@ pub(crate) struct Visualizer {
     /// The preview environment, shared by venue editing and score playback.
     venue_environment: VenueEnvironment,
     render_controls: RenderControls,
-    pub(crate) settings_open: bool,
+    /// The view-settings popover beside the dock.
+    pub(crate) settings: luma_ui::float::MenuVisibility,
     presentation: bool,
     bottom_bar_visible: bool,
     settings_motion: RefCell<settings::DockMotion>,
@@ -610,7 +611,10 @@ pub(crate) struct Visualizer {
     view_setting_saving: bool,
     view_setting_pending: Rc<RefCell<std::collections::BTreeMap<&'static str, String>>>,
     /// Whether the FPS readout's frame-stats panel is open, or playing its exit.
-    fps_panel: FpsPanel,
+    fps_panel: luma_ui::float::MenuVisibility,
+    /// The motion policy at construction, for the popovers' exits: the stage
+    /// render that reaps them has no `App` to read it from.
+    reduced_motion: bool,
     /// A show export is rendering. The stage draws nothing meanwhile, so the
     /// export has the GPU to itself.
     pub(crate) exporting: bool,
@@ -1425,7 +1429,7 @@ impl Visualizer {
             viewport_origin: Point::default(),
             venue_environment: VenueEnvironment::default(),
             render_controls: RenderControls::new(environment),
-            settings_open: false,
+            settings: Default::default(),
             presentation: false,
             bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(cx.reduce_motion())),
@@ -1443,7 +1447,8 @@ impl Visualizer {
             view_setting_error: None,
             view_setting_saving: false,
             view_setting_pending: Rc::default(),
-            fps_panel: FpsPanel::new(cx.reduce_motion()),
+            fps_panel: Default::default(),
+            reduced_motion: cx.reduce_motion(),
             exporting: false,
             build: None,
             stage: Rc::default(),
@@ -2463,7 +2468,7 @@ impl Visualizer {
     }
 
     pub(crate) fn prepare_presentation(&mut self) {
-        self.settings_open = false;
+        self.settings = Default::default();
         self.end_drag();
         // A shortcut can arrive before mouse-up. Cancel an unfinished pose
         // preview before parking the editor, so it cannot survive without a commit.
@@ -3642,7 +3647,10 @@ pub(crate) fn visualizer(
     let body = body(state, app, library);
     let floating = overlay_toolbar(state, app, venue_tools, transport);
     state.bottom_bar_visible = floating.is_some();
-    state.fps_panel.tick();
+    // The stage renders every frame, so nothing else has to ask for the
+    // frames the popovers' exits play over.
+    state.fps_panel.tick_close(state.reduced_motion);
+    state.settings.tick_close(state.reduced_motion);
     let fps = fps_overlay(state, app);
     let pane = state.stage.borrow().pane;
     let builder = state
@@ -4463,27 +4471,6 @@ impl RenderedRate {
     }
 }
 
-/// Whether the frame-stats panel is open, and whether it may animate.
-struct FpsPanel {
-    visibility: luma_ui::arg::select::MenuVisibility,
-    reduced: bool,
-}
-
-impl FpsPanel {
-    fn new(reduced: bool) -> Self {
-        Self {
-            visibility: luma_ui::arg::select::MenuVisibility::Closed,
-            reduced,
-        }
-    }
-
-    /// Retire an exit that has finished. The stage renders every frame, so
-    /// nothing else has to ask for the frames the exit plays over.
-    fn tick(&mut self) {
-        self.visibility.tick_close(self.reduced);
-    }
-}
-
 /// A reading on a floating surface: the value bright, its unit or name after
 /// it in the label's darker ink.
 fn stat_value(value: impl Into<gpui::SharedString>) -> Div {
@@ -4507,8 +4494,8 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Option<AnyElement> {
     if !matches!(state.status, Status::Live) {
         return None;
     }
-    let open = state.fps_panel.visibility.is_open();
-    let closing = state.fps_panel.visibility.exit();
+    let open = state.fps_panel.is_open();
+    let closing = state.fps_panel.exit();
     let (resting, reading) = {
         let stage = state.stage.borrow();
         (stage.resting, fps_reading(&stage))
@@ -4540,7 +4527,7 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Option<AnyElement> {
         move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
             app.update(cx, |this, cx| {
                 if let Some(state) = this.visualizer_mut() {
-                    state.fps_panel.visibility.toggle();
+                    state.fps_panel.toggle();
                 }
                 this.notify_stage(cx);
             });
@@ -6365,7 +6352,7 @@ mod orbit_selection_tests {
             viewport_origin: Default::default(),
             venue_environment: Default::default(),
             render_controls: RenderControls::new(Default::default()),
-            settings_open: false,
+            settings: Default::default(),
             presentation: false,
             bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(true)),
@@ -6383,7 +6370,8 @@ mod orbit_selection_tests {
             view_setting_error: None,
             view_setting_saving: false,
             view_setting_pending: Rc::default(),
-            fps_panel: FpsPanel::new(true),
+            fps_panel: Default::default(),
+            reduced_motion: true,
             exporting: false,
             build,
             stage: Rc::new(RefCell::new(Stage {

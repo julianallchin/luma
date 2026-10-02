@@ -128,8 +128,8 @@ impl Luma {
 
     pub(crate) fn dismiss_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(visualizer) = &mut self.visualizer {
-            if visualizer.settings_open {
-                visualizer.settings_open = false;
+            if visualizer.settings.is_open() {
+                visualizer.settings.close();
                 window.focus(&self.visualizer_focus, cx);
                 cx.notify();
                 return;

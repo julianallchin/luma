@@ -12,15 +12,14 @@ struct Popovers;
 impl Render for Popovers {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut root = div().size_full();
-        for (index, (name, above, y)) in [
-            ("above", true, 220.),
-            ("above-flipped", true, 10.),
-            ("below", false, 10.),
-            ("below-flipped", false, 260.),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (name, x, y) in [
+            ("above", 160., 220.),
+            ("above-flipped", 340., 10.),
+            ("below", 520., 10.),
+            ("below-flipped", 700., 260.),
+            ("left", 820., 120.),
+            ("left-flipped", 10., 120.),
+        ] {
             for (phase, progress) in [("rest", 0.0), ("closing", 0.5)] {
                 let label = format!("{name}-{phase}");
                 let content = div()
@@ -28,15 +27,15 @@ impl Render for Popovers {
                     .h(px(60.))
                     .agent_node(Role::Card, label.clone())
                     .into_any_element();
-                let popup = if above {
-                    float::anchored_above_closing(label, 20., content, progress)
-                } else {
-                    float::anchored_below_closing(label, 20., content, progress)
+                let popup = match name.split('-').next() {
+                    Some("above") => float::anchored_above_closing(label, 20., content, progress),
+                    Some("below") => float::anchored_below_closing(label, 20., content, progress),
+                    _ => float::anchored_left_closing(label, 20., content, progress),
                 };
                 root = root.child(
                     div()
                         .absolute()
-                        .left(px(160. + index as f32 * 180.))
+                        .left(px(x))
                         .top(px(y))
                         .size(px(20.))
                         .child(popup),
@@ -66,10 +65,13 @@ fn popover_exit_moves_toward_the_resolved_trigger_side() {
             return node.bounds;
         };
         const results = {};
-        for (const name of ["above", "above-flipped", "below", "below-flipped"]) {
+        for (const name of ["above", "above-flipped", "below", "below-flipped", "left", "left-flipped"]) {
             const rest = bounds(name + "-rest");
             const closing = bounds(name + "-closing");
-            results[name] = { y: rest.y, bottom: rest.y + rest.height, dy: closing.y - rest.y };
+            results[name] = {
+                x: rest.x, right: rest.x + rest.width, y: rest.y, bottom: rest.y + rest.height,
+                dx: closing.x - rest.x, dy: closing.y - rest.y,
+            };
         }
         results
     "#,
@@ -77,16 +79,20 @@ fn popover_exit_moves_toward_the_resolved_trigger_side() {
     );
     assert_eq!(result.error, None, "{}", result.stdout);
     let results = result.result;
-    for (name, direction) in [
-        ("above", 1.),
-        ("above-flipped", -1.),
-        ("below", -1.),
-        ("below-flipped", 1.),
+    for (name, axis, direction) in [
+        ("above", "dy", 1.),
+        ("above-flipped", "dy", -1.),
+        ("below", "dy", -1.),
+        ("below-flipped", "dy", 1.),
+        ("left", "dx", 1.),
+        ("left-flipped", "dx", -1.),
     ] {
-        assert_eq!(results[name]["dy"].as_f64(), Some(direction), "{results}");
+        assert_eq!(results[name][axis].as_f64(), Some(direction), "{results}");
     }
     assert!(results["above"]["bottom"].as_f64().expect("bottom") < 220.);
     assert!(results["above-flipped"]["y"].as_f64().expect("y") > 30.);
     assert!(results["below"]["y"].as_f64().expect("y") > 30.);
     assert!(results["below-flipped"]["bottom"].as_f64().expect("bottom") < 260.);
+    assert!(results["left"]["right"].as_f64().expect("right") < 820.);
+    assert!(results["left-flipped"]["x"].as_f64().expect("x") > 30.);
 }
