@@ -421,6 +421,22 @@ impl AppServices {
         Ok(())
     }
 
+    /// Write the agent rows a quit left in progress to their synced rows.
+    /// A launch calls this once, before any turn can run.
+    ///
+    /// # Errors
+    ///
+    /// If the admission or the open rows cannot be read.
+    pub async fn recover_open_agent_messages(&self) -> Result<(), CommandError> {
+        let principal = self.admitted_principal().await?;
+        crate::database::local::agent_threads::recover_open_messages(
+            &self.db.0,
+            principal.as_deref(),
+        )
+        .await
+        .map_err(CommandError::Internal)
+    }
+
     /// The principal of the verified host session in the state database.
     ///
     /// Not interchangeable with the app database's signed-write admission gate:

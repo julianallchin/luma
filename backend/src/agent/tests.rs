@@ -758,6 +758,16 @@ async fn a_turn_with_one_tool_call_persists_its_assistant_row() {
 
     // Exactly one preparation per assistant row — the trigger's own invariant,
     // and the insert above proves the trigger let the row through.
+
+    // The closed row is synced, and nothing of it is left in progress.
+    assert!(crate::database::local::agent_threads::open_message(
+        fixture.pool(),
+        &fixture.thread_id,
+        Some(OWNER)
+    )
+    .await
+    .expect("open row")
+    .is_none());
 }
 
 /// A steer sent while the first step runs reaches the model at the next step,
@@ -1634,6 +1644,14 @@ async fn rows_on_disk(fixture: &Fixture) -> Transcript {
     Transcript::from_rows(&rows).expect("transcript")
 }
 
+/// What a launch does after a quit: write the rows a turn left in progress to
+/// the synced transcript.
+async fn relaunch(fixture: &Fixture) {
+    crate::database::local::agent_threads::recover_open_messages(fixture.pool(), Some(OWNER))
+        .await
+        .expect("recovered");
+}
+
 /// Run a turn until the step after the first tool result starts, then drop
 /// it — what a quit does. Nothing after the drop can write.
 async fn quit_after_the_tool_result(fixture: &Fixture) {
@@ -1656,7 +1674,13 @@ async fn quit_after_the_tool_result(fixture: &Fixture) {
 async fn a_quit_after_a_tool_result_keeps_the_step_and_its_result() {
     let fixture = fixture().await;
     quit_after_the_tool_result(&fixture).await;
+    assert_eq!(
+        rows_on_disk(&fixture).await.messages.len(),
+        1,
+        "a running turn must not write its synced row at every step"
+    );
 
+    relaunch(&fixture).await;
     let transcript = rows_on_disk(&fixture).await;
     assert_eq!(transcript.messages.len(), 2, "{transcript:#?}");
     let assistant = &transcript.messages[1];
@@ -1681,6 +1705,7 @@ async fn a_quit_after_a_tool_result_keeps_the_step_and_its_result() {
 async fn resume_continues_the_open_row_from_the_saved_rows() {
     let fixture = fixture().await;
     quit_after_the_tool_result(&fixture).await;
+    relaunch(&fixture).await;
     let open_row = rows_on_disk(&fixture).await.messages[1].id.clone();
 
     let scripted = Arc::new(ScriptedModel::new(vec![reply_step("resumed")]));
@@ -1755,7 +1780,14 @@ async fn quit_during_a_tool(fixture: &Fixture) {
     let drive = async { while stream.next().await.is_some() {} };
     let saved = async {
         loop {
-            if rows_on_disk(fixture).await.messages.len() == 2 {
+            let open = crate::database::local::agent_threads::open_message(
+                fixture.pool(),
+                &fixture.thread_id,
+                Some(OWNER),
+            )
+            .await
+            .expect("open row");
+            if open.is_some() {
                 break;
             }
             tokio::task::yield_now().await;
@@ -1772,6 +1804,7 @@ async fn quit_during_a_tool(fixture: &Fixture) {
 async fn resume_answers_a_call_cut_off_by_a_quit_as_interrupted() {
     let fixture = fixture().await;
     quit_during_a_tool(&fixture).await;
+    relaunch(&fixture).await;
     assert!(rows_on_disk(&fixture).await.unfinished());
 
     let scripted = Arc::new(ScriptedModel::new(vec![reply_step("picking up")]));

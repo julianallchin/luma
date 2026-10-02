@@ -5,16 +5,18 @@
 //! ```
 //!
 //! Every engine reaches one commit point per step: the step's usage goes into
-//! the transcript, the open assistant row is appended (first time) or
-//! rewritten in place, and a CLI engine's native session is checkpointed at
-//! that head. A quit mid-turn therefore loses at most the step in flight, and
-//! [`Transcript::unfinished`] reads the rest back. Steering joins at the
+//! the transcript, the open assistant row is saved to the thread's local open
+//! record, and a CLI engine's native session is checkpointed at that row. The
+//! synced row is written once, when the row closes, because sync stores and
+//! ships every version of a row. A quit mid-turn therefore loses at most the
+//! step in flight: the next launch writes the open record to its synced row,
+//! and [`Transcript::unfinished`] reads the rest back. Steering joins at the
 //! engine's next step and is placed with [`TurnEvent::Steered`].
 //!
 //! The editor is told the score moved by comparing its `updated_at` across the
 //! turn, which is exactly what a save touches and nothing else does.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use futures_util::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
@@ -62,7 +64,6 @@ pub(super) async fn run(
         steer,
         unsent: VecDeque::new(),
         transcript: Transcript::default(),
-        durable: HashSet::new(),
         head: None,
         principal: None,
         spend: AgentThreadUsage::default(),
@@ -73,9 +74,19 @@ pub(super) async fn run(
     };
     let outcome = match turn.drive(prompt).await {
         Ok(()) => TurnOutcome::Completed,
-        Err(error) => TurnOutcome::Failed {
-            message: error.to_string(),
-        },
+        Err(error) => {
+            // The row the failure cut off is written as far as it got, so the
+            // thread reads as unfinished and a resume continues from there.
+            if let Err(close) = turn.close_open().await {
+                log::warn!(
+                    "[agent] thread {} kept its open row: {close}",
+                    turn.thread_id
+                );
+            }
+            TurnOutcome::Failed {
+                message: error.to_string(),
+            }
+        }
     };
     // Cloud cleanup runs independently when Claim drops. Only local execution
     // determines the result consumed by the parent and its merge.
@@ -92,9 +103,6 @@ struct Turn {
     /// ended: the next row answers them.
     unsent: VecDeque<UserPrompt>,
     transcript: Transcript,
-    /// Rows already in the database. A commit rewrites these and appends the
-    /// rest.
-    durable: HashSet<String>,
     /// The durable transcript tip this turn has observed. Every append is a
     /// compare-and-swap against it.
     head: Option<String>,
@@ -150,6 +158,20 @@ struct TurnSetup<'a> {
 }
 
 impl Turn {
+    /// Write the thread's open row, if a step left one, to its synced row.
+    async fn close_open(&self) -> Result<(), String> {
+        let pool = &self.service.services().db().0;
+        let principal = self.principal.as_deref();
+        let Some(open) = db::open_message(pool, &self.thread_id, principal).await? else {
+            return Ok(());
+        };
+        if db::close_message(pool, &self.thread_id, open, principal).await? {
+            Ok(())
+        } else {
+            Err("the transcript moved on".into())
+        }
+    }
+
     /// Fold the event into the transcript, then hand it to the host. The two
     /// stay in lockstep because rehydration reads the same transcript.
     fn emit(&mut self, event: TurnEvent) -> Applied {
@@ -183,12 +205,6 @@ impl Turn {
             .unwrap_or_default();
         self.spend.thread_id.clone_from(&self.thread_id);
         self.transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
-        self.durable = self
-            .transcript
-            .messages
-            .iter()
-            .map(|message| message.id.clone())
-            .collect();
         self.head = self.transcript.head_message_id();
         let resume_head = self.head.clone();
         // Resuming continues the open assistant row, when there is one, and
@@ -355,7 +371,7 @@ impl Turn {
         }
         if let Some(row) = self.transcript.interrupt_open_calls() {
             let id = self.transcript.messages[row].id.clone();
-            self.commit_row(&id).await?;
+            self.commit_row(&id, false).await?;
         }
         if let Some(last) = self
             .transcript
@@ -374,39 +390,66 @@ impl Turn {
             .ok_or_else(|| AgentError::Invalid("the unfinished turn has no prompt".into()))
     }
 
-    /// Make `row_id` in the database say what it says in the transcript:
-    /// append it the first time, rewrite it after. An empty row is not worth
-    /// a row and waits for its first part.
-    async fn commit_row(&mut self, row_id: &str) -> Result<(), AgentError> {
+    /// Make `row_id` in the database say what it says in the transcript: in
+    /// the thread's open record while the row is still being written, in its
+    /// synced row once `closed`. An empty row is not worth a row and waits
+    /// for its first part.
+    async fn commit_row(&mut self, row_id: &str, closed: bool) -> Result<(), AgentError> {
         let row = self.row(row_id)?;
-        if self.durable.contains(row_id) {
-            db::update_message_parts(
-                &self.service.services().db().0,
-                &self.thread_id,
-                row_id,
-                &row.parts_json(),
-                self.principal.as_deref(),
-            )
-            .await
-            .map_err(AgentError::Storage)?;
-        } else if !row.parts.is_empty() {
-            self.append(&row).await?;
-            self.durable.insert(row_id.to_owned());
+        if row.parts.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let pool = &self.service.services().db().0;
+        let open = db::OpenMessage {
+            parent_message_id: self.head.clone(),
+            message: NewAgentThreadMessage {
+                id: Some(row.id.clone()),
+                role: row.role.as_str().to_string(),
+                parts: row.parts_json(),
+            },
+        };
+        if !closed {
+            return db::save_open_message(pool, &self.thread_id, &open, self.principal.as_deref())
+                .await
+                .map_err(AgentError::Storage);
+        }
+        // A resumed row is already the head, so the head is this row either way.
+        if db::close_message(pool, &self.thread_id, open, self.principal.as_deref())
+            .await
+            .map_err(AgentError::Storage)?
+        {
+            self.head = Some(row.id);
+            Ok(())
+        } else {
+            Err(AgentError::HeadMoved)
+        }
     }
 
-    /// The commit point every step reaches: the row is durable, the native
-    /// session is checkpointed at the head it is now continuable from, and
-    /// the thread's running cost says what was spent to get here.
-    async fn commit(&mut self, setup: &TurnSetup<'_>, row_id: &str) -> Result<(), AgentError> {
-        self.commit_row(row_id).await?;
-        if let (Execution::External { engine, model, .. }, Some(session), Some(head)) =
-            (setup.execution, &self.native_session, &self.head)
+    /// The commit point every step reaches: the row is saved, the native
+    /// session is checkpointed at the head the row makes, and the thread's
+    /// running cost says what was spent to get here. `closed` writes the
+    /// synced row — see [`Self::commit_row`].
+    async fn commit(
+        &mut self,
+        setup: &TurnSetup<'_>,
+        row_id: &str,
+        closed: bool,
+    ) -> Result<(), AgentError> {
+        self.commit_row(row_id, closed).await?;
+        if let (Execution::External { engine, model, .. }, Some(session)) =
+            (setup.execution, &self.native_session)
         {
-            setup
-                .lease
-                .checkpoint(*engine, model.clone(), head.clone(), session.clone())?;
+            // The head a launch will read once the open row is recovered.
+            let head = if self.row(row_id)?.parts.is_empty() {
+                self.head.clone()
+            } else {
+                Some(row_id.to_owned())
+            };
+            if let Some(head) = head {
+                setup
+                    .lease
+                    .checkpoint(*engine, model.clone(), head, session.clone())?;
+            }
         }
         // After the row, so a recorded price never describes work the
         // transcript does not have.
@@ -426,7 +469,7 @@ impl Turn {
         user_id: String,
         prompt: UserPrompt,
     ) -> Result<(), AgentError> {
-        self.commit(setup, row).await?;
+        self.commit(setup, row, true).await?;
         let next_id = uuid::Uuid::new_v4().to_string();
         self.emit(TurnEvent::Steered {
             user_id: user_id.clone(),
@@ -436,7 +479,6 @@ impl Turn {
         self.attach_context(&user_id, &prompt);
         self.append(&context::user_message(user_id.clone(), &prompt))
             .await?;
-        self.durable.insert(user_id.clone());
         *row = next_id;
         *turn_message_id = user_id;
         Ok(())
@@ -530,7 +572,7 @@ impl Turn {
                 model: setup.execution.model().to_string(),
                 duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             });
-            self.commit(setup, &assistant_id).await?;
+            self.commit(setup, &assistant_id, false).await?;
 
             if calls.is_empty() {
                 return Ok((stop_reason, usage, assistant_id));
@@ -551,7 +593,7 @@ impl Turn {
             }
             while let Some((call_id, output)) = tasks.running.next().await {
                 self.emit(TurnEvent::ToolCallEnded { call_id, output });
-                self.commit(setup, &assistant_id).await?;
+                self.commit(setup, &assistant_id, false).await?;
             }
             drop(tasks);
 
@@ -685,7 +727,7 @@ impl Turn {
         // Folded before the commit, sent after it: the host hears the row
         // closed once it is.
         transcript::apply(&mut self.transcript, &ended);
-        self.commit(setup, assistant_id).await?;
+        self.commit(setup, assistant_id, true).await?;
         if let Some((score_id, stamp)) = self.score.clone() {
             let pool = self.service.services().db().0.clone();
             let current = score_stamp(&pool, &score_id).await?;
@@ -868,7 +910,7 @@ impl Turn {
                             let replier = &replier;
                             writes.push(Box::pin(replier.reply(reply, model_output)));
                             if let Some(row) = applied.row.map(|row| self.transcript.messages[row].id.clone()) {
-                                if let Err(error) = self.commit(setup, &row).await { break Err(error); }
+                                if let Err(error) = self.commit(setup, &row, false).await { break Err(error); }
                             }
                             continue;
                         }
@@ -937,7 +979,7 @@ impl Turn {
                     stepped = true;
                     self.external_step(&session, setup, request, StopReason::ToolUse, step_started);
                     step_started = std::time::Instant::now();
-                    if let Err(error) = self.commit(setup, assistant_id).await {
+                    if let Err(error) = self.commit(setup, assistant_id, false).await {
                         break Err(error);
                     }
                 }
@@ -1020,9 +1062,9 @@ impl Turn {
                     },
                 });
             }
-            // What finished before the failure stays: the row is durable as
+            // What finished before the failure stays: the row is written as
             // far as it got, and a resume continues from there.
-            let _ = self.commit(setup, assistant_id).await;
+            let _ = self.commit(setup, assistant_id, true).await;
             return Err(error);
         }
         // Steers the engine never took are answered by the next row.
@@ -1114,54 +1156,61 @@ pub(super) async fn record_stop(
         .await
         .map_err(AgentError::Storage)?;
     let mut transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
-    if !transcript.unfinished() {
+    // The stopped turn's row in progress, if it had one, is the last row.
+    let open = db::open_message(&pool, thread_id, principal.as_deref())
+        .await
+        .map_err(AgentError::Storage)?;
+    let parent = match &open {
+        Some(open) => {
+            let row = AgentChatMessage {
+                id: open.message.id.clone().unwrap_or_default(),
+                role: Role::Assistant,
+                parts: AgentChatMessage::parse_parts(&open.message.parts)
+                    .map_err(AgentError::Invalid)?,
+            };
+            if transcript.head_message_id().as_ref() == Some(&row.id) {
+                transcript.messages.pop();
+            }
+            transcript.messages.push(row);
+            open.parent_message_id.clone()
+        }
+        None => transcript.head_message_id(),
+    };
+    if !transcript.unfinished() && open.is_none() {
         return Ok(transcript);
     }
-    transcript.interrupt_open_calls();
-    let head = transcript.head_message_id();
-    match transcript.messages.last_mut() {
-        Some(last) if last.role == Role::Assistant => {
-            transcript::end_row(last, StopReason::Aborted);
-            db::update_message_parts(
-                &pool,
-                thread_id,
-                &last.id,
-                &last.parts_json(),
-                principal.as_deref(),
-            )
-            .await
-            .map_err(AgentError::Storage)?;
-        }
-        _ => {
+    if transcript.unfinished() {
+        transcript.interrupt_open_calls();
+        if transcript
+            .messages
+            .last()
+            .is_none_or(|last| last.role != Role::Assistant)
+        {
             // Stopped before the model wrote anything: the prompt gets an
             // empty answer that says so.
-            let mut row = AgentChatMessage {
+            transcript.messages.push(AgentChatMessage {
                 id: uuid::Uuid::new_v4().to_string(),
                 role: Role::Assistant,
                 parts: Vec::new(),
-            };
-            transcript::end_row(&mut row, StopReason::Aborted);
-            let outcome = db::append_messages_at_head(
-                &pool,
-                thread_id,
-                AppendAgentThreadMessagesInput {
-                    operation_id: uuid::Uuid::new_v4().to_string(),
-                    expected_head_message_id: head,
-                    messages: vec![NewAgentThreadMessage {
-                        id: Some(row.id.clone()),
-                        role: row.role.as_str().to_string(),
-                        parts: row.parts_json(),
-                    }],
-                },
-                principal.as_deref(),
-            )
-            .await
-            .map_err(AgentError::Storage)?;
-            if let AgentThreadAppendOutcome::HeadMoved { .. } = outcome {
-                return Err(AgentError::HeadMoved);
-            }
-            transcript.messages.push(row);
+            });
         }
+        let last = transcript.messages.last_mut().expect("an assistant row");
+        transcript::end_row(last, StopReason::Aborted);
+    }
+    let last = transcript.messages.last().expect("a row to close");
+    let closed = db::OpenMessage {
+        parent_message_id: parent,
+        message: NewAgentThreadMessage {
+            id: Some(last.id.clone()),
+            role: last.role.as_str().to_string(),
+            parts: last.parts_json(),
+        },
+    };
+    if !db::close_message(&pool, thread_id, closed, principal.as_deref())
+        .await
+        .map_err(AgentError::Storage)?
+    {
+        return Err(AgentError::HeadMoved);
     }
     Ok(transcript)
 }
