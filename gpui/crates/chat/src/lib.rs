@@ -331,8 +331,7 @@ impl Turn {
 /// its way in. An explicit conversation change shows a loading plate until
 /// the selected transcript arrives.
 enum Conversation {
-    /// Nothing was ever asked for — the unattached panel, which resolves no
-    /// thread at all.
+    /// Nothing was asked for yet — a reader before its open starts.
     Idle,
     /// A read is in flight, carrying the token it was started with. Answers
     /// are matched against the token so a slow resolve landing after a newer
@@ -345,11 +344,10 @@ enum Conversation {
 
 pub struct AgentChat {
     agent: Agent,
-    /// The score whose chats this panel shows. `None` is the unattached
-    /// panel: no score is open, so there is nothing to chat about.
+    /// The score or venue whose chats this panel shows: what "New chat"
+    /// creates under, and what a send without a context source is about.
+    /// `None` only for a reader, which never sends.
     subject: Option<ThreadScope>,
-    /// Initial resource metadata, retained when creating a chat with no editor open.
-    scope: Option<ThreadScope>,
     /// Reads the editor when a message is sent; never changes conversation
     /// identity. `None` sends [`Self::scope`] alone.
     context_source: Option<ContextSource>,
@@ -464,22 +462,36 @@ pub struct AgentChat {
 }
 
 impl AgentChat {
-    /// Open a chat on `scope`, and start resolving its thread when there is
-    /// one. `None` opens the panel unattached — see [`Self::scope`].
+    /// Open a chat on `subject`'s conversations: `thread` when one is named,
+    /// else the subject's most recently updated one.
     ///
     /// `running` is the app's one [`RunningTurns`]: every panel that can send
     /// shares it, so a turn outlives whichever panel started it.
     pub fn new(
         agent: Agent,
         running: Entity<RunningTurns>,
-        scope: Option<ThreadScope>,
+        subject: ThreadScope,
+        thread: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut chat = Self::blank(agent, running, Some(subject.clone()), cx);
+        match thread {
+            Some(thread) => chat.open_thread(thread, cx),
+            None => chat.load(subject, cx),
+        }
+        chat
+    }
+
+    fn blank(
+        agent: Agent,
+        running: Entity<RunningTurns>,
+        subject: Option<ThreadScope>,
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&running, |this, _, event, cx| this.on_running(event, cx));
         let chat = Self {
             agent,
-            subject: scope.clone(),
-            scope: scope.clone(),
+            subject,
             context_source: None,
             conversation: Conversation::Idle,
             reads: 0,
@@ -523,9 +535,6 @@ impl AgentChat {
         };
         let mut chat = chat;
         chat.watch_scrolling(cx);
-        if let Some(scope) = scope {
-            chat.load(scope, cx);
-        }
         chat
     }
 
@@ -546,7 +555,7 @@ impl AgentChat {
         thread_id: &str,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut chat = Self::new(agent, running, None, cx);
+        let mut chat = Self::blank(agent, running, None, cx);
         chat.read_only = true;
         chat.open_thread(thread_id, cx);
         chat
@@ -714,7 +723,7 @@ impl AgentChat {
             self.model_picker.queued = Some(selection);
             return;
         }
-        let Some(thread) = self.thread().map(str::to_owned) else {
+        let Some(thread) = self.thread_id().map(str::to_owned) else {
             return;
         };
         self.selection_saving = true;
@@ -1116,7 +1125,7 @@ impl AgentChat {
     /// Always creates: "new chat" is a statement, and resolving would hand back
     /// the existing conversation whenever there was one.
     pub fn new_thread(&mut self, cx: &mut Context<Self>) {
-        let Some(scope) = self.subject.clone().or_else(|| self.scope.clone()) else {
+        let Some(scope) = self.subject.clone() else {
             return;
         };
         let read = self.begin_read(cx);
@@ -1150,11 +1159,9 @@ impl AgentChat {
         match detail {
             Ok(detail) => match ThreadScope::try_from(&detail.thread)
                 .map_err(|error| error.to_string())
-                .and_then(|scope| {
-                    Transcript::from_rows(&detail.messages).map(|transcript| (scope, transcript))
-                }) {
-                Ok((scope, transcript)) => {
-                    self.scope = Some(scope);
+                .and_then(|_| Transcript::from_rows(&detail.messages))
+            {
+                Ok(transcript) => {
                     self.selection = Selection::from_thread(&detail.thread).ok();
                     // A running thread is attached to, not read: its rows are
                     // written at step boundaries, so the read is missing the
@@ -1220,8 +1227,9 @@ impl AgentChat {
         cx.notify();
     }
 
-    /// The conversation a send lands in, once its read has landed.
-    fn thread(&self) -> Option<&str> {
+    /// The conversation on screen, once its read has landed: where a send
+    /// lands, and which running turn this panel follows.
+    pub fn thread_id(&self) -> Option<&str> {
         match &self.conversation {
             Conversation::Open(id) => Some(id.as_str()),
             Conversation::Idle | Conversation::Loading(_) => None,
@@ -1235,12 +1243,6 @@ impl AgentChat {
         matches!(self.conversation, Conversation::Open(_))
     }
 
-    /// Whether the panel has a conversation to show: an open score, or the
-    /// thread a reader was opened on.
-    fn attached(&self) -> bool {
-        self.subject.is_some() || self.scope.is_some()
-    }
-
     /// Set what reads the editor for each message sent. Read at send time
     /// rather than pushed, because the playhead moves every frame.
     pub fn set_context_source(&mut self, source: ContextSource) {
@@ -1252,33 +1254,10 @@ impl AgentChat {
         match &self.context_source {
             Some(source) => source(cx),
             None => TurnContext {
-                scope: self.scope.clone(),
+                scope: self.subject.clone(),
                 editor: None,
             },
         }
-    }
-
-    /// Show `subject`'s most recently updated chat, or unattach.
-    ///
-    /// A running turn keeps running in the background, as it does when the
-    /// reader opens another chat. The draft stays in the composer.
-    pub fn set_subject(&mut self, subject: Option<ThreadScope>, cx: &mut Context<Self>) {
-        if self.subject == subject {
-            return;
-        }
-        self.subject = subject.clone();
-        match subject {
-            Some(subject) => self.load(subject, cx),
-            None => {
-                // Any read still in flight belongs to the score that was left.
-                self.reads += 1;
-                self.conversation = Conversation::Idle;
-                self.scope = None;
-                self.error = None;
-                self.seat(Transcript::default(), cx);
-            }
-        }
-        cx.notify();
     }
 
     /// Whether a turn is running. The composer, the send button and the status
@@ -1376,7 +1355,7 @@ impl AgentChat {
     /// resume a turn the reader ended on purpose — that offer is for turns a
     /// quit or a failure cut short.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
-        if let Some(thread) = self.thread().filter(|_| self.is_streaming()) {
+        if let Some(thread) = self.thread_id().filter(|_| self.is_streaming()) {
             let thread = thread.to_owned();
             self.running
                 .update(cx, |running, cx| running.cancel(&thread, cx));
@@ -1390,7 +1369,8 @@ impl AgentChat {
                         // Seated only over the same thread, at rest: a
                         // reader who moved on or sent again has newer rows.
                         Ok(transcript)
-                            if this.thread() == Some(thread.as_str()) && !this.is_streaming() =>
+                            if this.thread_id() == Some(thread.as_str())
+                                && !this.is_streaming() =>
                         {
                             this.seat(transcript, cx);
                         }
@@ -1422,7 +1402,7 @@ impl AgentChat {
         if !self.resumable() {
             return;
         }
-        let Some(thread) = self.thread().map(str::to_owned) else {
+        let Some(thread) = self.thread_id().map(str::to_owned) else {
             return;
         };
         let agent = self.agent.clone();
@@ -1504,7 +1484,7 @@ impl AgentChat {
             text: prompt.clone(),
             context: Some(self.editor_context(cx)),
         };
-        if let Some(thread) = self.thread().filter(|_| self.is_streaming()) {
+        if let Some(thread) = self.thread_id().filter(|_| self.is_streaming()) {
             self.running.read(cx).steer(thread, message);
             self.start_send_motion(prompt, cx);
             self.settle_trailer();
@@ -1512,7 +1492,7 @@ impl AgentChat {
             cx.notify();
             return;
         }
-        let Some(thread) = self.thread().map(str::to_owned) else {
+        let Some(thread) = self.thread_id().map(str::to_owned) else {
             self.error = Some("The conversation is still opening.".into());
             cx.notify();
             return;
@@ -1557,7 +1537,7 @@ impl AgentChat {
                 working::Working::Sending
             },
             since,
-            seed: working::flavour_seed(self.thread().unwrap_or_default()),
+            seed: working::flavour_seed(self.thread_id().unwrap_or_default()),
         })
     }
 
@@ -1618,10 +1598,10 @@ impl AgentChat {
     /// panel's to paint.
     fn on_running(&mut self, event: &RunningEvent, cx: &mut Context<Self>) {
         match event {
-            RunningEvent::Event { thread, event } if self.thread() == Some(thread) => {
+            RunningEvent::Event { thread, event } if self.thread_id() == Some(thread) => {
                 self.on_event(event, cx);
             }
-            RunningEvent::Ended { thread } if self.thread() == Some(thread) => {
+            RunningEvent::Ended { thread } if self.thread_id() == Some(thread) => {
                 self.settle(cx);
                 // A reader follows a turn it did not start, so it may have
                 // attached late or to a delegation its parent dropped. The
@@ -1638,7 +1618,7 @@ impl AgentChat {
     /// without the blank a fresh read shows first. Skipped when the rows say
     /// what is already shown, and when a turn attached meanwhile.
     fn reload(&mut self, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread().map(str::to_owned) else {
+        let Some(thread) = self.thread_id().map(str::to_owned) else {
             return;
         };
         let pending = self.agent.open_thread(thread.clone());
@@ -1650,7 +1630,7 @@ impl AgentChat {
                 return;
             };
             this.update(cx, |this, cx| {
-                if this.thread() != Some(thread.as_str())
+                if this.thread_id() != Some(thread.as_str())
                     || this.turn.is_some()
                     || this.transcript == transcript
                 {
@@ -1752,27 +1732,6 @@ impl AgentChat {
             window.request_animation_frame();
         }
         let theme = self.theme.clone();
-        // Unattached: the panel is its own opening and nothing else. No status
-        // strip and no composer, because there is no thread for a send to land
-        // in — a live field over a conversation that cannot exist would be the
-        // silent no-op moved one layer in.
-        //
-        // A read-only child starts with an id and learns its scope from the
-        // thread read, so it must show the loading plate while that arrives.
-        let attached = self.attached();
-        if !attached && !self.read_only {
-            let unattached = cx.entity();
-            return self
-                .plate(&unattached, &theme)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .px(px(theme::CONTENT_GUTTER))
-                        .child(opening(&Opening::UNATTACHED, None, &theme)),
-                )
-                .into_any_element();
-        }
         let streaming = self.is_streaming();
         // Read out before the composer takes `&mut self.composer` below —
         // the plate is painted in one expression, and a live `&self` inside it
@@ -1857,7 +1816,7 @@ impl AgentChat {
         // the list and everything pinned to the transcript's bottom clear it
         // by this much. A change repaints (see the footer's canvas), so a lag
         // of one frame never settles.
-        let footer = if attached && !self.read_only {
+        let footer = if !self.read_only {
             f32::from(self.composer_bounds.get().size.height)
         } else {
             0.0
@@ -2049,8 +2008,7 @@ impl AgentChat {
                     // painted over that is a conversation with history being
                     // told it has none — see [`Conversation`].
                     .when(
-                        attached
-                            && self.transcript.messages.is_empty()
+                        self.transcript.messages.is_empty()
                             && self.send_motion.pending.is_empty()
                             && self.is_open(),
                         |el| {
@@ -2068,7 +2026,7 @@ impl AgentChat {
                                     .child(working::trailer(&state, &theme, view, cx))
                             });
                             el.pb(px(footer))
-                                .child(opening(&Opening::CHAT, Some(&this), &theme))
+                                .child(opening(&Opening::CHAT, &this, &theme))
                                 .children(opening_trailer)
                         },
                     )
@@ -2089,7 +2047,7 @@ impl AgentChat {
             // conversation blurs under it instead of stopping at a seam. It
             // takes the pointer, except the wheel: a click on the composer must
             // not reach the transcript's unpin, but the list still scrolls.
-            .when(attached && !self.read_only, |el| {
+            .when(!self.read_only, |el| {
                 el.child(
                     div()
                         .absolute()
@@ -2144,9 +2102,8 @@ impl AgentChat {
             .into_any_element()
     }
 
-    /// The thread's surface and its header — everything both the attached and
-    /// the unattached body sit on, so the two cannot drift apart in the one
-    /// place where the chat meets the shell.
+    /// The thread's surface and its header: the one place where the chat
+    /// meets the shell.
     fn plate(&self, chat: &Entity<AgentChat>, theme: &Theme) -> gpui::Div {
         let plate = div()
             .relative()
@@ -2178,9 +2135,8 @@ impl AgentChat {
             .child(div().child("Luma").agent_node(NodeRole::Text, "Luma"))
             .child(div().flex_1())
             // The two ways out of the conversation you are in: back to an
-            // older one, or on to a new one. Only shown on an attached panel —
-            // a thread supplies the header while editor context seeds new chats.
-            .children(self.attached().then(|| {
+            // older one, or on to a new one.
+            .child({
                 let rewind = chat.clone();
                 let fresh = chat.clone();
                 div()
@@ -2206,7 +2162,7 @@ impl AgentChat {
                             fresh.update(cx, |this, cx| this.new_thread(cx));
                         },
                     ))
-            }))
+            })
     }
 }
 
@@ -2308,28 +2264,13 @@ fn jump_to_bottom(chat: &Entity<AgentChat>, footer: f32, theme: &Theme) -> impl 
 struct Opening {
     headline: &'static str,
     blurb: &'static str,
-    /// A dimmer second line, under the blurb. Only the unattached opening has
-    /// one: an attached panel's next move is the composer directly below it,
-    /// and a hint pointing at a control the eye is already on is noise.
-    hint: Option<&'static str>,
     prompts: &'static [&'static str],
 }
 
 impl Opening {
-    /// The panel with no score open. It offers no prompts because it has
-    /// no thread to send one into: what it owes the reader is the way *out*
-    /// of this state, which is the headline.
-    const UNATTACHED: Self = Self {
-        headline: UNATTACHED_HEADLINE,
-        blurb: "Each score keeps its own chats.",
-        hint: None,
-        prompts: &[],
-    };
-
     const CHAT: Self = Self {
         headline: OPENING_HEADLINE,
         blurb: "Build the room, shape the show, or explore the music.",
-        hint: None,
         prompts: &[
             "What is open right now?",
             "Describe this room",
@@ -2338,24 +2279,17 @@ impl Opening {
     };
 }
 
-/// What a conversation that has not started asks the reader. Public for the
-/// same reason [`UNATTACHED_HEADLINE`] is: it is what a test asserting the empty
-/// state never flashes over a loading thread looks for, and a test spelling
-/// the copy itself would pass while the shipped words said something else.
+/// What a conversation that has not started asks the reader. Public because
+/// it is what a test asserting the empty state never flashes over a loading
+/// thread looks for, and a test spelling the copy itself would pass while the
+/// shipped words said something else.
 pub const OPENING_HEADLINE: &str = "Where do you want to start?";
-
-/// The way out of an unattached panel, in the panel's own words. Public
-/// because it is what the exit gate looks for: a test that spelled the promise
-/// itself would pass while the shipped copy said something else.
-pub const UNATTACHED_HEADLINE: &str = "Pick a track to chat";
 
 /// A conversation that has not started: a mark, a headline, what the agent can
 /// do, and the prompts that fill the composer.
 ///
-/// `chat` is the panel the prompts send into, and `None` when there is none to
-/// send into — which is also when [`Opening::prompts`] is empty, so the two
-/// cannot disagree.
-fn opening(opening: &Opening, chat: Option<&Entity<AgentChat>>, theme: &Theme) -> impl IntoElement {
+/// `chat` is the panel the prompts send into.
+fn opening(opening: &Opening, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
     div()
         .size_full()
         .flex()
@@ -2402,14 +2336,6 @@ fn opening(opening: &Opening, chat: Option<&Entity<AgentChat>>, theme: &Theme) -
                         .child(SharedString::from(opening.blurb))
                         .agent_node(NodeRole::Text, opening.blurb),
                 )
-                .children(opening.hint.map(|hint| {
-                    div()
-                        .text_size(px(11.0))
-                        .text_center()
-                        .text_color(theme.text_faint.opacity(0.7))
-                        .child(SharedString::from(hint))
-                        .agent_node(NodeRole::Text, hint)
-                }))
                 .child(
                     div()
                         .mt(px(theme::SPACE_XS))
@@ -2417,14 +2343,14 @@ fn opening(opening: &Opening, chat: Option<&Entity<AgentChat>>, theme: &Theme) -
                         .flex()
                         .flex_col()
                         .gap(px(theme::SPACE_SM))
-                        .children(chat.into_iter().flat_map(|chat| {
+                        .children(
                             opening
                                 .prompts
                                 .iter()
                                 .copied()
                                 .enumerate()
-                                .map(|(ix, prompt)| suggestion(ix, prompt, chat, theme))
-                        })),
+                                .map(|(ix, prompt)| suggestion(ix, prompt, chat, theme)),
+                        ),
                 ),
         )
 }

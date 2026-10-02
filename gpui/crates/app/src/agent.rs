@@ -1,132 +1,247 @@
-//! The shell keeps one chat panel. It shows the open score's chats; the other
-//! editors only supply the working context for each turn.
+//! Each tab owns its chat. A score tab's chats are that score's; the venue
+//! tab's chats are the venue's (`docs/specs/venue-tabs.md` rules 3 and 4).
+//!
+//! Every panel shares the app's one [`RunningTurns`], so a turn belongs to its
+//! thread and not to whichever tab is in front: switching tabs or venues lets
+//! go of the view and leaves the turn running.
 
-use gpui::{AppContext as _, Context, Window};
+use std::collections::HashMap;
+
+use gpui::prelude::*;
+use gpui::{div, px, App, Context, Entity, Subscription};
 use luma_chat::{AgentChat, RunningEvent, RunningTurns};
 use luma_lib::agent::{ThreadScope, TurnContext, TurnEvent};
+use luma_ui::ladder;
+use luma_ui::node::{Instrument, Role};
 
 use crate::shell::Body;
 use crate::tabs::Target;
-use crate::track_editor::Editor;
 use crate::Luma;
 
-/// What a message sent now is about, independent of the conversation: the
-/// open track and how its timeline stands.
-pub(crate) fn turn_context(app: &Luma) -> TurnContext {
-    let editor = current_editor(app);
-    TurnContext {
-        scope: editor.and_then(editor_scope),
-        editor: editor.map(Editor::agent_context),
+/// One tab's chat panel, and what the tab's status dot needs beyond it.
+pub(crate) struct TabChat {
+    pub(crate) panel: Entity<AgentChat>,
+    /// The panel's turn ended while the tab was not in front. Cleared when the
+    /// tab is viewed.
+    unseen: bool,
+    _requests: Subscription,
+}
+
+/// What a tab's dot says. There is no "needs input": no turn event asks the
+/// reader anything yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabStatus {
+    Working,
+    Finished,
+}
+
+impl TabStatus {
+    /// The stronger of two: a working tab outranks one that finished.
+    fn max(self, other: Self) -> Self {
+        if self == Self::Working || other == Self::Working {
+            Self::Working
+        } else {
+            Self::Finished
+        }
     }
 }
 
-/// Whose chats the thread shows: the score the picked track's editor has
-/// open, or `None` when no score is open.
-pub(crate) fn chat_subject(app: &Luma) -> Option<ThreadScope> {
-    current_track(app)
-}
-
-/// A track editor with a score open.
-fn track_editor(body: &Body) -> Option<&Editor> {
-    let Body::TrackEditor(state) = body else {
-        return None;
+/// The dot itself, in the size and recipe of the sidebar's coverage dot.
+/// `subject` names it in the automation tree.
+pub(crate) fn status_dot(status: TabStatus, subject: &str) -> impl IntoElement {
+    let (color, word) = match status {
+        TabStatus::Working => (ladder::status_warn(), "working"),
+        TabStatus::Finished => (ladder::status_ok(), "finished"),
     };
-    state.subject().map(|_| &**state)
+    div()
+        .flex_none()
+        .size(px(6.))
+        .rounded_full()
+        .bg(color)
+        .agent_node(Role::Text, format!("{subject} {word}"))
 }
 
-fn editor_scope(editor: &Editor) -> Option<ThreadScope> {
-    let (track, venue, score) = editor.subject()?;
-    Some(ThreadScope::track(track, venue, score))
+/// The conversations a tab's chats belong to.
+pub(crate) fn scope(target: &Target) -> ThreadScope {
+    match target {
+        Target::Score {
+            venue,
+            track,
+            score,
+        } => ThreadScope::track(track, venue, score),
+        Target::Venue { venue } => ThreadScope::venue(venue),
+    }
 }
 
-/// An open track remains available while another editor tab is in front.
-fn current_editor(app: &Luma) -> Option<&Editor> {
-    app.workspace
-        .active_body()
-        .and_then(track_editor)
-        .or_else(|| {
-            app.workspace
-                .iter()
-                .filter_map(|tab| track_editor(&tab.body))
-                .last()
-        })
+/// What a message sent from `target`'s chat is about: the tab's subject, and
+/// how its timeline stands when it is a score.
+fn turn_context(app: &Luma, target: &Target) -> TurnContext {
+    let editor = match app.parked.body(&app.workspace, target) {
+        Some(Body::TrackEditor(editor)) => Some(editor.agent_context()),
+        _ => None,
+    };
+    TurnContext {
+        scope: Some(scope(target)),
+        editor,
+    }
 }
 
-fn current_track(app: &Luma) -> Option<ThreadScope> {
-    current_editor(app).and_then(editor_scope)
+impl Body {
+    pub(crate) fn chat(&self) -> &TabChat {
+        match self {
+            Self::TrackEditor(state) => &state.chat,
+            Self::Patch(state) => &state.chat,
+        }
+    }
+
+    fn chat_mut(&mut self) -> &mut TabChat {
+        match self {
+            Self::TrackEditor(state) => &mut state.chat,
+            Self::Patch(state) => &mut state.chat,
+        }
+    }
 }
 
 impl Luma {
-    /// Keep one chat entity on the open score's chats. Each message reads
-    /// the editor when it is sent, through [`turn_context`].
-    ///
-    /// The venue page hides the thread and leaves it alone, so the score's
-    /// chat, and any turn it is running, is there when the reader comes back.
-    pub(crate) fn sync_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let subject = chat_subject(self);
-        let follow = !self.venue_mode();
-        if let Some(chat) = &self.chat {
-            if follow {
-                chat.update(cx, |chat, cx| chat.set_subject(subject, cx));
-            }
-            return;
-        }
+    /// A chat panel for `target`. It shows `thread` when one is named — the
+    /// chat a restored tab had open — and else the subject's newest chat.
+    pub(crate) fn tab_chat(
+        &mut self,
+        target: &Target,
+        thread: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> TabChat {
         let agent = self.library.agent();
-        // Owned by the chat, which lives as long as the app: quitting drops it,
-        // and with it every running turn.
-        let running = cx.new(|_| RunningTurns::default());
-        // Weak, so the chat the app owns does not own the app back. The chat
+        let running = self.running.clone();
+        // Weak, so the panel the app owns does not own the app back. The panel
         // sends from its own handlers, never while the app is being updated.
         let app = cx.weak_entity();
-        let chat = cx.new(|cx| {
-            let mut chat = AgentChat::new(agent, running.clone(), None, cx);
+        let source = target.clone();
+        let subject = scope(target);
+        let panel = cx.new(|cx| {
+            let mut chat = AgentChat::new(agent, running, subject.clone(), thread, cx);
             chat.set_context_source(Box::new(move |cx| {
                 app.upgrade().map_or(
                     TurnContext {
-                        scope: None,
+                        scope: Some(subject.clone()),
                         editor: None,
                     },
-                    |app| turn_context(app.read(cx)),
+                    |app| turn_context(app.read(cx), &source),
                 )
             }));
-            chat.set_subject(subject, cx);
             chat
         });
-        let requests = cx.subscribe_in(&chat, window, |this, _, event, _, cx| match event {
+        let requests = cx.subscribe(&panel, |this, _, event, cx| match event {
             luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
             luma_chat::ChatEvent::SubagentsRequested(child) => {
                 this.show_subagents(child.clone(), cx);
             }
         });
-        // Heard from the registry rather than the panel: a turn in the
-        // background changes documents while the panel shows another chat.
-        // A subagent's own commits land on its private draft; its parent
-        // announces the change when the draft is published.
-        let commits = cx.subscribe(&running, |this, running, event, cx| {
-            if let RunningEvent::Event {
+        TabChat {
+            panel,
+            unseen: false,
+            _requests: requests,
+        }
+    }
+
+    /// The front tab's chat panel, which is the one on screen.
+    pub(crate) fn front_chat(&self) -> Option<&Entity<AgentChat>> {
+        self.workspace.active_body().map(|body| &body.chat().panel)
+    }
+
+    /// `target`'s dot, wherever its tab is. `None` for no dot, and for a
+    /// target with no open tab.
+    pub(crate) fn tab_status(&self, target: &Target, cx: &App) -> Option<TabStatus> {
+        status(self.parked.body(&self.workspace, target)?.chat(), cx)
+    }
+
+    /// The dots of the venue on screen, by tab: what the sidebar's rows show.
+    pub(crate) fn tab_statuses(&self, cx: &App) -> HashMap<Target, TabStatus> {
+        self.workspace
+            .iter()
+            .filter_map(|tab| Some((tab.target.clone(), status(tab.body.chat(), cx)?)))
+            .collect()
+    }
+
+    /// The strongest dot among each venue's tabs, for the venues not on
+    /// screen: what the venue picker shows beside them.
+    pub(crate) fn venue_statuses(&self, cx: &App) -> HashMap<String, TabStatus> {
+        let mut statuses = HashMap::new();
+        for (venue, tabs) in self.parked.sets(&self.workspace) {
+            if Some(venue) == self.parked.current() {
+                continue;
+            }
+            if let Some(found) = tabs
+                .iter()
+                .filter_map(|tab| status(tab.body.chat(), cx))
+                .reduce(TabStatus::max)
+            {
+                statuses.insert(venue.to_string(), found);
+            }
+        }
+        statuses
+    }
+
+    /// Viewing a tab clears its "finished" dot. Done at draw, for the reason
+    /// [`Luma::sync_venue_tabs`] is: every gesture that brings a tab to the
+    /// front only has to select it.
+    pub(crate) fn see_front_tab(&mut self) {
+        if let Some(body) = self.workspace.active_body_mut() {
+            body.chat_mut().unseen = false;
+        }
+    }
+
+    /// Hear the app's running turns: a commit reloads what it changed, and a
+    /// turn that ends behind another tab marks its own tab.
+    pub(crate) fn running_event(
+        &mut self,
+        running: Entity<RunningTurns>,
+        event: &RunningEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // A subagent's own commits land on its private draft; its parent
+            // announces the change when the draft is published.
+            RunningEvent::Event {
                 thread,
                 event: TurnEvent::DocumentChanged,
-            } = event
-            {
-                if running.read(cx).is_running(thread) {
-                    this.agent_documents_changed(cx);
+            } if running.read(cx).is_running(thread) => self.agent_documents_changed(cx),
+            RunningEvent::Ended { thread } => {
+                let front = self.workspace.active().cloned();
+                let ended: Vec<Target> = self
+                    .parked
+                    .tabs(&self.workspace)
+                    .filter(|tab| Some(&tab.target) != front.as_ref())
+                    .filter(|tab| {
+                        tab.body.chat().panel.read(cx).thread_id() == Some(thread.as_str())
+                    })
+                    .map(|tab| tab.target.clone())
+                    .collect();
+                for target in ended {
+                    if let Some(body) = self.parked.body_mut(&mut self.workspace, &target) {
+                        body.chat_mut().unseen = true;
+                    }
                 }
+                cx.notify();
             }
-        });
-        self.chat_subscription = Some(gpui::Subscription::join(requests, commits));
-        self.chat = Some(chat);
-        cx.notify();
+            RunningEvent::Event { .. } => {}
+        }
     }
-}
 
-impl Luma {
     fn agent_documents_changed(&mut self, cx: &mut Context<Self>) {
         // A commit can touch several documents, including delegated work. The
         // event deliberately carries no single editor subject.
-        self.agent_stale_tabs = self.parked.targets(&self.workspace);
+        self.agent_stale_tabs = self.all_targets();
         self.refresh_agent_tabs(cx);
         self.reload_stage(cx);
         self.refresh_score_listing(cx);
+    }
+
+    fn all_targets(&self) -> Vec<Target> {
+        self.parked
+            .tabs(&self.workspace)
+            .map(|tab| tab.target.clone())
+            .collect()
     }
 
     /// Rows arrived from another device. The same reload, for the same reason:
@@ -143,7 +258,7 @@ impl Luma {
         {
             return;
         }
-        self.agent_stale_tabs = self.parked.targets(&self.workspace);
+        self.agent_stale_tabs = self.all_targets();
         self.refresh_agent_tabs(cx);
         self.reload_stage(cx);
         self.refresh_score_listing(cx);
@@ -162,6 +277,8 @@ impl Luma {
         }
     }
 
+    /// Reload the live tabs an agent commit or a sync left stale. Parked tabs
+    /// stay marked until their venue comes back on screen.
     pub(crate) fn refresh_agent_tabs(&mut self, cx: &mut Context<Self>) {
         if self.agent_stale_tabs.is_empty() {
             return;
@@ -176,19 +293,18 @@ impl Luma {
                 continue;
             }
             self.agent_stale_tabs.retain(|stale| stale != &target);
-            match self.workspace.body(&target) {
-                Some(Body::TrackEditor(editor)) => {
-                    if let Some(score) = editor.score_id().map(str::to_owned) {
-                        self.reload_score_contents(target, score, cx);
-                    }
-                }
-                Some(Body::Patch(_)) => {
-                    if let Target::Patch { venue } = &target {
-                        self.reload_patch(venue.clone(), cx);
-                    }
-                }
-                _ => {}
+            match &target {
+                Target::Score { .. } => self.reload_score_contents(target.clone(), cx),
+                Target::Venue { venue } => self.reload_patch(venue.clone(), cx),
             }
         }
+    }
+}
+
+fn status(chat: &TabChat, cx: &App) -> Option<TabStatus> {
+    if chat.panel.read(cx).is_streaming() {
+        Some(TabStatus::Working)
+    } else {
+        chat.unseen.then_some(TabStatus::Finished)
     }
 }

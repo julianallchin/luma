@@ -80,9 +80,6 @@ pub(super) fn resolve_document(
 }
 
 impl Editor {
-    pub(crate) fn score_id(&self) -> Option<&str> {
-        self.score.as_ref().map(|score| score.id.as_str())
-    }
     pub(super) fn install_contents(
         &mut self,
         contents: crate::library::ScoreContents,
@@ -169,9 +166,7 @@ impl Luma {
         if editor.saving || !editor.dirty || !editor.writable() {
             return;
         }
-        let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
-            return;
-        };
+        let score_id = editor.score.id.clone();
         let candidate = match editor.graph_candidate() {
             Ok(score) => score,
             Err(error) => {
@@ -195,9 +190,6 @@ impl Luma {
                 let mut again = false;
                 let mut previews = Vec::new();
                 this.edit_track_tab(&target, cx, |editor| {
-                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
-                        return;
-                    }
                     editor.saving = false;
                     editor.writes += 1;
                     let Some(base) = editor.graph_score.as_mut() else {
@@ -233,20 +225,16 @@ impl Luma {
         .detach();
     }
 
-    pub(crate) fn reload_score_contents(
-        &mut self,
-        target: Target,
-        score_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        let Target::TrackEditor { track, .. } = &target else {
+    /// Re-read a score tab's document after a change this tab did not make.
+    pub(crate) fn reload_score_contents(&mut self, target: Target, cx: &mut Context<Self>) {
+        let Target::Score { track, score, .. } = &target else {
             return;
         };
         let Some(Body::TrackEditor(editor)) = self.workspace.body(&target) else {
             return;
         };
         let writes = editor.writes;
-        let pending = self.library.score_contents(&score_id, track);
+        let pending = self.library.score_contents(score, track);
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
@@ -254,9 +242,6 @@ impl Luma {
                 let mut changed = false;
                 let mut split = false;
                 this.edit_track_tab(&target, cx, |editor| {
-                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
-                        return;
-                    }
                     // The sync layer announces every write to a synced table,
                     // our own included. A read that overlapped a local edit or
                     // save is that save, or older than it: installing it would

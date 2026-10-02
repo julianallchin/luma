@@ -3,8 +3,7 @@
 // An empty workspace used to be a second, silent reason to hide the panel,
 // so the surface that offers the first tab was withheld until a tab existed.
 // What is asserted is the way out of that state, by both routes a user has:
-// the toggle in the window's corner, and ⌘T. The venue page is not a tab: the
-// sidebar's Venue row opens it, and the panel's offer does not.
+// the toggle in the window's corner, and ⌘T.
 
 const WIDTH = 1280;
 
@@ -57,39 +56,19 @@ test("an empty panel offers the ways to open a tab", () => {
   assert(read().empty, "the toggle closed the empty panel and could not bring it back");
 });
 
-// The last tab collapses the panel; reopening reveals choices, not a new tab.
-test("closing the last tab springs closed and reopens empty", { fixture: { motion: true } }, () => {
-  const seam = () => app.snapshot().find({ role: "slider", label: "Workspace width" })?.bounds.x ?? null;
-  const sample = () => {
-    const seen = [];
-    for (let i = 0; i < 20; i++) {
-      app.frames(1, { waitMs: 40 });
-      seen.push(seam());
-    }
-    return seen;
-  };
+// The last tab's close lands on the panel's offer: a tab owns its chat, so
+// with no tab there is no chat to share the room with.
+test("closing the last tab lands on the empty panel", () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the track's tab", (s) => closeButtons(s).length > 0);
-  app.frames(20, { waitMs: 40 });
-  const opened = seam();
-  expect(typeof opened).toBe("number");
-
   app.action("luma::CloseTab");
-  const closing = sample();
-  expect(seam()).toBe(null);
-  app.action("luma::ToggleWorkspace");
-  const opening = sample();
-  // The seam springs: some frames lie between open and the window's edge.
-  for (const [direction, frames] of Object.entries({ closing, opening })) {
-    assert(frames.some((x) => x !== null && x > opened + 2 && x < WIDTH - 10), `no intermediate spring frames ${direction}: ${frames}`);
-  }
-  assert(Math.abs(seam() - opened) < 1, `the panel reopened at ${seam()}, not ${opened}`);
-  const shot = app.snapshot();
-  expect(shot.find({ role: "card", label: "Empty panel" }) !== undefined).toBe(true);
+  const shot = until("the empty panel", (s) => s.find({ role: "card", label: "Empty panel" }) ? s : undefined);
   expect(closeButtons(shot).length).toBe(0);
+  expect(shot.find({ role: "slider", label: "Workspace width" })).toBe(undefined);
+  expect(shot.findAll({ role: "text" }).some((n) => n.label === "Luma")).toBe(false);
 });
 
-test("new tab with no tabs reaches the empty panel and the venue row opens the room", () => {
+test("new tab with no tabs reaches the empty panel and the venue row opens the venue tab", () => {
   openVenue();
   // The regression: ⌘T with an empty workspace produced nothing at all. It
   // must land on the panel's offer.
@@ -99,12 +78,11 @@ test("new tab with no tabs reaches the empty panel and the venue row opens the r
   app.frames(4);
   assert(read().empty, "⌘T with no tabs open reached nothing that can open one");
 
-  // The venue page replaces the empty state, and it is a place, not a tab:
-  // no strip and nothing to close.
+  // The venue tab replaces the empty state, in the strip like any tab.
   nav.venuePage("Test Venue");
   app.frames(4);
   const opened = read();
-  assert(!opened.empty && opened.venue, `the Venue row did not open the venue page: ${JSON.stringify(opened)}`);
-  assert(!opened.strip, "the venue page drew a tab strip");
-  expect(closeButtons(app.snapshot()).map((n) => n.label)).toEqual([]);
+  assert(!opened.empty && opened.venue, `the venue row did not open the venue tab: ${JSON.stringify(opened)}`);
+  assert(opened.strip, "the venue tab drew no strip");
+  expect(closeButtons(app.snapshot()).map((n) => n.label)).toEqual(["Close Venue"]);
 });

@@ -131,19 +131,6 @@ test("the transcript grows between frames", () => {
   expect(last).toBeGreaterThan(first);
 });
 
-// With no score open the chat is there, unattached, and says what it could
-// attach to; moving to another view about nothing keeps it.
-test("the chat opens unattached on a screen with no subject", () => {
-  const welcome = until("the unattached centre", (s) =>
-    texts(s).includes("Luma") && texts(s).includes("Pick a track to chat"));
-  expect(welcome.find({ role: "button", label: "Send" })).toBe(undefined);
-  expect(composer(welcome)).toBe(undefined);
-
-  app.action("luma::OpenSettings");
-  const settings = until("the settings dialog", (s) => s.find({ role: "card", label: "Settings dialog" }));
-  expect(texts(settings)).toContain("Luma");
-});
-
 test("a new chat has one identity across editors", () => {
   nav.trackEditor("Test Venue", "Aurora");
   nav.step("new conversation", "button", "New chat");

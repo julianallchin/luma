@@ -12,16 +12,15 @@ const room = (id, name) => [
 ];
 fixture({ track: false, seconds: 1, sql: [...room("alpha", "Alpha Hall"), ...room("beta", "Beta Room")] });
 
-// Leaving a room revokes its track as a subject without throwing the work
-// away: the new-tab offer stops offering a track the current browser cannot
-// open, while the tabs open under that track are parked under it and come
-// back the moment it is picked again. Asserting only the first half would
-// pass a shell that closed those tabs outright.
-test("switching venues parks the track subject and revokes it from the new-tab offer", () => {
+// A venue is a project: leaving it parks its whole tab set, and coming back
+// brings the set back as it was. The new-tab offer in the other room cannot
+// open a track from the room that was left.
+test("switching venues parks the venue's tabs and brings them back", () => {
+  const alphaTab = "Alpha Hall Track · #1";
   nav.venue("Alpha Hall");
   until("Alpha's track", (s) => s.find({ role: "row", label: "Alpha Hall Track" }) !== undefined);
   nav.track("Alpha Hall Track");
-  until("the selected Alpha tab", (s) => s.find({ role: "button", label: "Alpha Hall Track" }) !== undefined);
+  until("the Alpha tab", (s) => s.find({ role: "button", label: alphaTab }) !== undefined);
 
   nav.step("the venue switcher", "button", "Alpha Hall");
   nav.venue("Beta Room");
@@ -30,15 +29,10 @@ test("switching venues parks the track subject and revokes it from the new-tab o
   const offer = until("the empty panel's offer", (s) => s.find({ role: "card", label: "Empty panel" }) !== undefined);
   expect(offer.find({ role: "button", label: "Track editor" }).enabled).toBe(false);
   expect(offer.find({ role: "text", label: "Select a track first" }) !== undefined).toBe(true);
-  // The strip belongs to the picked track, so leaving Alpha parks its tabs.
-  expect(offer.find({ role: "button", label: "Alpha Hall Track" })).toBe(undefined);
+  expect(offer.find({ role: "button", label: alphaTab })).toBe(undefined);
 
-  // Parked is not closed: go back and re-pick the track.
+  // Parked is not closed: going back brings Alpha's tab with it.
   nav.step("the venue switcher", "button", "Beta Room");
   nav.venue("Alpha Hall");
-  until("Alpha's track again", (s) => s.find({ role: "row", label: "Alpha Hall Track" }) !== undefined);
-  // Its tabs are parked under the track, not the room.
-  expect(app.snapshot().find({ role: "button", label: "Alpha Hall Track" })).toBe(undefined);
-  nav.track("Alpha Hall Track");
-  until("the restored Alpha tab", (s) => s.find({ role: "button", label: "Alpha Hall Track" }) !== undefined);
+  until("the restored Alpha tab", (s) => s.find({ role: "button", label: alphaTab }) !== undefined);
 });

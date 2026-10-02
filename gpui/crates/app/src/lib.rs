@@ -49,6 +49,7 @@ mod keymap;
 mod library;
 mod patch;
 mod picker_preview;
+mod saved_tabs;
 mod settings;
 mod shell;
 mod signin;
@@ -94,7 +95,7 @@ pub fn init(cx: &mut App) {
     text_input::init(cx);
     motion::init(cx);
 }
-use luma_chat::AgentChat;
+use luma_chat::RunningTurns;
 use luma_ui::{fonts, ladder, motion, text_input};
 
 use shell::{Body, FocusSlot, Overlay};
@@ -117,19 +118,17 @@ pub struct Luma {
     /// is true mid-slide: the flag says where the region is going, this says
     /// where it is.
     pub(crate) sidebar_width: luma_ui::pane::PaneWidth,
-    /// The workspace panel's open tabs — **the set on screen**. What each one
+    /// The selected venue's open tabs — **the set on screen**. What each one
     /// shows *is* its identity, see [`tabs`].
     pub(crate) workspace: Tabs<Body>,
-    /// Every other subject's remembered tabs. The strip belongs to whatever is
-    /// picked in the sidebar, and [`Luma::sync_workspace_scope`] swaps this
-    /// set for that one — see [`workspace`].
+    /// Every other venue's tabs. [`Luma::sync_venue_tabs`] swaps this set for
+    /// the sidebar's venue's — see [`workspace`].
     pub(crate) parked: workspace::ParkedTabs<Body>,
+    /// The tabs this device reopens at launch — see [`saved_tabs`].
+    pub(crate) saved_tabs: saved_tabs::SavedTabs,
     /// Visual-only state for keyed chip reflow and the floating `+` menu.
     /// Logical tab identity and teardown remain owned by `workspace`.
     pub(crate) tab_chrome: tab_chrome::TabChrome,
-    /// What the sidebar has picked: a track, or the venue page. The tab set,
-    /// the thread and the `+` menu all follow it.
-    pub(crate) picked: Option<workspace::Pick>,
     pub(crate) workspace_hidden: bool,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
@@ -149,8 +148,8 @@ pub struct Luma {
     /// Session-lived: a split chosen for one window is not a preference about
     /// every future window.
     pub(crate) workspace_split: luma_ui::split::SplitFraction,
-    /// Whether an open workspace takes over everything right of the sidebar
-    /// or shares it with the thread column. The venue page always takes over.
+    /// Whether the front tab's editor takes over everything right of the
+    /// sidebar or shares it with the tab's chat.
     pub(crate) expanded: bool,
     /// Device pixels per logical pixel, as of the last render. Offscreen
     /// previews are drawn at the size they are shown.
@@ -208,12 +207,13 @@ pub struct Luma {
     /// What the one sign-out gesture is doing — see [`settings::AccountAction`].
     /// Who is signed in is not here: `Library` is the cache of that.
     pub(crate) account_action: settings::AccountAction,
-    /// The agent thread, the shell's centre. Built at first render (its
-    /// composer needs a `Window`) and then kept for the app's life — it is a
-    /// region, not a panel, and it cannot be closed.
-    pub(crate) chat: Option<Entity<AgentChat>>,
-    /// Alive exactly as long as the chat it listens to — see `sync_chat`.
-    pub(crate) chat_subscription: Option<gpui::Subscription>,
+    /// Every tab's chat runs its turns here, so a turn outlives the tab being
+    /// in front. Dropping it at quit cancels every turn.
+    pub(crate) running: Entity<RunningTurns>,
+    /// The app hears the registry: a start or end repaints the status dots,
+    /// and a commit reloads the documents it changed — see
+    /// [`Luma::running_event`].
+    _running: [gpui::Subscription; 2],
     /// The keyboard's home: one handle, tracked at whichever element
     /// [`Luma::focus_slot`] names this frame, so actions always have a
     /// dispatch path and a binding can scope to the region it runs through.
@@ -236,7 +236,8 @@ pub struct Luma {
     /// belongs to the picker instance that requested it, never merely to
     /// whichever venue overlay happens to be visible when it lands.
     pub(crate) venue_picker_generation: u64,
-    /// Agent commits invalidate parked editors too; reload them on restoration.
+    /// Agent commits invalidate parked tabs too; they reload when their venue
+    /// comes back on screen.
     pub(crate) agent_stale_tabs: Vec<crate::tabs::Target>,
     /// Correlates a history read with the dialog that asked for it — a slow
     /// list arriving after the reader reopened the picker is a stale answer.
@@ -259,6 +260,9 @@ impl Luma {
     /// something, which is what keeps "how did I get here" answerable from
     /// the click history alone.
     pub fn new(library: Library, cx: &mut Context<Self>) -> Self {
+        let running = cx.new(|_| RunningTurns::default());
+        let running_changed = cx.observe(&running, |_, _, cx| cx.notify());
+        let running_events = cx.subscribe(&running, Self::running_event);
         let mut app = Self {
             library,
             track_import: None,
@@ -271,8 +275,8 @@ impl Luma {
             sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace: Tabs::default(),
             parked: workspace::ParkedTabs::default(),
+            saved_tabs: saved_tabs::SavedTabs::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
-            picked: None,
             workspace_hidden: false,
             shell_presented: false,
             restoring_venue: false,
@@ -299,8 +303,8 @@ impl Luma {
             account_menu: luma_ui::dialog::Popup::default(),
             account_focus: cx.focus_handle().tab_stop(true),
             account_action: settings::AccountAction::default(),
-            chat: None,
-            chat_subscription: None,
+            running,
+            _running: [running_changed, running_events],
             chat_history_generation: 0,
             focus: cx.focus_handle(),
             dialog_focus: cx.focus_handle(),
@@ -499,8 +503,9 @@ impl Render for Luma {
         if self.sidebar.is_none() && self.overlay.get().is_none() && self.workspace.is_empty() {
             self.show_venues(cx);
         }
-        self.sync_workspace_scope(cx);
-        self.sync_chat(window, cx);
+        self.sync_venue_tabs(cx);
+        self.see_front_tab();
+        self.save_tabs(cx);
         self.sync_visualizer(cx);
         self.sync_fullscreen(window, cx);
         self.take_focus(window, cx);

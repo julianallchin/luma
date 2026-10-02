@@ -8,11 +8,13 @@ impl Editor {
 
 impl Luma {
     /// Leaving a song preserves its playhead and loop, but releases playback.
-    pub(crate) fn park_track_audio(&mut self, cx: &mut Context<Self>) {
+    /// Every live score tab but `keep` lets go of its audio.
+    pub(crate) fn park_track_audio(&mut self, keep: Option<&Target>, cx: &mut Context<Self>) {
         let targets: Vec<_> = self
             .workspace
             .iter()
             .map(|tab| tab.target.clone())
+            .filter(|target| Some(target) != keep)
             .collect();
         for target in targets {
             let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(&target) else {
@@ -32,7 +34,21 @@ impl Luma {
         }
     }
 
-    pub(crate) fn activate_track_audio(&mut self, target: &Target, cx: &mut Context<Self>) {
+    /// One song plays at a time, and it is the front score tab's. Bringing
+    /// the venue tab to the front leaves the song that was playing alone.
+    pub(crate) fn sync_track_audio(&mut self, cx: &mut Context<Self>) {
+        let Some(front) = self.workspace.active().cloned() else {
+            return;
+        };
+        match self.workspace.body(&front) {
+            Some(Body::TrackEditor(editor)) if editor.transport.session.is_none() => {}
+            _ => return,
+        }
+        self.park_track_audio(Some(&front), cx);
+        self.activate_track_audio(&front, cx);
+    }
+
+    fn activate_track_audio(&mut self, target: &Target, cx: &mut Context<Self>) {
         let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(target) else {
             return;
         };

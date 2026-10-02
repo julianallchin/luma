@@ -3458,12 +3458,10 @@ impl Luma {
     /// The room the stage should be showing this frame, and the score that
     /// should light it.
     ///
-    /// **The room comes from the scope, not from the visible tab.** Now that
-    /// the strip belongs to the picked track, the scope already names the room
-    /// every tab in that strip is being worked on against — so switching tabs
-    /// in the same strip leaves the stage exactly where it was. Only the
-    /// *lighting* still asks the tab,
-    /// because only a track editor knows a `(track, venue)` to composite.
+    /// **The room comes from the venue on screen, not from the visible tab.**
+    /// Every tab in a venue's set is worked on against that room, so switching
+    /// tabs leaves the stage exactly where it was. Only the *lighting* asks the
+    /// tab, because only a score tab has a score to composite.
     fn stage_subject(&self) -> Option<StageSubject> {
         // A hidden pane and a hidden workspace are the same fact to the stage:
         // there is no column to sit in. Both drop it rather than merely
@@ -3480,14 +3478,13 @@ impl Luma {
         if self.workspace.is_empty() {
             return None;
         }
-        let scope = self.tab_scope()?;
-        let venue_id = scope.venue().to_string();
+        let venue_id = self.parked.current()?.to_string();
         // The *score*, not the pair it sits on. A `(track, venue)` carries as
         // many scores as there are people who annotated it, and the editor is
         // the one thing that knows which of them is open — so the stage takes
         // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
-            Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.lit(),
+            Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => Some(state.lit()),
             Some(Body::TrackEditor(_) | Body::Patch(_)) | None => None,
         };
         let name = self
@@ -3518,7 +3515,7 @@ impl Luma {
     /// workspace has nothing about a room.
     ///
     /// Done at draw rather than at every navigation for the reason
-    /// [`Luma::sync_chat`] is: a navigation is a field assignment, and a
+    /// [`Luma::sync_venue_tabs`] is: a navigation is a field assignment, and a
     /// gesture that forgot to ask would leave the stage lighting a room
     /// nothing on screen is about. Comparing the venue *and* the score is what
     /// separates the two costs — a different room rebuilds, a different track

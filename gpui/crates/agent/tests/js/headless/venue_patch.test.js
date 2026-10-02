@@ -252,7 +252,7 @@ test("a wider mode asks before it moves the fixture", { fixture: { files: { "fix
   const before = reading("Mover 0 address = ");
   app.click(app.snapshot().find({ role: "select", label: "Mover 0 mode = Default" }));
   until("the mode menu", (s) => s.find({ role: "button", label: "Extended · 16 ch" }) !== undefined);
-  expect(app.snapshot().findAll({ role: "button" }).map((n) => n.label).filter((l) => l.includes(" ch")))
+  expect(app.snapshot().findAll({ role: "button" }).map((n) => n.label).filter((l) => l.endsWith(" ch")))
     .toEqual(["Default · 8 ch", "Extended · 16 ch"]);
 
   // Mover 1 sits eight channels on, so sixteen do not fit.

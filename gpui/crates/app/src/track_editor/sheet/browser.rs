@@ -141,7 +141,7 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
     if std::mem::replace(&mut editor.sheet.browser.stand_ins_asked, true) {
         return;
     }
-    let target = target(editor);
+    let target = editor.target();
     cx.spawn(async move |this, cx| {
         let strips = cx
             .background_executor()
@@ -304,21 +304,12 @@ fn single_clip_score(
     Ok(score)
 }
 
-fn target(editor: &Editor) -> Target {
-    Target::TrackEditor {
-        track: editor.track_id.to_string(),
-        venue: editor.venue_id.clone(),
-    }
-}
-
 /// Render the first shown tile that has no thumbnail yet, on every head.
 fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
     if editor.sheet.browser.thumbing || editor.graph_score.is_none() || editor.beats.is_none() {
         return;
     }
-    let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
-        return;
-    };
+    let score_id = editor.score.id.clone();
     let selection = luma_patterns::Selection::all();
     let browser = &editor.sheet.browser;
     let Some(preset) = matching(&browser.query)
@@ -336,7 +327,7 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
         }
     };
     editor.sheet.browser.thumbing = true;
-    let target = target(editor);
+    let target = editor.target();
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| {
             this.library.preview_score_clip(&score_id, CLIP_ID, &score)
@@ -381,9 +372,7 @@ impl Luma {
         editor.sheet.browser.hovered = Some(key(preset));
         editor.sheet.browser.audition = None;
         cx.notify();
-        let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
-            return;
-        };
+        let score_id = editor.score.id.clone();
         let Some(start) = editor
             .beats
             .as_ref()
@@ -411,7 +400,7 @@ impl Luma {
         let pending = self
             .library
             .prepare_score_clip_preview(&score_id, CLIP_ID, &score);
-        let target = target(editor);
+        let target = editor.target();
         let name = preset.name.clone();
         cx.spawn(async move |this, cx| {
             let Ok(scene) = pending.await else {

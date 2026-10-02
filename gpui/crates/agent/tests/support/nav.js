@@ -91,6 +91,11 @@ globalThis.nav = {
 		// the gesture that missed instead of on the assertion three lines on.
 		until("the timeline", (s) =>
 			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined);
+		// Opening a score's new tab puts the sidebar away so the timeline has
+		// the room; bring it back to walk out of the level.
+		if (app.snapshot().find({ role: "card", label: "Sidebar" }) === undefined) {
+			app.action("luma::ToggleSidebar");
+		}
 		nav.step("the way back to the track list", "button", "Back to tracks");
 		until("the track list again", (s) =>
 			s.find({ role: "card", label: "Scores level" }) === undefined
@@ -116,18 +121,18 @@ globalThis.nav = {
 		nav.step("the settings row", "row", "Settings");
 	},
 
-	// The venue page, through the sidebar's Venue row. The one page that
-	// names a room without naming a score, which is what a test wants when it
-	// needs the stage pane up over an *unlit* rig — a track editor would
+	// The venue tab, through the sidebar's "Venue setup" row. The one tab
+	// that names a room without naming a score, which is what a test wants
+	// when it needs the stage pane up over an *unlit* rig — a score tab would
 	// composite one.
 	patch(venue) {
 		nav.venue(venue);
 		nav.venuePage(venue);
 	},
 
-	// The Venue row, from a sidebar that is already on `venue`.
+	// The "Venue setup" row, from a sidebar that is already on `venue`.
 	venuePage(venue) {
-		nav.step("the Venue row", "toggle", "Venue");
+		nav.step("the Venue setup row", "row", "Venue setup");
 		until("the venue page", (s) =>
 			s.find({ role: "card", label: `${venue} Venue` }) !== undefined,
 		);

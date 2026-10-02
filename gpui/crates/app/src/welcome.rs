@@ -24,6 +24,8 @@ use std::time::Instant;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_lib::models::venues::Venue;
+
+use crate::agent::TabStatus;
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
 use luma_ui::icons::IconName;
@@ -232,12 +234,18 @@ impl Luma {
             ))));
         let venues = self.library.venues();
         let remembered = self.library.get_session_item(LAST_VENUE);
+        let saved_tabs = self.read_saved_tabs();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let venues = venues.await;
             let remembered = remembered.await;
+            let saved_tabs = saved_tabs.await;
             this.update(cx, |this, cx| {
                 this.restoring_venue = false;
+                // Every venue's tabs, reopened as each venue is. A store that
+                // cannot be read is nothing saved: the tabs are a convenience.
+                this.saved_tabs =
+                    crate::saved_tabs::SavedTabs::read(saved_tabs.ok().flatten().as_deref());
                 let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
                     return;
                 };
@@ -502,8 +510,12 @@ pub(crate) fn tick(
 
 /// The venue picker's card. Like the track palette, this owns its own
 /// `morph::card` — the shell hands it no box to live in.
+///
+/// `statuses` are the other venues' status dots: a venue whose tabs are not
+/// on screen still says when its agents are working or have finished.
 pub(crate) fn render(
     state: &VenuePicker,
+    statuses: &HashMap<String, TabStatus>,
     app: &Entity<Luma>,
     window: &Window,
     cx: &mut gpui::App,
@@ -511,12 +523,13 @@ pub(crate) fn render(
     let sample = state.morph.sample(Instant::now());
     let app = app.clone();
     morph::card(&sample, "Venue dialog", move |route, mode| {
-        route_body(state, *route, mode, &app, window, cx)
+        route_body(state, statuses, *route, mode, &app, window, cx)
     })
 }
 
 fn route_body(
     state: &VenuePicker,
+    statuses: &HashMap<String, TabStatus>,
     route: Route,
     mode: ContentMode,
     app: &Entity<Luma>,
@@ -545,7 +558,7 @@ fn route_body(
     frame
         .child(header(state, route, mode, app, window))
         .child(div().flex_1().min_h_0().flex().child(match route {
-            Route::Browse => browser(state, mode, app, window, cx),
+            Route::Browse => browser(state, statuses, mode, app, window, cx),
             Route::Create => create(state),
         }))
         .child(footer(route))
@@ -747,6 +760,7 @@ fn footer(route: Route) -> Div {
 
 fn browser(
     state: &VenuePicker,
+    statuses: &HashMap<String, TabStatus>,
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
@@ -767,7 +781,7 @@ fn browser(
                 float::empty_row("No matching venues").agent_node(Role::Text, "No matching venues"),
             ))
             .into_any_element(),
-        None => venue_list(state, mode, app, window),
+        None => venue_list(state, statuses, mode, app, window),
     }
 }
 
@@ -779,6 +793,7 @@ fn browser(
 /// Every venue must stay reachable by keyboard, so every venue is built.
 fn venue_list(
     state: &VenuePicker,
+    statuses: &HashMap<String, TabStatus>,
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
@@ -797,7 +812,16 @@ fn venue_list(
                         .venue_focuses
                         .get(&venue.id)
                         .expect("loaded venue has no focus handle");
-                    venue_card(venue, index == state.active, mode, focus, app, window)
+                    let status = statuses.get(&venue.id).copied();
+                    venue_card(
+                        venue,
+                        index == state.active,
+                        status,
+                        mode,
+                        focus,
+                        app,
+                        window,
+                    )
                 })),
         )
         .into_any_element()
@@ -806,6 +830,7 @@ fn venue_list(
 fn venue_card(
     venue: &Venue,
     cursor: bool,
+    status: Option<TabStatus>,
     mode: ContentMode,
     focus: &FocusHandle,
     app: &Entity<Luma>,
@@ -851,6 +876,7 @@ fn venue_card(
                     )
                 }),
         )
+        .children(status.map(|status| crate::agent::status_dot(status, &venue.name)))
         .child(
             div()
                 .flex_none()

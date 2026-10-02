@@ -663,13 +663,7 @@ impl Luma {
         let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
             return;
         };
-        let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
-            return;
-        };
-        let target = Target::TrackEditor {
-            track: editor.track_id.to_string(),
-            venue: editor.venue_id.clone(),
-        };
+        let target = editor.target();
         editor.sheet.flush_gen += 1;
         let generation = editor.sheet.flush_gen;
         let pending = self.library.debounce(ARG_FLUSH);
@@ -679,9 +673,6 @@ impl Luma {
                 let mut flush = false;
                 let mut graph = false;
                 this.edit_track_tab(&target, cx, |editor| {
-                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
-                        return;
-                    }
                     if editor.sheet.flush_gen == generation {
                         editor.sheet.burst = false;
                         flush = true;

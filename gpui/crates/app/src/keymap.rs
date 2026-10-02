@@ -135,7 +135,7 @@ actions!(
         SelectTab7,
         SelectTab8,
         SelectTab9,
-        /// Walk the sidebar's two levels: into the picked track's scores, and
+        /// Walk the sidebar's two levels: into the front tab's track's scores, and
         /// back out. Scoped to the sidebar, so they mean nothing while the
         /// keyboard is in a tab — where the same arrows are the timeline's.
         EnterScores,

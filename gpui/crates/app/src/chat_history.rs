@@ -1,5 +1,5 @@
-//! Search and select the open score's conversations without moving editor
-//! tabs.
+//! Search and select the front tab's conversations — its score's, or its
+//! venue's — without moving editor tabs.
 
 use std::collections::HashMap;
 
@@ -172,23 +172,21 @@ impl ChatHistory {
 }
 
 impl Luma {
-    /// Open all of this account's conversations, independent of editor context.
+    /// Whose chats the list shows: the front tab's subject.
+    fn chat_subject(&self) -> Option<luma_lib::agent::ThreadScope> {
+        self.workspace.active().map(crate::agent::scope)
+    }
+
+    /// Open the front tab's conversations.
     pub(crate) fn show_chat_history(&mut self, cx: &mut Context<Self>) {
         self.chat_history_generation = self.chat_history_generation.wrapping_add(1);
         let generation = self.chat_history_generation;
-        // The history button lives on an attached panel, so a score is open
+        // The history button lives on a tab's chat, so a tab is in front
         // whenever this runs.
-        let Some(subject) = crate::agent::chat_subject(self) else {
+        let Some(subject) = self.chat_subject() else {
             return;
         };
-        let Some(running) = self
-            .chat
-            .as_ref()
-            .map(|chat| chat.read(cx).running().clone())
-        else {
-            return;
-        };
-        let state = ChatHistory::loading(generation, running, cx);
+        let state = ChatHistory::loading(generation, self.running.clone(), cx);
         self.overlay.open(Overlay::ChatHistory(Box::new(state)));
         cx.notify();
         self.read_chat_history(subject, generation, cx);
@@ -200,7 +198,7 @@ impl Luma {
     /// until the new read lands. Reopening it would put the skeleton back over
     /// a list that was already there, once for every sync.
     pub(crate) fn refresh_chat_history(&mut self, cx: &mut Context<Self>) {
-        let Some(subject) = crate::agent::chat_subject(self) else {
+        let Some(subject) = self.chat_subject() else {
             return;
         };
         self.chat_history_generation = self.chat_history_generation.wrapping_add(1);
@@ -277,7 +275,7 @@ impl Luma {
     /// Show one conversation and close the picker. **Only the thread moves** —
     /// see the module docs.
     pub(crate) fn open_chat_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
-        if let Some(chat) = self.chat.clone() {
+        if let Some(chat) = self.front_chat().cloned() {
             chat.update(cx, |chat, cx| chat.open_thread(thread_id, cx));
         }
         self.dismiss_overlay(cx);

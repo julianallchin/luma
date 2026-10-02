@@ -1,10 +1,11 @@
-//! Which tab set is on screen, and where the others wait.
+//! Which venue's tab set is on screen, and where the others wait.
 //!
-//! # The strip belongs to a subject
+//! # A venue is a project
 //!
-//! A tab strip is the *subject's*: picking a track in the sidebar brings back the
-//! tabs that were open the last time that track was the subject, and leaves the
-//! previous track's exactly as they were. The subject is a [`TabScope`].
+//! Each venue has its own tab set: its score tabs and its venue tab. Picking a
+//! venue in the picker brings back the tabs that were open the last time that
+//! venue was on screen, and leaves the previous venue's exactly as they were.
+//! See `docs/specs/venue-tabs.md` rules 1 and 2.
 //!
 //! # The live set is not in here
 //!
@@ -13,77 +14,27 @@
 //! screen. This module holds only the sets that are *not* on screen, and
 //! [`ParkedTabs::focus`] swaps one for the other.
 //!
-//! That is why every call site that asks the workspace something is unchanged:
-//! there is no scope to thread through `active()`, `open()` or `close()`,
-//! because by the time they run the live set is already the right one. A
-//! wrapper delegating a dozen methods to "the current scope" would have put
-//! that question at every call site instead of answering it once here.
+//! That is why every call site that asks the workspace something needs no
+//! venue: by the time it runs, the live set is already the right one.
 //!
 //! # Parked is not closed
 //!
-//! Switching away parks a set; it does not tear it down. That is the shell's
-//! "nothing is destroyed to show something else" rule, one level up: closing a
-//! tab still runs `Luma::teardown`, and switching subjects still runs nothing.
-//! The gesture that *does* hand bodies back is the one where the subject
-//! itself went away — see [`ParkedTabs::retain`].
-//!
-//! # The venue is a place, not a tab
-//!
-//! The sidebar's Venue row picks the room itself. Its scope holds exactly one
-//! body, the patch page, and the shell draws that body with no strip.
+//! Switching venue parks a set; it does not tear it down. Closing a tab still
+//! runs `Luma::teardown`, and switching venues still runs nothing — a turn
+//! running in a parked tab's chat keeps running. The gesture that *does* hand
+//! bodies back is the one where a tab's subject went away — see
+//! [`ParkedTabs::retain`].
 
 use std::collections::HashMap;
 
-use crate::tabs::{Tabs, Target};
+use crate::tabs::{Tab, Tabs, Target};
 
-/// What the sidebar has picked: one track, or the venue itself.
-///
-/// One value rather than a track and a flag, so "a track is picked while the
-/// venue page is up" cannot be stated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Pick {
-    Track(String),
-    Venue,
-}
-
-/// Whose tab set is on screen.
-///
-/// A picked track's tabs, or the venue page when the Venue row is picked.
-///
-/// **The venue is part of the key even for a track.** A track id alone would
-/// identify the scope perfectly well, but then "drop everything belonging to
-/// the room I just left" could not be asked of the key, and answering it would
-/// mean keeping a second track-to-venue map beside this one.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum TabScope {
-    Track { track: String, venue: String },
-    Venue { venue: String },
-}
-
-impl TabScope {
-    /// The room this scope belongs to. Total, which is what lets a venue
-    /// switch be a predicate over keys rather than a lookup.
-    pub(crate) fn venue(&self) -> &str {
-        match self {
-            Self::Track { venue, .. } | Self::Venue { venue } => venue,
-        }
-    }
-
-    /// The track this scope is about, when it is about one.
-    pub(crate) fn track(&self) -> Option<&str> {
-        match self {
-            Self::Track { track, .. } => Some(track),
-            Self::Venue { .. } => None,
-        }
-    }
-}
-
-/// The tab sets that are not on screen, keyed by whose they are.
+/// The tab sets that are not on screen, keyed by venue id.
 pub(crate) struct ParkedTabs<B> {
-    parked: HashMap<TabScope, Tabs<B>>,
-    /// Whose set is live right now. `None` before any subject exists, which is
-    /// the empty shell the venue picker opens over.
-    current: Option<TabScope>,
+    parked: HashMap<String, Tabs<B>>,
+    /// The venue whose set is live right now. `None` before any venue is
+    /// picked, which is the empty shell the venue picker opens over.
+    current: Option<String>,
 }
 
 impl<B> Default for ParkedTabs<B> {
@@ -96,174 +47,156 @@ impl<B> Default for ParkedTabs<B> {
 }
 
 impl<B> ParkedTabs<B> {
-    /// Document replies still belong to their editor while it is parked.
+    /// The venue whose set is live.
+    pub(crate) fn current(&self) -> Option<&str> {
+        self.current.as_deref()
+    }
+
+    /// The body showing `target`, live or parked. Document replies and the
+    /// agent's turns still belong to their tab while it is parked.
+    pub(crate) fn body<'a>(&'a self, live: &'a Tabs<B>, target: &Target) -> Option<&'a B> {
+        if self.current.as_deref() == Some(target.venue()) {
+            return live.body(target);
+        }
+        self.parked.get(target.venue())?.body(target)
+    }
+
     pub(crate) fn body_mut<'a>(
         &'a mut self,
         live: &'a mut Tabs<B>,
         target: &Target,
     ) -> Option<&'a mut B> {
-        if live.body(target).is_some() {
+        if self.current.as_deref() == Some(target.venue()) {
             return live.body_mut(target);
         }
-        self.parked
-            .values_mut()
-            .find_map(|tabs| tabs.body_mut(target))
+        self.parked.get_mut(target.venue())?.body_mut(target)
     }
 
-    pub(crate) fn targets(&self, live: &Tabs<B>) -> Vec<Target> {
-        live.iter()
-            .chain(self.parked.values().flat_map(|tabs| tabs.iter()))
-            .map(|tab| tab.target.clone())
-            .collect()
+    /// Every tab set, the live one included, by venue.
+    pub(crate) fn sets<'a>(
+        &'a self,
+        live: &'a Tabs<B>,
+    ) -> impl Iterator<Item = (&'a str, &'a Tabs<B>)> {
+        self.current
+            .as_deref()
+            .map(|venue| (venue, live))
+            .into_iter()
+            .chain(
+                self.parked
+                    .iter()
+                    .map(|(venue, tabs)| (venue.as_str(), tabs)),
+            )
     }
 
-    /// Put `scope`'s remembered tabs on screen, parking whatever was there.
+    /// Every open tab in every set.
+    pub(crate) fn tabs<'a>(&'a self, live: &'a Tabs<B>) -> impl Iterator<Item = &'a Tab<B>> {
+        self.sets(live).flat_map(|(_, tabs)| tabs.iter())
+    }
+
+    /// Put `venue`'s remembered tabs on screen, parking whatever was there.
     ///
-    /// Returns whether anything moved, so a caller deriving the scope every
-    /// frame can notify only when it actually changed. Asking for the scope
+    /// Returns whether anything moved, so a caller deriving the venue every
+    /// frame can notify only when it actually changed. Asking for the venue
     /// that is already current is a no-op rather than a round trip through the
     /// map — otherwise every frame would park and unpark the live set, and any
     /// tab opened during that frame would be parked before it was ever drawn.
-    pub(crate) fn focus(&mut self, scope: Option<TabScope>, live: &mut Tabs<B>) -> bool {
-        if scope == self.current {
+    pub(crate) fn focus(&mut self, venue: Option<String>, live: &mut Tabs<B>) -> bool {
+        if venue == self.current {
             return false;
         }
-        let arriving = scope
+        let arriving = venue
             .as_ref()
-            .and_then(|scope| self.parked.remove(scope))
+            .and_then(|venue| self.parked.remove(venue))
             .unwrap_or_default();
         let leaving = std::mem::replace(live, arriving);
         if let Some(previous) = self.current.take() {
-            // An empty set is still a memory: it says "this track had nothing
-            // open", which is different from "this track was never visited"
-            // only in ways nothing can observe. Parking it anyway keeps the
-            // map's contents a function of where the eye has been, which is
-            // what the pruning rules below are stated over.
-            self.parked.insert(previous, leaving);
+            if !leaving.is_empty() {
+                self.parked.insert(previous, leaving);
+            }
         }
-        self.current = scope;
+        self.current = venue;
         true
     }
 
-    /// Forget every scope `keep` rejects, handing back their tab states so the
-    /// caller can run each one's teardown.
+    /// Close every tab `keep` rejects, in every set, handing each one back so
+    /// the caller can run its teardown.
     ///
-    /// This is the leak rule: a scope whose subject no longer exists — a
-    /// deleted track, a room that is gone — has no gesture that could ever
-    /// bring it back on screen, so nothing would otherwise drop it. The live
-    /// set is included, because the subject can vanish while you are looking
-    /// at it.
+    /// This is the leak rule: a tab whose subject no longer exists — a deleted
+    /// score, a track gone from the catalogue — has no gesture that could ever
+    /// make it useful again, so nothing would otherwise drop it. The live set
+    /// is included, because the subject can vanish while you are looking at it.
     pub(crate) fn retain(
         &mut self,
         live: &mut Tabs<B>,
-        keep: impl Fn(&TabScope) -> bool,
-    ) -> Vec<B> {
-        let doomed: Vec<TabScope> = self
-            .parked
-            .keys()
-            .filter(|scope| !keep(scope))
-            .cloned()
-            .collect();
-        let mut dropped: Vec<B> = doomed
-            .iter()
-            .filter_map(|scope| self.parked.remove(scope))
-            .flat_map(Tabs::into_bodies)
-            .collect();
-        if let Some(current) = self.current.as_ref() {
-            if !keep(current) {
-                self.current = None;
-                dropped.extend(std::mem::take(live).into_bodies());
-            }
+        keep: impl Fn(&Target) -> bool,
+    ) -> Vec<Tab<B>> {
+        let mut dropped = live.retain(&keep);
+        for tabs in self.parked.values_mut() {
+            dropped.extend(tabs.retain(&keep));
         }
+        self.parked.retain(|_, tabs| !tabs.is_empty());
         dropped
     }
 }
 
 impl crate::Luma {
-    /// The picked track, when a track rather than the venue is picked.
-    pub(crate) fn selected_track(&self) -> Option<&str> {
-        match &self.picked {
-            Some(Pick::Track(track)) => Some(track),
-            Some(Pick::Venue) | None => None,
-        }
-    }
-
-    /// Whether the venue page is up: the Venue row is picked.
-    pub(crate) fn venue_mode(&self) -> bool {
-        matches!(self.picked, Some(Pick::Venue))
-    }
-
-    /// Whose tab set belongs on screen this frame: the picked track, else
-    /// the venue page, else nothing.
+    /// Keep the live set pointed at the sidebar's venue.
     ///
-    /// Read from the *sidebar* rather than from the tabs, and that direction
-    /// matters: the strip is a consequence of what is picked, so deriving it
-    /// from what the strip is already showing would make the two define each
-    /// other and never move.
-    pub(crate) fn tab_scope(&self) -> Option<TabScope> {
-        let browser = self.sidebar.as_ref()?;
-        let venue = browser.venue_id().to_string();
-        Some(match self.picked.as_ref()? {
-            Pick::Track(track) => TabScope::Track {
-                track: track.clone(),
-                venue,
-            },
-            Pick::Venue => TabScope::Venue { venue },
-        })
-    }
-
-    /// Keep the strip pointed at the picked subject.
-    ///
-    /// Done at draw because a navigation
-    /// is a field assignment, and a gesture that forgot to ask would leave one
-    /// track's tabs on screen while the sidebar says another is picked. Every
-    /// gesture that changes the subject therefore only has to set
-    /// `picked`.
-    pub(crate) fn sync_workspace_scope(&mut self, cx: &mut gpui::Context<Self>) {
-        let scope = self.tab_scope();
-        if scope != self.parked.current {
-            self.park_track_audio(cx);
+    /// Done at draw because a venue switch is a field assignment, and a
+    /// gesture that forgot to ask would leave one venue's tabs on screen while
+    /// the sidebar shows another.
+    pub(crate) fn sync_venue_tabs(&mut self, cx: &mut gpui::Context<Self>) {
+        let venue = self
+            .sidebar
+            .as_ref()
+            .map(|browser| browser.venue_id().to_string());
+        if venue.as_deref() != self.parked.current() {
+            // Leaving a venue releases its songs' playback, the way leaving a
+            // song does.
+            self.park_track_audio(None, cx);
         }
-        if self.parked.focus(scope, &mut self.workspace) {
+        if self.parked.focus(venue, &mut self.workspace) {
             // The swapped-in set has its own active tab, so the keyboard is
             // owed to a different element than the frame before.
             cx.notify();
         }
-        let track = self
-            .workspace
-            .iter()
-            .find(|tab| matches!(tab.target, Target::TrackEditor { .. }))
-            .map(|tab| tab.target.clone());
-        if let Some(target) = track {
-            self.activate_track_audio(&target, cx);
-        }
+        self.sync_track_audio(cx);
         self.refresh_agent_tabs(cx);
     }
 
-    /// Forget the tab sets of tracks this venue no longer has.
+    /// Close every tab `keep` rejects, in every venue, and run each one's
+    /// teardown.
+    pub(crate) fn close_tabs_where(
+        &mut self,
+        keep: impl Fn(&Target) -> bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        for tab in self.parked.retain(&mut self.workspace, keep) {
+            self.teardown(tab.body, cx);
+        }
+        cx.notify();
+    }
+
+    /// Close the score tabs of tracks this venue no longer has.
     ///
     /// Called when a venue's rows land, which is the only moment the app
-    /// learns a track is gone — there is no delete gesture in this shell yet,
-    /// so "absent from the reloaded catalogue" *is* the deletion signal. Scoped
-    /// to the one venue whose rows these are: another room's tracks are not
-    /// missing, they are merely not in this list.
-    pub(crate) fn prune_tab_scopes(
+    /// learns a track is gone: "absent from the reloaded catalogue" *is* the
+    /// deletion signal. Scoped to the one venue whose rows these are.
+    pub(crate) fn prune_tracks(
         &mut self,
         venue_id: &str,
         live_tracks: &[String],
         cx: &mut gpui::Context<Self>,
     ) {
-        let dropped = self.parked.retain(&mut self.workspace, |scope| {
-            if scope.venue() != venue_id {
-                return true;
-            }
-            scope
-                .track()
-                .is_none_or(|track| live_tracks.iter().any(|id| id == track))
-        });
-        for body in dropped {
-            self.teardown(body, cx);
-        }
+        self.close_tabs_where(
+            |target| match target {
+                Target::Score { venue, track, .. } if venue == venue_id => {
+                    live_tracks.iter().any(|id| id == track)
+                }
+                _ => true,
+            },
+            cx,
+        );
     }
 }
 
@@ -271,17 +204,11 @@ impl crate::Luma {
 mod tests {
     use super::*;
 
-    fn track_scope(track: &str, venue: &str) -> TabScope {
-        TabScope::Track {
-            track: track.to_string(),
+    fn score(venue: &str, id: &str) -> Target {
+        Target::Score {
             venue: venue.to_string(),
-        }
-    }
-
-    fn editor(track: &str, venue: &str) -> Target {
-        Target::TrackEditor {
-            track: track.to_string(),
-            venue: venue.to_string(),
+            track: format!("{id}-track"),
+            score: id.to_string(),
         }
     }
 
@@ -289,125 +216,111 @@ mod tests {
         tabs.iter().map(|tab| tab.target.clone()).collect()
     }
 
+    fn focus(parked: &mut ParkedTabs<&'static str>, live: &mut Tabs<&'static str>, venue: &str) {
+        parked.focus(Some(venue.to_string()), live);
+    }
+
     #[test]
-    fn a_late_document_read_updates_its_parked_editor_only() {
+    fn a_venue_gets_its_own_tabs_back() {
         let mut parked = ParkedTabs::default();
         let mut live = Tabs::default();
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        live.open(editor("a", "room"), || "loading");
-        parked.focus(Some(track_scope("b", "room")), &mut live);
-        live.open(editor("b", "room"), || "song b");
-        *parked.body_mut(&mut live, &editor("a", "room")).unwrap() = "loaded a";
-        assert_eq!(live.active_body(), Some(&"song b"));
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        assert_eq!(live.active_body(), Some(&"loaded a"));
+        focus(&mut parked, &mut live, "club");
+        live.open(score("club", "a"), || "a");
+        live.open(score("club", "b"), || "b");
+
+        focus(&mut parked, &mut live, "hall");
+        assert!(live.is_empty(), "the hall inherited the club's tabs");
+        live.open(score("hall", "c"), || "c");
+
+        focus(&mut parked, &mut live, "club");
+        assert_eq!(targets(&live), vec![score("club", "a"), score("club", "b")]);
     }
 
     #[test]
-    fn a_subject_gets_its_own_tabs_back() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
+    fn the_front_tab_comes_back_with_the_set() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        focus(&mut parked, &mut live, "club");
+        live.open(score("club", "a"), || "a");
+        live.open(score("club", "b"), || "b");
+        live.select(&score("club", "a"));
 
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        live.open(editor("a", "room"), || "editor a");
-
-        parked.focus(Some(track_scope("b", "room")), &mut live);
-        assert!(live.is_empty(), "track b inherited track a's tabs");
-        live.open(editor("b", "room"), || "editor b");
-
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        assert_eq!(targets(&live), vec![editor("a", "room")]);
+        focus(&mut parked, &mut live, "hall");
+        focus(&mut parked, &mut live, "club");
+        assert_eq!(live.active(), Some(&score("club", "a")));
     }
 
     #[test]
-    fn the_selection_comes_back_with_the_set() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        live.open(editor("a", "room"), || "editor");
-        live.open(editor("b", "room"), || "other");
-        live.select(&editor("a", "room"));
-
-        parked.focus(Some(track_scope("b", "room")), &mut live);
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        assert_eq!(live.active(), Some(&editor("a", "room")));
+    fn asking_for_the_current_venue_moves_nothing() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        assert!(parked.focus(Some("club".into()), &mut live));
+        live.open(score("club", "a"), || "a");
+        assert!(!parked.focus(Some("club".into()), &mut live));
+        assert_eq!(targets(&live), vec![score("club", "a")]);
     }
 
     #[test]
-    fn asking_for_the_current_scope_moves_nothing() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        assert!(parked.focus(Some(track_scope("a", "room")), &mut live));
-        live.open(editor("a", "room"), || "editor");
-
-        assert!(!parked.focus(Some(track_scope("a", "room")), &mut live));
-        assert_eq!(
-            targets(&live),
-            vec![editor("a", "room")],
-            "re-focusing the live scope parked the set it was already showing"
-        );
+    fn switching_venues_hands_back_nothing_to_tear_down() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        focus(&mut parked, &mut live, "club");
+        live.open(score("club", "a"), || "turn running");
+        focus(&mut parked, &mut live, "hall");
+        focus(&mut parked, &mut live, "club");
+        assert_eq!(live.active_body(), Some(&"turn running"));
     }
 
     #[test]
-    fn switching_subjects_hands_back_nothing_to_tear_down() {
-        // Parked is not closed: the teardown seam stays `Tabs::close`.
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        live.open(editor("a", "room"), || "transport running");
-        parked.focus(Some(track_scope("b", "room")), &mut live);
+    fn a_parked_body_is_reachable_by_its_target() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        focus(&mut parked, &mut live, "club");
+        live.open(score("club", "a"), || "loading");
+        focus(&mut parked, &mut live, "hall");
+        live.open(score("hall", "b"), || "b");
 
-        parked.focus(Some(track_scope("a", "room")), &mut live);
-        assert_eq!(live.active_body(), Some(&"transport running"));
+        *parked.body_mut(&mut live, &score("club", "a")).unwrap() = "loaded";
+        assert_eq!(parked.body(&live, &score("club", "a")), Some(&"loaded"));
+        assert_eq!(live.active_body(), Some(&"b"));
     }
 
     #[test]
-    fn a_vanished_track_takes_its_whole_set_with_it() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        parked.focus(Some(track_scope("gone", "room")), &mut live);
-        live.open(editor("gone", "room"), || "doomed");
-        parked.focus(Some(track_scope("kept", "room")), &mut live);
-        live.open(editor("kept", "room"), || "kept");
+    fn retain_reaches_every_set_and_forgets_emptied_ones() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        focus(&mut parked, &mut live, "club");
+        live.open(score("club", "gone"), || "doomed");
+        focus(&mut parked, &mut live, "hall");
+        live.open(score("hall", "kept"), || "kept");
+        live.open(score("hall", "also-gone"), || "doomed too");
 
-        let dropped = parked.retain(&mut live, |scope| scope.track() != Some("gone"));
-        assert_eq!(dropped, vec!["doomed"]);
-        assert_eq!(targets(&live), vec![editor("kept", "room")]);
+        let gone = |target: &Target| match target {
+            Target::Score { score, .. } => score.contains("gone"),
+            Target::Venue { .. } => false,
+        };
+        let mut dropped: Vec<&str> = parked
+            .retain(&mut live, |target| !gone(target))
+            .into_iter()
+            .map(|tab| tab.body)
+            .collect();
+        dropped.sort_unstable();
+        assert_eq!(dropped, vec!["doomed", "doomed too"]);
+        assert_eq!(targets(&live), vec![score("hall", "kept")]);
+        assert_eq!(parked.sets(&live).count(), 1);
     }
 
     #[test]
-    fn a_subject_that_vanishes_while_on_screen_is_dropped_too() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        parked.focus(Some(track_scope("gone", "room")), &mut live);
-        live.open(editor("gone", "room"), || "doomed");
-
-        let dropped = parked.retain(&mut live, |scope| scope.track() != Some("gone"));
-        assert_eq!(dropped, vec!["doomed"]);
-        assert!(live.is_empty());
-        // Focusing "no subject" is a no-op precisely because `retain` already
-        // put the scope there — a set whose subject vanished must not stay
-        // current, or the next pick would park it under a dead key.
-        assert!(
-            !parked.focus(None, &mut live),
-            "the vanished subject is still the current scope"
-        );
-    }
-
-    #[test]
-    fn a_venue_switch_can_be_asked_of_the_keys_alone() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        parked.focus(Some(track_scope("a", "old")), &mut live);
-        live.open(editor("a", "old"), || "old");
-        parked.focus(
-            Some(TabScope::Venue {
-                venue: "new".into(),
-            }),
-            &mut live,
-        );
-
-        let dropped = parked.retain(&mut live, |scope| scope.venue() == "new");
-        assert_eq!(dropped, vec!["old"]);
+    fn sets_lists_the_live_set_under_its_venue() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        focus(&mut parked, &mut live, "club");
+        live.open(score("club", "a"), || "a");
+        focus(&mut parked, &mut live, "hall");
+        live.open(score("hall", "b"), || "b");
+        let mut venues: Vec<&str> = parked.sets(&live).map(|(venue, _)| venue).collect();
+        venues.sort_unstable();
+        assert_eq!(venues, vec!["club", "hall"]);
+        assert_eq!(parked.tabs(&live).count(), 2);
     }
 }

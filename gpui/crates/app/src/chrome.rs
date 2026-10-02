@@ -245,6 +245,10 @@ pub(crate) fn panel_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> imp
 /// gap after it.
 pub(crate) const THREAD_TOGGLE_SLOT: f32 = CONTROL + BAND_GAP;
 
+/// The room [`history_pair`] takes at the head of the band, with the gap
+/// after it.
+pub(crate) const HISTORY_SLOT: f32 = 2. * CONTROL + 2. * BAND_GAP;
+
 /// The thread's show/hide toggle, at the left end of the tab strip. It flips
 /// the same flag as `ToggleExpand`. It is lit while the thread is shown.
 pub(crate) fn thread_toggle(app: &Entity<Luma>, thread_shown: bool) -> impl IntoElement {
@@ -399,17 +403,12 @@ fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoEle
 
 /// The shell tab strip: one rounded chip per open tab, and the `+`.
 ///
-/// # The strip belongs to the panel
+/// # The strip spans the chat and the editor
 ///
-/// It rides the workspace panel's own band and nowhere else, so it opens and
-/// closes with the thing it is about — comet right-aligns its strip into a
-/// full-width bar to fake the same relationship. The `+` is part of the
-/// **strip** rather than of the band, for the same reason: it extends a row of
-/// tabs, so it is wherever that row is.
-///
-/// No band borrows the strip when the panel is away. Closing the panel puts
-/// its tabs away with it, and ⌘T opens the panel before it offers anything
-/// (see `Luma::render`).
+/// A tab owns both its chat and its editor, so the strip rides the band over
+/// both (`docs/specs/venue-tabs.md`, Layout). The `+` is part of the
+/// **strip** rather than of the band: it extends a row of tabs, so it is
+/// wherever that row is.
 ///
 /// With **no** tabs there is no `+`: the panel's own empty state is the offer
 /// then, and two offers for one question is the thing that rule prevents.
@@ -479,6 +478,7 @@ pub(crate) fn tab_strip(
                     &tab.target,
                     tab.title.clone().into(),
                     active.as_ref() == Some(&tab.target),
+                    app.tab_status(&tab.target, cx),
                     region,
                     entity,
                 )),
@@ -687,12 +687,13 @@ fn exit_chip(exit: &crate::tab_chrome::ExitChipFrame) -> impl IntoElement {
 }
 
 /// One tab chip: a leading icon slot that swaps in place for a ✕ on hover, the
-/// title, and [`luma_ui::toggle_paint`]. Click selects; the ✕
-/// closes through the same teardown every close takes.
+/// title, its chat's status dot, and [`luma_ui::toggle_paint`]. Click selects;
+/// the ✕ closes through the same teardown every close takes.
 fn chip(
     target: &Target,
     title: SharedString,
     is_active: bool,
+    status: Option<crate::agent::TabStatus>,
     close_region: PointerRegion,
     entity: &Entity<Luma>,
 ) -> impl IntoElement {
@@ -768,18 +769,21 @@ fn chip(
         )
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .text_size(px(11.5))
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .child(title.clone()),
         )
+        .children(status.map(|status| crate::agent::status_dot(status, &title)))
         .agent_node(Role::Button, title)
 }
 
 /// The icon a tab kind wears in its chip.
 fn kind_icon(target: &Target) -> IconName {
     match target {
-        Target::TrackEditor { .. } => IconName::Play,
-        Target::Patch { .. } => IconName::Cpu,
+        Target::Score { .. } => IconName::Play,
+        Target::Venue { .. } => IconName::Cpu,
     }
 }
