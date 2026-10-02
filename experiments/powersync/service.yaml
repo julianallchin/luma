@@ -1,6 +1,6 @@
 # PowerSync service config for the disposable stack in run.py.
 # PowerSync Cloud is configured through its dashboard; only the sync rules in
-# deploy/sync-rules.yaml are shared between the two.
+# deploy/powersync/sync-config.yaml are shared between the two.
 replication:
   connections:
     - type: postgresql

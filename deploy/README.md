@@ -23,7 +23,7 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
   `midi_bindings.mode_json`, `midi_bindings.target_override_json` or
   `midi_modifiers.groups_json`
 - `20260929000000_clip_graphs.sql`
-- `20261001000000_folders.sql` — then redeploy `sync-rules.yaml`, which
+- `20261001000000_folders.sql` — then redeploy `powersync/sync-config.yaml`, which
   names `folders` and `folder_tracks`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
@@ -42,7 +42,7 @@ alter role powersync_role with password '<generated>';
 2. Connect it to the Supabase Postgres with `powersync_role`, its password and
    the `powersync` publication.
 3. Client Auth: enable **Use Supabase Auth**.
-4. Paste `sync-rules.yaml` into the instance's sync rules and deploy.
+4. Run `powersync deploy sync-config --directory=deploy/powersync`.
 5. Put the instance URL in `backend/src/config.rs` as `POWERSYNC_URL`.
 
 `experiments/powersync/run.py` checks a change to either file against

@@ -4,7 +4,7 @@
 -- `graph` and `inputs_json` stay until the converted rows are uploaded and
 -- verified; 20260930000000_drop_form_columns.sql drops them.
 --
--- The backup tables keep the pre-conversion rows. `deploy/sync-rules.yaml`
+-- The backup tables keep the pre-conversion rows. `deploy/powersync/sync-config.yaml`
 -- selects `*` from clips, so its text does not change, but redeploy it after
 -- this migration so PowerSync picks up the new columns.
 

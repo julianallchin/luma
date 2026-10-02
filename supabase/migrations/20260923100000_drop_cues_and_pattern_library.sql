@@ -3,7 +3,7 @@
 -- `score_definitions`.
 --
 -- Apply after the clip-forms change set, which deletes these rows and clears
--- `agent_threads.implementation_id`, and after `deploy/sync-rules.yaml` no
+-- `agent_threads.implementation_id`, and after `deploy/powersync/sync-config.yaml` no
 -- longer names these tables: a sync rule over a dropped table fails its
 -- whole stream.
 --

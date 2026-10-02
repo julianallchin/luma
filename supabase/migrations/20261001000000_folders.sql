@@ -13,7 +13,7 @@
 --
 -- Order:
 --   1. Apply this file.
---   2. Redeploy `deploy/sync-rules.yaml`, which now names both tables.
+--   2. Redeploy `deploy/powersync/sync-config.yaml`, which now names both tables.
 --
 -- Idempotent.
 
