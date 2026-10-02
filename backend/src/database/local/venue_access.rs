@@ -13,6 +13,7 @@ pub enum VenueResource<'a> {
     Venue(&'a str),
     Fixture(&'a str),
     Group(&'a str),
+    Folder(&'a str),
     GroupMember(&'a str),
     StagePiece(&'a str),
     MidiModifier(&'a str),
@@ -233,6 +234,7 @@ async fn resolve_venue_id(
         VenueResource::Venue(id) => ("SELECT id FROM venues WHERE id = ?", id),
         VenueResource::Fixture(id) => ("SELECT venue_id FROM fixtures WHERE id = ?", id),
         VenueResource::Group(id) => ("SELECT venue_id FROM fixture_groups WHERE id = ?", id),
+        VenueResource::Folder(id) => ("SELECT venue_id FROM folders WHERE id = ?", id),
         VenueResource::GroupMember(id) => (
             "SELECT groups.venue_id
              FROM fixture_group_members member

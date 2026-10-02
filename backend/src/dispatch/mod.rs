@@ -105,6 +105,7 @@ use crate::models::agent_threads::{
 };
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
+use crate::models::folders::Folder;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::midi::{
     ControllerState, ControllerStatus, CreateBindingInput, CreateModifierInput, MidiBinding,
@@ -214,6 +215,12 @@ commands! {
 
     group_references::missing_venue_groups(venue_id: String) -> Vec<crate::models::groups::MissingGroup>;
     group_references::resolve_venue_group(venue_id: String, missing: String, replacement: Option<String>, fixtures: Vec<String>) -> ();
+    folders::list_folders(venue_id: String) -> Vec<Folder>;
+    folders::create_folder(venue_id: String, name: String) -> Folder;
+    folders::rename_folder(folder_id: String, name: String) -> ();
+    folders::delete_folder(folder_id: String) -> ();
+    folders::set_folder_track(folder_id: String, track_id: String, linked: bool) -> ();
+
     groups::generate_venue_groups(venue_id: String) -> ();
     groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();
     groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;

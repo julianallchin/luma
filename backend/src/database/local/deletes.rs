@@ -30,6 +30,9 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
     ),
     ("fixtures", &[("fixture_group_members", "fixture_id")]),
     ("fixture_groups", &[("fixture_group_members", "group_id")]),
+    ("folders", &[("folder_tracks", "folder_id")]),
+    // No foreign key carries this one locally; see the folders migration.
+    ("tracks", &[("folder_tracks", "track_id")]),
     (
         "scores",
         &[

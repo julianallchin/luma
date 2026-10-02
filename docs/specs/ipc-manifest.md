@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**153 commands** across **26 domains** · **13 events**
+**158 commands** across **27 domains** · **13 events**
 
 ## Domains
 
@@ -23,6 +23,7 @@ name.
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 16 | `backend/src/dispatch/handlers/fixtures.rs` |
+| `folders` | 5 | `backend/src/dispatch/handlers/folders.rs` |
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
@@ -39,7 +40,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **153** | |
+| **total** | **158** | |
 
 ## Commands
 
@@ -154,6 +155,16 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `fixture_role` | `path: String`<br>`modeName: String` | `FixtureRole` |
 | `remove_patched_fixture` | `venueId: String`<br>`id: String` | `()` |
 | `rename_patched_fixture` | `venueId: String`<br>`id: String`<br>`label: String` | `()` |
+
+### `folders`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `list_folders` | `venueId: String` | `Vec<Folder>` |
+| `create_folder` | `venueId: String`<br>`name: String` | `Folder` |
+| `rename_folder` | `folderId: String`<br>`name: String` | `()` |
+| `delete_folder` | `folderId: String` | `()` |
+| `set_folder_track` | `folderId: String`<br>`trackId: String`<br>`linked: bool` | `()` |
 
 ### `group_references`
 

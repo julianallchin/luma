@@ -615,6 +615,24 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        }
+      ],
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
+      "name": "create_folder",
+      "returns": "Folder"
+    },
+    {
+      "args": [
+        {
           "name": "requestId",
           "rust": "String"
         },
@@ -683,6 +701,20 @@
         "returns": "Option<crate::database::local::auth::AuthAccount>"
       },
       "returns": "Option<crate::database::local::auth::AuthAccount>"
+    },
+    {
+      "args": [
+        {
+          "name": "folderId",
+          "rust": "String"
+        }
+      ],
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
+      "name": "delete_folder",
+      "returns": "()"
     },
     {
       "args": [
@@ -1671,6 +1703,20 @@
         ]
       },
       "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
+      "name": "list_folders",
+      "returns": "Vec<Folder>"
     },
     {
       "args": [
@@ -2740,6 +2786,24 @@
     {
       "args": [
         {
+          "name": "folderId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        }
+      ],
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
+      "name": "rename_folder",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "venueId",
           "rust": "String"
         },
@@ -3204,6 +3268,28 @@
     {
       "args": [
         {
+          "name": "folderId",
+          "rust": "String"
+        },
+        {
+          "name": "trackId",
+          "rust": "String"
+        },
+        {
+          "name": "linked",
+          "rust": "bool"
+        }
+      ],
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
+      "name": "set_folder_track",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "venueId",
           "rust": "String"
         },
@@ -3583,6 +3669,11 @@
       "handlers": "backend/src/dispatch/handlers/fixtures.rs"
     },
     {
+      "commandCount": 5,
+      "domain": "folders",
+      "handlers": "backend/src/dispatch/handlers/folders.rs"
+    },
+    {
       "commandCount": 2,
       "domain": "group_references",
       "handlers": "backend/src/dispatch/handlers/group_references.rs"
@@ -3778,8 +3869,8 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 153,
-    "domainCount": 26,
+    "commandCount": 158,
+    "domainCount": 27,
     "eventCount": 13
   },
   "version": 2

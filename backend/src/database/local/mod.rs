@@ -4,6 +4,7 @@ pub mod beat_validations;
 pub mod database;
 pub mod deletes;
 pub mod fixtures;
+pub mod folders;
 pub mod group_overrides;
 pub mod groups;
 pub mod midi;

@@ -63,6 +63,11 @@ pub(crate) enum Action {
         /// pair.
         venue_id: SharedString,
     },
+    /// Delete a sidebar folder. Only its links go; its songs and their scores
+    /// stay.
+    DeleteFolder {
+        folder_id: SharedString,
+    },
 }
 
 /// A question the user has to answer before something is destroyed.
@@ -120,6 +125,7 @@ impl Luma {
                 track_id,
                 venue_id,
             } => self.delete_score(&track_id, &score_id, &venue_id, cx),
+            Action::DeleteFolder { folder_id } => self.delete_folder(folder_id.to_string(), cx),
         }
     }
 }

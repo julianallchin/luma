@@ -69,6 +69,7 @@ use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
 use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
 use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
+use luma_lib::models::folders::Folder;
 use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
 use luma_lib::models::node_graph::BeatGrid;
 use luma_lib::models::patch::{
@@ -1737,6 +1738,61 @@ impl Library {
         Output = Result<luma_lib::models::composable_patterns::ComposablePreview, LibraryError>,
     > + use<> {
         self.call("preview_composable_pattern", json!({"request":request}))
+    }
+
+    // -- folders --------------------------------------------------------------
+
+    /// The venue's folders, by name, each with the songs it holds.
+    pub fn folders(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<Folder>, LibraryError>> + use<> {
+        self.call("list_folders", json!({ "venueId": venue_id }))
+    }
+
+    /// A new, empty folder. The backend trims the name and refuses an empty
+    /// one.
+    pub fn create_folder(
+        &self,
+        venue_id: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<Folder, LibraryError>> + use<> {
+        self.call(
+            "create_folder",
+            json!({ "venueId": venue_id, "name": name }),
+        )
+    }
+
+    pub fn rename_folder(
+        &self,
+        folder_id: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "rename_folder",
+            json!({ "folderId": folder_id, "name": name }),
+        )
+    }
+
+    /// Delete a folder and its links. Its songs and their scores stay.
+    pub fn delete_folder(
+        &self,
+        folder_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("delete_folder", json!({ "folderId": folder_id }))
+    }
+
+    /// Put a song in a folder (`linked`), or take it out.
+    pub fn set_folder_track(
+        &self,
+        folder_id: &str,
+        track_id: &str,
+        linked: bool,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "set_folder_track",
+            json!({ "folderId": folder_id, "trackId": track_id, "linked": linked }),
+        )
     }
 
     // -- the track editor -----------------------------------------------------

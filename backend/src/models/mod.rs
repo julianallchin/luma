@@ -4,6 +4,7 @@ pub mod agent_threads;
 pub mod composable_patterns;
 pub mod distribute;
 pub mod fixtures;
+pub mod folders;
 pub mod groups;
 pub mod midi;
 pub mod mixer;

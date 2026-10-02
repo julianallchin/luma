@@ -21,6 +21,7 @@ pub mod controller;
 pub mod distribute;
 pub mod engine_dj;
 pub mod fixtures;
+pub mod folders;
 pub mod groups;
 pub mod host_audio;
 pub mod midi;
