@@ -81,6 +81,7 @@ use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 
 use crate::library::Rig;
+use crate::saved_cameras::Pose;
 use crate::shell::Body;
 use crate::{Library, LibraryError, Luma};
 
@@ -546,6 +547,13 @@ pub(crate) struct Visualizer {
     /// framing is owed rather than done, and a rig that loads before the first
     /// layout still opens fitted instead of guessed.
     owes_opening_pose: bool,
+    /// Where this venue's camera was last left on this device, if anywhere.
+    /// The opening pose is this when there is one — see [`crate::saved_cameras`].
+    saved_pose: Option<Pose>,
+    /// The opening pose has been taken. Until then the camera is a stand-in
+    /// for a rig that has not landed, and saving it would overwrite the pose
+    /// the venue is about to open on.
+    posed: bool,
     /// The button held, and where the pointer last was — `MouseMoveEvent`
     /// carries no delta.
     drag: Option<(Drag, Point<Pixels>)>,
@@ -1416,6 +1424,8 @@ impl Visualizer {
             ),
             framing: Framing::default(),
             owes_opening_pose: false,
+            saved_pose: None,
+            posed: false,
             drag: None,
             fly: None,
             pointer_locked: false,
@@ -1536,6 +1546,26 @@ impl Visualizer {
         self.owes_opening_pose = false;
     }
 
+    /// Open on the pose this venue was left in, or framed on the rig when
+    /// there is none. The lens is the framing's either way.
+    fn opening_pose(&self) -> Camera {
+        let camera = opening_camera(&self.framing, &self.view_finder());
+        match self.saved_pose {
+            Some(pose) => pose.applied(camera),
+            None => camera,
+        }
+    }
+
+    /// The pose to remember, once there is a real one.
+    pub(crate) fn settled_pose(&self) -> Option<Pose> {
+        self.posed.then(|| Pose::of(&self.camera))
+    }
+
+    /// Hand the stage the pose its venue was last left in.
+    pub(crate) fn restore_pose(&mut self, pose: Option<Pose>) {
+        self.saved_pose = pose;
+    }
+
     fn rig_loaded(&mut self, loaded: Result<Rig, LibraryError>) {
         let rig = match loaded {
             Ok(rig) => rig,
@@ -1593,7 +1623,7 @@ impl Visualizer {
             self.render_controls.haze,
         );
         self.framing = scene.framing(&definitions);
-        self.camera = opening_camera(&self.framing, &self.view_finder());
+        self.camera = self.opening_pose();
         self.owes_opening_pose = true;
         // A selection names authored objects; a reloaded scene may no longer
         // have some of them. Dropping the dead names here is what makes a
@@ -3549,6 +3579,7 @@ impl Luma {
         let Luma {
             visualizer,
             library,
+            saved_cameras,
             ..
         } = self;
         match visualizer {
@@ -3559,9 +3590,9 @@ impl Luma {
                 }
             }
             _ => {
-                *visualizer = Some(Visualizer::open(
-                    library, &venue_id, venue_name, subject, cx,
-                ));
+                let mut opened = Visualizer::open(library, &venue_id, venue_name, subject, cx);
+                opened.restore_pose(saved_cameras.pose(&venue_id));
+                *visualizer = Some(opened);
                 cx.notify();
             }
         }
@@ -3577,9 +3608,9 @@ impl Luma {
     /// Hiding **drops** the stage rather than merely leaving it undrawn: an
     /// off-screen viewport holding a GPU and a loaded rig is the cost this
     /// pane most needs not to have, and there is nothing to preserve — which
-    /// room it shows is re-derived from the workspace the moment it returns.
-    /// Showing it again is therefore also the one gesture that re-frames a
-    /// camera the pointer has wandered off with.
+    /// room it shows is re-derived from the workspace the moment it returns,
+    /// and the camera opens where it was last left — see
+    /// [`crate::saved_cameras`].
     pub(crate) fn toggle_visualizer(&mut self, cx: &mut Context<Self>) {
         self.visualizer_hidden = !self.visualizer_hidden;
         cx.notify();
@@ -4991,7 +5022,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                     state.size = bounds.size;
                     state.viewport_origin = bounds.origin;
                     if std::mem::take(&mut state.owes_opening_pose) {
-                        state.camera = opening_camera(&state.framing, &state.view_finder());
+                        state.camera = state.opening_pose();
+                        state.posed = true;
                     }
                 }
             });
@@ -6339,6 +6371,8 @@ mod orbit_selection_tests {
             camera,
             framing: Default::default(),
             owes_opening_pose: false,
+            saved_pose: None,
+            posed: false,
             drag: None,
             fly: None,
             pointer_locked: false,

@@ -50,6 +50,7 @@ mod library;
 mod new_tab;
 mod patch;
 mod picker_preview;
+mod saved_cameras;
 mod saved_tabs;
 mod settings;
 mod shell;
@@ -130,6 +131,7 @@ pub struct Luma {
     pub(crate) parked: workspace::ParkedTabs<Body>,
     /// The tabs this device reopens at launch — see [`saved_tabs`].
     pub(crate) saved_tabs: saved_tabs::SavedTabs,
+    pub(crate) saved_cameras: saved_cameras::SavedCameras,
     /// Visual-only state for keyed chip reflow. Logical tab identity and
     /// teardown remain owned by `workspace`.
     pub(crate) tab_chrome: tab_chrome::TabChrome,
@@ -283,6 +285,7 @@ impl Luma {
             workspace: Tabs::default(),
             parked: workspace::ParkedTabs::default(),
             saved_tabs: saved_tabs::SavedTabs::default(),
+            saved_cameras: saved_cameras::SavedCameras::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
             new_tab: None,
             workspace_hidden: false,
@@ -522,6 +525,7 @@ impl Render for Luma {
         self.see_front_tab();
         self.save_tabs(cx);
         self.sync_visualizer(cx);
+        self.save_camera(cx);
         self.sync_fullscreen(window, cx);
         self.take_focus(window, cx);
 

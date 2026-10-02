@@ -235,17 +235,23 @@ impl Luma {
         let venues = self.library.venues();
         let remembered = self.library.get_session_item(LAST_VENUE);
         let saved_tabs = self.read_saved_tabs();
+        let saved_cameras = self.read_saved_cameras();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let venues = venues.await;
             let remembered = remembered.await;
             let saved_tabs = saved_tabs.await;
+            let saved_cameras = saved_cameras.await;
             this.update(cx, |this, cx| {
                 this.restoring_venue = false;
                 // Every venue's tabs, reopened as each venue is. A store that
                 // cannot be read is nothing saved: the tabs are a convenience.
                 this.saved_tabs =
                     crate::saved_tabs::SavedTabs::read(saved_tabs.ok().flatten().as_deref());
+                // The same for each venue's last camera pose.
+                this.saved_cameras = crate::saved_cameras::SavedCameras::read(
+                    saved_cameras.ok().flatten().as_deref(),
+                );
                 let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
                     return;
                 };
