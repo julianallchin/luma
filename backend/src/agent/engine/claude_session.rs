@@ -465,6 +465,24 @@ mod live_cli_tests {
     #[ignore = "spawns the real claude CLI; needs `claude auth login` and spends a small amount of quota"]
     async fn a_hydrated_session_resumes_against_the_real_cli() {
         let cwd = tempfile::tempdir().unwrap();
+        let storage = crate::storage::StorageRoot::from_path(cwd.path().join("root"));
+        let png = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(RED_PNG_BASE64)
+                .unwrap()
+        };
+        std::fs::create_dir_all(storage.agent_figure_path("red").parent().unwrap()).unwrap();
+        std::fs::write(storage.agent_figure_path("red"), png).unwrap();
+        let storage = crate::storage::StorageRoot::from_path(cwd.path().join("root"));
+        let png = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(RED_PNG_BASE64)
+                .unwrap()
+        };
+        std::fs::create_dir_all(storage.agent_figure_path("red").parent().unwrap()).unwrap();
+        std::fs::write(storage.agent_figure_path("red"), png).unwrap();
         let transcript = Transcript {
             messages: vec![
                 AgentChatMessage::user(
@@ -490,7 +508,7 @@ mod live_cli_tests {
                             output: Some(json!({
                                 "status": "ok", "stdout": "", "stderr": "", "repr": null,
                                 "traceback": null, "notices": [], "durationMs": 5,
-                                "figures": [{"width": 1, "height": 1, "base64Png": RED_PNG_BASE64}],
+                                "figures": [{"width": 1, "height": 1, "path": "agent-figures/u1/red.png"}],
                             })),
                             error_text: None,
                         }),
@@ -498,7 +516,7 @@ mod live_cli_tests {
                 },
             ],
         };
-        let registry = ToolRegistry::new(vec![Arc::new(PythonTool)]);
+        let registry = ToolRegistry::new(vec![Arc::new(PythonTool::new(storage))]);
         let session = hydrate(
             &transcript,
             "not-a-real-turn-id",

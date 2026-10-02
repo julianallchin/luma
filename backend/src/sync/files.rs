@@ -1,4 +1,5 @@
-//! Audio, stems and album art between Supabase Storage and this machine.
+//! Audio, stems, album art and agent figures between Supabase Storage and this
+//! machine.
 //!
 //! An upload writes the bytes first and `storage_path` second, so a row never
 //! claims bytes that are not there. A download lands in a temp file and is
@@ -34,6 +35,7 @@ pub struct FileSyncStats {
     pub audio_uploaded: usize,
     pub stems_uploaded: usize,
     pub art_uploaded: usize,
+    pub figures_uploaded: usize,
     pub stems_downloaded: usize,
     pub art_downloaded: usize,
     pub errors: Vec<String>,
@@ -372,6 +374,77 @@ pub async fn upload_pending_album_art(
             }
             Err(e) => {
                 let msg = format!("upload art {}: {e}", row.id);
+                stats.errors.push(msg.clone());
+                sentry::capture_message(&msg, sentry::Level::Error);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Upload: Agent Figures
+// ============================================================================
+
+/// Upload the python figures this device queued for `uid`. A figure's row
+/// says where it goes and the cache holds its bytes; the row goes once the
+/// object is there.
+pub async fn upload_pending_agent_figures(
+    pool: &SqlitePool,
+    remote: &SupabaseClient,
+    uid: &str,
+    token: &str,
+    stats: &mut FileSyncStats,
+    host: &SyncHost,
+    progress: &super::progress::Progress,
+) -> Result<(), SyncError> {
+    use crate::agent::figures;
+
+    let paths: Vec<String> =
+        sqlx::query_scalar("SELECT path FROM agent_figure_uploads WHERE path LIKE ?")
+            .bind(format!("{}/{uid}/%", figures::BUCKET))
+            .fetch_all(pool)
+            .await?;
+
+    emit_upload_start(host, paths.len());
+
+    progress.phase("Uploading figures", Some(paths.len()), "files");
+    for path in &paths {
+        let _item = progress.item();
+        let object = &path[figures::BUCKET.len() + 1..];
+        let bytes = match std::fs::read(figures::cached(&host.storage, path)) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // A cache file that is gone can never be uploaded from here.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    sqlx::query("DELETE FROM agent_figure_uploads WHERE path = ?")
+                        .bind(path)
+                        .execute(pool)
+                        .await?;
+                }
+                stats.errors.push(format!("read figure {path}: {e}"));
+                continue;
+            }
+        };
+        match remote
+            .upload_file(figures::BUCKET, object, bytes, "image/png", token)
+            .await
+        {
+            Ok(_) => {
+                if let Err(e) = sqlx::query("DELETE FROM agent_figure_uploads WHERE path = ?")
+                    .bind(path)
+                    .execute(pool)
+                    .await
+                {
+                    stats.errors.push(format!("db update figure {path}: {e}"));
+                    continue;
+                }
+                stats.figures_uploaded += 1;
+                emit_upload_tick(host);
+            }
+            Err(e) => {
+                let msg = format!("upload figure {path}: {e}");
                 stats.errors.push(msg.clone());
                 sentry::capture_message(&msg, sentry::Level::Error);
             }

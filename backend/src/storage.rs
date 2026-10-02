@@ -155,6 +155,12 @@ impl StorageRoot {
         self.agent_workspaces_dir().join(thread_id)
     }
 
+    /// `<root>/agent-figures/<sha>.png` — a python figure's bytes, by the
+    /// SHA-256 of the PNG. See [`crate::agent::figures`].
+    pub fn agent_figure_path(&self, sha: &str) -> PathBuf {
+        self.0.join("agent-figures").join(format!("{sha}.png"))
+    }
+
     // -- isolated authored-document workspaces ------------------------------
 
     /// `<root>/authored-workspaces` — disposable plain-file snapshots used by

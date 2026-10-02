@@ -689,6 +689,8 @@ pub struct RowCtx<'a> {
     /// borrowed — see [`crate::python_cell`] for why the reading is cached at
     /// all.
     pub cells: &'a RefCell<crate::python_cell::Cells>,
+    /// What a python card loads its figures through.
+    pub agent: &'a crate::Agent,
     /// The one fold in flight, if any: which call, and how far through its
     /// tween it is. At most one, because a fold is started by a click and a
     /// click lands on one chip.

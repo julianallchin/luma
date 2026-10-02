@@ -179,9 +179,11 @@ impl ToolRegistry {
 /// The tool set for an agent kind. Both a parent turn and a subagent turn call
 /// this; they differ only in the [`ToolContext`] they pass to the result.
 #[must_use]
-pub fn registry_for_context(authored: bool) -> ToolRegistry {
-    let mut tools: Vec<Arc<dyn Tool>> =
-        vec![Arc::new(python::PythonTool), Arc::new(skill::SkillTool)];
+pub fn registry_for_context(authored: bool, storage: &crate::storage::StorageRoot) -> ToolRegistry {
+    let mut tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(python::PythonTool::new(storage.clone())),
+        Arc::new(skill::SkillTool),
+    ];
     if authored {
         tools.push(Arc::new(subagent::SubagentTool));
     }
