@@ -17,7 +17,7 @@
 -- writes when a save moves something.
 --
 -- Order:
---   1. Redeploy `deploy/sync-rules.yaml` without `changes`: a sync rule over a
+--   1. Redeploy `deploy/powersync/sync-config.yaml` without `changes`: a sync rule over a
 --      dropped table fails its whole stream.
 --   2. Apply this file.
 --   3. Ship the client that uploads `scores.authored_at`.

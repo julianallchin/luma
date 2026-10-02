@@ -5,7 +5,7 @@
 --
 -- Apply after every client runs a build without these columns. An older
 -- client still uploads them, and Postgres rejects a write to a column that
--- does not exist. `deploy/sync-rules.yaml` selects `*` from these tables, so
+-- does not exist. `deploy/powersync/sync-config.yaml` selects `*` from these tables, so
 -- the sync rules need no change.
 --
 -- Idempotent.

@@ -28,7 +28,7 @@ MIGRATIONS = [
     REPO / "supabase/migrations/20260918000000_cued_patterns.sql",
     REPO / "supabase/migrations/20260923100000_drop_cues_and_pattern_library.sql",
 ]
-SYNC_RULES = REPO / "deploy/sync-rules.yaml"
+SYNC_RULES = REPO / "deploy/powersync/sync-config.yaml"
 
 PREFIX = "luma-rows-"
 NETWORK = PREFIX + "net"
@@ -84,7 +84,7 @@ with the stack in the environment, which is how the Rust tests find it:
 
 That secret is also the inline JWKS key in this directory's service.yaml, so
 one minted token is accepted by both PostgREST and PowerSync. PowerSync reads
-that service.yaml and the repo's deploy/sync-rules.yaml, so the sync rules
+that service.yaml and the repo's deploy/powersync/sync-config.yaml, so the sync rules
 under test are the ones that ship.
 
 The runner refuses to start if a {PREFIX}* container already exists, and never

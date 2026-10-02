@@ -172,7 +172,7 @@ venue between devices. Only the three hardware-port columns above are local.
   `supabase/migrations/20260923100000_drop_cues_and_pattern_library.sql`
   drops `patterns`, `implementations` and `cues` and their read functions.
   All three are required on the server.
-- `deploy/sync-rules.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
+- `deploy/powersync/sync-config.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
   a parameter query and may return at most a thousand rows, so every one of
   them counts venues, scores or shared tracks — never their children.
 - `experiments/powersync/run.py`: disposable Postgres, PostgREST and PowerSync
@@ -184,5 +184,5 @@ venue between devices. Only the three hardware-port columns above are local.
 2. Connect it to the Supabase Postgres with the replication role and the
    `powersync` publication.
 3. Client Auth: enable "Use Supabase Auth".
-4. Paste `deploy/sync-rules.yaml`.
+4. Run `powersync deploy sync-config --directory=deploy/powersync`.
 5. Put the instance URL in `backend/src/config.rs` as `POWERSYNC_URL`.

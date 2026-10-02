@@ -1,7 +1,7 @@
 -- Every clip plays a shipped form, so a score has no local definitions.
 --
 -- Apply after the clip-forms change set, which deletes these rows, and after
--- `deploy/sync-rules.yaml` no longer names `score_definitions`: a sync rule
+-- `deploy/powersync/sync-config.yaml` no longer names `score_definitions`: a sync rule
 -- over a dropped table fails its whole stream.
 --
 -- A draft stores a whole score document. Documents written before this change
