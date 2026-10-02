@@ -145,8 +145,23 @@ impl Rig {
         self
     }
 
-    /// A fixture nobody has dragged out of the tray.
-    fn unplaced(mut self, id: &str, channels: u16) -> Rig {
+    /// A fixture standing on the venue floor, on no run.
+    fn floor(mut self, id: &str, channels: u16) -> Rig {
+        self.graph.insert_placed(
+            Node {
+                id: id.into(),
+                kind: NodeKind::Fixture,
+                catalog_ref: Some("mover".into()),
+                label: None,
+                params: Params::default(),
+            },
+            Edge {
+                parent: "venue".into(),
+                my_socket: "clamp".into(),
+                their_socket: crate::venue::FLOOR_SOCKET.into(),
+                roll: 0.0,
+            },
+        );
         self.fixtures.push(Fixture {
             id: id.into(),
             channels,
@@ -274,8 +289,8 @@ fn scoped_allocation_reserves_stored_addresses_without_turning_them_into_pins() 
         .pin("real-pin", 1, 400)
         .fixture("untouched", "z", 0.0, 100)
         .stored("untouched", 1, 1)
-        .unplaced("tray", 20)
-        .stored("tray", 1, 101);
+        .floor("loose", 20)
+        .stored("loose", 1, 101);
     let venue = resolve(&rig.graph, &table());
     let full = allocate(&venue, &rig.fixtures);
     let held = rig.fixtures.iter().find(|f| f.id == "untouched").unwrap();
@@ -289,7 +304,7 @@ fn scoped_allocation_reserves_stored_addresses_without_turning_them_into_pins() 
     assert!(scoped.get("real-pin").unwrap().pinned);
     assert_eq!(at(&scoped, "real-pin").address(), 400);
     assert!(scoped.get("untouched").is_none());
-    assert!(scoped.get("tray").is_none());
+    assert!(scoped.get("loose").is_none());
     assert_eq!(
         held.address,
         Address::Derived(Footprint::new(1, 1, 100).unwrap())
@@ -439,7 +454,7 @@ fn each_run_gets_a_universe_of_its_own() {
 fn a_run_that_would_cross_the_boundary_rolls_whole_and_says_so() {
     // A hand-set address parked near the end of the first universe leaves a
     // tail too short for the run's block.
-    let mut rig = Rig::new().run("truss").unplaced("pinned", 60);
+    let mut rig = Rig::new().run("truss").floor("pinned", 60);
     rig = rig.pin("pinned", 1, UNIVERSE_SIZE - 59);
     for i in 0..30 {
         rig = rig.fixture(&format!("m{i:02}"), "truss", f64::from(i), 16);
@@ -506,7 +521,7 @@ fn a_run_wider_than_a_universe_is_the_only_thing_that_splits() {
 }
 
 // ---------------------------------------------------------------------------
-// The tray, and pins
+// Fixtures on no run, and pins
 // ---------------------------------------------------------------------------
 
 /// The limit `on_run` documents, pinned rather than implied.
@@ -555,22 +570,22 @@ fn straight_corner_straight_is_two_runs_and_two_blocks() {
 }
 
 #[test]
-fn unplaced_fixtures_fill_the_gaps_the_runs_left_starting_at_universe_one() {
+fn fixtures_on_no_run_fill_the_gaps_the_runs_left_starting_at_universe_one() {
     let rig = Rig::new()
         .run("truss")
         .fixture("a", "truss", 0.0, 8)
         .fixture("b", "truss", 1.0, 8)
-        .unplaced("tray", 4);
+        .floor("loose", 4);
     let allocation = rig.allocate();
 
     let run_universe = at(&allocation, "a").universe();
-    let tray = at(&allocation, "tray");
-    assert_eq!(tray.universe(), run_universe);
+    let loose = at(&allocation, "loose");
+    assert_eq!(loose.universe(), run_universe);
     assert!(
-        tray.address() > at(&allocation, "b").last(),
-        "the tray fixture landed inside the run's block"
+        loose.address() > at(&allocation, "b").last(),
+        "the floor fixture landed inside the run's block"
     );
-    assert!(allocation.get("tray").expect("allocated").run.is_none());
+    assert!(allocation.get("loose").expect("allocated").run.is_none());
     assert_disjoint(&allocation);
 }
 
@@ -602,7 +617,7 @@ fn a_pin_the_run_block_would_have_covered_pushes_the_block_past_it() {
         .run("truss")
         .fixture("a", "truss", 0.0, 8)
         .fixture("b", "truss", 1.0, 8)
-        .unplaced("hand_set", 8);
+        .floor("hand_set", 8);
     let start = at(&rig.allocate(), "a");
     rig = rig.pin("hand_set", start.universe(), start.address());
 
@@ -699,7 +714,7 @@ fn the_input_order_of_the_fixture_list_does_not_reach_the_answer() {
         .fixture("y", "a", 0.5, 12)
         .fixture("z", "b", 1.0, 7)
         .fixture("w", "b", 3.0, 7)
-        .unplaced("tray", 3)
+        .floor("loose", 3)
         .pin("w", 4, 100);
 
     let table = |allocation: &Allocation| {
@@ -813,17 +828,17 @@ fn next_addresses_for_a_run_with_nothing_on_it_takes_a_fresh_universe() {
 }
 
 #[test]
-fn next_addresses_with_no_run_answers_the_tray_rule() {
+fn next_addresses_with_no_run_answers_the_run_less_rule() {
     let rig = Rig::new()
         .run("truss")
         .fixture("a", "truss", 0.0, 8)
-        .unplaced("tray", 8);
+        .floor("loose", 8);
     let allocation = rig.allocate();
     let next = rig.next(None, 8, 1);
 
     assert_eq!(next.len(), 1);
-    assert_eq!(next[0].address(), at(&allocation, "tray").last() + 1);
-    assert_eq!(next[0].universe(), at(&allocation, "tray").universe());
+    assert_eq!(next[0].address(), at(&allocation, "loose").last() + 1);
+    assert_eq!(next[0].universe(), at(&allocation, "loose").universe());
 }
 
 // ---------------------------------------------------------------------------
@@ -850,7 +865,7 @@ fn two_runs() -> Rig {
 
 /// A single run whose block will not fit in the universe it is offered.
 fn crowded() -> Rig {
-    let mut rig = Rig::new().run("truss").unplaced("house_dimmer", 96);
+    let mut rig = Rig::new().run("truss").floor("house_dimmer", 96);
     rig = rig.pin("house_dimmer", 1, UNIVERSE_SIZE - 95);
     for index in 0..24 {
         #[allow(clippy::cast_precision_loss)]

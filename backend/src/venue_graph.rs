@@ -216,8 +216,15 @@ pub async fn migrate(
     let fixtures = local::fixtures::get_patched_fixtures(access).await?;
 
     let root_id = format!("{venue_id}:venue");
-    local::venue_graph::insert_node_with_id(access, &root_id, NodeKind::Venue.as_str(), None, None)
-        .await?;
+    local::venue_graph::insert_node_with_id(
+        access,
+        &root_id,
+        NodeKind::Venue.as_str(),
+        None,
+        None,
+        None,
+    )
+    .await?;
 
     // Every old piece's world pose, in the frame the chain composed in. This is
     // `stage_render::flatten_pieces`'s arithmetic, in `f64` — the pass has to
@@ -225,33 +232,10 @@ pub async fn migrate(
     // tens of metres.
     let worlds = flatten_old_poses(&pieces);
 
-    // Pass 1: the nodes, under their old ids, so a selection or a group naming
-    // a stage piece still names the same thing.
-    for piece in &pieces {
-        local::venue_graph::insert_node_with_id(
-            access,
-            &piece.id,
-            kind_of(&piece.kind).as_str(),
-            Some(&piece.mesh_path),
-            piece.label.as_deref(),
-        )
-        .await?;
-    }
-    for fixture in &fixtures {
-        // `catalog_ref` names a node's *geometry* — a mesh for a piece, a
-        // bundle path for a light. The patch-row id is already the node id.
-        local::venue_graph::insert_node_with_id(
-            access,
-            &fixture.id,
-            NodeKind::Fixture.as_str(),
-            Some(&fixture.fixture_path),
-            fixture.label.as_deref(),
-        )
-        .await?;
-    }
-
-    // Pass 2: the edges. A node must exist before anything names it, which is
-    // why this is two passes and not one.
+    // Each node is written with its placement, under its old id, so a
+    // selection or a group naming a stage piece still names the same thing.
+    // A parent written after its child is fine: the foreign key is checked at
+    // commit.
     for (piece, world) in pieces.iter().zip(&worlds) {
         let node = Node {
             id: piece.id.clone(),
@@ -294,7 +278,20 @@ pub async fn migrate(
                 (root_id.clone(), edge, placement)
             }
         };
-        write_placement(access, &piece.id, &parent_id, &edge, placement).await?;
+        let at = Edge {
+            parent: parent_id,
+            ..edge
+        };
+        local::venue_graph::insert_node_with_id(
+            access,
+            &piece.id,
+            node.kind.as_str(),
+            Some(&piece.mesh_path),
+            piece.label.as_deref(),
+            Some(&(&at).into()),
+        )
+        .await?;
+        write_params(access, &piece.id, placement).await?;
     }
 
     for fixture in &fixtures {
@@ -315,7 +312,22 @@ pub async fn migrate(
             .next()
             .unwrap_or_else(|| fixture_clamp(0.0));
         let (edge, placement) = fixture_placement(world, &clamp);
-        write_placement(access, &fixture.id, &root_id, &edge, placement).await?;
+        let at = Edge {
+            parent: root_id.clone(),
+            ..edge
+        };
+        // `catalog_ref` names a node's *geometry* — a mesh for a piece, a
+        // bundle path for a light. The patch-row id is already the node id.
+        local::venue_graph::insert_node_with_id(
+            access,
+            &fixture.id,
+            NodeKind::Fixture.as_str(),
+            Some(&fixture.fixture_path),
+            fixture.label.as_deref(),
+            Some(&(&at).into()),
+        )
+        .await?;
+        write_params(access, &fixture.id, placement).await?;
     }
 
     Ok(true)
@@ -503,22 +515,11 @@ fn fixture_placement(world: DMat4, clamp: &ResolvedSocket) -> (Edge, SurfacePlac
     )
 }
 
-async fn write_placement(
+async fn write_params(
     access: &mut VenueAccess<'_, Write>,
     node_id: &str,
-    parent_id: &str,
-    edge: &Edge,
     placement: SurfacePlacement,
 ) -> Result<(), String> {
-    local::venue_graph::upsert_edge(
-        access,
-        node_id,
-        parent_id,
-        &edge.my_socket,
-        &edge.their_socket,
-        edge.roll,
-    )
-    .await?;
     let params = [
         ("u", placement.u),
         ("v", placement.v),
@@ -773,14 +774,15 @@ mod tests {
             .await
             .unwrap();
         let rows = local::venue_graph::get_graph(&mut access).await.unwrap();
-        let edge = rows
-            .edges
+        let placement = rows
+            .nodes
             .iter()
-            .find(|e| e.child_id == "cdj")
+            .find(|n| n.id == "cdj")
+            .and_then(|n| n.placement.clone())
             .expect("the cdj is placed");
-        assert_eq!(edge.parent_id, "deck", "the parent link survives");
+        assert_eq!(placement.parent, "deck", "the parent link survives");
         assert_eq!(
-            edge.my_socket, "mount",
+            placement.my_socket, "mount",
             "a cdj meets a surface through its mount"
         );
     }
@@ -790,7 +792,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use crate::models::venue_graph::{
-        diff, summarize, VenueConstraint, VenueEdge, VenueGraphRows, VenueNode,
+        diff, summarize, NodePlacement, VenueConstraint, VenueGraphRows, VenueNode,
     };
     use std::collections::BTreeMap;
 
@@ -805,7 +807,7 @@ mod tests {
     ///
     /// The same room `luma-render`'s `venue_poses` golden builds through
     /// `VenueGraph::attach` — deliberately asymmetric, one of every way a node
-    /// can be placed, an unplaced branch and a violated far end. It is written
+    /// can be placed and a violated far end. It is written
     /// here as rows because that is the shape a document stores, and
     /// [`resolve_rows_reproduce_the_venue_poses_golden`] holds the two
     /// spellings to the same solve, so the copy cannot drift in silence.
@@ -824,82 +826,98 @@ mod tests {
 
     fn golden_rows() -> VenueGraphRows {
         let mut nodes = Vec::new();
-        let mut edges = Vec::new();
         let mut params: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
 
-        let mut node = |id: &str, kind: &str, catalog_ref: Option<&str>, label: Option<&str>| {
+        // `(my socket, parent, their socket, roll)`.
+        type At<'a> = (&'a str, &'a str, &'a str, f64);
+        let mut node = |id: &str, kind: &str, catalog_ref: Option<&str>, at: Option<At<'_>>| {
             nodes.push(VenueNode {
                 id: id.into(),
                 venue_id: "golden".into(),
                 kind: kind.into(),
                 catalog_ref: catalog_ref.map(Into::into),
-                label: label.map(Into::into),
+                label: (kind == "venue").then(|| "Golden room".into()),
+                placement: at.map(|(my, parent, their, roll)| NodePlacement {
+                    parent: parent.into(),
+                    my_socket: my.into(),
+                    their_socket: their.into(),
+                    roll,
+                }),
             });
         };
-        node("venue", "venue", None, Some("Golden room"));
+        node("venue", "venue", None, None);
         node(
             "deck_a",
             "stage",
             Some("stage_lab/stage_praticavel_2x1x1.glb"),
-            None,
+            Some(("bottom", "venue", FLOOR_SOCKET, 0.4)),
         );
         node(
             "deck_b",
             "stage",
             Some("stage_lab/stage_praticavel_1x1.glb"),
-            None,
-        );
-        node("tower", "tower", Some("truss/straight"), None);
-        node("corner", "piece", Some("truss/corner"), None);
-        node("run", "run", Some("truss/straight"), None);
-        node("post", "tower", Some("truss/straight"), None);
-        node("flown", "fixture", Some("fixture:flown"), None);
-        node("uplight", "fixture", Some("fixture:uplight"), None);
-        node("aimed", "fixture", Some("fixture:aimed"), None);
-        node("flown_truss", "run", Some("truss/straight"), None);
-        node("under_truss", "fixture", Some("fixture:under"), None);
-        node("wall", "array", Some("stage_lab/speaker_dbr15.glb"), None);
-        node(
-            "tray_speaker",
-            "piece",
-            Some("stage_lab/speaker_dbr15.glb"),
-            None,
+            Some(("edge_left", "deck_a", "edge_right", 0.0)),
         );
         node(
-            "tray_on_tray",
-            "piece",
-            Some("stage_lab/speaker_dbr15.glb"),
-            None,
+            "tower",
+            "tower",
+            Some("truss/straight"),
+            Some(("end_a", "deck_a", "corner_fl", 0.0)),
         );
-
-        let mut edge = |child: &str, my: &str, parent: &str, their: &str, roll: f64| {
-            edges.push(VenueEdge {
-                child_id: child.into(),
-                parent_id: parent.into(),
-                my_socket: my.into(),
-                their_socket: their.into(),
-                roll,
-            });
-        };
-        edge("deck_a", "bottom", "venue", FLOOR_SOCKET, 0.4);
-        edge("deck_b", "edge_left", "deck_a", "edge_right", 0.0);
-        edge("tower", "end_a", "deck_a", "corner_fl", 0.0);
-        edge("corner", "face_-x", "tower", "end_b", 0.0);
-        edge("run", "end_a", "corner", "face_-z", 0.0);
-        edge("post", "end_a", "deck_a", "corner_br", 0.0);
-        edge("flown", FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0);
-        edge("uplight", FIXTURE_CLAMP_SOCKET, "venue", FLOOR_SOCKET, 1.1);
-        edge("aimed", FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0);
-        edge("flown_truss", "seat", "venue", RIG_SOCKET, 0.0);
-        edge(
-            "under_truss",
-            FIXTURE_CLAMP_SOCKET,
+        node(
+            "corner",
+            "piece",
+            Some("truss/corner"),
+            Some(("face_-x", "tower", "end_b", 0.0)),
+        );
+        node(
+            "run",
+            "run",
+            Some("truss/straight"),
+            Some(("end_a", "corner", "face_-z", 0.0)),
+        );
+        node(
+            "post",
+            "tower",
+            Some("truss/straight"),
+            Some(("end_a", "deck_a", "corner_br", 0.0)),
+        );
+        node(
+            "flown",
+            "fixture",
+            Some("fixture:flown"),
+            Some((FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0)),
+        );
+        node(
+            "uplight",
+            "fixture",
+            Some("fixture:uplight"),
+            Some((FIXTURE_CLAMP_SOCKET, "venue", FLOOR_SOCKET, 1.1)),
+        );
+        node(
+            "aimed",
+            "fixture",
+            Some("fixture:aimed"),
+            Some((FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0)),
+        );
+        node(
             "flown_truss",
-            "face_-y",
-            0.0,
+            "run",
+            Some("truss/straight"),
+            Some(("seat", "venue", RIG_SOCKET, 0.0)),
         );
-        edge("wall", "mount", "venue", FLOOR_SOCKET, 0.0);
-        edge("tray_on_tray", "mount", "tray_speaker", "mount", 0.0);
+        node(
+            "under_truss",
+            "fixture",
+            Some("fixture:under"),
+            Some((FIXTURE_CLAMP_SOCKET, "flown_truss", "face_-y", 0.0)),
+        );
+        node(
+            "wall",
+            "array",
+            Some("stage_lab/speaker_dbr15.glb"),
+            Some(("mount", "venue", FLOOR_SOCKET, 0.0)),
+        );
 
         let mut param = |id: &str, entries: &[(&str, f64)]| {
             params.insert(
@@ -931,7 +949,6 @@ mod tests {
 
         VenueGraphRows {
             nodes,
-            edges,
             params,
             constraints: vec![VenueConstraint {
                 node_id: "run".into(),
@@ -942,13 +959,13 @@ mod tests {
         }
     }
 
-    /// The same room after a refit: a bar of four movers goes in, the spare
-    /// speakers leave the tray, a deck is turned round, the tower grows, the
-    /// room is renamed and the far end is re-aimed. One of every change kind.
+    /// The same room after a refit: a bar of four movers goes in, the speaker
+    /// wall leaves, a deck is turned round, the tower grows, the room is
+    /// renamed and the far end is re-aimed. One of every change kind.
     fn refit_rows() -> VenueGraphRows {
         let mut rows = golden_rows();
-        rows.nodes.retain(|n| !n.id.starts_with("tray_"));
-        rows.edges.retain(|e| !e.child_id.starts_with("tray_"));
+        rows.nodes.retain(|n| n.id != "wall");
+        rows.params.remove("wall");
         for index in 1..=4 {
             rows.nodes.push(VenueNode {
                 id: format!("spot_{index}"),
@@ -956,13 +973,12 @@ mod tests {
                 kind: "fixture".into(),
                 catalog_ref: Some(format!("fixture:spot_{index}")),
                 label: Some(format!("Rogue R2 Spot {index}")),
-            });
-            rows.edges.push(VenueEdge {
-                child_id: format!("spot_{index}"),
-                parent_id: "venue".into(),
-                my_socket: FIXTURE_CLAMP_SOCKET.into(),
-                their_socket: RIG_SOCKET.into(),
-                roll: 0.0,
+                placement: Some(NodePlacement {
+                    parent: "venue".into(),
+                    my_socket: FIXTURE_CLAMP_SOCKET.into(),
+                    their_socket: RIG_SOCKET.into(),
+                    roll: 0.0,
+                }),
             });
             rows.params.insert(
                 format!("spot_{index}"),
@@ -974,9 +990,9 @@ mod tests {
                 node.label = Some("Golden room, refit".into());
             }
         }
-        for edge in &mut rows.edges {
-            if edge.child_id == "deck_b" {
-                edge.their_socket = "edge_front".into();
+        for node in &mut rows.nodes {
+            if let (true, Some(placement)) = (node.id == "deck_b", node.placement.as_mut()) {
+                placement.their_socket = "edge_front".into();
             }
         }
         rows.params
@@ -1041,19 +1057,6 @@ mod tests {
             serde_json::Value::Array(poses),
             golden["nodes"],
             "the rows resolve to the poses the render crate's rig pins"
-        );
-        assert_eq!(
-            solved
-                .unplaced
-                .iter()
-                .map(|u| u.node_id.as_str())
-                .collect::<Vec<_>>(),
-            golden["unplaced"]
-                .as_array()
-                .expect("unplaced is an array")
-                .iter()
-                .map(|u| u["node"].as_str().expect("a node id"))
-                .collect::<Vec<_>>()
         );
         assert_eq!(
             solved.dangling.len(),

@@ -76,9 +76,6 @@ pub(crate) enum Overlay {
     /// the frame on screen.
     FixturePicker(Box<fixture_picker::FixturePicker>),
     InsertPattern(Box<track_editor::picker::Picker>),
-    /// Picking a definition, a mode and a count for the patch page. Boxed like
-    /// the rest: it carries a morph, a search field and a number field.
-    AddFixtures(Box<patch::AddFixtures>),
     /// "Are you sure": one question, two answers, one closed list of acts —
     /// see [`crate::confirm`]. Unboxed because it is a few strings and an
     /// enum, and it is the *smallest* variant here rather than the largest.
@@ -101,7 +98,6 @@ impl Overlay {
             Self::Subagents(_) => keymap::context::SUBAGENTS,
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
             Self::InsertPattern(_) => keymap::context::PATTERN_INSERT,
-            Self::AddFixtures(_) => keymap::context::ADD_FIXTURES,
             Self::Confirm(_) => keymap::context::CONFIRM,
             Self::GroupRepair(_) => keymap::context::ROOT,
             Self::ShowExport(_) => keymap::context::SHOW_EXPORT,
@@ -319,11 +315,6 @@ impl Luma {
         // Innermost first: a dialog showing a child's transcript steps back to
         // its list before the list itself closes.
         if self.subagents_to_list(cx) {
-            return;
-        }
-        // Same rung, same reason: the add-fixtures card steps back to the
-        // bundle before the card itself closes.
-        if self.add_fixtures_back(cx) {
             return;
         }
         if self.overlay.as_open().is_none() {
@@ -867,9 +858,6 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if matches!(app.overlay.as_open(), Some(Overlay::FixturePicker(_))) {
         fixture_picker::tick(app, window, cx);
     }
-    if matches!(app.overlay.as_open(), Some(Overlay::AddFixtures(_))) {
-        patch::tick_add_fixtures(app, window, cx);
-    }
     if matches!(app.overlay.as_open(), Some(Overlay::Subagents(_))) {
         // Read out of the chat before the overlay is borrowed: both live on
         // `app`, and the dialog cannot reach back through the entity for them.
@@ -1129,7 +1117,10 @@ fn inspector_region(
         } else {
             app.inspector_width.set(slot);
         }
-        style.w(app.inspector_width.eval(window)).h_full().flex_none()
+        style
+            .w(app.inspector_width.eval(window))
+            .h_full()
+            .flex_none()
     };
     cached(region, style)
 }
@@ -1529,10 +1520,6 @@ fn overlay_layer(
         Overlay::FixturePicker(state) => (
             fixture_picker::render(state, entity, window),
             "Fixture picker dialog",
-        ),
-        Overlay::AddFixtures(state) => (
-            patch::add_fixtures_dialog(state, entity, window),
-            "Add fixtures dialog",
         ),
         Overlay::GroupRepair(state) => (
             patch::groups::repair_dialog(state, entity),

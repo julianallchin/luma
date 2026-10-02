@@ -93,6 +93,13 @@ fn sample(column: &str) -> Option<Option<&'static str>> {
     })
 }
 
+/// A node's placement columns. The fixture's node is a root (`kind` samples
+/// as `venue`), and the schema's CHECK says a root has no placement.
+fn root_placement(synced: &super::schema::SyncedTable, column: &str) -> bool {
+    synced.name == "venue_nodes"
+        && matches!(column, "parent_id" | "my_socket" | "their_socket" | "roll")
+}
+
 /// Every generated put statement must parse, bind, and upsert rather than
 /// duplicate when the same row arrives twice.
 ///
@@ -118,6 +125,8 @@ async fn every_put_statement_upserts_against_the_real_schema() {
                 let round = if *column == "updated_at" { round } else { 0 };
                 query = query.bind(if key.contains(column) {
                     Some(format!("key-{column}"))
+                } else if root_placement(synced, column) {
+                    None
                 } else if BOOLEAN_COLUMNS.contains(column) {
                     Some("true".to_owned())
                 } else if let Some(value) = sample(column) {
@@ -424,6 +433,9 @@ fn value(
     round: usize,
     nullable: &[String],
 ) -> Option<String> {
+    if root_placement(synced, column) {
+        return None;
+    }
     if matches!(column, "parent_id" | "target_node") {
         return Some(PARENT.to_owned());
     }
@@ -456,7 +468,7 @@ fn value(
 /// The id every row in the checkpoint fixture is written under.
 const ROW: &str = "row";
 
-/// A second node, because an edge may not be its own parent.
+/// A second node, because a check may not name its own node as the far end.
 const PARENT: &str = "parent";
 
 /// The whole schema, downloaded at once, children before parents.
@@ -483,15 +495,20 @@ async fn a_whole_checkpoint_applies_however_it_is_ordered() {
         .execute(&mut *connection)
         .await
         .expect("begin");
-    // The one row the generated statements cannot write for themselves: an
-    // edge may not be its own parent, so there has to be a second node.
-    sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'stage')")
-        .bind(PARENT)
-        .bind(ROW)
-        .bind(ROW)
-        .execute(&mut *connection)
-        .await
-        .expect("the second node");
+    // The one row the generated statements cannot write for themselves: a
+    // second node, hung on the root the statements write as `ROW`.
+    sqlx::query(
+        "INSERT INTO venue_nodes
+             (id, uid, venue_id, kind, parent_id, my_socket, their_socket, roll)
+         VALUES (?, ?, ?, 'stage', ?, 'bottom', 'floor', 0.0)",
+    )
+    .bind(PARENT)
+    .bind(ROW)
+    .bind(ROW)
+    .bind(ROW)
+    .execute(&mut *connection)
+    .await
+    .expect("the second node");
     for round in 0..3 {
         for synced in SYNCED_TABLES.iter().rev() {
             let nullable: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(

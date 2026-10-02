@@ -1,24 +1,13 @@
 //! Browsing the bundled QLC+ fixture definitions.
 //!
-//! Shared, because two surfaces want it: the patch page's add dialog picks a
-//! definition to patch N unplaced copies of, and the stage page's distribution
-//! popup picks one to hang along a truss. They differ entirely in what they do
-//! with the answer and not at all in how the question is asked, so the search,
-//! the paging and the rows live here once.
-//!
-//! # Two hosts, two ways of drawing the same rows
-//!
-//! The patch page's dialog is browsing *fixtures* and nothing else, so it
-//! renders [`rows`] and takes the whole component including its field.
-//!
 //! The stage page's add-element dialog asks one question — "what goes in
-//! next" — over three provenances: catalog pieces, the rows the patch has
-//! never placed, and this bundle. So it takes the state and not the picture:
-//! its own field drives [`FixtureLibrary::set_query`], [`FixtureLibrary::query`]
-//! is what narrows the other two sections, and [`FixtureLibrary::entries`]
-//! becomes rows in its own sectioned list. What it does *not* keep is a second
-//! query, a second page cursor and a second spelling of the error — which is
-//! what `Luma::stage_search_fixtures` was before it was deleted.
+//! next" — over two provenances: catalog pieces and this bundle. So it takes
+//! the state and not the picture: its own field drives
+//! [`FixtureLibrary::set_query`], [`FixtureLibrary::query`] is what narrows the
+//! catalog section, and [`FixtureLibrary::entries`] becomes rows in its own
+//! sectioned list. What it does *not* keep is a second query, a second page
+//! cursor and a second spelling of the error — which is what
+//! `Luma::stage_search_fixtures` was before it was deleted.
 //!
 //! # What this owns, and what its host owns
 //!
@@ -26,16 +15,12 @@
 //! browsing*. It does not own where it is stored or which Tokio runtime its
 //! calls go on, because those are facts about the host: the host hands it
 //! [`FixtureLibrary::page`]'s future to await and calls [`FixtureLibrary::landed`]
-//! with the result. That is what keeps one component usable from an overlay and
-//! from a tab body without either of them being the other's special case.
-
-use std::rc::Rc;
+//! with the result.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, App, Context, Entity, SharedString, Subscription, Window};
+use gpui::{div, px, AnyElement, Context, Entity, SharedString, Subscription};
 
 use luma_lib::models::fixtures::FixtureEntry;
-use luma_ui::float::{self, RowState};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::text_input::{self, TextInput};
@@ -50,9 +35,8 @@ pub(crate) const PAGE: usize = 60;
 pub(crate) struct FixtureLibrary {
     field: Entity<TextInput>,
     /// What the field says when it is empty, and the name it answers to in the
-    /// automation tree. Held because the two hosts ask one question in two
-    /// vocabularies: the patch page is picking a fixture, and the stage page's
-    /// one field also narrows catalog pieces and unplaced rows.
+    /// automation tree. The stage page's one field also narrows catalog
+    /// pieces.
     placeholder: SharedString,
     /// The query, mirrored out of the field. The field is the editor; this is
     /// what the fetch was issued for.
@@ -171,94 +155,6 @@ impl FixtureLibrary {
             Err(error) => self.error = Some(error.to_string().into()),
         }
     }
-}
-
-/// What a picked row does. Boxed at render time rather than held in state, so
-/// unlike [`crate::confirm::Action`] there is nothing here that outlives a
-/// frame — a picker's callback is part of the element tree, not of the app.
-pub(crate) type OnPick = Rc<dyn Fn(&FixtureEntry, &mut Window, &mut App)>;
-
-/// The rows, grouped by manufacturer.
-///
-/// Grouped rather than flat because the bundle is fifteen thousand definitions
-/// and a manufacturer is how anyone narrows it: `search_fixtures` matches both
-/// halves of the name, so "chauvet rogue" and "rogue" both land, and the
-/// heading is what tells you which of four Rogues you are looking at.
-pub(crate) fn rows(state: &FixtureLibrary, picked: Option<&str>, on_pick: OnPick) -> AnyElement {
-    if let Some(error) = &state.error {
-        return float::viewport()
-            .child(float::list().child(float::error_row(error.clone())))
-            .into_any_element();
-    }
-    if state.entries.is_empty() {
-        let message: SharedString = if state.loading {
-            "Reading the fixture bundle…".into()
-        } else {
-            format!("No fixture matches “{}”", state.query).into()
-        };
-        return float::viewport()
-            .child(
-                float::list()
-                    .child(float::empty_row(message.clone()).agent_node(Role::Text, message)),
-            )
-            .into_any_element();
-    }
-
-    let mut list = float::list().id("fixture-library").overflow_y_scroll();
-    let mut heading: Option<&str> = None;
-    for entry in &state.entries {
-        if heading != Some(entry.manufacturer.as_str()) {
-            heading = Some(&entry.manufacturer);
-            list = list.child(
-                float::section_heading(entry.manufacturer.clone())
-                    .agent_node(Role::Text, entry.manufacturer.clone()),
-            );
-        }
-        let label = format!("{} {}", entry.manufacturer, entry.model);
-        let chosen = picked == Some(entry.path.as_str());
-        let pick = on_pick.clone();
-        let row = entry.clone();
-        list = list.child(
-            float::menu_row(
-                RowState::of(chosen, false),
-                format!("fixture-{}", entry.path),
-            )
-            .id(SharedString::from(format!("fixture-row-{}", entry.path)))
-            .w_full()
-            .h(px(30.0))
-            .px(px(10.0))
-            .on_click(move |_, window, cx| pick(&row, window, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(12.5))
-                    .child(entry.model.clone()),
-            )
-            .agent_node(Role::Row, label),
-        );
-    }
-    if state.loading {
-        list = list.child(
-            div()
-                .px(px(10.0))
-                .py(px(6.0))
-                .text_size(px(11.0))
-                .text_color(ladder::muted_foreground())
-                .child("Loading more…"),
-        );
-    } else if !state.exhausted {
-        list = list.child(
-            div()
-                .px(px(10.0))
-                .py(px(6.0))
-                .text_size(px(11.0))
-                .text_color(ladder::muted_foreground())
-                .child(format!("{} shown — scroll for more", state.entries.len())),
-        );
-    }
-    float::viewport().child(list).into_any_element()
 }
 
 /// The search field, or its typed text painted flat for a morph copy in

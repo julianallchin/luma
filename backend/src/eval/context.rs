@@ -136,8 +136,8 @@ pub(crate) async fn resolve_selection_primitives_with_access(
     let mut out = Vec::new();
     for resolved in &fixtures {
         let fixture = &resolved.fixture;
-        // Patched but unplaced: it is in the tray, not in the room, so it emits
-        // no primitives at all rather than a stack of them at the origin.
+        // A fixture the solve cannot reach emits no primitives at all rather
+        // than a stack of them at the origin.
         let Some(pose) = venue.pose(&fixture.id) else {
             continue;
         };

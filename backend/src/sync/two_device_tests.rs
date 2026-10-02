@@ -882,7 +882,7 @@ async fn a_stranger_reaches_nothing_of_a_shared_venue() {
 
 /// One row of every venue-child shape, and all of it on the member's device.
 ///
-/// This is what evaluates each query in `deploy/sync-rules.yaml` against real
+/// This is what evaluates each query in `deploy/powersync/sync-config.yaml` against real
 /// data: a rule that names a column the table does not have, or a subquery the
 /// service refuses, fails the whole stream, and the only symptom is rows that
 /// never arrive.
@@ -913,13 +913,10 @@ async fn every_venue_child_shape_reaches_a_member() {
              VALUES ('{track}', '{USER}', '[]', '[]')"
         ),
         format!(
-            "INSERT INTO venue_nodes (id, uid, venue_id, kind)
-             VALUES ('{root}', '{USER}', '{venue}', 'venue'),
-                    ('{child}', '{USER}', '{venue}', 'run')"
-        ),
-        format!(
-            "INSERT INTO venue_edges (child_id, uid, venue_id, parent_id, my_socket, their_socket)
-             VALUES ('{child}', '{USER}', '{venue}', '{root}', 'base', 'top')"
+            "INSERT INTO venue_nodes
+                 (id, uid, venue_id, kind, parent_id, my_socket, their_socket, roll)
+             VALUES ('{root}', '{USER}', '{venue}', 'venue', NULL, NULL, NULL, NULL),
+                    ('{child}', '{USER}', '{venue}', 'run', '{root}', 'base', 'top', 0.0)"
         ),
         format!(
             "INSERT INTO venue_node_params (uid, venue_id, node_id, key, value)
@@ -966,7 +963,6 @@ async fn every_venue_child_shape_reaches_a_member() {
         ("venues", "id", venue.as_str()),
         ("venue_members", "venue_id", venue.as_str()),
         ("venue_nodes", "venue_id", venue.as_str()),
-        ("venue_edges", "venue_id", venue.as_str()),
         ("venue_node_params", "venue_id", venue.as_str()),
         ("venue_constraints", "venue_id", venue.as_str()),
         ("fixtures", "venue_id", venue.as_str()),

@@ -20,7 +20,7 @@
 //!
 //! # Why the chrome is elements and not pixels
 //!
-//! The palette, the tray, the readouts, the socket beads and the measurement
+//! The palette, the readouts, the socket beads and the measurement
 //! label are all ordinary gpui elements laid over the viewport, not draws
 //! inside it. Two reasons, and they are the same reason twice: the harness
 //! sees elements and never pixels, and the headless harness has no renderer at
@@ -122,12 +122,13 @@ pub(crate) struct Build {
     /// rows back, and re-deriving rows from a parsed graph would be a second
     /// spelling of the same table.
     rows: luma_lib::models::venue_graph::VenueGraphRows,
-    /// Snapshots a structural verb replaced, oldest first. Burned whenever a
-    /// verb creates or deletes patch rows — a snapshot cannot restore half a
-    /// fixture, so it does not pretend to.
-    undo: Vec<luma_lib::models::venue_graph::VenueGraphRows>,
+    /// The patch as the library last answered it, beside `rows`: a verb that
+    /// deletes lights is undone by bringing their patch rows back too.
+    patch: Vec<luma_lib::models::fixtures::PatchedFixture>,
+    /// Snapshots a structural verb replaced, oldest first.
+    undo: Vec<Snapshot>,
     /// What undo stepped back over, for redo. Cleared by any new verb.
-    redo: Vec<luma_lib::models::venue_graph::VenueGraphRows>,
+    redo: Vec<Snapshot>,
     /// The last verb's warnings, and its refusal if it had one.
     pub(crate) report: Vec<String>,
     /// A verb that has not come back yet. Placement is idempotent per gesture,
@@ -150,9 +151,16 @@ struct ParamScrub {
     /// A value arrived while a write was in flight.
     queued: bool,
     /// The graph before the first write: the whole scrub is one undo step.
-    snapshot: luma_lib::models::venue_graph::VenueGraphRows,
+    snapshot: Snapshot,
     /// At least one write succeeded, so there is a step to remember.
     wrote: bool,
+}
+
+/// One undo step: the graph rows and the patch they were read beside.
+#[derive(Clone)]
+pub(crate) struct Snapshot {
+    rows: luma_lib::models::venue_graph::VenueGraphRows,
+    patch: Vec<luma_lib::models::fixtures::PatchedFixture>,
 }
 
 impl Build {
@@ -175,6 +183,7 @@ impl Build {
             distribution: Vec::new(),
             distribution_layout: luma_scene::distribute::Layout::Even,
             rows: rig.rows.clone(),
+            patch: rig.fixtures.clone(),
             undo: Vec::new(),
             redo: Vec::new(),
             report: Vec::new(),
@@ -197,6 +206,7 @@ impl Build {
         self.graph = graph;
         self.solved = rig.venue.clone();
         self.rows = rig.rows.clone();
+        self.patch = rig.fixtures.clone();
         if self
             .selected
             .as_ref()
@@ -325,13 +335,7 @@ impl Build {
             // A light's clamp stands off its housing, so the ghost has to ask
             // the supply for it exactly as the commit will — a preview that
             // hangs by the origin previews a placement that will not happen.
-            // An unplaced fixture already has a node to ask about; a held one
-            // is the bundle path it was dragged out of.
-            Holding::Unplaced { node, .. } => self
-                .graph
-                .node(node)
-                .map(|node| self.sockets.sockets(node))
-                .unwrap_or_default(),
+            // A held light is the bundle path it was picked from.
             Holding::Fixture { path, .. } => self.sockets.sockets(&luma_scene::venue::Node {
                 id: hand::GHOST_NODE.to_string(),
                 kind: luma_scene::venue::NodeKind::Fixture,
@@ -377,7 +381,7 @@ impl Build {
                     max: half,
                 })
             }
-            Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
+            Holding::Fixture { .. } => None,
         }
     }
 
@@ -416,9 +420,17 @@ impl Build {
         out.into_iter().map(|(_, id)| id).collect()
     }
 
+    /// The room as it stands, as an undo step.
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            rows: self.rows.clone(),
+            patch: self.patch.clone(),
+        }
+    }
+
     /// File a snapshot a verb just replaced, and drop the redo branch — a new
     /// edit after an undo is a new history.
-    pub(crate) fn remember(&mut self, snapshot: luma_lib::models::venue_graph::VenueGraphRows) {
+    pub(crate) fn remember(&mut self, snapshot: Snapshot) {
         self.undo.push(snapshot);
         if self.undo.len() > UNDO_DEPTH {
             self.undo.remove(0);
@@ -426,8 +438,8 @@ impl Build {
         self.redo.clear();
     }
 
-    /// Burn both stacks: a verb created or deleted patch rows, and every
-    /// snapshot on either side would restore fixtures that cannot come back.
+    /// Burn both stacks: a restore was refused, so what they hold no longer
+    /// matches the venue.
     pub(crate) fn forget_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -673,11 +685,12 @@ impl Build {
     /// roll freedom, and a surface joint is the only kind whose child is free
     /// to be picked up and put down somewhere else.
     pub(crate) fn freedom_of(&self, node: &str) -> Freedom {
+        // The root, or a joint whose host socket is gone: nothing to move.
         let Some(edge) = self.graph.edge(node) else {
-            return Freedom::Unplaced;
+            return Freedom::Bolted;
         };
         let Some(host) = self.room.socket(&edge.parent, &edge.their_socket) else {
-            return Freedom::Unplaced;
+            return Freedom::Bolted;
         };
         match (host.socket_type.kind(), host.roll) {
             (luma_scene::sockets::SocketKind::Surface, _) if edge.parent == self.room.root() => {
@@ -696,8 +709,6 @@ impl Build {
 /// their roll control, or no movement at all when bolted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Freedom {
-    /// Nothing has placed it — it is in the tray.
-    Unplaced,
     /// Seated on the venue's own floor or grid; rig pieces may also change trim.
     Free,
     /// Bolted onto a face — it slides along it, and nowhere else.
@@ -714,7 +725,7 @@ impl Freedom {
         match self {
             Freedom::Slide => Some("u"),
             Freedom::Roll => Some("yaw"),
-            Freedom::Free | Freedom::Bolted | Freedom::Unplaced => None,
+            Freedom::Free | Freedom::Bolted => None,
         }
     }
 }
@@ -770,8 +781,8 @@ pub(crate) struct StagePage {
     /// stage page asking it a second way was the duplicate.
     ///
     /// Its field is the dialog's *only* field: [`FixtureLibrary::query`] is
-    /// what the catalog and unplaced sections are filtered by too, so one
-    /// string narrows all three provenances.
+    /// what the catalog section is filtered by too, so one string narrows
+    /// both provenances.
     pub(crate) library: FixtureLibrary,
     /// The focus the dialog traps while it is up.
     pub(crate) focus: gpui::FocusHandle,
@@ -828,7 +839,7 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         // What the verb is about to replace is what undo restores.
-        let snapshot = self.build_state().map(|build| build.rows.clone());
+        let snapshot = self.build_state().map(Build::snapshot);
         if let Some(build) = self.build_mut() {
             build.committing = true;
         }
@@ -839,25 +850,16 @@ impl Luma {
                     build.committing = false;
                     match &result {
                         Ok(report) => {
-                            // Warnings only. A report is what the *graph* now
-                            // says, and `PlacementReport::outcome` is a fact
-                            // about the node rather than a verdict on the call
-                            // — `detach` answers `Unplaced` because that is
-                            // what it was asked to do. A refusal is the `Err`
-                            // arm below and cannot arrive here at all.
+                            // Warnings only: a refusal is the `Err` arm below
+                            // and cannot arrive here at all.
                             build.report = report.warnings.clone();
                             if let Some(snapshot) = snapshot {
                                 build.remember(snapshot);
                             }
                             // What the verb touched is what the inspector
-                            // should be about: the piece just placed is the one
-                            // about to be trimmed, flipped or detached. A
-                            // branch that has just *left* the room is not — a
-                            // sheet open on a detached wing is a sheet about
-                            // nothing, and `Unplaced` is exactly what `detach`
-                            // was asked for.
-                            build
-                                .select(report.outcome.is_placed().then(|| report.node_id.clone()));
+                            // should be about: the piece just placed is the
+                            // one about to be trimmed or flipped.
+                            build.select(Some(report.node_id.clone()));
                         }
                         Err(error) => build.report = vec![error.to_string()],
                     }
@@ -1328,50 +1330,15 @@ impl Luma {
         }
         // Place mode is sticky, and only for a catalog piece: that is a stamp,
         // and an operator rigging a row of them should not have to walk back
-        // to the dialog between each. A tray fixture and a duplicate are one
-        // specific thing each — once placed there is no second one to hold.
+        // to the dialog between each. A duplicate is one specific thing —
+        // once placed there is no second one to hold.
         build.hand = match &what {
             Holding::Piece { .. } => Hand::Placing(Held::again(&what)),
-            Holding::Duplicate { .. } | Holding::Unplaced { .. } | Holding::Fixture { .. } => {
-                Hand::Idle
-            }
+            Holding::Duplicate { .. } | Holding::Fixture { .. } => Hand::Idle,
         };
         let pending: Verb = match (&what, &landed.how) {
             // Refused above: a fixture is created as a row, never dropped.
             (Holding::Fixture { .. }, _) => return,
-            (
-                Holding::Unplaced { node, .. },
-                Landing::Socket {
-                    parent,
-                    my_socket,
-                    their_socket,
-                    yaw,
-                },
-            ) => {
-                Box::pin(
-                    self.library
-                        .reattach(&venue, node, parent, my_socket, their_socket, *yaw),
-                )
-            }
-            // A fixture nobody has placed still has a row, so it is
-            // re-attached rather than created — the tray is the one place an
-            // unplaced fixture may live, never the origin.
-            (
-                Holding::Unplaced { node, .. },
-                Landing::Free {
-                    surface,
-                    my_socket,
-                    seat,
-                },
-            ) => {
-                let (parent, socket) = surface
-                    .clone()
-                    .unwrap_or((root, luma_scene::venue::FLOOR_SOCKET.to_string()));
-                Box::pin(
-                    self.library
-                        .reattach(&venue, node, &parent, my_socket, &socket, seat.yaw),
-                )
-            }
             (
                 Holding::Piece {
                     catalog_ref,
@@ -1551,6 +1518,7 @@ impl Luma {
             return;
         }
         build.committing = true;
+        let snapshot = build.snapshot();
         let venue = build.venue_id.clone();
         let layout =
             luma_lib::models::distribute::DistributeLayout::from(build.distribution_layout);
@@ -1574,7 +1542,7 @@ impl Luma {
                             build.report = report.warnings.clone();
                             build.select(ids.last().cloned());
                             build.distribution = ids;
-                            build.forget_history();
+                            build.remember(snapshot);
                         }
                     }
                     Err(error) => {
@@ -1682,7 +1650,7 @@ impl Luma {
                     key: key.to_string(),
                     value,
                     queued: true,
-                    snapshot: build.rows.clone(),
+                    snapshot: build.snapshot(),
                     wrote: false,
                 });
             }
@@ -1750,19 +1718,6 @@ impl Luma {
             .ok();
         })
         .detach();
-    }
-
-    /// Detach the selected node. Its rows stay: it lands in the tray, which is
-    /// the difference between unplaced and deleted.
-    pub(crate) fn stage_detach(&mut self, cx: &mut Context<Self>) {
-        let Some(build) = self.build_state() else {
-            return;
-        };
-        let (Some(node), venue) = (build.selected.clone(), build.venue_id.clone()) else {
-            return;
-        };
-        let pending = self.library.detach(&venue, &node);
-        self.stage_verb(pending, cx);
     }
 
     /// Write dragged pieces' previewed poses into the graph.
@@ -1835,7 +1790,7 @@ impl Luma {
         let Some(target) = target else {
             return;
         };
-        let present = build.rows.clone();
+        let present = build.snapshot();
         if forward {
             build.undo.push(present);
         } else {
@@ -1843,7 +1798,9 @@ impl Luma {
         }
         build.committing = true;
         let venue = build.venue_id.clone();
-        let pending = self.library.restore_graph(&venue, &target);
+        let pending = self
+            .library
+            .restore_graph(&venue, &target.rows, &target.patch);
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
@@ -1862,7 +1819,8 @@ impl Luma {
         .detach();
     }
 
-    /// Scene removal is undoable; fixtures retain their library/patch row.
+    /// Scene removal is undoable: a deleted light's patch row comes back with
+    /// it.
     ///
     /// Acts on the whole selection — a row, a marquee, shift-clicks — not only
     /// the primary. A node whose ancestor is also selected is left to the
@@ -1901,19 +1859,16 @@ impl Luma {
             }
             false
         };
-        let jobs: Vec<(String, bool)> = nodes
+        let jobs: Vec<String> = nodes
             .iter()
-            .filter(|node| !has_selected_ancestor(node))
-            .filter_map(|node| {
-                let data = build.graph.node(node)?;
-                Some((node.clone(), data.kind == NodeKind::Fixture))
-            })
+            .filter(|node| !has_selected_ancestor(node) && build.graph.node(node).is_some())
+            .cloned()
             .collect();
         if jobs.is_empty() {
             return;
         }
         let venue = build.venue_id.clone();
-        let snapshot = build.rows.clone();
+        let snapshot = build.snapshot();
         if let Some(build) = self.build_mut() {
             build.committing = true;
             build.select(None);
@@ -1935,12 +1890,12 @@ impl Luma {
     fn run_stage_deletes(
         &mut self,
         venue: String,
-        mut jobs: Vec<(String, bool)>,
-        snapshot: luma_lib::models::venue_graph::VenueGraphRows,
+        mut jobs: Vec<String>,
+        snapshot: Snapshot,
         mut errors: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some((node, fixture)) = jobs.pop() else {
+        let Some(node) = jobs.pop() else {
             if let Some(build) = self.build_mut() {
                 build.committing = false;
                 build.report = errors.clone();
@@ -1953,15 +1908,7 @@ impl Luma {
             cx.notify();
             return;
         };
-        let pending: std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<(), LibraryError>> + Send>,
-        > = if fixture {
-            let detach = self.library.detach(&venue, &node);
-            Box::pin(async move { detach.await.map(|_| ()) })
-        } else {
-            let delete = self.library.delete_subtree(&venue, &node);
-            Box::pin(async move { delete.await.map(|_| ()) })
-        };
+        let pending = self.library.delete_subtree(&venue, &node);
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
@@ -2072,6 +2019,7 @@ impl Luma {
             return;
         };
         let venue = build.venue_id.clone();
+        let snapshot = build.snapshot();
         let Some(row) = build.hand.configuring() else {
             return;
         };
@@ -2107,8 +2055,8 @@ impl Luma {
                         Ok(report) => report.warnings.clone(),
                         Err(error) => vec![error.to_string()],
                     };
-                    if report.is_ok() {
-                        build.forget_history();
+                    if report.as_ref().is_ok_and(|report| report.refusal.is_none()) {
+                        build.remember(snapshot);
                     }
                 }
                 // The row's own report carries no venue, so the room is re-read
@@ -2204,14 +2152,11 @@ impl Build {
             // one in ([`install`]'s stations): the ghost and the stations are
             // the same body seen before and after the count is set, and two
             // spellings of "a light goes here" would be one too many.
-            Holding::Fixture { .. } | Holding::Unplaced { .. } => vec![GhostBody {
+            Holding::Fixture { path, .. } => vec![GhostBody {
                 geometry: Geometry::Procedural(luma_render::catalog::default_params(
                     luma_scene::catalog::Family::Corner,
                 )),
-                fixture: match what {
-                    Holding::Fixture { path, .. } => Some(path.clone()),
-                    _ => None,
-                },
+                fixture: Some(path.clone()),
                 world: landed.world,
                 scale: STATION_GHOST_SCALE,
             }],
@@ -2328,8 +2273,6 @@ pub(crate) struct StageView {
     pub(crate) selected: Option<String>,
     /// The add-element dialog's keyboard cursor, when it is up.
     pub(crate) choosing: Option<usize>,
-    /// Unplaced fixtures, as dialog rows.
-    pub(crate) unplaced: Vec<(String, String)>,
     pub(crate) configuring: Option<ConfigureView>,
 }
 
@@ -2402,17 +2345,6 @@ impl Luma {
                 .collect(),
             selected: build.selected.clone(),
             choosing: build.hand.choosing().map(|c| c.cursor),
-            unplaced: build
-                .solved
-                .unplaced
-                .iter()
-                .map(|node| {
-                    (
-                        node.node_id.clone(),
-                        node.label.clone().unwrap_or_else(|| node.node_id.clone()),
-                    )
-                })
-                .collect(),
             configuring: build.hand.configuring().map(|row| ConfigureView {
                 host: format!("{} {}", row.host_label, row.host_socket),
                 what: row.what.label().to_string(),
@@ -2492,8 +2424,7 @@ pub(crate) fn controls(
                             .id("stage-object-list")
                             .max_h(px(320.0))
                             .overflow_y_scroll()
-                            .child(elements(view, app))
-                            .child(unplaced(view, app)),
+                            .child(elements(view, app)),
                     )
                     .agent_node(Role::Card, "Stage objects")
                     .into_any_element(),
@@ -2507,7 +2438,7 @@ pub(crate) fn controls(
         .child(objects)
         .children(
             (view.choosing.is_some() || state.closing.is_closing())
-                .then(|| chooser(state, view, view.choosing.unwrap_or(0), app, window)),
+                .then(|| chooser(state, view.choosing.unwrap_or(0), app, window)),
         )
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
         .children(state.menu.as_ref().map(|menu| node_menu(menu, app)))
@@ -2570,18 +2501,16 @@ pub(crate) struct ChooserRow {
 /// Every element this venue can be given that matches the dialog's query, in
 /// one list.
 ///
-/// Catalog pieces, the fixtures the patch has never placed, and the library —
-/// three provenances, one question ("what goes in next"), so one list. They
-/// were two menus and a search field before, which is three places to look for
-/// one answer.
+/// Catalog pieces and the library — two provenances, one question ("what goes
+/// in next"), so one list.
 ///
-/// Already narrowed, because the three provenances narrow differently and only
-/// this function knows which is which: the catalog and the unplaced rows are
-/// in memory and filtered here, while the library's rows *are* the answer to
+/// Already narrowed, because the two provenances narrow differently and only
+/// this function knows which is which: the catalog is in memory and filtered
+/// here, while the library's rows *are* the answer to
 /// the query — [`Library::search_fixtures`] matched them, and re-filtering the
 /// page it returned would drop rows it matched on a field the label does not
 /// carry.
-pub(crate) fn chooser_rows(view: &StageView, library: &FixtureLibrary) -> Vec<ChooserRow> {
+pub(crate) fn chooser_rows(library: &FixtureLibrary) -> Vec<ChooserRow> {
     let needle = library.query().trim().to_lowercase();
     let matches = |label: &str, section: &str| {
         needle.is_empty()
@@ -2603,19 +2532,6 @@ pub(crate) fn chooser_rows(view: &StageView, library: &FixtureLibrary) -> Vec<Ch
             },
         })
         .collect();
-    rows.extend(
-        view.unplaced
-            .iter()
-            .filter(|(_, label)| matches(label, "Unplaced"))
-            .map(|(node, label)| ChooserRow {
-                label: label.clone(),
-                section: "Unplaced",
-                take: Holding::Unplaced {
-                    node: node.clone(),
-                    label: label.clone(),
-                },
-            }),
-    );
     rows.extend(library.entries().iter().map(|entry| {
         let label = format!("{} {}", entry.manufacturer, entry.model);
         ChooserRow {
@@ -2661,7 +2577,6 @@ fn chooser_preview(row: Option<&ChooserRow>) -> Div {
             || "Seats on its own underside".to_string(),
             |footing| format!("Stands on {footing}"),
         ),
-        Holding::Unplaced { .. } => "Patched, never placed".to_string(),
         // The dialog never offers one — a duplicate comes off a selection.
         Holding::Duplicate { .. } => "A copy of what is selected".to_string(),
         Holding::Fixture { .. } => "Placed as a row along a face".to_string(),
@@ -2696,14 +2611,8 @@ fn chooser_preview(row: Option<&ChooserRow>) -> Div {
 const CHOOSER_PREVIEW_W: f32 = 208.0;
 
 /// The add-element dialog: a search field, a preview, a sectioned list.
-fn chooser(
-    state: &StagePage,
-    view: &StageView,
-    cursor: usize,
-    app: &Entity<Luma>,
-    window: &Window,
-) -> AnyElement {
-    let rows = chooser_rows(view, &state.library);
+fn chooser(state: &StagePage, cursor: usize, app: &Entity<Luma>, window: &Window) -> AnyElement {
+    let rows = chooser_rows(&state.library);
     let dismiss = app.clone();
 
     let mut list = float::list().id("stage-chooser-list").overflow_y_scroll();
@@ -3029,13 +2938,7 @@ pub(crate) struct NodeMenuAt {
 }
 
 fn node_menu(menu_at: &NodeMenuAt, app: &Entity<Luma>) -> AnyElement {
-    let (dup, flip, detach, delete, close) = (
-        app.clone(),
-        app.clone(),
-        app.clone(),
-        app.clone(),
-        app.clone(),
-    );
+    let (dup, flip, delete, close) = (app.clone(), app.clone(), app.clone(), app.clone());
     let mut menu = luma_ui::menu::ContextMenu::new("stage-node-menu", menu_at.at);
     if let Some(socket) = menu_at.socket.clone() {
         let extend = app.clone();
@@ -3054,9 +2957,6 @@ fn node_menu(menu_at: &NodeMenuAt, app: &Entity<Luma>) -> AnyElement {
         flip.update(cx, |this, cx| this.stage_flip(cx));
     })
     .separator()
-    .destructive("Detach", move |_, cx| {
-        detach.update(cx, |this, cx| this.stage_detach(cx));
-    })
     .destructive("Delete", move |_, cx| {
         delete.update(cx, |this, cx| this.stage_delete(cx));
     })
@@ -3957,6 +3857,7 @@ mod tests {
             report: Vec::new(),
             committing: false,
             param_scrub: None,
+            patch: Vec::new(),
         }
     }
 
@@ -4045,8 +3946,8 @@ mod tests {
         )
     }
 
-    /// Duplicate + flip of an asymmetric wing writes the same `venue_edges`
-    /// rows as building the opposite wing by hand.
+    /// Duplicate + flip of an asymmetric wing writes the same placements
+    /// as building the opposite wing by hand.
     ///
     /// The wing is asymmetric on purpose — it bolts to its parent by a *sided*
     /// face, which is the case that a flip mirroring only the host's half of
@@ -4145,9 +4046,6 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
     let mut card = div().flex().flex_col().w_full().gap(px(6.0));
     let duplicate = app.clone();
     let remove = app.clone();
-    let unplaced = build.graph.edge(&selected.node).is_none();
-    let place_node = selected.node.clone();
-    let place_label = selected.label.clone();
     card = card.child(
         div().w_full().child(
             div()
@@ -4165,34 +4063,10 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         .items_center()
         .gap(px(8.0))
         .child(
-            float::btn(
-                if unplaced { "Place" } else { "Duplicate" },
-                "selection-duplicate",
-            )
-            .id("selection-duplicate")
-            .on_click(move |_, _, cx| {
-                duplicate.update(cx, |this, cx| {
-                    if unplaced {
-                        this.stage_take(
-                            Holding::Unplaced {
-                                node: place_node.clone(),
-                                label: place_label.clone(),
-                            },
-                            cx,
-                        );
-                    } else {
-                        this.stage_duplicate(cx);
-                    }
-                })
-            })
-            .agent_node(
-                Role::Button,
-                if unplaced {
-                    "Place element"
-                } else {
-                    "Duplicate element"
-                },
-            ),
+            float::btn("Duplicate", "selection-duplicate")
+                .id("selection-duplicate")
+                .on_click(move |_, _, cx| duplicate.update(cx, |this, cx| this.stage_duplicate(cx)))
+                .agent_node(Role::Button, "Duplicate element"),
         )
         .child(
             float::btn("Remove", "selection-remove")
@@ -4481,37 +4355,6 @@ fn elements(view: &StageView, app: &Entity<Luma>) -> AnyElement {
                 )
                 .agent_node(Role::Row, format!("Element {label}"))
                 .agent_focused(selected)
-        }))
-        .into_any_element()
-}
-
-fn unplaced(view: &StageView, app: &Entity<Luma>) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .when(!view.unplaced.is_empty(), |d| {
-            d.child(float::label("Unplaced fixtures"))
-        })
-        .children(view.unplaced.iter().map(|(node, label)| {
-            let app = app.clone();
-            let node = node.clone();
-            let label = label.clone();
-            let shown = label.clone();
-            float::btn(format!("Place {shown}"), format!("place-{node}"))
-                .id(gpui::SharedString::from(format!("place-{node}")))
-                .on_click(move |_, _, cx| {
-                    app.update(cx, |this, cx| {
-                        this.stage_take(
-                            hand::Holding::Unplaced {
-                                node: node.clone(),
-                                label: label.clone(),
-                            },
-                            cx,
-                        )
-                    })
-                })
-                .agent_node(Role::Button, format!("Place {shown}"))
         }))
         .into_any_element()
 }

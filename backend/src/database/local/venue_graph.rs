@@ -1,4 +1,4 @@
-//! The four venue-graph tables.
+//! The three venue-graph tables.
 //!
 //! Rows in, rows out. Nothing here knows what a socket is or where a piece
 //! ends up — that is [`crate::venue_graph`]'s business, and the split is what
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
-use crate::models::venue_graph::{VenueConstraint, VenueEdge, VenueGraphRows, VenueNode};
+use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
 
 /// Tell the derived-group cache the rig moved.
 ///
@@ -49,17 +49,51 @@ pub fn graph_committed() {
     crate::services::groups::invalidate_venue_fixture_cache();
 }
 
-/// The four tables this module owns.
+/// The three tables this module owns.
 ///
 /// Sync is the one writer that does not come through the functions below: it
 /// upserts and deletes graph rows straight from the registry, by name. This is
 /// how it says the same thing they say.
-pub const TABLES: &[&str] = &[
-    "venue_nodes",
-    "venue_edges",
-    "venue_node_params",
-    "venue_constraints",
-];
+pub const TABLES: &[&str] = &["venue_nodes", "venue_node_params", "venue_constraints"];
+
+/// One `venue_nodes` row as SQLite hands it over: the placement as four
+/// nullable columns, which the schema's CHECK keeps all-or-nothing.
+#[derive(sqlx::FromRow)]
+struct NodeRow {
+    id: String,
+    venue_id: String,
+    kind: String,
+    catalog_ref: Option<String>,
+    label: Option<String>,
+    parent_id: Option<String>,
+    my_socket: Option<String>,
+    their_socket: Option<String>,
+    roll: Option<f64>,
+}
+
+impl From<NodeRow> for VenueNode {
+    fn from(row: NodeRow) -> Self {
+        let placement = match (row.parent_id, row.my_socket, row.their_socket, row.roll) {
+            (Some(parent), Some(my_socket), Some(their_socket), Some(roll)) => {
+                Some(NodePlacement {
+                    parent,
+                    my_socket,
+                    their_socket,
+                    roll,
+                })
+            }
+            _ => None,
+        };
+        VenueNode {
+            id: row.id,
+            venue_id: row.venue_id,
+            kind: row.kind,
+            catalog_ref: row.catalog_ref,
+            label: row.label,
+            placement,
+        }
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Reads
@@ -68,7 +102,7 @@ pub const TABLES: &[&str] = &[
 /// Every row of one venue's graph, in id order.
 ///
 /// # Errors
-/// Fails if any of the four tables cannot be read.
+/// Fails if any of the three tables cannot be read.
 pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRows, String> {
     let venue_id = access.venue_id().to_string();
 
@@ -78,10 +112,10 @@ pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRo
     // here rather than repaired in place: `venue_nodes` is a table whose
     // triggers refuse a migration-time write, and a row that is rewritten the
     // next time it is saved needs no repair anyway.
-    let nodes = sqlx::query_as::<_, VenueNode>(
+    let nodes = sqlx::query_as::<_, NodeRow>(
         "SELECT node.id, node.venue_id, node.kind,
                 COALESCE(fixture.fixture_path, node.catalog_ref) AS catalog_ref,
-                node.label
+                node.label, node.parent_id, node.my_socket, node.their_socket, node.roll
          FROM venue_nodes node
          LEFT JOIN fixtures fixture
                 ON fixture.id = node.id AND node.kind = 'fixture'
@@ -90,18 +124,10 @@ pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRo
     .bind(&venue_id)
     .fetch_all(&mut *access.connection())
     .await
-    .map_err(|e| format!("Failed to read venue nodes: {e}"))?;
-
-    let edges = sqlx::query_as::<_, VenueEdge>(
-        "SELECT edge.child_id, edge.parent_id, edge.my_socket, edge.their_socket, edge.roll
-         FROM venue_edges edge
-         JOIN venue_nodes node ON node.id = edge.child_id
-         WHERE node.venue_id = ? ORDER BY edge.child_id ASC",
-    )
-    .bind(&venue_id)
-    .fetch_all(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to read venue edges: {e}"))?;
+    .map_err(|e| format!("Failed to read venue nodes: {e}"))?
+    .into_iter()
+    .map(VenueNode::from)
+    .collect();
 
     let param_rows: Vec<(String, String, f64)> = sqlx::query_as(
         "SELECT param.node_id, param.key, param.value
@@ -132,7 +158,6 @@ pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRo
 
     Ok(VenueGraphRows {
         nodes,
-        edges,
         params,
         constraints,
     })
@@ -159,24 +184,31 @@ pub async fn root_id(access: &mut impl AuthorizedVenue) -> Result<Option<String>
 // Writes
 // -----------------------------------------------------------------------------
 
-/// Insert a node and return its generated id.
+/// Insert a node where it hangs, and return its generated id.
+///
+/// The placement is part of the row: a node is never written without one,
+/// and the schema refuses one that tries.
 ///
 /// # Errors
-/// Fails if the insert is refused — most often by write admission.
+/// Fails if the insert is refused.
 pub async fn insert_node(
     access: &mut VenueAccess<'_, Write>,
     kind: &str,
     catalog_ref: Option<&str>,
     label: Option<&str>,
+    placement: &NodePlacement,
 ) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
-    insert_node_with_id(access, &id, kind, catalog_ref, label).await?;
+    insert_node_with_id(access, &id, kind, catalog_ref, label, Some(placement)).await?;
     Ok(id)
 }
 
-/// Insert a node under an id the caller chose — the migration pass, which
-/// reuses the old row's id so that a group membership or a saved selection
-/// naming a stage piece still names the same thing.
+/// Insert a node under an id the caller chose: the root, a fixture (whose
+/// node id is its patch-row id), a restored row, or the conversion pass,
+/// which reuses the old row's id so that a group membership or a saved
+/// selection naming a stage piece still names the same thing.
+///
+/// `placement` is `None` for the root and only for the root.
 ///
 /// # Errors
 /// As [`insert_node`].
@@ -186,12 +218,15 @@ pub async fn insert_node_with_id(
     kind: &str,
     catalog_ref: Option<&str>,
     label: Option<&str>,
+    placement: Option<&NodePlacement>,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_string();
     let principal = access.principal().map(str::to_owned);
     sqlx::query(
-        "INSERT INTO venue_nodes (id, uid, venue_id, kind, catalog_ref, label)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO venue_nodes
+             (id, uid, venue_id, kind, catalog_ref, label,
+              parent_id, my_socket, their_socket, roll)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(principal)
@@ -199,6 +234,10 @@ pub async fn insert_node_with_id(
     .bind(kind)
     .bind(catalog_ref)
     .bind(label)
+    .bind(placement.map(|p| p.parent.as_str()))
+    .bind(placement.map(|p| p.my_socket.as_str()))
+    .bind(placement.map(|p| p.their_socket.as_str()))
+    .bind(placement.map(|p| p.roll))
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to insert venue node: {e}"))?;
@@ -206,19 +245,27 @@ pub async fn insert_node_with_id(
     Ok(())
 }
 
-/// Restore the metadata of an existing node without deleting its relations.
+/// Restore the metadata and placement of an existing node without deleting
+/// its relations.
 pub async fn update_node(
     access: &mut VenueAccess<'_, Write>,
     node: &VenueNode,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_string();
+    let placement = node.placement.as_ref();
     sqlx::query(
-        "UPDATE venue_nodes SET kind = ?, catalog_ref = ?, label = ?
+        "UPDATE venue_nodes
+         SET kind = ?, catalog_ref = ?, label = ?,
+             parent_id = ?, my_socket = ?, their_socket = ?, roll = ?
          WHERE id = ? AND venue_id = ?",
     )
     .bind(&node.kind)
     .bind(&node.catalog_ref)
     .bind(&node.label)
+    .bind(placement.map(|p| p.parent.as_str()))
+    .bind(placement.map(|p| p.my_socket.as_str()))
+    .bind(placement.map(|p| p.their_socket.as_str()))
+    .bind(placement.map(|p| p.roll))
     .bind(&node.id)
     .bind(venue_id)
     .execute(&mut *access.connection())
@@ -246,43 +293,30 @@ pub async fn delete_constraint(
     Ok(())
 }
 
-/// Place a node, replacing whatever edge it had. One statement, because
-/// "exactly one parent" is the primary key and an insert-then-delete would be
-/// two states the invariant is false in.
+/// Move a node to a new place. One statement: a node has exactly one
+/// placement, and there is no moment between two writes where it has none.
 ///
 /// # Errors
-/// Fails if the upsert is refused.
-pub async fn upsert_edge(
+/// Fails if the update is refused.
+pub async fn set_placement(
     access: &mut VenueAccess<'_, Write>,
-    child_id: &str,
-    parent_id: &str,
-    my_socket: &str,
-    their_socket: &str,
-    roll: f64,
+    node_id: &str,
+    placement: &NodePlacement,
 ) -> Result<(), String> {
-    let principal = access.principal().map(str::to_owned);
     let venue_id = access.venue_id().to_owned();
     sqlx::query(
-        "INSERT INTO venue_edges (child_id, uid, venue_id, parent_id, my_socket, their_socket, roll)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(child_id) DO UPDATE SET
-             uid = excluded.uid,
-             venue_id = excluded.venue_id,
-             parent_id = excluded.parent_id,
-             my_socket = excluded.my_socket,
-             their_socket = excluded.their_socket,
-             roll = excluded.roll",
+        "UPDATE venue_nodes SET parent_id = ?, my_socket = ?, their_socket = ?, roll = ?
+         WHERE id = ? AND venue_id = ?",
     )
-    .bind(child_id)
-    .bind(principal)
+    .bind(&placement.parent)
+    .bind(&placement.my_socket)
+    .bind(&placement.their_socket)
+    .bind(placement.roll)
+    .bind(node_id)
     .bind(venue_id)
-    .bind(parent_id)
-    .bind(my_socket)
-    .bind(their_socket)
-    .bind(roll)
     .execute(&mut *access.connection())
     .await
-    .map_err(|e| format!("Failed to attach venue node: {e}"))?;
+    .map_err(|e| format!("Failed to place venue node: {e}"))?;
     graph_changed();
     Ok(())
 }
@@ -294,7 +328,7 @@ pub async fn upsert_edge(
 /// is false in.
 ///
 /// Admission is [`luma_scene::venue::VenueGraph::constrain`]'s, upstream of
-/// here, exactly as it is for [`upsert_edge`]: this layer writes rows the
+/// here, exactly as it is for [`set_placement`]: this layer writes rows the
 /// caller has already had admitted against the solved graph.
 ///
 /// # Errors
@@ -327,26 +361,6 @@ pub async fn upsert_constraint(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to record venue constraint: {e}"))?;
-    graph_changed();
-    Ok(())
-}
-
-/// Unplace a node, leaving it and its subtree out of the solve.
-///
-/// # Errors
-/// Fails if the delete is refused.
-pub async fn delete_edge(
-    access: &mut VenueAccess<'_, Write>,
-    child_id: &str,
-) -> Result<(), String> {
-    deletes::delete_where(
-        access.connection(),
-        "venue_edges",
-        "child_id = ?",
-        &[child_id],
-    )
-    .await
-    .map_err(|e| format!("Failed to detach venue node: {e}"))?;
     graph_changed();
     Ok(())
 }
@@ -423,16 +437,11 @@ pub async fn set_label(
 /// Delete the named nodes, and everything hanging off each row.
 ///
 /// The caller passes the whole subtree it means to remove, because which nodes
-/// those are is the graph's question, not SQL's.
-///
-/// Everything hanging off a node — its params, its constraints, and every edge
-/// it is either end of — goes with it, because [`sync_delete`] walks the sync
-/// registry's foreign keys before it touches the node. `ON DELETE CASCADE`
-/// cannot do this: the dependants' write admission authorizes them *through*
-/// their node, and inside a cascade that node is already gone, so the guard
-/// finds no owner and aborts the whole statement. Dropping the edges a node is
-/// the *parent* of is what leaves its children unplaced rather than dangling —
-/// which is how `delete_subtree` trays the lights off a truss it takes down.
+/// those are is the graph's question, not SQL's — and because a light's patch
+/// row has to go with its node, which only the caller can do
+/// ([`crate::services::fixture_create::delete`]). Children go before their
+/// parent, so each delete is its own row in the upload queue rather than a
+/// cascade. A node's params and constraints go with it ([`deletes`]).
 ///
 /// # Errors
 /// Fails if any delete is refused.
@@ -440,7 +449,7 @@ pub async fn delete_nodes(
     access: &mut VenueAccess<'_, Write>,
     ids: &[String],
 ) -> Result<(), String> {
-    for id in ids {
+    for id in ids.iter().rev() {
         deletes::delete_where(access.connection(), "venue_nodes", "id = ?", &[id.as_str()])
             .await
             .map_err(|e| format!("Failed to delete venue node: {e}"))?;

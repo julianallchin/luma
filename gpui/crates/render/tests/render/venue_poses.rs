@@ -245,31 +245,6 @@ fn venue() -> VenueGraph {
         on_floor("mount", 0.0),
     );
 
-    // A speaker nobody has placed, with a second one stacked on it: rows in the
-    // venue with no path to the root, which the solve reports rather than
-    // drops. The pair is what pins that only the *root* of an unplaced branch
-    // is listed, with the size of the branch alongside.
-    graph.insert(node(
-        "tray_speaker",
-        NodeKind::Piece,
-        "stage_lab/speaker_dbr15.glb",
-        &[],
-    ));
-    graph.insert_placed(
-        node(
-            "tray_on_tray",
-            NodeKind::Piece,
-            "stage_lab/speaker_dbr15.glb",
-            &[],
-        ),
-        Edge {
-            parent: "tray_speaker".into(),
-            my_socket: "mount".into(),
-            their_socket: "mount".into(),
-            roll: 0.0,
-        },
-    );
-
     // A far end: the run's open end checked against the tower it started from.
     // Violated by construction — the run goes nowhere near it — which is the
     // status a golden most needs to pin, because "satisfied" is also what a
@@ -410,23 +385,10 @@ fn golden() -> String {
         .map(|d| json!({ "node": d.node, "socket": d.socket, "type": d.socket_type.as_str() }))
         .collect();
 
-    let unplaced: Vec<Value> = solved
-        .unplaced()
-        .iter()
-        .map(|u| {
-            json!({
-                "node": u.node,
-                "kind": u.kind.as_str(),
-                "descendants": u.descendants,
-            })
-        })
-        .collect();
-
     let mut out = serde_json::to_string_pretty(&sorted_keys(json!({
         "nodes": nodes,
         "constraints": constraints,
         "dangling": dangling,
-        "unplaced": unplaced,
         "warnings": solved.warnings().len(),
     })))
     .expect("the capture serializes");

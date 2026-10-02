@@ -131,24 +131,18 @@ async fn seed(pool: &SqlitePool) {
 
     for run in ["run-downstage", "run-upstage"] {
         sqlx::query(
-            "INSERT INTO venue_nodes (id, uid, venue_id, kind, catalog_ref, label)
-             VALUES (?, 'alice', ?, 'run', 'truss/straight', ?)",
+            "INSERT INTO venue_nodes
+                 (id, uid, venue_id, kind, catalog_ref, label,
+                  parent_id, my_socket, their_socket, roll)
+             VALUES (?, 'alice', ?, 'run', 'truss/straight', ?, ?, 'grab', 'floor', 0.0)",
         )
         .bind(run)
         .bind(VENUE)
         .bind(run)
-        .execute(pool)
-        .await
-        .expect("run node");
-        sqlx::query(
-            "INSERT INTO venue_edges (child_id, parent_id, my_socket, their_socket, roll)
-             VALUES (?, ?, 'grab', 'floor', 0.0)",
-        )
-        .bind(run)
         .bind(&root)
         .execute(pool)
         .await
-        .expect("run edge");
+        .expect("run node");
         sqlx::query("INSERT INTO venue_node_params (node_id, key, value) VALUES (?, 'span', 8.0)")
             .bind(run)
             .execute(pool)
@@ -176,25 +170,19 @@ async fn seed(pool: &SqlitePool) {
         .expect("fixture row");
 
         sqlx::query(
-            "INSERT INTO venue_nodes (id, uid, venue_id, kind, catalog_ref, label)
-             VALUES (?, 'alice', ?, 'fixture', ?, ?)",
+            "INSERT INTO venue_nodes
+                 (id, uid, venue_id, kind, catalog_ref, label,
+                  parent_id, my_socket, their_socket, roll)
+             VALUES (?, 'alice', ?, 'fixture', ?, ?, ?, 'clamp', 'grab', 0.0)",
         )
         .bind(fixture.id)
         .bind(VENUE)
         .bind(fixture.id)
         .bind(fixture.id)
-        .execute(pool)
-        .await
-        .expect("fixture node");
-        sqlx::query(
-            "INSERT INTO venue_edges (child_id, parent_id, my_socket, their_socket, roll)
-             VALUES (?, ?, 'clamp', 'grab', 0.0)",
-        )
-        .bind(fixture.id)
         .bind(fixture.run)
         .execute(pool)
         .await
-        .expect("fixture edge");
+        .expect("fixture node");
         sqlx::query("INSERT INTO venue_node_params (node_id, key, value) VALUES (?, 'u', ?)")
             .bind(fixture.id)
             .bind(fixture.along)
@@ -894,11 +882,11 @@ async fn stage_restore_only_changes_different_rows() {
     let fixtures = fixtures_root();
     let stage = crate::services::stage_ops::Stage::new(&pool, &fixtures, VENUE);
     let original = stage.rows().await.unwrap();
+    let patch = patched(&pool).await;
     // `updated_at` is what a write moves now; an untouched row keeps its own.
     let versions = |pool: SqlitePool| async move {
         sqlx::query_as::<_, (String, String)>(
             "SELECT 'node:' || id, updated_at FROM venue_nodes
-             UNION ALL SELECT 'edge:' || child_id, updated_at FROM venue_edges
              UNION ALL SELECT 'param:' || node_id || ':' || key, updated_at FROM venue_node_params
              ORDER BY 1",
         )
@@ -907,7 +895,7 @@ async fn stage_restore_only_changes_different_rows() {
         .unwrap()
     };
     let before = versions(pool.clone()).await;
-    stage.restore(&original).await.unwrap();
+    stage.restore(&original, &patch).await.unwrap();
     assert_eq!(
         versions(pool.clone()).await,
         before,
@@ -920,34 +908,109 @@ async fn stage_restore_only_changes_different_rows() {
         .get_mut("run-downstage")
         .unwrap()
         .insert("span".into(), 6.0);
-    stage.restore(&edited).await.unwrap();
+    stage.restore(&edited, &patch).await.unwrap();
     let after = versions(pool.clone()).await;
     let changed: Vec<_> = before.iter().zip(&after).filter(|(a, b)| a != b).collect();
     assert_eq!(changed.len(), 1);
     assert_eq!(changed[0].1 .0, "param:run-downstage:span");
-    stage.restore(&original).await.unwrap();
+    stage.restore(&original, &patch).await.unwrap();
     assert_eq!(stage.rows().await.unwrap().params, original.params);
-    // Removing a parent deletes its children's edges. A snapshot that keeps
-    // those children and reparents them must recreate the missing relations.
+    // A snapshot that drops a parent and keeps its children reparents them
+    // before the parent goes, so the delete takes nothing the snapshot keeps.
     let mut reduced = original.clone();
     reduced.nodes.retain(|node| node.id != "run-downstage");
     reduced.params.remove("run-downstage");
-    reduced
-        .edges
-        .retain(|edge| edge.child_id != "run-downstage");
-    for edge in &mut reduced.edges {
-        if edge.parent_id == "run-downstage" {
-            edge.parent_id = "run-upstage".into();
+    for node in &mut reduced.nodes {
+        if let Some(placement) = node.placement.as_mut() {
+            if placement.parent == "run-downstage" {
+                placement.parent = "run-upstage".into();
+            }
         }
     }
-    stage.restore(&reduced).await.unwrap();
+    stage.restore(&reduced, &patch).await.unwrap();
     let restored = stage.rows().await.unwrap();
     assert_eq!(restored.nodes, reduced.nodes);
-    assert_eq!(restored.edges, reduced.edges);
     assert_eq!(restored.params, reduced.params);
-    stage.restore(&original).await.unwrap();
+    assert_eq!(
+        paperwork(&patched(&pool).await),
+        paperwork(&patch),
+        "every light kept its patch row"
+    );
+    stage.restore(&original, &patch).await.unwrap();
     let restored = stage.rows().await.unwrap();
     assert_eq!(restored.nodes, original.nodes);
-    assert_eq!(restored.edges, original.edges);
     assert_eq!(restored.params, original.params);
+}
+
+/// A light never exists without a place: pulling a truss down takes its
+/// lights and their patch rows with it, and undo brings both back.
+#[tokio::test]
+async fn deleting_a_truss_deletes_its_lights_and_undo_restores_them() {
+    let (_directory, pool) = seeded().await;
+    // The seed stacks every light on 1/1; a real patch never overlaps, and
+    // undo checks the address it brings a light back to.
+    let mut access = write(&pool).await;
+    auto_patch(&mut access, &fixtures_root())
+        .await
+        .expect("auto");
+    access.commit().await.expect("commit");
+    let fixtures = fixtures_root();
+    let stage = crate::services::stage_ops::Stage::new(&pool, &fixtures, VENUE);
+    let snapshot = stage.rows().await.unwrap();
+    let patch = patched(&pool).await;
+
+    stage.delete_subtree("run-downstage").await.unwrap();
+    let after = stage.rows().await.unwrap();
+    let left = patched(&pool).await;
+    for mover in MOVERS {
+        assert!(
+            !after.nodes.iter().any(|node| node.id == mover),
+            "{mover} left with its truss"
+        );
+        assert!(
+            !left.iter().any(|row| row.id == mover),
+            "{mover}'s patch row left with it"
+        );
+    }
+    assert!(
+        left.iter()
+            .all(|row| after.nodes.iter().any(|node| node.id == row.id)),
+        "no patch row is left without a node"
+    );
+
+    stage.restore(&snapshot, &patch).await.unwrap();
+    assert_eq!(stage.rows().await.unwrap().nodes, snapshot.nodes);
+    assert_eq!(
+        paperwork(&patched(&pool).await),
+        paperwork(&patch),
+        "the lights came back where they were patched"
+    );
+}
+
+async fn patched(pool: &SqlitePool) -> Vec<crate::models::fixtures::PatchedFixture> {
+    let mut access = read(pool).await;
+    let mut rows = crate::database::local::fixtures::get_patched_fixtures(&mut access)
+        .await
+        .unwrap();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    rows
+}
+
+/// What a patch row says about a light, without who wrote it.
+fn paperwork(
+    rows: &[crate::models::fixtures::PatchedFixture],
+) -> Vec<(String, i64, i64, i64, String, Option<String>, bool)> {
+    rows.iter()
+        .map(|row| {
+            (
+                row.id.clone(),
+                row.universe,
+                row.address,
+                row.num_channels,
+                row.mode_name.clone(),
+                row.label.clone(),
+                row.address_pinned,
+            )
+        })
+        .collect()
 }

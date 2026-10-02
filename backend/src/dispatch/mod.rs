@@ -114,7 +114,7 @@ use crate::models::midi::{
 use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::BeatGrid;
 use crate::models::patch::ArtNetNode;
-use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput};
+use crate::models::patch::{AutoPatchReport, UniverseCell, UniverseOutput};
 use crate::models::patterns::AnnotationPreview;
 use crate::models::perform::PerformTrackMatch;
 use crate::models::scores::{Score, ScoreSummary};
@@ -131,7 +131,6 @@ use crate::models::waveforms::TrackWaveform;
 
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 use crate::render_engine::PerformDeckInput;
-use crate::services::group_derivation::FixtureRole;
 use crate::settings::AppSettings;
 pub use handlers::scores::prepare_score_clip_preview;
 /// Large native audio payload; retains the dispatcher's visibility checks.
@@ -176,17 +175,6 @@ commands! {
     fixtures::initialize_fixtures() -> usize;
     fixtures::search_fixtures(query: String, offset: usize, limit: usize) -> Vec<FixtureEntry>;
     fixtures::get_fixture_definition(path: String) -> FixtureDefinition;
-    fixtures::patch_fixture(
-        venue_id: String,
-        universe: i64,
-        address: i64,
-        num_channels: i64,
-        manufacturer: String,
-        model: String,
-        mode_name: String,
-        fixture_path: String,
-        label: Option<String>,
-    ) -> PatchedFixture;
     fixtures::set_fixture_address(
         venue_id: String,
         id: String,
@@ -196,12 +184,6 @@ commands! {
     fixtures::auto_patch(venue_id: String) -> AutoPatchReport;
     fixtures::universe_occupancy(venue_id: String, universe: i64) -> Vec<UniverseCell>;
     fixtures::universes_in_use(venue_id: String) -> Vec<u16>;
-    fixtures::next_addresses(
-        venue_id: String,
-        run: Option<String>,
-        channels: i64,
-        count: usize,
-    ) -> Vec<PatchAddress>;
     fixtures::set_fixture_mode(
         venue_id: String,
         id: String,
@@ -209,7 +191,6 @@ commands! {
         allow_move: bool,
     ) -> PatchedFixture;
     fixtures::set_address_pinned(venue_id: String, id: String, pinned: bool) -> ();
-    fixtures::fixture_role(path: String, mode_name: String) -> FixtureRole;
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
@@ -302,7 +283,11 @@ commands! {
         layout: DistributeLayout,
     ) -> DistributeReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
-    stage::restore_graph(venue_id: String, rows: VenueGraphRows) -> ResolvedVenue;
+    stage::restore_graph(
+        venue_id: String,
+        rows: VenueGraphRows,
+        patch: Vec<PatchedFixture>,
+    ) -> ResolvedVenue;
     stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
     stage::attach(
         venue_id: String,
@@ -314,14 +299,6 @@ commands! {
         their_socket: String,
         yaw: Option<f64>,
         params: Option<BTreeMap<String, f64>>,
-    ) -> PlacementReport;
-    stage::reattach(
-        venue_id: String,
-        node_id: String,
-        parent_id: String,
-        my_socket: String,
-        their_socket: String,
-        yaw: Option<f64>,
     ) -> PlacementReport;
     stage::constrain(
         venue_id: String,
@@ -362,7 +339,6 @@ commands! {
         their_socket: String,
         flip: Option<bool>,
     ) -> PlacementReport;
-    stage::detach(venue_id: String, node_id: String) -> PlacementReport;
     stage::set_params(
         venue_id: String,
         node_id: String,

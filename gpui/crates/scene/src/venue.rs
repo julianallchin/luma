@@ -210,8 +210,9 @@ impl Node {
     }
 }
 
-/// One row of `venue_edges` — the relation that produced a pose, kept rather
-/// than discarded the moment the drag ends.
+/// Where a node hangs — the placement columns of its `venue_nodes` row, kept
+/// rather than discarded the moment the drag ends. Every node but the root has
+/// exactly one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Edge {
     pub parent: String,
@@ -431,9 +432,9 @@ impl VenueGraph {
         &self.root
     }
 
-    /// Add a node with no edge yet. A node with no edge and no descendants is
-    /// unplaced (a fixture in the patch tray); [`resolve`] leaves it out of the
-    /// walk rather than guessing a pose.
+    /// Add a node before its edge, so [`Self::attach`] can check the joint
+    /// against the node's own sockets. A writer attaches it straight after; a
+    /// node with no edge is not something a venue stores.
     pub fn insert(&mut self, node: Node) {
         self.nodes.insert(node.id.clone(), node);
     }
@@ -683,17 +684,8 @@ impl VenueGraph {
         Ok(())
     }
 
-    /// Remove a node's edge, leaving it unplaced.
-    pub fn detach(&mut self, child: &str) {
-        self.edges.remove(child);
-    }
-
     /// Drop a node, everything hanging off it, and every check either end of it
-    /// held.
-    ///
-    /// [`Self::detach`]'s harder sibling: a detached branch is still in the
-    /// room and comes back if it is re-attached, and this one is gone. The root
-    /// is the room itself and is never removed.
+    /// held. The root is the room itself and is never removed.
     pub fn remove(&mut self, id: &str) {
         if id == self.root {
             return;
@@ -886,8 +878,8 @@ pub enum ConstraintStatus {
     Satisfied,
     /// Both ends resolved and they do not meet, by this many metres.
     Violated { gap_m: f64 },
-    /// One end does not resolve: the node is unplaced, gone, or has no such
-    /// socket. The check claims nothing — both its sockets stay in
+    /// One end does not resolve: the node is gone, unreachable, or has no
+    /// such socket. The check claims nothing — both its sockets stay in
     /// [`ResolvedVenue::dangling`], because a relation to a node that is not
     /// in the room accounts for no end that is.
     Dangling,
@@ -940,6 +932,11 @@ pub enum Warning {
     RollClamped { requested: f64, applied: f64 },
     /// An array with a `count` outside `1..=`[`MAX_ARRAY_COUNT`].
     ArrayCountClamped { requested: f64, applied: u32 },
+    /// The node's chain of parents never reaches the root, so it has no pose:
+    /// an ancestor became no node ([`Self::UnknownKind`]), or two devices
+    /// reparented into a loop. Writers never make this; it is reported so a
+    /// damaged venue is not silently missing a branch.
+    Unreachable,
 }
 
 /// Ceiling on a single array's expansion. ~500 nodes is the working bound for
@@ -954,27 +951,6 @@ pub struct NodeWarning {
     pub warning: Warning,
 }
 
-/// The root of a subtree the solve never reached: a node with no edge, and
-/// everything hanging off it.
-///
-/// Two things produce one — a fixture nobody has dragged out of the patch tray,
-/// and `detach`. Both are legitimate; what is not legitimate is silence: with
-/// no pose and no mention, "unplaced" and "deleted" look identical to whoever
-/// just dragged a wing.
-///
-/// Only the **root** is listed: the subtree below it is unplaced for exactly
-/// one reason, and repeating that reason per descendant would bury it.
-/// [`Self::descendants`] is how big the branch is, so a caller can say "and 6
-/// more" without walking the graph itself.
-#[derive(Clone, Debug)]
-pub struct UnplacedNode {
-    pub node: String,
-    pub kind: NodeKind,
-    pub label: Option<String>,
-    /// How many nodes hang off it, not counting itself.
-    pub descendants: usize,
-}
-
 /// The whole venue, solved.
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedVenue {
@@ -982,7 +958,6 @@ pub struct ResolvedVenue {
     index: BTreeMap<String, usize>,
     constraints: Vec<ConstraintReport>,
     dangling: Vec<DanglingSocket>,
-    unplaced: Vec<UnplacedNode>,
     warnings: Vec<NodeWarning>,
 }
 
@@ -1011,12 +986,6 @@ impl ResolvedVenue {
         &self.dangling
     }
 
-    /// Every subtree the walk never reached, by its root, in node-id order.
-    #[must_use]
-    pub fn unplaced(&self) -> &[UnplacedNode] {
-        &self.unplaced
-    }
-
     /// Everything the solve decided for the caller.
     #[must_use]
     pub fn warnings(&self) -> &[NodeWarning] {
@@ -1030,15 +999,9 @@ impl ResolvedVenue {
     /// [`EdgeError`]s, raised before a write ever happens.
     #[must_use]
     pub fn placement(&self, node: &str) -> Placement {
-        let pose = self.pose(node);
         Placement {
             node: node.to_string(),
-            outcome: if pose.is_some() {
-                Outcome::Placed
-            } else {
-                Outcome::Unplaced
-            },
-            parent: pose.and_then(|p| p.parent.clone()),
+            parent: self.pose(node).and_then(|p| p.parent.clone()),
             warnings: self
                 .warnings
                 .iter()
@@ -1082,49 +1045,17 @@ fn member_of(id: &str) -> Option<&str> {
 #[derive(Clone, Debug)]
 pub struct Placement {
     pub node: String,
-    /// What the graph now says about the node — **not** whether the call
-    /// worked. See [`Outcome`].
-    pub outcome: Outcome,
     pub parent: Option<String>,
     pub warnings: Vec<Warning>,
     pub dangling: Vec<DanglingSocket>,
     pub constraints: Vec<ConstraintReport>,
 }
 
-/// Where the node a call named ended up.
-///
-/// This is a fact about the *graph*, not a verdict on the call. Conflating the
-/// two is how `detach` — which does exactly what it says and unplaces a branch
-/// on purpose — came to report itself as a refusal.
-///
-/// There is no `Refused` variant, because a refused call produces no
-/// `Placement` at all: the two hard errors ([`EdgeError`]) are raised before
-/// any write, so a refusal is the `Err` half of the caller's `Result` and
-/// cannot be read out of this. A variant nothing can construct would be a
-/// promise the type does not keep.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// The solve reached it: it has a pose, and it is in the room.
-    Placed,
-    /// No edge leads to it. The ordinary state of a patched fixture nobody has
-    /// placed, and the whole point of `detach`; the rows are still there, which
-    /// is the difference between unplaced and deleted.
-    Unplaced,
-}
-
-impl Outcome {
-    /// Whether the node is in the room.
-    #[must_use]
-    pub fn is_placed(self) -> bool {
-        matches!(self, Outcome::Placed)
-    }
-}
-
 /// Solve one venue: every node's pose, arrays expanded, checks evaluated.
 ///
 /// Depth-first from the root with children in id order, so the output is
-/// byte-identical across runs. Unplaced nodes — a patched fixture nobody has
-/// dragged out of the tray — are absent rather than placed at the origin.
+/// byte-identical across runs. A node the walk cannot reach is absent rather
+/// than placed at the origin, and warned about as [`Warning::Unreachable`].
 #[must_use]
 pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> ResolvedVenue {
     // Children by parent, each list already in id order because `edges` is a
@@ -1253,7 +1184,14 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
         dangling_of(&mut out, node, members, sockets, &claimed);
     }
 
-    out.unplaced = unplaced_subtrees(graph, &out);
+    for node in graph.nodes() {
+        if !out.index.contains_key(&node.id) {
+            out.warnings.push(NodeWarning {
+                node: node.id.clone(),
+                warning: Warning::Unreachable,
+            });
+        }
+    }
     out
 }
 
@@ -1284,66 +1222,6 @@ fn push_children<'a>(
         parent,
         parent_world,
     }));
-}
-
-/// Every subtree the walk never reached, by its root.
-///
-/// A node with no pose is unplaced. Its *root* is the one whose parent is not
-/// itself unplaced — a node with no edge at all, or one whose edge names a
-/// parent that is gone. Loaded rows can also hold a cycle ([`insert_placed`]
-/// does not re-check what [`attach`] admitted), and a cycle has no such root;
-/// those nodes are reported individually rather than dropped, which is the
-/// whole point of this list.
-///
-/// [`insert_placed`]: VenueGraph::insert_placed
-/// [`attach`]: VenueGraph::attach
-fn unplaced_subtrees(graph: &VenueGraph, out: &ResolvedVenue) -> Vec<UnplacedNode> {
-    let missing: BTreeSet<&str> = graph
-        .nodes()
-        .map(|n| n.id.as_str())
-        .filter(|id| !out.index.contains_key(*id))
-        .collect();
-    let mut covered: BTreeSet<String> = BTreeSet::new();
-    let mut roots: Vec<UnplacedNode> = Vec::new();
-    for id in &missing {
-        let rooted = match graph.edge(id) {
-            None => true,
-            Some(edge) => !missing.contains(edge.parent.as_str()),
-        };
-        if rooted {
-            report_unplaced(graph, id, &mut covered, &mut roots);
-        }
-    }
-    // A cycle: every member's parent is unplaced too, so none of them looked
-    // like a root above. Each is its own entry — there is no branch point to
-    // name, and silence is what this list exists to prevent.
-    for id in &missing {
-        if !covered.contains(*id) {
-            report_unplaced(graph, id, &mut covered, &mut roots);
-        }
-    }
-    roots.sort_by(|a, b| a.node.cmp(&b.node));
-    roots
-}
-
-/// Record one unplaced subtree and mark every node it covers.
-fn report_unplaced(
-    graph: &VenueGraph,
-    id: &str,
-    covered: &mut BTreeSet<String>,
-    roots: &mut Vec<UnplacedNode>,
-) {
-    let members = graph.subtree(id);
-    let descendants = members.len().saturating_sub(1);
-    covered.extend(members);
-    if let Some(node) = graph.node(id) {
-        roots.push(UnplacedNode {
-            node: node.id.clone(),
-            kind: node.kind,
-            label: node.label.clone(),
-            descendants,
-        });
-    }
 }
 
 fn push_pose(out: &mut ResolvedVenue, pose: NodePose) {
@@ -1715,7 +1593,7 @@ fn array_count(out: &mut ResolvedVenue, node: &Node) -> u32 {
 ///
 /// A joint claims **both** its halves — the child's `my_socket` and the host's
 /// `their_socket`. A far-end check claims both of its **only once its target
-/// resolves**: a check naming a node that is unplaced or gone accounts for
+/// resolves**: a check naming a node that is unreachable or gone accounts for
 /// nothing that is in the room, and letting it close a socket would hide the
 /// open end behind the paperwork that was supposed to explain it. Satisfied
 /// and violated both claim — a violated end is a *measured* end, and the gap
@@ -2449,7 +2327,6 @@ mod tests {
         assert_eq!(anchor.array_index, None);
         assert!(anchor.world.transform_point3(DVec3::ZERO).x.abs() < 1e-12);
         let placement = resolved.placement("bar");
-        assert!(placement.outcome.is_placed());
         assert_eq!(placement.parent.as_deref(), Some("deck1"));
         // Members are derived from the generator, so they name it as parent.
         assert!(members.iter().all(|m| m.parent.as_deref() == Some("bar")));
@@ -2535,7 +2412,7 @@ mod tests {
             err.to_string().contains("`wall` is an array"),
             "the refusal names the array: {err}"
         );
-        // Refused before any write: the stick is still unplaced, and the
+        // Refused before any write: the stick still has no edge, and the
         // array's ends are still open.
         assert!(graph.edge("stick").is_none());
     }
@@ -2571,12 +2448,8 @@ mod tests {
         );
         assert!(resolved.pose("blob1").is_none(), "no node, no pose");
         assert_eq!(
-            resolved
-                .unplaced()
-                .iter()
-                .map(|u| u.node.as_str())
-                .collect::<Vec<_>>(),
-            ["deck1"],
+            resolved.placement("deck1").warnings,
+            [Warning::Unreachable],
             "what hung off it is reported, not dropped"
         );
         // And the report for the dropped row carries its warning.
@@ -2956,7 +2829,7 @@ mod tests {
     }
 
     /// A check whose target does not resolve claims nothing. The node is
-    /// unplaced or gone, so the check describes no end that is in the room,
+    /// gone, so the check describes no end that is in the room,
     /// and closing a socket on it would hide the open end behind the very
     /// paperwork that was meant to explain it.
     #[test]
@@ -3129,70 +3002,28 @@ mod tests {
         assert!(resolved.dangling().iter().all(|d| d.node != "venue"));
     }
 
+    /// Two loaded rows that name each other as parent cannot be reached from
+    /// the root. Each is warned about rather than dropped in silence.
     #[test]
-    fn an_unplaced_node_gets_no_pose_and_is_named() {
+    fn a_loop_of_loaded_rows_is_warned_about() {
         let mut graph = VenueGraph::new(root());
-        graph.insert(node("tray", NodeKind::Fixture, "mover"));
+        let edge = |parent: &str| Edge {
+            parent: parent.into(),
+            my_socket: "bottom".into(),
+            their_socket: "top".into(),
+            roll: 0.0,
+        };
+        graph.insert_placed(node("a", NodeKind::Stage, "deck"), edge("b"));
+        graph.insert_placed(node("b", NodeKind::Stage, "deck"), edge("a"));
         let resolved = resolve(&graph, &table());
-        assert!(resolved.pose("tray").is_none());
-        assert!(!resolved.placement("tray").outcome.is_placed());
-        // No pose, but not silence: a fixture in the tray is the legitimate
-        // case, and the caller has to be able to tell it from a lost one.
-        let unplaced = resolved.unplaced();
-        assert_eq!(unplaced.len(), 1);
-        assert_eq!(unplaced[0].node, "tray");
-        assert_eq!(unplaced[0].kind, NodeKind::Fixture);
-        assert_eq!(unplaced[0].descendants, 0);
-    }
-
-    /// `detach` leaves the whole branch without a parent. Only its root is
-    /// listed — one reason, said once — with the branch's size alongside.
-    #[test]
-    fn a_detached_subtree_is_reported_by_its_root() {
-        let mut graph = VenueGraph::new(root());
-        let mut deck_node = node("deck1", NodeKind::Stage, "deck");
-        deck_node.params = on_floor(0.0, 0.0, 0.0);
-        graph.insert(deck_node);
-        graph.attach("deck1", floor_edge(0.0), &table()).unwrap();
-        graph.insert(node("deck2", NodeKind::Stage, "deck"));
-        graph
-            .attach(
-                "deck2",
-                Edge {
-                    parent: "deck1".into(),
-                    my_socket: "edge_left".into(),
-                    their_socket: "edge_right".into(),
-                    roll: 0.0,
-                },
-                &table(),
-            )
-            .unwrap();
-        graph.insert(node("head", NodeKind::Fixture, "mover"));
-        graph
-            .attach(
-                "head",
-                Edge {
-                    parent: "deck2".into(),
-                    my_socket: "clamp".into(),
-                    their_socket: "top".into(),
-                    roll: 0.0,
-                },
-                &table(),
-            )
-            .unwrap();
-        assert!(resolve(&graph, &table()).unplaced().is_empty());
-
-        graph.detach("deck2");
-        let resolved = resolve(&graph, &table());
-        assert!(resolved.pose("deck2").is_none());
-        assert!(resolved.pose("head").is_none(), "the branch came along");
-        let unplaced = resolved.unplaced();
-        assert_eq!(
-            unplaced.iter().map(|u| u.node.as_str()).collect::<Vec<_>>(),
-            ["deck2"],
-            "the root of the branch, not every node in it"
-        );
-        assert_eq!(unplaced[0].descendants, 1);
+        assert!(resolved.pose("a").is_none() && resolved.pose("b").is_none());
+        let unreached: Vec<&str> = resolved
+            .warnings()
+            .iter()
+            .filter(|w| w.warning == Warning::Unreachable)
+            .map(|w| w.node.as_str())
+            .collect();
+        assert_eq!(unreached, ["a", "b"]);
     }
 
     /// Every member is a real truss standing in the room; the anchor is a seat
@@ -3276,7 +3107,15 @@ mod tests {
                 &table(),
             )
             .unwrap();
-        graph.insert(node("tray", NodeKind::Fixture, "mover"));
+        graph.insert_placed(
+            node("light", NodeKind::Fixture, "mover"),
+            Edge {
+                parent: "venue".into(),
+                my_socket: "clamp".into(),
+                their_socket: FLOOR_SOCKET.into(),
+                roll: 0.0,
+            },
+        );
 
         let resolved = resolve(&graph, &table());
         let drawn: Vec<&str> = resolved

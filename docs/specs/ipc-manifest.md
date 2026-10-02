@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**158 commands** across **27 domains** · **13 events**
+**153 commands** across **27 domains** · **13 events**
 
 ## Domains
 
@@ -22,7 +22,7 @@ name.
 | `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
-| `fixtures` | 16 | `backend/src/dispatch/handlers/fixtures.rs` |
+| `fixtures` | 13 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `folders` | 5 | `backend/src/dispatch/handlers/folders.rs` |
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
@@ -34,13 +34,13 @@ name.
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
 | `scores` | 11 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
-| `stage` | 13 | `backend/src/dispatch/handlers/stage.rs` |
+| `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **158** | |
+| **total** | **153** | |
 
 ## Commands
 
@@ -144,15 +144,12 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `initialize_fixtures` | — | `usize` |
 | `search_fixtures` | `query: String`<br>`offset: usize`<br>`limit: usize` | `Vec<FixtureEntry>` |
 | `get_fixture_definition` | `path: String` | `FixtureDefinition` |
-| `patch_fixture` | `venueId: String`<br>`universe: i64`<br>`address: i64`<br>`numChannels: i64`<br>`manufacturer: String`<br>`model: String`<br>`modeName: String`<br>`fixturePath: String`<br>`label: Option<String>` | `PatchedFixture` |
 | `set_fixture_address` | `venueId: String`<br>`id: String`<br>`universe: i64`<br>`address: i64` | `()` |
 | `auto_patch` | `venueId: String` | `AutoPatchReport` |
 | `universe_occupancy` | `venueId: String`<br>`universe: i64` | `Vec<UniverseCell>` |
 | `universes_in_use` | `venueId: String` | `Vec<u16>` |
-| `next_addresses` | `venueId: String`<br>`run: Option<String>`<br>`channels: i64`<br>`count: usize` | `Vec<PatchAddress>` |
 | `set_fixture_mode` | `venueId: String`<br>`id: String`<br>`modeName: String`<br>`allowMove: bool` | `PatchedFixture` |
 | `set_address_pinned` | `venueId: String`<br>`id: String`<br>`pinned: bool` | `()` |
-| `fixture_role` | `path: String`<br>`modeName: String` | `FixtureRole` |
 | `remove_patched_fixture` | `venueId: String`<br>`id: String` | `()` |
 | `rename_patched_fixture` | `venueId: String`<br>`id: String`<br>`label: String` | `()` |
 
@@ -286,16 +283,14 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_venue_graph` | `venueId: String` | `VenueGraphRows` |
-| `restore_graph` | `venueId: String`<br>`rows: VenueGraphRows` | `ResolvedVenue` |
+| `restore_graph` | `venueId: String`<br>`rows: VenueGraphRows`<br>`patch: Vec<PatchedFixture>` | `ResolvedVenue` |
 | `get_resolved_venue` | `venueId: String` | `ResolvedVenue` |
 | `attach` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`parentId: String`<br>`mySocket: Option<String>`<br>`theirSocket: String`<br>`yaw: Option<f64>`<br>`params: Option<BTreeMap<String, f64>>` | `PlacementReport` |
-| `reattach` | `venueId: String`<br>`nodeId: String`<br>`parentId: String`<br>`mySocket: String`<br>`theirSocket: String`<br>`yaw: Option<f64>` | `PlacementReport` |
 | `constrain` | `venueId: String`<br>`nodeId: String`<br>`mySocket: String`<br>`targetNode: String`<br>`targetSocket: String` | `PlacementReport` |
 | `place_free` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`surfaceNodeId: Option<String>`<br>`surfaceSocket: Option<String>`<br>`mySocket: Option<String>`<br>`u: f64`<br>`v: f64`<br>`yaw: Option<f64>`<br>`trim: Option<f64>`<br>`params: Option<BTreeMap<String, f64>>` | `PlacementReport` |
 | `extend` | `venueId: String`<br>`nodeId: String`<br>`socket: String`<br>`lengthM: Option<f64>` | `PlacementReport` |
 | `extend_reach` | `venueId: String`<br>`nodeId: String`<br>`socket: String` | `Option<Reach>` |
 | `duplicate` | `venueId: String`<br>`nodeId: String`<br>`parentId: String`<br>`theirSocket: String`<br>`flip: Option<bool>` | `PlacementReport` |
-| `detach` | `venueId: String`<br>`nodeId: String` | `PlacementReport` |
 | `set_params` | `venueId: String`<br>`nodeId: String`<br>`params: BTreeMap<String, f64>`<br>`label: Option<String>` | `PlacementReport` |
 | `delete_subtree` | `venueId: String`<br>`nodeId: String` | `ResolvedVenue` |
 

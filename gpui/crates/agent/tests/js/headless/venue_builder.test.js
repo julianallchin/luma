@@ -430,29 +430,6 @@ test("a row that will not fit is refused and the offer makes it fit", () => {
   expect(patched()).toBe(before + wanted);
 });
 
-// Detaching returns a piece to the add-element dialog's Unplaced section
-// rather than deleting it.
-test("detaching returns a piece to unplaced", () => {
-  open();
-  const rows = () => app.snapshot().findAll({ role: "row" }).map((n) => n.label);
-  // `row` is one role over three surfaces: read what a gesture added.
-  const resting = rows();
-  arm("Truss · straight");
-  shorten();
-  dropAt(0.3, 0.8);
-  app.key("escape");
-  app.frames(4);
-  select(0.3, 0.8);
-  menu(socket("Truss · straight end_a"), "Detach");
-  settle("the piece to leave the room", (s) => s.findAll({ role: "button" }).filter((n) => n.label.startsWith("Socket Truss")).length === 0);
-  press("Add element");
-  until("the dialog", (s) => s.findAll({ role: "input", label: "Search elements" }).length > 0);
-  app.type(app.snapshot().find({ role: "input", label: "Search elements" }), "Unpl");
-  app.frames(8);
-  const offered = rows().filter((l) => !resting.includes(l));
-  assert(offered.some((row) => row.includes("Truss")), `a detached piece did not come back as unplaced: ${offered}`);
-});
-
 // A socket with nothing in front of it still builds: "ray hits nothing →
 // ghost at 0.5 m, type a length". A stub is how a rig grows into empty air.
 test("a socket facing nothing still builds a stub at the length asked for", () => {
@@ -478,26 +455,6 @@ test("a socket facing nothing still builds a stub at the length asked for", () =
   // The span the graph took, read off the sheet's own control.
   expect(settled("stage-span")).toBe(asked);
   expect(one("Edge: ")).toContain("end_");
-});
-
-// Detaching works: it leaves the branch unplaced on purpose, so the sheet
-// gains no refusal line and the inspector lets go of it.
-test("detaching is not a refusal", () => {
-  open();
-  const resting = app.snapshot().findAll({ role: "row" }).map((n) => n.label);
-  arm("Truss · straight");
-  shorten();
-  dropAt(0.3, 0.8);
-  app.key("escape");
-  app.frames(6);
-  select(0.3, 0.8);
-  menu(socket("Truss · straight end_a"), "Detach");
-  settle("the piece to leave the room", (s) => s.findAll({ role: "button" }).filter((n) => n.label.startsWith("Socket Truss")).length === 0);
-  app.frames(10);
-  const added = app.snapshot().findAll({ role: "row" }).map((n) => n.label).filter((l) => !resting.includes(l));
-  assert(!added.some((line) => line.includes("refus")), `detaching reported itself as a refusal: ${added}`);
-  assert(!app.snapshot().findAll({ role: "slider" }).some((n) => n.label.startsWith("stage-height-")),
-    "the inspector stayed open on a branch that had left the room");
 });
 
 // A venue with nothing in it is already buildable: `+` alone lands the first
@@ -596,9 +553,27 @@ test("the element list removes immediately and undo restores it", () => {
   nav.step("the remaining objects", "toggle", "Stage objects");
   until("the element removed", () => elements().length < before);
   app.key("escape");
-  // Removing an element leaves the patched fixtures alone.
-  until("the fixture inventory after removal", () => fixtures().length === fixtureCount);
+  // A light never outlives its place: the lights hung on the element go
+  // with it, and undo brings them back with their patch rows.
+  until("the fixture inventory after removal", () => fixtures().length <= fixtureCount);
   app.action("luma::UndoStage");
+  until("the restored fixtures", () => fixtures().length === fixtureCount);
   nav.step("the restored objects", "toggle", "Stage objects");
   until("the restored elements", () => elements().length === before);
+});
+
+// A light deleted from the room leaves the patch with it, and undo brings the
+// light back with its patch row.
+test("deleting a light unpatches it and undo patches it again", () => {
+  nav.stage("Test Venue");
+  const fixtures = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("Mover ")).map((n) => n.label);
+  until("the fixture inventory", () => fixtures().includes("Mover 0"));
+  const before = fixtures();
+  nav.step("a light", "row", "Mover 0");
+  app.action("luma::DeleteStageElement");
+  until("the light to leave the patch", () => !fixtures().includes("Mover 0"));
+  expect(fixtures().length).toBe(before.length - 1);
+  app.action("luma::UndoStage");
+  until("the light to come back", () => fixtures().includes("Mover 0"));
+  expect(fixtures()).toEqual(before);
 });

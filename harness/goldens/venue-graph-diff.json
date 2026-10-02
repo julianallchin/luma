@@ -79,29 +79,23 @@
     {
       "catalogRef": "stage_lab/speaker_dbr15.glb",
       "change": "removed",
-      "kind": "piece",
+      "kind": "array",
       "node": {
-        "id": "tray_on_tray",
+        "id": "wall",
         "label": null
       },
-      "params": {},
+      "params": {
+        "count": 5.0,
+        "span": 4.0,
+        "u": 0.0,
+        "v": 0.0
+      },
       "placement": {
         "mySocket": "mount",
-        "parent": "tray_speaker",
+        "parent": "venue",
         "roll": 0.0,
-        "theirSocket": "mount"
+        "theirSocket": "floor"
       }
-    },
-    {
-      "catalogRef": "stage_lab/speaker_dbr15.glb",
-      "change": "removed",
-      "kind": "piece",
-      "node": {
-        "id": "tray_speaker",
-        "label": null
-      },
-      "params": {},
-      "placement": null
     },
     {
       "change": "reparented",
@@ -164,7 +158,7 @@
   ],
   "summary": [
     "+ 4 fixtures (Rogue R2 Spot 1–4)",
-    "- 2 pieces (tray_on_tray, tray_speaker)",
+    "- wall (4 m) on venue.floor",
     "~ deck_b: deck_a.edge_right → deck_a.edge_front",
     "~ tower: span 4.5 → 5",
     "~ Golden room: label \"Golden room\" → \"Golden room, refit\"",

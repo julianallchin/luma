@@ -32,7 +32,7 @@
 //! to a stage is a **wing**, `left wing` or `right wing` by which side of the
 //! stage's centre it is *attached* to. Anything else is named for the way it
 //! runs: `horizontal` (spread along the stage or into it) or `vertical`
-//! (spread up). Unplaced fixtures are their own class, `unplaced`.
+//! (spread up).
 //!
 //! **Row** — one per distribution: one structure piece, one row, never merged
 //! with the piece beside it. Two towers on the left are two rows of one
@@ -314,10 +314,7 @@ pub struct FixtureFact {
     /// The definition's model, for `<model> <n>` labels.
     pub model: String,
     pub role: FixtureRole,
-    /// `None` for a fixture in the patch tray. Unplaced fixtures still get a
-    /// role and a class (`unplaced`); with no position there is nothing to
-    /// measure, so they get no row name and no split.
-    pub placement: Option<FixturePlacement>,
+    pub placement: FixturePlacement,
 }
 
 /// One structure node fixtures hang on — one row of the tree.
@@ -571,8 +568,6 @@ enum Class {
     Wing(Wing),
     /// Free-standing, named for the way it runs.
     Run(Lie),
-    /// Not in the room at all.
-    Unplaced,
 }
 
 impl Class {
@@ -582,7 +577,6 @@ impl Class {
             Class::Wing(Wing::Right) => "right wing",
             Class::Run(Lie::Horizontal) => "horizontal",
             Class::Run(Lie::Vertical) => "vertical",
-            Class::Unplaced => UNPLACED,
         }
     }
 }
@@ -615,10 +609,7 @@ pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
         // called.
         let mut rows: Vec<Row<'_>> = Vec::new();
         for fixture in &members {
-            let structure = fixture
-                .placement
-                .as_ref()
-                .map(|placement| placement.parent.clone());
+            let structure = fixture.placement.parent.clone();
             let index = match rows.iter().position(|row| row.structure == structure) {
                 Some(index) => index,
                 None => {
@@ -784,17 +775,14 @@ fn split_row<'a>(
     let points: Vec<[f64; 3]> = row
         .members
         .iter()
-        .filter_map(|fixture| Some(fixture.placement.as_ref()?.position))
+        .map(|fixture| fixture.placement.position)
         .collect();
     let Some((spread, at)) = separation(&points) else {
         return false;
     };
     let mut halves: [Vec<&'a FixtureFact>; 2] = [Vec::new(), Vec::new()];
     for fixture in &row.members {
-        let Some(placement) = fixture.placement.as_ref() else {
-            continue;
-        };
-        let above = placement.position[spread.axis()] > at;
+        let above = fixture.placement.position[spread.axis()] > at;
         halves[usize::from(above != spread.first_is_greater())].push(fixture);
     }
     for (end, members) in spread.ends().into_iter().zip(halves) {
@@ -808,35 +796,23 @@ fn split_row<'a>(
     true
 }
 
-/// The class name for fixtures nothing in the room holds.
-const UNPLACED: &str = "unplaced";
-
 /// One distribution: the fixtures of one role on one structure.
 struct Row<'a> {
-    /// The structure they hang on, `None` for the patch tray.
-    structure: Option<String>,
+    /// The structure they hang on.
+    structure: String,
     members: Vec<&'a FixtureFact>,
 }
 
 impl Row<'_> {
-    /// The mean of the row's placed fixtures, `[0, 0, 0]` when none are
-    /// placed — which only happens for the unplaced row, and that row is never
-    /// measured against a sibling.
+    /// The mean of the row's fixtures. A row has at least one.
     fn centre(&self) -> [f64; 3] {
         let mut sum = [0.0; 3];
-        let mut n = 0.0;
         for fixture in &self.members {
-            let Some(placement) = fixture.placement.as_ref() else {
-                continue;
-            };
             for (axis, value) in sum.iter_mut().enumerate() {
-                *value += placement.position[axis];
+                *value += fixture.placement.position[axis];
             }
-            n += 1.0;
         }
-        if n == 0.0 {
-            return sum;
-        }
+        let n = self.members.len().max(1) as f64;
         sum.map(|value| value / n)
     }
 
@@ -856,7 +832,7 @@ impl Row<'_> {
         let positions: Vec<[f64; 3]> = self
             .members
             .iter()
-            .filter_map(|fixture| Some(fixture.placement.as_ref()?.position))
+            .map(|fixture| fixture.placement.position)
             .collect();
         let spread = |axis: usize| {
             let (min, max) = positions.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
@@ -874,8 +850,7 @@ impl Row<'_> {
 
 impl VenueFacts {
     fn structure_of(&self, row: &Row<'_>) -> Option<&StructureFact> {
-        let node = row.structure.as_deref()?;
-        self.structures.iter().find(|s| s.node == node)
+        self.structures.iter().find(|s| s.node == row.structure)
     }
 
     fn label_of(&self, row: &Row<'_>) -> Option<&str> {
@@ -886,17 +861,16 @@ impl VenueFacts {
 /// Which class a row belongs to. A structure attached exactly at the stage
 /// centre is a right wing — see the module header on that tie.
 fn class_of(facts: &VenueFacts, row: &Row<'_>) -> Class {
-    let Some(structure) = facts.structure_of(row) else {
-        return Class::Unplaced;
-    };
-    if structure.on_stage {
-        return Class::Wing(if structure.position[0] < facts.stage_centre_x {
-            Wing::Left
-        } else {
-            Wing::Right
-        });
+    match facts.structure_of(row) {
+        Some(structure) if structure.on_stage => {
+            Class::Wing(if structure.position[0] < facts.stage_centre_x {
+                Wing::Left
+            } else {
+                Wing::Right
+            })
+        }
+        _ => Class::Run(row.lie()),
     }
-    Class::Run(row.lie())
 }
 
 /// Add one node, returning its id.
@@ -996,28 +970,29 @@ pub fn facts_from<S: NodeSockets + ?Sized>(
         ..VenueFacts::default()
     };
 
+    // A fixture the solve cannot reach (a damaged venue) has nowhere to be
+    // grouped by, so it is left out rather than filed under a made-up class.
     for identity in fixtures {
-        let placement = solved.pose(&identity.id).and_then(|pose| {
-            let parent = pose.parent.clone()?;
+        let Some(placement) = solved.pose(&identity.id).and_then(|pose| {
             Some(FixturePlacement {
-                parent,
+                parent: pose.parent.clone()?,
                 position: pose.data_pose().0,
             })
-        });
-        if let Some(placement) = &placement {
-            if !facts
-                .structures
-                .iter()
-                .any(|structure| structure.node == placement.parent)
-            {
-                let pose = solved.pose(&placement.parent);
-                facts.structures.push(StructureFact {
-                    node: placement.parent.clone(),
-                    on_stage: hangs_off_a_stage(graph, &placement.parent),
-                    label: pose.and_then(|pose| pose.label.clone()),
-                    position: pose.map_or([0.0; 3], |pose| attachment_point(graph, sockets, pose)),
-                });
-            }
+        }) else {
+            continue;
+        };
+        if !facts
+            .structures
+            .iter()
+            .any(|structure| structure.node == placement.parent)
+        {
+            let pose = solved.pose(&placement.parent);
+            facts.structures.push(StructureFact {
+                node: placement.parent.clone(),
+                on_stage: hangs_off_a_stage(graph, &placement.parent),
+                label: pose.and_then(|pose| pose.label.clone()),
+                position: pose.map_or([0.0; 3], |pose| attachment_point(graph, sockets, pose)),
+            });
         }
         facts.fixtures.push(FixtureFact {
             id: identity.id.clone(),
@@ -1528,10 +1503,10 @@ mod tests {
             id: id.into(),
             model: "Bar".into(),
             role,
-            placement: Some(FixturePlacement {
+            placement: FixturePlacement {
                 parent: parent.into(),
                 position: at,
-            }),
+            },
         }
     }
 
@@ -1622,11 +1597,10 @@ mod tests {
     fn two_runs_of_a_class_are_two_rows() {
         let mut facts = horizontal_facts();
         for fact in &mut facts.fixtures {
-            if let Some(placement) = fact.placement.as_mut() {
-                if placement.parent == "low" {
-                    placement.position[2] = 5.0;
-                    placement.position[1] = 4.0;
-                }
+            let placement = &mut fact.placement;
+            if placement.parent == "low" {
+                placement.position[2] = 5.0;
+                placement.position[1] = 4.0;
             }
         }
         assert_eq!(
@@ -1955,25 +1929,6 @@ mod tests {
         assert!(!paths.contains(&"spots/left".to_string()));
     }
 
-    #[test]
-    fn unplaced_fixtures_get_a_class_and_no_rows() {
-        let facts = VenueFacts {
-            venue_id: "v".into(),
-            stage_centre_x: 0.0,
-            structures: Vec::new(),
-            fixtures: vec![FixtureFact {
-                id: "tray".into(),
-                model: "Bar".into(),
-                role: FixtureRole::Wash,
-                placement: None,
-            }],
-        };
-        assert_eq!(
-            paths(&derive_groups(&facts)),
-            vec!["washes", "washes/unplaced"]
-        );
-    }
-
     // -----------------------------------------------------------------------
     // Identity
     // -----------------------------------------------------------------------
@@ -2237,10 +2192,9 @@ mod tests {
 
         let mut moved = horizontal_facts();
         for fact in &mut moved.fixtures {
-            if let Some(placement) = fact.placement.as_mut() {
-                if placement.parent == "high" {
-                    placement.position[2] = 0.0;
-                }
+            let placement = &mut fact.placement;
+            if placement.parent == "high" {
+                placement.position[2] = 0.0;
             }
         }
         let after = derive_groups(&moved);

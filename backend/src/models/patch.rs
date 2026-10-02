@@ -20,8 +20,8 @@ pub struct PatchAssignment {
     pub address: u16,
     /// The last channel this fixture occupies.
     pub last_address: u16,
-    /// The run whose universe it took, or `None` for a fixture in the tray or
-    /// resting on the floor.
+    /// The run whose universe it took, or `None` for a fixture resting on the
+    /// floor.
     pub run: Option<String>,
     /// A hand-set address the allocator preserved rather than derived.
     pub pinned: bool,
@@ -158,24 +158,4 @@ pub struct UniverseOutput {
     /// Art-Net's 15-bit Net/SubNet/Universe triple, as the node announced it.
     pub port_address: i64,
     pub node_name: Option<String>,
-}
-
-/// A free slot, as [`crate::services::patch::next_addresses`] hands it to a
-/// caller whose fixtures do not exist yet.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PatchAddress {
-    pub universe: u16,
-    pub address: u16,
-    pub last_address: u16,
-}
-
-impl From<luma_scene::patch::Footprint> for PatchAddress {
-    fn from(footprint: luma_scene::patch::Footprint) -> Self {
-        PatchAddress {
-            universe: footprint.universe(),
-            address: footprint.address(),
-            last_address: footprint.last(),
-        }
-    }
 }

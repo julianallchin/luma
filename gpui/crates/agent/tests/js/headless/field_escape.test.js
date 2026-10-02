@@ -26,31 +26,6 @@ function escapeDraft(name, text) {
   app.frames(4);
 }
 
-// A dialog binds escape to dismiss inside every child, text fields included.
-test("escape in the add dialog's count drops the draft and keeps the page",
-  { fixture: { seconds: 20, rig: 4, window: [1500, 950] } }, () => {
-  nav.patch("Test Venue");
-  nav.step("patch details", "button", "Patch details");
-  nav.expand();
-  nav.stageOff();
-  until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
-  app.click(app.snapshot().find({ role: "button", label: "Add fixtures" }));
-  const bundle = until("the bundle", (s) => s.find({ role: "input", label: "Search fixtures…" }) !== undefined);
-  app.type(bundle.find({ role: "input", label: "Search fixtures…" }), "Mover");
-  until("the seeded definition", (s) => s.find({ role: "row", label: "Luma Mover" }) !== undefined);
-  app.click(app.snapshot().find({ role: "row", label: "Luma Mover" }));
-  until("the count page", () => field("count") !== undefined);
-  app.frames(6);
-
-  // Escape on the count page steps the dialog back to the bundle.
-  escapeDraft("count", "7");
-  assert(field("count") !== undefined, "escape in the count field also stepped the dialog back");
-
-  // The field is still focused but clean, so the next escape is the dialog's.
-  app.key("escape");
-  until("the dialog to step back", () => field("count") === undefined);
-});
-
 // The expression field reverts and leaves; the clip stays selected.
 test("escape drops an expression draft and keeps the selection", () => {
   nav.venue("Test Venue");

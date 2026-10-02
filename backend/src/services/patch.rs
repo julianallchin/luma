@@ -171,7 +171,7 @@ pub async fn auto_patch(
 
 /// Where the next `count` fixtures of `channels` channels each would go if they
 /// were added to `run` now — what a distribution needs before its fixtures
-/// exist. `run` of `None` asks for tray addresses.
+/// exist. `run` of `None` asks for run-less addresses.
 ///
 /// # Errors
 /// Fails if the patch cannot be read or the venue cannot be solved.

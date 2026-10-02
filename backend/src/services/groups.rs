@@ -244,10 +244,9 @@ fn role_and_aim(resource_path: &Path, fixture: &PatchedFixture) -> (FixtureRole,
 
 /// Get all heads for a fixture with their world positions (PathBuf version).
 ///
-/// Empty when the mode defines no heads, and empty when the fixture is patched
-/// but **not placed**: a head node is a point in the room, and a fixture in the
-/// tray is not in the room. The alternative — a head at the origin — is what
-/// piled every unplaced fixture at `(0, 0, 0)`.
+/// Empty when the mode defines no heads, and empty when the solve cannot reach
+/// the fixture: a head node is a point in the room. The alternative — a head
+/// at the origin — is what piled fixtures at `(0, 0, 0)`.
 fn get_fixture_heads_with_path(
     resource_path: &Path,
     venue: &ResolvedVenue,

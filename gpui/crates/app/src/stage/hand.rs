@@ -3,11 +3,11 @@
 //! # One state machine
 //!
 //! [`Hand`] is the whole of the builder's transient state. Arming a palette
-//! piece, dragging a fixture out of the tray, duplicating a wing and running a
-//! truss out of a socket are four gestures that all end in a **placement**, and
-//! they are mutually exclusive: a hand that was both "armed with a truss" and
-//! "extending from a socket" could answer the next click two ways. So they are
-//! variants of one enum rather than four booleans, and the only way to leave
+//! piece or a light, duplicating a wing and running a truss out of a socket are
+//! three gestures that all end in a **placement**, and they are mutually
+//! exclusive: a hand that was both "armed with a truss" and "extending from a
+//! socket" could answer the next click two ways. So they are variants of one
+//! enum rather than three booleans, and the only way to leave
 //! one is through [`Hand::drop`] or [`Hand::clear`].
 //!
 //! # Two radii, and why they are not one
@@ -327,8 +327,6 @@ pub(crate) enum Holding {
         /// Inverts the copy's handedness about its root socket.
         flip: bool,
     },
-    /// A patched fixture that has never been placed — `reattach`.
-    Unplaced { node: String, label: String },
     /// A fixture from the library that has no row anywhere yet — `distribute`,
     /// which is how *every* new fixture is created, a single one being a row
     /// of one. It carries what the fit needs so the preview and the commit
@@ -357,7 +355,7 @@ impl Holding {
             Holding::Piece { display_name, .. } | Holding::Duplicate { display_name, .. } => {
                 display_name
             }
-            Holding::Unplaced { label, .. } | Holding::Fixture { label, .. } => label,
+            Holding::Fixture { label, .. } => label,
         }
     }
 
@@ -365,7 +363,7 @@ impl Holding {
         match self {
             Holding::Piece { kind, .. } => *kind,
             Holding::Duplicate { .. } => NodeKind::Piece,
-            Holding::Unplaced { .. } | Holding::Fixture { .. } => NodeKind::Fixture,
+            Holding::Fixture { .. } => NodeKind::Fixture,
         }
     }
 
@@ -376,7 +374,7 @@ impl Holding {
     pub(crate) fn footing(&self) -> Option<&str> {
         match self {
             Holding::Piece { footing, .. } => *footing,
-            Holding::Duplicate { .. } | Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
+            Holding::Duplicate { .. } | Holding::Fixture { .. } => None,
         }
     }
 }
@@ -442,8 +440,7 @@ pub(crate) struct Landed {
 /// Which verb a landing is.
 #[derive(Debug, Clone)]
 pub(crate) enum Landing {
-    /// Socket met socket: `attach` for a new node, `reattach` for one that
-    /// already has a row.
+    /// Socket met socket: `attach`.
     Socket {
         parent: String,
         my_socket: String,

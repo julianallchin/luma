@@ -21,9 +21,9 @@ pub struct HeadLayout {
 /// `f64` basis narrows to the `f32` the kinematics work in, and the one place
 /// the app turns a resolved node into a [`Mount`].
 ///
-/// A fixture that is patched but not placed has no pose at all — it is in the
-/// tray — so callers get `None` from `ResolvedVenue::pose` and must decide what
-/// absence means rather than mount it at the origin.
+/// A fixture the solve cannot reach has no pose at all, so callers get `None`
+/// from `ResolvedVenue::pose` and must decide what absence means rather than
+/// mount it at the origin.
 #[must_use]
 pub fn fixture_mount(pose: &NodePose) -> Mount {
     let (position, rotation) = pose.data_basis();

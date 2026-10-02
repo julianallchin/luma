@@ -18,9 +18,10 @@ The workspace has two kinds of tab scope:
 
 The patch table lists each fixture with its **Mode**, **Universe** and **Address**.
 
-1. Click **Add fixtures**. Search the fixture library. Luma ships a library of QLC+ fixture definitions.
-2. Choose the **Mode**. The mode sets how many DMX channels the fixture uses and what each channel does. Choose the mode that is set on the real fixture.
-3. Set the **Universe** and **Address**, or let Luma pick them. **Auto patch** assigns addresses for you.
+You add lights on the stage page, not here. Every light has a place on the stage. When you place a light, it gets a row in the patch table. When you delete a light, its row goes too.
+
+1. Choose the **Mode**. The mode sets how many DMX channels the fixture uses and what each channel does. Choose the mode that is set on the real fixture.
+2. Set the **Universe** and **Address**, or let Luma pick them. **Auto patch** assigns addresses for you.
 
 The backend assigns every address. The patch page shows an error when the backend refuses an address.
 
@@ -31,7 +32,8 @@ A universe has 512 channels. A fixture that uses 16 channels and starts at addre
 The stage page is the only place where you set positions.
 
 - Choose a piece from the palette, such as a truss, and place it.
-- Drag a fixture from the tray onto the stage.
+- Choose a fixture and place it on a piece, such as a truss. Luma ships a library of QLC+ fixture definitions.
+- Delete a piece, and the lights on it are deleted too. Undo brings them back.
 - A piece snaps to a socket first, then to the surface under the cursor, then to the ground grid.
 
 Positions use a Z-up, right-handed coordinate system in metres.

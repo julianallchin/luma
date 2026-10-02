@@ -5,10 +5,9 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Wri
 use crate::dispatch::{AppServices, CommandError};
 use crate::fixtures::layout::fixture_mount;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
-use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell};
+use crate::models::patch::{AutoPatchReport, UniverseCell};
 use crate::services::fixture_create;
 use crate::services::fixtures as fixture_service;
-use crate::services::group_derivation::FixtureRole;
 use crate::services::groups::invalidate_venue_fixture_cache;
 use crate::services::patch as patch_service;
 
@@ -33,9 +32,9 @@ pub async fn get_patched_fixtures(
 /// stale. Callers that need both fetch both — they are already fetching several
 /// things about a venue in parallel.
 ///
-/// A fixture that is patched but not placed is **absent from the result**
-/// rather than carried with a fabricated origin pose: it is in the tray and has
-/// no facing at all. Consumers key by id, so absence is the answer.
+/// A fixture the solve cannot reach is **absent from the result** rather than
+/// carried with a fabricated origin pose. Consumers key by id, so absence is
+/// the answer.
 pub async fn get_fixture_facings(
     services: &AppServices,
     venue_id: String,
@@ -101,59 +100,6 @@ pub async fn get_fixture_definition(
     )?)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn patch_fixture(
-    services: &AppServices,
-    venue_id: String,
-    universe: i64,
-    address: i64,
-    num_channels: i64,
-    manufacturer: String,
-    model: String,
-    mode_name: String,
-    fixture_path: String,
-    label: Option<String>,
-) -> Result<PatchedFixture, CommandError> {
-    // The graph has to exist before a fixture can be a node in it, and this is
-    // the first write on the venue for a caller that has only ever patched.
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    // The one door a typed address comes through, and it is shut before
-    // anything is written: a refused patch leaves the database untouched.
-    let footprint = patch_service::occupancy(&mut access)
-        .await?
-        .admit(
-            None,
-            narrow(universe)?,
-            narrow(address)?,
-            narrow(num_channels)?,
-        )
-        .map_err(CommandError::from)?;
-    let mut numbering = fixture_create::numbering(&mut access).await?;
-    let fixture = fixture_create::create(
-        &mut access,
-        &mut numbering,
-        fixture_create::NewFixture {
-            manufacturer: &manufacturer,
-            model: &model,
-            mode_name: &mode_name,
-            fixture_path: &fixture_path,
-            footprint,
-            // Derived, not typed: the address the dialog offered came from
-            // `next_addresses`, so auto-patch is free to move it.
-            pinned: false,
-            name: match label {
-                Some(label) => fixture_create::Naming::Given(label),
-                None => fixture_create::Naming::Minted(None),
-            },
-        },
-    )
-    .await?;
-    commit_and_publish(services, access).await?;
-    Ok(fixture)
-}
-
 /// Put one fixture at a hand-chosen address, and pin it there.
 ///
 /// Refuses a collision or a footprint past 512 with the conflict named; it
@@ -204,34 +150,6 @@ pub async fn universes_in_use(
     Ok(patch_service::universes_in_use(&mut access).await?)
 }
 
-/// Where the next `count` fixtures of `channels` channels each would go.
-///
-/// The one place a caller that has no fixture yet — the add dialog, a
-/// duplication, a distribution — asks for an address. There is no other
-/// allocator to ask.
-pub async fn next_addresses(
-    services: &AppServices,
-    venue_id: String,
-    run: Option<String>,
-    channels: i64,
-    count: usize,
-) -> Result<Vec<PatchAddress>, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(patch_service::next_addresses(
-        &mut access,
-        &services.fixtures_root,
-        run.as_deref(),
-        narrow(channels)?,
-        count,
-    )
-    .await?
-    .into_iter()
-    .map(PatchAddress::from)
-    .collect())
-}
-
 /// Repatch one fixture into another of its definition's modes.
 ///
 /// `allow_move` off is the page's first ask: a mode whose width no longer fits
@@ -269,31 +187,6 @@ pub async fn set_address_pinned(
     let mut access = fixture_write(services, &venue_id, &id).await?;
     patch_service::set_pinned(&mut access, &id, pinned).await?;
     commit_and_publish(services, access).await
-}
-
-/// What a definition patched in `mode_name` would be *for*.
-///
-/// The add dialog's "will land in `<role>`" line, answered by the derivation's
-/// own table rather than by a second copy of it in the page (AF10). A caller
-/// with no fixture yet has nothing else to ask.
-pub async fn fixture_role(
-    services: &AppServices,
-    path: String,
-    mode_name: String,
-) -> Result<FixtureRole, CommandError> {
-    let relative = confine_to_root(&path)?;
-    let definition = fixture_service::get_fixture_definition(&services.fixtures_root, relative)?;
-    let mode = definition
-        .modes
-        .iter()
-        .find(|mode| mode.name == mode_name)
-        .ok_or_else(|| {
-            CommandError::NotFound(format!(
-                "{} {} has no mode {mode_name}",
-                definition.manufacturer, definition.model
-            ))
-        })?;
-    Ok(FixtureRole::of(&definition, mode))
 }
 
 pub async fn remove_patched_fixture(

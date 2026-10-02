@@ -53,8 +53,8 @@ use luma_render::face::host_face;
 use luma_scene::distribute::{offsets, Fit, Layout};
 use luma_scene::patch::{allocate_run, next_addresses, Footprint};
 use luma_scene::venue::{
-    DanglingSocket, Edge, EdgeError, Node, NodeKind, NodeWarning, ResolvedVenue, UnplacedNode,
-    VenueGraph, FLOOR_SOCKET,
+    DanglingSocket, Edge, EdgeError, Node, NodeKind, NodeWarning, ResolvedVenue, VenueGraph,
+    FLOOR_SOCKET,
 };
 
 use crate::database::local::fixtures as fixtures_db;
@@ -171,8 +171,6 @@ pub struct Report {
     pub announce: Vec<String>,
     /// Open structural sockets left in the venue, as the resolver reports them.
     pub dangling: Vec<DanglingSocket>,
-    /// Subtrees the solve could not reach — the tray, and anything detached.
-    pub unplaced: Vec<UnplacedNode>,
 }
 
 impl Report {
@@ -186,7 +184,6 @@ impl Report {
             warnings: Vec::new(),
             announce: Vec::new(),
             dangling: Vec::new(),
-            unplaced: Vec::new(),
         }
     }
 }
@@ -277,33 +274,23 @@ pub async fn distribute(
     }
 
     // Addresses come from the allocator, against the venue as it stands — the
-    // rows do not exist yet, so there is nothing for `allocate` to order them
-    // by and `next_addresses` is the door built for exactly this caller. What
-    // it gives back is provisional; see the re-derivation below.
+    // rows do not exist yet; see [`offer`]. What it gives back is provisional;
+    // see the re-derivation below.
     let solved = luma_scene::venue::resolve(&graph, sockets);
     let run = run_of(&solved, &host_id);
-    let footprints = next_addresses(
-        &solved,
-        &patch::inputs(&rows),
-        run.as_deref(),
-        channels,
-        stations.len(),
-    );
-    if footprints.len() < stations.len() {
-        return Err(format!(
-            "there is no room in the patch for {count} more fixtures of {channels} channels: \
-             {found} of them fit, so {short} would have nowhere to go",
-            count = stations.len(),
-            found = footprints.len(),
-            short = stations.len() - footprints.len(),
-        ));
-    }
+    let footprints = offer(&solved, &rows, run.as_deref(), channels, stations.len())?;
 
     let mut numbering = fixture_create::numbering(access)
         .await
         .map_err(|e| e.to_string())?;
     let mut placed: Vec<(String, String, Footprint, f64)> = Vec::new();
     for (station, footprint) in stations.iter().zip(&footprints) {
+        let edge = Edge {
+            parent: host_id.clone(),
+            my_socket: clamp.name.clone(),
+            their_socket: host_socket.clone(),
+            roll: 0.0,
+        };
         let fixture = fixture_create::create(
             access,
             &mut numbering,
@@ -315,6 +302,7 @@ pub async fn distribute(
                 footprint: *footprint,
                 pinned: false,
                 name: Naming::Minted(request.label_prefix),
+                placement: (&edge).into(),
             },
         )
         .await
@@ -334,16 +322,9 @@ pub async fn distribute(
             .into_iter()
             .collect(),
         };
-        let edge = Edge {
-            parent: host_id.clone(),
-            my_socket: clamp.name.clone(),
-            their_socket: host_socket.clone(),
-            roll: 0.0,
-        };
-        // The invariants are `luma_scene`'s and are checked *before* the edge
-        // is written; a refusal here leaves the transaction to roll back
-        // everything this loop has done so far, which is the whole of "never
-        // partial placement".
+        // The invariants are `luma_scene`'s; a refusal here leaves the
+        // transaction to roll back everything this loop has done so far,
+        // which is the whole of "never partial placement".
         graph.insert(node.clone());
         graph
             .attach(&node.id, edge.clone(), sockets)
@@ -359,61 +340,15 @@ pub async fn distribute(
                 .collect(),
         )
         .await?;
-        venue_graph_db::upsert_edge(
-            access,
-            &node.id,
-            &edge.parent,
-            &edge.my_socket,
-            &edge.their_socket,
-            edge.roll,
-        )
-        .await?;
         placed.push((fixture.id, label, *footprint, *station));
     }
 
     // Two distributions on one run interleave in **physical** order, not
-    // creation order (`docs/specs/venue-builder-gauntlet.md` §5).
-    // `next_addresses` could only ever append, because the rows it was asked
-    // about did not exist yet. They do now, so the run's addressing is derived
-    // again — by the one allocator, over the finished venue — and written down.
-    //
-    // Only the host's own run is rewritten. A distribution is not an auto-patch:
-    // re-addressing a truss on the other side of the room because somebody hung
-    // two pars over here is a surprise nobody asked for, and pins are preserved
-    // either way. The allocator reserves untouched runs' stored footprints,
-    // since only this run's planned addresses are actually written.
+    // creation order (`docs/specs/venue-builder-gauntlet.md` §5); see
+    // [`readdress_run`].
     let solved = crate::venue_graph::resolved(access, fixtures_root).await?;
     if let Some(run) = run.as_deref() {
-        let rows = fixtures_db::get_patched_fixtures(access).await?;
-        let allocation = allocate_run(&solved, &patch::inputs(&rows), run);
-        if let Some(luma_scene::patch::Note::NoRoom { fixture }) = allocation
-            .notes
-            .iter()
-            .find(|note| matches!(note, luma_scene::patch::Note::NoRoom { .. }))
-        {
-            return Err(format!("No DMX address available for fixture {fixture}"));
-        }
-        for assignment in &allocation.assignments {
-            if assignment.pinned {
-                continue;
-            }
-            let universe = i64::from(assignment.footprint.universe());
-            let address = i64::from(assignment.footprint.address());
-            let stands_there = rows.iter().any(|row| {
-                row.id == assignment.fixture && row.universe == universe && row.address == address
-            });
-            if stands_there {
-                continue;
-            }
-            fixtures_db::update_fixture_address(
-                access,
-                &assignment.fixture,
-                universe,
-                address,
-                false,
-            )
-            .await?;
-        }
+        readdress_run(access, &solved, run).await?;
     }
 
     // The report says what the *database* says, rather than what the allocator
@@ -447,8 +382,77 @@ pub async fn distribute(
         warnings: solved.warnings().to_vec(),
         announce: laid_where(request.layout, &stations, width),
         dangling: solved.dangling().to_vec(),
-        unplaced: solved.unplaced().to_vec(),
     })
+}
+
+/// Where `count` new fixtures of `channels` channels would land on `run`,
+/// before their rows exist — so there is nothing for `allocate` to order them
+/// by, and [`next_addresses`] is the door built for exactly this. Provisional:
+/// once the rows exist, [`readdress_run`] gives the answer.
+///
+/// # Errors
+/// The patch has no room for all `count` of them.
+pub(crate) fn offer(
+    solved: &ResolvedVenue,
+    rows: &[PatchedFixture],
+    run: Option<&str>,
+    channels: u16,
+    count: usize,
+) -> Result<Vec<Footprint>, String> {
+    let footprints = next_addresses(solved, &patch::inputs(rows), run, channels, count);
+    if footprints.len() < count {
+        return Err(format!(
+            "there is no room in the patch for {count} more fixtures of {channels} channels: \
+             {found} of them fit, so {short} would have nowhere to go",
+            found = footprints.len(),
+            short = count - footprints.len(),
+        ));
+    }
+    Ok(footprints)
+}
+
+/// Re-derive `run`'s addressing by the one allocator, over the finished venue,
+/// and write it down.
+///
+/// [`offer`] could only ever append, because the rows it was asked about did
+/// not exist yet. They do now. Only this run is rewritten: adding lights here
+/// is not an auto-patch, and re-addressing a truss on the other side of the
+/// room because somebody hung two pars over here is a surprise nobody asked
+/// for. Pins are preserved, and the allocator reserves untouched runs' stored
+/// footprints, since only this run's planned addresses are written.
+///
+/// # Errors
+/// A fixture of the run has no room in the patch, or the database's.
+pub(crate) async fn readdress_run(
+    access: &mut VenueAccess<'_, Write>,
+    solved: &ResolvedVenue,
+    run: &str,
+) -> Result<(), String> {
+    let rows = fixtures_db::get_patched_fixtures(access).await?;
+    let allocation = allocate_run(solved, &patch::inputs(&rows), run);
+    if let Some(luma_scene::patch::Note::NoRoom { fixture }) = allocation
+        .notes
+        .iter()
+        .find(|note| matches!(note, luma_scene::patch::Note::NoRoom { .. }))
+    {
+        return Err(format!("No DMX address available for fixture {fixture}"));
+    }
+    for assignment in &allocation.assignments {
+        if assignment.pinned {
+            continue;
+        }
+        let universe = i64::from(assignment.footprint.universe());
+        let address = i64::from(assignment.footprint.address());
+        let stands_there = rows.iter().any(|row| {
+            row.id == assignment.fixture && row.universe == universe && row.address == address
+        });
+        if stands_there {
+            continue;
+        }
+        fixtures_db::update_fixture_address(access, &assignment.fixture, universe, address, false)
+            .await?;
+    }
+    Ok(())
 }
 
 /// What a `span=` window turned into, where it turned into something else.
@@ -584,7 +588,7 @@ pub fn body_width_m(definition: &FixtureDefinition) -> f64 {
 /// The same "nearest ancestor" walk [`luma_scene::patch`] does after the fact;
 /// it is asked here because the fixtures do not exist yet, so there is nothing
 /// for that walk to start from.
-fn run_of(solved: &ResolvedVenue, host: &str) -> Option<String> {
+pub(crate) fn run_of(solved: &ResolvedVenue, host: &str) -> Option<String> {
     let mut cursor = Some(host);
     while let Some(id) = cursor {
         let pose = solved.pose(id)?;

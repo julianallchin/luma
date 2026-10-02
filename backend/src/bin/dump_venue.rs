@@ -90,9 +90,9 @@ struct FixtureFactDump {
     manufacturer: String,
     model: String,
     role: String,
-    /// The venue-graph node the fixture hangs on; `None` for the patch tray.
-    parent: Option<String>,
-    position: Option<[f64; 3]>,
+    /// The venue-graph node the fixture hangs on.
+    parent: String,
+    position: [f64; 3],
 }
 
 #[derive(Serialize)]
@@ -246,8 +246,8 @@ async fn main() -> Result<(), String> {
                 manufacturer: row.map(|row| row.manufacturer.clone()).unwrap_or_default(),
                 model: fact.model.clone(),
                 role: fact.role.as_str().to_string(),
-                parent: fact.placement.as_ref().map(|p| p.parent.clone()),
-                position: fact.placement.as_ref().map(|p| p.position),
+                parent: fact.placement.parent.clone(),
+                position: fact.placement.position,
             }
         })
         .collect();
