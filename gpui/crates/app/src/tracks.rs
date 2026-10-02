@@ -14,13 +14,20 @@
 //! presentation metadata and never decide membership, so a newly added track
 //! is visible before its first annotation is authored.
 //!
+//! # Folders
+//!
+//! Under the venue's own row the list shows the venue's folders, each opening
+//! onto the songs it holds, and then every song under "All songs". A song in a
+//! folder is the same song as under All songs: it opens the same scores. See
+//! [`folders`].
+//!
 //! Album art comes from `album_art_path` — a path on disk, never inlined bytes
 //! (see CLAUDE.md on why bulk responses carry paths). The native host reads
 //! the file with `img(path)` and
 //! GPUI's image cache handles the decode and the lazy load.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
@@ -31,6 +38,7 @@ use luma_ui::float::{self, RowState};
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::{ladder, motion};
 
+use luma_lib::models::folders::Folder;
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 
@@ -38,6 +46,7 @@ use crate::agent::TabStatus;
 use crate::tabs::Target;
 use crate::Luma;
 
+pub(crate) mod folders;
 pub(crate) mod scores;
 
 /// Which of the sidebar's two levels the column is showing.
@@ -113,13 +122,36 @@ impl Ownership {
     }
 }
 
+/// One line of the list. Every kind is [`ROW_HEIGHT`] tall: the list is a
+/// `uniform_list`, which sizes every item like its first.
+#[derive(Clone, Copy)]
+enum Entry {
+    /// A folder; `folder` indexes [`Tracks::folders`], and `songs` is how
+    /// many of its songs the filters admit.
+    Folder {
+        folder: usize,
+        songs: usize,
+        open: bool,
+    },
+    /// The way to make another folder.
+    NewFolder,
+    /// The heading over every song, with how many the filters admit.
+    AllSongs { songs: usize },
+    /// What All songs says when it lists nothing.
+    NoSongs,
+    /// A song; `row` indexes [`Tracks::rows`]. `folder` is the folder it is
+    /// listed under, or none under All songs.
+    Song { row: usize, folder: Option<usize> },
+}
+
 /// The screen's whole state: the venue it is showing, everything the seam
 /// returned for it, and the three filters over that.
 ///
-/// [`Self::shown`] is indices into [`Self::rows`] rather than a second copy of
-/// the rows, recomputed on every state change instead of on every draw: a draw
-/// happens per frame and per hover, and re-filtering a full library there is
-/// the difference between a scroll that keeps up and one that does not.
+/// [`Self::entries`] is indices into [`Self::rows`] and [`Self::folders`]
+/// rather than a second copy of them, recomputed on every state change instead
+/// of on every draw: a draw happens per frame and per hover, and re-filtering
+/// a full library there is the difference between a scroll that keeps up and
+/// one that does not.
 pub struct Tracks {
     /// The venue the rows were decorated for. The editor needs it too — a
     /// track's score is per-venue — so it is kept beside the name it is shown
@@ -128,7 +160,24 @@ pub struct Tracks {
     venue_name: String,
     load_generation: u64,
     rows: Rc<[TrackBrowserRow]>,
-    shown: Rc<[usize]>,
+    /// The venue's folders, by name, each with the songs it holds. Re-read
+    /// whenever the rows are — see [`Luma::with_tracks_for_venue`].
+    folders: Rc<[Folder]>,
+    /// The open folders, by id.
+    expanded: HashSet<String>,
+    /// What the list draws, top to bottom.
+    entries: Rc<[Entry]>,
+    /// The entry the scores level was entered from. A song can be listed twice
+    /// — in a folder and under All songs — so its track alone does not say
+    /// which row the shared element left.
+    origin: Option<usize>,
+    /// The menu a right-click raised, or none. One slot: two menus open at
+    /// once is the bug it rules out.
+    menu: Option<folders::Menu>,
+    /// The folder whose name is being typed, or none.
+    rename: Option<folders::Rename>,
+    /// Why the last folder change failed, until the next one lands.
+    folder_error: Option<String>,
     /// Whether the venue's query has come back. Written in the same
     /// assignment as [`Self::rows`] and [`Self::error`], so "still loading"
     /// and "nothing to show" can never be confused for one another.
@@ -208,7 +257,7 @@ impl Tracks {
         self.refilter();
     }
 
-    /// The rows the filters admit, in the order the query returned them.
+    /// The songs the filters admit, in the order the query returned them.
     fn filter(&self) -> Vec<usize> {
         let query = self.query.trim().to_lowercase();
         self.rows
@@ -223,8 +272,59 @@ impl Tracks {
             .collect()
     }
 
+    /// Rebuild [`Self::entries`]: each folder, followed by its songs when it
+    /// is open; the way to make another; then every song. A folder lists the
+    /// songs the filters admit, in the same order as All songs.
     fn refilter(&mut self) {
-        self.shown = self.filter().into();
+        let shown = self.filter();
+        let mut entries = Vec::with_capacity(self.folders.len() + shown.len() + 3);
+        for (index, folder) in self.folders.iter().enumerate() {
+            let held: HashSet<&str> = folder.track_ids.iter().map(String::as_str).collect();
+            let songs: Vec<usize> = shown
+                .iter()
+                .copied()
+                .filter(|row| held.contains(self.rows[*row].id.as_str()))
+                .collect();
+            let open = self.expanded.contains(&folder.id);
+            entries.push(Entry::Folder {
+                folder: index,
+                songs: songs.len(),
+                open,
+            });
+            if open {
+                entries.extend(songs.into_iter().map(|row| Entry::Song {
+                    row,
+                    folder: Some(index),
+                }));
+            }
+        }
+        entries.push(Entry::NewFolder);
+        entries.push(Entry::AllSongs { songs: shown.len() });
+        if shown.is_empty() {
+            entries.push(Entry::NoSongs);
+        }
+        entries.extend(
+            shown
+                .into_iter()
+                .map(|row| Entry::Song { row, folder: None }),
+        );
+        self.entries = entries.into();
+    }
+
+    /// The track of the song at `index`, if that entry is a song.
+    fn song_at(&self, index: usize) -> Option<&TrackBrowserRow> {
+        match self.entries.get(index)? {
+            Entry::Song { row, .. } => Some(&self.rows[*row]),
+            _ => None,
+        }
+    }
+
+    /// The first entry that lists `track_id`.
+    fn first_song(&self, track_id: &str) -> Option<usize> {
+        (0..self.entries.len()).find(|index| {
+            self.song_at(*index)
+                .is_some_and(|track| track.id == track_id)
+        })
     }
 
     /// Push to `level`, with the shared element starting at `row_top`.
@@ -297,8 +397,8 @@ impl Tracks {
     }
 
     /// Where the flying row's list position is, in pixels from the top of the
-    /// pushing region. `index` is a position in [`Self::shown`], which is what
-    /// the list draws.
+    /// pushing region. `index` is a position in [`Self::entries`], which is
+    /// what the list draws.
     fn row_top(&self, index: usize) -> f32 {
         let (Some(region), Some(list)) = (self.region.get(), self.list_box.get()) else {
             return 0.;
@@ -307,15 +407,19 @@ impl Tracks {
         f32::from(list.origin.y - region.origin.y) + index as f32 * ROW_HEIGHT + offset
     }
 
-    /// The scores level's track, as an index into the rows currently shown —
-    /// the position a pop with no entrance to reverse would fly back to.
+    /// The scores level's track, as an index into the entries currently
+    /// shown: the row it was entered from while that row still lists it, else
+    /// the first that does. The position a pop flies back to.
     fn flying_index(&self) -> Option<usize> {
         let Level::Scores(level) = &self.level else {
             return None;
         };
-        self.shown
-            .iter()
-            .position(|row| self.rows[*row].id == level.track.id)
+        self.origin
+            .filter(|index| {
+                self.song_at(*index)
+                    .is_some_and(|track| track.id == level.track.id)
+            })
+            .or_else(|| self.first_song(&level.track.id))
     }
 }
 
@@ -370,7 +474,13 @@ impl Luma {
             venue_name: venue.name,
             load_generation: generation,
             rows: Rc::from(Vec::new()),
-            shown: Rc::from(Vec::new()),
+            folders: Rc::from(Vec::new()),
+            expanded: HashSet::new(),
+            entries: Rc::from(Vec::new()),
+            origin: None,
+            menu: None,
+            rename: None,
+            folder_error: None,
             loaded: false,
             error: None,
             ownership: Ownership::Mine,
@@ -416,21 +526,19 @@ impl Luma {
         .detach();
     }
 
-    /// Enter the scores level for the row at `index` of what the list is
+    /// Enter the scores level for the song at `index` of what the list is
     /// showing. The index, not the id, because the flight starts at the row's
-    /// *place* — and two rows of the same track cannot be on screen at once.
+    /// *place* — and a song in a folder is on screen twice.
     fn push_scores(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
+        let Some(browser) = &mut self.sidebar else {
             return;
         };
-        let Some(track) = browser
-            .shown
-            .get(index)
-            .map(|row| browser.rows[*row].id.clone())
-        else {
+        let Some(track) = browser.song_at(index).map(|track| track.id.clone()) else {
             return;
         };
         let row_top = browser.row_top(index);
+        browser.origin = Some(index);
+        browser.menu = None;
         self.show_scores(&track, row_top, window, cx);
     }
 
@@ -450,11 +558,7 @@ impl Luma {
         let Some(picked) = self.front_track() else {
             return;
         };
-        let Some(index) = browser
-            .shown
-            .iter()
-            .position(|row| browser.rows[*row].id == picked)
-        else {
+        let Some(index) = browser.first_song(picked) else {
             return;
         };
         self.push_scores(index, window, cx);
@@ -565,6 +669,10 @@ impl Luma {
             .loaded
             .then(|| state.rows.iter().map(|row| row.id.clone()).collect());
         cx.notify();
+        // Which songs a folder holds is a question about the same rows, so the
+        // folders are re-read with them: every load of the catalogue comes
+        // through here.
+        self.reload_folders(cx);
         if let Some(surviving) = surviving {
             self.prune_tracks(venue_id, &surviving, cx);
         }
@@ -721,7 +829,6 @@ fn tracks_level(
     app: &Entity<Luma>,
     window: &Window,
 ) -> Div {
-    let flying = state.flying().map(|track| track.id.as_str());
     let venue = Target::Venue {
         venue: state.venue_id.clone(),
     };
@@ -735,7 +842,12 @@ fn tracks_level(
             statuses.get(&venue).copied(),
             app,
         ))
-        .child(count(state))
+        .children(
+            state
+                .folder_error
+                .clone()
+                .map(|error| float::error_row(error).mx(px(PAD_X))),
+        )
         .child(match &state.error {
             Some(message) => luma_ui::plate(
                 format!("Failed to load tracks: {message}"),
@@ -744,16 +856,11 @@ fn tracks_level(
             None if !state.loaded => {
                 luma_ui::plate("Loading tracks…".to_string(), ladder::muted_foreground())
             }
-            None if state.shown.is_empty() => luma_ui::plate(
-                if state.rows.is_empty() {
-                    "No tracks imported".to_string()
-                } else {
-                    "No matching tracks".to_string()
-                },
-                ladder::muted_foreground(),
-            ),
-            None => body(state, shell.front_track(), flying, app).into_any_element(),
+            None => body(state, statuses, shell.front_track(), app).into_any_element(),
         })
+        // A sibling of the list, not a child of a row: the list clips, and a
+        // menu inside it would be cut off at the column's edge.
+        .children(folders::menu(state, app))
 }
 
 /// What the foot says when nobody is signed in — the guest namespace, which is
@@ -1127,20 +1234,6 @@ fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
         }))
 }
 
-/// How many rows the filters admit, over a hairline that opens the list.
-fn count(state: &Tracks) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .flex_col()
-        .gap(px(6.))
-        .px(px(PAD_X))
-        .pt(px(12.))
-        .pb(px(6.))
-        .child(luma_ui::caption(format!("{} tracks", state.shown.len())))
-        .child(float::divider())
-}
-
 /// The scrolling rows. `uniform_list` virtualizes them, so a library of
 /// thousands costs one screenful of elements. Everything the closure needs is refcounted, so a redraw
 /// copies two pointers rather than the library.
@@ -1149,12 +1242,29 @@ fn count(state: &Tracks) -> Div {
 /// the push measures a row's `y` against it, and a constant restating the
 /// head's and the filters' heights is a constant that drifts the first time
 /// either is retuned.
-fn body(state: &Tracks, selected: Option<&str>, flying: Option<&str>, app: &Entity<Luma>) -> Div {
+fn body(
+    state: &Tracks,
+    statuses: &HashMap<Target, TabStatus>,
+    selected: Option<&str>,
+    app: &Entity<Luma>,
+) -> Div {
     let rows = Rc::clone(&state.rows);
-    let shown = Rc::clone(&state.shown);
+    let entries = Rc::clone(&state.entries);
+    let folders = Rc::clone(&state.folders);
+    let dots = folders::statuses(state, statuses);
+    let renaming = state
+        .rename
+        .as_ref()
+        .map(|rename| (rename.folder_id.clone(), rename.field.clone()));
     let app = app.clone();
     let selected = selected.map(str::to_string);
-    let flying = flying.map(str::to_string);
+    // The entry the shared element is carrying, while one is in flight.
+    let flying = state.flying().and_then(|_| state.flying_index());
+    let no_songs = if state.rows.is_empty() {
+        "No tracks imported"
+    } else {
+        "No matching tracks"
+    };
     div()
         .flex_1()
         .min_h(px(0.))
@@ -1162,13 +1272,43 @@ fn body(state: &Tracks, selected: Option<&str>, flying: Option<&str>, app: &Enti
         .overflow_hidden()
         .child(luma_ui::arg::bounds_into(&state.list_box))
         .child(
-            uniform_list("tracks", shown.len(), move |range, _, _| {
+            uniform_list("tracks", entries.len(), move |range, _, _| {
                 range
-                    .map(|index| {
-                        let row = &rows[shown[index]];
-                        let picked = selected.as_deref() == Some(row.id.as_str());
-                        let flew = flying.as_deref() == Some(row.id.as_str());
-                        track_row(row, index, picked, flew, &app)
+                    .map(|index| match entries[index] {
+                        Entry::Folder {
+                            folder,
+                            songs,
+                            open,
+                        } => {
+                            let folder_row = &folders[folder];
+                            let field = renaming
+                                .as_ref()
+                                .filter(|(id, _)| *id == folder_row.id)
+                                .map(|(_, field)| field);
+                            folders::folder_row(folder_row, songs, open, dots[folder], field, &app)
+                        }
+                        Entry::NewFolder => folders::new_folder_row(&app),
+                        Entry::AllSongs { songs } => all_songs(songs),
+                        Entry::NoSongs => slot(
+                            div()
+                                .px(px(float::ROW_INSET))
+                                .text_size(px(12.))
+                                .text_color(ladder::muted_foreground())
+                                .child(no_songs)
+                                .agent_node(Role::Text, no_songs),
+                        )
+                        .into_any_element(),
+                        Entry::Song { row, folder } => {
+                            let track = &rows[row];
+                            track_row(
+                                track,
+                                index,
+                                folder.map(|folder| folders[folder].id.as_str()),
+                                selected.as_deref() == Some(track.id.as_str()),
+                                flying == Some(index),
+                                &app,
+                            )
+                        }
                     })
                     .collect()
             })
@@ -1264,14 +1404,23 @@ fn track_face(track: &TrackBrowserRow, lit: bool) -> Div {
 fn track_row(
     track: &TrackBrowserRow,
     index: usize,
+    folder: Option<&str>,
     picked: bool,
     flying: bool,
     app: &Entity<Luma>,
 ) -> AnyElement {
     let name = track_name(track);
     let deeper = app.clone();
+    let raised = app.clone();
+    let track_id = track.id.clone();
+    // A song listed in a folder is the same track twice on screen, so its
+    // element is keyed by the folder too.
+    let key = match folder {
+        Some(folder) => format!("{folder}/{}", track.id),
+        None => track.id.clone(),
+    };
     let row = div()
-        .id(SharedString::from(track.id.clone()))
+        .id(SharedString::from(key.clone()))
         .w_full()
         .h(px(ROW_HEIGHT))
         .relative()
@@ -1279,6 +1428,14 @@ fn track_row(
         .items_center()
         .on_click(move |_, window, cx| {
             deeper.update(cx, |this, cx| this.push_scores(index, window, cx));
+        })
+        .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
+            cx.stop_propagation();
+            let menu = folders::Menu::Song {
+                at: event.position,
+                track_id: track_id.clone(),
+            };
+            raised.update(cx, |this, cx| this.open_sidebar_menu(menu, cx));
         })
         // Comet's selection recipe, from the one place it is written down:
         // hover and selection share the *fill*, and only the picked row also
@@ -1292,14 +1449,11 @@ fn track_row(
         })
         .when(!picked, |row| {
             row.bg(luma_ui::motion::hover_blend(
-                &format!("track-row-{}", track.id),
+                &format!("track-row-{key}"),
                 luma_ui::glass::wash(0.),
                 luma_ui::glass::glass_hover(),
             ))
-            .on_hover(luma_ui::motion::hover_listener(format!(
-                "track-row-{}",
-                track.id
-            )))
+            .on_hover(luma_ui::motion::hover_listener(format!("track-row-{key}")))
         })
         // The row the shared element is carrying is drawn by the flight, not
         // here — one track, one row on screen.
@@ -1323,14 +1477,52 @@ fn track_row(
         )
         .agent_node(Role::Row, name);
     // Inset by the sidebar's gutter, so the fill lines up with the search
-    // field above it.
+    // field above it; a folder's songs sit one step further in.
+    slot(row)
+        .when(folder.is_some(), |slot| slot.pl(px(PAD_X + FOLDER_INDENT)))
+        .into_any_element()
+}
+
+/// How far a folder's songs sit in from the folder.
+const FOLDER_INDENT: f32 = 14.;
+
+/// One line of the list: [`ROW_HEIGHT`] tall, inset by the sidebar's gutter.
+fn slot(content: impl IntoElement) -> Div {
     div()
         .w_full()
         .h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
         .px(px(PAD_X))
-        .child(row)
-        .into_any_element()
+        .child(content)
 }
+
+/// The heading over every song, with how many the filters admit, over a
+/// hairline that opens them.
+fn all_songs(songs: usize) -> AnyElement {
+    slot(
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .px(px(float::ROW_INSET))
+                    .child(div().flex_1().child(float::label(ALL_SONGS)))
+                    .child(luma_ui::caption(format!("{songs} songs"))),
+            )
+            .child(float::divider()),
+    )
+    .items_end()
+    .pb(px(6.))
+    .into_any_element()
+}
+
+/// What the heading over every song says.
+const ALL_SONGS: &str = "All songs";
 
 /// The row's cover thumbnail: a neutral plate, with the art painted over it
 /// when the track has any.

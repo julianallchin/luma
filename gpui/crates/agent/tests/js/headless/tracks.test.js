@@ -69,7 +69,7 @@ test("the browser filters a seeded library by venue, ownership and search", () =
   const read = () => {
     const shot = app.snapshot();
     return {
-      count: shot.find((node) => /^\d+ tracks$/.test(node.label)).label,
+      count: shot.find((node) => /^\d+ songs$/.test(node.label)).label,
       // The songs; the venue's own row leads them and is not a track.
       rows: shot.findAll({ role: "row" }).map((node) => node.label).filter((label) => label !== "Venue setup"),
     };
@@ -91,22 +91,22 @@ test("the browser filters a seeded library by venue, ownership and search", () =
   nav.venue("Test Venue");
   app.frames(6);
   const opened = read();
-  expect(opened.count).toBe(`${MINE} tracks`);
+  expect(opened.count).toBe(`${MINE} songs`);
   expect(opened.rows.slice(0, 3)).toEqual(["Aurora", "Basslines", "Cascade"]);
 
   // Each filter moves the count by exactly the rows it admits.
-  expect(press("toggle", "All").count).toBe(`${ALL} tracks`);
-  expect(press("toggle", "Mine").count).toBe(`${MINE} tracks`);
+  expect(press("toggle", "All").count).toBe(`${ALL} songs`);
+  expect(press("toggle", "Mine").count).toBe(`${MINE} songs`);
 
   // Search narrows to what it matches, and escape puts it back.
   app.type(app.snapshot().find({ role: "input" }), "bassl");
   app.frames(2);
   const searched = read();
-  expect(searched.count).toBe("1 tracks");
+  expect(searched.count).toBe("1 songs");
   expect(searched.rows).toEqual(["Basslines"]);
   app.key("escape");
   app.frames(2);
-  expect(read().count).toBe(`${MINE} tracks`);
+  expect(read().count).toBe(`${MINE} songs`);
 
   // The list is virtualized: a screenful of rows, not a library of them.
   expect(opened.rows.length).toBeGreaterThan(0);

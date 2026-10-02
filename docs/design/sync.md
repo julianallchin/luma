@@ -16,11 +16,12 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   `agent_thread_messages.updated_at` and
   `agent_thread_transcript_heads.created_at` are nullable with no default, so
   every writer has to set them. `backend/src/sync/schema.rs` is the list.
-- Eleven tables keep their natural key as the local primary key and carry `id`
-  as a `GENERATED ALWAYS … VIRTUAL` column with a unique index. Three
+- Twelve tables keep their natural key as the local primary key and carry `id`
+  as a `GENERATED ALWAYS … VIRTUAL` column with a unique index. Four
   concatenate two columns — `venue_node_params` (`node_id || ':' || key`),
   `venue_constraints` (`node_id || ':' || my_socket`), `track_stems`
-  (`track_id || ':' || stem_name`). The other eight alias a single column:
+  (`track_id || ':' || stem_name`), `folder_tracks`
+  (`folder_id || ':' || track_id`). The other eight alias a single column:
   `venue_edges.id = child_id`, each `track_*` analysis table `= track_id`,
   `agent_thread_transcript_heads.id = thread_id`. Generation is local only — in
   Postgres `id` is a plain `text primary key` the client supplies, and the
@@ -125,7 +126,8 @@ is an upsert.
 ## Synced tables
 
 venues, venue_members, fixtures, fixture_groups, fixture_group_members,
-venue_nodes, venue_edges, venue_node_params, venue_constraints, tracks,
+venue_nodes, venue_edges, venue_node_params, venue_constraints, folders,
+folder_tracks, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
 clips, midi_modifiers,

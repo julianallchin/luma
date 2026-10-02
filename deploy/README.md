@@ -22,6 +22,9 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
   runs a build that no longer uploads `agent_threads.implementation_id`,
   `midi_bindings.mode_json`, `midi_bindings.target_override_json` or
   `midi_modifiers.groups_json`
+- `20260929000000_clip_graphs.sql`
+- `20261001000000_folders.sql` — then redeploy `sync-rules.yaml`, which
+  names `folders` and `folder_tracks`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

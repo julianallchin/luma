@@ -37,7 +37,7 @@ pub(crate) enum TabStatus {
 
 impl TabStatus {
     /// The stronger of two: a working tab outranks one that finished.
-    fn max(self, other: Self) -> Self {
+    pub(crate) fn max(self, other: Self) -> Self {
         if self == Self::Working || other == Self::Working {
             Self::Working
         } else {

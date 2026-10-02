@@ -446,6 +446,25 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         ]
     ),
     table!(
+        "folders",
+        "@.id",
+        "uid",
+        ["id", "uid", "venue_id", "name", "created_at", "updated_at"]
+    ),
+    table!(
+        "folder_tracks",
+        "@.folder_id || ':' || @.track_id",
+        "uid",
+        [
+            "folder_id",
+            "track_id",
+            "uid",
+            "venue_id",
+            "created_at",
+            "updated_at"
+        ]
+    ),
+    table!(
         "agent_threads",
         "@.id",
         "uid",
