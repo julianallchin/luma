@@ -8,6 +8,9 @@ Run directly with either the bundled environment or an ordinary Python::
 
 from __future__ import annotations
 
+import io
+from contextlib import redirect_stdout
+
 import math
 import os
 import sys
@@ -114,13 +117,12 @@ class Host:
         outputs.mkdir(parents=True, exist_ok=True)
         rel = f"outputs/stage-{len(self.calls)}.png"
         (self.workspace / rel).write_bytes(b"\x89PNG\r\n\x1a\n")
-        # The host clamps `t` into the track's span; a test that echoed the
-        # request back would not prove the facade reads the *response*.
         return {
             "artifactRel": rel,
             "width": payload["width"],
             "height": payload["height"],
             "view": payload["view"],
+            # The host clamps a time past the track's end (100 s here).
             "t": min(payload["t"], 100.0),
         }
 
@@ -166,7 +168,7 @@ class VenueGroupTests(unittest.TestCase):
         def host(method, payload):
             calls.append((method, payload))
             row = {"id": "saved", "name": "back_movers", "origin": "manual",
-                   "fixtures": [{"id": "f1", "label": "Mover", "heads": ["f1:0"], "headCount": 1}]}
+                   "fixtures": [{"id": "f1", "label": "Mover", "heads": ["f1:0"], "head_count": 1}]}
             return {"group": row} if method == "venue.group" else {"groups": [row]}
         venue = Venue(record(), host_call=host, workspace=Path(tempfile.mkdtemp(prefix="luma-group-")))
         distribution = Distribution({"report": {"fixtures": [
@@ -174,6 +176,7 @@ class VenueGroupTests(unittest.TestCase):
         ]}})
         group = venue.group("Back Movers", distribution)
         self.assertEqual(group.name, "back_movers")
+        self.assertEqual(group.fixtures[0].head_count, 1)
         self.assertEqual(calls[-1], ("venue.group", {"name": "Back Movers", "fixtures": ["f1"], "replace": False}))
         venue.group("back_movers", [group.fixtures[0], "f1"], replace=True)
         self.assertEqual(calls[-1][1]["fixtures"], ["f1"])
@@ -286,8 +289,19 @@ class VenueRenderTests(unittest.TestCase):
         self.assertEqual(payload["house"], 0.2)
         self.assertIsNone(payload["sun"])
 
-    def test_the_host_clamp_wins_over_the_requested_time(self) -> None:
-        self.assertEqual(self.venue.render(t=1e9).t, 100.0)
+    def test_a_time_past_the_track_end_is_clamped_and_says_so(self) -> None:
+        with redirect_stdout(io.StringIO()) as out:
+            shot = self.venue.render(t=1e9)
+        self.assertEqual(shot.t, 100.0)
+        self.assertEqual(out.getvalue(), "render: clamped to the end of the track: 100.000 s\n")
+
+    def test_a_non_finite_light_is_refused_before_the_transport_sees_it(self) -> None:
+        for kwargs in ({"house": float("nan")}, {"sun": float("inf")}):
+            with self.assertRaises(LumaHostCallError):
+                self.venue.render(**kwargs)
+            with self.assertRaises(LumaHostCallError):
+                self.venue.environment(**kwargs)
+        self.assertEqual(self.host.calls, [])
 
     def test_a_render_lands_in_the_cell_figure_list(self) -> None:
         first = self.venue.render(view="front")
@@ -456,6 +470,7 @@ def node_row(node_id: str, **overrides: Any) -> dict[str, Any]:
         "host": "root",
         "at": [1.0, 2.0],
         "z": 0.17,
+        "trim": 0.0,
         "size": [3.0, 0.34, 0.34],
         "face": [0.0, 0.0, 1.0],
         "tips": [tip_row(node_id)],
@@ -484,7 +499,6 @@ def placement(node_id: str = "n-1", tree: str = "root  venue\n") -> dict[str, An
     return {
         "placement": {
             "nodeId": node_id,
-            "outcome": "placed",
             "parentId": "root",
             "warnings": [],
             "dangling": [],
@@ -580,14 +594,6 @@ class BuildHost:
             }
         if method == "venue.open":
             return {
-                "unplaced": [
-                    {
-                        "nodeId": "mover-9",
-                        "kind": "fixture",
-                        "label": "Spare",
-                        "descendants": 0,
-                    }
-                ],
                 "dangling": [
                     {"nodeId": "run-1", "socket": "end_b", "socketType": "truss_end"}
                 ],
@@ -607,7 +613,6 @@ class BuildHost:
                         "refusal": None,
                         "warnings": ["recorded in the draft"],
                         "dangling": [],
-                        "unplaced": [],
                     },
                     "describe": "draft  venue\n",
                 }
@@ -636,7 +641,6 @@ class BuildHost:
                     "refusal": None,
                     "warnings": [],
                     "dangling": [],
-                    "unplaced": [],
                 },
                 "describe": "root  venue\n",
             }
@@ -690,19 +694,16 @@ class BuildTests(unittest.TestCase):
         # Sockets are still reachable for `attach`/`extend`.
         self.assertIn("end_a", catalog.sockets("truss"))
 
-    def test_unplaced_and_dangling_are_read_live(self) -> None:
+    def test_dangling_is_read_live(self) -> None:
         """Not the cell's binding snapshot: a build script asks after it has
         changed the room."""
-        unplaced = self.venue.unplaced()
-        self.assertEqual(unplaced[0].node_id, "mover-9")
-        self.assertEqual(unplaced[0].descendants, 0)
         dangling = self.venue.dangling()
-        self.assertEqual(dangling[0].socket, "end_b")
-        self.assertEqual([name for name, _ in self.host.calls], ["venue.open", "venue.open"])
+        self.assertEqual((dangling[0].node, dangling[0].socket), ("run-1", "end_b"))
+        self.assertEqual([name for name, _ in self.host.calls], ["venue.open"])
 
     def test_reach_measures_before_an_extend_refuses(self) -> None:
         reach = self.venue.reach("run-1", "end_b")
-        self.assertEqual(reach.gap_m, 4.0)
+        self.assertEqual((reach.node, reach.gap_m), ("run-2", 4.0))
         self.assertEqual(self.host.last("venue.reach")["nodeId"], "run-1")
 
     # -- writes ---------------------------------------------------------
@@ -746,7 +747,7 @@ class BuildTests(unittest.TestCase):
 
         venue = Venue(record(), host_call=boom, workspace=self.workspace)
         with self.assertRaises(LumaHostCallError):
-            venue.detach("run-1")
+            venue.remove("run-1")
 
     def test_trim_converts_only_the_angle(self) -> None:
         self.venue.trim("run-1", trim=6.0, yaw=45.0, span=3.0)
@@ -774,7 +775,7 @@ class BuildTests(unittest.TestCase):
         """One solve, both channels — a program never asks twice what its own
         call did."""
         placed = self.venue.attach("truss/straight", to="deck-1", socket="corner_fl")
-        self.assertTrue(placed.placed)
+        self.assertEqual(placed.parent_id, "root")
         self.assertIn("root  venue", placed.describe())
 
     def test_printing_a_report_is_a_summary_and_not_the_whole_rig(self) -> None:
@@ -782,7 +783,7 @@ class BuildTests(unittest.TestCase):
         `describe()` is where it lives."""
         placed = self.venue.attach("truss/straight", to="deck-1", socket="corner_fl")
         self.assertNotIn("root  venue", str(placed))
-        self.assertIn("<Placement n-1 placed>", str(placed))
+        self.assertIn("<Placement n-1 on root>", str(placed))
         row = self.venue.distribute("a.qxf", 4, on="run-1", face=(0, -1, 0), mode="m")
         self.assertNotIn("root  venue", str(row))
         self.assertIn("Distribution", str(row))
@@ -828,7 +829,7 @@ class BuildTests(unittest.TestCase):
         lookup: every verb that names a node takes what another verb returned."""
         row = self.venue.distribute("a.qxf", 2, on="run-1", face=(0, -1, 0), mode="8-Channel")
         head = row.fixtures[0]
-        self.assertEqual(head.node_id, "fix-1")
+        self.assertEqual(head.id, "fix-1")
         self.assertEqual((head.universe, head.address), (1, 1))
         self.assertEqual(head.group_path, ("wash", "left wing"))
         self.venue.aim(head, tilt=30)
@@ -901,9 +902,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(found[0].at, (1.0, 2.0))
         self.assertEqual(found[0].piece, "truss")
         self.assertEqual(found[0].face, (0.0, 0.0, 1.0))
+        # Centre height and the trim parameter are two different numbers.
+        self.assertEqual((found[0].z, found[0].trim), (0.17, 0.0))
         # A returned node feeds straight back into any verb that names one.
-        self.venue.detach(found[0])
-        self.assertEqual(self.host.last("venue.detach")["nodeId"], "n-1")
+        self.venue.remove(found[0])
+        self.assertEqual(self.host.last("venue.remove")["nodeIds"], ["n-1"])
 
     def test_extent_answers_the_is_it_centred_question(self) -> None:
         span = self.venue.extent(kind="tower")
@@ -932,6 +935,23 @@ class BuildTests(unittest.TestCase):
         # A list mixing a group with a plain node id flattens too.
         self.venue.extent([group, "n-1"])
         self.assertEqual(self.host.last("venue.extent")["ids"], ["f1", "f2", "n-1"])
+        # A verb that takes one node refuses a group instead of sending its id.
+        with self.assertRaises(LumaHostCallError):
+            self.venue.aim(group, tilt=10)
+
+    def test_one_fixture_has_one_id_on_every_surface(self) -> None:
+        """Snapshot rows, group members, verb results and node handles all
+        name a fixture by `id`, and each one is accepted where a node is."""
+        from luma_exec.venue import Group
+        member = Group({"id": "g", "name": "wing", "fixtures": [
+            {"id": "fix-1", "label": "A", "heads": ["fix-1:0"], "head_count": 1},
+        ]}).fixtures[0]
+        row = self.venue.distribute("a.qxf", 2, on="run-1", face=(0, -1, 0), mode="8-Channel")
+        for handle in (member, row.fixtures[0], {"id": "fix-1"}, "fix-1"):
+            self.venue.aim(handle, tilt=5)
+            self.assertEqual(self.host.last("venue.params")["nodeId"], "fix-1")
+        self.assertFalse(hasattr(member, "node_id"))
+        self.assertFalse(hasattr(row.fixtures[0], "node_id"))
 
     def test_extent_takes_a_distribution_by_the_fixtures_it_placed(self) -> None:
         distribution = Distribution({"report": {"fixtures": [
@@ -1118,7 +1138,6 @@ class BuildTests(unittest.TestCase):
                     },
                     "warnings": [],
                     "dangling": [],
-                    "unplaced": [],
                 },
                 "describe": "root  venue\n",
             }
@@ -1138,9 +1157,8 @@ class BuildTests(unittest.TestCase):
         for call in (
             venue.describe,
             venue.dangling,
-            venue.unplaced,
             lambda: venue.place("truss"),
-            lambda: venue.detach("n"),
+            lambda: venue.remove("n"),
         ):
             with self.assertRaises(VenueHostUnavailableError):
                 call()

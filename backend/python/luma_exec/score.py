@@ -4,8 +4,8 @@
     t = time(every=2)
     place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
     pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]])
-    clip = edit.add_clip(color(brightness=pill), name="Chase", beats=(32, 48), selection="bars")
-    edit.window(beats=(32, 36)).output.heatmap()
+    clip = edit.add_clip(color(brightness=pill), name="Chase", at=("9", "13"), selection="bars")
+    edit.window(at=("9", "10")).output.heatmap()
     edit.apply()
 
 A clip has a name, a time range, a selection, a blend mode, a seed and one
@@ -13,6 +13,9 @@ graph. Build the graph with the bare builders (time, space, noise, audio,
 curve, mirror, shuffle, group, split, then color, aim or strobe) and math on
 curves (cut * fade, max(a, b)), or start from preset("Chase"). add_clip and update_clip run the Rust checker on
 that clip at once and raise ClipError with its text.
+
+A position is "bar.beat.16th", all three from 1, as the editor shows it.
+"17" is 17.1.1. A range includes its start and excludes its end.
 
 A color is light in linear Rec. 2020, three channels 0..1. "#RRGGBB" is sRGB
 and is converted. clip.graph.source() gives Python that rebuilds a clip's
@@ -27,14 +30,15 @@ import math
 import uuid
 from dataclasses import dataclass
 
-from .clip import ClipError, Graph, preset
+from .clip import ClipError, Graph, _preset_name, preset
 from .color import from_srgb
 from .host_errors import LumaHostCallError
 from .track import (TrackOutput, TrackError, TrackReadOnlyError,
                     TrackClosedError, TrackHostUnavailableError,
                     _ImmutableSnapshot, _field, _items,
                     _freeze, _range_pair, _selection, _blend, _z,
-                    _downbeat_values, _check_result, _pattern_color, BLEND_MODES)
+                    _feature_times, _check_result, _pattern_color, _format_time_axis, BLEND_MODES,
+                    BarGrid)
 
 # How far, in beats, one clip may run past the start of the next on its track
 # and still count as ending where it starts.
@@ -69,16 +73,18 @@ def _seed(value):
 
 @dataclass(frozen=True)
 class Clip:
-    """One clip: id, name, start/duration in beats, selection, seed, z, blend, graph.
+    """One clip: id, name, at, selection, seed, z, blend, graph.
 
-    This is a read-only value. Use edit.update_clip(clip, ...) to change it.
-    clip.graph.source() is Python that rebuilds the graph. The stored JSON
-    spells z and blend as z_index and blend_mode.
+    at is the clip's range as two positions, such as ("17.1.1", "21.1.1").
+    The range includes its start and excludes its end; at=clip.at places
+    another clip on the same range. This is a read-only value. Use
+    edit.update_clip(clip, ...) to change it. clip.graph.source() is Python
+    that rebuilds the graph. The stored JSON spells z and blend as z_index
+    and blend_mode, and stores start and duration in beats, where 0 is 1.1.1.
     """
     id: str
     name: str
-    start: float
-    duration: float
+    at: tuple
     selection: object
     seed: int
     z: int
@@ -86,9 +92,10 @@ class Clip:
     graph: Graph
 
     @classmethod
-    def read(cls, id, value):
+    def read(cls, id, value, bars):
         name = value.get("name", "")
-        return cls(id, name, value["start"], value["duration"],
+        start, end = value["start"], value["start"] + value["duration"]
+        return cls(id, name, (bars.format(start), bars.format(end)),
                    _freeze(value.get("selection", {"expression": "all"})), value["seed"],
                    value.get("z_index", 0), value.get("blend_mode", "replace"),
                    Graph.from_json(value.get("graph") or {}, name=name or None))
@@ -115,8 +122,9 @@ class GraphTrack(_ImmutableSnapshot):
         self.duration_s = float(_field(values, "duration_s", default=0) or 0)
         self.editable = bool(_field(values, "editable", default=False))
         self._document = _plain(_field(values, "document"))
-        self._downbeats = _downbeat_values(features)
-        self._beats = _downbeat_values({"downbeats": _field(features, "beats", default=None)})
+        self._beats = _feature_times(features, "beats")
+        self._downbeats = _feature_times(features, "downbeats")
+        self._beats_per_bar = int(_field(features, "beats_per_bar", "beatsPerBar", default=4) or 4)
         self._seal()
 
     def _require_active(self):
@@ -124,9 +132,10 @@ class GraphTrack(_ImmutableSnapshot):
             raise TrackClosedError("this score is no longer in scope; use the current luma.track")
 
     @staticmethod
-    def color(srgb):
+    def from_srgb(srgb):
         """An sRGB color, "#RRGGBB" or three channels 0..1, as the linear
-        Rec. 2020 triple a score stores."""
+        Rec. 2020 triple a score stores. A plain tuple in color() is already
+        linear Rec. 2020; use this to convert an sRGB tuple first."""
         try:
             return from_srgb(srgb)
         except ValueError as error:
@@ -162,26 +171,6 @@ class GraphTrack(_ImmutableSnapshot):
         """Binding inventory hook; keeps ``luma.catalog()`` domain-neutral."""
         return _items(self._values)
 
-    def _bar_time(self, bar):
-        """1-indexed fractional bar boundary -> seconds, with edge extrapolation."""
-        downbeats = self._downbeats
-        index = math.floor(bar - 1.0)
-        fraction = bar - 1.0 - index
-        if len(downbeats) == 1:
-            bpm = float(_field(self._features, "bpm", default=120.0) or 120.0)
-            beats_per_bar = float(
-                _field(self._features, "beats_per_bar", "beatsPerBar", default=4.0)
-                or 4.0
-            )
-            span = beats_per_bar * 60.0 / bpm
-            return downbeats[0] + (index + fraction) * span
-        if index < 0:
-            return downbeats[0] + (index + fraction) * (downbeats[1] - downbeats[0])
-        if index + 1 < len(downbeats):
-            return downbeats[index] + fraction * (downbeats[index + 1] - downbeats[index])
-        span = downbeats[-1] - downbeats[-2]
-        return downbeats[-1] + (index - (len(downbeats) - 1) + fraction) * span
-
     def _refresh(self, snapshot):
         # An edit owns its candidate; only this live facade advances when the
         # worker installs a new manifest for the same score.
@@ -202,8 +191,8 @@ class GraphTrack(_ImmutableSnapshot):
 
     @property
     def clips(self):
-        """All saved Clip values, ordered by start beat, layer z, then ID."""
-        return tuple(Clip.read(id, clip) for id, clip in sorted(
+        """All saved Clip values, ordered by start, layer z, then ID."""
+        return tuple(Clip.read(id, clip, self.bars) for id, clip in sorted(
             self._document["clips"].items(), key=lambda item: (item[1]["start"], item[1].get("z_index", 0), item[0])))
 
     def definition(self, kind):
@@ -248,7 +237,34 @@ class GraphTrack(_ImmutableSnapshot):
         left = max(0, min(len(self._beats)-2, bisect.bisect_right(self._beats, seconds)-1))
         return left + (seconds - self._beats[left]) / (self._beats[left+1] - self._beats[left])
 
-    def beat_at(self, seconds):
+    @property
+    def bars(self):
+        """The bar grid: bar n starts at the n-th detected downbeat, as on the ruler."""
+        grid = vars(self).get("_bars")
+        if grid is None:
+            grid = BarGrid([self._beat_at(time) for time in self._downbeats], self._beats_per_bar)
+            object.__setattr__(self, "_bars", grid)
+        return grid
+
+    def position_at(self, seconds):
+        """The position at a time on the track, as "bar.beat.16th".
+
+        Seconds count from the start of the audio. The beat grid gives the
+        position, so a tempo change moves it. Example: position_at(63.4)
+        gives "17.2.3".
+        """
+        return self.bars.format(self._beat_at(seconds))
+
+    def seconds_at(self, position):
+        """The time in seconds of a position "bar.beat.16th".
+
+        "17" is 17.1.1. The beat grid gives the time. Example:
+        seconds_at("17.2") gives the time of beat 2 of bar 17.
+        """
+        return self._seconds_at(self.bars.parse(position))
+
+    def _beat_at(self, seconds):
+        """Seconds -> beats from the first downbeat."""
         if not math.isfinite(seconds):
             raise TrackError("time must be finite")
         origin = _field(self._values, "beat_origin_s", default=None)
@@ -256,7 +272,8 @@ class GraphTrack(_ImmutableSnapshot):
             raise TrackError("musical time requires a detected beat origin")
         return self._raw_beat(seconds) - self._raw_beat(origin)
 
-    def seconds_at(self, beat):
+    def _seconds_at(self, beat):
+        """Beats from the first downbeat -> seconds."""
         self._clock()
         if not math.isfinite(beat):
             raise TrackError("beat position must be finite")
@@ -267,20 +284,27 @@ class GraphTrack(_ImmutableSnapshot):
         left = max(0, min(len(self._beats)-2, math.floor(raw)))
         return self._beats[left] + (raw-left) * (self._beats[left+1]-self._beats[left])
 
-    def _range(self, *, beats=None, bars=None, seconds=None):
-        if sum(value is not None for value in (beats, bars, seconds)) != 1:
-            raise TrackError("specify exactly one of beats=, bars= or seconds=")
-        if beats is not None:
-            return _range_pair(beats, "beats")
+    def _range(self, *, at=None, bars=None, seconds=None):
+        """One of at=, bars= or seconds= as (start, end) in beats from the first downbeat."""
+        if sum(value is not None for value in (at, bars, seconds)) != 1:
+            raise TrackError('specify exactly one of at=("17", "21"), bars=(17, 21) or seconds=(0, 16)')
+        if at is not None:
+            if isinstance(at, (str, bytes)) or len(at) != 2:
+                raise TrackError('at must be a (start, end) pair of positions, such as ("17.1", "21.1")')
+            start, end = (self.bars.parse(position) for position in at)
+            if end <= start:
+                raise TrackError(f"at {tuple(at)!r}: the end must come after the start")
+            return start, end
         if bars is not None:
-            if not self._downbeats:
-                raise TrackError("bar ranges require detected downbeats")
             start, end = _range_pair(bars, "bars")
-            return self.beat_at(self._bar_time(start)), self.beat_at(self._bar_time(end))
+            if start != int(start) or end != int(end):
+                raise TrackError("bars are whole bar numbers, such as bars=(17, 21); use at= inside a bar")
+            return self.bars.start(int(start)), self.bars.start(int(end))
         start, end = _range_pair(seconds, "seconds")
-        return self.beat_at(start), self.beat_at(end)
+        return self._beat_at(start), self._beat_at(end)
 
     def window(self, **range):
+        """Inspect an at=, bars= or seconds= range of the saved score."""
         return Window(self, self._document, self._range(**range))
 
     def __repr__(self):
@@ -312,7 +336,10 @@ class Edit:
     @property
     def clips(self):
         """All candidate Clip values: unchanged saved clips plus staged edits."""
-        return tuple(Clip.read(id, clip) for id, clip in self._candidate["clips"].items())
+        return tuple(self._read(id, clip) for id, clip in self._candidate["clips"].items())
+
+    def _read(self, id, value):
+        return Clip.read(id, value, self._track.bars)
 
     def definition(self, kind):
         """The definition record of a node kind (inputs, settings, defaults)."""
@@ -345,7 +372,7 @@ class Edit:
         if not result.ok:
             raise ClipError("\n".join(_prefixed(label, id, message) for message in result.errors))
 
-    def add_clip(self, graph, *, name=None, beats=None, bars=None, seconds=None,
+    def add_clip(self, graph, *, name=None, at=None, bars=None, seconds=None,
                  selection="all", z=None, blend=None, seed=None, id=None):
         """Stage a clip and return it. The checker runs on it at once.
 
@@ -353,11 +380,14 @@ class Edit:
         or a preset name. name is required unless the graph is a preset;
         a preset also gives its blend mode (motion presets are offset).
         With no blend and no preset, the blend is replace.
-        Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
-        seconds=(0,16). Beats start at zero; bars at one. selection is a
-        group expression. Clips composite bottom-up by integer z; omit z to
-        place above clips overlapping this range. One z is one track: a clip
-        given a z cuts away the part of any clip it covers at that z. replace covers the lower
+        Supply exactly one range: at=("17.1", "21.1") with positions
+        "bar.beat.16th" (all from 1; "17" is 17.1.1), bars=(17, 21), or
+        seconds=(0, 16). A range includes its start and excludes its end.
+        selection is a group expression. Clips composite bottom-up by integer z; omit z to
+        place above clips overlapping this range. One z is one track, as in
+        Ableton: clips at one z never overlap, whatever lights they select. A
+        clip placed on or stretched into another clip at its z cuts that clip
+        and replaces it there; each cut prints one line. replace covers the lower
         layer; add sums; screen brightens; an aim clip takes replace or
         offset (offset adds its yaw and pitch to the aim underneath).
         """
@@ -366,7 +396,7 @@ class Edit:
         name = name if name is not None else graph.name
         if not name:
             raise ClipError('clip: expected a name; got none. Example: name="Kick chase"')
-        start, end = self._track._range(beats=beats, bars=bars, seconds=seconds)
+        start, end = self._track._range(at=at, bars=bars, seconds=seconds)
         id = id or str(uuid.uuid4())
         if id in self._candidate["clips"]:
             raise TrackError(f"clip {id!r} already exists")
@@ -378,20 +408,27 @@ class Edit:
                  "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend or graph.blend or "replace"),
                  "graph": graph.json()}
         self._check_clip(id, value)
-        self._cut(id, value)
+        self._report(self._cut(id, value))
         self._candidate["clips"][id] = value
-        return Clip.read(id, value)
+        return self._read(id, value)
+
+    @staticmethod
+    def _report(cuts):
+        """Print each cut, so a caller sees what a new or moved clip took away."""
+        for line in cuts:
+            print(line)
 
     def _cut(self, id, value):
         """Cut away the part of every other clip at value's z that value covers.
 
         A z is one track and its clips never overlap. A clip the range covers
         whole is removed; one it covers in part is trimmed, or split in two
-        with the far piece as a new clip.
+        with the far piece as a new clip. Returns one line per clip it changed.
         """
         z, start = value.get("z_index", 0), value["start"]
         end = start + value["duration"]
         clips = self._candidate["clips"]
+        cuts = []
         for other_id, other in list(clips.items()):
             other_start = other["start"]
             other_end = other_start + other["duration"]
@@ -405,8 +442,14 @@ class Edit:
             if tail > _TOUCH:
                 piece = dict(copy.deepcopy(other), start=end, duration=tail)
                 clips[str(uuid.uuid4()) if head > _TOUCH else other_id] = piece
+            label = f"clip {other.get('name') or other_id} ({other_id}) at z {z}"
+            kept = [self._track.bars.format_range(a, a + d) for a, d in
+                    ((other_start, head), (end, tail)) if d > _TOUCH]
+            cuts.append(f"cut: {label} is now {' and '.join(kept)}" if kept
+                        else f"cut: removed {label}; the new clip covers all of it")
+        return cuts
 
-    def update_clip(self, clip, *, graph=None, name=None, beats=None, bars=None, seconds=None,
+    def update_clip(self, clip, *, graph=None, name=None, at=None, bars=None, seconds=None,
                     selection=None, z=None, blend=None, seed=None):
         """Update a Clip or clip ID and return its new value; other fields stay.
 
@@ -428,8 +471,8 @@ class Edit:
             if not str(name):
                 raise ClipError('clip: expected a name; got none. Example: name="Kick chase"')
             value["name"] = str(name)
-        if any(item is not None for item in (beats, bars, seconds)):
-            start, end = self._track._range(beats=beats, bars=bars, seconds=seconds)
+        if any(item is not None for item in (at, bars, seconds)):
+            start, end = self._track._range(at=at, bars=bars, seconds=seconds)
             value.update(start=start, duration=end - start)
         if selection is not None:
             value["selection"] = _selection(selection)
@@ -440,9 +483,9 @@ class Edit:
         if seed is not None:
             value["seed"] = _seed(seed)
         self._check_clip(id, value)
-        self._cut(id, value)
+        self._report(self._cut(id, value))
         self._candidate["clips"][id] = value
-        return Clip.read(id, value)
+        return self._read(id, value)
 
     def remove_clip(self, clip):
         """Remove a Clip or clip ID from the candidate; nothing is saved yet."""
@@ -472,18 +515,27 @@ class Edit:
         self._closed = True
         return result
 
-    def diff(self):
-        """IDs added, removed or updated versus this edit's captured base."""
-        result = {}
-        for kind in ("clips",):
-            before, after = self._base[kind], self._candidate[kind]
-            result[kind] = {"added": sorted(after.keys()-before.keys()),
-                            "removed": sorted(before.keys()-after.keys()),
-                            "updated": sorted(key for key in before.keys() & after.keys() if before[key] != after[key])}
-        return result
+    def diff(self, full=False):
+        """What this edit changes against the score it captured.
+
+        A short plan: a count line, then one line per clip, sorted by start.
+        `+` is added, `-` removed, `~` changed. A changed clip shows only the
+        fields that changed, as before → after, and its graph per node and
+        input. A clip that a cut split shows as one line. full=True gives the
+        raw stored clips: {"added": {id: clip}, "removed": {id: clip},
+        "changed": {id: {"before": clip, "after": clip}}}.
+        """
+        before, after = self._base["clips"], self._candidate["clips"]
+        added = {id: after[id] for id in after.keys() - before.keys()}
+        removed = {id: before[id] for id in before.keys() - after.keys()}
+        changed = {id: {"before": before[id], "after": after[id]}
+                   for id in before.keys() & after.keys() if before[id] != after[id]}
+        if full:
+            return copy.deepcopy({"added": added, "removed": removed, "changed": changed})
+        return _Plan(self._track.bars, after, added, removed, changed).text()
 
     def window(self, **range):
-        """Inspect a beats=, bars= or seconds= window of the complete candidate.
+        """Inspect an at=, bars= or seconds= range of the complete candidate.
 
         timeline() plots clips; output.heatmap() shows composited light output.
         For the 3D scene, use luma.venue.render(edit=self, t=seconds).
@@ -518,14 +570,177 @@ def _prefixed(label, id, message):
     return message if message.startswith("clip ") else f"clip {label} ({id}): {message}"
 
 
+class Diff(str):
+    """Plain text that shows as itself, not as a quoted string."""
+
+    def __repr__(self):
+        return str(self)
+
+
+#: At most this many clip lines in edit.diff(); full=True has every clip.
+_DIFF_LINES = 200
+
+
+class _Plan:
+    """edit.diff() as text: a count line and one line per clip."""
+
+    def __init__(self, bars, candidate, added, removed, changed):
+        self._bars, self._candidate = bars, candidate
+        self._added, self._removed, self._changed = dict(added), removed, changed
+        self._pieces = self._splits()
+
+    def _splits(self):
+        """Added clips that are the far piece of a changed clip a cut split."""
+        pieces = {}
+        for id, value in list(self._added.items()):
+            for old_id, change in self._changed.items():
+                old, new = change["before"], change["after"]
+                if (_same_but_range(value, old) and _same_but_range(new, old)
+                        and old["start"] - _TOUCH <= value["start"]
+                        and value["start"] + value["duration"] <= old["start"] + old["duration"] + _TOUCH):
+                    pieces.setdefault(old_id, []).append(id)
+                    del self._added[id]
+                    break
+        return pieces
+
+    def text(self):
+        rows = [(value["start"], "+", self._line("+", id, value)) for id, value in self._added.items()]
+        rows += [(value["start"], "-", self._line("-", id, value)) for id, value in self._removed.items()]
+        rows += [(change["after"]["start"], "~", self._changed_line(id, change))
+                 for id, change in self._changed.items()]
+        rows.sort(key=lambda row: (row[0], row[1]))
+        counts = (f"{len(self._added)} added, {len(self._removed)} removed, "
+                  f"{len(self._changed)} changed")
+        lines = [counts] + [line for _, _, line in rows[:_DIFF_LINES]]
+        if len(rows) > _DIFF_LINES:
+            lines.append(f"…and {len(rows) - _DIFF_LINES} more; diff(full=True) has every clip")
+        return Diff("\n".join(lines))
+
+    def _range(self, value):
+        return self._bars.format_range(value["start"], value["start"] + value["duration"])
+
+    def _line(self, sign, id, value):
+        name = value.get("name") or id
+        selection = (value.get("selection") or {}).get("expression", "all")
+        return f"{sign} {name} {self._range(value)} z {value.get('z_index', 0)} {selection}"
+
+    def _changed_line(self, id, change):
+        old, new = change["before"], change["after"]
+        pieces = self._pieces.get(id)
+        if pieces:
+            cutter = self._cutter(old, [id, *pieces])
+            ranges = ", ".join(self._range(value) for value in
+                               sorted([new, *(self._candidate[p] for p in pieces)], key=lambda v: v["start"]))
+            return f"{self._line('~', id, old)}: split by {cutter} → {len(pieces) + 1} clips ({ranges})"
+        notes = []
+        if old.get("name") != new.get("name"):
+            notes.append(f"name {old.get('name')!r} → {new.get('name')!r}")
+        if (old["start"], old["duration"]) != (new["start"], new["duration"]):
+            notes.append(f"at {self._range(old)} → {self._range(new)}")
+        for key, label in (("z_index", "z"), ("blend_mode", "blend"), ("seed", "seed")):
+            if old.get(key) != new.get(key):
+                notes.append(f"{label} {old.get(key)} → {new.get(key)}")
+        if old.get("selection") != new.get("selection"):
+            notes.append(f"selection {(old.get('selection') or {}).get('expression')!r} → "
+                         f"{(new.get('selection') or {}).get('expression')!r}")
+        notes += _graph_changes(old.get("graph") or {}, new.get("graph") or {})
+        return f"{self._line('~', id, new)}: " + "; ".join(notes)
+
+    def _cutter(self, old, pieces):
+        """The name of the candidate clip at old's z that sits inside old's range."""
+        start, end = old["start"], old["start"] + old["duration"]
+        for id, value in self._candidate.items():
+            if (id not in pieces and value.get("z_index", 0) == old.get("z_index", 0)
+                    and start < value["start"] + value["duration"] and value["start"] < end):
+                return value.get("name") or id
+        return "a cut"
+
+
+def _same_but_range(a, b):
+    """Two clips that differ at most in start and duration."""
+    return {k: v for k, v in a.items() if k not in ("start", "duration")} == \
+        {k: v for k, v in b.items() if k not in ("start", "duration")}
+
+
+def _graph_changes(old, new):
+    """Per node and input: what changed in a clip graph, as short notes."""
+    before, after = old.get("nodes") or {}, new.get("nodes") or {}
+    readers = {}
+    for node_id, node in after.items():
+        if node.get("kind") in ("color", "aim", "strobe"):
+            for name, value in (node.get("inputs") or {}).items():
+                for wire in _wires(value):
+                    readers.setdefault(wire, name)
+    notes = [f"-node {id}" for id in sorted(before.keys() - after.keys())]
+    notes += [f"+node {id}" for id in sorted(after.keys() - before.keys())]
+    for id in sorted(before.keys() & after.keys()):
+        a, b = before[id], after[id]
+        if a == b:
+            continue
+        prefix = f"{readers[id]}: " if id in readers else ""
+        if a.get("kind") != b.get("kind"):
+            notes.append(f"{prefix}{id} kind {a.get('kind')} → {b.get('kind')}")
+            continue
+        for field in ("settings", "inputs"):
+            old_values, new_values = a.get(field) or {}, b.get(field) or {}
+            for name in sorted(old_values.keys() | new_values.keys()):
+                if old_values.get(name) != new_values.get(name):
+                    notes.append(f"{prefix}{id} {name} {_brief(old_values.get(name))} → "
+                                 f"{_brief(new_values.get(name))}")
+    return notes
+
+
+def _wires(value):
+    if isinstance(value, dict) and set(value) == {"node"}:
+        return [value["node"]]
+    if isinstance(value, list):
+        return [wire for item in value for wire in _wires(item)]
+    return []
+
+
+def _brief(value):
+    """A stored input value in a few characters: a preset name, a wire, a number."""
+    if value is None:
+        return "empty"
+    if isinstance(value, dict) and set(value) == {"node"}:
+        return value["node"]
+    if isinstance(value, dict) and set(value) == {"points"}:
+        name = _preset_name("curves", value["points"])
+        return f'"{name}"' if name else f"{len(value['points'])} points"
+    if isinstance(value, dict) and set(value) == {"stops"}:
+        name = _preset_name("gradients", value["stops"])
+        return f'"{name}"' if name else f"{len(value['stops'])} stops"
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, list) and all(isinstance(item, (int, float)) for item in value):
+        return "(" + ", ".join(f"{item:g}" for item in value) + ")"
+    text = json.dumps(value, separators=(",", ":"))
+    return text if len(text) <= 40 else text[:39] + "…"
+
+
 class Window(_ImmutableSnapshot):
+    """One range of a score: its clips, and its composited output.
+
+    at is the range as two positions; bars is the same range in bars from 1,
+    such as (17, 21). start_s and end_s are the range in seconds.
+    """
+
     def __init__(self, track, document, span):
         self._track = track
         self._document = copy.deepcopy(document)
-        self.start_s, self.end_s = (track.seconds_at(beat) for beat in span)
-        self.bars = None
-        self.clips = tuple(Clip.read(id, clip) for id, clip in document["clips"].items()
-                           if clip["start"] < span[1] and clip["start"]+clip["duration"] > span[0])
+        start, end = span
+        self.start_s, self.end_s = track._seconds_at(start), track._seconds_at(end)
+        if track.duration_s > 0 and self.end_s > track.duration_s:
+            if self.start_s >= track.duration_s:
+                raise TrackError(f"window starts at {self.start_s:.3f} s, after the track ends at {track.duration_s:.3f} s")
+            self.end_s = track.duration_s
+            end = track._beat_at(self.end_s)
+            print(f"window: clamped to the end of the track: {self.end_s:.3f} s")
+        grid = track.bars
+        self.at = (grid.format(start), grid.format(end))
+        self.bars = (grid.bar_number(start), grid.bar_number(end))
+        self.clips = tuple(Clip.read(id, clip, grid) for id, clip in document["clips"].items()
+                           if clip["start"] < end and clip["start"]+clip["duration"] > start)
         self.output = TrackOutput(self)
         self._seal()
 
@@ -537,11 +752,13 @@ class Window(_ImmutableSnapshot):
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(12, 3), dpi=100)
         for clip in self.clips:
-            start = max(self.start_s, self._track.seconds_at(clip.start))
-            end = min(self.end_s, self._track.seconds_at(clip.start+clip.duration))
+            stored = self._document["clips"][clip.id]
+            start = max(self.start_s, self._track._seconds_at(stored["start"]))
+            end = min(self.end_s, self._track._seconds_at(stored["start"] + stored["duration"]))
             kind = clip.graph.output.kind if clip.graph.output is not None else "empty"
             ax.barh(clip.z, end-start, left=start, color=_pattern_color(kind), height=.7)
             ax.text((start+end)/2, clip.z, clip.name or kind, ha="center", va="center", fontsize=8)
-        ax.set(xlim=(self.start_s, self.end_s), xlabel="time (s)", ylabel="stack", title="Score clips")
+        ax.set(xlim=(self.start_s, self.end_s), ylabel="z", title=f"Score clips · {'-'.join(self.at)}")
+        _format_time_axis(ax, self)
         fig.tight_layout()
         return fig

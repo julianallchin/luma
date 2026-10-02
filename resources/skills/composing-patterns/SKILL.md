@@ -17,7 +17,8 @@ mode. Build, add, measure, apply.
    as Python. Load `node-cards` for what each node and input does.
 3. **Build the graph.** Start from a catalog row or `preset("Chase")`. Change
    the numbers that the music asks for.
-4. **Add** with `edit.add_clip(graph, name="Kick chase", beats=(32, 48), selection="name")`.
+4. **Add** with `edit.add_clip(graph, name="Kick chase", at=("9", "13"), selection="name")`.
+   A position is `bar.beat.16th`, all three from 1; the range excludes its end.
    The checker runs at once. A `ClipError` tells you the node, the input and
    an example fix.
 5. **Measure** with `edit.window(...)`. Read the numbers before you look at a
@@ -40,7 +41,7 @@ edit.add_clip(color(color="#1030ff", brightness=0.3),
 t = time(every=1, duration=2)
 place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
 pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]])
-kick = curve(audio("Kick"), "Ramp up", low=0.3, high=1)
+kick = curve(audio("low"), "Ramp up", low=0.3, high=1)
 chase = color(brightness=pill * kick)
 clip = edit.add_clip(chase, name="Kick chase", seconds=(0.0, end),
                      selection="led_bars_vertical", blend="screen")
@@ -79,7 +80,8 @@ graph to `edit.update_clip(clip, graph=...)`.
   cut on `brightness` (or strobe `rate`). `alpha` mixes the whole clip with
   the light below: use it for a fade in or out of the clip.
 - **Settings are not wired.** `kind`, `wrap`, `base` and `by` are plain words.
-- **`edit.check()` takes no arguments.** So do `edit.diff()` and `edit.apply()`.
+- **`edit.check()` and `edit.apply()` take no arguments.** `edit.diff()` prints
+  a short plan; `edit.diff(full=True)` gives the raw clips.
 - **`luma.track.document` is a property.** Do not call it.
 - **Python calls need `purpose`.** The tool refuses a cell without it.
 - **Selection is a group expression.** Operators: `&` and, `|` or, `^` xor,
@@ -113,14 +115,14 @@ The composited output is available as numbers:
 ```python
 view = edit.window(seconds=(55.0, 65.0))
 out = view.output
-vals = out.values             # numpy, [light, time, rgb], linear Rec. 2020 0..1
-ids = out.light_ids           # "fixture_id:head_index", same order as axis 0
+vals = out.values             # numpy, [primitive, time, rgb], linear Rec. 2020 0..1
+ids = out.primitive_ids       # "fixture_id:head_index", same order as axis 0
 t = out.times_s               # seconds, same order as axis 1
-bright = vals.max(axis=2)     # [light, time]
+bright = vals.max(axis=2)     # [primitive, time]
 lit_fraction = (bright > 0.05).mean()
-aim = out.aim.values          # [light, time, 3] unit vectors in U, V, Z
-weight = out.aim.weight       # [light, time]
-shutter = out.strobe.values   # [light, time]
+aim = out.aim.values          # [primitive, time, 3] unit vectors in U, V, Z
+weight = out.aim.weight       # [primitive, time]
+shutter = out.strobe.values   # [primitive, time]
 ```
 
 Use this to check three things fast:

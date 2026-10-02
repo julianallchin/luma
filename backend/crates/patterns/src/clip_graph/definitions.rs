@@ -398,7 +398,7 @@ fn build(kind: Kind) -> Definition {
             Produces::Coordinate,
             vec![
                 heads(),
-                ("speed", number(Unit::Beats, "4").above(0.)),
+                ("period", number(Unit::Beats, "4").above(0.)),
                 ("scale", number(Unit::Share, "0.5").above(0.)),
                 ("contrast", share("0")),
             ],
@@ -409,11 +409,11 @@ fn build(kind: Kind) -> Definition {
             vec![
                 (
                     "low_hz",
-                    number(Unit::Hz, "40").range(20., 20000.).time_only(),
+                    number(Unit::Hz, "60").range(20., 20000.).time_only(),
                 ),
                 (
                     "high_hz",
-                    number(Unit::Hz, "100").range(20., 20000.).time_only(),
+                    number(Unit::Hz, "300").range(20., 20000.).time_only(),
                 ),
             ],
             vec![],

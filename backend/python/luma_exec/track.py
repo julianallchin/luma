@@ -11,7 +11,7 @@ The canonical render response reuses the normal Luma artifact system::
 
     {
       "tensor": {"$kind": "tensor", "artifact_id": ..., "dtype": "f32",
-                 "shape": [light, time, channel], "axes": [...]},
+                 "shape": [primitive, time, channel], "axes": [...]},
       "artifact": {"id": ..., "kind": "tensor", "encoding": "raw_le",
                    "rel_path": ..., "byte_len": ...}
     }
@@ -19,14 +19,16 @@ The canonical render response reuses the normal Luma artifact system::
 The tensor is registered into the track's ``ArtifactStore`` and materialized
 as the ordinary lazy, read-only ``LumaTensor``. Tests and other in-process
 callers may return an ndarray, a LumaTensor, or
-``{"values": array, "lightIds": [...], "timesS": [...]}`` instead.
+``{"values": array, "primitiveIds": [...], "timesS": [...]}`` instead.
 """
 
 from __future__ import annotations
 
+import bisect
 import copy
 import hashlib
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -126,22 +128,23 @@ _CHANNELS = {
 
 @dataclass(frozen=True)
 class AimOutput:
-    """Composited aim: `values` [light, time, 3] unit vectors in UVZ, `weight` [light, time]."""
+    """Composited aim: `values` [primitive, time, 3] unit vectors in UVZ, `weight` [primitive, time]."""
     values: Any
     weight: Any
 
 
 @dataclass(frozen=True)
 class StrobeOutput:
-    """Composited strobe: `values` [light, time], shutter 0..1."""
+    """Composited strobe: `values` [primitive, time], shutter 0..1."""
     values: Any
 
 
 class TrackOutput:
     """The real composited output of one candidate window, loaded lazily.
 
-    `values` is light color [light, time, rgb]: linear Rec. 2020, already
-    darkened by the dimmer. `aim` and `strobe` hold the other channels.
+    `values` is light color [primitive, time, rgb]: linear Rec. 2020, already
+    darkened by the dimmer. A primitive is one light cell, as in the venue.
+    `primitive_ids` names them. `aim` and `strobe` hold the other channels.
     """
 
     def __init__(self, window) -> None:
@@ -150,7 +153,7 @@ class TrackOutput:
         self._values: Any = None
         self._channels: Any = None
         self._channel_labels: list[str] | None = None
-        self._light_ids: list[str] | None = None
+        self._primitive_ids: list[str] | None = None
         self._times_s: Any = None
 
     @property
@@ -165,7 +168,7 @@ class TrackOutput:
 
     @property
     def aim(self) -> AimOutput:
-        """Aim per light and time: unit vectors in UVZ plus the aim weight."""
+        """Aim per primitive and time: unit vectors in UVZ plus the aim weight."""
         import numpy as np
 
         self._load()
@@ -189,9 +192,9 @@ class TrackOutput:
         return self._channels[:, :, index]
 
     @property
-    def light_ids(self) -> list[str] | None:
+    def primitive_ids(self) -> list[str] | None:
         self._load()
-        return list(self._light_ids) if self._light_ids is not None else None
+        return list(self._primitive_ids) if self._primitive_ids is not None else None
 
     @property
     def times_s(self) -> Any:
@@ -213,7 +216,7 @@ class TrackOutput:
             values = np.repeat(values[..., None], 3, axis=2)
         if values.ndim != 3 or values.shape[2] < 3:
             raise TrackError(
-                "track.score_render tensor must have shape [light, time, channel>=3]"
+                "track.score_render tensor must have shape [primitive, time, channel>=3]"
             )
         rgb = to_display(np.clip(values[:, :, :3], 0.0, 1.0))
         light_count = rgb.shape[0]
@@ -231,7 +234,7 @@ class TrackOutput:
                 -0.5,
             ),
         )
-        labels = self.light_ids or [str(index) for index in range(light_count)]
+        labels = self.primitive_ids or [str(index) for index in range(light_count)]
         if labels:
             stride = max(1, math.ceil(len(labels) / 28))
             rows = list(range(0, len(labels), stride))
@@ -282,8 +285,8 @@ class TrackOutput:
                 value = tensor_spec
             else:
                 value = _field(response, "values", "rgb", default=response)
-            self._light_ids = _string_list(
-                _field(response, "lightIds", "light_ids", default=None)
+            self._primitive_ids = _string_list(
+                _field(response, "primitiveIds", default=None)
             )
             self._times_s = _field(response, "timesS", "times_s", default=None)
 
@@ -301,10 +304,8 @@ class TrackOutput:
             values = channels
         self._values = _readonly(values)
 
-        if self._light_ids is None:
-            self._light_ids = _axis_labels(value, "light") or _axis_labels(
-                value, "primitive"
-            )
+        if self._primitive_ids is None:
+            self._primitive_ids = _axis_labels(value, "primitive")
         if self._times_s is None:
             self._times_s = getattr(value, "times_s", None)
 
@@ -370,17 +371,85 @@ def _range_pair(value: Sequence[float], name: str) -> tuple[float, float]:
     return start, end
 
 
-def _downbeat_values(features: Any) -> tuple[float, ...]:
+_POSITION = re.compile(r"\s*(-?\d+)(?:\.(\d+)(?:\.(\d+(?:\.\d+)?))?)?\s*")
+
+
+class BarGrid:
+    """Bars as the editor ruler draws them, and positions `bar.beat.16th`.
+
+    Bar n starts at the n-th detected downbeat. `starts` holds those starts
+    in beats from the first downbeat, so bar 1 starts at 0. Beats inside a
+    bar are the detected beats; a 16th is a quarter of a beat. Before the
+    first downbeat and after the last, bars are `beats_per_bar` long.
+    Bar, beat and 16th all count from 1. A position between 16ths has a
+    fraction: 17.2.3.5 is half way from 16th 3 to 16th 4.
+    """
+
+    def __init__(self, starts, beats_per_bar: int) -> None:
+        self.starts = tuple(float(start) for start in starts) or (0.0,)
+        self.beats_per_bar = int(beats_per_bar)
+
+    def start(self, bar: int) -> float:
+        """The beat where a bar (from 1) starts."""
+        index = bar - 1
+        if index < 0:
+            return self.starts[0] + index * self.beats_per_bar
+        if index >= len(self.starts):
+            return self.starts[-1] + (index - len(self.starts) + 1) * self.beats_per_bar
+        return self.starts[index]
+
+    def length(self, bar: int) -> float:
+        """The number of beats in a bar."""
+        return self.start(bar + 1) - self.start(bar)
+
+    def bar_at(self, beat: float) -> int:
+        """The bar (from 1) that holds a beat."""
+        if beat < self.starts[0]:
+            return 1 - math.ceil((self.starts[0] - beat) / self.beats_per_bar - 1e-9)
+        if beat >= self.starts[-1]:
+            return len(self.starts) + math.floor((beat - self.starts[-1]) / self.beats_per_bar + 1e-9)
+        return bisect.bisect_right(self.starts, beat)
+
+    def bar_number(self, beat: float) -> float:
+        """A beat as a bar number with a fraction: 17.5 is half way through bar 17."""
+        bar = self.bar_at(beat)
+        return bar + (beat - self.start(bar)) / self.length(bar)
+
+    def format(self, beat: float) -> str:
+        """A beat as `bar.beat.16th`."""
+        bar = self.bar_at(beat)
+        sixteenths = round((beat - self.start(bar)) * 4, 2)
+        if sixteenths >= round(self.length(bar) * 4, 2):
+            bar, sixteenths = bar + 1, 0.0
+        in_bar, sixteenth = divmod(sixteenths, 4)
+        return f"{bar}.{int(in_bar) + 1}.{round(sixteenth + 1, 2):g}"
+
+    def format_range(self, start: float, end: float) -> str:
+        """A range as `start-end`. It includes its start and excludes its end."""
+        return f"{self.format(start)}-{self.format(end)}"
+
+    def parse(self, text: str) -> float:
+        """`bar.beat.16th` as a beat. "17" is 17.1.1 and "17.2" is 17.2.1."""
+        match = _POSITION.fullmatch(text) if isinstance(text, str) else None
+        if not match:
+            raise TrackError(f'a position is "bar.beat.16th", such as "17", "17.2" or "17.2.3"; got {text!r}')
+        bar, beat, sixteenth = int(match[1]), int(match[2] or 1), float(match[3] or 1)
+        beats = math.ceil(self.length(bar) - 1e-9)
+        if not 1 <= beat <= beats or not 1 <= sixteenth < 5:
+            raise TrackError(f"position {text!r}: bar {bar} has beats 1-{beats}, and a 16th is 1-4")
+        return self.start(bar) + (beat - 1) + (sixteenth - 1) / 4
+
+
+def _feature_times(features: Any, name: str) -> tuple[float, ...]:
+    """The times in seconds of one feature array, such as "beats"; () when absent."""
     try:
-        downbeats = (
-            _field(features, "downbeats", default=None) if features is not None else None
-        )
+        times = _field(features, name, default=None) if features is not None else None
     except Exception:
         return ()
-    if downbeats is None:
+    if times is None:
         return ()
     try:
-        values = getattr(downbeats, "values", downbeats)
+        values = getattr(times, "values", times)
     except Exception:
         return ()
     if callable(values):
@@ -392,9 +461,7 @@ def _downbeat_values(features: Any) -> tuple[float, ...]:
 
 
 def _format_time_axis(ax: Any, window) -> None:
-    if window.bars is None:
-        ax.set_xlabel("time (s)")
-        return
+    """Label the x axis (seconds) with the bar numbers of the window."""
     start, end = window.bars
     first = math.ceil(start)
     last = math.floor(end)
@@ -403,14 +470,13 @@ def _format_time_axis(ax: Any, window) -> None:
     shown = integers[::stride]
     if integers and integers[-1] == end and (not shown or shown[-1] != integers[-1]):
         shown.append(integers[-1])
-    ax.set_xticks([window._track._bar_time(bar) for bar in shown], [str(bar) for bar in shown])
-    ax.set_xlabel("bar (end exclusive)")
+    grid = window._track.bars
+    ax.set_xticks([window._track._seconds_at(grid.start(bar)) for bar in shown], [str(bar) for bar in shown])
+    ax.set_xlabel("bar")
 
 
 def _window_label(window) -> str:
-    if window.bars is not None:
-        return f"bars [{window.bars[0]:g}, {window.bars[1]:g})"
-    return f"seconds [{window.start_s:g}, {window.end_s:g})"
+    return "-".join(window.at)
 
 
 def _pattern_color(pattern_id: str) -> tuple[float, float, float, float]:

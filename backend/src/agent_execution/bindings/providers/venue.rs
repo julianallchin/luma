@@ -45,7 +45,7 @@ struct FixtureBinding {
     universe: i64,
     address: i64,
     num_channels: i64,
-    /// Absent when the fixture is patched but unplaced — it is in the tray.
+    /// Absent only when the solve cannot reach the fixture (a damaged venue).
     at: Option<[f64; 2]>,
     z: Option<f64>,
     /// Unit vector in the stage frame, matching aim(direction=).
@@ -53,16 +53,6 @@ struct FixtureBinding {
     /// The same direction as a stage word: `house`, `upstage`, `stage-left`,
     /// `stage-right`, `up`, `down`.
     facing_word: Option<&'static str>,
-}
-
-/// A node with no pose, by the root of its branch.
-#[derive(Serialize)]
-struct UnplacedBinding {
-    id: String,
-    kind: String,
-    label: Option<String>,
-    /// How many nodes hang off it, not counting itself.
-    descendants: usize,
 }
 
 /// One node of the venue's group tree, with the fixtures in it.
@@ -122,7 +112,6 @@ pub async fn provide(
             "venue.haze_snapshot",
             "venue.fixtures",
             "venue.pieces",
-            "venue.unplaced_snapshot",
             "venue.group_snapshot",
             "venue.positions",
             "venue.uv",
@@ -152,7 +141,6 @@ pub async fn provide(
                 "venue.haze_snapshot",
                 "venue.fixtures",
                 "venue.pieces",
-                "venue.unplaced_snapshot",
                 "venue.group_snapshot",
                 "venue.positions",
                 "venue.uv",
@@ -220,10 +208,9 @@ pub async fn provide(
                 })
                 .collect();
             inline(b, "venue.pieces", pieces)?;
-            unplaced(b, &venue)?;
         }
         Err(e) => {
-            for path in ["venue.fixtures", "venue.pieces", "venue.unplaced_snapshot"] {
+            for path in ["venue.fixtures", "venue.pieces"] {
                 unavailable(b, path, format!("the venue could not be resolved: {e}"))?;
             }
         }
@@ -241,9 +228,9 @@ pub async fn provide(
 /// what the resolver says and what the renderer draws. Every consumer that used
 /// to do its own arithmetic on `rotation` got a different answer.
 ///
-/// A patched fixture nobody has placed is reported with no pose at all rather
-/// than one at the origin — it is in the tray, and pretending otherwise is how
-/// venues ended up with fixtures piled at `(0, 0, 0)`.
+/// A fixture the solve cannot reach is reported with no pose at all rather
+/// than one at the origin — pretending otherwise is how venues ended up with
+/// fixtures piled at `(0, 0, 0)`.
 async fn fixtures(
     b: &mut BindingBuilder,
     access: &mut VenueAccess<'_, Read>,
@@ -292,27 +279,6 @@ async fn fixtures(
         })
         .collect();
     inline(b, "venue.fixtures", &bindings)
-}
-
-/// Everything the room has but has not placed: the patch tray, and any branch
-/// a `detach` left hanging.
-///
-/// Reported by the root of each branch rather than per node — one reason, said
-/// once — with the branch's size alongside, because "the wing is gone" and "the
-/// wing is unplaced, 6 pieces" are different sentences and only the second is
-/// true.
-fn unplaced(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
-    let bindings: Vec<UnplacedBinding> = venue
-        .unplaced()
-        .iter()
-        .map(|u| UnplacedBinding {
-            id: u.node.clone(),
-            kind: u.kind.as_str().to_string(),
-            label: u.label.clone(),
-            descendants: u.descendants,
-        })
-        .collect();
-    inline(b, "venue.unplaced_snapshot", &bindings)
 }
 
 /// The camera names `luma.venue.render(view=...)` accepts.
@@ -427,9 +393,10 @@ async fn positions(
         ),
     )?;
 
-    // The same primitives in the rig's own frame — the space patterns should be
-    // authored in (`get_attribute u`/`v`). Same axis labels, same order, so it
-    // joins to `venue.positions` by identity.
+    // The same primitives in the rig's own normalized frame. Same primitive
+    // labels, same order, so it joins to `venue.positions` by identity. Its
+    // coordinates are named `along` and `height`, not `u`/`v`, because they
+    // are not the stage axes `venue.positions` uses.
     let world: Vec<[f32; 3]> = resolved.iter().map(|(_, p)| *p).collect();
     let uv: Vec<f32> = rig_uv(&world).into_iter().flatten().collect();
     put_f32(
@@ -439,14 +406,14 @@ async fn positions(
         &uv,
         vec![
             AxisSpec::labels("primitive", ids),
-            AxisSpec::labels("coordinate", vec!["u".into(), "v".into()]),
+            AxisSpec::labels("coordinate", vec!["along".into(), "height".into()]),
         ],
         None,
         Provenance::new("venue_layout").with_note(
-            "rig-intrinsic pattern space, both 0..1 over the whole venue: u runs along the \
-             first principal component of the horizontal (XY) spread, sign-canonicalized to \
-             point +X; v is normalized height. Matches the `u`/`v` get_attribute values when \
-             the selection is the whole venue — a narrower selection refits its own axis",
+            "rig-normalized space, both 0..1 over the whole venue. These are not the stage \
+             u/v of venue.positions. along: position along the rig's main horizontal line \
+             (first principal component of the plan spread), pointing toward stage right \
+             (+u), or upstage (-v) when the rig runs front to back. height: normalized height, 0.5 when every head is at one height",
         ),
     )
 }

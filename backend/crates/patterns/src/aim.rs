@@ -65,7 +65,8 @@ pub struct Turn {
     /// The way the fan leans the head, its length the degrees. Zero is no
     /// lean. A head beyond the mirror already leans the mirror image.
     pub lean: [f64; 3],
-    /// Degrees toward the right of the aim.
+    /// Degrees counter-clockwise seen from above: toward the left of the
+    /// aim, by the right-hand rule about +Z.
     pub yaw: f64,
     /// Degrees toward the up of the aim.
     pub pitch: f64,
@@ -189,15 +190,16 @@ pub fn frame(d: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (right, cross(right, d))
 }
 
-/// Turn `d` by `yaw` degrees toward the frame's right and `pitch` degrees
-/// toward its up.
+/// Turn `d` by `yaw` degrees toward the frame's left (counter-clockwise
+/// seen from above, the right-hand rule about +Z, as the venue turns) and
+/// `pitch` degrees toward its up.
 pub fn offset(d: [f64; 3], yaw: f64, pitch: f64) -> [f64; 3] {
     let d = unit(d);
     let (right, up) = frame(d);
     let (sy, cy) = yaw.to_radians().sin_cos();
     let (sp, cp) = pitch.to_radians().sin_cos();
     unit(std::array::from_fn(|i| {
-        cp * (cy * d[i] + sy * right[i]) + sp * up[i]
+        cp * (cy * d[i] - sy * right[i]) + sp * up[i]
     }))
 }
 
@@ -268,6 +270,14 @@ mod tests {
         assert!(close(half, [s, s, 0.0]), "{half:?}");
         assert!(close(slerp(DOWN, [0.0, 1.0, 0.0], 0.0), DOWN));
         assert!(close(slerp(DOWN, [0.0, 1.0, 0.0], 1.0), [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn positive_yaw_turns_counter_clockwise_seen_from_above() {
+        // Toward the crowd (+V), a quarter turn left is stage left (-U).
+        assert!(close(offset([0.0, 1.0, 0.0], 90.0, 0.0), [-1.0, 0.0, 0.0]));
+        // A tilted aim swings the same way: toward stage left.
+        assert!(offset([0.0, 0.766, -0.643], 30.0, 0.0)[0] < 0.0);
     }
 
     #[test]

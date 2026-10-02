@@ -7,26 +7,28 @@ description: How to hear a track before lighting it — an investigation loop ov
 The first grid you read is a hypothesis. Keep testing it until the stopping
 bar below is met.
 
-Positions everywhere are `bar.beat.16th`: UI bar from 1, UI beat from 0, felt
-16th inside that beat. Check `luma.music.feel` first: it reports the felt
-tempo and the drum feel. When the grid is stored at half the felt tempo (70
-for a 140 track) a UI beat holds eight felt 16ths. Quote positions exactly as
-the tools print them: `13.0.6`, not "top of 13".
+Positions everywhere are `bar.beat.16th`, all three from 1, as in the
+editor. A 16th is a quarter of a beat. A range such as `9.1.1-13.1.1`
+includes its start and excludes its end. Check `luma.music.feel` first: it
+reports the felt tempo and the drum feel. When the grid is stored at half the
+felt tempo (70 for a 140 track) a felt 16th is half a 16th, so a felt 16th
+can print as `13.1.3.5`. Quote positions exactly as the tools print them:
+`13.1.4`, not "top of 13".
 
 ## Tools
 
-- `sections()`: boundaries, drops and repeats (`41-64 ≈ 9-32`). Watch for
+- `sections()`: boundaries, drops and repeats (`41.1.1-65.1.1 ≈ 9.1.1-33.1.1`). Watch for
   2-bar inserts that shift the phrase grid.
-- `listen("9-12")`: the mix without vocals in four bands (sub, low, mid,
+- `listen("9-13")`: the mix without vocals in four bands (sub, low, mid,
   high), n2n kick/snare/hat, and vocals, per felt 16th.
-- `modulation("9-16")`: wobble and sweep peaks per felt bar; `!` flags a rate
+- `modulation("9-17")`: wobble and sweep peaks per bar; `!` flags a rate
   change (`! mid 1/8 wobble (was kick-gap sweeps)`). A change of rate is
   louder to the ear than a 10 dB change of level.
-- `deviations("9-32")`: each bar against its same-parity neighbours. The first
+- `deviations("9-33")`: each bar against its same-parity neighbours. The first
   line is the 2-bar cycle (odd bars against even), where scoops and 2-bar
   stabs live.
-- `similar("13")`: places that share what is special about a beat, bar or
-  phrase. `mode="rhythm"`: same rhythm, other sound; `mode="sound"`: the
+- `similar("13")`: places that share what is special about a bar (`"13"`),
+  a beat (`"13.2"`) or a range (`"9-17"`). `mode="rhythm"`: same rhythm, other sound; `mode="sound"`: the
   reverse.
 - The recipes below: 5 ms envelopes, pitch, kick templates.
 
@@ -73,9 +75,9 @@ question has an answer or `unknown`.
 Record findings as rows, not prose:
 
 ```
-13.0.6-13.0.8 | low  | -9 dB, kick present       | deviations | high | scoop cut?
-10.0.0-10.3.7 | mid  | 1/8 wobble, was 1/4 in 9  | modulation | high | LFO rate change
-11.2.4        | hat  | missing                   | listen     | low  | n2n hat
+13.1.4-13.2.1 | low  | -9 dB, kick present       | deviations | high | scoop cut?
+10.1.1-11.1.1 | mid  | 1/8 wobble, was 1/4 in 9  | modulation | high | LFO rate change
+11.3.3        | hat  | missing                   | listen     | low  | n2n hat
 ```
 
 Position, band or source, observation, tool, confidence, interpretation.
@@ -108,8 +110,8 @@ same bars, one per aspect:
 Brief each with the bars, the feel, its aspect, the row format and "Return
 evidence rows only, no prose. Do not edit the score. Do not spawn
 subagents." Merge the rows by position. Where two listeners explain one
-position differently (drums: missing kick at `13.0.6`; bass: bass cut at
-`13.0.6`), that position is probably the most interesting thing in the
+position differently (drums: missing kick at `13.1.4`; bass: bass cut at
+`13.1.4`), that position is probably the most interesting thing in the
 phrase: test it yourself, or ask the user.
 
 ## Motion rules

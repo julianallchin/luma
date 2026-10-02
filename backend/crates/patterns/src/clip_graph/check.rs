@@ -68,7 +68,7 @@ pub fn check_clip(clip: &Clip) -> Result<()> {
         || !(start + duration).is_finite()
     {
         return fail(format!(
-            "clip: expected a finite start and a duration above 0; got start {start} and duration {duration}. Example: beats=(32, 40)"
+            "clip: expected a finite start and a duration above 0; got start {start} and duration {duration}. Example: at=(\"9\", \"11\")"
         ));
     }
     Ok(())
@@ -427,7 +427,8 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
             Some(Input::Number(hz)) => Some(*hz),
             _ => None,
         };
-        if let (Some(low), Some(high)) = (hz("low_hz", 40.), hz("high_hz", 100.)) {
+        let (empty_low, empty_high) = crate::presets::empty_band();
+        if let (Some(low), Some(high)) = (hz("low_hz", empty_low), hz("high_hz", empty_high)) {
             if high <= low {
                 return fail(format!(
                     "{id}.high_hz: expected Hz above low_hz ({low}); got {high}. Example: high_hz={}",
@@ -1090,9 +1091,9 @@ fn bound_example(def: &InputDef, bound: &str) -> &'static str {
         }
         Some(Unit::Hz) => {
             if low {
-                "40"
+                "60"
             } else {
-                "100"
+                "300"
             }
         }
         Some(Unit::Metres) => {

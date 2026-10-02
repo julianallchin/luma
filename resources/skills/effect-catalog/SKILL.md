@@ -46,14 +46,14 @@ name on its card: `pill = curve(...)`.
 | Gradient | `place = space(); color(color=curve(place, "Ramp up", gradient="Sunset"))` | space → curve(color) |
 | Stepped palette | `t = time(every=4); color(color=curve(t, "Steps 4", gradient="Rainbow"))` | time(every) → curve(color) |
 | Two-color swap | `t = time(every=2); color(color=curve(t, "Square", gradient=[(0, "#ff2a00"), (1, "#0040ff")]))` | time(every) → curve(color) |
-| Follows a band | `kick = audio(low_hz=40, high_hz=100); color(brightness=curve(kick, "Ramp up"))` | audio → curve → brightness |
-| VU meter | `bars = split(); bass = audio(low_hz=20, high_hz=250); height = space(heads=bars, direction=(0, 0, 1), shift=curve(bass, "Ramp up", high=1.1)); color(brightness=curve(height, "Step down"))` | audio → curve → space.shift up each bar; Step down lights the heads below the level; the level runs to 1.1 so the top head lights |
+| Follows a band | `bass = audio(low_hz=60, high_hz=300); color(brightness=curve(bass, "Ramp up"))` | audio → curve → brightness |
+| VU meter | `bars = split(); bass = audio(low_hz=60, high_hz=300); height = space(heads=bars, direction=(0, 0, 1), shift=curve(bass, "Ramp up", high=1.1)); color(brightness=curve(height, "Step down"))` | audio → curve → space.shift up each bar; Step down lights the heads below the level; the level runs to 1.1 so the top head lights |
 | Random heads | `k = time(every=1); order = shuffle(time=k); rank = space(heads=order, kind="order"); color(brightness=curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]))` | time(every) → shuffle → space(order) → curve with a jump |
 | Random bars | `bars = group(); k = time(every=1); order = shuffle(heads=bars, time=k); rank = space(heads=order, kind="order"); color(brightness=curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]))` | time(every) → shuffle(group) → space → curve |
 | Sparkle | `k = time(every=0.125, duration=0.5); order = shuffle(time=k); rank = space(heads=order, kind="order"); color(brightness=curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]) * curve(k, "Spike"))` | one time node: a random 30% × a spike over time |
 | Build | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp up"), kind="order"); color(brightness=curve(rank, "Step down"))` | each head turns on when the clip's progress passes its random number: the shuffled rank shifted by progress over the clip, then a step. Stretches with the clip |
 | Dissolve | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp down"), kind="order"); color(brightness=curve(rank, "Step down"))` | as Build backwards: each head goes off when the clip's progress passes its random number |
-| Clouds | `cloud = noise(speed=8, scale=0.5); color(color=curve(cloud, "Ramp up", gradient="Ocean"), brightness=curve(cloud, "Ramp up", low=0.2, high=1))` | one noise → two curves |
+| Clouds | `cloud = noise(period=8, scale=0.5); color(color=curve(cloud, "Ramp up", gradient="Ocean"), brightness=curve(cloud, "Ramp up", low=0.2, high=1))` | one noise → two curves |
 | Sparkle rain | `bars = group(); columns = split(); k = time(every=0.25, duration=1); order = shuffle(heads=bars, time=k); drop = space(heads=columns, direction=(0, 0, -1), shift=curve(k, "Ramp up", low=-0.3, high=1), scale=0.3); rank = space(heads=order, kind="order"); color(brightness=curve(drop, "Comet") * curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]))` | needs vertical bars; each event's fall is a shift down each bar; × a random 20% per bar |
 
 ## Movement
@@ -89,19 +89,19 @@ name on its card: `pill = curve(...)`.
 | Name | Python | Chain |
 |---|---|---|
 | Position | `aim(direction=D)` | aim |
-| Fan | `place = space(); aim(direction=D, yaw=curve(place, "Ramp up", low=-25, high=25))` | space → curve → yaw |
+| Fan | `place = space(); aim(direction=D, yaw=curve(place, "Ramp up", low=25, high=-25))` | space → curve → yaw |
 | Converge | `aim(point=(0, 3, 0), base="point")` | point base |
 | Follow | `t = time(); aim(point=curve(t, "Ramp up", low=(-3, 3, 0), high=(3, 3, 0)), base="point")` | time → curve(vector) → point |
 | Bloom | `t = time(); aim(point=curve(t, "Ramp up", low=(0, 0, 40), high=(0, 0, 7)), base="away")` | away base; the point comes down toward the rig |
 | Tunnel | `aim(point=(0, 25, 1.5), base="point")` | a far point downstage |
-| Sweep | `t = time(every=8); aim(direction=D, yaw=curve(t, "Sine", low=-45, high=45))` | time(every) → curve → yaw |
+| Sweep | `t = time(every=8); aim(direction=D, yaw=curve(t, "Sine", low=45, high=-45))` | time(every) → curve → yaw |
 | Nod wave | `place = space(); t = time(every=4, phase=curve(place, "Ramp up", high=216)); aim(direction=D, pitch=curve(t, "Sine", low=-25, high=25))` | space → curve → time.phase |
-| Circle | `t = time(every=4); low = value(-18); high = value(18); aim(direction=D, yaw=curve(t, "Cosine", low=low, high=high), pitch=curve(t, "Sine", low=low, high=high))` | one time → two curves; one swing (two values) for yaw and pitch keeps it a circle |
-| Figure-8 | `t = time(every=4); aim(direction=D, yaw=curve(t, "Sine", low=-25, high=25), pitch=curve(t, "Double sine", low=-12.5, high=12.5))` | the same, pitch twice as fast |
-| Pinwheel | `turn = space(kind="angle"); t = time(every=4, phase=curve(turn, "Ramp up", high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, "Cosine", low=low, high=high), pitch=curve(t, "Sine", low=low, high=high))` | Circle with phase by angle |
-| Scissor | `halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, "Sine", low=-30, high=30))` | mirrored heads yaw the other way |
+| Circle | `t = time(every=4); low = value(-18); high = value(18); aim(direction=D, yaw=curve(t, "Cosine", low=high, high=low), pitch=curve(t, "Sine", low=low, high=high))` | one time → two curves; one swing (two values) for yaw and pitch keeps it a circle |
+| Figure-8 | `t = time(every=4); aim(direction=D, yaw=curve(t, "Sine", low=25, high=-25), pitch=curve(t, "Double sine", low=-12.5, high=12.5))` | the same, pitch twice as fast |
+| Pinwheel | `turn = space(kind="angle"); t = time(every=4, phase=curve(turn, "Ramp up", high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, "Cosine", low=high, high=low), pitch=curve(t, "Sine", low=low, high=high))` | Circle with phase by angle |
+| Scissor | `halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, "Sine", low=30, high=-30))` | mirrored heads yaw the other way |
 | Up/down flip | `t = time(every=2); aim(direction=D, pitch=curve(t, "Square", low=-30, high=30))` | held pitch |
-| Ballyhoo | `speed = value(4); scale = value(0.02); drift = noise(speed=speed, scale=scale); wander = noise(speed=speed, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, "Ramp up", low=low, high=high), pitch=curve(wander, "Ramp up", low=low, high=high))` | two noise nodes, two streams, one speed, scale and swing |
+| Ballyhoo | `period = value(4); scale = value(0.02); drift = noise(period=period, scale=scale); wander = noise(period=period, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, "Ramp up", low=high, high=low), pitch=curve(wander, "Ramp up", low=low, high=high))` | two noise nodes, two streams, one period, scale and swing |
 
 Motion presets ship with blend `offset`. Put a Position clip (`replace`)
 under them.
@@ -112,7 +112,7 @@ under them.
 |---|---|---|
 | Strobe | `strobe(rate=0.9)` | strobe |
 | Ramp | `t = time(); strobe(rate=curve(t, "Ramp up"))` | time → curve → rate |
-| Strobe follows a band | `kick = audio(low_hz=40, high_hz=100); strobe(rate=curve(kick, "Ramp up", low=0.3, high=1))` | audio → curve → rate |
+| Strobe follows a band | `bass = audio(low_hz=60, high_hz=300); strobe(rate=curve(bass, "Ramp up", low=0.3, high=1))` | audio → curve → rate |
 
 ## Not one clip
 
@@ -127,7 +127,7 @@ under them.
 | Strobe burst | one clip | A short Strobe clip. |
 | Wobble strobe | agent's job | Measure the wobble rate with `luma.music`. Place Strobe clips, or a Strobe with `rate=curve(time(every=<rate>), "Square")`. |
 | Color per pitch | agent's job | Analyse the pitch. Place one Wash clip per note, each in its color. |
-| Level meter | agent's job | A bar that grows with the level is not one clip. Place Wipe clips on the peaks, or drive `brightness` with `curve(audio("Bass"), "Ramp up")`. |
+| Level meter | agent's job | A bar that grows with the level is not one clip. Place Wipe clips on the peaks, or drive `brightness` with `curve(audio("low"), "Ramp up")`. |
 
 ## Change an effect
 
@@ -140,7 +140,7 @@ under them.
 - Combine: multiply, `brightness=a * b`. `max(a, b)` keeps the brighter of
   two patterns; `1 - a` turns a pattern over.
 - React to the music: replace a fixed number with
-  `curve(audio("Kick"), "Ramp up", low=..., high=...)`, or multiply it in:
-  `brightness=pill * curve(audio("Kick"), "Ramp up", low=0.3, high=1)`.
+  `curve(audio("low"), "Ramp up", low=..., high=...)`, or multiply it in:
+  `brightness=pill * curve(audio("low"), "Ramp up", low=0.3, high=1)`.
 - Fade the whole clip: `alpha=curve(time(), "Fade in")`. Alpha is the clip's
   opacity over the light below; keep the pattern on `brightness`.

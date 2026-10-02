@@ -1013,6 +1013,7 @@ impl Editor {
             id: clip.id.to_string(),
             name: clip.label.to_string(),
             lane: clip.row,
+            z: clip.z,
             start: clip.start,
             end: clip.end,
             selected: self.selected.contains(&clip.id),

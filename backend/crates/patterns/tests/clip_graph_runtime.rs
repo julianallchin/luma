@@ -538,7 +538,7 @@ fn noise_nodes_draw_their_own_streams_and_a_linked_node_is_shared() {
         (0..12).any(|n| (0..times.len()).any(|t| (turn[[n, t, 3]] - turn[[n, t, 4]]).abs() > 1e-6));
     assert!(differs, "two noise nodes with the same settings differ");
     let linked = graph(json!({
-        "noise1": {"kind": "noise", "inputs": {"speed": 4, "scale": 0.02}},
+        "noise1": {"kind": "noise", "inputs": {"period": 4, "scale": 0.02}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise1"}, "low": -40, "high": 40}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise1"}, "low": -40, "high": 40}},
         "aim1": {"kind": "aim", "settings": {"base": "direction"},
@@ -835,7 +835,7 @@ fn a_space_node_gives_each_head_its_place() {
 fn sample_noise_matches_the_noise_playback_reads() {
     let cells = line();
     let graph = graph(json!({
-        "noise1": {"kind": "noise", "inputs": {"speed": 4, "scale": 0.3, "contrast": 0.2}},
+        "noise1": {"kind": "noise", "inputs": {"period": 4, "scale": 0.3, "contrast": 0.2}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
     for beat in [0., 2.5, 9.] {

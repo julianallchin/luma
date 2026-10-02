@@ -329,8 +329,10 @@ items. Blend modes: the light set
 Setting `base`: `direction` \| `point` \| `away`. `direction` aims along the
 vector. `point` aims each head at the point. `away` aims each head from the
 point through the head (a diverging fan; Bloom animates the point's height).
-The UI shows only the vector the base uses. Then yaw turns right, pitch turns
-up, in the aim's own frame (`aim::offset`). A head that a `mirror` folded
+The UI shows only the vector the base uses. `point` is metres in the venue
+frame (+u stage right, +v toward the crowd, +z up). Then yaw and pitch turn
+the aim (`aim::offset`): positive yaw is counter-clockwise seen from above
+(the right-hand rule about +z, as the venue turns), positive pitch is up. A head that a `mirror` folded
 takes the mirror image of yaw and pitch (`aim::mirrored_offset`, one
 reflection per stacked mirror, applied in reverse order). Alpha is the weight.
 Blend modes: `replace` (`blend_aim`) and `offset` (`offset_aim`), unchanged.
@@ -464,12 +466,12 @@ A length of 0 is a jump at the shift, as for `time.length`.
 | Input | Type | Unit | Range | Promotable | Empty |
 |---|---|---|---|---|---|
 | heads | heads | | | wire only | all clip heads |
-| speed | number | beats | > 0 | yes | 4 |
+| period | number | beats | > 0 | yes | 4 |
 | scale | number | share | > 0 | yes | uniform (one value for all heads) |
 | contrast | number | share | 0–1 | yes | 0 |
 
 One mode. Output 0–1 = coherent value noise sampled at
-`(u/scale, v/scale, z/scale, beats/speed)`, where `u, v, z` are the head's
+`(u/scale, v/scale, z/scale, beats/period)`, where `u, v, z` are the head's
 unit position scaled so the span's largest extent is 1. Contrast:
 `((raw − 0.5) × (1 + 3·contrast) + 0.5)` clamped. Each noise node has its own
 stream: salt = clip seed ⊕ FNV(node id). A tiny scale (0.02) gives each head
@@ -479,8 +481,8 @@ its own wander; that replaces `independent`.
 
 | Input | Type | Unit | Range | Promotable | Empty |
 |---|---|---|---|---|---|
-| low_hz | number | hz | 20–20000 | yes (T) | 40 |
-| high_hz | number | hz | 20–20000, > low_hz | yes (T) | 100 |
+| low_hz | number | hz | 20–20000 | yes (T) | 60 (the low band) |
+| high_hz | number | hz | 20–20000, > low_hz | yes (T) | 300 (the low band) |
 
 Output 0–1: the band's energy from the full mix (`band_energy`), scaled by
 its min and max over the whole track (`FeatureSource::range`). Threshold, floor and gain live in
@@ -750,7 +752,7 @@ Prepare time (cells known):
 3. `time`: `ClipProgress`, or the clock's `progress`, then
    `Shift(delay, length, phase)`.
 4. `space`: constant `a` field (or `Axis`).
-5. `noise`: `ClockTable(speed)` → `Clock` turns → `Noise4(u,v,z, turns, scale, contrast, salt)`.
+5. `noise`: `ClockTable(period)` → `Clock` turns → `Noise4(u,v,z, turns, scale, contrast, salt)`.
 6. `audio`: `band_energy` → `clip_range` → `Normalize` → 0–1.
 7. `curve`: `Curve(x, low, high; shape, gradient, kind)` → 3 components.
    A list input: its items chained through `Product`.
@@ -830,7 +832,7 @@ mirror, shuffle, group, split, color, aim, strobe, preset`.
 clock(every, duration=None) -> Clock
 time(clock=None, delay=0, length=1, phase=0) -> Coordinate
 space(heads=None, direction=None, centre=None, at=None, shift=0, scale=1, kind="line", wrap=None) -> Coordinate
-noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate
+noise(heads=None, period=None, scale=None, contrast=None) -> Coordinate
 audio(low_hz=None, high_hz=None) -> Coordinate
 curve(x, shape=None, low=None, high=None, gradient=None) -> Value
 mirror(heads=None, direction=None, at=None) -> Heads
@@ -896,7 +898,7 @@ record (2.6). `luma.track.nodes()` lists the 13 kinds.
 (name → points), `luma.presets.gradients` (name → stops),
 `luma.presets.bands` (name → `(low_hz, high_hz)`). A preset name works where
 a shape, a gradient or a band is expected: `curve(t, "Comet")`,
-`curve(t, "Ramp up", gradient="Fire")`, `audio(*luma.presets.bands["Kick"])`.
+`curve(t, "Ramp up", gradient="Fire")`, `audio("low")`.
 
 ### 6.4 window()
 
@@ -1198,7 +1200,7 @@ varies per event on the brightness clock (the effect now includes them).
    to `~/.config/com.luma.luma/backups/pre-clip-graphs-20260929/`.
 2. Run the converter and the parity check on a copy. Read `report.md`.
 3. Apply the Supabase migration (adds columns, takes the backup tables).
-   Redeploy `deploy/sync-rules.yaml` (unchanged text) so PowerSync sees the
+   Redeploy `deploy/powersync/sync-config.yaml` (unchanged text) so PowerSync sees the
    new columns.
 4. `backend/src/bin/clip_graphs_apply.rs --app-dir ~/.config/com.luma.luma
    --sql <dir>/clips.sql`: opens with `open_app_db_at` so PowerSync queues
@@ -1263,8 +1265,8 @@ Fade out, Square `[[0,1,"hold"],[0.5,0],[1,0]]`, Sine
 `[[0,0.5,"sine-out"],[0.25,1,"sine-in"],[0.5,0.5,"sine-out"],[0.75,0,"sine-in"],[1,0.5]]`,
 Cosine (Sine shifted a quarter), Double sine (two cycles), Steps 2/3/4/8
 (`i/(N−1)` held for `1/N` each). Gradients: Rainbow, Warm, Cool, Fire, Ocean,
-Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
-4000–16000, Full 20–16000. `D` below is the venue's default aim
+Sunset, B/W. Bands: sub 20–60, low 60–300, mid 300–4000, high
+4000–20000 (`luma.music` splits the mix by the same table). `D` below is the venue's default aim
 `(0, 0.766, -0.643)`.
 
 ### Color
@@ -1280,14 +1282,14 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Gradient | `place = space(); hue = curve(place, "Ramp up", gradient="Sunset"); color(color=hue)` | space → curve(color) |
 | Stepped palette | `k = clock(every=4); t = time(k); hue = curve(t, "Steps 4", gradient="Rainbow"); color(color=hue)` | clock → time → curve(color) |
 | Two-color swap | `k = clock(every=2); t = time(k); hue = curve(t, "Square", gradient=[(0, "#ff2a00"), (1, "#0040ff")]); color(color=hue)` | clock → time → curve(color) |
-| Follows a band | `kick = audio(40, 100); level = curve(kick, "Ramp up"); color(brightness=level)` | audio → curve → brightness |
-| VU meter | `bass = audio(20, 250); level = curve(bass, "Ramp up", high=1.1); bars = split(); height = space(bars, direction=(0, 0, 1), shift=level); meter = curve(height, "Step down"); color(brightness=meter)` | audio → curve → space.shift up each bar; Step down lights the heads below the level; the level runs to 1.1 so the top head lights |
+| Follows a band | `bass = audio(60, 300); level = curve(bass, "Ramp up"); color(brightness=level)` | audio → curve → brightness |
+| VU meter | `bass = audio(60, 300); level = curve(bass, "Ramp up", high=1.1); bars = split(); height = space(bars, direction=(0, 0, 1), shift=level); meter = curve(height, "Step down"); color(brightness=meter)` | audio → curve → space.shift up each bar; Step down lights the heads below the level; the level runs to 1.1 so the top head lights |
 | Random heads | `k = clock(every=1); order = shuffle(clock=k); rank = space(order, kind="order"); half = curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | clock → shuffle → space(order) → curve with a jump |
 | Random bars | `k = clock(every=1); bars = group(); order = shuffle(bars, clock=k); rank = space(order, kind="order"); half = curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | clock → shuffle(group) → space → curve |
 | Sparkle | `k = clock(every=0.125, duration=0.5); order = shuffle(clock=k); rank = space(order, kind="order"); pick = curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]); t = time(k); spike = curve(t, "Spike"); color(brightness=[pick, spike])` | one clock; a random 30% × a spike over time |
 | Build | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp up"), kind="order"); color(brightness=curve(rank, "Step down"))` | shuffle → space(order) shifted by progress over the clip → step; stretches with the clip |
 | Dissolve | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp down"), kind="order"); color(brightness=curve(rank, "Step down"))` | as Build, heads go off in a random order |
-| Clouds | `cloud = noise(speed=8, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)` | one noise → two curves |
+| Clouds | `cloud = noise(period=8, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)` | one noise → two curves |
 | Sparkle rain | `k = clock(every=0.25, duration=1); bars = group(); order = shuffle(bars, clock=k); columns = split(); t = time(k); fall = curve(t, "Ramp up", low=-0.3, high=1); drop = space(columns, direction=(0, 0, -1), shift=fall, length=0.3); streak = curve(drop, "Comet"); rank = space(order, kind="order"); pick = curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]); color(brightness=streak, alpha=pick)` | needs vertical bars; each event's fall is a shift down each bar; the pick is a random 20% per bar |
 
 ### Movement
@@ -1334,7 +1336,7 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Pinwheel | `k = clock(every=4); turn = space(kind="angle"); lag = curve(turn, "Ramp up", high=360); t = time(k, phase=lag); across = curve(t, "Cosine", low=-20, high=20); up = curve(t, "Sine", low=-20, high=20); aim(direction=D, yaw=across, pitch=up)` | Circle with phase by angle |
 | Scissor | `k = clock(every=4); halves = mirror(); t = time(k); swing = curve(t, "Sine", low=-30, high=30); aim(heads=halves, direction=D, yaw=swing)` | mirrored heads yaw the other way |
 | Up/down flip | `k = clock(every=2); t = time(k); flip = curve(t, "Square", low=-30, high=30); aim(direction=D, pitch=flip)` | held pitch |
-| Ballyhoo | `drift = noise(speed=4, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = noise(speed=4, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two noise nodes, two streams |
+| Ballyhoo | `drift = noise(period=4, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = noise(period=4, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two noise nodes, two streams |
 
 Motion presets ship with blend `offset` and a Position underneath is the
 usual pairing.
@@ -1345,7 +1347,7 @@ usual pairing.
 |---|---|---|
 | Strobe | `strobe(rate=0.9)` | strobe |
 | Ramp | `t = time(); rise = curve(t, "Ramp up"); strobe(rate=rise)` | time → curve → rate |
-| Strobe follows a band | `kick = audio(40, 100); rate = curve(kick, "Ramp up", low=0.3, high=1); strobe(rate=rate)` | audio → curve → rate |
+| Strobe follows a band | `bass = audio(60, 300); rate = curve(bass, "Ramp up", low=0.3, high=1); strobe(rate=rate)` | audio → curve → rate |
 
 ### Not one clip
 
@@ -1372,7 +1374,7 @@ files.
 | Agent | Owns |
 |---|---|
 | A patterns | `backend/crates/patterns/**` except `examples/clip_graph_parity.rs` |
-| B backend | `backend/src/**` except `agent/prompts/**` and `bin/clip_graphs_apply.rs`; `backend/migrations/*`; `supabase/migrations/*`; `deploy/sync-rules.yaml` |
+| B backend | `backend/src/**` except `agent/prompts/**` and `bin/clip_graphs_apply.rs`; `backend/migrations/*`; `supabase/migrations/*`; `deploy/powersync/sync-config.yaml` |
 | C python | `backend/python/luma_exec/**`; `backend/src/agent/prompts/*.md`; `resources/skills/**`; `scripts/headless/mcp_smoke.ts`, `mcp-client.ts` |
 | D gpui | `gpui/crates/app/**`; `gpui/crates/ui/**`; `gpui/crates/agent/**` |
 | E migration | `backend/scripts/migrate_clip_graphs.py`, `check_clip_graphs_migration.py`; `backend/src/bin/clip_graphs_apply.rs`; `backend/crates/patterns/examples/clip_graph_parity.rs` |

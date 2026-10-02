@@ -650,11 +650,11 @@ fn noise_settings(graph: &ClipGraph, node: &Node) -> noise::Settings {
         }
         None => None,
     };
-    let speed = number("speed", 4., "speed at 4 beats").unwrap_or(4.);
+    let period = number("period", 4., "period at 4 beats").unwrap_or(4.);
     let scale = number("scale", 0.25, "scale at 25 %");
     let contrast = number("contrast", 0., "contrast at 0").unwrap_or(0.);
     noise::Settings {
-        speed,
+        period,
         scale,
         contrast,
         held,
@@ -675,7 +675,7 @@ fn noise_preview(
             seed,
             place,
             beats,
-            settings.speed,
+            settings.period,
             settings.scale,
             settings.contrast,
         )
