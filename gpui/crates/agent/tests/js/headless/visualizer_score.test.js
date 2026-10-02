@@ -27,6 +27,11 @@ test("the stage is lit by the score the timeline opened", () => {
     // The install is a round trip, so the stage's readout lands after the
     // timeline's; waiting for it is the point.
     until(`the rig lit by ${handle}`, () => ordinal(rig()) === handle);
+    // A new tab puts the sidebar away a double-click interval after the
+    // click; bring it back for the next pick.
+    until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
+    app.action("luma::ToggleSidebar");
+    until("the scores again", () => rows().length === listed.length);
     return timeline();
   };
   const one = open(listed[0]);

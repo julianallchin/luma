@@ -25,11 +25,16 @@ test("switching venues parks the venue's tabs and brings them back", () => {
   nav.step("the venue switcher", "button", "Alpha Hall");
   nav.venue("Beta Room");
   until("Beta's track", (s) => s.find({ role: "row", label: "Beta Room Track" }) !== undefined);
-  // Beta has nothing open, so the offer is the panel's empty state.
-  const offer = until("the empty panel's offer", (s) => s.find({ role: "card", label: "Empty panel" }) !== undefined);
-  expect(offer.find({ role: "button", label: "Track editor" }).enabled).toBe(false);
-  expect(offer.find({ role: "text", label: "Select a track first" }) !== undefined).toBe(true);
-  expect(offer.find({ role: "button", label: alphaTab })).toBe(undefined);
+  // Beta has nothing open, and its `+` box lists Beta's songs only.
+  until("the empty panel", (s) => s.find({ role: "card", label: "Empty panel" }) !== undefined);
+  expect(app.snapshot().find({ role: "button", label: alphaTab })).toBe(undefined);
+  app.action("luma::NewTab");
+  const offer = until("the + box", (s) => s.find({ role: "card", label: "New tab" }) ? s : undefined);
+  const box = offer.find({ role: "card", label: "New tab" }).bounds;
+  const listed = offer.findAll((n) => n.role === "row" && n.bounds.y >= box.y && n.bounds.x >= box.x)
+    .map((n) => n.label);
+  expect(listed).toEqual(["Venue", "Beta Room Track"]);
+  app.key("escape");
 
   // Parked is not closed: going back brings Alpha's tab with it.
   nav.step("the venue switcher", "button", "Beta Room");

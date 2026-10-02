@@ -193,6 +193,19 @@ pub(crate) struct ScoreMenu {
     clips: i64,
 }
 
+impl ScoreRow {
+    /// What the row is called: the score's name, or its owner when it has
+    /// none.
+    pub(crate) fn title(&self) -> SharedString {
+        self.name.clone().unwrap_or_else(|| self.author.clone())
+    }
+
+    /// The line under the title: clips, age and what the agent spent.
+    pub(crate) fn detail(&self) -> SharedString {
+        format!("{} clips · {}{}", self.clips, self.age, self.spend).into()
+    }
+}
+
 impl Scores {
     /// This venue's rows, which are the ones that answer the pointer.
     fn here<'a>(&'a self, venue: &'a str) -> impl Iterator<Item = &'a ScoreRow> {
@@ -326,8 +339,10 @@ impl Luma {
 
     /// Open `score`'s tab and hide the sidebar so the timeline has the room.
     ///
-    /// A score that already has a tab is only brought to the front, and the
-    /// sidebar stays: the first click of a rename double-click lands here.
+    /// The hide waits [`DOUBLE_CLICK`]: the click that lands here may be the
+    /// first of a rename double-click, and the second click has to find its
+    /// row. A rename in that time cancels the hide. A score that already has a
+    /// tab is only brought to the front, and the sidebar stays.
     pub(crate) fn open_sidebar_score(
         &mut self,
         track_id: SharedString,
@@ -343,7 +358,16 @@ impl Luma {
             score: score.id.clone(),
         };
         if self.workspace.body(&target).is_none() {
-            self.sidebar_hidden = true;
+            let wait = self.library.debounce(DOUBLE_CLICK);
+            self.sidebar_hide = Some(cx.spawn(async move |this, cx| {
+                wait.await;
+                this.update(cx, |this, cx| {
+                    this.sidebar_hide = None;
+                    this.sidebar_hidden = true;
+                    cx.notify();
+                })
+                .ok();
+            }));
         }
         self.open_score(&track_id, score, None, cx);
     }
@@ -547,6 +571,8 @@ impl Luma {
         if row.read_only {
             return;
         }
+        // The second click of the pair: the sidebar stays for the caret.
+        self.sidebar_hide = None;
         let opened_on = row.name.as_deref().unwrap_or_default().to_string();
         let field = cx.new(|cx| {
             let mut input = TextInput::search("Score name", cx);
@@ -651,6 +677,12 @@ pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
 }
 
 // -- rendering ----------------------------------------------------------------
+
+/// How long a click on a score waits before it puts the sidebar away, so the
+/// second click of a double-click still finds the row. About the platform's
+/// double-click interval: gpui does not publish it (its Linux backends keep a
+/// private 400 ms; macOS reads the system setting per event).
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// The head's Back affordance, and therefore where the flying track row lands:
 /// the head's row sits directly under it, at the same inset the list rows have,
@@ -932,7 +964,7 @@ fn score_row(
                     .truncate()
                     .text_size(px(10.))
                     .text_color(glass::ink(0.45))
-                    .child(format!("{} clips · {}{}", row.clips, row.age, row.spend)),
+                    .child(row.detail()),
             ),
     )
     .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
@@ -944,14 +976,15 @@ fn score_row(
 /// The score's name, or its owner when it has none. A double-click on it
 /// starts a rename when `renamer` is present — this venue's own score.
 ///
-/// The first click of the pair goes to the row, which leaves an open score as
-/// it is. The second click stops here so the row does not see it at all.
+/// The first click of the pair goes to the row, which opens the score and
+/// puts the sidebar away after [`DOUBLE_CLICK`]. The second click stops here,
+/// so the row does not see it, and the rename cancels the hide.
 fn name_label(
     row: &ScoreRow,
     open: bool,
     renamer: Option<(Entity<Luma>, SharedString)>,
 ) -> AnyElement {
-    let name = row.name.clone().unwrap_or_else(|| row.author.clone());
+    let name = row.title();
     div()
         .id(SharedString::from(format!("score-name-{}", row.id)))
         .truncate()

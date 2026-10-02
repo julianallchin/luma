@@ -82,6 +82,9 @@ globalThis.nav = {
 	track(name) {
 		nav.scores(name);
 		const level = app.snapshot();
+		const tabs = (s) => s.findAll({ role: "button" })
+			.filter((n) => n.label.startsWith("Close ") && n.label !== "Close next tab").length;
+		const before = tabs(level);
 		const score = level.findAll({ role: "row" }).find((n) => n.label.startsWith("#"));
 		// No score in this venue yet — minting one is the same door, and it
 		// opens what it mints.
@@ -92,9 +95,19 @@ globalThis.nav = {
 		until("the timeline", (s) =>
 			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined);
 		// Opening a score's new tab puts the sidebar away so the timeline has
-		// the room; bring it back to walk out of the level.
-		if (app.snapshot().find({ role: "card", label: "Sidebar" }) === undefined) {
+		// the room — one double-click interval after the click. Wait for it,
+		// then bring the sidebar back to walk out of the level.
+		if (tabs(app.snapshot()) > before) {
+			until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
 			app.action("luma::ToggleSidebar");
+			// At rest, not sliding: two frames in a row at one width.
+			let last = -1;
+			until("the sidebar back at rest", (s) => {
+				const width = s.find({ role: "card", label: "Sidebar" })?.bounds.width ?? -1;
+				const still = width > 0 && width === last;
+				last = width;
+				return still;
+			});
 		}
 		nav.step("the way back to the track list", "button", "Back to tracks");
 		until("the track list again", (s) =>

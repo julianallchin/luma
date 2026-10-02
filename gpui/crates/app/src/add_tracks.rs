@@ -433,24 +433,17 @@ impl Luma {
         // — every arm below takes `self` mutably.
         let query_empty = state.query_is_empty(route, cx);
         let menu_open = state.source_menu.is_open();
-        let key = event.keystroke.key.as_str();
-        let modified = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
 
-        match key {
+        match float::Nav::of(&event.keystroke, query_empty) {
             // Innermost first: escape closes the menu if one is open, and only
             // then the dialog — the same order the shell dismisses in.
-            "escape" if menu_open => self.toggle_source_menu(cx),
-            "escape" => self.dismiss_overlay(cx),
-            "left" => self.add_tracks_back(route, cx),
-            // ⌫ on an empty query is the same gesture as ←: the palette is a
-            // navigator, and a query short enough to type is short enough to
-            // delete your way out of.
-            "backspace" if query_empty => self.add_tracks_back(route, cx),
-            "up" => self.add_tracks_step(route, -1, cx),
-            "down" => self.add_tracks_step(route, 1, cx),
-            "enter" if modified => self.add_tracks_submit(route, cx),
-            "enter" | "right" => self.add_tracks_activate(route, cx),
-            _ => {}
+            Some(float::Nav::Dismiss) if menu_open => self.toggle_source_menu(cx),
+            Some(float::Nav::Dismiss) => self.dismiss_overlay(cx),
+            Some(float::Nav::Back) => self.add_tracks_back(route, cx),
+            Some(float::Nav::Step(delta)) => self.add_tracks_step(route, delta, cx),
+            Some(float::Nav::Submit) => self.add_tracks_submit(route, cx),
+            Some(float::Nav::Open) => self.add_tracks_activate(route, cx),
+            None => {}
         }
     }
 
@@ -1327,20 +1320,10 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
 /// strip that appears and disappears mid-flow shifts everything under it, and
 /// the footer is already reserved space on every route.
 fn footer(activity: Option<&TrackImportActivity>, route: Route) -> Div {
-    let mut band = float::footer_band()
-        .child(float::key_hint_pair(
-            IconName::ArrowUp,
-            IconName::ArrowDown,
-            "Navigate",
-        ))
-        .child(float::key_hint(IconName::ArrowLeft, "Back"))
-        .child(float::key_hint(
-            IconName::ArrowRight,
-            match route {
-                Route::SourceLibrary => "Select",
-                _ => "Open",
-            },
-        ));
+    let mut band = float::nav_legend(match route {
+        Route::SourceLibrary => "Select",
+        Route::TrackBrowser => "Open",
+    });
     band = band.child(float::key_hint_text("⌘↵", "Import"));
     band = band.child(div().flex_1().min_w_0());
     // A route's own failure is shown where its rows would have been, by
@@ -1645,28 +1628,11 @@ fn track_row(
     // where only some tracks have covers keeps one left edge. `tracks::album_art`
     // is the app's one recipe for this — art is a path on disk, read through
     // gpui's image cache, never inlined bytes (CLAUDE.md).
-    row.child(crate::tracks::album_art(art, ART_SIZE)).child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .justify_center()
-            .gap(px(2.0))
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(12.5))
-                    .child(title.to_string()),
-            )
-            .children(subtitle.map(|subtitle| {
-                div()
-                    .truncate()
-                    .text_size(px(10.5))
-                    .text_color(ladder::muted_foreground())
-                    .child(subtitle.to_string())
-            })),
-    )
+    row.child(crate::tracks::album_art(art, ART_SIZE))
+        .child(float::row_text(
+            title.to_string(),
+            subtitle.map(|subtitle| subtitle.to_string().into()),
+        ))
 }
 
 /// The line a list shows in place of rows it does not have.

@@ -47,6 +47,7 @@ mod fullscreen;
 mod history;
 mod keymap;
 mod library;
+mod new_tab;
 mod patch;
 mod picker_preview;
 mod saved_tabs;
@@ -110,6 +111,9 @@ pub struct Luma {
     /// keeps itself open: the two states are one fact read twice.
     pub(crate) sidebar: Option<tracks::Tracks>,
     pub(crate) sidebar_hidden: bool,
+    /// A score click's pending hide of the sidebar — see
+    /// [`Luma::open_sidebar_score`]. Dropping it cancels the hide.
+    pub(crate) sidebar_hide: Option<gpui::Task<()>>,
     /// The window's parts drawn as views of their own, so the stage's frames
     /// rebuild only the stage — see [`shell::Region`].
     pub(crate) regions: shell::Regions,
@@ -126,9 +130,11 @@ pub struct Luma {
     pub(crate) parked: workspace::ParkedTabs<Body>,
     /// The tabs this device reopens at launch — see [`saved_tabs`].
     pub(crate) saved_tabs: saved_tabs::SavedTabs,
-    /// Visual-only state for keyed chip reflow and the floating `+` menu.
-    /// Logical tab identity and teardown remain owned by `workspace`.
+    /// Visual-only state for keyed chip reflow. Logical tab identity and
+    /// teardown remain owned by `workspace`.
     pub(crate) tab_chrome: tab_chrome::TabChrome,
+    /// The `+`'s combo box, while it is open — see [`new_tab`].
+    pub(crate) new_tab: Option<new_tab::NewTab>,
     pub(crate) workspace_hidden: bool,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
@@ -269,6 +275,7 @@ impl Luma {
             next_track_import: 0,
             sidebar: None,
             sidebar_hidden: false,
+            sidebar_hide: None,
             regions: shell::Regions::default(),
             // The first shell frame resolves both widths without animation;
             // subsequent visibility changes use the shared spring.
@@ -277,6 +284,7 @@ impl Luma {
             parked: workspace::ParkedTabs::default(),
             saved_tabs: saved_tabs::SavedTabs::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
+            new_tab: None,
             workspace_hidden: false,
             shell_presented: false,
             restoring_venue: false,
@@ -472,6 +480,13 @@ impl Luma {
         self.workspace.select_index(index);
         cx.notify();
     }
+
+    /// Show or hide the sidebar, by the button or ⌘B. The person's own toggle
+    /// out-ranks a score click's pending hide, which it cancels.
+    pub(crate) fn toggle_sidebar(&mut self) {
+        self.sidebar_hide = None;
+        self.sidebar_hidden = !self.sidebar_hidden;
+    }
 }
 
 impl Render for Luma {
@@ -612,7 +627,7 @@ impl Render for Luma {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _, cx| {
-                this.sidebar_hidden = !this.sidebar_hidden;
+                this.toggle_sidebar();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleWorkspace, _, cx| {
@@ -624,17 +639,11 @@ impl Render for Luma {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &keymap::CloseTab, _, cx| this.close_active_tab(cx)))
-            .on_action(cx.listener(|this, _: &keymap::NewTab, _, cx| {
-                // ⌘T means "show me the ways to open a tab", and where those
-                // live depends on whether any exist yet: the `+` menu hangs
-                // off the strip, and with no tabs there is no strip to hang
-                // it off — the panel's own empty state is the offer instead.
-                // Either way the panel comes up, because both live inside it.
+            .on_action(cx.listener(|this, _: &keymap::NewTab, window, cx| {
+                // ⌘T presses the `+`: it opens the combo box, and brings up
+                // the panel the picked tab will show in.
                 this.workspace_hidden = false;
-                if !this.workspace.is_empty() {
-                    this.tab_chrome.toggle_menu();
-                }
-                cx.notify();
+                this.toggle_new_tab(window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::SelectTab1, _, cx| this.select_tab(0, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab2, _, cx| this.select_tab(1, cx)))

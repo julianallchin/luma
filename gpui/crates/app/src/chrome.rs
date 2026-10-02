@@ -58,11 +58,9 @@ use gpui::*;
 use gpui_component::Icon;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
-use luma_ui::{float, glass, ladder, motion, radius};
+use luma_ui::{float, glass, motion, radius};
 
-use crate::tab_chrome::{
-    menu_choices, NewTabPrerequisites, PointerRegion, TabDescriptor, CHIP_GAP,
-};
+use crate::tab_chrome::{PointerRegion, TabDescriptor, CHIP_GAP};
 use crate::tabs::Target;
 use crate::Luma;
 
@@ -224,7 +222,7 @@ pub(crate) fn sidebar_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> i
         open,
         enabled,
         app,
-        |this| this.sidebar_hidden = !this.sidebar_hidden,
+        Luma::toggle_sidebar,
     )
 }
 
@@ -410,8 +408,9 @@ fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoEle
 /// **strip** rather than of the band: it extends a row of tabs, so it is
 /// wherever that row is.
 ///
-/// With **no** tabs there is no `+`: the panel's own empty state is the offer
-/// then, and two offers for one question is the thing that rule prevents.
+/// The `+` is there with no tabs too: it is the one way to open a tab from
+/// the strip (`docs/specs/venue-tabs.md` rule 9), and the empty panel only
+/// points at it. It needs a venue, whose songs it lists.
 pub(crate) fn tab_strip(
     app: &mut Luma,
     entity: &Entity<Luma>,
@@ -431,7 +430,7 @@ pub(crate) fn tab_strip(
             title: tab.body.title().to_string(),
         })
         .collect::<Vec<_>>();
-    let show_plus = !descriptors.is_empty() && available_width >= CONTROL;
+    let show_plus = app.sidebar.is_some() && available_width >= CONTROL;
     let controls_width = if show_plus { CONTROL } else { 0.0 };
     let now = Instant::now();
     let frame = app.tab_chrome.frame(
@@ -455,9 +454,9 @@ pub(crate) fn tab_strip(
         .flex()
         .items_center()
         .relative()
-        // The menu is a sibling outside this mask. Chips and fixed controls
-        // are clipped to the exact room the band assigned them, so a 0px slot
-        // cannot leak its icon/padding over history or settings.
+        // The combo box is a sibling outside this mask. Chips and fixed
+        // controls are clipped to the exact room the band assigned them, so a
+        // 0px slot cannot leak its icon/padding over history or settings.
         .overflow_hidden();
     for (index, tab) in frame.live.iter().enumerate() {
         let region = PointerRegion {
@@ -484,7 +483,6 @@ pub(crate) fn tab_strip(
                 )),
         );
     }
-    let menu_open = app.tab_chrome.menu_open && show_plus;
     let mut controls = div()
         .h(px(CHIP_HEIGHT))
         .flex()
@@ -498,29 +496,22 @@ pub(crate) fn tab_strip(
     rail = rail.child(controls);
 
     let mut strip = strip.child(rail);
-    // The menu hangs off the strip through the house floating layer:
+    // The combo box hangs off the strip through the house floating layer:
     // `deferred(…).priority(1)` lifts it above everything painted in normal
     // order — the window controls included — and `anchored` owns the
-    // off-screen fitting. An overlay up means the menu yields.
-    if menu_open && app.overlay.get().is_none() {
-        let prerequisites = app.new_tab_prerequisites();
-        let dismiss = entity.clone();
-        strip = strip.child(float::anchored_at(
-            "new-tab-menu",
-            point(px(window_x + frame.controls_x), px(HEIGHT - 3.0)),
-            float::Dismiss::on_press_out(move |_, cx| {
-                dismiss.update(cx, |this, cx| {
-                    if this.tab_chrome.dismiss_menu() {
-                        cx.notify();
-                    }
-                });
-            }),
-            div()
-                .w(px(240.0))
-                .child(new_tab_menu(entity, &prerequisites))
-                .agent_node(Role::Card, "New tab menu")
-                .into_any_element(),
-        ));
+    // off-screen fitting. An overlay up means the combo box yields.
+    if let Some(new_tab) = app.new_tab.as_ref().filter(|_| show_plus) {
+        if app.overlay.get().is_none() {
+            let dismiss = entity.clone();
+            strip = strip.child(float::anchored_at(
+                "new-tab-combo",
+                point(px(window_x + frame.controls_x), px(HEIGHT - 3.0)),
+                float::Dismiss::on_press_out(move |window, cx| {
+                    dismiss.update(cx, |this, cx| this.close_new_tab(window, cx));
+                }),
+                new_tab.combo().into_any_element(),
+            ));
+        }
     }
     strip.agent_node(Role::Card, "Tab strip")
 }
@@ -570,58 +561,11 @@ fn new_tab_control(entity: &Entity<Luma>) -> Div {
         luma_ui::icon_button(IconName::Plus, luma_ui::Enabled::Yes)
             .id("new-tab")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(move |_, _, cx| {
-                toggled.update(cx, |this, cx| {
-                    this.tab_chrome.toggle_menu();
-                    cx.notify();
-                });
+            .on_click(move |_, window, cx| {
+                toggled.update(cx, |this, cx| this.toggle_new_tab(window, cx));
             })
             .agent_node(Role::Button, "new-tab"),
     )
-}
-
-/// The `+` menu's card: the house popover surface with the house rows, not a
-/// third drawing of either. Rows are [`float::menu_row`], so hover fades the
-/// way every other floating row's does; a choice that cannot act dims whole
-/// ([`float::INERT_OPACITY`]) rather than minting its own grey.
-fn new_tab_menu(entity: &Entity<Luma>, prerequisites: &NewTabPrerequisites) -> Div {
-    let mut menu = float::popover_card()
-        .w_full()
-        .flex_none()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-    for availability in menu_choices(prerequisites) {
-        let choice = availability.choice;
-        let enabled = availability.enabled();
-        let opened = entity.clone();
-        let key = SharedString::from(format!("new-tab:{}", choice.label()));
-        let mut column = div().flex().flex_col().gap(px(2.0)).child(choice.label());
-        if let Some(reason) = availability.reason {
-            column = column.child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(ladder::foreground_alpha(0.45))
-                    .child(reason)
-                    .agent_node(Role::Text, reason),
-            );
-        }
-        let mut row = float::menu_row(float::RowState::Rest, key.clone())
-            .id(key)
-            .w_full()
-            .min_h(px(38.0))
-            .child(column);
-        if enabled {
-            row = row.on_click(move |_, _, cx| {
-                opened.update(cx, |this, cx| this.activate_new_tab_choice(choice, cx));
-            });
-        } else {
-            row = row.cursor_default().opacity(float::INERT_OPACITY);
-        }
-        menu = menu.child(
-            row.agent_node(Role::Button, choice.label())
-                .agent_disabled(!enabled),
-        );
-    }
-    menu
 }
 
 fn stable_close_hotspot(entity: &Entity<Luma>, region: PointerRegion) -> impl IntoElement {

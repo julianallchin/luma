@@ -26,7 +26,10 @@ test("two scores of one track are two tabs", () => {
   const listed = until("both scores", (s) => scoreRows(s).length === 2 ? s : undefined);
   app.click(scoreRows(listed)[0]);
   until("the first score's tab", (s) => chips(s).length === 1);
-  // Opening a score hides the sidebar; bring the launcher back.
+  // Opening a score hides the sidebar, a double-click interval after the
+  // click; bring the launcher back.
+  const sidebarAway = (s) => s.find({ role: "card", label: "Sidebar" }) === undefined;
+  until("the sidebar put away", sidebarAway);
   app.action("luma::ToggleSidebar");
   app.frames(4);
   app.click(scoreRows(app.snapshot())[1]);
@@ -36,6 +39,7 @@ test("two scores of one track are two tabs", () => {
   assert(chat(both), "the score tab has no chat");
 
   // A click on a score that already has a tab brings it forward.
+  until("the sidebar put away", sidebarAway);
   app.action("luma::ToggleSidebar");
   app.frames(4);
   app.click(scoreRows(app.snapshot())[0]);

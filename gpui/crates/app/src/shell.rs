@@ -28,14 +28,14 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, Context, Div, DragMoveEvent, SharedString, Window};
 
 use luma_ui::dialog::morph::{self, MorphSize};
-use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::node::{Instrument, Role};
 use luma_ui::pane;
 use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
     add_tracks, chat_history, chrome, confirm, export_dialog, fixture_picker, keymap, patch,
-    settings, stage, subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
+    settings, stage, subagents, track_editor, tracks, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -51,11 +51,6 @@ const CENTER_MIN: f32 = 360.0;
 /// How wide a seam between two regions is. One device pixel's worth of rule at
 /// 1×, and the only structural line the shell draws.
 const SEAM_WIDTH: f32 = 1.0;
-/// Shared maximum width for the empty workspace’s action rows.
-const EMPTY_PANEL_BUTTON_WIDTH: f32 = 420.0;
-/// Between those buttons, and between one and the reason it cannot act.
-const EMPTY_PANEL_GAP: f32 = 8.0;
-const EMPTY_PANEL_REASON_GAP: f32 = 4.0;
 
 /// One plane over the whole shell. The regions persist beneath it — closing
 /// an overlay reveals them exactly as they were.
@@ -304,10 +299,6 @@ impl Luma {
     /// the overlay. The venue picker with nothing selected stays — see the
     /// module docs.
     pub(crate) fn dismiss_overlay(&mut self, cx: &mut Context<Self>) {
-        if self.tab_chrome.dismiss_menu() {
-            cx.notify();
-            return;
-        }
         if matches!(self.overlay.as_open(), Some(Overlay::InsertPattern(_))) {
             self.close_overlay(cx);
             return;
@@ -679,14 +670,8 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             0.0
         };
     let strip_width = chrome::band_room(main_span, strip_lead, 0.0, 0);
-    // The `+` menu hangs off the strip: empty the strip and the menu has
-    // nothing to hang off, so it goes too rather than waiting armed for
-    // whatever brings the strip back.
-    if app.workspace.is_empty() {
-        app.tab_chrome.dismiss_menu();
-    }
-    // Same rule for the account menu: it hangs off the sidebar's foot, so a
-    // sidebar that is away has nothing for it to hang from. Dropped rather
+    // The account menu hangs off the sidebar's foot, so a sidebar that is
+    // away has nothing for it to hang from. Dropped rather
     // than closed — an exit needs a surface to play over.
     if app.sidebar.is_none() || app.sidebar_hidden {
         app.account_menu = luma_ui::dialog::Popup::default();
@@ -1035,7 +1020,7 @@ fn workspace_body(
     // first tab is started from. The stage stands down with it: a rig view
     // over no editor is a room with no subject.
     if app.workspace.is_empty() {
-        return empty_panel(app, &cx.entity());
+        return empty_panel();
     }
     let split = app.split_view_active();
     let inspector = matches!(app.workspace.active_body(), Some(Body::TrackEditor(_)))
@@ -1335,82 +1320,20 @@ fn split_view_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
 /// [`WorkspaceResize`].
 struct SplitViewResize;
 
-/// What the panel shows before its first tab: the ways to open one, stacked
-/// and centred.
-///
-/// These are [`tab_chrome::NewTabChoice`] — the same ones the `+` menu
-/// offers, with the same labels and the same prerequisites. The choices are
-/// stated once and drawn twice: a menu when the strip has tabs to sit beside,
-/// and this when it does not. A second list here would be the one that drifts.
-///
-/// A choice that cannot act yet keeps its slot and says why, the way the
-/// chrome's own dimmed controls do — the panel's anatomy is the same whether
-/// you have a track selected or not.
-fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
-    let prerequisites = app.new_tab_prerequisites();
-    let mut stack = div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .max_w(px(EMPTY_PANEL_BUTTON_WIDTH))
-        .gap(px(EMPTY_PANEL_GAP));
-    for availability in tab_chrome::menu_choices(&prerequisites) {
-        let choice = availability.choice;
-        let enabled = availability.enabled();
-        let label = choice.label();
-        let icon = match choice {
-            tab_chrome::NewTabChoice::Venue => luma_ui::icons::IconName::Cpu,
-            tab_chrome::NewTabChoice::Track => luma_ui::icons::IconName::Play,
-        };
-        let button = luma_ui::button("", enabled.into())
-            .justify_start()
-            .gap(px(12.0))
-            .px(px(16.0))
-            .h(px(52.0))
-            .child(gpui_component::Icon::new(icon).size(px(18.0)))
-            .child(label)
-            .id(SharedString::from(format!("empty-panel:{label}")))
-            .w_full();
-        let button = if enabled {
-            let opened = entity.clone();
-            button.on_click(move |_, _, cx| {
-                opened.update(cx, |this, cx| this.activate_new_tab_choice(choice, cx));
-            })
-        } else {
-            button
-        };
-        stack = stack.child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(EMPTY_PANEL_REASON_GAP))
-                // The node rides a plain wrapper: `agent_disabled` is not on
-                // `Stateful`, and the button has an id because it is clickable.
-                .child(
-                    div()
-                        .w_full()
-                        .child(button)
-                        .agent_node(Role::Button, label)
-                        .agent_disabled(!enabled),
-                )
-                .children(availability.reason.map(|reason| {
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(glass::ink(0.32))
-                        .child(reason)
-                        .agent_node(Role::Text, reason)
-                })),
-        );
-    }
+/// What the panel shows before its first tab: the key that opens one. The `+`
+/// in the strip above is the offer itself (`docs/specs/venue-tabs.md` rule 9);
+/// this only says where it is, so there is one offer and not two.
+fn empty_panel() -> AnyElement {
     div()
         .flex_1()
         .min_h_0()
         .flex()
         .items_center()
         .justify_center()
-        .px(px(24.0))
-        .child(stack)
+        .child(luma_ui::float::key_hint_text(
+            "⌘T",
+            "Open a song or the venue",
+        ))
         .agent_node(Role::Card, "Empty panel")
         .into_any_element()
 }

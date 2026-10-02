@@ -343,6 +343,27 @@ pub fn empty_row(message: impl Into<SharedString>) -> Div {
         .child(message.into())
 }
 
+/// A list row's words: a title over a muted subtitle, both truncating, so a
+/// long name never pushes the row's lead or its trailing marks out of place.
+/// The caller puts its lead (album art, a glyph, a handle) before this.
+pub fn row_text(title: impl Into<SharedString>, subtitle: Option<SharedString>) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(rpx(2.0))
+        .child(div().truncate().text_size(rpx(12.5)).child(title.into()))
+        .children(subtitle.map(|subtitle| {
+            div()
+                .truncate()
+                .text_size(rpx(10.5))
+                .text_color(ladder::muted_foreground())
+                .child(subtitle)
+        }))
+}
+
 /// The float tier's "this one is chosen" mark, and the hole it leaves when it
 /// is not.
 ///
@@ -479,6 +500,20 @@ pub fn key_hint_pair(first: IconName, second: IconName, label: impl Into<SharedS
                 .child(cap_glyph(second)),
         )
         .child(key_hint_label(label))
+}
+
+/// A navigator's legend: the footer band with the keys every navigator
+/// shares — `[↑|↓] Navigate`, `← Back` and `→` doing `open`. A card adds its
+/// own keys after these. See [`Nav`] for what the keys do.
+pub fn nav_legend(open: impl Into<SharedString>) -> Div {
+    footer_band()
+        .child(key_hint_pair(
+            IconName::ArrowUp,
+            IconName::ArrowDown,
+            "Navigate",
+        ))
+        .child(key_hint(IconName::ArrowLeft, "Back"))
+        .child(key_hint(IconName::ArrowRight, open))
 }
 
 fn hint_row() -> Div {
@@ -1384,6 +1419,13 @@ impl<T> Picker<T> {
         self.shown.get(self.cursor).map(|&at| &self.rows[at])
     }
 
+    /// The `index`th row of [`Picker::shown`], for a virtualized list that
+    /// draws a range of them.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.shown.get(index).map(|&at| &self.rows[at])
+    }
+
     /// Walk the cursor by `delta`, wrapping at both ends. Returns the new
     /// cursor position for a `scroll_to_item`, or `None` when there is
     /// nothing to walk — the caller then neither scrolls nor redraws.
@@ -1419,6 +1461,48 @@ impl<T> Picker<T> {
                 .collect()
         };
         self.cursor = 0;
+    }
+}
+
+/// What a key means to a navigator: a list under a filter field.
+///
+/// The field holds focus but does not own the keyboard. A search field
+/// ([`crate::text_input::Mode::Search`]) leaves the navigation keys unbound,
+/// so they bubble out of it to the card, which reads them here. Only text
+/// keys reach the field. One grammar, so every navigator answers the same
+/// keys the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nav {
+    /// Escape: close the card.
+    Dismiss,
+    /// ← , or ⌫ on an empty query: one level up. A query short enough to
+    /// type is short enough to delete your way out of.
+    Back,
+    /// ↑ / ↓: move the cursor.
+    Step(isize),
+    /// ↵ or →: act on the row under the cursor.
+    Open,
+    /// ⌘↵: the card's one committing action.
+    Submit,
+}
+
+impl Nav {
+    /// The meaning of `keystroke`, or `None` for a key a navigator leaves
+    /// alone. `query_empty` says whether the filter is empty, which decides
+    /// whether ⌫ edits text or walks back.
+    #[must_use]
+    pub fn of(keystroke: &gpui::Keystroke, query_empty: bool) -> Option<Self> {
+        let modified = keystroke.modifiers.platform || keystroke.modifiers.control;
+        Some(match keystroke.key.as_str() {
+            "escape" => Self::Dismiss,
+            "left" => Self::Back,
+            "backspace" if query_empty => Self::Back,
+            "up" => Self::Step(-1),
+            "down" => Self::Step(1),
+            "enter" if modified => Self::Submit,
+            "enter" | "right" => Self::Open,
+            _ => return None,
+        })
     }
 }
 
@@ -1537,6 +1621,29 @@ mod tests {
         assert_eq!(p.shown().count(), 2);
         p.set_query("1");
         assert_eq!(p.shown().copied().collect::<Vec<_>>(), [1, 10]);
+    }
+
+    /// ⌫ is the field's while there is text to delete, and the way back once
+    /// there is not; a chord on ↵ is the commit, not the open.
+    #[test]
+    fn the_navigator_grammar_leaves_text_keys_to_the_field() {
+        let key = |text: &str| gpui::Keystroke::parse(text).expect("a keystroke");
+        assert_eq!(Nav::of(&key("backspace"), true), Some(Nav::Back));
+        assert_eq!(Nav::of(&key("backspace"), false), None);
+        assert_eq!(Nav::of(&key("enter"), false), Some(Nav::Open));
+        assert_eq!(Nav::of(&key("right"), false), Some(Nav::Open));
+        assert_eq!(Nav::of(&key("ctrl-enter"), false), Some(Nav::Submit));
+        assert_eq!(Nav::of(&key("down"), false), Some(Nav::Step(1)));
+        assert_eq!(Nav::of(&key("a"), true), None);
+    }
+
+    /// `get` addresses what is shown, not what is held.
+    #[test]
+    fn picker_get_indexes_the_filtered_rows() {
+        let mut p = picker();
+        p.set_query("beta");
+        assert_eq!(p.get(1), Some(&"beta_two"));
+        assert_eq!(p.get(2), None);
     }
 
     /// Every radius this module paints is on the ladder — the check that

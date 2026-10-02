@@ -342,14 +342,38 @@ const MIN_VISIBLE_OPACITY: f32 = 0.01;
 /// else. Routes supply content; they do not describe the box around it.
 ///
 /// The child callback owns route content; this function owns the card's
-/// surface, geometry, clipping, layer order, filtered poses and the target's
-/// input plane.
+/// surface, geometry and clipping, and [`layers`] the rest.
 pub fn card<K>(
     sample: &MorphSample<K>,
     semantic_label: impl Into<SharedString>,
-    mut content: impl FnMut(&K, ContentMode) -> AnyElement,
+    content: impl FnMut(&K, ContentMode) -> AnyElement,
 ) -> AnyElement {
-    let layers = sample
+    gpui::div()
+        .relative()
+        .flex_none()
+        .w(px(sample.size.width))
+        .h(px(sample.size.height))
+        .overflow_hidden()
+        .rounded(px(radius::MODAL))
+        .bg(glass::dialog())
+        .children(layers(sample, content))
+        .child(rim())
+        .agent_node(Role::Card, semantic_label)
+        .into_any_element()
+}
+
+/// The sample's route layers, each posed and placed in a box of
+/// `sample.size`. [`card`] lays them on the dialog surface; a host with a
+/// surface of its own (a popover whose body changes level) lays them in a
+/// relative box of that size that clips.
+///
+/// The child callback owns route content; this owns the layer order, the
+/// filtered poses and the target's input plane.
+pub fn layers<K>(
+    sample: &MorphSample<K>,
+    mut content: impl FnMut(&K, ContentMode) -> AnyElement,
+) -> Vec<AnyElement> {
+    sample
         .layers
         .iter()
         // A layer the eye cannot see still costs a full content build and, if
@@ -384,7 +408,7 @@ pub fn card<K>(
                 .h(px(layer.size.height))
                 .opacity(pose.opacity);
             if mode == ContentMode::Interactive {
-                return shell.occlude().child(content(key, mode));
+                return shell.occlude().child(content(key, mode)).into_any_element();
             }
             // `filtered` costs an offscreen render target and a blur pass
             // whatever its arguments say, so a pose that asks for neither must
@@ -392,27 +416,18 @@ pub fn card<K>(
             // is every transition, once its blur has run out — paints straight.
             let identity = pose.blur <= 0.0 && (pose.scale - 1.0).abs() <= f32::EPSILON;
             if identity {
-                shell.child(content(key, mode))
+                shell.child(content(key, mode)).into_any_element()
             } else {
-                shell.child(super::filtered(
-                    pose.blur,
-                    pose.scale,
-                    gpui::div().size_full().child(content(key, mode)),
-                ))
+                shell
+                    .child(super::filtered(
+                        pose.blur,
+                        pose.scale,
+                        gpui::div().size_full().child(content(key, mode)),
+                    ))
+                    .into_any_element()
             }
-        });
-    gpui::div()
-        .relative()
-        .flex_none()
-        .w(px(sample.size.width))
-        .h(px(sample.size.height))
-        .overflow_hidden()
-        .rounded(px(radius::MODAL))
-        .bg(glass::dialog())
-        .children(layers)
-        .child(rim())
-        .agent_node(Role::Card, semantic_label)
-        .into_any_element()
+        })
+        .collect()
 }
 
 /// The card's hairline outline, painted as its **last** child.

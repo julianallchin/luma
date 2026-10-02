@@ -1,5 +1,5 @@
-// The empty workspace a new tab opens on, under a real renderer: its action
-// rows are drawn, and drawn as rows a person can hit.
+// The `+` box over an empty workspace, under a real renderer: its rows are
+// drawn, and drawn as rows a person can hit.
 
 fixture({
   seconds: 20,
@@ -7,10 +7,11 @@ fixture({
   window: [1280, 800],
 });
 
-test("the empty workspace's action rows are visible", () => {
+test("the + box's rows are visible", () => {
   nav.venue("Test Venue");
   app.action("luma::NewTab");
-  until("the empty workspace", (s) => s.find({ role: "card", label: "Empty panel" }) !== undefined);
+  until("the box over the empty workspace", (s) =>
+    s.find({ role: "card", label: "Empty panel" }) !== undefined && s.find({ role: "row", label: "Venue" }) !== undefined);
   app.frames(4);
   const shot = app.screenshot();
   image.keep(shot, "tabs/empty-workspace");
@@ -19,7 +20,7 @@ test("the empty workspace's action rows are visible", () => {
   const whole = image.stats(shot);
   expect(whole.max - whole.min).toBeGreaterThan(30);
 
-  const row = app.snapshot().find({ role: "button", label: "Track editor" }).bounds;
+  const row = app.snapshot().find({ role: "row", label: "Venue" }).bounds;
   // A row, not a chip: wider than tall, and tall enough to aim at.
   expect(row.width).toBeGreaterThan(row.height * 3);
   expect(row.height).toBeGreaterThan(23);
