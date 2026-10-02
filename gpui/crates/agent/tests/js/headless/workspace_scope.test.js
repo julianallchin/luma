@@ -1,39 +1,61 @@
-// The tab strip belongs to the picked track.
+// A venue's tab set: a tab per score, and the venue tab.
 //
-// `tabs.rs` and `workspace.rs` prove the swap as pure logic. This proves the
-// wiring: picking a row in the sidebar is what moves the strip, and the set
-// comes back intact.
+// `tabs.rs` and `workspace.rs` prove the sets as pure logic. This proves the
+// wiring: the sidebar opens tabs, a tab owns its chat, and the strip spans the
+// chat and the editor (`docs/specs/venue-tabs.md`).
 
 fixture({
   seconds: 20,
   clips: [{ pattern: "pattern-strobe", name: "Strobe", start: 2, end: 6 }],
-  equal_timestamp_track: true,
+  extra_scores: 1,
   rig: 4,
+  window: [1600, 900],
 });
 
-// The sidebar's Venue row is a place, not a tab. Picking it hides the thread
-// and the strip and shows the venue page. Picking a track brings that track's
-// strip and the thread back as they were.
-test("the venue row takes the workspace and a track gives it back", () => {
-  const state = () => {
-    const s = app.snapshot();
-    return {
-      page: s.find({ role: "card", label: "Test Venue Venue" }) !== undefined,
-      strip: s.find({ role: "card", label: "Tab strip" }) !== undefined,
-      thread: s.findAll({ role: "text" }).some((n) => n.label === "Luma"),
-      aurora: s.find({ role: "button", label: "Aurora" }) !== undefined,
-    };
-  };
+const chips = (s) => s.findAll({ role: "button" })
+  .map((n) => n.label)
+  .filter((label) => label.startsWith("Aurora · #") || label === "Venue");
+const scoreRows = (s) => s.findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
+const chat = (s) => s.findAll({ role: "text" }).some((n) => n.label === "Luma");
+
+// Opening a second score of the same track opens a second tab beside the
+// first, rather than swapping the score inside one track's tab.
+test("two scores of one track are two tabs", () => {
+  nav.venue("Test Venue");
+  nav.scores("Aurora");
+  const listed = until("both scores", (s) => scoreRows(s).length === 2 ? s : undefined);
+  app.click(scoreRows(listed)[0]);
+  until("the first score's tab", (s) => chips(s).length === 1);
+  // Opening a score hides the sidebar; bring the launcher back.
+  app.action("luma::ToggleSidebar");
+  app.frames(4);
+  app.click(scoreRows(app.snapshot())[1]);
+  const both = until("the second score's tab", (s) => chips(s).length === 2 ? s : undefined);
+  expect(chips(both).sort()).toEqual(["Aurora · #1", "Aurora · #2"]);
+  // The strip spans the chat: the front tab's chat is on screen beside it.
+  assert(chat(both), "the score tab has no chat");
+
+  // A click on a score that already has a tab brings it forward.
+  app.action("luma::ToggleSidebar");
+  app.frames(4);
+  app.click(scoreRows(app.snapshot())[0]);
+  app.frames(4);
+  expect(chips(app.snapshot()).length).toBe(2);
+});
+
+// The venue tab sits in the same strip as the score tabs and shows the
+// venue's chat beside the patch page.
+test("the venue tab is a tab with its own chat", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  until("Aurora's timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  expect(state()).toEqual({ page: false, strip: true, thread: true, aurora: true });
+  until("Aurora's tab", (s) => chips(s).length === 1);
 
   nav.venuePage("Test Venue");
-  until("the thread collapsed", (s) => !s.findAll({ role: "text" }).some((n) => n.label === "Luma"));
-  expect(state()).toEqual({ page: true, strip: false, thread: false, aurora: false });
+  const page = until("the venue tab", (s) => chips(s).includes("Venue") ? s : undefined);
+  expect(chips(page).length).toBe(2);
+  assert(chat(page), "the venue tab hid its chat");
+  assert(page.find({ role: "card", label: "Tab strip" }) !== undefined, "the venue tab drew no strip");
 
-  nav.step("Aurora again", "row", "Aurora");
-  until("Aurora's strip", (s) => s.find({ role: "button", label: "Aurora" }) !== undefined);
-  until("the thread back", (s) => s.findAll({ role: "text" }).some((n) => n.label === "Luma"));
-  expect(state()).toEqual({ page: false, strip: true, thread: true, aurora: true });
+  // Back to the score: its tab was parked behind the venue tab, not closed.
+  nav.step("Aurora's chip", "button", chips(page).find((label) => label !== "Venue"));
+  until("Aurora's timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
 });

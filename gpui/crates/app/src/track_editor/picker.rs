@@ -74,10 +74,7 @@ pub(super) fn open(app: &mut Luma, cx: &mut Context<Luma>) {
     editor
         .menu_search
         .update(cx, |field, cx| field.set_text("", cx));
-    let target = Target::TrackEditor {
-        track: editor.track_id.clone(),
-        venue: editor.venue_id.clone(),
-    };
+    let target = editor.target();
     let rig = app.library.venue_rig(&editor.venue_id);
     let settings = app
         .visualizer

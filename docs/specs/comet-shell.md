@@ -9,26 +9,23 @@ Section numbers are cited from code. Keep them stable.
 
 ## 0. Overview
 
-The agent thread is the centre of the app. The track list is a sidebar beside
-it. Editors are tabs in a workspace panel on the right.
+**Superseded in part by [`venue-tabs.md`](venue-tabs.md).** Tabs belong to a
+venue, a tab is a score or the venue, and each tab owns its chat. The tab
+strip spans the chat and the editor:
 
 ```text
-┌──────────────┬──────────────────────────────────┬─────────────────────────┐
-│  venue       │                                  │ [track][graph][+]       │
-│              │                                  │                         │
-│  tracks      │        the agent thread          │   stage (optional)      │
-│  …           │                                  │                         │
-│              │                                  │   the active tab        │
-│              │   ┌──────────────────────────┐   │                         │
-│              │   │  composer                │   │                         │
-│              │   └──────────────────────────┘   │                         │
-└──────────────┴──────────────────────────────────┴─────────────────────────┘
-   sidebar (256)            centre: flex_1              workspace
-   ⌘B                                                   ⌘⇧B
+┌──────────┬───────────────────────────────────────────────────────┐
+│ venue ▾  │ [Strobe · #1 ●][Strobe · #2][Opus · #1][⌂ Venue]      │
+│          ├───────────────────┬───────────────────────────────────┤
+│ ⌂ Venue  │  chat (this tab)  │  editor (this tab)                │
+│ songs    │                   │  track editor, or the patch page  │
+│  scores  │  composer         │                                   │
+└──────────┴───────────────────┴───────────────────────────────────┘
+   sidebar (256)                        ⌘B / ⌘⇧B
 ```
 
-Three regions, one persistent shell. Nothing is destroyed to show something
-else, so there is no Back and no provenance chain.
+The sidebar, the chat and the editor are persistent regions. Nothing is
+destroyed to show something else, so there is no Back and no provenance chain.
 
 ---
 
@@ -48,47 +45,49 @@ else, so there is no Back and no provenance chain.
 
 ## 2. Region model
 
-### 2.1 Sidebar — the subject list
+[`venue-tabs.md`](venue-tabs.md) is the contract for tab sets, tab keys, the
+per-tab chat and status dots. This section keeps what that spec does not
+restate.
 
-The sidebar lists the selected venue's tracks. A button at its head reopens
-the venue picker. The venue picker is the only way to choose a venue. It
-opens by itself when there is no venue, no overlay and no tab.
+### 2.1 Sidebar — the launcher
 
-A row shows a status lead, the title, and `artist · bpm`. A click selects the
-track and opens its editor tab. A second click reveals the existing tab.
+The sidebar shows the selected venue: its "Venue setup" row, then its songs,
+and a song's scores one level in. A row opens its tab or brings it to the
+front. A button at its head reopens the venue picker, which is the only way to
+choose a venue. It opens by itself when there is no venue, no overlay and no
+tab.
 
 `⌘B` toggles the sidebar.
 
-### 2.2 Centre — the agent thread
+### 2.2 The tab's chat
 
-The centre is `luma_chat::AgentChat` at `flex_1`. It cannot be closed. The
-chat's scope comes from the visible tab. The ChatHistory overlay lists every
-conversation in the room. The Subagents overlay shows delegated work.
+Each tab owns one `luma_chat::AgentChat`, beside its editor. Every chat shares
+the app's one `RunningTurns`, so a turn keeps running when its tab is not in
+front. The ChatHistory overlay lists the front tab's conversations. The
+Subagents overlay shows delegated work.
 
-With no thread, the centre shows the new-thread canvas. The composer stays
+With no thread, the chat shows the new-thread canvas. The composer stays
 mounted, and the first send creates the thread.
 
-### 2.3 Right — the workspace panel
+### 2.3 The tab strip and the editor
 
-A tab strip and one visible tab. `⌘⇧B` toggles the panel. Expand / Show chat
-switches between the split and the takeover layout.
+A tab strip over the chat and the editor, and one visible tab. `⌘⇧B` toggles
+the editor. Expand / Show chat switches between the split and the takeover
+layout.
 
 A tab **is** its target (`gpui/crates/app/src/tabs.rs`):
 
 ```rust
 enum Target {
-    TrackEditor { track: String, venue: String },
-    ScoreGraph { score: String, graph: String },
-    Patch { venue: String },
+    Score { venue: String, track: String, score: String },
+    Venue { venue: String },
 }
 ```
 
 - Opening a target that has a tab reveals that tab. There is no `TabId`.
-- `Patch` is a singleton per venue, because there is one value per venue.
-- Target fields name what a gesture can supply. A key widens only when a
-  gesture needs it.
-- Leaving a venue closes that venue's `Patch` tab only. A track editor is
-  about its track, so it stays.
+- `Venue` is a singleton per venue.
+- Each venue has its own set (`gpui/crates/app/src/workspace.rs`). Switching
+  venue parks the set; it closes nothing.
 
 **State retention.** A tab owns its state for its whole life. Switching tabs
 tears down nothing: playback continues and a loop region stays armed.

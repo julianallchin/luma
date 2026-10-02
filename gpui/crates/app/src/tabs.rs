@@ -8,15 +8,13 @@
 //!
 //! - opening a target that already has a tab *reveals* that tab rather than
 //!   minting a second view of one thing ([`Tabs::open`] is idempotent),
-//! - the patch page is a singleton per venue for free, since there is only one
-//!   `Patch { venue }` value per venue,
-//! - "surface this track's tab" is a call with no question attached —
+//! - the venue tab is a singleton per venue for free, since there is only one
+//!   `Venue { venue }` value per venue,
+//! - "surface this score's tab" is a call with no question attached —
 //!   whether the tab already existed is not the caller's problem.
 //!
-//! A second identity (a `TabId` beside the target) would be a second key that
-//! could disagree with the first, which is exactly the drift the shell
-//! redesign removes. See `docs/specs/comet-shell.md` §2.3 and its deviation
-//! note.
+//! A score tab is keyed by its score, so two scores of one track are two tabs.
+//! See `docs/specs/venue-tabs.md`.
 //!
 //! # Why the body is a type parameter
 //!
@@ -28,47 +26,51 @@
 //!
 //! # Switching is not closing
 //!
-//! [`Tabs::close`] hands the body **back**; nothing else does. That asymmetry
-//! is the whole seam behind the shell's teardown rule: switching tabs tears
-//! down nothing (playback continues, a loop region stays armed), and closing
-//! runs the state's own close semantics — which the caller can only do if it
-//! is given the state to run them on.
+//! [`Tabs::close`] and [`Tabs::retain`] hand the body **back**; nothing else
+//! does. That asymmetry is the whole seam behind the shell's teardown rule:
+//! switching tabs tears down nothing (playback continues, a loop region stays
+//! armed, a turn keeps running), and closing runs the state's own close
+//! semantics — which the caller can only do if it is given the state to run
+//! them on.
 
 /// What a workspace tab shows.
 ///
-/// Closed on purpose: the `+` menu, the picker cards, the keymap and the
-/// agent's targeted opens all enumerate this, and a variant that existed in one
-/// of those lists and not the others would be a card that opens nothing.
+/// Closed on purpose: the sidebar's launcher rows, the keymap, persistence and
+/// the agent's targeted opens all enumerate this, and a variant that existed
+/// in one of those lists and not the others would be a row that opens nothing.
 ///
 /// Ids are `String` rather than newtypes because every id in this crate is a
-/// `String` today — minting four newtypes here would put a second id vocabulary
-/// at the wrong layer and make every call site a conversion. Recorded as a
-/// deviation in the spec rather than silently dropped.
-///
-/// The fields are what today's *gestures* can name — a key wider than any
-/// gesture would force every call site to invent the missing half. A track row
-/// names `(track, venue)` and the score is resolved from that pair; a pattern
-/// row names a pattern and the implementation arrives with the document. When
-/// a gesture that names a score or an implementation exists, the key widens in
-/// the same change that adds it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `String` today — minting newtypes here would put a second id vocabulary at
+/// the wrong layer and make every call site a conversion.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub(crate) enum Target {
-    /// One track's timeline, against the named venue's score for it.
-    TrackEditor { track: String, venue: String },
-    /// One venue's stage, fixture inventory and groups. Singleton per venue,
-    /// and the only body of the venue page — it never sits in a track's strip.
-    Patch { venue: String },
+    /// One score of one track, in the venue the score belongs to.
+    Score {
+        venue: String,
+        track: String,
+        score: String,
+    },
+    /// One venue's stage, fixture inventory and groups. Singleton per venue.
+    Venue { venue: String },
 }
 
 impl Target {
+    /// The venue whose tab set this tab belongs to.
+    pub(crate) fn venue(&self) -> &str {
+        match self {
+            Self::Score { venue, .. } | Self::Venue { venue } => venue,
+        }
+    }
+
     /// The key context this tab's root declares, nested *inside* the
     /// workspace's own context. That nesting is what lets the track editor's
     /// whole binding block survive the shell swap character-for-character —
     /// see [`crate::keymap`].
     pub(crate) fn key_context(&self) -> &'static str {
         match self {
-            Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
-            Self::Patch { .. } => crate::keymap::context::PATCH,
+            Self::Score { .. } => crate::keymap::context::TRACK_EDITOR,
+            Self::Venue { .. } => crate::keymap::context::PATCH,
         }
     }
 
@@ -79,8 +81,8 @@ impl Target {
     /// reordered would lose its hover and its drag mid-gesture.
     pub(crate) fn element_key(&self) -> String {
         match self {
-            Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
-            Self::Patch { venue } => format!("patch:{venue}"),
+            Self::Score { score, .. } => format!("score:{score}"),
+            Self::Venue { venue } => format!("venue:{venue}"),
         }
     }
 }
@@ -155,14 +157,15 @@ impl<B> Tabs<B> {
         Some(tab.body)
     }
 
-    /// Every open tab's state, in strip order, consuming the set.
-    ///
-    /// The whole-set counterpart of [`Self::close`]: a subject that no longer
-    /// exists takes its tabs with it, and each of those states still owes its
-    /// teardown. Consuming rather than draining is what makes "the set is gone"
-    /// unrepresentable afterwards.
-    pub(crate) fn into_bodies(self) -> Vec<B> {
-        self.open.into_iter().map(|tab| tab.body).collect()
+    /// Close every tab `keep` rejects, handing back each one so the caller can
+    /// run its teardown. The whole-set counterpart of [`Self::close`]: a
+    /// subject that no longer exists takes its tabs with it.
+    pub(crate) fn retain(&mut self, keep: impl Fn(&Target) -> bool) -> Vec<Tab<B>> {
+        let (kept, dropped) = std::mem::take(&mut self.open)
+            .into_iter()
+            .partition(|tab| keep(&tab.target));
+        self.open = kept;
+        dropped
     }
 
     /// Make `target` the visible tab. A target that is not open is ignored —
@@ -246,9 +249,10 @@ mod tests {
     use super::*;
 
     fn track(id: &str) -> Target {
-        Target::TrackEditor {
-            track: id.to_string(),
+        Target::Score {
             venue: "venue".to_string(),
+            track: id.to_string(),
+            score: format!("{id}-score"),
         }
     }
 
@@ -275,14 +279,44 @@ mod tests {
     }
 
     #[test]
-    fn a_venue_has_exactly_one_patch_page() {
+    fn a_venue_has_exactly_one_venue_tab() {
         let mut tabs: Tabs<&str> = Tabs::default();
-        let target = Target::Patch {
+        let target = Target::Venue {
             venue: "aurora".to_string(),
         };
         tabs.open(target.clone(), || "one");
-        tabs.open(target, || panic!("the patch is a singleton per venue"));
+        tabs.open(target, || panic!("the venue tab is a singleton per venue"));
         assert_eq!(tabs.iter().count(), 1);
+    }
+
+    #[test]
+    fn two_scores_of_one_track_are_two_tabs() {
+        let mut tabs: Tabs<&str> = Tabs::default();
+        let score = |id: &str| Target::Score {
+            venue: "venue".to_string(),
+            track: "song".to_string(),
+            score: id.to_string(),
+        };
+        tabs.open(score("main"), || "main");
+        tabs.open(score("alt"), || "alt");
+        assert_eq!(targets(&tabs), vec![score("main"), score("alt")]);
+    }
+
+    #[test]
+    fn retain_hands_back_every_rejected_tab_and_heals_the_selection() {
+        let mut tabs: Tabs<&str> = Tabs::default();
+        tabs.open(track("a"), || "a");
+        tabs.open(track("b"), || "b");
+        tabs.open(track("c"), || "c");
+        tabs.select(&track("b"));
+        let dropped: Vec<&str> = tabs
+            .retain(|target| target != &track("b"))
+            .into_iter()
+            .map(|tab| tab.body)
+            .collect();
+        assert_eq!(dropped, vec!["b"]);
+        assert_eq!(targets(&tabs), vec![track("a"), track("c")]);
+        assert_eq!(tabs.active(), Some(&track("a")));
     }
 
     #[test]
@@ -374,7 +408,7 @@ mod tests {
         let keys = [
             track("a").element_key(),
             track("b").element_key(),
-            Target::Patch {
+            Target::Venue {
                 venue: "v".to_string(),
             }
             .element_key(),
@@ -387,7 +421,7 @@ mod tests {
     fn every_target_declares_a_distinct_key_context() {
         let contexts = [
             track("a").key_context(),
-            Target::Patch {
+            Target::Venue {
                 venue: "v".to_string(),
             }
             .key_context(),

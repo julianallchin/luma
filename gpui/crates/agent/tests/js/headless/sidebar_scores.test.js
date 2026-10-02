@@ -3,7 +3,7 @@
 // - a track row is a door to the track's documents: pressing it goes a level
 //   deeper, not straight onto a timeline the sidebar guessed at;
 // - the level lists every score on the `(track, venue)`, and choosing one
-//   moves the timeline onto it without leaving the list;
+//   opens its own tab and puts the sidebar away;
 // - `New score` mints another and opens it;
 // - Back returns to the track list.
 
@@ -28,19 +28,23 @@ test("the row opens a track's scores, and the level switches, mints and pops", (
   // would still be a tab stop.
   expect(app.snapshot().find({ role: "input", label: "Search tracks" })).toBe(undefined);
 
-  // Choosing is reading: the list stays while the timeline moves.
+  // Choosing opens the score's own tab and gives the timeline the room; the
+  // level is where it was when the sidebar comes back.
   const other = rows().find((n) => !n.label.startsWith(`${opened.slice("Score ".length)} `));
   app.click(other);
   until("the timeline on the other score", () => ordinal() !== opened);
   const switched = ordinal();
-  expect(app.snapshot().find({ role: "card", label: "Scores level" }) !== undefined).toBe(true);
+  expect(app.snapshot().find({ role: "card", label: "Sidebar" })).toBe(undefined);
+  app.action("luma::ToggleSidebar");
+  until("the level back", (s) => s.find({ role: "card", label: "Scores level" }) !== undefined);
 
   // Mint another, which opens it: a new score, not a hand-back of one on the
   // pair.
   app.click(app.snapshot().find({ role: "button", label: "New score" }));
-  until("a fourth score, open", () => rows().length === 4 && ordinal() !== switched);
+  until("a fourth score, open", () => ordinal() === "Score #4");
+  app.action("luma::ToggleSidebar");
+  until("four scores listed", () => rows().length === 4);
   expect(ordinals(rows().map((n) => n.label))).toEqual(["#1", "#2", "#3", "#4"]);
-  expect(ordinal()).toBe("Score #4");
 
   // …and back out.
   app.click(app.snapshot().find({ role: "button", label: "Back to tracks" }));

@@ -128,24 +128,14 @@ pub struct Editor {
     track_name: String,
     /// The track's audio file, which playback decodes from the top.
     audio_path: std::path::PathBuf,
-    /// The venue whose score is open. Half of what a conversation about this
-    /// track is scoped by — see [`crate::agent::turn_context`].
+    /// The venue the score belongs to.
     venue_id: String,
     /// The score whose clips are on the timeline, and whether this host may
-    /// write to it. `None` until the lookup lands, and still `None` for a
-    /// track this venue has never annotated — there is no score to edit then,
-    /// and the lanes stay empty.
-    score: Option<Score>,
-    /// Whether anything has yet decided what this tab is showing — set by
-    /// [`rebase`], which is the only thing that ever writes [`Self::score`].
-    ///
-    /// Not derivable from `score.is_none()`, and that is the whole point: "no
-    /// score chosen yet" and "chosen to be on none, because the score was
-    /// deleted" are different facts, and the tab's own opening read lands
-    /// *after* both. Without this latch a delete raced the initial listing and
-    /// the timeline reopened the document that had just been archived — with a
-    /// listing taken before it was.
-    score_chosen: bool,
+    /// write to it. Fixed for the tab's life: the score is the tab's identity
+    /// (see [`Editor::target`]), so another score is another tab.
+    score: Score,
+    /// The tab's chat: this score's conversations.
+    pub(crate) chat: crate::agent::TabChat,
     waveform: Option<Rc<TrackWaveform>>,
     gpu_waveform: Rc<RefCell<waveform::Resource>>,
     timeline_waveform: waveform::Strip,
@@ -277,27 +267,6 @@ pub(crate) struct Score {
     pub(crate) ordinal: i64,
     /// Somebody else's score: visible, not writable.
     pub(crate) read_only: bool,
-}
-
-/// Point the editor at `score`, or at nothing, with none of the last one left
-/// behind.
-///
-/// `composited` is reset with the rest: it records what was last *sent to the
-/// rig*, and after a rebase the rig is holding another document's scene —
-/// keeping the old value would make the next reconcile compare against a list
-/// that is not on the timeline any more and skip the install.
-fn rebase(editor: &mut Editor, score: Option<Score>) {
-    editor.score = score;
-    editor.score_chosen = true;
-    editor.selected.clear();
-    editor.cursor = None;
-    editor.history = History::default();
-    editor.clipboard = None;
-    editor.clips = Vec::new().into();
-    editor.graph_score = None;
-    editor.sheet.invalidate();
-    editor.composited = None;
-    editor.dirty = false;
 }
 
 /// One clip, with everything a draw *and* a write need already resolved.
@@ -944,17 +913,16 @@ impl View {
 }
 
 impl Editor {
-    /// The track being edited. The window title and the tab's chip are the
-    /// only readers outside this module.
-    pub(crate) fn track_name(&self) -> &str {
-        &self.track_name
+    /// The tab's chip: the track, and which of its scores. Two scores of one
+    /// track are two tabs, so the track alone would not tell them apart.
+    pub(crate) fn title(&self) -> String {
+        format!("{} · #{}", self.track_name, self.score.ordinal)
     }
 
     /// What an export of the open score takes from the timeline: its name,
-    /// its length in seconds and its audio file. `None` with no score open,
-    /// or before the track's length is known.
+    /// its length in seconds and its audio file. `None` before the track's
+    /// length is known.
     pub(crate) fn export_source(&self) -> Option<(String, f32, std::path::PathBuf)> {
-        self.score.as_ref()?;
         let duration = self.transport.duration;
         (duration > 0.).then(|| (self.track_name.clone(), duration, self.audio_path.clone()))
     }
@@ -962,7 +930,7 @@ impl Editor {
     /// Whether an edit is allowed to land at all: a score this host owns, and
     /// no other reason to refuse.
     fn writable(&self) -> bool {
-        self.score.as_ref().is_some_and(|score| !score.read_only)
+        !self.score.read_only
     }
 
     /// Where the lanes are, on the canvas the last frame painted.
@@ -1016,15 +984,13 @@ impl Editor {
         self.view.lift = 0.;
     }
 
-    /// The track and venue this conversation would be about, once there is a
-    /// score to hang it on.
-    pub(crate) fn subject(&self) -> Option<(String, String, String)> {
-        let score = self.score.as_ref()?;
-        Some((
-            self.track_id.clone(),
-            self.venue_id.clone(),
-            score.id.clone(),
-        ))
+    /// The tab this editor is: its score, in its venue.
+    pub(crate) fn target(&self) -> Target {
+        Target::Score {
+            venue: self.venue_id.clone(),
+            track: self.track_id.clone(),
+            score: self.score.id.clone(),
+        }
     }
 
     /// The timeline as a chat message reports it: the playhead, the cursor,
@@ -1066,12 +1032,11 @@ impl Editor {
 
     /// The score the stage above this timeline should be lit by — the open
     /// document, which is this screen's own fact and nobody else's to derive.
-    pub(crate) fn lit(&self) -> Option<crate::visualizer::Lit> {
-        let score = self.score.as_ref()?;
-        Some(crate::visualizer::Lit {
-            score: score.id.clone(),
-            ordinal: score.ordinal,
-        })
+    pub(crate) fn lit(&self) -> crate::visualizer::Lit {
+        crate::visualizer::Lit {
+            score: self.score.id.clone(),
+            ordinal: self.score.ordinal,
+        }
     }
 
     /// The track this timeline edits.
@@ -1867,40 +1832,64 @@ fn lane_count(clips: &[Clip]) -> usize {
 // screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Open a track's timeline as a workspace tab, from the sidebar row that
-    /// named it. Reopening a track that already has a tab reveals it and
-    /// reloads nothing: the tab's identity is its target.
+    /// Open the newest score `track_id` has in the selected venue — the
+    /// first row of the listing, which is the order the sidebar shows.
+    pub(crate) fn open_track(&mut self, track_id: &str, cx: &mut Context<Self>) {
+        let Some(browser) = &self.sidebar else {
+            return;
+        };
+        let venue_id = browser.venue_id().to_string();
+        let track_id = track_id.to_string();
+        let listing = self.library.scores_across_venues(&track_id);
+        cx.spawn(async move |this, cx| {
+            let Ok(summaries) = listing.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                let user = this.library.user_id();
+                let newest = crate::tracks::scores::rows(&summaries, user.as_deref())
+                    .iter()
+                    .find(|row| row.venue_id.as_ref() == venue_id)
+                    .map(crate::tracks::scores::open_row);
+                if let Some(score) = newest {
+                    this.open_score(&track_id, score, None, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Open `score` of `track_id` as a tab in the selected venue, or bring its
+    /// tab to the front: the tab's identity is its score. `thread` is the chat
+    /// a restored tab had open.
     ///
-    /// The five reads are started together and awaited in order: they do not
+    /// The four reads are started together and awaited in order: they do not
     /// depend on each other, and each is already its own task on the Tokio
     /// runtime, so sequencing the `await`s costs nothing and keeps the
-    /// assignment in one place. The clips are the exception — they are keyed
-    /// by a score id that only the first read knows.
-    pub(crate) fn open_track(&mut self, track_id: &str, cx: &mut Context<Self>) {
+    /// assignment in one place.
+    pub(crate) fn open_score(
+        &mut self,
+        track_id: &str,
+        score: Score,
+        thread: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(browser) = &self.sidebar else {
             return;
         };
         let Some(track) = browser.find(track_id) else {
             return;
         };
-        self.picked = Some(crate::workspace::Pick::Track(track.id.clone()));
-        // Picking the track *is* changing the strip's subject, and the tab
-        // this gesture is about to open belongs to the arriving set. Syncing
-        // here rather than waiting for the next draw is what keeps it out of
-        // the outgoing track's remembered tabs — the swap is a no-op whenever
-        // the scope has not actually moved, so paying for it here is free.
-        self.sync_workspace_scope(cx);
-        let Some(browser) = &self.sidebar else {
-            return;
-        };
         let venue_id = browser.venue_id().to_string();
-        let target = Target::TrackEditor {
-            track: track_id.to_string(),
+        let target = Target::Score {
             venue: venue_id.clone(),
+            track: track.id.clone(),
+            score: score.id.clone(),
         };
-        if self.workspace.body_mut(&target).is_some() {
+        if self.workspace.body(&target).is_some() {
             self.workspace.select(&target);
-            self.activate_track_audio(&target, cx);
+            self.workspace_hidden = false;
             cx.notify();
             return;
         }
@@ -1908,7 +1897,7 @@ impl Luma {
         let waveform = self.library.track_waveform(track_id);
         let beats = self.library.track_beats(track_id);
         let validation = self.library.track_beat_validation(track_id);
-        let scores = self.library.scores_across_venues(track_id);
+        let contents = self.library.score_contents(&score.id, track_id);
 
         let menu_search =
             cx.new(|cx| luma_ui::text_input::TextInput::search("Search patterns…", cx));
@@ -1928,12 +1917,14 @@ impl Luma {
                 });
             }
         });
+        let chat = self.tab_chat(&target, thread, cx);
         let state = Box::new(Editor {
             track_id: track.id.clone(),
             track_name: track_title(&track),
             audio_path: track.file_path.clone().into(),
             venue_id: venue_id.clone(),
-            score: None,
+            score,
+            chat,
             waveform: None,
             gpu_waveform: Rc::new(RefCell::new(waveform::Resource::default())),
             timeline_waveform: waveform::Strip::default(),
@@ -1983,26 +1974,19 @@ impl Luma {
             writes: 0,
             error: None,
             loaded: false,
-            score_chosen: false,
             composited: None,
             compositing: false,
             sheet: sheet::State::default(),
         });
         self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
-        self.activate_track_audio(&target, cx);
 
         cx.spawn(async move |this, cx| {
             let waveform = waveform.await;
             let beats = beats.await;
             let validation = validation.await;
-            let scores = scores.await;
+            let contents = contents.await;
 
             this.update(cx, |this, cx| {
-                let user = this.library.user_id();
-                // Which score the timeline opens on, decided inside the tab
-                // edit and acted on outside it — the clip read is a second
-                // trip, and `edit_track_tab` holds the tab, not the app.
-                let mut open = None;
                 // Addressed to the tab the load was started for, not to
                 // whichever tab is visible when it lands.
                 this.edit_track_tab(&target, cx, |editor| {
@@ -2026,148 +2010,40 @@ impl Luma {
                         }
                         Err(error) => editor.beat_validation_error = Some(error.to_string()),
                     }
-                    match scores {
-                        // The venue in hand, in the order the seam listed —
-                        // `scores.updated_at DESC`, which in practice is
-                        // creation order, because a clip write touches the
-                        // `clips` rows and never bumps the score row (see
-                        // `list_scores_for_track`). Only when nothing has been
-                        // chosen yet: a gesture that named a *particular*
-                        // score got here first — or took one away — and this
-                        // listing must not overrule either. See
-                        // [`Editor::score_chosen`].
-                        Ok(summaries) if !editor.score_chosen => {
-                            open = crate::tracks::scores::rows(&summaries, user.as_deref())
-                                .iter()
-                                .find(|row| row.venue_id.as_ref() == editor.venue_id)
-                                .map(crate::tracks::scores::open_row);
-                        }
-                        Ok(_) => {}
-                        Err(error) => editor.error = Some(error.to_string()),
-                    }
                 });
-                if let Some(score) = open {
-                    this.load_score(target.clone(), score, cx);
-                }
-                // A long track at the opening zoom can already be past the
-                // stored envelope's resolution, so the first measurement is
-                // asked for with the waveform rather than waiting for a
-                // gesture. It needs the canvas's width, which the first
-                // prepaint supplies — this is a no-op before then and the
-                // prepaint asks again.
+                this.install_score(target, contents, cx);
             })
             .ok();
         })
         .detach();
     }
 
-    /// Show `score_id`'s clips on the timeline at `target`.
-    ///
-    /// The one way a score reaches the canvas: the first open takes it as
-    /// soon as the listing lands, and the rail takes it again on every
-    /// switch, so "which score am I looking at" has a single answer and a
-    /// single code path that sets it.
-    ///
-    /// Everything that was *about* the outgoing score goes with it — the
-    /// selection, the cursor, the undo stack, the clipboard. They name clip
-    /// ids that the arriving score does not contain, and carrying them over
-    /// would leave an undo that restores clips into a document they were
-    /// never in.
-    ///
-    /// The rig follows. The stage is lit by *this* score
-    /// ([`Editor::lit`]), so a switch here is a switch there — done by the
-    /// stage's own reconcile rather than from inside this call, which knows
-    /// nothing about whether a stage is even mounted.
-    pub(crate) fn load_score(&mut self, target: Target, score: Score, cx: &mut Context<Self>) {
-        // Whatever the outgoing score still owes goes out first. The write
-        // names its own score, so it lands on the document it was made
-        // against however long it takes to return.
-        if self.workspace.active() == Some(&target) {
-            self.commit_clips(cx);
-        }
-        let Target::TrackEditor { track, .. } = &target else {
-            return;
-        };
-        let pending = self.library.score_contents(&score.id, track);
-        let score_id = score.id.clone();
-        self.edit_track_tab(&target, cx, |editor| rebase(editor, Some(score)));
-        cx.spawn(async move |this, cx| {
-            let contents = pending.await;
-            this.update(cx, |this, cx| {
-                let mut previews = Vec::new();
-                let mut split = false;
-                this.edit_track_tab(&target, cx, |editor| {
-                    // The tab may have moved on — onto another score, or off
-                    // every score because this one was deleted while the read
-                    // was out. Either way this answer is about a document the
-                    // timeline is no longer showing, and neither its clips nor
-                    // its error belong here.
-                    if editor.score.as_ref().map(|open| open.id.as_str()) != Some(score_id.as_str())
-                    {
-                        return;
-                    }
-                    match contents {
-                        Ok(contents) => match editor.install_contents(contents) {
-                            Ok(()) => {
-                                previews =
-                                    editor.clips.iter().map(|clip| clip.id.clone()).collect();
-                                split = editor.dirty;
-                            }
-                            Err(error) => editor.error = Some(error),
-                        },
-                        Err(error) => editor.error = Some(error.to_string()),
-                    }
-                });
-                for id in previews {
-                    this.refresh_clip_preview_for(target.clone(), id, cx);
+    /// Put a score's stored contents on its tab's timeline, with their
+    /// previews and the stage's scene.
+    fn install_score(
+        &mut self,
+        target: Target,
+        contents: Result<crate::library::ScoreContents, LibraryError>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut previews = Vec::new();
+        let mut split = false;
+        self.edit_track_tab(&target, cx, |editor| match contents {
+            Ok(contents) => match editor.install_contents(contents) {
+                Ok(()) => {
+                    previews = editor.clips.iter().map(|clip| clip.id.clone()).collect();
+                    split = editor.dirty;
                 }
-                this.refresh_working_scene_for(&target, cx);
-                if split {
-                    this.commit_graph_score_for(target, cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Which score the tab for `(track, venue)` is showing, if there is one.
-    ///
-    /// The sidebar's scores level asks this to decide which row wears the
-    /// selection ring: the open document is the editor's fact, not the
-    /// listing's, and a second copy of it in the sidebar would be a second
-    /// answer to the same question.
-    /// Take the editor off `score_id` if that is what it is showing, leaving it
-    /// in the same defined state a tab has before any score is chosen: no
-    /// score, no clips, nothing selected, and — through
-    /// [`Editor::lit`] — no scene on the rig.
-    ///
-    /// Called *before* the seam has answered the delete, deliberately. The
-    /// alternative is a timeline that keeps drawing a document that no longer
-    /// exists for as long as the round trip takes, and then blinks; "the score
-    /// is gone" is true the moment the operator agreed to it.
-    pub(crate) fn unload_score(&mut self, target: &Target, score_id: &str, cx: &mut Context<Self>) {
-        let showing = match self.workspace.body(target) {
-            Some(Body::TrackEditor(editor)) => editor
-                .score
-                .as_ref()
-                .is_some_and(|open| open.id == score_id),
-            _ => false,
-        };
-        if !showing {
-            return;
+                Err(error) => editor.error = Some(error),
+            },
+            Err(error) => editor.error = Some(error.to_string()),
+        });
+        for id in previews {
+            self.refresh_clip_preview_for(target.clone(), id, cx);
         }
-        self.edit_track_tab(target, cx, |editor| rebase(editor, None));
-    }
-
-    pub(crate) fn open_score_id(&self, track_id: &str, venue_id: &str) -> Option<String> {
-        let target = Target::TrackEditor {
-            track: track_id.to_string(),
-            venue: venue_id.to_string(),
-        };
-        match self.workspace.body(&target)? {
-            Body::TrackEditor(editor) => editor.score.as_ref().map(|score| score.id.clone()),
-            _ => None,
+        self.refresh_working_scene_for(&target, cx);
+        if split {
+            self.commit_graph_score_for(target, cx);
         }
     }
 
@@ -2222,10 +2098,7 @@ impl Luma {
         let Some(grid) = editor.beats.as_deref() else {
             return;
         };
-        let target = Target::TrackEditor {
-            track: editor.track_id.clone(),
-            venue: editor.venue_id.clone(),
-        };
+        let target = editor.target();
         let request =
             self.library
                 .set_track_beat_validation(&editor.track_id, grid, verdict, reason);
@@ -2996,16 +2869,13 @@ impl Luma {
         if !state.clips.iter().any(|clip| clip.id == id) {
             return;
         }
-        let score_id = state.score.as_ref().map(|score| score.id.clone());
+        let score_id = state.score.id.clone();
         let candidate = match state.graph_candidate() {
             Ok(score) => score,
             Err(error) => {
                 state.preview_errors.insert(id, error);
                 return;
             }
-        };
-        let Some(score_id) = score_id else {
-            return;
         };
         let pending = self.library.preview_score_clip(&score_id, &id, &candidate);
         state.preview_inflight.insert(id.clone());
@@ -3014,9 +2884,6 @@ impl Luma {
             this.update(cx, |this, cx| {
                 let mut again = false;
                 this.edit_track_tab(&target, cx, |editor| {
-                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
-                        return;
-                    }
                     if !editor.clips.iter().any(|clip| clip.id == id) {
                         editor.preview_inflight.remove(&id);
                         editor.preview_queued.remove(&id);
@@ -3227,9 +3094,7 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     if same_scene(last, &editor.clips) {
         return;
     }
-    let Some(score) = editor.score.as_ref().map(|score| score.id.clone()) else {
-        return;
-    };
+    let score = editor.score.id.clone();
     let candidate = match editor.graph_candidate() {
         Ok(score) => score,
         Err(error) => {
@@ -3238,10 +3103,7 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
         }
     };
     let sent = editor.clips.clone();
-    let target = Target::TrackEditor {
-        track: editor.track_id.to_string(),
-        venue: editor.venue_id.clone(),
-    };
+    let target = editor.target();
     editor.compositing = true;
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| {
@@ -3252,9 +3114,6 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
         let result = pending.await;
         this.update(cx, |this, cx| {
             this.edit_track_tab(&target, cx, |editor| {
-                if editor.score.as_ref().map(|s| &s.id) != Some(&score) {
-                    return;
-                }
                 editor.compositing = false;
                 // Remember this attempt, including a failure, so a bad input
                 // produces one useful error instead of a retry every frame.
@@ -3615,12 +3474,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .child(div().flex_1())
         // Which score is on the timeline, by the handle the sidebar names it
         // by.
-        .when_some(state.score.as_ref(), |el, score| {
-            el.child(luma_ui::caption(format!("Score #{}", score.ordinal)))
-        })
-        .when(state.score.is_none() && state.loaded, |el| {
-            el.child(luma_ui::caption("No score"))
-        })
+        .child(luma_ui::caption(format!("Score #{}", state.score.ordinal)))
         // A refused write, over the timeline it was refused for.
         .when_some(
             state
@@ -3639,10 +3493,9 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 )
             },
         )
-        .when(
-            state.score.as_ref().is_some_and(|score| score.read_only),
-            |el| el.child(luma_ui::caption("Read only")),
-        )
+        .when(state.score.read_only, |el| {
+            el.child(luma_ui::caption("Read only"))
+        })
 }
 
 /// `M:SS`, the same clock the browser's TIME column reads in.

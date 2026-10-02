@@ -2,8 +2,8 @@
 //!
 //! A score is a `(track, venue)` document owned by one principal, and a pair
 //! holds as many of them as there are principals who annotated it
-//! (`migrations/20260325000000_multi_score.sql`). The editor opens the most
-//! recently touched one; this level is where the rest of them exist.
+//! (`migrations/20260325000000_multi_score.sql`). Each score opens as its own
+//! tab, so two scores of one track can be open side by side.
 //!
 //! # Why a level and not a strip
 //!
@@ -18,10 +18,10 @@
 //!
 //! The listing is cross-venue ([`Library::scores_across_venues`]) because "the
 //! same track, scored in the warehouse too" is the fact the operator cannot
-//! otherwise find. Only the open venue's rows answer the pointer: a tab is
-//! keyed by `(track, venue)`, so another venue's score is a different tab and
-//! not a different reading of this one.
+//! otherwise find. Only the open venue's rows answer the pointer: another
+//! venue's score belongs to that venue's tab set.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -35,6 +35,8 @@ use luma_lib::models::scores::ScoreSummary;
 use luma_lib::models::tracks::TrackBrowserRow;
 
 use super::{track_face, Level, PAD_X};
+use crate::agent::TabStatus;
+use crate::tabs::Target;
 use crate::Luma;
 
 /// One score, as the level reads it. Everything here is resolved once, when
@@ -322,31 +324,28 @@ impl Luma {
         cx.notify();
     }
 
-    /// Show `score` on the track's timeline, opening the tab if it is not up,
-    /// and hide the sidebar so the timeline has the room.
+    /// Open `score`'s tab and hide the sidebar so the timeline has the room.
     ///
-    /// A score the tab already shows is only brought forward, and the sidebar
-    /// stays. Loading it again would drop its selection and undo, and the first
-    /// click of a rename double-click lands here.
+    /// A score that already has a tab is only brought to the front, and the
+    /// sidebar stays: the first click of a rename double-click lands here.
     pub(crate) fn open_sidebar_score(
         &mut self,
         track_id: SharedString,
         score: crate::track_editor::Score,
         cx: &mut Context<Self>,
     ) {
-        self.open_track(&track_id, cx);
         let Some(browser) = &self.sidebar else {
             return;
         };
-        if self.open_score_id(&track_id, browser.venue_id()).as_deref() == Some(score.id.as_str()) {
-            return;
-        }
-        self.sidebar_hidden = true;
-        let target = crate::tabs::Target::TrackEditor {
-            track: track_id.to_string(),
+        let target = Target::Score {
             venue: browser.venue_id().to_string(),
+            track: track_id.to_string(),
+            score: score.id.clone(),
         };
-        self.load_score(target, score, cx);
+        if self.workspace.body(&target).is_none() {
+            self.sidebar_hidden = true;
+        }
+        self.open_score(&track_id, score, None, cx);
     }
 
     /// Mint this track another score in the open venue and show it.
@@ -482,13 +481,14 @@ impl Luma {
         );
     }
 
-    /// Archive the score, take the editor off it if that is what it was
-    /// showing, and re-read the listing.
+    /// Archive the score, close its tab, and re-read the listing.
     ///
-    /// The editor is cleared *first* and unconditionally — see
-    /// [`Luma::unload_score`]. The listing is re-read after the seam answers,
-    /// for the same reason [`Luma::create_sidebar_score`] reads after the
-    /// create: a listing taken before the write still has the row in it.
+    /// The tab closes *first*, before the seam has answered: a timeline that
+    /// kept drawing a document that no longer exists for as long as the round
+    /// trip takes, and then vanished, would be worse. The listing is re-read
+    /// after the seam answers, for the same reason
+    /// [`Luma::create_sidebar_score`] reads after the create: a listing taken
+    /// before the write still has the row in it.
     pub(crate) fn delete_score(
         &mut self,
         track_id: &str,
@@ -498,14 +498,12 @@ impl Luma {
     ) {
         self.close_score_menu(cx);
         let pending = self.library.delete_score(score_id);
-        self.unload_score(
-            &crate::tabs::Target::TrackEditor {
-                track: track_id.to_string(),
-                venue: venue_id.to_string(),
-            },
-            score_id,
-            cx,
-        );
+        let doomed = Target::Score {
+            venue: venue_id.to_string(),
+            track: track_id.to_string(),
+            score: score_id.to_string(),
+        };
+        self.close_tabs_where(|target| target != &doomed, cx);
         let track_id = track_id.to_string();
         cx.spawn(async move |this, cx| {
             let deleted = pending.await;
@@ -661,22 +659,22 @@ pub(super) const BACK_ROW_HEIGHT: f32 = 26.;
 
 /// The whole level: the head, this venue's scores, the way to mint another,
 /// and — quietly, at the foot — the other rooms this track is scored in.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn level(
     shell: &Luma,
     state: &super::Tracks,
     scores: &Scores,
+    statuses: &HashMap<Target, TabStatus>,
     app: &Entity<Luma>,
     window: &Window,
     flying: bool,
 ) -> AnyElement {
-    let venue = state.venue_id();
-    let open = shell.open_score_id(&scores.track.id, venue);
     div()
         .size_full()
         .flex()
         .flex_col()
         .child(head(scores, app, window, flying))
-        .child(body(state, scores, open.as_deref(), app))
+        .child(body(state, scores, shell.workspace.active(), statuses, app))
         // A sibling of the body, not a child of a row: the body clips, and a
         // menu inside it would be cut off at the column's edge. Same argument
         // the tab strip's `+` menu makes about its own rail.
@@ -749,8 +747,15 @@ fn head(scores: &Scores, app: &Entity<Luma>, window: &Window, flying: bool) -> D
 }
 
 /// This venue's scores, the way to mint another, and the other venues' as
-/// context under a divider.
-fn body(state: &super::Tracks, scores: &Scores, open: Option<&str>, app: &Entity<Luma>) -> Div {
+/// context under a divider. `front` is the front tab, whose row wears the
+/// ring.
+fn body(
+    state: &super::Tracks,
+    scores: &Scores,
+    front: Option<&Target>,
+    statuses: &HashMap<Target, TabStatus>,
+    app: &Entity<Luma>,
+) -> Div {
     let venue = state.venue_id();
     let here: Vec<&ScoreRow> = scores.here(venue).collect();
     div()
@@ -778,9 +783,15 @@ fn body(state: &super::Tracks, scores: &Scores, open: Option<&str>, app: &Entity
                 .as_ref()
                 .filter(|rename| rename.score_id == row.id)
                 .map(|rename| &rename.field);
+            let target = Target::Score {
+                venue: venue.to_string(),
+                track: scores.track.id.clone(),
+                score: row.id.to_string(),
+            };
             score_row(
                 row,
-                open == Some(row.id.as_ref()),
+                front == Some(&target),
+                statuses.get(&target).copied(),
                 Some((app, &scores.track)),
                 rename,
             )
@@ -795,7 +806,7 @@ fn body(state: &super::Tracks, scores: &Scores, open: Option<&str>, app: &Entity
                 .child(float::section_heading(venue).pt(px(8.)))
                 .children(
                     rows.into_iter()
-                        .map(|row| score_row(row, false, None, None)),
+                        .map(|row| score_row(row, false, None, None, None)),
                 )
         }))
         .child(div().flex_1())
@@ -829,10 +840,12 @@ fn elsewhere<'a>(
 /// recipe decides the open one, through [`float::menu_row`]: hover and
 /// selection share the fill, and only the open score carries the inset ring.
 ///
-/// `rename` is the live field when this row's name is being typed.
+/// `rename` is the live field when this row's name is being typed, and
+/// `status` the dot of the score's tab.
 fn score_row(
     row: &ScoreRow,
     open: bool,
+    status: Option<TabStatus>,
     press: Option<(&Entity<Luma>, &TrackBrowserRow)>,
     rename: Option<&Entity<TextInput>>,
 ) -> AnyElement {
@@ -923,6 +936,7 @@ fn score_row(
             ),
     )
     .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
+    .children(status.map(|status| crate::agent::status_dot(status, &format!("#{}", row.ordinal))))
     .agent_node(Role::Row, label)
     .into_any_element()
 }

@@ -71,10 +71,7 @@ pub(super) fn prepaint(
     if updates_frozen() && strip.frame.is_some() {
         return;
     }
-    let target = Target::TrackEditor {
-        track: editor.track_id.clone(),
-        venue: editor.venue_id.clone(),
-    };
+    let target = editor.target();
     let identity = editor.gpu_waveform.clone();
     let resource = identity.borrow();
     if resource.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {

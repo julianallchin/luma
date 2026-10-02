@@ -577,3 +577,76 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     assert_eq!(out["retry"], true);
     assert_eq!(out["empty"], false);
 }
+
+/// Remove one score row from a fixture library between launches.
+fn delete_score(dir: &Path, id: &str) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to start fixture runtime")
+        .block_on(async {
+            let db = luma_lib::database::local::database::init_app_db_at(dir)
+                .await
+                .expect("failed to reopen fixture app database");
+            sqlx::query("DELETE FROM scores WHERE id = ?")
+                .bind(id)
+                .execute(&db.0)
+                .await
+                .expect("failed to delete fixture score");
+            db.0.close().await;
+        });
+}
+
+/// `docs/specs/venue-tabs.md` rule 8: a launch reopens the last venue, each
+/// venue's tabs with the front tab in front, and drops a tab whose score is
+/// gone.
+#[test]
+fn open_tabs_come_back_at_launch() {
+    let dir = fixture_dir(
+        "tabs",
+        &[("alpha", "Alpha Hall"), ("beta", "Beta Room")],
+        None,
+        true,
+    );
+    let mut first = harness(&dir, luma_app::NavigationFixture::default());
+    exec(
+        &mut first,
+        r#"
+        const chip = (s, label) => s.find({ role: "button", label }) !== undefined;
+        nav.venue("Alpha Hall");
+        nav.track("Alpha Hall Track");
+        until("Alpha's score tab", (s) => chip(s, "Alpha Hall Track · #1"));
+        nav.venuePage("Alpha Hall");
+        until("Alpha's venue tab", (s) => chip(s, "Venue"));
+        nav.step("the venue switcher", "button", "Alpha Hall");
+        nav.venue("Beta Room");
+        nav.track("Beta Room Track");
+        until("Beta's score tab", (s) => chip(s, "Beta Room Track · #1"));
+        // Long enough for the debounced save to land.
+        app.frames(30, { waitMs: 50 });
+        true
+        "#,
+    );
+    drop(first);
+    delete_score(&dir, "score-beta");
+
+    let mut second = harness(&dir, luma_app::NavigationFixture::default());
+    let out = exec(
+        &mut second,
+        r#"
+        const chip = (s, label) => s.find({ role: "button", label }) !== undefined;
+        // Beta was the last venue; its one tab's score is gone.
+        until("Beta, restored", (s) => s.find({ role: "row", label: "Venue setup" }) !== undefined);
+        // Long enough for a restore that wrongly kept the tab to open it.
+        app.frames(20, { waitMs: 50 });
+        const betaTab = chip(app.snapshot(), "Beta Room Track · #1");
+        nav.step("the venue switcher", "button", "Beta Room");
+        nav.venue("Alpha Hall");
+        const alpha = until("Alpha's tabs, restored", (s) =>
+            chip(s, "Alpha Hall Track · #1") && chip(s, "Venue") ? s : undefined);
+        ({ betaTab, venueInFront: alpha.find({ role: "card", label: "Alpha Hall Venue" }) !== undefined })
+        "#,
+    );
+    assert_eq!(out["betaTab"], false);
+    assert_eq!(out["venueInFront"], true);
+}

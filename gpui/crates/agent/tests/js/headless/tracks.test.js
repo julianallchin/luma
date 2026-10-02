@@ -70,7 +70,8 @@ test("the browser filters a seeded library by venue, ownership and search", () =
     const shot = app.snapshot();
     return {
       count: shot.find((node) => /^\d+ tracks$/.test(node.label)).label,
-      rows: shot.findAll({ role: "row" }).map((node) => node.label),
+      // The songs; the venue's own row leads them and is not a track.
+      rows: shot.findAll({ role: "row" }).map((node) => node.label).filter((label) => label !== "Venue setup"),
     };
   };
   const press = (role, label) => {

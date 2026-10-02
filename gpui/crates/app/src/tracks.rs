@@ -20,6 +20,7 @@
 //! GPUI's image cache handles the decode and the lazy load.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
@@ -33,6 +34,8 @@ use luma_ui::{ladder, motion};
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 
+use crate::agent::TabStatus;
+use crate::tabs::Target;
 use crate::Luma;
 
 pub(crate) mod scores;
@@ -336,31 +339,13 @@ fn matches(track: &TrackBrowserRow, query: &str) -> bool {
 
 impl Luma {
     /// Select a venue: the sidebar fills with its tracks, the picker overlay
-    /// closes, and the venue page of any other venue closes with it — a view
-    /// of a room you left is a window into nowhere. Track and graph tabs
-    /// stay: they are about their own subjects, and closing somebody's open
-    /// timeline because they glanced at another room would be the shell
-    /// throwing work away.
+    /// closes, and the venue's own tab set comes on screen — the one it had
+    /// when it was left, or the one saved at the last quit. The venue being
+    /// left keeps its set, parked: a venue is a project.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
-        // A remembered pick belongs to the browser that named it, and that
-        // includes the venue page: a switch leaves venue mode, and nothing is
-        // picked until the reader picks again.
-        self.picked = None;
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
         let venue_id = venue.id.clone();
-        // Only the venue pages go. The track scopes of the room being left
-        // stay parked — the room still exists, and its track work is worth
-        // remembering.
-        let leaving: Vec<crate::shell::Body> =
-            self.parked
-                .retain(&mut self.workspace, |scope| match scope {
-                    crate::workspace::TabScope::Venue { venue: owner } => owner == &venue.id,
-                    crate::workspace::TabScope::Track { .. } => true,
-                });
-        for body in leaving {
-            self.teardown(body, cx);
-        }
         self.close_overlay(cx);
         let pending = self.library.tracks(&venue.id);
         let remember = self
@@ -401,6 +386,9 @@ impl Luma {
             region: Rc::new(Cell::new(None)),
             list_box: Rc::new(Cell::new(None)),
         });
+        // The arriving venue's set goes on screen now, so a tab opened before
+        // the next draw opens into it.
+        self.sync_venue_tabs(cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
@@ -415,6 +403,9 @@ impl Luma {
                         Err(error) => state.error = Some(error.to_string()),
                     }
                 });
+                // A saved score tab needs its track's row, so the venue's
+                // saved tabs reopen once the catalogue is here.
+                this.restore_tabs(&venue_id, cx);
             })
             .ok();
         })
@@ -440,20 +431,14 @@ impl Luma {
             return;
         };
         let row_top = browser.row_top(index);
-        // Going into a track's scores *is* picking that track: the strip and
-        // the stage are scoped to the pick, and a column reading one track
-        // while they read another was the disagreement this avoids. Setting
-        // the field is the whole gesture — the scope is synced at draw
-        // ([`crate::Luma::sync_workspace_scope`]).
-        self.picked = Some(crate::workspace::Pick::Track(track.clone()));
         self.show_scores(&track, row_top, window, cx);
     }
 
-    /// `→` in the sidebar: into the picked track's scores.
+    /// `→` in the sidebar: into the front tab's track's scores.
     ///
-    /// The picked track rather than a focused row, because the list is
-    /// virtualized and its rows carry no focus handles — the pick is the one
-    /// notion of "the row this column is currently about" that survives a
+    /// The front tab's track rather than a focused row, because the list is
+    /// virtualized and its rows carry no focus handles — the front tab is the
+    /// one notion of "the row this column is currently about" that survives a
     /// scroll.
     pub(crate) fn enter_selected_scores(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(browser) = &self.sidebar else {
@@ -462,7 +447,7 @@ impl Luma {
         if matches!(browser.level, Level::Scores(_)) {
             return;
         }
-        let Some(picked) = self.selected_track() else {
+        let Some(picked) = self.front_track() else {
             return;
         };
         let Some(index) = browser
@@ -581,7 +566,25 @@ impl Luma {
             .then(|| state.rows.iter().map(|row| row.id.clone()).collect());
         cx.notify();
         if let Some(surviving) = surviving {
-            self.prune_tab_scopes(venue_id, &surviving, cx);
+            self.prune_tracks(venue_id, &surviving, cx);
+        }
+    }
+}
+
+impl Luma {
+    /// The front tab's track, when the front tab is a score.
+    pub(crate) fn front_track(&self) -> Option<&str> {
+        match self.workspace.active()? {
+            Target::Score { track, .. } => Some(track),
+            Target::Venue { .. } => None,
+        }
+    }
+
+    /// The track whose scores the sidebar is showing, if it is one level in.
+    pub(crate) fn sidebar_track(&self) -> Option<&str> {
+        match &self.sidebar.as_ref()?.level {
+            Level::Scores(level) => Some(&level.track.id),
+            Level::Tracks => None,
         }
     }
 }
@@ -604,12 +607,15 @@ const ART: f32 = 32.;
 /// The sidebar: the two levels, the push between them, and the account at the
 /// foot.
 ///
+/// The sidebar is a launcher (`docs/specs/venue-tabs.md` rule 7): its rows
+/// open tabs or bring them to the front, and the row of the front tab wears
+/// the selection ring. `statuses` are the live tabs' status dots, drawn on
+/// the rows that open those tabs.
+///
 /// Takes the whole shell rather than the browser alone, because the column's
 /// two ends are about different things: the levels are the venue's, the foot
 /// is the person's — and the foot is *outside* the pushing region for exactly
-/// that reason. The picked track comes from there too — it is not the same as
-/// the open editor tab: the pick is what the strip and the stage are scoped
-/// to, and it survives closing that track's tabs.
+/// that reason.
 ///
 /// # The push
 ///
@@ -619,7 +625,13 @@ const ART: f32 = 32.;
 /// of the arriving level — which is why the two share a horizontal inset and
 /// a row height: the shared element then travels in `y` alone, and there is no
 /// box interpolation to get wrong.
-pub fn sidebar(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+pub(crate) fn sidebar(
+    shell: &Luma,
+    state: &Tracks,
+    statuses: &HashMap<Target, TabStatus>,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> Div {
     let t = state.progress();
     let travel = crate::shell::SIDEBAR_WIDTH;
     div()
@@ -642,12 +654,21 @@ pub fn sidebar(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Window
                 // tab stop, so the column would answer for two subjects at
                 // once.
                 .children((t < 1.).then(|| {
-                    sliding(-travel * t, 1. - t).child(tracks_level(shell, state, app, window))
+                    sliding(-travel * t, 1. - t)
+                        .child(tracks_level(shell, state, statuses, app, window))
                 }))
                 .children(match &state.level {
-                    Level::Scores(level) => Some(sliding(travel * (1. - t), t).child(
-                        scores::level(shell, state, level, app, window, state.push.is_some()),
-                    )),
+                    Level::Scores(level) => {
+                        Some(sliding(travel * (1. - t), t).child(scores::level(
+                            shell,
+                            state,
+                            level,
+                            statuses,
+                            app,
+                            window,
+                            state.push.is_some(),
+                        )))
+                    }
                     Level::Tracks => None,
                 })
                 .children(flight(state, t))
@@ -692,14 +713,28 @@ fn flight(state: &Tracks, t: f32) -> Option<Div> {
 }
 
 /// The track list itself: the venue's name (the way back to the picker), the
-/// search, the filters, and the rows.
-fn tracks_level(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+/// search, the filters, the venue's own row, and the songs.
+fn tracks_level(
+    shell: &Luma,
+    state: &Tracks,
+    statuses: &HashMap<Target, TabStatus>,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> Div {
     let flying = state.flying().map(|track| track.id.as_str());
+    let venue = Target::Venue {
+        venue: state.venue_id.clone(),
+    };
     div()
         .size_full()
         .flex()
         .flex_col()
-        .child(header(state, shell.venue_mode(), app, window))
+        .child(header(state, app, window))
+        .child(venue_row(
+            shell.workspace.active() == Some(&venue),
+            statuses.get(&venue).copied(),
+            app,
+        ))
         .child(count(state))
         .child(match &state.error {
             Some(message) => luma_ui::plate(
@@ -717,7 +752,7 @@ fn tracks_level(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Windo
                 },
                 ladder::muted_foreground(),
             ),
-            None => body(state, shell.selected_track(), flying, app).into_any_element(),
+            None => body(state, shell.front_track(), flying, app).into_any_element(),
         })
 }
 
@@ -890,12 +925,12 @@ fn account_menu(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
 /// a menu of two words that spanned the sidebar would read as a panel.
 const ACCOUNT_MENU_WIDTH: f32 = 200.0;
 
-/// The sidebar's header: the venue select and the venue page's button, the
-/// search and the add-track button, and the ownership filter.
+/// The sidebar's header: the venue select, the search and the add-track
+/// button, and the ownership filter.
 ///
 /// Every control here shares one height, one text size and the field's
 /// material, so the rows read as one block.
-fn header(state: &Tracks, venue_mode: bool, app: &Entity<Luma>, window: &Window) -> Div {
+fn header(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
     let add = app.clone();
     div()
         .flex()
@@ -909,8 +944,7 @@ fn header(state: &Tracks, venue_mode: bool, app: &Entity<Luma>, window: &Window)
                 .flex()
                 .items_center()
                 .gap(px(HEADER_GAP))
-                .child(venue_select(state, app, window))
-                .child(venue_page_button(venue_mode, app)),
+                .child(venue_select(state, app, window)),
         )
         .child(
             div()
@@ -919,7 +953,7 @@ fn header(state: &Tracks, venue_mode: bool, app: &Entity<Luma>, window: &Window)
                 .gap(px(HEADER_GAP))
                 .child(search(state, app, window))
                 .child(
-                    square(luma_ui::icons::IconName::Plus, false, "add-track")
+                    square(luma_ui::icons::IconName::Plus, "add-track")
                         .id("add-track")
                         .on_click(move |_, _, cx| {
                             add.update(cx, |this, cx| this.show_add_tracks(cx))
@@ -949,30 +983,25 @@ fn header_field() -> Div {
         .text_size(px(HEADER_TEXT))
 }
 
-/// A square header button in the field's material. `active` swaps the rest
-/// fill for the selected fill.
-fn square(icon: luma_ui::icons::IconName, active: bool, fade_key: &str) -> Div {
-    let button = header_field()
+/// A square header button in the field's material.
+fn square(icon: luma_ui::icons::IconName, fade_key: &str) -> Div {
+    let fade_key = SharedString::from(fade_key.to_string());
+    let mut button = header_field()
         .w(px(HEADER_CONTROL))
         .px(px(0.))
         .justify_center()
         .cursor_pointer()
-        .text_color(luma_ui::glass::ink(if active { 0.95 } else { 0.7 }))
-        .child(gpui_component::Icon::new(icon).size(px(HEADER_ICON)));
-    if active {
-        button.bg(luma_ui::glass::card_selected_bg())
-    } else {
-        let fade_key = SharedString::from(fade_key.to_string());
-        let mut button = button.bg(luma_ui::motion::hover_blend(
+        .text_color(luma_ui::glass::ink(0.7))
+        .child(gpui_component::Icon::new(icon).size(px(HEADER_ICON)))
+        .bg(luma_ui::motion::hover_blend(
             &fade_key,
             luma_ui::glass::ink(0.03),
             luma_ui::glass::glass_hover(),
         ));
-        button
-            .interactivity()
-            .on_hover(luma_ui::motion::hover_listener(fade_key));
-        button
-    }
+    button
+        .interactivity()
+        .on_hover(luma_ui::motion::hover_listener(fade_key));
+    button
 }
 
 /// The venue select. It reopens the venue picker — the picker overlay is the
@@ -1009,15 +1038,32 @@ fn venue_select(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl Int
         .agent_focused(state.venue_focus.is_focused(window))
 }
 
-/// The door to the venue page. Its selected fill is the only sign that the
-/// page is up.
-fn venue_page_button(venue_mode: bool, app: &Entity<Luma>) -> impl IntoElement {
+/// The venue's own row: opens the venue tab, or brings it to the front. It
+/// wears the ring while that tab is in front, and the tab's status dot.
+fn venue_row(front: bool, status: Option<TabStatus>, app: &Entity<Luma>) -> Div {
     let open = app.clone();
-    square(luma_ui::icons::IconName::Stage, venue_mode, "venue-page")
-        .id("venue-page")
-        .on_click(move |_, _, cx| open.update(cx, |this, cx| this.open_venue_page(cx)))
-        .agent_node(Role::Toggle, "Venue")
+    div()
+        .flex_shrink_0()
+        .px(px(PAD_X))
+        .pt(px(HEADER_GAP))
+        .child(
+            float::nav_row(RowState::of(front, false), "venue-row")
+                .id("venue-row")
+                .on_click(move |_, _, cx| open.update(cx, |this, cx| this.open_venue_tab(None, cx)))
+                .child(
+                    gpui_component::Icon::new(luma_ui::icons::IconName::Stage)
+                        .size(px(HEADER_ICON))
+                        .text_color(luma_ui::glass::ink(if front { 0.95 } else { 0.7 })),
+                )
+                .child(div().flex_1().min_w(px(0.)).truncate().child(VENUE_ROW))
+                .children(status.map(|status| crate::agent::status_dot(status, VENUE_ROW)))
+                .agent_node(Role::Row, VENUE_ROW),
+        )
 }
+
+/// What the venue's row says. One spelling: the row and its status dot are
+/// both named by it.
+const VENUE_ROW: &str = "Venue setup";
 
 /// The search field: a [`float::field`] that takes keystrokes.
 ///
@@ -1185,11 +1231,10 @@ fn track_face(track: &TrackBrowserRow, lit: bool) -> Div {
                     div()
                         .truncate()
                         .text_size(px(12.))
-                        // The picked row is the one the whole workspace is
-                        // scoped to, so it carries full ink; the rest sit back
-                        // as a quiet list. This is the only weight difference —
-                        // the ring already says which row is picked, and a
-                        // second louder signal would just be shouting.
+                        // The front tab's row carries full ink; the rest sit
+                        // back as a quiet list. This is the only weight
+                        // difference — the ring already says which row is in
+                        // front, and a second louder signal would be shouting.
                         .text_color(luma_ui::glass::ink(if lit { 0.95 } else { 0.72 }))
                         .child(track_name(track)),
                 )

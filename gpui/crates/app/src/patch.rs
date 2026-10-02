@@ -124,6 +124,8 @@ pub(crate) struct StripDrag {
 }
 
 pub(crate) struct Patch {
+    /// The venue tab's chat: the venue's own conversations.
+    pub(crate) chat: crate::agent::TabChat,
     pub(crate) venue_id: String,
     pub(crate) venue_name: String,
     pub(crate) stage: crate::stage::StagePage,
@@ -169,8 +171,14 @@ pub(crate) struct Patch {
 }
 
 impl Patch {
-    pub(crate) fn loading(venue_id: String, venue_name: String, cx: &mut Context<Luma>) -> Self {
+    pub(crate) fn loading(
+        venue_id: String,
+        venue_name: String,
+        chat: crate::agent::TabChat,
+        cx: &mut Context<Luma>,
+    ) -> Self {
         Self {
+            chat,
             venue_id,
             stage: crate::stage::StagePage::new(cx),
             details_open: false,
@@ -198,10 +206,6 @@ impl Patch {
             notice: None,
             generation: 0,
         }
-    }
-
-    pub(crate) fn venue_name(&self) -> &str {
-        &self.venue_name
     }
 
     pub(crate) fn rows(&self) -> &[PatchedFixture] {
@@ -299,37 +303,25 @@ impl Patch {
 // ---------------------------------------------------------------------------
 
 impl Luma {
-    /// Pick the sidebar's Venue row: the venue page fills the workspace and
-    /// the thread collapses behind it. Picking a track leaves it again.
-    pub(crate) fn open_venue_page(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar.is_none() {
-            return;
-        }
-        self.picked = Some(crate::workspace::Pick::Venue);
-        self.workspace_hidden = false;
-        // Swap the venue's set in first, so the page opens into it and not
-        // into the track set that was on screen.
-        self.sync_workspace_scope(cx);
-        self.open_patch(cx);
-    }
-
-    /// Reveal the selected venue's patch: the venue page's one body, or a
-    /// tab beside a track's editor when the `+` menu asks for it.
-    pub(crate) fn open_patch(&mut self, cx: &mut Context<Self>) {
+    /// Open the selected venue's tab, or bring it to the front. `thread` is
+    /// the chat a restored tab had open.
+    pub(crate) fn open_venue_tab(&mut self, thread: Option<&str>, cx: &mut Context<Self>) {
         let Some(browser) = &self.sidebar else {
             return;
         };
         let venue_id = browser.venue_id().to_string();
         let venue_name = browser.venue_name().to_string();
-        let target = Target::Patch {
+        let target = Target::Venue {
             venue: venue_id.clone(),
         };
-        if self.workspace.body_mut(&target).is_some() {
+        if self.workspace.body(&target).is_some() {
             self.workspace.select(&target);
+            self.workspace_hidden = false;
             cx.notify();
             return;
         }
-        let state = Patch::loading(venue_id.clone(), venue_name, cx);
+        let chat = self.tab_chat(&target, thread, cx);
+        let state = Patch::loading(venue_id.clone(), venue_name, chat, cx);
         self.open_tab(target, move || Body::Patch(Box::new(state)), cx);
         self.reload_patch(venue_id, cx);
     }
@@ -341,7 +333,7 @@ impl Luma {
     /// matters — a mode change the allocator answered by *moving* the fixture —
     /// is exactly the case a guess gets wrong.
     pub(crate) fn reload_patch(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        let target = Target::Patch {
+        let target = Target::Venue {
             venue: venue_id.clone(),
         };
         let Some(Body::Patch(state)) = self.workspace.body_mut(&target) else {
@@ -383,7 +375,7 @@ impl Luma {
         universe: u16,
         cx: &mut Context<Self>,
     ) {
-        let target = Target::Patch {
+        let target = Target::Venue {
             venue: venue_id.clone(),
         };
         let Some(Body::Patch(state)) = self.workspace.body_mut(&target) else {
@@ -477,7 +469,7 @@ impl Patch {
 
 impl Luma {
     fn patch_mut(&mut self, venue_id: &str) -> Option<&mut Patch> {
-        match self.workspace.body_mut(&Target::Patch {
+        match self.workspace.body_mut(&Target::Venue {
             venue: venue_id.to_string(),
         }) {
             Some(Body::Patch(state)) => Some(state),

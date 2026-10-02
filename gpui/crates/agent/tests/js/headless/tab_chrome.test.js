@@ -10,15 +10,15 @@ fixture({
   motion: true,
 });
 
-// ⌘T brings the panel back and opens the menu on it, including from a shut
-// panel. The `+` and its menu live only in the panel, so ⌘T has to bring the
-// panel with them or it reaches nothing.
+// ⌘T brings the editor back and opens the menu, including from a shut
+// editor. The strip spans the tab's chat and its editor, so it stays while the
+// editor is away.
 test("new tab opens the panel and its menu together", () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
 
   app.action("luma::ToggleWorkspace");
-  until("the panel put away", (s) => s.find({ role: "card", label: "Tab strip" }) === undefined);
+  until("the editor put away", (s) => s.find({ role: "card", label: "Waveform" }) === undefined);
 
   app.action("luma::NewTab");
   const menu = until("the new-tab menu", (s) => s.find({ role: "card", label: "New tab menu" }) !== undefined);

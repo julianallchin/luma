@@ -127,13 +127,12 @@ impl Luma {
     /// Open the subagents dialog, optionally straight on one child.
     pub(crate) fn show_subagents(&mut self, child: Option<SharedString>, cx: &mut Context<Self>) {
         let rows = self
-            .chat
-            .as_ref()
+            .front_chat()
             .map(|chat| chat.read(cx).subagents().to_vec())
             .unwrap_or_default();
-        let source = self.reader_source(cx);
+        let source = self.reader_source();
         let mut state = Subagents::new(rows, cx);
-        if let (Some(child), Some(source)) = (child, source) {
+        if let Some(child) = child {
             open_child(&mut state, child, &source, cx);
         }
         self.overlay.open(Overlay::Subagents(Box::new(state)));
@@ -144,9 +143,7 @@ impl Luma {
         // Read the reader's inputs out first: `open_mut` below borrows `self`,
         // and reaching back through `cx.entity()` for them inside that borrow
         // is a read of an entity that is already being updated.
-        let Some(source) = self.reader_source(cx) else {
-            return;
-        };
+        let source = self.reader_source();
         if let Some(Overlay::Subagents(state)) = self.overlay.open_mut() {
             open_child(state, child, &source, cx);
             cx.notify();
@@ -154,14 +151,9 @@ impl Luma {
     }
 
     /// What a child's reader is built from: the agent, and the app's running
-    /// turns, where a running child's turn is folded from its parent's. `None`
-    /// without a chat, which is also when there is no child to read.
-    fn reader_source(
-        &self,
-        cx: &Context<Self>,
-    ) -> Option<(luma_chat::Agent, Entity<RunningTurns>)> {
-        let running = self.chat.as_ref()?.read(cx).running().clone();
-        Some((self.library.agent(), running))
+    /// turns, where a running child's turn is folded from its parent's.
+    fn reader_source(&self) -> (luma_chat::Agent, Entity<RunningTurns>) {
+        (self.library.agent(), self.running.clone())
     }
 
     /// Go back to the list, and say whether there was anywhere to go back

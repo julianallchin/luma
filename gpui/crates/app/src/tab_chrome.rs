@@ -492,7 +492,7 @@ impl Luma {
                 .sidebar
                 .as_ref()
                 .map(|state| state.venue_id().to_string()),
-            track: self.selected_track().map(str::to_string),
+            track: self.sidebar_track().map(str::to_string),
         }
     }
 
@@ -528,14 +528,11 @@ impl Luma {
         self.finish_close_tab(target, cx);
     }
 
-    /// Logical teardown, shared by every close gesture.
-    ///
+    /// Logical teardown, shared by every close gesture. The last tab's close
+    /// lands on the empty panel, which is the offer of the next one.
     fn finish_close_tab(&mut self, target: &Target, cx: &mut gpui::Context<Self>) {
         if let Some(body) = self.workspace.close(target) {
             self.teardown(body, cx);
-            if self.workspace.is_empty() {
-                self.workspace_hidden = true;
-            }
         }
         cx.notify();
     }
@@ -549,9 +546,9 @@ impl Luma {
     ) {
         self.tab_chrome.menu_open = false;
         match choice {
-            NewTabChoice::Venue => self.open_patch(cx),
+            NewTabChoice::Venue => self.open_venue_tab(None, cx),
             NewTabChoice::Track => {
-                if let Some(track) = self.selected_track().map(str::to_string) {
+                if let Some(track) = self.sidebar_track().map(str::to_string) {
                     self.open_track(&track, cx);
                 }
             }
@@ -565,9 +562,10 @@ mod tests {
     use super::*;
 
     fn target(name: &str) -> Target {
-        Target::TrackEditor {
-            track: name.into(),
+        Target::Score {
             venue: "venue".into(),
+            track: name.into(),
+            score: name.into(),
         }
     }
 

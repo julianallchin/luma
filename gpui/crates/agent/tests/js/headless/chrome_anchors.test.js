@@ -77,11 +77,10 @@ test("the toggles do not move when the panels they open do", () => {
   assert(sidebarClosed.back >= sidebarClosed.sidebarToggleRight && sidebarClosed.back - sidebarClosed.sidebarToggleRight <= 16,
     `the cluster does not rest against the left anchor when the sidebar is shut: ${JSON.stringify(sidebarClosed)}`);
 
-  // The strip is the panel's, and the `+` is the strip's: closing the panel
-  // puts them away together.
-  expect(panelClosed.strip).toBe(null);
-  expect(panelClosed.add).toBe(null);
-  for (const [name, state] of Object.entries({ bothOpen, panelReopened })) {
+  // The strip spans the tab's chat and its editor, so closing the editor
+  // leaves it, and the `+` is the strip's: it stays with it.
+  expect(panelClosed.strip).toBe(bothOpen.strip);
+  for (const [name, state] of Object.entries({ bothOpen, panelClosed, panelReopened })) {
     assert(state.add > state.strip, `the add control parted company with its strip in ${name}`);
   }
 });

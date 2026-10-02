@@ -127,8 +127,8 @@ impl Body {
     /// What the tab's chip and the window title call this tab.
     pub(crate) fn title(&self) -> SharedString {
         match self {
-            Self::TrackEditor(state) => state.track_name().to_string().into(),
-            Self::Patch(state) => state.venue_name().to_string().into(),
+            Self::TrackEditor(state) => state.title().into(),
+            Self::Patch(_) => "Venue".into(),
         }
     }
 }
@@ -261,10 +261,6 @@ impl Luma {
     /// ⌘W inside the workspace; also the handler behind every tab-closing
     /// gesture, so the teardown cannot be skipped by one of them.
     pub(crate) fn close_active_tab(&mut self, cx: &mut Context<Self>) {
-        // The venue page is not a tab: it leaves when a track is picked.
-        if self.venue_mode() {
-            return;
-        }
         let Some(target) = self.workspace.active().cloned() else {
             return;
         };
@@ -577,8 +573,11 @@ fn cached(region: gpui::Entity<Region>, style: gpui::StyleRefinement) -> AnyElem
 fn sidebar_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
     let entity = cx.entity();
     let app = &*app;
+    let statuses = app.tab_statuses(cx);
     match &app.sidebar {
-        Some(browser) => tracks::sidebar(app, browser, &entity, window).into_any_element(),
+        Some(browser) => {
+            tracks::sidebar(app, browser, &statuses, &entity, window).into_any_element()
+        }
         None => div().into_any_element(),
     }
 }
@@ -586,12 +585,13 @@ fn sidebar_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> 
 /// The whole window: full-height region columns, the seams between them, the
 /// overlay over all of it, and the traffic lights over that.
 ///
-/// **The window splits vertically first.** Every region runs `y = 0` to the
-/// bottom and carries its own head band across its own width (see
-/// [`crate::chrome`]), so the seams between regions are uninterrupted rules
-/// from edge to edge. Regions are flush and square: no insets, no gutters, no
-/// rounded cards. Depth is a value step across a seam — the one structural
-/// line this shell draws, and the only border it has in either axis.
+/// **The window splits vertically first.** The sidebar and the tab area each
+/// run `y = 0` to the bottom and carry their own head band (see
+/// [`crate::chrome`]). The tab area's band holds the strip, over both halves
+/// of the front tab: its chat and its editor, divided below the band by a
+/// hint seam. Regions are flush and square: no insets, no gutters, no rounded
+/// cards. Depth is a value step across a seam — the one structural line this
+/// shell draws, and the only border it has in either axis.
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
     let sidebar_view = Regions::get(&mut app.regions.sidebar, "Sidebar", sidebar_body, true, cx);
@@ -611,7 +611,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     app.tick_sidebar_push(window);
     let sidebar_w = app.sidebar_width.eval(window);
     let viewport = f32::from(window.viewport_size().width);
-    // What the thread and the panel share, and how they divide it. Stored as a
+    // What the chat and the editor share, and how they divide it. Stored as a
     // proportion (see [`luma_ui::split`]), so the sidebar taking 256px from the
     // pair takes it from *both* in the ratio they were already at — the split
     // is unchanged by a ⌘B, which is the whole point of storing it this way. A
@@ -619,10 +619,10 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // thread, because the thread is the flexible one.
     let room = shared_room(viewport, f32::from(sidebar_w));
     let squeezed = room < CENTER_MIN + WORKSPACE_MIN;
-    // The venue page has no chat, so it always takes the thread's room.
-    let venue_mode = app.venue_mode();
-    let expanded = app.expanded || venue_mode;
-    let workspace_open_w = if expanded || squeezed {
+    // The chat belongs to the front tab, so with no tab there is no chat and
+    // the panel takes the room to offer the first one.
+    let has_chat = app.front_chat().is_some();
+    let workspace_open_w = if app.expanded || squeezed || !has_chat {
         room
     } else {
         app.workspace_split.resolve(room).1
@@ -645,53 +645,44 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
     let workspace_w = app.workspace_width.eval(window);
 
-    // Takeover: an open workspace covers everything right of the sidebar and
-    // the thread column collapses behind it. The default is comet's split;
-    // `ToggleExpand` trades the thread's room for the tab's.
+    // Takeover: an open editor covers everything right of the sidebar and the
+    // chat collapses behind it. The default is comet's split; `ToggleExpand`
+    // trades the chat's room for the editor's.
     //
     // A window with no legal split reaches the same layout without anyone
     // asking for it. There are two floors — [`CENTER_MIN`] and
     // [`WORKSPACE_MIN`] — and a window that cannot honour both has to drop one
-    // region rather than shave both: the panel carries the tab strip, so a
-    // panel ground down to a sliver takes every tab and the `+` with it, and
-    // the thread cannot host them instead without the strip having two homes
-    // again. The panel takes the room, through the branch takeover already is.
-    let takeover =
-        !app.workspace_hidden && (expanded || squeezed) && f32::from(workspace_w) >= room - 0.5;
+    // region rather than shave both. The chat goes, and comes back when the
+    // window is wide enough again.
+    let takeover = !app.workspace_hidden
+        && (app.expanded || squeezed || !has_chat)
+        && f32::from(workspace_w) >= room - 0.5;
     let show_sidebar = app.sidebar.is_some() && sidebar_w > px(0.0);
-    let show_thread = !takeover;
-    // The panel is up exactly when it has not been put away. Emptiness is not
-    // a reason to hide it: the panel offers the first tab, so with no tabs it
-    // opens onto [`empty_panel`].
+    let show_thread = !takeover && has_chat;
     let show_workspace = takeover || workspace_w > px(0.0);
-    let workspace_panel_width = if takeover {
-        viewport - f32::from(sidebar_w) - if show_sidebar { SEAM_WIDTH } else { 0.0 }
-    } else {
-        f32::from(workspace_w)
+    // The tab owns both its chat and its editor, so its strip spans the two
+    // (`docs/specs/venue-tabs.md`, Layout): one band over everything right of
+    // the sidebar — history first, then the chat toggle, then the strip.
+    let main_x = f32::from(sidebar_w) + if show_sidebar { SEAM_WIDTH } else { 0.0 };
+    let main_span = chrome::BandSpan {
+        x: main_x,
+        width: viewport - main_x,
+        viewport,
     };
-    // The thread toggle leads the strip on a track. Narrow windows already
-    // give the workspace all available room and do not offer a no-op toggle.
-    let thread_toggle = !squeezed && app.selected_track().is_some();
-    let workspace_strip_width = chrome::band_room(
-        chrome::BandSpan {
-            x: viewport - workspace_panel_width,
-            width: workspace_panel_width,
-            viewport,
-        },
-        if thread_toggle { chrome::CONTROL } else { 0.0 },
-        0.0,
-        usize::from(thread_toggle),
-    );
-    // The `+` menu hangs off the strip, and the strip is the panel's: put the
-    // panel away or empty it and the menu has nothing to hang off, so it goes
-    // too rather than waiting armed for whatever brings the strip back.
-    //
-    // Asked of the panel's *state*, not of `show_workspace`: that is this
-    // frame's animated width, which says "not yet" at the start of an entrance
-    // the state has already committed to. ⌘T opens the panel and its menu in
-    // one action, and nothing about that pair should turn on where a tween
-    // happens to be sampled.
-    if app.workspace_hidden || app.workspace.is_empty() || venue_mode {
+    // Narrow windows already give the editor all the room and do not offer a
+    // no-op toggle.
+    let thread_toggle = !squeezed && has_chat;
+    let strip_lead = chrome::HISTORY_SLOT
+        + if thread_toggle {
+            chrome::THREAD_TOGGLE_SLOT
+        } else {
+            0.0
+        };
+    let strip_width = chrome::band_room(main_span, strip_lead, 0.0, 0);
+    // The `+` menu hangs off the strip: empty the strip and the menu has
+    // nothing to hang off, so it goes too rather than waiting armed for
+    // whatever brings the strip back.
+    if app.workspace.is_empty() {
         app.tab_chrome.dismiss_menu();
     }
     // Same rule for the account menu: it hangs off the sidebar's foot, so a
@@ -713,137 +704,93 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         .on_drag_move(cx.listener(Luma::drag_workspace_seam))
         .on_drag_move(cx.listener(Luma::drag_visualizer_seam));
 
-    if app.sidebar.is_some() {
-        if show_sidebar {
-            // The sidebar's content is laid out at its full width for the whole
-            // slide (see `pane::pane`), so its band is spanned that way too —
-            // reserving against the clipped width would re-pad it every frame.
-            let span = chrome::BandSpan {
-                x: 0.0,
-                width: SIDEBAR_WIDTH,
-                viewport,
-            };
-            let body = column(chrome::band(span))
-                // The one region that raises itself off the ground, because it
-                // is the frame and not the subject. On the blurred window that
-                // lift is a WASH over the root fill, not a plane: an opaque
-                // rung would be a slab sitting on the blur, and a translucent
-                // one would land on the root's own tone and vanish.
-                //
-                // No edge of its own: the rule on its trailing side is the
-                // `seam` below, which every region boundary here is drawn by.
-                // A border here would have been a second line beside that one,
-                // inside the clipping pane rather than between the regions.
-                .bg(glass::tone_column())
-                .key_context(keymap::context::SIDEBAR)
-                .child(cached(
-                    sidebar_view,
-                    gpui::StyleRefinement::default().size_full(),
-                ))
-                .into_any_element();
-            // Laid out at its full width for the whole slide, so a sidebar
-            // easing open reveals its rows rather than re-wrapping them.
-            row = row.child(
-                pane::pane(sidebar_w, px(SIDEBAR_WIDTH), body)
-                    // The region itself, named. Its content is addressable but
-                    // its *edge* was not, and the edge is what the regions
-                    // beside it are measured from.
-                    .agent_node(Role::Card, "Sidebar"),
-            );
-            // The sidebar and whatever is beside it are different planes, so
-            // the line between them is the bright one.
-            row = row.child(seam(ladder::seam_plane()));
-        }
-    }
-
-    if show_thread {
-        // Where the thread sits this frame: it begins at the sidebar's live
-        // edge and ends at the workspace's, so its band tracks both panels
-        // without restating either one's curve.
+    if app.sidebar.is_some() && show_sidebar {
+        // The sidebar's content is laid out at its full width for the whole
+        // slide (see `pane::pane`), so its band is spanned that way too —
+        // reserving against the clipped width would re-pad it every frame.
         let span = chrome::BandSpan {
-            x: f32::from(sidebar_w) + if show_sidebar { SEAM_WIDTH } else { 0.0 },
-            width: viewport
-                - f32::from(sidebar_w)
-                - if show_sidebar { SEAM_WIDTH } else { 0.0 }
-                - if show_workspace {
-                    f32::from(workspace_w) + SEAM_WIDTH
-                } else {
-                    0.0
-                },
+            x: 0.0,
+            width: SIDEBAR_WIDTH,
             viewport,
         };
-        // Back/forward, then empty band. The thread carries no tabs — they are
-        // the panel's — and nothing else: the account lives at the foot of the
-        // sidebar.
-        let head = chrome::band(span)
-            .child(chrome::history_pair())
-            .child(div().flex_1());
+        let body = column(chrome::band(span))
+            // The one region that raises itself off the ground, because it
+            // is the frame and not the subject. On the blurred window that
+            // lift is a WASH over the root fill, not a plane: an opaque
+            // rung would be a slab sitting on the blur, and a translucent
+            // one would land on the root's own tone and vanish.
+            //
+            // No edge of its own: the rule on its trailing side is the
+            // `seam` below, which every region boundary here is drawn by.
+            .bg(glass::tone_column())
+            .key_context(keymap::context::SIDEBAR)
+            .child(cached(
+                sidebar_view,
+                gpui::StyleRefinement::default().size_full(),
+            ))
+            .into_any_element();
+        // Laid out at its full width for the whole slide, so a sidebar
+        // easing open reveals its rows rather than re-wrapping them.
         row = row.child(
-            column(head)
+            pane::pane(sidebar_w, px(SIDEBAR_WIDTH), body)
+                // The region itself, named. Its content is addressable but
+                // its *edge* was not, and the edge is what the regions
+                // beside it are measured from.
+                .agent_node(Role::Card, "Sidebar"),
+        );
+        // The sidebar and whatever is beside it are different planes, so
+        // the line between them is the bright one.
+        row = row.child(seam(ladder::seam_plane()));
+    }
+
+    let mut head = chrome::band(main_span).child(chrome::history_pair());
+    let mut origin = chrome::tab_strip_origin(main_span) + chrome::HISTORY_SLOT;
+    if thread_toggle {
+        head = head.child(chrome::thread_toggle(&entity, !app.expanded));
+        origin += chrome::THREAD_TOGGLE_SLOT;
+    }
+    head = head.child(chrome::tab_strip(
+        app,
+        &entity,
+        strip_width,
+        origin,
+        window,
+        cx,
+    ));
+    // Below the band: the front tab's chat, then its editor.
+    let mut body = div().flex_1().min_h_0().flex().flex_row().relative();
+    if show_thread {
+        body = body.child(
+            div()
+                .h_full()
+                .min_w_0()
                 .flex_1()
-                // The ground, not a card on it: the thread is what the app is
-                // about, and the content plane is the darkest one there is.
-                //
-                // **Opaque**, like the workspace ground below — a structural
-                // plane has no coverage (see `glass`'s module docs). A
-                // translucent plane would make the transcript's fade bands
-                // unpaintable: a plane composited over an unknown backdrop has no colour any
-                // overlay can match, so the band read as a dark strip however
-                // it was tinted. Opaque, `panel_opaque()` *is* the plane, and
-                // the band that fades to it disappears into it by construction.
-                .bg(glass::panel_opaque())
                 .key_context(keymap::context::THREAD)
-                .children(app.chat.clone().map(|chat| {
+                .children(app.front_chat().cloned().map(|chat| {
                     luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
                 })),
         );
     }
-
     if show_workspace {
-        // The panel is the last region in the row, so it always ends at the
-        // window's trailing edge — takeover only makes it start further left.
-        let span = chrome::BandSpan {
-            x: viewport - workspace_panel_width,
-            width: workspace_panel_width,
-            viewport,
-        };
-        // The venue page has one body and no strip: the sidebar's Venue row
-        // is all that says it is up.
-        let mut head = chrome::band(span);
-        if !venue_mode {
-            let mut origin = chrome::tab_strip_origin(span);
-            if thread_toggle {
-                head = head.child(chrome::thread_toggle(&entity, !app.expanded));
-                origin += chrome::THREAD_TOGGLE_SLOT;
-            }
-            head = head.child(chrome::tab_strip(
-                app,
-                &entity,
-                workspace_strip_width,
-                origin,
-                window,
-                cx,
-            ));
-        }
         if show_thread {
             // Both sides are lit surfaces whose own value step already divides
             // them, so this rule is a hint. The grip that pulls it is mounted
             // after the panel, not here — see [`workspace_grip`].
-            row = row.child(seam(ladder::seam_hint()));
+            body = body.child(seam(ladder::seam_hint()));
         }
-        // The same ground the thread column is — which is why the rule between
-        // them is [`ladder::seam_hint`] and not the bright one. Opaque, where
-        // the thread column is not: a tab holds an *instrument* surface, and a
-        // waveform read through a blurred desktop is a waveform you cannot
-        // read. The two grounds are the same rung; only their coverage differs,
-        // and it differs because of what each one carries.
-        let panel = column(head)
+        // Opaque, like the chat's ground: a tab holds an *instrument* surface,
+        // and a waveform read through a blurred desktop is a waveform you
+        // cannot read.
+        let panel = div()
+            .size_full()
+            .flex()
+            .flex_col()
             .bg(ladder::background())
             .key_context(keymap::context::WORKSPACE)
             .child(workspace_body(
                 app,
                 if takeover {
-                    workspace_panel_width
+                    viewport - main_x
                 } else {
                     workspace_open_w
                 },
@@ -851,22 +798,35 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 cx,
             ))
             .into_any_element();
-        row = row.child(if takeover {
+        body = body.child(if takeover {
             div().h_full().flex_1().min_w_0().child(panel)
         } else {
             pane::opaque_pane(workspace_w, px(workspace_open_w), panel)
         });
         if show_thread {
-            // After both panes it divides, so the strip it overhangs is its
-            // own — and before the layers below, which must keep the pointer
-            // they cover. The rule is a hair to the panel's left, and the
-            // panel ends at the window, so that is where the grip centres.
-            row = row.child(workspace_grip(
-                viewport - f32::from(workspace_w) - SEAM_WIDTH / 2.0,
+            // After both panes it divides, and before the layers below, which
+            // must keep the pointer they cover. The rule is a hair to the
+            // panel's left and the panel ends at the window; the grip is
+            // placed in the body's own coordinates, which start at `main_x`.
+            body = body.child(workspace_grip(
+                viewport - f32::from(workspace_w) - SEAM_WIDTH / 2.0 - main_x,
                 cx,
             ));
         }
     }
+    row = row.child(
+        column(head)
+            .flex_1()
+            // The ground, not a card on it: the chat is what the app is
+            // about, and the content plane is the darkest one there is.
+            //
+            // **Opaque**: a structural plane has no coverage (see `glass`'s
+            // module docs). A translucent plane would make the transcript's
+            // fade bands unpaintable — a plane composited over an unknown
+            // backdrop has no colour any overlay can match.
+            .bg(glass::panel_opaque())
+            .child(body),
+    );
 
     // Window-space tab exits and their stable close target sit above both pane
     // rails, but below popovers and modal overlays.
@@ -929,8 +889,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         // Read out of the chat before the overlay is borrowed: both live on
         // `app`, and the dialog cannot reach back through the entity for them.
         let rows = app
-            .chat
-            .as_ref()
+            .front_chat()
             .map(|chat| chat.read(cx).subagents().to_vec())
             .unwrap_or_default();
         if let Some(Overlay::Subagents(state)) = app.overlay.open_mut() {
@@ -1608,7 +1567,13 @@ fn overlay_layer(
     // `morph::card` — and a dialog that never morphs simply has one route
     // (`morph::fixed_card`); the shell does not describe a dialog's box.
     let (card, label) = match overlay {
-        Overlay::Venues(state) => (welcome::render(state, entity, window, cx), "Venue dialog"),
+        Overlay::Venues(state) => {
+            let statuses = app.venue_statuses(cx);
+            (
+                welcome::render(state, &statuses, entity, window, cx),
+                "Venue dialog",
+            )
+        }
         Overlay::Settings(state) => (
             morph::fixed_card(
                 "Settings dialog",
