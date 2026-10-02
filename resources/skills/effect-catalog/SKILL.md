@@ -39,6 +39,7 @@ name on its card: `pill = curve(...)`.
 |---|---|---|
 | Wash | `color(color=(1, 1, 1))` | color |
 | Pulse | `t = time(every=1); color(brightness=curve(t, "Drop"))` | time(every) → curve → brightness |
+| Triplet pulse | `t = time(every=1/3); color(brightness=curve(t, "Drop"))` | Pulse on the triplet grid: three per beat. Write `1/3`, never `0.333` |
 | Breathe | `t = time(every=4); color(brightness=curve(t, "Swell"))` | time(every) → curve → brightness |
 | Fade | `t = time(); color(alpha=curve(t, "Fade in"))` | time → curve → alpha: the whole clip fades in |
 | Color fade | `t = time(); color(color=curve(t, "Ramp up", gradient=[(0, "#b0400a"), (1, "#2449eb")]))` | time → curve(color) → color |

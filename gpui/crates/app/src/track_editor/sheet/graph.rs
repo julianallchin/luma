@@ -348,7 +348,7 @@ fn number_field(
         )
         .with_decimals(decimals, cx);
         match edit::suffix(spec.unit) {
-            Some(unit) => field.with_unit(unit),
+            Some(unit) => field.with_unit(unit, cx),
             None => field,
         }
     })

@@ -26,11 +26,37 @@ use crate::text_input::{self, TextInput, DRAFT_CONTEXT};
 /// Parse a draft against its range. `None` is "revert": empty, unparseable,
 /// or non-finite input has no number in it to commit. A finite number outside
 /// the range commits clamped — the pointer analog (a slider) clamps, and a
-/// typed `999` meaning "all the way up" should not bounce back.
+/// typed `999` meaning "all the way up" should not bounce back. A fraction
+/// `a/b` commits exactly, so `1/3` is a third and not 0.3333.
 #[must_use]
 pub fn parse_draft(draft: &str, min: f64, max: f64) -> Option<f64> {
-    let value: f64 = draft.trim().parse().ok()?;
+    let draft = draft.trim();
+    let value: f64 = match draft.split_once('/') {
+        Some((top, bottom)) => {
+            top.trim().parse::<f64>().ok()? / bottom.trim().parse::<f64>().ok()?
+        }
+        None => draft.parse().ok()?,
+    };
     value.is_finite().then(|| value.clamp_value(min, max))
+}
+
+/// The denominators a beat value shows as a fraction over: straight and
+/// triplet divisions down to a 32nd.
+const DENOMINATORS: [u32; 9] = [2, 3, 4, 6, 8, 12, 16, 24, 32];
+
+/// `value` as `n/d` when it is exactly a musical fraction its decimals would
+/// round: 1/3 shows as "1/3", 0.25 stays "0.25", and 0.3333 stays "0.3333",
+/// so a near-third never passes for a third.
+#[must_use]
+pub fn format_fraction(value: f64, decimals: usize) -> Option<String> {
+    let shown = format_decimals(value, decimals);
+    if shown.parse::<f64>().ok() == Some(value) {
+        return None;
+    }
+    DENOMINATORS.iter().find_map(|&d| {
+        let top = value * f64::from(d);
+        ((top - top.round()).abs() < 1e-9).then(|| format!("{}/{d}", top.round()))
+    })
 }
 
 /// The one spelling a committed value shows as — also what a revert restores,
@@ -97,6 +123,10 @@ pub trait DraftValue: Copy + PartialEq + std::fmt::Display + 'static {
     fn show(self, _decimals: usize) -> String {
         self.to_string()
     }
+    /// The value as a musical fraction, where the domain has one.
+    fn fraction(self, _decimals: usize) -> Option<String> {
+        None
+    }
 }
 impl DraftValue for f64 {
     fn clamp_value(self, min: Self, max: Self) -> Self {
@@ -120,6 +150,9 @@ impl DraftValue for f64 {
     }
     fn show(self, decimals: usize) -> String {
         format_decimals(self, decimals)
+    }
+    fn fraction(self, decimals: usize) -> Option<String> {
+        format_fraction(self, decimals)
     }
 }
 impl DraftValue for u64 {
@@ -155,6 +188,8 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     per: Option<(&'static str, bool)>,
     /// The most decimals the field shows.
     decimals: usize,
+    /// Whether an exact musical fraction shows as one: a field in beats.
+    fractions: bool,
     _subs: [Subscription; 2],
 }
 
@@ -208,6 +243,7 @@ impl<T: DraftValue> DraftedNumber<T> {
             unit: None,
             per: None,
             decimals: DECIMALS,
+            fractions: false,
             _subs,
         }
     }
@@ -222,10 +258,14 @@ impl<T: DraftValue> DraftedNumber<T> {
         self
     }
 
-    /// Show `unit` after the digits, inside the field.
+    /// Show `unit` after the digits, inside the field. A field in beats
+    /// shows an exact triplet or 32nd as a fraction: 1/3, not 0.3333.
     #[must_use]
-    pub fn with_unit(mut self, unit: &'static str) -> Self {
+    pub fn with_unit(mut self, unit: &'static str, cx: &mut Context<Self>) -> Self {
         self.unit = Some(unit);
+        self.fractions = unit == "beats";
+        let text = self.shown();
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
         self
     }
 
@@ -253,6 +293,10 @@ impl<T: DraftValue> DraftedNumber<T> {
     fn shown(&self) -> String {
         match self.per {
             Some((_, true)) => format_per(self.value.per()),
+            _ if self.fractions => self
+                .value
+                .fraction(self.decimals)
+                .unwrap_or_else(|| self.value.show(self.decimals)),
             _ => self.value.show(self.decimals),
         }
     }
@@ -399,6 +443,31 @@ mod tests {
         // Parseable but not a number anyone committed.
         assert_eq!(parse_draft("NaN", 0., 100.), None);
         assert_eq!(parse_draft("inf", 0., 100.), None);
+        // Fractions commit exactly.
+        assert_eq!(parse_draft("1/3", 0., 100.), Some(1. / 3.));
+        assert_eq!(parse_draft(" -2 / 3 ", -10., 10.), Some(-2. / 3.));
+        assert_eq!(parse_draft("1/0", 0., 100.), None);
+        assert_eq!(parse_draft("1/", 0., 100.), None);
+        assert_eq!(parse_draft("1/2/3", 0., 100.), None);
+    }
+
+    /// An exact triplet or 32nd shows as a fraction; a round decimal and a
+    /// near-third do not.
+    #[test]
+    fn beats_show_exact_fractions() {
+        assert_eq!(format_fraction(1. / 3., DECIMALS).as_deref(), Some("1/3"));
+        assert_eq!(format_fraction(4. / 3., DECIMALS).as_deref(), Some("4/3"));
+        assert_eq!(format_fraction(-1. / 6., DECIMALS).as_deref(), Some("-1/6"));
+        assert_eq!(format_fraction(1. / 32., DECIMALS).as_deref(), Some("1/32"));
+        assert_eq!(format_fraction(0.25, DECIMALS), None);
+        assert_eq!(format_fraction(2., DECIMALS), None);
+        assert_eq!(format_fraction(0.3333, DECIMALS), None);
+        assert_eq!(format_fraction(0.333333, DECIMALS), None);
+        // What a fraction shows as parses back to the same value.
+        for value in [1. / 3., 2. / 3., 1. / 12., 5. / 24.] {
+            let shown = format_fraction(value, DECIMALS).unwrap();
+            assert_eq!(parse_draft(&shown, -100., 100.), Some(value));
+        }
     }
 
     /// One spelling per value, and reverting restores exactly it.

@@ -189,6 +189,7 @@ CATALOG = {
     "Slash with values": EXAMPLE_SLASH_VALUES,
     "Shifted chase": EXAMPLE_SHIFT,
     "Wobble strobe": "strobe(rate=curve(time(every=0.25), 'Square'))",
+    "Triplet pulse": "t = time(every=1/3); color(brightness=curve(t, 'Drop'))",
     "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('low'), 'Ramp up', low=0.2, high=1))",
     "Named steps": "t = time(every=2); cut = curve(t, 'Step down'); fade = curve(t, 'Fade out'); glow = cut * fade; color(brightness=max(glow, 0.1), alpha=1 - curve(t, 'Ramp up'))",
 }
@@ -417,6 +418,14 @@ class ClipBuilderTests(unittest.TestCase):
                 self.assertEqual(again.json(), graph.json())
                 self.assertEqual(again.source(), graph.source())
                 self.assertEqual(graph.source().splitlines()[-1].split("(")[0], graph.output.kind)
+
+    def test_source_writes_exact_thirds_as_fractions(self):
+        graph = run("t = time(every=1/3, duration=2/3, delay=1/32); color(brightness=curve(t, 'Drop'))")
+        self.assertIn("time(every=1/3, duration=2/3, delay=0.03125)", graph.source())
+        # A near-third is not a third and keeps its digits.
+        near = run("t = time(every=0.3333); color(brightness=curve(t, 'Drop'))")
+        self.assertIn("every=0.3333", near.source())
+        self.assertIn("0.25", run("t = time(every=0.25); color(brightness=curve(t, 'Drop'))").source())
 
     def test_json_round_trips_through_from_json(self):
         for name, code in CATALOG.items():

@@ -609,7 +609,7 @@ impl ColorArgEditor {
                     window,
                     cx,
                 )
-                .with_unit("%")
+                .with_unit("%", cx)
             });
             let subscriptions = [
                 cx.subscribe(&hex, |editor, _, event: &NumberEvent<Hex>, cx| {
