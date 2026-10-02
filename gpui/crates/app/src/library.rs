@@ -777,6 +777,12 @@ impl Library {
                 .apply_persisted_settings()
                 .await
                 .map_err(|error| error.to_string())?;
+            // Before any turn runs: a turn cut off by a quit left its last
+            // row local, and the thread reads unfinished once it is written.
+            // Not a launch failure: the rows wait for the next launch.
+            if let Err(error) = services.recover_open_agent_messages().await {
+                eprintln!("[luma] agent rows in progress were not recovered: {error}");
+            }
             // The address to name the principal by, out of the same stored
             // snapshot the admission above was proven from. `current_account`
             // makes no request — see its handler — which is the property this

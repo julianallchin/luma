@@ -9,12 +9,10 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::database::local::auth::principal_key;
-#[cfg(test)]
-use crate::models::agent_threads::NewAgentThreadMessage;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage,
     AgentThreadTranscriptHead, AgentThreadUsage, AppendAgentThreadMessagesInput,
-    CreateAgentThreadInput,
+    CreateAgentThreadInput, NewAgentThreadMessage,
 };
 
 const THREAD_COLUMNS: &str =
@@ -706,11 +704,9 @@ pub async fn append_messages_at_head(
     })
 }
 
-/// Rewrite what one of this thread's rows says, in place. A running turn
-/// appends its assistant row at the first step that has something to keep and
-/// then grows it here at every step and tool result, so a quit mid-turn loses
-/// at most the step in flight. The row keeps its place in the chain.
-pub async fn update_message_parts(
+/// Rewrite what one of this thread's rows says, in place. The row keeps its
+/// place in the chain.
+async fn update_message_parts(
     pool: &SqlitePool,
     thread_id: &str,
     message_id: &str,
@@ -745,6 +741,158 @@ pub async fn update_message_parts(
     tx.commit()
         .await
         .map_err(|e| format!("Failed to commit agent message update: {e}"))
+}
+
+/// The row a running turn is still writing, kept local and unsynced.
+#[derive(Debug, Clone)]
+pub struct OpenMessage {
+    /// The transcript head the row is appended at.
+    pub parent_message_id: Option<String>,
+    pub message: NewAgentThreadMessage,
+}
+
+/// Keep `open` as the thread's row in progress. A running turn calls this at
+/// every step and tool result, so a quit loses at most the step in flight;
+/// the synced row is written once, by [`close_message`].
+pub async fn save_open_message(
+    pool: &SqlitePool,
+    thread_id: &str,
+    open: &OpenMessage,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let parts_json = serde_json::to_string(&open.message.parts)
+        .map_err(|e| format!("Failed to serialize message parts: {e}"))?;
+    sqlx::query(
+        "INSERT INTO agent_open_messages
+         (thread_id, uid, message_id, parent_message_id, role, parts_json)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (thread_id) DO UPDATE SET
+             uid = excluded.uid, message_id = excluded.message_id,
+             parent_message_id = excluded.parent_message_id,
+             role = excluded.role, parts_json = excluded.parts_json",
+    )
+    .bind(thread_id)
+    .bind(owner_user_id)
+    .bind(open.message.id.as_deref())
+    .bind(open.parent_message_id.as_deref())
+    .bind(&open.message.role)
+    .bind(parts_json)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to save open agent message: {e}"))?;
+    Ok(())
+}
+
+/// The thread's row in progress, if a turn left one.
+pub async fn open_message(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<Option<OpenMessage>, String> {
+    let row: Option<(String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT message_id, parent_message_id, role, parts_json
+         FROM agent_open_messages WHERE thread_id = ? AND uid IS ?",
+    )
+    .bind(thread_id)
+    .bind(owner_user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to load open agent message: {e}"))?;
+    row.map(|(id, parent_message_id, role, parts_json)| {
+        Ok(OpenMessage {
+            parent_message_id,
+            message: NewAgentThreadMessage {
+                id: Some(id),
+                role,
+                parts: serde_json::from_str(&parts_json)
+                    .map_err(|e| format!("Failed to read open agent message: {e}"))?,
+            },
+        })
+    })
+    .transpose()
+}
+
+/// Write a finished row to the synced transcript and drop the thread's open
+/// record for it. A new row is appended at `parent_message_id`; a row the
+/// chain already has (a resumed one) is rewritten in place. `false` when the
+/// head moved past `parent_message_id` and nothing was written.
+pub async fn close_message(
+    pool: &SqlitePool,
+    thread_id: &str,
+    open: OpenMessage,
+    owner_user_id: Option<&str>,
+) -> Result<bool, String> {
+    let id = open
+        .message
+        .id
+        .clone()
+        .ok_or("An agent message is closed by its id")?;
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM agent_thread_messages WHERE id = ? AND created_in_thread_id = ?",
+    )
+    .bind(&id)
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to look up agent message {id}: {e}"))?
+    .is_some();
+    if exists {
+        update_message_parts(pool, thread_id, &id, &open.message.parts, owner_user_id).await?;
+    } else {
+        let outcome = append_messages_at_head(
+            pool,
+            thread_id,
+            AppendAgentThreadMessagesInput {
+                operation_id: Uuid::new_v4().to_string(),
+                expected_head_message_id: open.parent_message_id,
+                messages: vec![open.message],
+            },
+            owner_user_id,
+        )
+        .await?;
+        if let AgentThreadAppendOutcome::HeadMoved { .. } = outcome {
+            return Ok(false);
+        }
+    }
+    sqlx::query("DELETE FROM agent_open_messages WHERE thread_id = ? AND message_id = ?")
+        .bind(thread_id)
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to drop open agent message {id}: {e}"))?;
+    Ok(true)
+}
+
+/// Write every row in progress that `owner_user_id`'s turns left behind — a
+/// quit cut them off — to the synced transcript, as far as each got. Called
+/// at launch, before any turn runs. A row that can no longer be placed (its
+/// thread moved on or went) is dropped with a warning.
+pub async fn recover_open_messages(
+    pool: &SqlitePool,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let threads: Vec<String> =
+        sqlx::query_scalar("SELECT thread_id FROM agent_open_messages WHERE uid IS ?")
+            .bind(owner_user_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to list open agent messages: {e}"))?;
+    for thread_id in threads {
+        let Some(open) = open_message(pool, &thread_id, owner_user_id).await? else {
+            continue;
+        };
+        match close_message(pool, &thread_id, open, owner_user_id).await {
+            Ok(true) => continue,
+            Ok(false) => log::warn!("[agent] thread {thread_id} moved on; dropped its open row"),
+            Err(error) => log::warn!("[agent] dropped thread {thread_id}'s open row: {error}"),
+        }
+        sqlx::query("DELETE FROM agent_open_messages WHERE thread_id = ?")
+            .bind(&thread_id)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to drop open agent message: {e}"))?;
+    }
+    Ok(())
 }
 
 /// The one wording for a lost head CAS, shared by every caller that reports
@@ -904,6 +1052,7 @@ pub async fn delete_thread(
             "DELETE FROM agent_thread_transcript_heads WHERE thread_id = ?",
             "DELETE FROM agent_thread_runs WHERE thread_id = ?",
             "DELETE FROM agent_thread_usage WHERE thread_id = ?",
+            "DELETE FROM agent_open_messages WHERE thread_id = ?",
         ] {
             sqlx::query(statement)
                 .bind(id)
