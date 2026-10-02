@@ -917,9 +917,22 @@ class Graph:
 # ---------------------------------------------------------------------------
 
 
+# Denominators a number prints as a fraction over: straight and triplet beat
+# divisions down to a 32nd.
+_DENOMINATORS = (2, 3, 4, 6, 8, 12, 16, 24, 32)
+
+
 def _literal(value):
     if isinstance(value, float):
-        return str(int(value)) if value.is_integer() and abs(value) < 1e15 else repr(value)
+        if value.is_integer() and abs(value) < 1e15:
+            return str(int(value))
+        # An exact third prints as 1/3, so a reader never copies 0.333.
+        if round(value, 6) != value:
+            for d in _DENOMINATORS:
+                n = round(value * d)
+                if n / d == value:
+                    return f"{n}/{d}"
+        return repr(value)
     if isinstance(value, (list, tuple)):
         items = ", ".join(_literal(item) for item in value)
         return f"({items},)" if len(value) == 1 else f"({items})"

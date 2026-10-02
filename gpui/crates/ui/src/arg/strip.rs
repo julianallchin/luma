@@ -415,7 +415,7 @@ impl CurveStrip {
                 window,
                 cx,
             )
-            .with_unit("%")
+            .with_unit("%", cx)
         });
         let mut subscriptions =
             vec![cx.subscribe(&position, |this, _, event: &NumberEvent, cx| {
@@ -464,7 +464,7 @@ impl CurveStrip {
                     cx,
                 );
                 match unit {
-                    Some(unit) => field.with_unit(unit),
+                    Some(unit) => field.with_unit(unit, cx),
                     None => field,
                 }
             });
