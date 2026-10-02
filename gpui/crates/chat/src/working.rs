@@ -177,9 +177,17 @@ impl Working {
     }
 }
 
-/// The indicator's line. Declared, so its words and timer rewriting within
+/// The gap above the indicator: the same gap a tool group and a text block
+/// keep, so the indicator reads as its own block, not as one more line.
+const TRAILER_GAP: f32 = theme::GAP_TOOL;
+
+/// The indicator's line: a prose line, so its middle sits where the next line
+/// of the reply will.
+const TRAILER_LINE: f32 = luma_md::render::MD_LINE_HEIGHT;
+
+/// The indicator's height. Declared, so its words and timer rewriting within
 /// it never change the row's height.
-const TRAILER_HEIGHT: f32 = 24.0;
+const TRAILER_HEIGHT: f32 = TRAILER_GAP + TRAILER_LINE;
 
 /// The trailer: spinner, word, and — once there is something to time — how
 /// long it has been going.
@@ -195,12 +203,12 @@ pub fn trailer(trailer: &Trailer, theme: &Theme, view: EntityId, cx: &mut gpui::
     div()
         .h(px(TRAILER_HEIGHT))
         .flex_none()
-        .line_height(px(16.0))
+        .line_height(px(TRAILER_LINE))
         .flex()
         .flex_row()
         .items_center()
         .gap(px(theme::SPACE_SM))
-        .pt(px(theme::SPACE_SM))
+        .pt(px(TRAILER_GAP))
         .text_size(px(12.0))
         .child(spinner(view, cx))
         .child(
