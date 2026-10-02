@@ -7,18 +7,18 @@
 
 fixture({ clips: [{ pattern: "pat-glow", name: "Glow", start: 1, end: 4 }] });
 
-// The workspace's `+` menu, hung at a window point. The sidebar's track row
+// The workspace's `+` box, hung at a window point. The sidebar's track row
 // sits under the press — pressing it pushes the column to that track's
 // scores, which is loud and easy to notice.
 test("a press outside a menu closes it and does not reach what is under it", () => {
   // The `+` lives in the workspace panel's band, so a tab must be open first.
   // `nav.track` leaves the sidebar on the track list.
   nav.trackEditor("Test Venue", "Aurora");
-  const menu = (s) => s.find({ role: "card", label: "New tab menu" });
+  const menu = (s) => s.find({ role: "card", label: "New tab" });
   const level = (s) => s.find({ role: "card", label: "Scores level" });
 
   app.action("luma::NewTab");
-  const opened = until("the new-tab menu", (s) => menu(s) !== undefined);
+  const opened = until("the + box", (s) => menu(s) !== undefined);
   expect(level(opened)).toBe(undefined);
 
   app.click(opened.find({ role: "row", label: "Aurora" }));

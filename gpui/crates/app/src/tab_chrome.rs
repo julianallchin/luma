@@ -1,4 +1,4 @@
-//! Pure state behind the workspace tab strip's menu and close/reflow motion.
+//! Pure state behind the workspace tab strip's close/reflow motion.
 //!
 //! [`crate::tabs::Tabs`] remains the authority for open targets, selection and
 //! teardown. This module remembers only what chrome needs after that logical
@@ -50,7 +50,7 @@ pub(crate) struct TabStripFrame {
     /// Relative paint offset for the `+` and collapse-control group.
     pub(crate) controls_x_offset: f32,
     /// Where the control group *is* this frame, in strip space — the anchor
-    /// the `+` menu hangs from. Published rather than re-derived at the call
+    /// the `+`'s combo box hangs from. Published rather than re-derived at the call
     /// site from a first-chip width, which is the same number only while every
     /// chip is the same width.
     pub(crate) controls_x: f32,
@@ -137,7 +137,6 @@ impl ScalarMotion {
 
 #[derive(Debug)]
 pub(crate) struct TabChrome {
-    pub(crate) menu_open: bool,
     /// Window-space origin of the one live strip owner this frame.
     strip_origin: (f32, f32),
     live: Vec<LiveChip>,
@@ -149,7 +148,6 @@ pub(crate) struct TabChrome {
 impl Default for TabChrome {
     fn default() -> Self {
         Self {
-            menu_open: false,
             strip_origin: (0.0, 0.0),
             live: Vec::new(),
             exits: Vec::new(),
@@ -162,14 +160,6 @@ impl Default for TabChrome {
 impl TabChrome {
     pub(crate) fn set_strip_origin(&mut self, x: f32, y: f32) {
         self.strip_origin = (x, y);
-    }
-
-    pub(crate) fn toggle_menu(&mut self) {
-        self.menu_open = !self.menu_open;
-    }
-
-    pub(crate) fn dismiss_menu(&mut self) -> bool {
-        std::mem::take(&mut self.menu_open)
     }
 
     /// Capture the visual chip before its logical tab is removed.
@@ -435,67 +425,7 @@ fn progress(started: Instant, now: Instant) -> f32 {
     motion::exit_progress_at(&TAB_SLIDE, started, now)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NewTabChoice {
-    Venue,
-    Track,
-}
-
-impl NewTabChoice {
-    pub(crate) const ALL: [Self; 2] = [Self::Venue, Self::Track];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Venue => "Venue",
-            Self::Track => "Track editor",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct NewTabPrerequisites {
-    pub(crate) venue: Option<String>,
-    pub(crate) track: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ChoiceAvailability {
-    pub(crate) choice: NewTabChoice,
-    pub(crate) reason: Option<&'static str>,
-}
-
-impl ChoiceAvailability {
-    pub(crate) fn enabled(self) -> bool {
-        self.reason.is_none()
-    }
-}
-
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 2] {
-    NewTabChoice::ALL.map(|choice| {
-        let reason = match choice {
-            NewTabChoice::Venue if prerequisites.venue.is_none() => Some("Select a venue first"),
-            NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
-            NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
-            _ => None,
-        };
-        ChoiceAvailability { choice, reason }
-    })
-}
-
 impl Luma {
-    /// What the current shell state lets the `+` menu (and the empty panel's
-    /// copy of it) offer. One constructor, so the two drawings of the choices
-    /// cannot gate on different facts.
-    pub(crate) fn new_tab_prerequisites(&self) -> NewTabPrerequisites {
-        NewTabPrerequisites {
-            venue: self
-                .sidebar
-                .as_ref()
-                .map(|state| state.venue_id().to_string()),
-            track: self.sidebar_track().map(str::to_string),
-        }
-    }
-
     /// One close path for the chip, middle click and keyboard. Logical removal
     /// and teardown happen immediately; this module retains only exit paint.
     pub(crate) fn close_tab(
@@ -533,25 +463,6 @@ impl Luma {
     fn finish_close_tab(&mut self, target: &Target, cx: &mut gpui::Context<Self>) {
         if let Some(body) = self.workspace.close(target) {
             self.teardown(body, cx);
-        }
-        cx.notify();
-    }
-
-    /// Act on the currently named subject. Each opener is target-idempotent;
-    /// this layer only translates one menu choice into that existing path.
-    pub(crate) fn activate_new_tab_choice(
-        &mut self,
-        choice: NewTabChoice,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.tab_chrome.menu_open = false;
-        match choice {
-            NewTabChoice::Venue => self.open_venue_tab(None, cx),
-            NewTabChoice::Track => {
-                if let Some(track) = self.sidebar_track().map(str::to_string) {
-                    self.open_track(&track, cx);
-                }
-            }
         }
         cx.notify();
     }
@@ -714,43 +625,5 @@ mod tests {
         let after_handoff = chrome.transition_frame(false, start);
         assert_eq!(after_handoff.exits[0].x, exit_x);
         assert_eq!(after_handoff.stable_close, before.stable_close);
-    }
-
-    #[test]
-    fn menu_reasons_name_each_missing_prerequisite() {
-        // Looked up by choice, not by index: the menu's order is a display
-        // decision and a new entry must not move what this test is about.
-        let reason = |prerequisites: &NewTabPrerequisites, choice: NewTabChoice| {
-            menu_choices(prerequisites)
-                .into_iter()
-                .find(|availability| availability.choice == choice)
-                .expect("every choice is offered")
-                .reason
-        };
-        let none = NewTabPrerequisites::default();
-        assert_eq!(
-            reason(&none, NewTabChoice::Venue),
-            Some("Select a venue first")
-        );
-        assert_eq!(
-            reason(&none, NewTabChoice::Track),
-            Some("Select a venue first")
-        );
-
-        let venue = NewTabPrerequisites {
-            venue: Some("v".into()),
-            ..Default::default()
-        };
-        assert_eq!(reason(&venue, NewTabChoice::Venue), None);
-        assert_eq!(
-            reason(&venue, NewTabChoice::Track),
-            Some("Select a track first")
-        );
-
-        let all = menu_choices(&NewTabPrerequisites {
-            venue: Some("v".into()),
-            track: Some("t".into()),
-        });
-        assert!(all.into_iter().all(ChoiceAvailability::enabled));
     }
 }

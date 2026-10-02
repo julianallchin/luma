@@ -1,9 +1,9 @@
 // The panel before its first tab.
 //
-// An empty workspace used to be a second, silent reason to hide the panel,
-// so the surface that offers the first tab was withheld until a tab existed.
+// An empty workspace used to be a second, silent reason to hide the panel.
 // What is asserted is the way out of that state, by both routes a user has:
-// the toggle in the window's corner, and ⌘T.
+// the toggle in the window's corner, and ⌘T, which opens the strip's `+` box
+// (docs/specs/venue-tabs.md rule 9).
 
 const WIDTH = 1280;
 
@@ -34,18 +34,21 @@ function openVenue() {
 
 const closeButtons = (s) => s.nodes.filter((n) => n.role === "button" && n.label.startsWith("Close "));
 
-test("an empty panel offers the ways to open a tab", () => {
+test("an empty panel points at the + and the + is there", () => {
   openVenue();
   const landed = read();
   assert(landed.panelEnabled === true, "the panel toggle was inert with no tabs, so the empty state had no door");
   // With no tabs the panel rests open onto its empty state.
   assert(landed.empty, "the panel did not open onto its empty state");
-  // Every choice, by its canonical label: the list the `+` menu offers.
-  const buttons = app.snapshot().findAll({ role: "button" }).map((n) => n.label);
-  expect(buttons).toContain("Venue");
-  expect(buttons).toContain("Track editor");
-  // Exactly one offer: no `+` while the empty state is up.
-  assert(!landed.add, "the add control appeared beside the empty state");
+  // One offer: the strip's `+`, with or without tabs. The panel only names
+  // its key, so it holds no buttons of its own.
+  assert(landed.add, "the strip had no + with no tabs open");
+  const panel = app.snapshot().find({ role: "card", label: "Empty panel" }).bounds;
+  const inPanel = app.snapshot().findAll({ role: "button" }).filter((n) =>
+    n.bounds.x >= panel.x && n.bounds.y >= panel.y
+    && n.bounds.x + n.bounds.width <= panel.x + panel.width
+    && n.bounds.y + n.bounds.height <= panel.y + panel.height);
+  expect(inPanel.map((n) => n.label)).toEqual([]);
 
   // The toggle is a door, and a door swings both ways.
   app.click(app.snapshot().find({ role: "button", label: "panel-toggle" }));
@@ -68,21 +71,20 @@ test("closing the last tab lands on the empty panel", () => {
   expect(shot.findAll({ role: "text" }).some((n) => n.label === "Luma")).toBe(false);
 });
 
-test("new tab with no tabs reaches the empty panel and the venue row opens the venue tab", () => {
+test("new tab with no tabs brings the panel up with the + box open", () => {
   openVenue();
-  // The regression: ⌘T with an empty workspace produced nothing at all. It
-  // must land on the panel's offer.
+  // The regression: ⌘T with an empty workspace produced nothing at all.
   app.action("luma::ToggleWorkspace");
   app.frames(4);
   app.action("luma::NewTab");
-  app.frames(4);
-  assert(read().empty, "⌘T with no tabs open reached nothing that can open one");
+  const shot = until("the + box", (s) => s.find({ role: "card", label: "New tab" }) ? s : undefined);
+  assert(read().empty, "⌘T with no tabs open did not bring the panel back");
+  expect(shot.find({ role: "row", label: "Venue" }) !== undefined).toBe(true);
 
   // The venue tab replaces the empty state, in the strip like any tab.
-  nav.venuePage("Test Venue");
-  app.frames(4);
+  app.key("v e n u e enter");
+  until("the venue tab", (s) => s.find({ role: "card", label: "Test Venue Venue" }) !== undefined);
   const opened = read();
-  assert(!opened.empty && opened.venue, `the venue row did not open the venue tab: ${JSON.stringify(opened)}`);
-  assert(opened.strip, "the venue tab drew no strip");
+  assert(!opened.empty && opened.strip, `the venue tab did not replace the empty state: ${JSON.stringify(opened)}`);
   expect(closeButtons(app.snapshot()).map((n) => n.label)).toEqual(["Close Venue"]);
 });

@@ -33,8 +33,8 @@ test("the row opens a track's scores, and the level switches, mints and pops", (
   const other = rows().find((n) => !n.label.startsWith(`${opened.slice("Score ".length)} `));
   app.click(other);
   until("the timeline on the other score", () => ordinal() !== opened);
-  const switched = ordinal();
-  expect(app.snapshot().find({ role: "card", label: "Sidebar" })).toBe(undefined);
+  // The sidebar goes one double-click interval after the click.
+  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
   app.action("luma::ToggleSidebar");
   until("the level back", (s) => s.find({ role: "card", label: "Scores level" }) !== undefined);
 
@@ -42,6 +42,7 @@ test("the row opens a track's scores, and the level switches, mints and pops", (
   // pair.
   app.click(app.snapshot().find({ role: "button", label: "New score" }));
   until("a fourth score, open", () => ordinal() === "Score #4");
+  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
   app.action("luma::ToggleSidebar");
   until("four scores listed", () => rows().length === 4);
   expect(ordinals(rows().map((n) => n.label))).toEqual(["#1", "#2", "#3", "#4"]);

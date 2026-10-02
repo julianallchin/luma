@@ -25,12 +25,23 @@ region model of `comet-shell.md` §0 and §2 where they disagree.
    input".
 7. **The sidebar is a launcher.** It shows the venue row ("Venue setup"), the
    venue's folders, and all its songs with their scores. A click opens that
-   tab, or brings it to the front. The sidebar no longer owns tab sets.
+   tab, or brings it to the front. The sidebar no longer owns tab sets. A click on a score
+   puts the sidebar away after about one double-click interval (400 ms), so
+   a double-click on the score's name still reaches the row and renames it.
+   The rename cancels the hide.
 8. **Tabs come back at launch.** The app reopens the last venue, every
    venue's open tabs in strip order, the front tab of each venue, and the
    chat each tab had open. This is stored on this device only (a local
    session item, not synced) and saved on every change, debounced. A tab
    whose score, track or venue no longer exists is dropped without a word.
+9. **The `+` is a combo box.** ⌘T presses it. It lists "Venue" and every
+   song in the venue. Typing filters: "Venue" by its word or the venue's
+   name, a song by title, artist or album (as the add-track dialog does).
+   ↑/↓ move, ↵ or → picks, ← or ⌫ on an empty filter goes back one level,
+   Escape closes. A song goes one level in, to its scores in this venue,
+   also when it has only one. A score or "Venue" opens that tab, or brings
+   it to the front, and closes the box. The `+` shows with no tabs too; the
+   empty panel only points at it.
 
 ## Layout
 
@@ -49,7 +60,7 @@ the editor, because both belong to the tab.
 
 ## Phases
 
-- **Phase 1 (now):** rules 1–8 and the layout. "Needs input" (rule 6) waits
+- **Phase 1 (now):** rules 1–9 and the layout. "Needs input" (rule 6) waits
   for a turn event that asks the reader something; no such event exists yet.
   The planned local migration for the `pattern_graph` route is not needed:
   `20260912000000_row_model.sql` already dropped the agent thread route

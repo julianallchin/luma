@@ -55,7 +55,7 @@ test("fullscreen keeps the live camera and restores its pose", () => {
 
   // In a venue tab, fullscreen hides the authoring shortcuts and exit restores them.
   app.action("luma::NewTab");
-  nav.step("venue tab", "button", "Venue");
+  nav.step("venue tab", "row", "Venue");
   until("venue controls", () => node("toggle", "Stage objects"));
   app.click(node("card", "Stage"));
   app.key("shift-f");

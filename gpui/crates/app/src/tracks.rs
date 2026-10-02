@@ -249,6 +249,12 @@ impl Tracks {
         self.rows.iter().find(|row| row.id == track_id).cloned()
     }
 
+    /// Every track in the venue, whatever the sidebar's filters say — the
+    /// rows the `+`'s combo box lists.
+    pub(crate) fn venue_rows(&self) -> impl Iterator<Item = &TrackBrowserRow> {
+        self.rows.iter().filter(|row| row.is_in_venue)
+    }
+
     /// Adopt a freshly venue-decorated library read after an add-track action.
     pub(crate) fn replace_rows(&mut self, rows: Vec<TrackBrowserRow>) {
         self.rows = rows.into();
@@ -425,7 +431,7 @@ impl Tracks {
 
 /// `title`, `artist` or `album` contains `query`, which is already lowercased
 /// and trimmed. An empty query matches everything.
-fn matches(track: &TrackBrowserRow, query: &str) -> bool {
+pub(crate) fn matches(track: &TrackBrowserRow, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
@@ -685,14 +691,6 @@ impl Luma {
         match self.workspace.active()? {
             Target::Score { track, .. } => Some(track),
             Target::Venue { .. } => None,
-        }
-    }
-
-    /// The track whose scores the sidebar is showing, if it is one level in.
-    pub(crate) fn sidebar_track(&self) -> Option<&str> {
-        match &self.sidebar.as_ref()?.level {
-            Level::Scores(level) => Some(&level.track.id),
-            Level::Tracks => None,
         }
     }
 }
@@ -1549,7 +1547,7 @@ pub(crate) fn album_art(path: Option<&str>, size: f32) -> Div {
 }
 
 /// The title, or `file_path`'s basename as the last resort.
-fn track_name(track: &TrackBrowserRow) -> String {
+pub(crate) fn track_name(track: &TrackBrowserRow) -> String {
     if let Some(title) = track.title.as_ref().filter(|t| !t.is_empty()) {
         return title.clone();
     }

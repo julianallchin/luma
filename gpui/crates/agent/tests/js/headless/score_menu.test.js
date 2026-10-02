@@ -4,8 +4,8 @@
 //   are findable by role and label like every other control.
 // - Deleting a score that holds clips asks first, quoting the row's count,
 //   and the row survives a cancel.
-// - Confirming removes it; when it was the score on the timeline, the editor
-//   lands in its defined `No score` state.
+// - Confirming removes it; when it was the score on the timeline, its tab
+//   closes.
 // - An empty score goes without a dialog: a confirmation that can only be
 //   answered one way is one nobody reads.
 
@@ -76,15 +76,19 @@ test(`deleting a score with clips asks first and the answer decides`, () => {
   expect(labels(after).length).toBe(listed.length - 1);
 });
 
-test(`deleting the open score leaves the editor with no score`, () => {
+test(`deleting the open score closes its tab`, () => {
   const ordinal = (s) => s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"));
   const level = toScores();
   const before = labels(level);
 
-  // Choosing a score from this level opens it and stays here: the list and
-  // the editor on the same document.
+  // Choosing a score from this level opens it and puts the sidebar away a
+  // double-click interval later; bring it back to have the list and the
+  // editor on the same document.
   app.click(withClips(level));
-  const open = until("the timeline on the chosen score", (s) => ordinal(s) !== undefined);
+  until("the timeline on the chosen score", (s) => ordinal(s) !== undefined);
+  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
+  app.action("luma::ToggleSidebar");
+  const open = until("the level back", (s) => withClips(s) !== undefined);
 
   // `#N` is a position and renumbers on delete; the clip count names the
   // score across the deletion — the fixture's one clip is on this one.
@@ -92,9 +96,9 @@ test(`deleting the open score leaves the editor with no score`, () => {
   const next = app.snapshot();
   // Either door: a score with clips asks, an empty one does not.
   if (dialog(next) !== undefined) app.click(lastDelete(next));
-  // The editor lets go at once; the list is re-read when the seam answers.
-  const gone = until("the editor off the score and the list re-read", (s) =>
-    s.findAll({ role: "text" }).some((n) => n.label === "No score")
+  // The score's tab closes at once; the list is re-read when the seam answers.
+  const gone = until("the tab closed and the list re-read", (s) =>
+    s.find({ role: "card", label: "Empty panel" }) !== undefined
       && rows(s).length === before.length - 1);
 
   expect(ordinal(gone)).toBe(undefined);
