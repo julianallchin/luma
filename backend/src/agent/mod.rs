@@ -26,6 +26,7 @@
 
 pub(crate) mod context;
 pub mod engine;
+pub mod figures;
 pub mod model;
 pub mod skills;
 pub mod subagent;
@@ -882,6 +883,14 @@ impl AgentService {
     /// Answers the transcript as it now stands.
     pub async fn record_stop(&self, thread_id: &str) -> Result<Transcript, AgentError> {
         turn::record_stop(self, thread_id).await
+    }
+
+    /// A python figure's PNG, by its stored `path`: from this machine's
+    /// cache, or downloaded with the signed-in session and cached.
+    pub async fn figure(&self, path: &str) -> Result<Vec<u8>, AgentError> {
+        figures::load(self.services.storage(), self.services.state_pool(), path)
+            .await
+            .map_err(AgentError::Storage)
     }
 
     pub(crate) async fn principal(&self) -> Result<Option<String>, AgentError> {

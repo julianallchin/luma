@@ -32,7 +32,7 @@ pub struct PythonCellResult {
 }
 
 /// A plot or headless scene frame the cell produced. `artifact_rel` locates
-/// its workspace file; `base64_png` supplies model delivery and synced history.
+/// its workspace file; `base64_png` is what the model is shown.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PythonCellFigure {
@@ -46,9 +46,10 @@ pub struct PythonCellFigure {
 /// output, and therefore the shape every reader of a persisted turn decodes:
 /// the chat panel, the detail view, the model-facing projection.
 ///
-/// It is [`PythonCellResult`] minus what only the run knew (`artifact_rel`,
-/// oversized figure bytes). Older rows carry fields this shape no longer has;
-/// serde ignores them, and so must every other decoder.
+/// It is [`PythonCellResult`] minus what only the run knew (`artifact_rel`),
+/// with each figure's bytes replaced by where they are kept. Older rows carry
+/// fields this shape no longer has; serde ignores them, and so must every
+/// other decoder.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PythonToolOutput {
@@ -62,15 +63,14 @@ pub struct PythonToolOutput {
     pub duration_ms: u64,
 }
 
-/// A figure as the transcript keeps it. New captures retain the image bytes;
-/// older append-only transcripts may contain dimensions alone.
+/// A figure as the transcript keeps it: its size, and the PNG's
+/// `agent-figures/<uid>/<sha>.png` path (see [`crate::agent::figures`]).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PythonStoredFigure {
     pub width: u32,
     pub height: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base64_png: Option<String>,
+    pub path: String,
 }
 
 /// What the agent is looking at, as the host can describe it.

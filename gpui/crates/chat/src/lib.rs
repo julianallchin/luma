@@ -214,6 +214,19 @@ impl Agent {
         async move { task.await.ok().flatten() }
     }
 
+    /// A python figure's PNG, by its stored path — see
+    /// [`luma_lib::agent::AgentService::figure`].
+    pub fn figure(
+        &self,
+        path: String,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + Send + use<> {
+        let service = self.service.clone();
+        let task = self
+            .runtime
+            .spawn(async move { service.figure(&path).await.map_err(|e| e.to_string()) });
+        async move { task.await.map_err(|error| error.to_string())? }
+    }
+
     /// Start a turn. The stream is built here rather than inside the spawned
     /// task so its steering handle can be handed back with it — a turn a host
     /// could not redirect would force the composer to lock while one ran.
@@ -1936,6 +1949,7 @@ impl AgentChat {
                         trailer: (last_item == Some(ix)).then_some(trailer).flatten(),
                         expanded: &state.expanded,
                         cells: &state.cells,
+                        agent: &state.agent,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         fold_px: &state.fold_px,
                         theme: &state.theme,

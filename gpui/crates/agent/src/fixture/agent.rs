@@ -166,7 +166,10 @@ impl Tool for ScriptedTool {
 
 /// The registry `entries` name, in their order. A shipped name that is not a
 /// shipped tool is an error, so a typo cannot quietly drop a tool.
-pub(super) fn registry(entries: &[ToolEntry]) -> Result<ToolRegistry, String> {
+pub(super) fn registry(
+    entries: &[ToolEntry],
+    storage: &luma_lib::storage::StorageRoot,
+) -> Result<ToolRegistry, String> {
     use luma_lib::agent::tools::{python::PythonTool, skill::SkillTool, subagent::SubagentTool};
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
     for entry in entries {
@@ -174,7 +177,7 @@ pub(super) fn registry(entries: &[ToolEntry]) -> Result<ToolRegistry, String> {
             ToolEntry::Scripted(tool) => tools.push(Arc::new(tool.clone())),
             ToolEntry::Shipped(name) => {
                 let tool: Arc<dyn Tool> = match name.as_str() {
-                    "python" => Arc::new(PythonTool),
+                    "python" => Arc::new(PythonTool::new(storage.clone())),
                     "skill" => Arc::new(SkillTool),
                     "subagent" => Arc::new(SubagentTool),
                     _ => return Err(format!("no shipped tool {name:?}")),

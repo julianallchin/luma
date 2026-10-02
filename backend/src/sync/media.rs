@@ -1,4 +1,4 @@
-//! Media transfer: audio, stems and album art, on its own clock.
+//! Media transfer: audio, stems, album art and agent figures, on its own clock.
 //!
 //! Bytes go through Supabase Storage rather than the row protocol, so this is a
 //! second, slower loop: while a session exists, upload what has a local file
@@ -111,6 +111,16 @@ impl Media {
         )
         .await?;
         files::upload_pending_album_art(
+            &self.pool,
+            remote,
+            &uid,
+            &token,
+            &mut stats,
+            host,
+            &self.progress,
+        )
+        .await?;
+        files::upload_pending_agent_figures(
             &self.pool,
             remote,
             &uid,

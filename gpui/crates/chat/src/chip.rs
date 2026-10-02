@@ -511,7 +511,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
         )
         .when(openness > 0.0, |el| {
             // Keep details aligned with the label.
-            let card = div().child(detail_card(tool, cell.as_deref(), theme, window));
+            let card = div().child(detail_card(tool, cell.as_deref(), ctx, window));
             el.child(if openness >= 1.0 {
                 // Fully open renders at its natural height. Clamping a settled
                 // card to a computed number would turn any drift between
@@ -587,9 +587,10 @@ fn two_tone(parts: &Label, phase: Option<f32>, theme: &Theme) -> gpui::StyledTex
 /// Painted on the mono face and never wrapped — one source line is one card
 /// line, which is what keeps the open height a multiplication rather than a
 /// measurement.
-fn detail_card(tool: &ToolPart, cell: Option<&Cell>, theme: &Theme, window: &Window) -> AnyElement {
+fn detail_card(tool: &ToolPart, cell: Option<&Cell>, ctx: &RowCtx, window: &Window) -> AnyElement {
+    let theme = ctx.theme;
     if let Some(cell) = cell {
-        return cell.card(theme, window);
+        return cell.card(theme, ctx.agent, window);
     }
     let failed = matches!(tool.state, ToolState::OutputError);
     let answer = match (&tool.error_text, &tool.output) {

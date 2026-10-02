@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{AnyView, App, AppContext as _, Window};
+use luma_lib::storage::StorageRoot;
 use luma_ui::runtime::Runtime;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
@@ -228,10 +229,10 @@ impl Fixture {
         if fixture.graph_score.is_some() && !fixture.clips.is_empty() {
             return Err("graph_score and clips are exclusive".into());
         }
-        if let Some(tools) = &fixture.tools {
-            agent::registry(tools)?;
-        }
         fixture.name = name.into();
+        if let Some(tools) = &fixture.tools {
+            agent::registry(tools, &StorageRoot::from_path(config_dir(&fixture.name)))?;
+        }
         Ok(fixture)
     }
 
@@ -405,6 +406,7 @@ impl Fixture {
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
+        let storage = StorageRoot::from_path(config_dir.clone());
         let root: crate::RootFactory =
             Arc::new(move |window: &mut Window, cx: &mut App| -> AnyView {
                 luma_app::init(cx);
@@ -430,7 +432,10 @@ impl Fixture {
                 }
                 if let Some(tools) = &tools {
                     // Checked in `from_json`, so this cannot fail here.
-                    library.set_agent_tools(agent::registry(tools).expect("fixture tools"));
+                    library.set_agent_tools(
+                        agent::registry(tools, &storage)
+                            .expect("fixture tools"),
+                    );
                 }
                 let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))

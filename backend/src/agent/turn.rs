@@ -211,11 +211,9 @@ impl Turn {
         // the editor shows travels with each user message instead.
         let system = super::system_prompt().to_string();
 
-        let registry = self
-            .service
-            .tools
-            .clone()
-            .unwrap_or_else(|| tools::registry_for_context(authored));
+        let registry = self.service.tools.clone().unwrap_or_else(|| {
+            tools::registry_for_context(authored, self.service.services().storage())
+        });
         // Only a subagent thread works on a draft; a root thread edits live.
         let draft_id = match (authored, detail.thread.score_id.as_deref()) {
             (true, Some(score_id)) if detail.thread.parent_thread_id.is_some() => {
@@ -1297,13 +1295,11 @@ const CONTINUATION_MAX_BYTES: usize = 200_000;
 const RECENT_MESSAGES: usize = 2;
 
 /// Rebuild the whole thread as one text prompt for a resume-less fallback
-/// session (see `external_row`). This is pure token cost with no visual
-/// value for any image it carries — it lands in a JSON *string*, not an
-/// `image` content block, so a figure can never render for the model — and an
-/// unbounded reserialize of a long thread is what made one real conversation
-/// open a 571k-token prompt cache on its first turn. So: figures always
-/// become a short placeholder, and older tool-output text is truncated toward
-/// a bounded total size, with the most recent turn kept richer.
+/// session (see `external_row`). An unbounded reserialize of a long thread is
+/// what made one real conversation open a 571k-token prompt cache on its first
+/// turn. So older tool-output text is truncated toward a bounded total size,
+/// with the most recent turn kept richer. A stored figure is only its size and
+/// path, so it costs nothing to keep.
 fn continuation(transcript: &Transcript) -> String {
     let relevant: Vec<&transcript::AgentChatMessage> = transcript
         .messages
@@ -1344,8 +1340,8 @@ fn continuation(transcript: &Transcript) -> String {
 
 /// One transcript part as `continuation()` replays it: unchanged, except the
 /// editor context is the text block the model reads everywhere else, and a
-/// tool call's stored output has its figures replaced and its text fields
-/// clamped to `budget` characters.
+/// tool call's stored output has its text fields clamped to `budget`
+/// characters.
 fn continuation_part(part: &transcript::AgentChatPart, budget: usize) -> Value {
     let mut value = part.to_value();
     if value["type"] == context::PART_TYPE {
@@ -1353,42 +1349,12 @@ fn continuation_part(part: &transcript::AgentChatPart, budget: usize) -> Value {
             return serde_json::json!({"type": "text", "text": context::render(&context)});
         }
     }
-    if let transcript::AgentChatPart::Tool(tool) = part {
+    if let transcript::AgentChatPart::Tool(_) = part {
         if let Some(output) = value.get_mut("output") {
-            let purpose = tool
-                .input
-                .as_ref()
-                .and_then(|input| input.get("purpose"))
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| tool.tool_name());
-            strip_figures(output, purpose);
             clamp_tool_text(output, budget);
         }
     }
     value
-}
-
-/// Replace every stored figure's `base64Png` with a short placeholder. A
-/// figure landing in `continuation()`'s prompt text is never seen as a
-/// picture by the model regardless of size, so the bytes buy nothing.
-fn strip_figures(output: &mut Value, purpose: &str) {
-    let Some(figures) = output.get_mut("figures").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for figure in figures {
-        let Some(map) = figure.as_object_mut() else {
-            continue;
-        };
-        if map.remove("base64Png").is_none() {
-            continue;
-        }
-        let width = map.get("width").and_then(Value::as_u64).unwrap_or(0);
-        let height = map.get("height").and_then(Value::as_u64).unwrap_or(0);
-        map.insert(
-            "base64Png".into(),
-            Value::String(format!("[figure: {purpose}, {width}x{height}]")),
-        );
-    }
 }
 
 /// Clamp every string field of a stored tool output to `budget` characters.
@@ -1407,9 +1373,6 @@ fn clamp_tool_text(value: &mut Value, budget: usize) {
             .for_each(|item| clamp_tool_text(item, budget)),
         Value::Object(map) => {
             for (key, entry) in map.iter_mut() {
-                if key == "base64Png" {
-                    continue; // already a placeholder, or never present
-                }
                 let tail_share = if matches!(key.as_str(), "traceback" | "stderr" | "errorText") {
                     0.9
                 } else {
@@ -1515,12 +1478,12 @@ mod continuation_tests {
         }
     }
 
-    /// A long thread of old turns, each carrying a full-resolution figure and
-    /// a large stdout — exactly the shape that made one real conversation open
-    /// a 571k-token prompt cache on its very first turn (see turn.rs's
-    /// `continuation` doc comment).
+    /// A long thread of old turns, each with a figure and a large stdout —
+    /// the shape that made one real conversation open a 571k-token prompt
+    /// cache on its very first turn (see turn.rs's `continuation` doc
+    /// comment).
     #[test]
-    fn continuation_strips_every_figure_and_bounds_total_size() {
+    fn continuation_keeps_figure_paths_and_bounds_total_size() {
         let old_output = serde_json::json!({
             "status": "ok",
             "stdout": "x".repeat(10_000),
@@ -1528,7 +1491,7 @@ mod continuation_tests {
             "repr": null,
             "traceback": null,
             "notices": [],
-            "figures": [{"width": 640, "height": 480, "base64Png": "A".repeat(2_000_000)}],
+            "figures": [{"width": 640, "height": 480, "path": "agent-figures/u1/abc.png"}],
             "durationMs": 12,
         });
 
@@ -1541,12 +1504,8 @@ mod continuation_tests {
         let text = continuation(&transcript);
 
         assert!(
-            !text.contains(&"A".repeat(1_000)),
-            "figure bytes leaked into the continuation prompt"
-        );
-        assert!(
-            text.contains("[figure: plot the rig, 640x480]"),
-            "expected a figure placeholder, got: {text}"
+            text.contains("agent-figures/u1/abc.png"),
+            "expected the figure's path, got: {text}"
         );
         assert!(
             text.len() < CONTINUATION_MAX_BYTES * 2,

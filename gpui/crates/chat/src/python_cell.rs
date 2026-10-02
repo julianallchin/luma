@@ -5,16 +5,21 @@
 //! tool it *does* have a reading of: what is stored is a typed cell result
 //! ([`PythonToolOutput`], the very struct the agent persisted), and a reader
 //! wants the code highlighted, the streams told apart and the figures as
-//! pictures — not a `figures  [{"width":1100,"base64Png":"iVBOR…` row.
+//! pictures — not a `figures  [{"width":1100,"path":"agent-figures/…` row.
 //!
 //! # A cell is read once, not once a frame
 //!
-//! A visible row re-renders every frame, and a call's stored output carries its
-//! figures as base64 — megabytes of it. Deserializing that, and decoding the
-//! PNGs (gpui names an image by hashing its bytes, so even the *identity* is
-//! O(size)), is not something a scrolling list can do per frame. [`Cells`] is
+//! A visible row re-renders every frame, and deserializing a call's stored
+//! output is not something a scrolling list should do per frame. [`Cells`] is
 //! therefore the entry point: it reads a call once and hands back an `Rc`,
 //! re-reading only when the call itself moves.
+//!
+//! # A figure is a path
+//!
+//! A stored figure names its PNG (see [`luma_lib::agent::figures`]). The card
+//! loads it through gpui's asset cache — from this machine's figure cache, or
+//! from Storage when another device drew it — so a figure is fetched and
+//! decoded once per app, not once per frame.
 //!
 //! # One reading feeds both the height and the element
 //!
@@ -25,13 +30,14 @@
 //! and one that is not even available until the decode lands.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::mem::Discriminant;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use base64::Engine as _;
 use gpui::{
-    div, img, prelude::*, px, AnyElement, Hsla, Image, ImageFormat, ObjectFit, SharedString, Window,
+    div, img, prelude::*, px, AnyElement, App, Asset, Hsla, Image, ImageCacheError, ImageFormat,
+    ImageSource, ObjectFit, SharedString, Window,
 };
 use luma_lib::agent::{ToolPart, ToolState};
 use luma_lib::models::agent_execution::{PythonStoredFigure, PythonToolOutput};
@@ -184,7 +190,7 @@ impl Cell {
         };
         let figures = output
             .as_ref()
-            .map(|output| output.figures.iter().map(Figure::decode).collect())
+            .map(|output| output.figures.iter().map(Figure::read).collect())
             .unwrap_or_default();
 
         Some(Self {
@@ -223,7 +229,7 @@ impl Cell {
     }
 
     /// The card: the code, then what the cell said, then what it drew.
-    pub fn card(&self, theme: &Theme, window: &Window) -> AnyElement {
+    pub fn card(&self, theme: &Theme, agent: &crate::Agent, window: &Window) -> AnyElement {
         let syntax = Syntax::new(theme);
         let highlight = syntax.highlight(Some("python"), &self.code);
         let opts = RenderOptions::settled(self.key.clone());
@@ -260,7 +266,11 @@ impl Cell {
                     theme,
                 )
             }))
-            .children(self.figures.iter().map(|figure| figure.element(theme)))
+            .children(
+                self.figures
+                    .iter()
+                    .map(|figure| figure.element(theme, agent)),
+            )
             .into_any_element()
     }
 }
@@ -357,16 +367,22 @@ fn clipped(lines: Vec<String>) -> Vec<SharedString> {
     out
 }
 
-/// One matplotlib figure, decoded.
+/// One matplotlib figure, by where its PNG is kept.
 struct Figure {
     width: u32,
     height: u32,
-    /// `None` when the transcript did not keep the bytes — a single figure over
-    /// the persistence budget — or when they will not decode.
-    image: Option<Arc<Image>>,
+    path: SharedString,
 }
 
 impl Figure {
+    fn read(stored: &PythonStoredFigure) -> Self {
+        Self {
+            width: stored.width,
+            height: stored.height,
+            path: SharedString::from(stored.path.clone()),
+        }
+    }
+
     /// This figure's declared box height — see [`FIGURE_HEIGHT_MAX`].
     fn height(&self) -> f32 {
         if self.width == 0 {
@@ -376,56 +392,89 @@ impl Figure {
             .clamp(FIGURE_HEIGHT_MIN, FIGURE_HEIGHT_MAX)
     }
 
-    fn decode(stored: &PythonStoredFigure) -> Self {
-        let image = stored
-            .base64_png
-            .as_ref()
-            .and_then(|data| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(data.as_bytes())
-                    .ok()
-            })
-            .map(|bytes| Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
-        Self {
-            width: stored.width,
-            height: stored.height,
-            image,
-        }
-    }
-
-    fn element(&self, theme: &Theme) -> AnyElement {
-        let frame = div()
+    fn element(&self, theme: &Theme, agent: &crate::Agent) -> AnyElement {
+        let source = FigureSource {
+            path: self.path.clone(),
+            agent: agent.clone(),
+        };
+        let png = ImageSource::Custom(Arc::new(
+            move |window: &mut Window, cx: &mut App| match window
+                .use_asset::<FigurePng>(&source, cx)?
+            {
+                Ok(image) => image.use_render_image(window, cx).map(Ok),
+                Err(error) => Some(Err(ImageCacheError::Io(Arc::new(std::io::Error::other(
+                    error.to_string(),
+                ))))),
+            },
+        ));
+        // Loading and failed look the same: the figure's slot, saying what
+        // it holds. Both fill the declared box, so the card does not resize
+        // under a reader when the picture lands.
+        let (width, height, faint) = (self.width, self.height, theme.text_faint);
+        let placeholder = move || {
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::wash(0.04))
+                .text_size(px(11.0))
+                .text_color(faint)
+                .child(SharedString::from(format!("figure {width}×{height}")))
+                .into_any_element()
+        };
+        div()
             .h(px(self.height()))
             .flex()
             .flex_none()
             .items_center()
             .justify_center()
             .overflow_hidden()
-            .rounded(px(luma_ui::radius::ROW));
-        let Some(image) = self.image.clone() else {
-            // A figure the transcript could not keep still holds its slot and
-            // says so, rather than leaving a gap the reader has to guess at.
-            return frame
-                .bg(theme::wash(0.04))
-                .text_size(px(11.0))
-                .text_color(theme.text_faint)
-                .child(SharedString::from(format!(
-                    "figure {}×{} was too large to keep",
-                    self.width, self.height
-                )))
-                .into_any_element();
-        };
-        frame
+            .rounded(px(luma_ui::radius::ROW))
             .child(
-                img(image)
+                img(png)
                     .size_full()
                     .object_fit(ObjectFit::Contain)
-                    // The decode is asynchronous. Both the placeholder and the
-                    // picture fill the same declared box, so the card does not
-                    // resize under a reader one frame after they opened it.
-                    .with_loading(|| div().size_full().into_any_element()),
+                    .with_loading(placeholder.clone())
+                    .with_fallback(placeholder),
             )
             .into_any_element()
+    }
+}
+
+/// A figure to load: its path, and the agent that can fetch it. Named by the
+/// path alone, which is what the asset cache keys on.
+#[derive(Clone)]
+struct FigureSource {
+    path: SharedString,
+    agent: crate::Agent,
+}
+
+impl Hash for FigureSource {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+    }
+}
+
+/// A figure's PNG, from the local cache or else from Storage. A failure is
+/// kept for the session, like any other asset.
+enum FigurePng {}
+
+impl Asset for FigurePng {
+    type Source = FigureSource;
+    type Output = Result<Arc<Image>, SharedString>;
+
+    fn load(
+        source: Self::Source,
+        _cx: &mut App,
+    ) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
+        let bytes = source.agent.figure(source.path.to_string());
+        async move {
+            bytes
+                .await
+                .map(|bytes| Arc::new(Image::from_bytes(ImageFormat::Png, bytes)))
+                .map_err(SharedString::from)
+        }
     }
 }
 
@@ -576,7 +625,7 @@ mod tests {
         // wide plot gets a short box, a stage render the tall one.
         let boxed = |width: u32, height: u32| {
             cell(stored(json!({
-                "figures": [{ "width": width, "height": height }],
+                "figures": [{ "width": width, "height": height, "path": "agent-figures/u/a.png" }],
             })))
             .height()
                 - bare.height()
@@ -587,24 +636,21 @@ mod tests {
         assert_eq!(boxed(4000, 10), FIGURE_HEIGHT_MIN);
     }
 
-    /// A figure decodes once per call, not once a frame — the property the
-    /// cache exists for, and the one a scrolling list depends on.
+    /// A call is read once, not once a frame — the property the cache
+    /// exists for, and the one a scrolling list depends on.
     #[test]
     fn a_settled_call_is_read_once() {
-        // 1×1 transparent PNG.
-        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk\
-                   YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
         let tool = part(
             "python",
             json!({ "code": "1" }),
             Some(stored(json!({
-                "figures": [{ "width": 1, "height": 1, "base64Png": png }],
+                "figures": [{ "width": 1, "height": 1, "path": "agent-figures/u/a.png" }],
             }))),
         );
         let mut cells = Cells::default();
         let first = cells.read(&tool).unwrap();
         let second = cells.read(&tool).unwrap();
-        assert!(first.figures[0].image.is_some());
+        assert_eq!(first.figures[0].path.as_ref(), "agent-figures/u/a.png");
         assert!(
             Rc::ptr_eq(&first, &second),
             "a second render must reuse the reading, not redo it"
@@ -615,15 +661,5 @@ mod tests {
         let mut grown = tool.clone();
         grown.input = Some(json!({ "code": "1 + 1" }));
         assert!(!Rc::ptr_eq(&first, &cells.read(&grown).unwrap()));
-    }
-
-    /// A figure the transcript could not keep still occupies its slot, so a
-    /// card's height does not depend on what was persisted.
-    #[test]
-    fn a_dropped_figure_keeps_its_box() {
-        let cell = cell(stored(json!({
-            "figures": [{ "width": 9, "height": 9 }],
-        })));
-        assert!(cell.figures[0].image.is_none());
     }
 }
