@@ -838,6 +838,15 @@ enum Gesture {
         /// The line's travel from alpha 0 to 1, in pixels.
         travel: f32,
     },
+    /// Panning: the lanes follow the pointer on both axes, as a bare wheel
+    /// moves them. The middle button pans, and so does the left one with the
+    /// platform key and Alt held (Cmd+Option on a Mac, Ctrl+Alt elsewhere).
+    /// `last` is where the previous move left the pointer; `button` is the
+    /// one whose release ends the pan.
+    Pan {
+        last: Point<Pixels>,
+        button: MouseButton,
+    },
 }
 
 /// Which part of a clip a press took hold of.
@@ -2601,8 +2610,17 @@ impl Luma {
             let Some(mut gesture) = editor.gesture.take() else {
                 return;
             };
-            if let Gesture::Clips { moved, .. } = &mut gesture {
-                *moved = true;
+            match &mut gesture {
+                Gesture::Clips { moved, .. } => *moved = true,
+                Gesture::Pan { last, .. } => {
+                    let delta = at - *last;
+                    *last = at;
+                    editor.anchor = None;
+                    editor.zoom_motion = None;
+                    editor.set_scroll(editor.view.scroll - f32::from(delta.x));
+                    editor.set_lift(editor.view.lift + f32::from(delta.y));
+                }
+                _ => {}
             }
             match &gesture {
                 Gesture::Scrub => {
@@ -2643,6 +2661,7 @@ impl Luma {
                     editor.sync_cursor();
                 }
                 Gesture::Alpha { .. } => editor.drag_alpha(&gesture, at),
+                Gesture::Pan { .. } => {}
             }
             editor.gesture = Some(gesture);
         });
@@ -2651,11 +2670,26 @@ impl Luma {
         }
     }
 
+    /// A press that pans, unless another gesture already holds the canvas.
+    fn timeline_pan(&mut self, at: Point<Pixels>, button: MouseButton, cx: &mut Context<Self>) {
+        self.with_track_editor(cx, |editor| {
+            if editor.gesture.is_none() {
+                editor.gesture = Some(Gesture::Pan { last: at, button });
+            }
+        });
+    }
+
     /// A release. An edge that actually moved is written back; a press that
     /// only selected is not, because nothing changed.
-    fn timeline_release(&mut self, cx: &mut Context<Self>) {
+    fn timeline_release(&mut self, button: MouseButton, cx: &mut Context<Self>) {
+        // Each button ends only its own gesture: a pan ends on the button
+        // that started it, and everything else on the left one.
         match self.workspace.active_body() {
-            Some(Body::TrackEditor(state)) if state.gesture.is_some() => {}
+            Some(Body::TrackEditor(state))
+                if state.gesture.as_ref().is_some_and(|gesture| match gesture {
+                    Gesture::Pan { button: held, .. } => *held == button,
+                    _ => button == MouseButton::Left,
+                }) => {}
             _ => return,
         }
         let mut save = false;
@@ -3560,8 +3594,9 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let registered = scene.clone();
     // Over an alpha line, the cursor says what a drag does. A drag keeps it
     // wherever the pointer goes.
-    let alpha_cursor = match &state.gesture {
+    let cursor = match &state.gesture {
         Some(Gesture::Alpha { grab, .. }) => Some((grab.part.cursor(true), true)),
+        Some(Gesture::Pan { .. }) => Some((CursorStyle::ClosedHand, true)),
         Some(_) => None,
         None => state.alpha_hover.map(|part| (part.cursor(false), false)),
     };
@@ -3602,7 +3637,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                 },
                 move |bounds, hitbox, window, cx| {
                     paint(bounds, &scene, window, cx);
-                    match alpha_cursor {
+                    match cursor {
                         Some((style, true)) => window.set_window_cursor_style(style),
                         Some((style, false)) => window.set_cursor_style(style, &hitbox),
                         None => {}
@@ -3834,7 +3869,8 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
                 let Some(Body::TrackEditor(editor)) = this.workspace.active_body_mut() else {
                     return false;
                 };
-                if event.button != MouseButton::Left || event.click_count != 2 {
+                let pans = event.modifiers.secondary() && event.modifiers.alt;
+                if event.button != MouseButton::Left || event.click_count != 2 || pans {
                     editor.pressed_clip = None;
                     return false;
                 }
@@ -3856,10 +3892,12 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
             return;
         }
         let at = event.position;
-        // Three gestures share one press, told apart by button and count, the
-        // way the platform tells them apart: the right button offers an
-        // insertion, a second left click opens the clip's pattern, and a first
-        // left click is the pointer contract in `timeline_press`.
+        // The gestures that share one press, told apart by button, keys and
+        // count, the way the platform tells them apart: the right button
+        // offers an insertion, the middle button (or the left with the
+        // platform key and Alt) pans, a second left click opens the clip's
+        // pattern, and a first left click is the pointer contract in
+        // `timeline_press`.
         match (event.button, event.click_count) {
             (MouseButton::Right, _) => {
                 pressed.update(cx, |this, cx| {
@@ -3870,6 +3908,14 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
                         }
                     }
                 });
+            }
+            (MouseButton::Middle, _) => {
+                pressed.update(cx, |this, cx| {
+                    this.timeline_pan(at, MouseButton::Middle, cx)
+                });
+            }
+            (MouseButton::Left, _) if event.modifiers.secondary() && event.modifiers.alt => {
+                pressed.update(cx, |this, cx| this.timeline_pan(at, MouseButton::Left, cx));
             }
             (MouseButton::Left, 2) => {
                 pressed.update(cx, |this, cx| this.timeline_open_pattern(at, cx));
@@ -3892,8 +3938,11 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
 
     let released = app.clone();
     window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-            released.update(cx, |this, cx| this.timeline_release(cx));
+        if phase == DispatchPhase::Bubble
+            && matches!(event.button, MouseButton::Left | MouseButton::Middle)
+        {
+            let button = event.button;
+            released.update(cx, |this, cx| this.timeline_release(button, cx));
         }
     });
 
