@@ -11,6 +11,7 @@
 mod check;
 pub(crate) mod clock_table;
 mod definitions;
+pub mod grid;
 mod heads;
 pub(crate) mod kernels;
 mod lower;

@@ -137,7 +137,7 @@ Kinds (14): `time`, `space`, `noise`, `audio`, `curve`, `math`, `value`, `mirror
 | Change | v3 |
 |---|---|
 | alpha | Opacity. `color`: light = color × brightness; then the clip's light blends with the light below by its blend mode, and the result mixes with the light below by alpha: `out = below + (blend(below, clip) − below) × alpha`. `strobe` the same on the shutter (shutter = rate). `aim` unchanged (alpha is the aim's weight). Alpha 0 shows the clip below, in every blend mode. The overlap ranking (5.3) still multiplies all factors, alpha included. The lighting tensor's channel 11 is the clip's alpha for color and strobe (the aim weight for aim); `FixtureOutput.alpha`. |
-| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` degrees, any (T, H); 360° is one event. Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase (0 too), `τ = fract(τ + phase / 360)`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
+| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` degrees, any (T, H); 360° is one event. A number in `every`, `duration` or `delay` must be on the beat grid: a multiple of 1/32 or of 1/24 (within 1e-9), and every and duration are at least 1/32. A wire into these inputs is free. The UI snaps a typed number to the nearest grid value (`clip_graph::grid::snap`). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase (0 too), `τ = fract(τ + phase / 360)`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
 | shuffle | `shuffle(heads, time)`: `time` is a wire from a time node; with `every`, a new order per event; without, one order. |
 | space | `space(heads, direction, centre, at, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0): `x = at + (a − at − shift) / scale`, `at` the origin (0–1, empty 0: the old `(a − shift) / scale`); with `wrap` it tiles, `x = fract(x)` (decisions 50, 52). The ruler `a` is measured on the selection before any fold. `centre` (selection point, T) is read by radial and angle. |
 | mirror | `mirror(heads, direction, at)`. `at` (selection number 0–1, T): the plane sits at `at` along the direction across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. A mirror moves heads, never a space's ruler. |
@@ -355,6 +355,9 @@ Shutter = rate × alpha. Blend modes: the light set.
 |---|---|---|---|---|---|
 | every | number | beats | > 0 | yes (T, H) | error: `clock1.every needs beats, such as every=1` |
 | duration | number | beats | > 0 | yes (T, H) | same as every |
+
+A number in every or duration is on the beat grid: a multiple of 1/32 or of
+1/24, at least 1/32. A wire is free. Section 0 has the time node's rule.
 
 Events start at the clip start. Event `k` is born at the beat where the
 integrated `every` reaches `k` (the existing clock table handles a varying
@@ -606,7 +609,9 @@ all run it. Python does not check on its own.
 3. Value: right type for the input (number, vector, color, points, gradient,
    list); finite; in range; points valid (curve rules); gradient valid; a
    direction not zero; a list only on a 0–1 number input, with two or more
-   items, each a number in range or a number curve.
+   items, each a number in range or a number curve. A number in a time
+   node's `every`, `duration` or `delay` is a multiple of 1/32 or of 1/24
+   of a beat; a wire there is free.
 4. Wire: right wire type; a curve's kind fits its destination; a curve that
    feeds two inputs has one unit; a curve's low/high in the destination's range
    (interval: `[min(low, high), max(low, high)]`, with wire bounds from their
@@ -638,6 +643,7 @@ as "Curve 2"). Examples, verbatim:
 - `aim1.yaw: expected a number -180–180 (degrees) or a number curve; got a list of 2 items. Example: yaw=0. A list multiplies only on an input with range 0–1, such as brightness`
 - `time1.phase: expected wires of one clock; got clock2 through curve4 while x follows clock1. Example: use the same clock for both`
 - `clock1.every: expected beats above 0; got 0. Example: every=1, or leave the clock out for once over the clip`
+- `time1.every: expected a beat on the grid (a multiple of 1/32 or 1/24); got 0.1. Example: every=3/32`
 - `curve5.low: expected a vector for aim1.direction; got 0. Example: low=(0, 1, -0.5), high=(0, 0.5, -1)`
 - `curve5: expected low and high not opposite for space1.direction; got (1,0,0) and (-1,0,0). Example: rotate with kind="angle" instead`
 - `graph: expected one output node; got color1 and strobe1. Example: one clip per output`

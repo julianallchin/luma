@@ -15,7 +15,7 @@ use luma_ui::arg::noise;
 use luma_ui::arg::strip::{self, CurveStrip, StripChanged, StripValue};
 use luma_ui::icons::IconName;
 use luma_ui::{icon_button, rpx, Enabled};
-use p::clip_graph::{definition, ClipGraph, Input, Kind, Node};
+use p::clip_graph::{definition, grid, ClipGraph, Input, Kind, Node};
 
 use super::*;
 
@@ -307,6 +307,7 @@ fn item_field(
         spec,
         canvas::NODE_FIELD_W - CONTROL_HEIGHT - VECTOR_GAP,
         luma_ui::arg::number::DECIMALS,
+        None,
         window,
         cx,
     );
@@ -331,6 +332,7 @@ fn number_field(
     spec: edit::Spec,
     width: f32,
     decimals: usize,
+    snap: Option<Box<dyn Fn(f64) -> f64>>,
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> Entity<DraftedNumber> {
@@ -347,11 +349,24 @@ fn number_field(
             cx,
         )
         .with_decimals(decimals, cx);
+        let field = match snap {
+            Some(snap) => field.with_snap(snap),
+            None => field,
+        };
         match edit::suffix(spec.unit) {
             Some(unit) => field.with_unit(unit, cx),
             None => field,
         }
     })
+}
+
+/// A time node's constant every, duration and delay commit on the beat
+/// grid: a multiple of 1/32 or 1/24.
+fn grid_snap(graph: &ClipGraph, id: &str, input: &str) -> Option<Box<dyn Fn(f64) -> f64>> {
+    let kind = graph.nodes.get(id)?.kind;
+    let input = input.to_owned();
+    grid::on_grid(kind, &input)
+        .then(|| Box::new(move |beats| grid::snap(kind, &input, beats)) as Box<dyn Fn(f64) -> f64>)
 }
 
 fn field_name(id: &str, input: &str) -> String {
@@ -382,6 +397,7 @@ fn field(
                 spec,
                 canvas::NODE_FIELD_W,
                 luma_ui::arg::number::DECIMALS,
+                grid_snap(graph, id, input),
                 window,
                 cx,
             );
@@ -408,6 +424,7 @@ fn field(
                     spec,
                     VECTOR_FIELD_W,
                     VECTOR_DECIMALS,
+                    None,
                     window,
                     cx,
                 );
