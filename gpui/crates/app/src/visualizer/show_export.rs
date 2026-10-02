@@ -246,7 +246,10 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
             return Err("Cancelled".into());
         }
         // The frame ends on the tick, a frame interval after the one before.
-        let bass = shot.bass.as_ref().map_or(0.0, |bass| bass.bass_at(tick.score));
+        let bass = shot
+            .bass
+            .as_ref()
+            .map_or(0.0, |bass| bass.bass_at(tick.score));
         let moment = luma_render::footage::moment(tick.clock, 1.0 / f64::from(FPS), bass);
         let universe = motors.step(tick.clock, tick.score, sample(tick.score));
         let frame = build_frame_at(
