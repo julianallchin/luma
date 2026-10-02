@@ -307,6 +307,49 @@ fn rule_3_value() {
     );
 }
 
+/// A time node's constant every, duration and delay lie on the beat grid: a
+/// multiple of 1/32 or 1/24. A wire is free.
+#[test]
+fn rule_3_beats_lie_on_the_grid() {
+    let timed = |input: &str, value: Value| {
+        json!({
+            "time1": {"kind": "time", "inputs": {"every": 1, input: value}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})
+    };
+    for value in [1. / 3., 2. / 3., 0.25, 1. / 32., 7. / 8., 4.] {
+        for input in ["every", "duration", "delay"] {
+            graph(timed(input, json!(value))).check().unwrap();
+        }
+    }
+    graph(timed("delay", json!(-1. / 6.))).check().unwrap();
+    for (value, example) in [
+        ("0.1", "3/32"),
+        ("0.3333", "1/3"),
+        ("0.333333", "1/3"),
+        ("8.000075", "8"),
+        ("0.9", "29/32"),
+    ] {
+        assert_eq!(
+            error(timed("every", json!(value.parse::<f64>().unwrap()))),
+            format!("time1.every: expected a beat on the grid (a multiple of 1/32 or 1/24); got {value}. Example: every={example}")
+        );
+    }
+    assert_eq!(
+        error(timed("delay", json!(-0.4))),
+        "time1.delay: expected a beat on the grid (a multiple of 1/32 or 1/24); got -0.4. Example: delay=-13/32"
+    );
+    // A wired every is free, and so are its curve's low and high.
+    graph(json!({
+        "time2": {"kind": "time"},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "low": 0.1, "high": 0.3333}},
+        "time1": {"kind": "time", "inputs": {"every": {"node": "curve2"}}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+    .check()
+    .unwrap();
+}
+
 // ---- rule 4: wire ----
 
 #[test]

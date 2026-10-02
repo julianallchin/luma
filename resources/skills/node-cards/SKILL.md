@@ -171,9 +171,11 @@ The clip end cuts an event. With no every and a duration, there is one event
 of that length from the clip start. Two time nodes whose every and duration
 are equal (the same numbers or the same wires) share one set of events.
 
-Write triplets as fractions: `every=1/3`, `duration=1/6`, `delay=2/3`.
-Never write `0.333` or `0.3333`: it is not a third, and it drifts off
-the beat and off the triplet grid.
+A number in every, duration or delay must be on the beat grid: a multiple
+of 1/32 or of 1/24. The smallest every and duration is 1/32. A wire (a curve
+or math) into these inputs is free. Write triplets as fractions:
+`every=1/3`, `duration=1/6`, `delay=2/3`. Never write `0.333` or `0.3333`:
+it is not a third, and the checker refuses it.
 
 `p` is the progress: the age of the event (or of the clip) over its
 duration, 0–1. Each head then gets its own clock: τ = p − delay / duration.
@@ -427,6 +429,7 @@ Examples:
 - `math1.values: expected exactly two items for -; got 3. Example: values=[curve1, curve2]`
 - `curve1.gradient: expected a gradient because kind is color; got nothing. Example: gradient="Rainbow"`
 - `time1.every: expected beats above 0; got 0. Example: every=1, or leave every out for once over the clip`
+- `time1.every: expected a beat on the grid (a multiple of 1/32 or 1/24); got 0.3333. Example: every=1/3`
 - `graph: expected one output node; got color1 and strobe1. Example: one clip per output`
 - `clip: expected a name; got none. Example: name="Kick chase"`
 

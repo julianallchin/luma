@@ -190,6 +190,9 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     decimals: usize,
     /// Whether an exact musical fraction shows as one: a field in beats.
     fractions: bool,
+    /// What a commit stores in place of the typed value: the nearest grid
+    /// beat for a time node's constant every, duration and delay.
+    snap: Option<Box<dyn Fn(T) -> T>>,
     _subs: [Subscription; 2],
 }
 
@@ -244,6 +247,7 @@ impl<T: DraftValue> DraftedNumber<T> {
             per: None,
             decimals: DECIMALS,
             fractions: false,
+            snap: None,
             _subs,
         }
     }
@@ -266,6 +270,14 @@ impl<T: DraftValue> DraftedNumber<T> {
         self.fractions = unit == "beats";
         let text = self.shown();
         self.input.update(cx, |input, cx| input.set_text(text, cx));
+        self
+    }
+
+    /// Store `snap(value)` on a commit, and show it: a typed 0.1 beat
+    /// commits as 3/32.
+    #[must_use]
+    pub fn with_snap(mut self, snap: impl Fn(T) -> T + 'static) -> Self {
+        self.snap = Some(Box::new(snap));
         self
     }
 
@@ -343,6 +355,7 @@ impl<T: DraftValue> DraftedNumber<T> {
             }
             _ => T::parse(&draft, self.min, self.max),
         };
+        let parsed = parsed.map(|value| self.snap.as_ref().map_or(value, |snap| snap(value)));
         match parsed {
             Some(value) => {
                 let changed = value != self.value;

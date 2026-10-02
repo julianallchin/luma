@@ -2,7 +2,7 @@
 //! all run it. Each error reads
 //! `<node id>.<input>: expected <shape and unit>; got <what was given>. Example: <one Python call>`.
 use super::{definition, ClipGraph, InputDef, InputType, Kind, Node, Produces, Unit, VERSION};
-use super::{Input, MAX_NODES};
+use super::{grid, Input, MAX_NODES};
 use crate::{BlendMode, Clip, Error, Result};
 use std::collections::{BTreeSet, HashMap};
 
@@ -410,6 +410,7 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
             });
         let Some(source) = from_value else {
             value_input(graph, id, node, name, def, input)?;
+            beat_grid(id, node, name, input)?;
             continue;
         };
         let held = match (def.ty, graph.resolve(input)) {
@@ -438,6 +439,18 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Rule 3: a time node's constant every, duration and delay lie on the beat
+/// grid. A wire is free.
+fn beat_grid(id: &str, node: &Node, name: &str, input: &Input) -> Result<()> {
+    match input {
+        Input::Number(value) if !grid::is_on_grid(node.kind, name, *value) => fail(format!(
+            "{id}.{name}: expected a beat on the grid (a multiple of 1/32 or 1/24); got {value}. Example: {name}={}",
+            grid::fraction(grid::snap(node.kind, name, *value))
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Rule 3 for one input that holds `input` (not empty).

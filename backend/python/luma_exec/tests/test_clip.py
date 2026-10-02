@@ -419,6 +419,19 @@ class ClipBuilderTests(unittest.TestCase):
                 self.assertEqual(again.source(), graph.source())
                 self.assertEqual(graph.source().splitlines()[-1].split("(")[0], graph.output.kind)
 
+    def test_catalog_beats_lie_on_the_grid(self):
+        # The Rust checker refuses a time node's constant every, duration or
+        # delay off the grid: a multiple of 1/32 or 1/24 of a beat.
+        def on_grid(v):
+            return any(abs(v * d - round(v * d)) <= 1e-9 * d for d in (32, 24))
+        for name, code in CATALOG.items():
+            for node in run(code).json()["nodes"].values():
+                for key in ("every", "duration", "delay"):
+                    value = node.get("inputs", {}).get(key) if node["kind"] == "time" else None
+                    if isinstance(value, (int, float)):
+                        with self.subTest(f"{name} {key}"):
+                            self.assertTrue(on_grid(value), value)
+
     def test_source_writes_exact_thirds_as_fractions(self):
         graph = run("t = time(every=1/3, duration=2/3, delay=1/32); color(brightness=curve(t, 'Drop'))")
         self.assertIn("time(every=1/3, duration=2/3, delay=0.03125)", graph.source())
@@ -564,6 +577,15 @@ class ClipEditTests(unittest.TestCase):
         updated = edit.update_clip(clip, name="Glow", graph=color(alpha=0.5), blend="add")
         self.assertEqual((updated.name, updated.blend), ("Glow", "add"))
         self.assertEqual(updated.graph.output.inputs["alpha"], 0.5)
+
+    def test_an_off_grid_beat_reaches_the_agent(self):
+        edit = self.track().edit()
+        self.refuse = ("time1.every: expected a beat on the grid (a multiple of 1/32 or 1/24); "
+                       "got 0.1. Example: every=3/32")
+        with self.assertRaises(ClipError) as caught:
+            edit.add_clip(color(brightness=curve(time(every=0.1), "Drop")), name="Pulse", at=("1", "2"), id="pulse")
+        self.assertEqual(str(caught.exception), f"clip Pulse (pulse): {self.refuse}")
+        self.assertNotIn("pulse", edit.candidate["clips"])
 
     def test_clips_read_back_with_source(self):
         track = self.track()
