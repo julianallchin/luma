@@ -2369,8 +2369,8 @@ impl Visualizer {
             }
             _ => return None,
         }
-        // The builder selects the *node*, not the render object: a subtree, a
-        // trim and a detach are all things the graph has names for — and the
+        // The builder selects the *node*, not the render object: a subtree and a
+        // trim are things the graph has names for — and the
         // render object's identity IS the node id, which is what lets the two
         // agree by construction. After *every* gesture that can move the
         // selection — click and marquee alike — so the builder never holds a
@@ -6754,6 +6754,7 @@ mod orbit_selection_tests {
                     kind: "venue".into(),
                     catalog_ref: None,
                     label: None,
+                    placement: None,
                 }],
                 ..Default::default()
             },

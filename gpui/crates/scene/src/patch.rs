@@ -18,9 +18,9 @@
 //!   has to split, and that says so too ([`Note::RunSplit`]).
 //! - A **pinned** fixture — an address a human set by hand — is never
 //!   re-derived. It is reserved first, and the derived blocks flow around it.
-//! - A fixture with no run — unplaced in the tray, or resting on the floor
-//!   rather than on structure — takes the next free slot from universe 1,
-//!   filling the gaps the run blocks left, in fixture-id order.
+//! - A fixture with no run — resting on the floor rather than on structure —
+//!   takes the next free slot from universe 1, filling the gaps the run blocks
+//!   left, in fixture-id order.
 //!
 //! # Why this module has no database and no catalog
 //!
@@ -172,7 +172,7 @@ pub struct Assignment {
     pub fixture: String,
     pub footprint: Footprint,
     /// The run this fixture hangs from, and therefore whose universe it took.
-    /// `None` for a fixture in the tray or resting on the floor.
+    /// `None` for a fixture resting on the floor.
     pub run: Option<String>,
     /// Whether this is a hand-set address the allocator preserved rather than
     /// derived. `auto_patch` writes only the rest.
@@ -401,9 +401,8 @@ fn on_run(venue: &ResolvedVenue, fixture: &str) -> Option<OnRun> {
 /// Assign every fixture a universe and an address.
 ///
 /// Total and deterministic: same venue and same fixture list in, byte-identical
-/// assignments out. A fixture the venue does not place still gets an address —
-/// it is in the tray, not lost — and the only fixture that gets none is one
-/// there was genuinely no room for, which is reported as [`Note::NoRoom`].
+/// assignments out. A fixture on no run still gets an address, and the only
+/// fixture that gets none is one there was genuinely no room for, which is reported as [`Note::NoRoom`].
 #[must_use]
 pub fn allocate(venue: &ResolvedVenue, fixtures: &[Fixture]) -> Allocation {
     allocate_scoped(venue, fixtures, None)
@@ -553,7 +552,7 @@ fn allocate_scoped(venue: &ResolvedVenue, fixtures: &[Fixture], run: Option<&str
         }
     }
 
-    // The tray, and anything resting on the floor: no run, so no universe of
+    // Anything resting on the floor: no run, so no universe of
     // its own — it fills the gaps the run blocks left, from universe 1.
     loose.sort_by(|a, b| a.id.cmp(&b.id));
     for fixture in loose {
@@ -598,7 +597,7 @@ fn place(occupancy: &mut Occupancy, universe: u16, fixture: &Fixture) -> Option<
 /// interleaves with fixtures already on the run is put in physical order by the
 /// subsequent [`allocate_run`]. Auto-patch uses [`allocate`] for the whole venue.
 ///
-/// `run` of `None` asks for tray addresses — the run-less rule, from universe 1.
+/// `run` of `None` asks for run-less addresses, from universe 1.
 ///
 /// # Which occupancy this answers against
 ///
@@ -658,7 +657,7 @@ pub fn next_addresses(
             .max()
     };
     let start = match run {
-        // The tray fills gaps from universe 1, same as the run-less rule.
+        // The run-less rule fills gaps from universe 1.
         None => 1,
         // A run that already carries fixtures continues in its own universe;
         // the occupancy above is what pushes these past its block.

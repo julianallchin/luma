@@ -683,93 +683,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // The other door: the patch page's non-placed add
-    // -----------------------------------------------------------------------
-
-    /// The seam both critics found. A fixture patched *outside* a distribution
-    /// must still be a node in the graph — with no edge, so the resolver
-    /// reports it unplaced and the tray can find it to drag onto a truss.
-    #[tokio::test]
-    async fn a_fixture_patched_on_the_patch_page_lands_in_the_tray() {
-        let (_dir, services, venue) = room().await;
-        let id = patch_one(&services, &venue, 1, 1).await;
-
-        assert!(
-            graph_nodes(&services, &venue).await.contains(&id),
-            "the patch page's add left no venue node"
-        );
-        let resolved = dispatch(
-            &services,
-            "get_resolved_venue",
-            &json!({ "venueId": venue }),
-        )
-        .await
-        .unwrap();
-        let unplaced: Vec<&str> = resolved["unplaced"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|u| u["nodeId"].as_str().unwrap())
-            .collect();
-        assert_eq!(unplaced, [id.as_str()], "the tray is empty: {resolved}");
-        assert!(
-            !resolved["nodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|n| n["id"] == json!(id)),
-            "a tray fixture got a pose"
-        );
-    }
-
-    /// And it can then be dragged onto a truss, which is what the tray is for.
-    #[tokio::test]
-    async fn a_tray_fixture_can_be_reattached_to_a_truss() {
-        let (_dir, services, venue) = room().await;
-        let run = truss(&services, &venue, 4.0).await;
-        let id = patch_one(&services, &venue, 1, 1).await;
-
-        let report = dispatch(
-            &services,
-            "reattach",
-            &json!({
-                "venueId": venue,
-                "nodeId": id,
-                "parentId": run,
-                "mySocket": "clamp",
-                "theirSocket": "face_-y",
-                "yaw": null,
-            }),
-        )
-        .await
-        .expect("the tray fixture would not hang");
-        assert_eq!(report["refusal"], json!(null), "{report}");
-        assert!(report["venue"]["unplaced"].as_array().unwrap().is_empty());
-    }
-
-    /// The patch page's add takes the venue's next `<model> <n>` from the
-    /// backend.
-    #[tokio::test]
-    async fn the_backend_names_a_patch_page_add() {
-        let (_dir, services, venue) = room().await;
-        let run = truss(&services, &venue, 4.0).await;
-        spread(&services, &venue, &run, "face_-y", 2, even())
-            .await
-            .unwrap();
-        patch_one(&services, &venue, 9, 1).await;
-
-        let labels: Vec<String> = patch(&services, &venue)
-            .await
-            .iter()
-            .map(|f| f["label"].as_str().unwrap().to_string())
-            .collect();
-        assert!(
-            labels.contains(&format!("{MOVER_MODEL} 3")),
-            "the third mover was not named third: {labels:?}"
-        );
-    }
-
-    // -----------------------------------------------------------------------
     // Two rows on one run
     // -----------------------------------------------------------------------
 
@@ -962,43 +875,10 @@ mod tests {
         );
     }
 
-    /// And the patch page's own add, deleted the same way, leaves no node —
-    /// the tray does not fill up with fixtures nobody has.
+    /// A light never exists without a place: pulling a truss down takes its
+    /// lights and their patch rows with it.
     #[tokio::test]
-    async fn deleting_a_tray_fixture_leaves_no_node() {
-        let (_dir, services, venue) = room().await;
-        let id = patch_one(&services, &venue, 1, 1).await;
-        dispatch(
-            &services,
-            "remove_patched_fixture",
-            &json!({ "venueId": venue, "id": id }),
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            graph_nodes(&services, &venue).await.is_empty() || {
-                !graph_nodes(&services, &venue).await.contains(&id)
-            }
-        );
-        let resolved = dispatch(
-            &services,
-            "get_resolved_venue",
-            &json!({ "venueId": venue }),
-        )
-        .await
-        .unwrap();
-        assert!(
-            resolved["unplaced"].as_array().unwrap().is_empty(),
-            "the tray still holds a deleted fixture: {resolved}"
-        );
-    }
-
-    /// Pulling a truss down loses the rig its shape, not its lights: the
-    /// fixtures survive as inventory, in the tray, ready to hang somewhere
-    /// else.
-    #[tokio::test]
-    async fn deleting_a_truss_trays_its_lights() {
+    async fn deleting_a_truss_deletes_its_lights() {
         let (_dir, services, venue) = room().await;
         let run = truss(&services, &venue, 4.0).await;
         let report = spread(&services, &venue, &run, "face_-y", 3, even())
@@ -1011,7 +891,7 @@ mod tests {
             .map(|f| f["id"].as_str().unwrap().to_string())
             .collect();
 
-        let venue_after = dispatch(
+        dispatch(
             &services,
             "delete_subtree",
             &json!({ "venueId": venue, "nodeId": run }),
@@ -1019,33 +899,20 @@ mod tests {
         .await
         .expect("the truss would not come down");
 
-        assert_eq!(
-            patch(&services, &venue).await.len(),
-            3,
-            "the lights went too"
-        );
-        let unplaced: Vec<&str> = venue_after["unplaced"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|u| u["nodeId"].as_str().unwrap())
-            .collect();
-        for id in &ids {
-            assert!(unplaced.contains(&id.as_str()), "{id} is not in the tray");
-        }
         assert!(
-            !venue_after["nodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|n| n["id"] == json!(run)),
-            "the truss is still there"
+            patch(&services, &venue).await.is_empty(),
+            "the patch rows went with the lights"
         );
+        let nodes = graph_nodes(&services, &venue).await;
+        assert!(!nodes.contains(&run), "the truss is still there");
+        for id in &ids {
+            assert!(!nodes.contains(id), "{id} outlived its truss");
+        }
     }
 
-    /// `delete_subtree` aimed straight at a fixture *does* delete it — that is
-    /// the builder saying "this light, gone", and it goes through the same one
-    /// door the patch page uses.
+    /// `delete_subtree` aimed straight at a fixture deletes it — that is the
+    /// builder saying "this light, gone", and it goes through the same one door
+    /// the patch page uses.
     #[tokio::test]
     async fn deleting_a_fixture_node_deletes_the_fixture() {
         let (_dir, services, venue) = room().await;
@@ -1065,6 +932,86 @@ mod tests {
 
         assert_eq!(patch(&services, &venue).await.len(), 2);
         assert!(!graph_nodes(&services, &venue).await.contains(&victim));
+    }
+
+    /// A light node never exists without its patch row: duplicating a truss
+    /// with two lights patches two copies at free addresses, and undoing the
+    /// duplicate takes those rows away again.
+    #[tokio::test]
+    async fn duplicating_a_truss_patches_its_lights_and_undo_unpatches_them() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        spread(&services, &venue, &run, "face_-y", 2, even())
+            .await
+            .unwrap();
+        let deck = dispatch(&services, "get_venue_graph", &json!({ "venueId": venue }))
+            .await
+            .unwrap()["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["catalogRef"] == json!(DECK))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let snapshot = dispatch(&services, "get_venue_graph", &json!({ "venueId": venue }))
+            .await
+            .unwrap();
+        let before = patch(&services, &venue).await;
+
+        dispatch(
+            &services,
+            "duplicate",
+            &json!({
+                "venueId": venue,
+                "nodeId": run,
+                "parentId": deck,
+                "theirSocket": "corner_fr",
+                "flip": null,
+            }),
+        )
+        .await
+        .expect("the truss would not duplicate");
+
+        let after = patch(&services, &venue).await;
+        assert_eq!(after.len(), 4, "two copies, two new patch rows");
+        let nodes = graph_nodes(&services, &venue).await;
+        let channels = |row: &Value| {
+            let universe = row["universe"].as_u64().unwrap();
+            let address = row["address"].as_u64().unwrap();
+            (
+                universe,
+                address..address + row["numChannels"].as_u64().unwrap(),
+            )
+        };
+        for (i, row) in after.iter().enumerate() {
+            let id = row["id"].as_str().unwrap().to_string();
+            assert!(nodes.contains(&id), "patch row {id} has no light");
+            let (universe, span) = channels(row);
+            for other in &after[i + 1..] {
+                let (other_universe, other_span) = channels(other);
+                assert!(
+                    universe != other_universe
+                        || span.end <= other_span.start
+                        || other_span.end <= span.start,
+                    "{row} and {other} share channels"
+                );
+            }
+        }
+
+        dispatch(
+            &services,
+            "restore_graph",
+            &json!({ "venueId": venue, "rows": snapshot, "patch": before }),
+        )
+        .await
+        .expect("the duplicate would not undo");
+        assert_eq!(
+            patch(&services, &venue).await,
+            before,
+            "undo left the copies' patch rows"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1243,29 +1190,6 @@ mod tests {
         )
         .await
         .expect("the deck was refused")["nodeId"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    }
-
-    async fn patch_one(services: &AppServices, venue: &str, universe: i64, address: i64) -> String {
-        dispatch(
-            services,
-            "patch_fixture",
-            &json!({
-                "venueId": venue,
-                "universe": universe,
-                "address": address,
-                "numChannels": 18,
-                "manufacturer": "Chauvet",
-                "model": MOVER_MODEL,
-                "modeName": MOVER_MODE,
-                "fixturePath": MOVER,
-                "label": null,
-            }),
-        )
-        .await
-        .expect("the patch was refused")["id"]
             .as_str()
             .unwrap()
             .to_string()

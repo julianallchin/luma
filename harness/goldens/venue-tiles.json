@@ -21,10 +21,7 @@
       "          ·║",
       "     2     ║",
       "            ║",
-      "            ║",
-      "",
-      "unplaced:",
-      "  tray_speaker (piece) + 1 more"
+      "            ║"
     ]
   },
   "venue-poses-coarse": {
@@ -43,10 +40,7 @@
       "     0 ·║S S",
       "        ·║",
       "         ║",
-      "         ║",
-      "",
-      "unplaced:",
-      "  tray_speaker (piece) + 1 more"
+      "         ║"
     ]
   }
 }

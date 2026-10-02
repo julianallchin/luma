@@ -30,10 +30,9 @@ const W_MODE: f32 = 116.0;
 const W_UNIVERSE: f32 = 64.0;
 const W_ADDRESS: f32 = 64.0;
 const W_RANGE: f32 = 90.0;
-const W_PLACED: f32 = 76.0;
 const ROW_HEIGHT: f32 = 38.0;
 
-/// The narrowest the nine columns fit in: the fixed widths, both name columns
+/// The narrowest the seven columns fit in: the fixed widths, both name columns
 /// at their minimum, the gaps between them and the page's own inset. Below
 /// this the table scrolls sideways rather than squeezing — a column of
 /// addresses that has been compressed into an ellipsis is a column that lies.
@@ -42,9 +41,8 @@ const MIN_WIDTH: f32 = W_MODEL
     + W_UNIVERSE
     + W_ADDRESS
     + W_RANGE
-    + W_PLACED
     + 2.0 * NAME_MIN_WIDTH
-    + 7.0 * COLUMN_GAP
+    + 6.0 * COLUMN_GAP
     + 2.0 * ROW_INSET;
 const NAME_MIN_WIDTH: f32 = 120.0;
 const COLUMN_GAP: f32 = 10.0;
@@ -318,7 +316,6 @@ fn head() -> impl IntoElement {
         .child(cell(W_ADDRESS).child(float::label("Address")))
         .child(cell(W_RANGE).child(float::label("Channels")))
         .child(cell_flex().child(float::label("Group")))
-        .child(cell(W_PLACED).child(float::label("Placed")))
 }
 
 fn cell(width: f32) -> Div {
@@ -351,7 +348,6 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
         .unwrap_or_else(|| row.model.clone())
         .into();
     let selected = state.selected.contains(&row.id);
-    let placed = state.is_placed(&row.id);
     let last = row.address + row.num_channels - 1;
     // The selection vocabulary is snake_case because an expression is typed; a
     // table is read. Underscores become spaces for the eye only — the name a
@@ -445,24 +441,6 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
                 .truncate()
                 .child(group.clone())
                 .agent_node(Role::Text, format!("{name} group = {group}")),
-        )
-        .child(
-            // Only the exception is written. Every fixture in a finished rig is
-            // placed, and a column repeating the word down forty rows says
-            // nothing while hiding the one row that does not. "Unplaced" is
-            // the word everywhere on this page — the tray is a stage-page
-            // idea and naming it here would be a second name for one state.
-            cell(W_PLACED)
-                .text_size(px(12.0))
-                .text_color(ladder::status_warn())
-                .child(if placed { "" } else { "Unplaced" })
-                .agent_node(
-                    Role::Text,
-                    format!(
-                        "{name} placement = {}",
-                        if placed { "placed" } else { "unplaced" }
-                    ),
-                ),
         );
 
     let line = line
@@ -639,8 +617,6 @@ pub(super) fn row_menu(
     let pinned = state.row(fixture).is_some_and(|row| row.address_pinned);
     let venue = state.venue_id.clone();
 
-    let dup_app = app.clone();
-    let dup_venue = venue.clone();
     let pin_app = app.clone();
     let pin_venue = venue.clone();
     let pin_ids: Vec<String> = state
@@ -655,17 +631,6 @@ pub(super) fn row_menu(
     let closed_venue = venue;
 
     ContextMenu::new("patch-row-menu", at)
-        .item(
-            if count == 1 {
-                "Duplicate".to_string()
-            } else {
-                format!("Duplicate {count} fixtures")
-            },
-            move |_, cx| {
-                let venue = dup_venue.clone();
-                dup_app.update(cx, |this, cx| this.duplicate_patch_rows(venue, cx));
-            },
-        )
         .item(
             if pinned {
                 "Unpin address"

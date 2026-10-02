@@ -185,7 +185,8 @@ impl Rig {
     ///
     /// # Errors
     /// Fails when the venue cannot be solved or the patch cannot be read. A
-    /// head that is unplaced or whose definition does not load is left out.
+    /// head the solve cannot reach or whose definition does not load is left
+    /// out.
     pub async fn load<'a>(
         access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
         fixtures_root: &std::path::Path,

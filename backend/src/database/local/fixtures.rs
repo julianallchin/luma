@@ -72,6 +72,39 @@ pub async fn insert_fixture(
     })
 }
 
+/// Write a patch row back exactly as it was read, id and all — an undo
+/// bringing a deleted fixture back.
+///
+/// # Errors
+/// Fails if the insert is refused.
+pub async fn insert_fixture_row(
+    access: &mut VenueAccess<'_, Write>,
+    row: &PatchedFixture,
+) -> Result<(), String> {
+    let venue_id = access.venue_id().to_owned();
+    let uid = access.principal().map(str::to_owned);
+    sqlx::query(
+        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)",
+    )
+    .bind(&row.id)
+    .bind(&uid)
+    .bind(&venue_id)
+    .bind(row.universe)
+    .bind(row.address)
+    .bind(row.num_channels)
+    .bind(&row.manufacturer)
+    .bind(&row.model)
+    .bind(&row.mode_name)
+    .bind(&row.fixture_path)
+    .bind(&row.label)
+    .bind(i64::from(row.address_pinned))
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to restore fixture: {e}"))?;
+    Ok(())
+}
+
 /// Move one fixture to `universe`/`address`, recording whether the number came
 /// from a human.
 ///

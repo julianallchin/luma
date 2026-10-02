@@ -35,16 +35,11 @@ use crate::shell::Body;
 use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
-mod add;
 mod footprint;
 pub(crate) mod groups;
 mod outputs;
 mod table;
 mod venue;
-
-pub(crate) use add::render as add_fixtures_dialog;
-pub(crate) use add::tick as tick_add_fixtures;
-pub(crate) use add::AddFixtures;
 
 /// What the header's chips hang.
 ///
@@ -216,12 +211,6 @@ impl Patch {
         self.rows().iter().find(|row| row.id == id)
     }
 
-    pub(crate) fn is_placed(&self, id: &str) -> bool {
-        self.data
-            .as_ref()
-            .is_some_and(|data| data.placed.contains(id))
-    }
-
     /// The group path a fixture sits on, deepest node first joined by ` / `.
     ///
     /// Read out of `list_group_tree` rather than derived: the derivation is the
@@ -271,12 +260,6 @@ impl Patch {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    /// Whether any selected fixture is placed — the question the unpatch
-    /// confirmation is asking.
-    pub(crate) fn any_selected_placed(&self) -> bool {
-        self.selected.iter().any(|id| self.is_placed(id))
     }
 
     pub(crate) fn any_pinned(&self) -> bool {
@@ -798,48 +781,7 @@ impl Luma {
         .detach();
     }
 
-    /// One more of each selected fixture, at the allocator's next free slots.
-    pub(crate) fn duplicate_patch_rows(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        let Some(state) = self.patch_mut(&venue_id) else {
-            return;
-        };
-        state.menu = None;
-        let picked: Vec<PatchedFixture> = state
-            .rows()
-            .iter()
-            .filter(|row| state.selected.contains(&row.id))
-            .cloned()
-            .collect();
-        if picked.is_empty() {
-            return;
-        }
-        let batches: Vec<_> = picked
-            .into_iter()
-            .map(|row| {
-                self.library.add_fixtures(
-                    &venue_id,
-                    crate::library::NewFixtures {
-                        manufacturer: row.manufacturer,
-                        model: row.model,
-                        mode_name: row.mode_name,
-                        fixture_path: row.fixture_path,
-                        channels: row.num_channels,
-                        count: 1,
-                    },
-                )
-            })
-            .collect();
-        cx.spawn(async move |this, cx| {
-            for batch in batches {
-                batch.await.ok();
-            }
-            this.update(cx, |this, cx| this.reload_patch(venue_id, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// Ask before unpatching anything that is standing in the room.
+    /// Ask before unpatching: every light stands in the room.
     pub(crate) fn unpatch_selection(&mut self, venue_id: String, cx: &mut Context<Self>) {
         let Some(state) = self.patch_mut(&venue_id) else {
             return;
@@ -854,12 +796,7 @@ impl Luma {
         if ids.is_empty() {
             return;
         }
-        let placed = state.any_selected_placed();
         let count = ids.len();
-        if !placed {
-            self.run_unpatch(venue_id, ids, cx);
-            return;
-        }
         self.ask(
             Confirm {
                 title: if count == 1 {
@@ -867,9 +804,7 @@ impl Luma {
                 } else {
                     format!("Unpatch {count} fixtures?").into()
                 },
-                body: "It is placed in the room. Unpatching removes it from the \
-                       structure it hangs on as well as from the patch."
-                    .into(),
+                body: "Unpatching removes it from the room as well as from the patch.".into(),
                 verb: "Unpatch".into(),
                 action: Action::UnpatchFixtures {
                     venue_id: venue_id.into(),
@@ -1269,11 +1204,9 @@ pub(super) fn details(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// Title, what the patch holds, and the four things a person came here to do.
+/// Title, what the patch holds, and the things a person came here to do.
 fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
-    let add = app.clone();
     let auto = app.clone();
-    let for_add = state.venue_id.clone();
     let for_auto = state.venue_id.clone();
     div()
         .flex_shrink_0()
@@ -1315,15 +1248,6 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                     auto.update(cx, |this, cx| this.auto_patch_venue(venue, cx));
                 })
                 .agent_node(Role::Button, "Auto patch"),
-        )
-        .child(
-            luma_ui::float::btn_primary("Add fixtures")
-                .id("patch-add")
-                .on_click(move |_, _, cx| {
-                    let venue = for_add.clone();
-                    add.update(cx, |this, cx| this.open_add_fixtures(venue, cx));
-                })
-                .agent_node(Role::Button, "Add fixtures"),
         )
 }
 
@@ -1389,13 +1313,8 @@ fn subtitle(state: &Patch) -> SharedString {
     let Some(data) = state.data.as_ref() else {
         return "Reading the patch…".into();
     };
-    let unplaced = data
-        .fixtures
-        .iter()
-        .filter(|f| !data.placed.contains(&f.id))
-        .count();
     format!(
-        "{} · {} · {unplaced} unplaced",
+        "{} · {}",
         plural(data.fixtures.len(), "fixture"),
         plural(data.universes.len(), "universe"),
     )

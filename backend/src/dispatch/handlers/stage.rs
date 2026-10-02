@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 
 use crate::dispatch::{AppServices, CommandError};
+use crate::models::fixtures::PatchedFixture;
 use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
 use crate::services::stage_ops::{Stage, StageError};
 
@@ -50,17 +51,19 @@ pub async fn get_resolved_venue(
 }
 
 /// Replace the venue's graph with a snapshot of itself — undo's one verb.
-/// Structure only: patch rows are not part of a snapshot, and one that names
-/// a fixture whose patch row is gone is refused whole.
+/// `patch` is the patch the snapshot was taken beside: a light the snapshot
+/// holds and the venue lost comes back with its patch row from it.
 ///
 /// # Errors
-/// Refused if the rows do not form a graph or a fixture's patch row is gone.
+/// Refused if the rows do not form a graph, a returning light's patch row is
+/// not in `patch`, or its old address is taken.
 pub async fn restore_graph(
     services: &AppServices,
     venue_id: String,
     rows: VenueGraphRows,
+    patch: Vec<PatchedFixture>,
 ) -> Result<ResolvedVenue, CommandError> {
-    Ok(stage(services, &venue_id).restore(&rows).await?)
+    Ok(stage(services, &venue_id).restore(&rows, &patch).await?)
 }
 
 /// What a run out of this socket would meet, and how far away it is.
@@ -115,31 +118,6 @@ pub async fn attach(
         .await?)
 }
 
-/// Place a node that already exists somewhere else — a re-attach, or a fixture
-/// dragged out of the patch tray.
-///
-/// # Errors
-/// As [`attach`].
-pub async fn reattach(
-    services: &AppServices,
-    venue_id: String,
-    node_id: String,
-    parent_id: String,
-    my_socket: String,
-    their_socket: String,
-    yaw: Option<f64>,
-) -> Result<PlacementReport, CommandError> {
-    Ok(stage(services, &venue_id)
-        .reattach(
-            &node_id,
-            &parent_id,
-            &my_socket,
-            &their_socket,
-            yaw.unwrap_or(0.0),
-        )
-        .await?)
-}
-
 /// Free placement: put a node on a surface at `(u, v, yaw, trim)`.
 ///
 /// The floor and the grid are the venue root's own two surfaces, so a piece on
@@ -179,19 +157,6 @@ pub async fn place_free(
             params.unwrap_or_default(),
         )
         .await?)
-}
-
-/// Unplace a node. It and its subtree drop out of the solve; the rows stay, so
-/// re-attaching restores the whole branch.
-///
-/// # Errors
-/// Fails if the venue is not writable or the node is not in it.
-pub async fn detach(
-    services: &AppServices,
-    venue_id: String,
-    node_id: String,
-) -> Result<PlacementReport, CommandError> {
-    Ok(stage(services, &venue_id).detach(&node_id).await?)
 }
 
 /// Write down a far end: this socket meets that one.
@@ -279,13 +244,9 @@ pub async fn duplicate(
         .await?)
 }
 
-/// Delete a node and everything structural hanging off it.
-///
-/// Pulling a truss down loses the rig its shape, not its lights: every fixture
-/// under the deleted node is **trayed** — its edge cascades away with its
-/// parent, so the solve reports it unplaced and the tray can hang it somewhere
-/// else. Only a fixture the caller names *directly* is deleted, and then
-/// through the one door that takes the patch row with the node.
+/// Delete a node and everything hanging off it. A light never exists without
+/// a place, so the lights under it go too, patch rows included; undo is
+/// [`restore_graph`].
 ///
 /// # Errors
 /// Fails if the venue is not writable or the node is not in it.
@@ -366,56 +327,6 @@ mod tests {
             .await
             .expect_err("the placement was accepted");
         assert_eq!(before, node_count(&services, &venue).await);
-    }
-
-    #[tokio::test]
-    async fn a_node_cannot_be_its_own_parent() {
-        let (_dir, services, venue) = room().await;
-        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
-            .await
-            .unwrap();
-        let error = reattach(&services, &venue, &deck, &deck, "edge_left", "edge_right")
-            .await
-            .expect_err("a deck was bolted to itself");
-        assert_invalid(&error, "so attaching would loop");
-    }
-
-    #[tokio::test]
-    async fn a_cycle_is_refused() {
-        let (_dir, services, venue) = room().await;
-        let a = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
-            .await
-            .unwrap();
-        let b = attach(
-            &services,
-            &venue,
-            "stage",
-            DECK,
-            &a,
-            "edge_left",
-            "edge_right",
-            None,
-        )
-        .await
-        .unwrap();
-        let error = reattach(&services, &venue, &a, &b, "edge_right", "edge_left")
-            .await
-            .expect_err("a is inside b is inside a");
-        assert_invalid(&error, "so attaching would loop");
-    }
-
-    /// The root is the venue frame, not a piece in the room.
-    #[tokio::test]
-    async fn the_root_cannot_be_reattached() {
-        let (_dir, services, venue) = room().await;
-        let root = root_id(&services, &venue).await;
-        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
-            .await
-            .unwrap();
-        let error = reattach(&services, &venue, &root, &deck, "bottom", "top")
-            .await
-            .expect_err("the room was hung off a deck");
-        assert_invalid(&error, "the venue root cannot be attached");
     }
 
     /// A node id is not authorization. Naming another venue's deck as a parent
@@ -538,11 +449,10 @@ mod tests {
 
         let id = report["nodeId"].as_str().unwrap().to_string();
         assert_eq!(
-            report["outcome"],
-            json!("placed"),
-            "a placed array is not reported placed"
+            report["parentId"],
+            json!(deck),
+            "the array is placed on the deck"
         );
-        assert_eq!(report["parentId"], json!(deck));
 
         // One row in the graph, `count` derived members plus the anchor in the
         // solve: members are derived, never stored.
@@ -676,16 +586,14 @@ mod tests {
             .await
             .unwrap();
 
-        // Delete the target out from under the check. The row goes with it
-        // (`ON DELETE CASCADE` names `target_node`), so this is the general
-        // case: unplaced, gone, or a socket the geometry lost.
-        dispatch(
-            &services,
-            "detach",
-            &json!({ "venueId": venue, "nodeId": right }),
-        )
-        .await
-        .unwrap();
+        // Point the check at a socket the target's geometry does not have —
+        // what a catalog change leaves behind. `constrain` would refuse it, so
+        // the row is written as a sync or an old build would have left it.
+        sqlx::query("UPDATE venue_constraints SET target_socket = 'nowhere' WHERE node_id = ?")
+            .bind(&left)
+            .execute(&services.db.0)
+            .await
+            .unwrap();
 
         let venue_json = resolved(&services, &venue).await;
         assert_eq!(
@@ -892,87 +800,33 @@ mod tests {
         assert_eq!(open, ["end_b"], "the bolted end is not open: {open:?}");
     }
 
-    /// A branch with no edge is reported, never dropped: `detach` names the
-    /// subtree's root and how many nodes hang off it. Silence is what makes
-    /// "unplaced" and "deleted" look identical to whoever just dragged a wing
-    /// off.
+    /// A light is its node and its patch row. `attach` and `place_free` write
+    /// only a node, so they refuse a light rather than make one with no DMX
+    /// address.
     #[tokio::test]
-    async fn a_detached_subtree_is_reported_unplaced() {
+    async fn a_light_is_not_placed_without_its_patch_row() {
         let (_dir, services, venue) = room().await;
         let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
             .await
             .unwrap();
-        let post = attach(
-            &services,
-            &venue,
-            "tower",
-            TRUSS,
-            &deck,
-            "end_a",
-            "corner_fl",
-            Some(json!({ "span": 2.0 })),
-        )
-        .await
-        .unwrap();
-        let head = attach(
-            &services,
-            &venue,
-            "run",
-            TRUSS,
-            &post,
-            "end_a",
-            "end_b",
-            Some(json!({ "span": 1.5 })),
-        )
-        .await
-        .unwrap();
-        assert!(resolved(&services, &venue).await["unplaced"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        let before = node_count(&services, &venue).await;
+        const LIGHT: &str = "Chauvet/Chauvet-Rogue-R2-Spot.qxf";
 
-        let report = dispatch(
-            &services,
-            "detach",
-            &json!({ "venueId": venue, "nodeId": post }),
+        let error = attach(
+            &services, &venue, "fixture", LIGHT, &deck, "clamp", "top", None,
         )
         .await
-        .expect("the detach was refused");
+        .expect_err("attach made a light");
+        assert_invalid(&error, "distribute");
+        let error = place(&services, &venue, "fixture", LIGHT, "clamp", 0.0, 0.0)
+            .await
+            .expect_err("place_free made a light");
+        assert_invalid(&error, "distribute");
 
-        // `unplaced`, and not a refusal: the call did exactly what it was
-        // asked to do, and the outcome is a fact about the node.
         assert_eq!(
-            report["outcome"],
-            json!("unplaced"),
-            "a detached node was not reported unplaced"
-        );
-        let unplaced = report["venue"]["unplaced"].as_array().unwrap();
-        assert_eq!(
-            unplaced
-                .iter()
-                .map(|u| u["nodeId"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            [post.as_str()],
-            "the root of the branch, listed once"
-        );
-        assert_eq!(
-            unplaced[0]["descendants"],
-            json!(1),
-            "the speaker on it came along"
-        );
-        // The rows are still there — detach unplaces, it does not delete.
-        let placed: Vec<&str> = report["venue"]["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|n| n["id"].as_str().unwrap())
-            .collect();
-        assert!(!placed.contains(&post.as_str()));
-        assert!(!placed.contains(&head.as_str()));
-        assert_eq!(
+            before,
             node_count(&services, &venue).await,
-            4,
-            "root, deck, post, head: unplacing deletes nothing"
+            "no rows written"
         );
     }
 
@@ -1032,7 +886,7 @@ mod tests {
         let restored = dispatch(
             &services,
             "restore_graph",
-            &serde_json::json!({"venueId": venue, "rows": snapshot}),
+            &serde_json::json!({"venueId": venue, "rows": snapshot, "patch": []}),
         )
         .await
         .unwrap();
@@ -1129,29 +983,6 @@ mod tests {
         Ok(report["nodeId"].as_str().unwrap().to_string())
     }
 
-    async fn reattach(
-        services: &AppServices,
-        venue: &str,
-        node: &str,
-        parent: &str,
-        my_socket: &str,
-        their_socket: &str,
-    ) -> Result<Value, CommandError> {
-        dispatch(
-            services,
-            "reattach",
-            &json!({
-                "venueId": venue,
-                "nodeId": node,
-                "parentId": parent,
-                "mySocket": my_socket,
-                "theirSocket": their_socket,
-                "yaw": null,
-            }),
-        )
-        .await
-    }
-
     async fn constrain(
         services: &AppServices,
         venue: &str,
@@ -1202,20 +1033,6 @@ mod tests {
         dispatch(services, "get_resolved_venue", &json!({ "venueId": venue }))
             .await
             .expect("the venue did not resolve")
-    }
-
-    async fn root_id(services: &AppServices, venue: &str) -> String {
-        dispatch(services, "get_venue_graph", &json!({ "venueId": venue }))
-            .await
-            .unwrap()["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["kind"] == json!("venue"))
-            .expect("every venue has a root")["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
     }
 
     async fn node_count(services: &AppServices, venue: &str) -> usize {

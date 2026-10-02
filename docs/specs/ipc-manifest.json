@@ -789,27 +789,6 @@
           "rust": "String"
         },
         {
-          "name": "nodeId",
-          "rust": "String"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "detach",
-      "prose": {
-        "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
           "name": "hostNodeId",
           "rust": "Option<String>"
         },
@@ -1111,27 +1090,6 @@
         "returns": "Option<Reach>"
       },
       "returns": "Option<Reach>"
-    },
-    {
-      "args": [
-        {
-          "name": "path",
-          "rust": "String"
-        },
-        {
-          "name": "modeName",
-          "rust": "String"
-        }
-      ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "fixture_role",
-      "prose": {
-        "returns": "FixtureRole"
-      },
-      "returns": "FixtureRole"
     },
     {
       "args": [
@@ -2225,90 +2183,6 @@
     {
       "args": [
         {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "run",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "channels",
-          "rust": "i64"
-        },
-        {
-          "name": "count",
-          "rust": "usize"
-        }
-      ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "next_addresses",
-      "prose": {
-        "returns": "Vec<PatchAddress>"
-      },
-      "returns": "Vec<PatchAddress>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "universe",
-          "rust": "i64"
-        },
-        {
-          "name": "address",
-          "rust": "i64"
-        },
-        {
-          "name": "numChannels",
-          "rust": "i64"
-        },
-        {
-          "name": "manufacturer",
-          "rust": "String"
-        },
-        {
-          "name": "model",
-          "rust": "String"
-        },
-        {
-          "name": "modeName",
-          "rust": "String"
-        },
-        {
-          "name": "fixturePath",
-          "rust": "String"
-        },
-        {
-          "name": "label",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "patch_fixture",
-      "prose": {
-        "notes": "No address-overlap validation server-side — the frontend computes the next free address (findNextAvailableAddress) and the auto label `${model} (${n+1})`. Spatial pose is not settable here at all: placement is a `venue_edges` row, not a fixture column. universe/address/numChannels are i64 on the wire but bigint in the TS type, so callers must pass plain numbers in and Number()-convert on the way back out (see :688 `universe: Number(fixture.universe)`). One call site ignores the return and refetches; two use the returned fixture's id.",
-        "returns": "PatchedFixture { id, uid: string|null, venueId, universe: bigint, address: bigint, numChannels: bigint, manufacturer, model, modeName, fixturePath, label: string|null, posX..posZ, rotX..rotZ }",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::Venue(venue_id); inserts a row and commits",
-          "Re-reads the full patch and pushes it to ArtNetManager (fixture_service::update_artnet_patch) — live DMX output changes",
-          "invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "PatchedFixture"
-    },
-    {
-      "args": [
-        {
           "name": "trackNetworkPath",
           "rust": "String"
         },
@@ -2555,43 +2429,6 @@
         ]
       },
       "returns": "Vec<DiscoveredDevice>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "nodeId",
-          "rust": "String"
-        },
-        {
-          "name": "parentId",
-          "rust": "String"
-        },
-        {
-          "name": "mySocket",
-          "rust": "String"
-        },
-        {
-          "name": "theirSocket",
-          "rust": "String"
-        },
-        {
-          "name": "yaw",
-          "rust": "Option<f64>"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "reattach",
-      "prose": {
-        "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
     },
     {
       "args": [
@@ -3031,6 +2868,10 @@
         {
           "name": "rows",
           "rust": "VenueGraphRows"
+        },
+        {
+          "name": "patch",
+          "rust": "Vec<PatchedFixture>"
         }
       ],
       "domain": "stage",
@@ -3664,7 +3505,7 @@
       "handlers": "backend/src/dispatch/handlers/engine_dj.rs"
     },
     {
-      "commandCount": 16,
+      "commandCount": 13,
       "domain": "fixtures",
       "handlers": "backend/src/dispatch/handlers/fixtures.rs"
     },
@@ -3724,7 +3565,7 @@
       "handlers": "backend/src/dispatch/handlers/settings.rs"
     },
     {
-      "commandCount": 13,
+      "commandCount": 11,
       "domain": "stage",
       "handlers": "backend/src/dispatch/handlers/stage.rs"
     },
@@ -3869,7 +3710,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 158,
+    "commandCount": 153,
     "domainCount": 27,
     "eventCount": 13
   },

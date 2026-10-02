@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 use luma_scene::venue::{
-    ConstraintStatus, DanglingSocket, NodePose, NodeWarning, Outcome, ResolvedVenue as Solved,
-    UnplacedNode, VenueGraph, Warning,
+    ConstraintStatus, DanglingSocket, Edge, NodePose, NodeWarning, ResolvedVenue as Solved,
+    VenueGraph, Warning,
 };
 
 /// One `venue_nodes` row.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VenueNode {
     pub id: String,
@@ -30,18 +30,54 @@ pub struct VenueNode {
     /// that was true — see `get_graph`.
     pub catalog_ref: Option<String>,
     pub label: Option<String>,
+    /// Where it hangs. `None` on the root, and only there: the schema refuses
+    /// any other node without one.
+    pub placement: Option<NodePlacement>,
 }
 
-/// One `venue_edges` row: the relation that produces a pose.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, FromRow)]
+/// Where a node hangs: whose socket it is bolted to, by which of its own, and
+/// how far it is turned about the joint.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct VenueEdge {
-    pub child_id: String,
-    pub parent_id: String,
+pub struct NodePlacement {
+    pub parent: String,
     pub my_socket: String,
     pub their_socket: String,
     /// Radians about the shared normal — *yaw* on a surface placement.
     pub roll: f64,
+}
+
+impl NodePlacement {
+    /// The placement as the resolver's relation.
+    #[must_use]
+    pub fn edge(&self) -> Edge {
+        Edge {
+            parent: self.parent.clone(),
+            my_socket: self.my_socket.clone(),
+            their_socket: self.their_socket.clone(),
+            roll: self.roll,
+        }
+    }
+}
+
+impl From<&Edge> for NodePlacement {
+    fn from(edge: &Edge) -> Self {
+        Self {
+            parent: edge.parent.clone(),
+            my_socket: edge.my_socket.clone(),
+            their_socket: edge.their_socket.clone(),
+            roll: edge.roll,
+        }
+    }
+}
+
+impl fmt::Display for NodePlacement {
+    /// The socket a rigger would name it by — `tower_a.top`. `my_socket` is
+    /// the node's own end and reads as noise in a summary; a change to it
+    /// still shows, because a placement is compared whole.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}.{}", self.parent, self.their_socket)
+    }
 }
 
 /// One `venue_constraints` row: a far end, checked after the solve.
@@ -63,7 +99,6 @@ pub struct VenueConstraint {
 #[serde(rename_all = "camelCase")]
 pub struct VenueGraphRows {
     pub nodes: Vec<VenueNode>,
-    pub edges: Vec<VenueEdge>,
     pub params: BTreeMap<String, BTreeMap<String, f64>>,
     pub constraints: Vec<VenueConstraint>,
 }
@@ -71,17 +106,21 @@ pub struct VenueGraphRows {
 impl VenueGraphRows {
     /// The rows as the model the resolver walks.
     ///
+    /// `None` unless there is exactly one root and every other node has a
+    /// placement: rows that break either are not a venue, and a caller that
+    /// was handed them (a restore, a file) refuses them whole.
+    ///
     /// A row naming an unknown `kind` becomes no node: the alphabet is closed,
     /// and inventing a kind for it would put something in the tree that no code
     /// below knows how to draw. It is reported as a
     /// [`Warning::UnknownKind`] on the solved venue rather than refused,
     /// because the rest of the room is still a room — the same reason a piece
     /// whose catalog entry is gone is drawn at its parent's origin instead of
-    /// failing the load. Its edge is not a relation this graph holds,
-    /// so whatever hung off it is reported unplaced.
+    /// failing the load. Whatever hung off it is reported
+    /// [`Warning::Unreachable`].
     #[must_use]
     pub fn to_graph(&self) -> Option<VenueGraph> {
-        use luma_scene::venue::{Constraint, Edge, Node, NodeKind};
+        use luma_scene::venue::{Constraint, Node, NodeKind};
 
         let node_of = |row: &VenueNode| -> Option<Node> {
             Some(Node {
@@ -97,29 +136,20 @@ impl VenueGraphRows {
             })
         };
 
+        let is_root = |row: &VenueNode| row.kind == NodeKind::Venue.as_str();
+        if self.nodes.iter().filter(|row| is_root(row)).count() != 1
+            || self
+                .nodes
+                .iter()
+                .any(|row| is_root(row) == row.placement.is_some())
+        {
+            return None;
+        }
         let root = self
             .nodes
             .iter()
-            .find(|n| n.kind == NodeKind::Venue.as_str())
+            .find(|row| is_root(row))
             .and_then(node_of)?;
-        // The two tables are joined here rather than loaded in sequence: a
-        // node arrives with the edge that places it, so an edge belonging to a
-        // row that became no node is not a relation this graph ever holds.
-        let placements: BTreeMap<&str, Edge> = self
-            .edges
-            .iter()
-            .map(|edge| {
-                (
-                    edge.child_id.as_str(),
-                    Edge {
-                        parent: edge.parent_id.clone(),
-                        my_socket: edge.my_socket.clone(),
-                        their_socket: edge.their_socket.clone(),
-                        roll: edge.roll,
-                    },
-                )
-            })
-            .collect();
 
         // Rows go in with `insert_placed`, not `attach`: they were already
         // admitted when they were written, and re-checking them here would mean
@@ -127,16 +157,12 @@ impl VenueGraphRows {
         // all rather than reporting one dangling piece.
         let mut graph = VenueGraph::new(root);
         for row in &self.nodes {
-            let Some(node) = node_of(row) else {
-                graph.warn(&row.id, Warning::UnknownKind(row.kind.clone()));
+            let Some(placement) = &row.placement else {
                 continue;
             };
-            if node.id == graph.root() {
-                continue;
-            }
-            match placements.get(row.id.as_str()) {
-                Some(edge) => graph.insert_placed(node, edge.clone()),
-                None => graph.insert(node),
+            match node_of(row) {
+                Some(node) => graph.insert_placed(node, placement.edge()),
+                None => graph.warn(&row.id, Warning::UnknownKind(row.kind.clone())),
             }
         }
         // Constraints go in with `load_constraint` for `insert_placed`'s
@@ -226,29 +252,6 @@ pub struct ResolvedConstraint {
     pub gap_m: Option<f64>,
 }
 
-/// A subtree the solve never reached, by its root — the patch tray, and what
-/// `detach` leaves behind. See [`luma_scene::venue::UnplacedNode`].
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolvedUnplaced {
-    pub node_id: String,
-    pub kind: String,
-    pub label: Option<String>,
-    /// How many nodes hang off it, not counting itself.
-    pub descendants: u32,
-}
-
-impl From<&UnplacedNode> for ResolvedUnplaced {
-    fn from(unplaced: &UnplacedNode) -> Self {
-        ResolvedUnplaced {
-            node_id: unplaced.node.clone(),
-            kind: unplaced.kind.as_str().to_string(),
-            label: unplaced.label.clone(),
-            descendants: u32::try_from(unplaced.descendants).unwrap_or(u32::MAX),
-        }
-    }
-}
-
 /// An open structural socket.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -277,9 +280,6 @@ pub struct ResolvedVenue {
     pub nodes: Vec<ResolvedNode>,
     pub constraints: Vec<ResolvedConstraint>,
     pub dangling: Vec<ResolvedDangling>,
-    /// Every node the solve could not reach, by the root of its branch. A
-    /// fixture in the patch tray is here, and so is anything just detached.
-    pub unplaced: Vec<ResolvedUnplaced>,
     /// One line per thing the solve had to decide for the caller.
     pub warnings: Vec<String>,
 }
@@ -313,11 +313,6 @@ impl From<&Solved> for ResolvedVenue {
                 .iter()
                 .map(ResolvedDangling::from)
                 .collect(),
-            unplaced: solved
-                .unplaced()
-                .iter()
-                .map(ResolvedUnplaced::from)
-                .collect(),
             warnings: solved.warnings().iter().map(warning_line).collect(),
         }
     }
@@ -344,6 +339,7 @@ fn describe(warning: &Warning) -> String {
         Warning::ArrayCountClamped { requested, applied } => {
             format!("an array of {requested} became {applied}")
         }
+        Warning::Unreachable => "its parents never reach the room, so it has no pose".into(),
     }
 }
 
@@ -357,42 +353,11 @@ fn describe(warning: &Warning) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct PlacementReport {
     pub node_id: String,
-    /// What the graph now says about the node. **Not** whether the call
-    /// worked — a refusal is this call's `Err`, and never reaches here.
-    pub outcome: PlacementOutcome,
     pub parent_id: Option<String>,
     pub warnings: Vec<String>,
     pub dangling: Vec<ResolvedDangling>,
     pub constraints: Vec<ResolvedConstraint>,
     pub venue: ResolvedVenue,
-}
-
-/// [`luma_scene::venue::Outcome`] on the wire.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PlacementOutcome {
-    /// The solve reached it: it has a pose, and it is in the room.
-    Placed,
-    /// No edge leads to it — a patched-but-unplaced fixture, or a detached
-    /// branch. Its rows are still there.
-    Unplaced,
-}
-
-impl PlacementOutcome {
-    /// Whether the node is in the room.
-    #[must_use]
-    pub fn is_placed(self) -> bool {
-        matches!(self, Self::Placed)
-    }
-}
-
-impl From<Outcome> for PlacementOutcome {
-    fn from(outcome: Outcome) -> Self {
-        match outcome {
-            Outcome::Placed => Self::Placed,
-            Outcome::Unplaced => Self::Unplaced,
-        }
-    }
 }
 
 impl PlacementReport {
@@ -403,7 +368,6 @@ impl PlacementReport {
         let venue = ResolvedVenue::from(solved);
         Self {
             node_id: node_id.to_string(),
-            outcome: placement.outcome.into(),
             parent_id: placement.parent,
             warnings: placement.warnings.iter().map(describe).collect(),
             dangling: venue
@@ -625,7 +589,6 @@ struct VenueFileV1 {
     schema_version: u32,
     venue_id: String,
     nodes: Vec<FileNode>,
-    edges: Vec<VenueEdge>,
     params: BTreeMap<String, BTreeMap<String, f64>>,
     constraints: Vec<VenueConstraint>,
 }
@@ -638,6 +601,7 @@ struct FileNode {
     kind: String,
     catalog_ref: Option<String>,
     label: Option<String>,
+    placement: Option<NodePlacement>,
 }
 
 impl VenueGraphRows {
@@ -702,8 +666,6 @@ impl VenueFileV1 {
             .map(|n| n.venue_id.clone())
             .unwrap_or_default();
 
-        let mut edges = rows.edges.clone();
-        edges.sort_by(|left, right| edge_key(left).cmp(&edge_key(right)));
         let mut constraints = rows.constraints.clone();
         constraints.sort_by(|left, right| constraint_key(left).cmp(&constraint_key(right)));
 
@@ -717,9 +679,9 @@ impl VenueFileV1 {
                     kind: node.kind.clone(),
                     catalog_ref: node.catalog_ref.clone(),
                     label: node.label.clone(),
+                    placement: node.placement.clone(),
                 })
                 .collect(),
-            edges,
             params: rows.params.clone(),
             constraints,
         }
@@ -736,24 +698,13 @@ impl VenueFileV1 {
                     kind: node.kind,
                     catalog_ref: node.catalog_ref,
                     label: node.label,
+                    placement: node.placement,
                 })
                 .collect(),
-            edges: self.edges,
             params: self.params,
             constraints: self.constraints,
         }
     }
-}
-
-/// An edge's identity: one placement per child, spelled in full so the order
-/// is total even if a venue ever holds two.
-fn edge_key(edge: &VenueEdge) -> (&str, &str, &str, &str) {
-    (
-        &edge.child_id,
-        &edge.parent_id,
-        &edge.my_socket,
-        &edge.their_socket,
-    )
 }
 
 /// A constraint's identity — the whole row, which is what makes two of them
@@ -786,37 +737,6 @@ impl fmt::Display for NodeRef {
     }
 }
 
-/// Where a node hangs: whose socket it is bolted to, by which of its own, and
-/// how far it is turned about the joint.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct NodePlacement {
-    pub parent: String,
-    pub my_socket: String,
-    pub their_socket: String,
-    pub roll: f64,
-}
-
-impl fmt::Display for NodePlacement {
-    /// The socket a rigger would name it by — `tower_a.top`. `my_socket` is
-    /// the node's own end and reads as noise in a summary; a change to it
-    /// still shows, because a placement is compared whole.
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}.{}", self.parent, self.their_socket)
-    }
-}
-
-impl From<&VenueEdge> for NodePlacement {
-    fn from(edge: &VenueEdge) -> Self {
-        Self {
-            parent: edge.parent_id.clone(),
-            my_socket: edge.my_socket.clone(),
-            their_socket: edge.their_socket.clone(),
-            roll: edge.roll,
-        }
-    }
-}
-
 /// One difference between two revisions of a venue, in the vocabulary of the
 /// room rather than of the rows.
 ///
@@ -846,8 +766,8 @@ pub enum VenueChange {
     },
     Reparented {
         node: NodeRef,
-        from: Option<NodePlacement>,
-        to: Option<NodePlacement>,
+        from: NodePlacement,
+        to: NodePlacement,
     },
     ParamChanged {
         node: NodeRef,
@@ -883,11 +803,6 @@ pub enum VenueChange {
 #[must_use]
 pub fn diff(before: &VenueGraphRows, after: &VenueGraphRows) -> Vec<VenueChange> {
     let index = |rows: &VenueGraphRows| -> BTreeMap<String, NodeSnapshot> {
-        let placements: BTreeMap<&str, &VenueEdge> = rows
-            .edges
-            .iter()
-            .map(|edge| (edge.child_id.as_str(), edge))
-            .collect();
         rows.nodes
             .iter()
             .map(|node| {
@@ -895,7 +810,6 @@ pub fn diff(before: &VenueGraphRows, after: &VenueGraphRows) -> Vec<VenueChange>
                     node.id.clone(),
                     NodeSnapshot {
                         node: node.clone(),
-                        placement: placements.get(node.id.as_str()).map(|e| (*e).into()),
                         params: rows.params.get(&node.id).cloned().unwrap_or_default(),
                     },
                 )
@@ -944,12 +858,14 @@ pub fn diff(before: &VenueGraphRows, after: &VenueGraphRows) -> Vec<VenueChange>
                 to: new.node.label.clone(),
             });
         }
-        if old.placement != new.placement {
-            modified.push(VenueChange::Reparented {
-                node: node.clone(),
-                from: old.placement.clone(),
-                to: new.placement.clone(),
-            });
+        if let (Some(from), Some(to)) = (&old.node.placement, &new.node.placement) {
+            if from != to {
+                modified.push(VenueChange::Reparented {
+                    node: node.clone(),
+                    from: from.clone(),
+                    to: to.clone(),
+                });
+            }
         }
         let keys: BTreeSet<&String> = old.params.keys().chain(new.params.keys()).collect();
         for key in keys {
@@ -1026,10 +942,9 @@ pub fn diff(before: &VenueGraphRows, after: &VenueGraphRows) -> Vec<VenueChange>
 }
 
 /// One node with everything a change has to say about it, gathered from the
-/// three tables that hold it.
+/// two tables that hold it.
 struct NodeSnapshot {
     node: VenueNode,
-    placement: Option<NodePlacement>,
     params: BTreeMap<String, f64>,
 }
 
@@ -1046,7 +961,7 @@ impl NodeSnapshot {
             self.node_ref(),
             self.node.kind.clone(),
             self.node.catalog_ref.clone(),
-            self.placement.clone(),
+            self.node.placement.clone(),
             self.params.clone(),
         );
         if added {
@@ -1110,16 +1025,10 @@ impl fmt::Display for VenueChange {
                 }
                 match placement {
                     Some(placement) => write!(formatter, " on {placement}"),
-                    None => formatter.write_str(" unplaced"),
+                    None => Ok(()),
                 }
             }
-            Self::Reparented { node, from, to } => {
-                let side = |p: &Option<NodePlacement>| {
-                    p.as_ref()
-                        .map_or_else(|| "unplaced".to_string(), NodePlacement::to_string)
-                };
-                write!(formatter, "~ {node}: {} → {}", side(from), side(to))
-            }
+            Self::Reparented { node, from, to } => write!(formatter, "~ {node}: {from} → {to}"),
             Self::ParamChanged {
                 node,
                 key,
@@ -1299,23 +1208,31 @@ mod tests {
         }
     }
 
-    fn row(id: &str, kind: &str) -> VenueNode {
+    fn root() -> VenueNode {
+        VenueNode {
+            id: "venue".into(),
+            venue_id: "v".into(),
+            kind: "venue".into(),
+            catalog_ref: None,
+            label: None,
+            placement: None,
+        }
+    }
+
+    /// A node bolted by its `bottom` to `parent.their_socket`.
+    fn on(id: &str, kind: &str, parent: &str, their_socket: &str) -> VenueNode {
         VenueNode {
             id: id.to_string(),
             venue_id: "v".into(),
             kind: kind.to_string(),
             catalog_ref: Some("deck".into()),
             label: None,
-        }
-    }
-
-    fn edge(child: &str, parent: &str, their_socket: &str) -> VenueEdge {
-        VenueEdge {
-            child_id: child.to_string(),
-            parent_id: parent.to_string(),
-            my_socket: "bottom".into(),
-            their_socket: their_socket.to_string(),
-            roll: 0.0,
+            placement: Some(NodePlacement {
+                parent: parent.to_string(),
+                my_socket: "bottom".into(),
+                their_socket: their_socket.to_string(),
+                roll: 0.0,
+            }),
         }
     }
 
@@ -1324,54 +1241,52 @@ mod tests {
     /// and is reported as itself, along with whatever was standing on it.
     #[test]
     fn a_row_with_an_unknown_kind_is_warned_about_not_swallowed() {
-        let rows = VenueGraphRows {
-            nodes: vec![
-                row("venue", "venue"),
-                row("blob1", "blob"),
-                row("deck1", "stage"),
-            ],
-            edges: vec![
-                edge("blob1", "venue", FLOOR_SOCKET),
-                edge("deck1", "blob1", "top"),
-            ],
-            params: BTreeMap::new(),
-            constraints: Vec::new(),
-        };
+        let rows = rows(vec![
+            root(),
+            on("blob1", "blob", "venue", FLOOR_SOCKET),
+            on("deck1", "stage", "blob1", "top"),
+        ]);
 
         let graph = rows.to_graph().expect("the venue has a root");
         let solved = ResolvedVenue::from(&resolve(&graph, &Mount));
 
         assert_eq!(
             solved.warnings,
-            ["blob1: `blob` is not a node kind"],
-            "the warning names the row and the kind it claimed"
+            [
+                "blob1: `blob` is not a node kind",
+                "deck1: its parents never reach the room, so it has no pose"
+            ],
+            "the warnings name the row, the kind it claimed, and what stood on it"
         );
         assert!(
-            !solved.nodes.iter().any(|n| n.id == "blob1"),
-            "an unknown kind is no node"
-        );
-        assert_eq!(
-            solved
-                .unplaced
+            !solved
+                .nodes
                 .iter()
-                .map(|u| u.node_id.as_str())
-                .collect::<Vec<_>>(),
-            ["deck1"],
-            "what stood on it is reported, not lost"
+                .any(|n| n.id == "blob1" || n.id == "deck1"),
+            "an unknown kind is no node, and nothing stands on it"
         );
     }
 
-    fn labelled(id: &str, kind: &str, label: &str) -> VenueNode {
-        VenueNode {
-            label: Some(label.into()),
-            ..row(id, kind)
-        }
+    /// A node with no placement is not a venue row: the rows are refused
+    /// whole rather than solved with a light missing.
+    #[test]
+    fn a_node_without_a_placement_is_not_a_graph() {
+        let mut stray = on("light", "fixture", "venue", FLOOR_SOCKET);
+        stray.placement = None;
+        assert!(rows(vec![root(), stray]).to_graph().is_none());
+        let mut placed_root = root();
+        placed_root.placement = on("x", "stage", "venue", FLOOR_SOCKET).placement;
+        assert!(rows(vec![placed_root]).to_graph().is_none());
     }
 
-    fn rows(nodes: Vec<VenueNode>, edges: Vec<VenueEdge>) -> VenueGraphRows {
+    fn labelled(mut node: VenueNode, label: &str) -> VenueNode {
+        node.label = Some(label.into());
+        node
+    }
+
+    fn rows(nodes: Vec<VenueNode>) -> VenueGraphRows {
         VenueGraphRows {
             nodes,
-            edges,
             params: BTreeMap::new(),
             constraints: Vec::new(),
         }
@@ -1381,13 +1296,9 @@ mod tests {
     fn sample() -> VenueGraphRows {
         VenueGraphRows {
             nodes: vec![
-                row("venue", "venue"),
-                row("tower_a", "tower"),
-                row("run_3", "run"),
-            ],
-            edges: vec![
-                edge("tower_a", "venue", "floor"),
-                edge("run_3", "tower_a", "top"),
+                root(),
+                on("tower_a", "tower", "venue", "floor"),
+                on("run_3", "run", "tower_a", "top"),
             ],
             params: [
                 ("tower_a".to_string(), [("trim".to_string(), 6.0)].into()),
@@ -1420,7 +1331,15 @@ mod tests {
         );
         assert_eq!(back.params, sample().params);
         assert_eq!(back.constraints.len(), 1);
-        assert_eq!(back.edges.len(), 2);
+        let by_id = |mut nodes: Vec<VenueNode>| {
+            nodes.sort_by(|a, b| a.id.cmp(&b.id));
+            nodes
+        };
+        assert_eq!(
+            by_id(back.nodes.clone()),
+            by_id(sample().nodes),
+            "placements travel with their nodes"
+        );
         assert!(
             bytes.ends_with(b"\n"),
             "a canonical file ends in a newline, as `graph.json` does"
@@ -1434,7 +1353,6 @@ mod tests {
     fn canonical_bytes_ignore_row_order() {
         let mut shuffled = sample();
         shuffled.nodes.reverse();
-        shuffled.edges.reverse();
         shuffled.constraints.push(VenueConstraint {
             node_id: "tower_a".into(),
             my_socket: "top".into(),
@@ -1471,10 +1389,9 @@ mod tests {
 
     #[test]
     fn an_arrival_names_its_kind_its_size_and_the_socket_it_hangs_on() {
-        let before = rows(vec![row("venue", "venue"), row("tower_a", "tower")], vec![]);
+        let before = rows(vec![root(), on("tower_a", "tower", "venue", "floor")]);
         let mut after = before.clone();
-        after.nodes.push(row("run_3", "run"));
-        after.edges.push(edge("run_3", "tower_a", "top"));
+        after.nodes.push(on("run_3", "run", "tower_a", "top"));
         after
             .params
             .insert("run_3".into(), [("span".to_string(), 6.0)].into());
@@ -1488,11 +1405,8 @@ mod tests {
 
     #[test]
     fn a_departure_is_the_arrival_read_backwards() {
-        let before = rows(
-            vec![row("venue", "venue"), row("tower_a", "tower")],
-            vec![edge("tower_a", "venue", "floor")],
-        );
-        let after = rows(vec![row("venue", "venue")], vec![]);
+        let before = rows(vec![root(), on("tower_a", "tower", "venue", "floor")]);
+        let after = rows(vec![root()]);
 
         let changes = diff(&before, &after);
         assert!(
@@ -1505,8 +1419,8 @@ mod tests {
     /// two events, so nothing downstream has to reconcile a kind change.
     #[test]
     fn a_node_that_changed_kind_left_and_a_new_one_arrived() {
-        let before = rows(vec![row("venue", "venue"), row("x", "tower")], vec![]);
-        let after = rows(vec![row("venue", "venue"), row("x", "run")], vec![]);
+        let before = rows(vec![root(), on("x", "tower", "venue", "floor")]);
+        let after = rows(vec![root(), on("x", "run", "venue", "floor")]);
 
         assert!(matches!(
             &diff(&before, &after)[..],
@@ -1517,17 +1431,13 @@ mod tests {
 
     #[test]
     fn reparenting_reports_the_socket_it_left_and_the_one_it_reached() {
-        let before = rows(
-            vec![row("venue", "venue"), row("tower_a", "tower")],
-            vec![edge("tower_a", "venue", "floor")],
-        );
-        let mut after = before.clone();
-        after.edges[0].their_socket = "rig".into();
+        let before = rows(vec![root(), on("tower_a", "tower", "venue", "floor")]);
+        let after = rows(vec![root(), on("tower_a", "tower", "venue", "rig")]);
 
         let changes = diff(&before, &after);
         assert!(matches!(
             &changes[..],
-            [VenueChange::Reparented { from: Some(from), to: Some(to), .. }]
+            [VenueChange::Reparented { from, to, .. }]
                 if from.their_socket == "floor" && to.their_socket == "rig"
         ));
         assert_eq!(summarize(&changes), "~ tower_a: venue.floor → venue.rig");
@@ -1537,7 +1447,7 @@ mod tests {
     fn a_changed_param_names_the_key_and_both_values() {
         let before = VenueGraphRows {
             params: [("tower_a".to_string(), [("trim".to_string(), 6.0)].into())].into(),
-            ..rows(vec![row("venue", "venue"), row("tower_a", "tower")], vec![])
+            ..rows(vec![root(), on("tower_a", "tower", "venue", "floor")])
         };
         let mut after = before.clone();
         after
@@ -1559,20 +1469,9 @@ mod tests {
     /// room by the old name has to be able to find the line.
     #[test]
     fn relabelling_reads_from_the_old_name() {
-        let before = rows(
-            vec![
-                row("venue", "venue"),
-                labelled("tower_a", "tower", "SL tower"),
-            ],
-            vec![],
-        );
-        let after = rows(
-            vec![
-                row("venue", "venue"),
-                labelled("tower_a", "tower", "SR tower"),
-            ],
-            vec![],
-        );
+        let tower = || on("tower_a", "tower", "venue", "floor");
+        let before = rows(vec![root(), labelled(tower(), "SL tower")]);
+        let after = rows(vec![root(), labelled(tower(), "SR tower")]);
 
         let changes = diff(&before, &after);
         assert!(matches!(
@@ -1604,18 +1503,17 @@ mod tests {
     /// the range the rigger labelled them with.
     #[test]
     fn a_run_of_same_kind_arrivals_collapses_to_one_line() {
-        let before = rows(vec![row("venue", "venue")], vec![]);
+        let before = rows(vec![root()]);
         let mut after = before.clone();
         for index in 1..=4 {
             after.nodes.push(labelled(
-                &format!("spot_{index}"),
-                "fixture",
+                on(&format!("spot_{index}"), "fixture", "venue", "rig"),
                 &format!("Rogue R2 Spot {index}"),
             ));
         }
         let mut gone = before.clone();
-        gone.nodes.push(row("odd", "fixture"));
-        gone.nodes.push(row("even", "fixture"));
+        gone.nodes.push(on("odd", "fixture", "venue", "rig"));
+        gone.nodes.push(on("even", "fixture", "venue", "rig"));
 
         assert_eq!(
             summarize(&diff(&before, &after)),

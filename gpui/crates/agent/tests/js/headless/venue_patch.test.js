@@ -136,11 +136,10 @@ test("auto patch moves and reports", () => {
   assert(reading("Mover 1 address = ") !== "100", "auto patch left the override in place");
 });
 
-// Unpatching something standing in the room asks before it takes it down.
-test("unpatching a placed fixture asks first", () => {
+// Unpatching takes the light out of the room too, so it asks first.
+test("unpatching a fixture asks first", () => {
   openPatch();
   const before = movers();
-  expect(reading("Mover 2 placement = ")).toBe("placed");
   const askToUnpatch = () => {
     app.click(app.snapshot().find({ role: "row", label: "Mover 2" }), { button: "right" });
     until("the row menu", (s) => s.find({ role: "button", label: "Unpatch" }) !== undefined);
@@ -158,49 +157,6 @@ test("unpatching a placed fixture asks first", () => {
   until("the row to go", (s) => s.find({ role: "row", label: "Mover 2" }) === undefined);
   app.frames(6);
   expect(movers().length).toBe(before.length - 1);
-});
-
-// The add dialog morphs from the bundle to the count, and what it makes
-// continues the venue's own numbering.
-test("adding N fixtures morphs and continues the numbering", () => {
-  openPatch();
-  const before = movers();
-  app.click(app.snapshot().find({ role: "button", label: "Add fixtures" }));
-  const bundle = until("the bundle", (s) => s.find({ role: "input", label: "Search fixtures…" }) !== undefined);
-  app.type(bundle.find({ role: "input", label: "Search fixtures…" }), "Mover");
-  until("the seeded definition", (s) => s.find({ role: "row", label: "Luma Mover" }) !== undefined);
-  app.frames(4);
-
-  // The morph: page one leaves, page two arrives, and the table behind the
-  // card keeps every row for the whole flight. Only frames with the dialog.
-  app.click(app.snapshot().find({ role: "row", label: "Luma Mover" }));
-  const flight = app.painted()
-    .filter((s) => s.find({ role: "card", label: "Add fixtures dialog" }) !== undefined)
-    .map((s) => s.nodes.filter((n) => n.role === "row" && n.label.startsWith("Mover ")).length);
-  assert(flight.length > 0, "the morph drew no frames");
-  assert(flight.every((count) => count === before.length), `the table flashed while the dialog morphed: ${flight}`);
-  until("the count page", (s) => s.findAll({ role: "input" }).some((n) => n.label.startsWith("count = ")));
-  app.frames(6);
-  expect(texts().find((l) => l.startsWith("Lands in"))).toContain("unplaced");
-  // The mode trigger is a plate wide enough for the word on it: handed no
-  // modes to size by, it collapses to its chevron. Six pixels a character is
-  // a floor on "the label fits", not a measurement.
-  const chip = app.snapshot().find({ role: "select", label: "Default" }).bounds;
-  assert(chip.width >= 6 * "Default".length && chip.width > chip.height, `the mode chip is narrower than its word: ${JSON.stringify(chip)}`);
-
-  app.click(app.snapshot().find({ role: "input", label: "count = 1" }));
-  app.key("secondary-a 3 enter");
-  until("the count", (s) => s.find({ role: "input", label: "count = 3" }) !== undefined);
-  app.frames(2);
-  app.click(app.snapshot().find({ role: "button", label: "Add" }));
-  // The rig ships Mover 0–3, so the mint continues at 4.
-  until("three more rows", (s) => s.find({ role: "row", label: "Mover 6" }) !== undefined);
-  app.frames(6);
-  const after = movers();
-  for (const name of ["Mover 4", "Mover 5", "Mover 6"]) expect(after).toContain(name);
-  expect(after.length).toBe(before.length + 3);
-  // What the button made true, in the page's word for a fixture with no place.
-  expect(texts().find((l) => l.startsWith("Added "))).toBe("Added 3 fixtures, unplaced");
 });
 
 // Two modes over the rig's one, at eight and sixteen channels.
@@ -295,7 +251,6 @@ test("venue groups are editable in the narrow panel", { fixture: { window: [1100
   expect(included()).toEqual(["Include Mover 0", "Include Mover 1"]);
   nav.step("cancel", "button", "Cancel group edit");
   until("the builder", (s) => s.find({ role: "button", label: "Add element" }));
-  expect(app.snapshot().find({ role: "button", label: "Add fixtures" }) !== undefined).toBe(true);
 });
 
 test("fixture table edits and scene controls share selection", () => {

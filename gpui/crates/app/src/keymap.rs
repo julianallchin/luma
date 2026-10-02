@@ -69,8 +69,6 @@ pub(crate) mod context {
     /// Picking a clip's fixtures off the room.
     pub const FIXTURE_PICKER: &str = "FixturePicker";
     pub const PATTERN_INSERT: &str = "PatternInsert";
-    /// Picking a definition and a count for the patch page.
-    pub const ADD_FIXTURES: &str = "AddFixtures";
     /// The one confirmation dialog — see [`crate::confirm`].
     pub const CONFIRM: &str = "Confirm";
     /// The "Export show" dialog — see [`crate::export_dialog`].
@@ -87,7 +85,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 10] = [
+    pub const DIALOGS: [&str; 9] = [
         VENUES,
         SETTINGS,
         ADD_TRACKS,
@@ -95,7 +93,6 @@ pub(crate) mod context {
         SUBAGENTS,
         FIXTURE_PICKER,
         PATTERN_INSERT,
-        ADD_FIXTURES,
         CONFIRM,
         SHOW_EXPORT,
     ];
@@ -161,8 +158,8 @@ actions!(
         /// `W`/`E` pair, scoped to the stage page.
         GizmoTranslate,
         GizmoRotate,
-        /// Delete the stage builder's selected subtree. Its fixtures are
-        /// trayed, not destroyed.
+        /// Delete the stage builder's selected subtree, its fixtures and
+        /// their patch rows with it.
         DeleteStageElement,
         /// Open the stage builder's add-element dialog, caret in its search.
         AddStageElement,

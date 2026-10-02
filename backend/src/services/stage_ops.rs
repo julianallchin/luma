@@ -10,7 +10,7 @@
 //!
 //! # What is a verb and what is a composition
 //!
-//! `attach`, `reattach`, `place_free`, `detach`, `constrain`, `set_params` and
+//! `attach`, `place_free`, `constrain`, `set_params` and
 //! `delete_subtree` each write one relation and re-solve. [`Stage::extend`] and
 //! [`Stage::duplicate`] are **compositions** of those — an extend is an attach
 //! plus, when the run bridges a measured gap, the far-end check that says so;
@@ -42,6 +42,7 @@ use sqlx::SqlitePool;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::local::venue_graph as venue_graph_db;
 use crate::models::distribute::{DistributeLayout, DistributeReport};
+use crate::models::fixtures::PatchedFixture;
 use crate::models::venue_graph::{
     PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
 };
@@ -290,7 +291,7 @@ impl<'a> Stage<'a> {
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_kind(kind)?;
-        self.require_catalog_ref(kind, catalog_ref)?;
+        self.require_catalog_ref(catalog_ref)?;
         require_in_venue(&mut access, &[parent_id]).await?;
         // `derived` is whether the catalog picked the caller's half of the
         // joint rather than the caller naming it.
@@ -309,16 +310,15 @@ impl<'a> Stage<'a> {
                 (socket, true)
             }
         };
-        let node_id = self
-            .insert(&mut access, kind, catalog_ref, label, params)
-            .await?;
         let edge = Edge {
             parent: parent_id.to_string(),
             my_socket: my_socket.clone(),
             their_socket: their_socket.to_string(),
             roll: yaw,
         };
-        self.check_and_write(&mut access, &node_id, edge).await?;
+        let node_id = self
+            .insert(&mut access, kind, catalog_ref, label, params, edge)
+            .await?;
         let mut report = self.report(access, &node_id).await?;
         // The choice, said out loud. Picking the caller's half of the joint is
         // a convenience — `attach` scores socket *types*, so a piece with four
@@ -332,31 +332,6 @@ impl<'a> Stage<'a> {
             ));
         }
         Ok(report)
-    }
-
-    /// Place a node that already exists somewhere else — a re-attach, or a
-    /// fixture dragged out of the patch tray.
-    ///
-    /// # Errors
-    /// As [`Self::attach`].
-    pub async fn reattach(
-        &self,
-        node_id: &str,
-        parent_id: &str,
-        my_socket: &str,
-        their_socket: &str,
-        yaw: f64,
-    ) -> Result<PlacementReport> {
-        let mut access = self.write().await?;
-        require_in_venue(&mut access, &[node_id, parent_id]).await?;
-        let edge = Edge {
-            parent: parent_id.to_string(),
-            my_socket: my_socket.to_string(),
-            their_socket: their_socket.to_string(),
-            roll: yaw,
-        };
-        self.check_and_write(&mut access, node_id, edge).await?;
-        self.report(access, node_id).await
     }
 
     /// Free placement: put a node on a surface at `(u, v, yaw, trim)`.
@@ -384,7 +359,7 @@ impl<'a> Stage<'a> {
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_kind(kind)?;
-        self.require_catalog_ref(kind, catalog_ref)?;
+        self.require_catalog_ref(catalog_ref)?;
         let parent_id = match surface_node_id {
             Some(id) => {
                 require_in_venue(&mut access, &[id]).await?;
@@ -403,29 +378,16 @@ impl<'a> Stage<'a> {
             Some(name) => name.to_string(),
             None => self.seat_socket(kind, catalog_ref, &params)?,
         };
-        let node_id = self
-            .insert(&mut access, kind, catalog_ref, label, params)
-            .await?;
         let edge = Edge {
             parent: parent_id,
             my_socket,
             their_socket: surface.to_string(),
             roll: yaw,
         };
-        self.check_and_write(&mut access, &node_id, edge).await?;
+        let node_id = self
+            .insert(&mut access, kind, catalog_ref, label, params, edge)
+            .await?;
         self.report(access, &node_id).await
-    }
-
-    /// Unplace a node. It and its subtree drop out of the solve; the rows stay,
-    /// so re-attaching restores the whole branch.
-    ///
-    /// # Errors
-    /// Fails if the venue is not writable or the node is not in it.
-    pub async fn detach(&self, node_id: &str) -> Result<PlacementReport> {
-        let mut access = self.write().await?;
-        require_in_venue(&mut access, &[node_id]).await?;
-        venue_graph_db::delete_edge(&mut access, node_id).await?;
-        self.report(access, node_id).await
     }
 
     /// Write down a far end: this socket meets that one.
@@ -480,7 +442,7 @@ impl<'a> Stage<'a> {
     ///
     /// # Errors
     /// Fails if the venue is not writable or the node is not in it. Refuses
-    /// unsupported/non-finite parameters, including yaw without an edge.
+    /// unsupported/non-finite parameters, including yaw on the root.
     pub async fn set_params(
         &self,
         node_id: &str,
@@ -493,15 +455,7 @@ impl<'a> Stage<'a> {
         let (_, edge) = parameter_edit(&graph, node_id, &params)?;
         if params.remove("yaw").is_some() {
             let edge = edge.expect("parameter_edit validated the yaw edge");
-            venue_graph_db::upsert_edge(
-                &mut access,
-                node_id,
-                &edge.parent,
-                &edge.my_socket,
-                &edge.their_socket,
-                edge.roll,
-            )
-            .await?;
+            venue_graph_db::set_placement(&mut access, node_id, &(&edge).into()).await?;
         }
         venue_graph_db::set_params(&mut access, node_id, &keep(params)).await?;
         if label.is_some() {
@@ -510,16 +464,12 @@ impl<'a> Stage<'a> {
         self.report(access, node_id).await
     }
 
-    /// Delete a node and everything structural hanging off it.
+    /// Delete a node and everything hanging off it.
     ///
-    /// # A fixture is inventory, not structure
-    ///
-    /// Pulling a truss down loses the rig its shape, not its lights: every
-    /// fixture under the deleted node is **trayed** — its edge cascades away
-    /// with its parent, so the solve reports it unplaced and the tray can hang
-    /// it somewhere else. Only a fixture the caller names *directly* is
-    /// deleted, and then through [`fixture_create::delete`], which is the one
-    /// door that takes the patch row with the node.
+    /// A light never exists without a place, so pulling a truss down takes its
+    /// lights with it: every fixture in the subtree goes through
+    /// [`fixture_create::delete`], the one door that takes the patch row with
+    /// the node. Undo is [`Self::restore`], which brings both back.
     ///
     /// # Errors
     /// Fails if the venue is not writable or the node is not in it; refuses the
@@ -537,10 +487,11 @@ impl<'a> Stage<'a> {
             .subtree(node_id)
             .into_iter()
             .partition(|id| graph.node(id).is_some_and(|n| n.kind == NodeKind::Fixture));
-        venue_graph_db::delete_nodes(&mut access, &structure).await?;
-        if fixtures.iter().any(|id| id == node_id) {
-            fixture_create::delete(&mut access, node_id).await?;
+        drop(graph);
+        for fixture in &fixtures {
+            fixture_create::delete(&mut access, fixture).await?;
         }
+        venue_graph_db::delete_nodes(&mut access, &structure).await?;
         let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
         let out = ResolvedVenue::from(&solved);
         venue_graph::commit_graph(access).await?;
@@ -591,6 +542,12 @@ impl<'a> Stage<'a> {
             .filter(|r| (length - r.gap_m).abs() <= f64::EPSILON.max(1e-6))
             .map(|r| (r.node_id, r.socket));
 
+        let edge = Edge {
+            parent: node_id.to_string(),
+            my_socket: RUN_NEAR_END.to_string(),
+            their_socket: socket.to_string(),
+            roll: 0.0,
+        };
         let node = self
             .insert(
                 &mut access,
@@ -598,15 +555,9 @@ impl<'a> Stage<'a> {
                 Some(TRUSS_STRAIGHT),
                 None,
                 BTreeMap::from([("span".to_string(), length)]),
+                edge,
             )
             .await?;
-        let edge = Edge {
-            parent: node_id.to_string(),
-            my_socket: RUN_NEAR_END.to_string(),
-            their_socket: socket.to_string(),
-            roll: 0.0,
-        };
-        self.check_and_write(&mut access, &node, edge).await?;
         if let Some((target_node, target_socket)) = bridged {
             let mut graph = venue_graph::graph(&mut access).await?;
             let constraint = Constraint {
@@ -641,11 +592,11 @@ impl<'a> Stage<'a> {
     /// [`mirror_socket`] name, because a reflection turns the child over as
     /// well as the host.
     ///
+    /// The copy is the whole subtree or nothing: a step that is refused fails
+    /// the call, and the transaction rolls back every copy made before it.
+    ///
     /// # Errors
-    /// As [`Self::attach`], for the root's joint. A descendant whose own copy
-    /// is refused leaves the copies already made — the transaction is one edit,
-    /// and a wing that arrived half-built is visible in `describe()`, where a
-    /// silent rollback would not be.
+    /// As [`Self::attach`], for any joint of the copy.
     pub async fn duplicate(
         &self,
         node_id: &str,
@@ -660,43 +611,69 @@ impl<'a> Stage<'a> {
             .ok_or_else(|| StageError::NotFound(format!("`{node_id}` is not in this venue")))?;
         drop(graph);
 
+        let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
+        let mut numbering = fixture_create::numbering(&mut access).await?;
+        let mut runs = std::collections::BTreeSet::new();
         let mut minted: HashMap<String, String> = HashMap::new();
         let mut root_copy = None;
         for step in steps {
-            let parent = match minted.get(&step.parent) {
-                Some(copy) => copy.clone(),
-                // The root's parent is the landing host, which is not a copy.
-                None if root_copy.is_none() => step.parent.clone(),
-                // A descendant whose parent's copy was skipped has nowhere to
-                // hang; it is reported unplaced by the solve below.
-                None => continue,
+            // The root's parent is the landing host; every later step's parent
+            // was copied first, because the plan lists parents before children.
+            let parent = match (&root_copy, minted.get(&step.parent)) {
+                (None, _) => step.parent.clone(),
+                (Some(_), Some(copy)) => copy.clone(),
+                (Some(_), None) => {
+                    return Err(StageError::Internal(format!(
+                        "the copy of `{}` came before its parent's",
+                        step.source
+                    )))
+                }
             };
-            let copy = self
-                .insert(
-                    &mut access,
-                    step.kind.as_str(),
-                    step.catalog_ref.as_deref(),
-                    step.label.as_deref(),
-                    step.params,
-                )
-                .await?;
             let edge = Edge {
                 parent,
                 my_socket: step.my_socket,
                 their_socket: step.their_socket,
                 roll: step.yaw,
             };
-            self.check_and_write(&mut access, &copy, edge).await?;
+            let copy = if step.kind == NodeKind::Fixture {
+                let source = patch
+                    .iter()
+                    .find(|row| row.id == step.source)
+                    .ok_or_else(|| {
+                        StageError::Internal(format!("light `{}` has no patch row", step.source))
+                    })?;
+                let (copy, run) = self
+                    .insert_light(&mut access, &mut numbering, source, step.params, edge)
+                    .await?;
+                runs.extend(run);
+                copy
+            } else {
+                self.insert(
+                    &mut access,
+                    step.kind.as_str(),
+                    step.catalog_ref.as_deref(),
+                    step.label.as_deref(),
+                    step.params,
+                    edge,
+                )
+                .await?
+            };
             minted.insert(step.source, copy.clone());
             root_copy.get_or_insert(copy);
         }
         let root_copy =
             root_copy.ok_or_else(|| StageError::NotFound("nothing to duplicate".into()))?;
+        // The copies' runs are addressed again now that every light exists,
+        // as a distribution's is.
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        for run in &runs {
+            distribute_service::readdress_run(&mut access, &solved, run).await?;
+        }
         self.report(access, &root_copy).await
     }
 
     /// Patch, name and place `count` fixtures along one host face — the
-    /// only fixture constructor besides the patch page's non-placed add.
+    /// only fixture constructor.
     ///
     /// One verb, one transaction: the rows, the nodes, the edges and the
     /// addresses either all land or none do.
@@ -767,16 +744,14 @@ impl<'a> Stage<'a> {
         let mut access = self.write().await?;
         require_in_venue(&mut access, &[member_node_id]).await?;
         let graph = venue_graph::graph(&mut access).await?;
-        let Some(edge) = graph.edge(member_node_id).cloned() else {
-            return Err(StageError::Refused(format!(
-                "`{member_node_id}` is not placed on anything"
-            )));
-        };
-        if graph.node(member_node_id).map(|node| node.kind) != Some(NodeKind::Fixture) {
+        let (Some(edge), Some(NodeKind::Fixture)) = (
+            graph.edge(member_node_id).cloned(),
+            graph.node(member_node_id).map(|node| node.kind),
+        ) else {
             return Err(StageError::Refused(
                 "only a fixture's row can be redistributed".into(),
             ));
-        }
+        };
         let rows = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
         let Some(member) = rows.iter().find(|row| row.id == member_node_id) else {
             return Err(StageError::NotFound(format!(
@@ -848,50 +823,62 @@ impl<'a> Stage<'a> {
     /// Replace the venue's graph with a snapshot of itself — the undo stack's
     /// one verb.
     ///
-    /// The snapshot is rows a `get_venue_graph` (or any verb's round trip)
-    /// answered earlier: structure only. Patch rows are not part of it, so a
-    /// snapshot naming a fixture whose patch row has since been deleted is
-    /// refused whole — restoring half a fixture would be a node no page can
-    /// draw. One transaction: reconcile changed rows, preserving unchanged
-    /// rows and their sync receipts, then re-solve.
+    /// `patch` is the patch the snapshot was taken beside, so a verb that
+    /// deleted lights can be undone: a fixture node the snapshot holds and the
+    /// venue has lost comes back with its patch row from `patch`, and one the
+    /// venue holds and the snapshot does not leaves with its patch row. A light
+    /// in both keeps the patch row it has now, because a patch edit is not a
+    /// stage edit. One transaction: reconcile changed rows, preserving
+    /// unchanged rows and their sync receipts, then re-solve.
     ///
     /// # Errors
-    /// [`StageError::Refused`] if the rows do not form a graph or a fixture
-    /// node's patch row is gone.
-    pub async fn restore(&self, rows: &VenueGraphRows) -> Result<ResolvedVenue> {
+    /// [`StageError::Refused`] if the rows do not form a graph, a returning
+    /// light has no patch row in `patch`, or its old address is taken.
+    pub async fn restore(
+        &self,
+        rows: &VenueGraphRows,
+        patch: &[PatchedFixture],
+    ) -> Result<ResolvedVenue> {
         if rows.to_graph().is_none() {
             return Err(StageError::Refused(
                 "the snapshot's rows do not form a graph".into(),
             ));
         }
+        let fixture = NodeKind::Fixture.as_str();
         let mut access = self.write().await?;
-        let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
-        for node in &rows.nodes {
-            if node.kind == "fixture" && !patch.iter().any(|row| row.id == node.id) {
-                return Err(StageError::Refused(format!(
-                    "`{}` is a fixture whose patch row is gone — the snapshot predates a patch \
-                     edit and cannot be restored",
-                    node.id
-                )));
+        let current = venue_graph_db::get_graph(&mut access).await?;
+        let held = |id: &str| current.nodes.iter().find(|node| node.id == id);
+
+        // Lights first, so the addresses the leaving ones free are free for
+        // the returning ones.
+        for node in &current.nodes {
+            if node.kind == fixture && !rows.nodes.iter().any(|row| row.id == node.id) {
+                fixture_create::delete(&mut access, &node.id).await?;
             }
         }
-        let current = venue_graph::graph(&mut access).await?;
-        let root = current.root().to_string();
-        let removed: Vec<String> = current
-            .nodes()
-            .filter(|node| node.id != root && !rows.nodes.iter().any(|row| row.id == node.id))
-            .map(|node| node.id.clone())
-            .collect();
-        drop(current);
-        venue_graph_db::delete_nodes(&mut access, &removed).await?;
-        // Deletion can also remove edges/constraints on retained nodes. Read
-        // after the cascade so those relations are restored when necessary.
-        let current = venue_graph_db::get_graph(&mut access).await?;
         for node in &rows.nodes {
-            if node.kind == "venue" {
+            if node.kind != fixture || held(&node.id).is_some() {
                 continue;
             }
-            match current.nodes.iter().find(|old| old.id == node.id) {
+            let row = patch.iter().find(|row| row.id == node.id).ok_or_else(|| {
+                StageError::Refused(format!(
+                    "`{}` is a light whose patch row is gone, and the snapshot does not carry it",
+                    node.id
+                ))
+            })?;
+            fixture_create::restore(&mut access, row, node).await?;
+        }
+
+        // Structure: new rows in, changed rows (placements included) back to
+        // what they were, then the rows the snapshot does not have out. In
+        // that order, so nothing the snapshot keeps still hangs off a row
+        // about to go. A parent written after its child is fine: the foreign
+        // key is checked at commit.
+        for node in &rows.nodes {
+            if node.kind == "venue" || node.kind == fixture {
+                continue;
+            }
+            match held(&node.id) {
                 None => {
                     venue_graph_db::insert_node_with_id(
                         &mut access,
@@ -899,6 +886,7 @@ impl<'a> Stage<'a> {
                         &node.kind,
                         node.catalog_ref.as_deref(),
                         node.label.as_deref(),
+                        node.placement.as_ref(),
                     )
                     .await?;
                 }
@@ -908,6 +896,22 @@ impl<'a> Stage<'a> {
                 Some(_) => {}
             }
         }
+        for node in &rows.nodes {
+            if node.kind == fixture && held(&node.id).is_some_and(|old| old != node) {
+                venue_graph_db::update_node(&mut access, node).await?;
+            }
+        }
+        let removed: Vec<String> = current
+            .nodes
+            .iter()
+            .filter(|node| node.kind != "venue" && node.kind != fixture)
+            .filter(|node| !rows.nodes.iter().any(|row| row.id == node.id))
+            .map(|node| node.id.clone())
+            .collect();
+        venue_graph_db::delete_nodes(&mut access, &removed).await?;
+
+        // Read again: the deletes took their params and constraints with them.
+        let current = venue_graph_db::get_graph(&mut access).await?;
         for node in &rows.nodes {
             let desired = rows.params.get(&node.id);
             let existing = current.params.get(&node.id);
@@ -924,24 +928,6 @@ impl<'a> Stage<'a> {
             }
             if !changes.is_empty() {
                 venue_graph_db::set_params(&mut access, &node.id, &changes).await?;
-            }
-        }
-        for edge in &current.edges {
-            if !rows.edges.iter().any(|row| row.child_id == edge.child_id) {
-                venue_graph_db::delete_edge(&mut access, &edge.child_id).await?;
-            }
-        }
-        for edge in &rows.edges {
-            if !current.edges.contains(edge) {
-                venue_graph_db::upsert_edge(
-                    &mut access,
-                    &edge.child_id,
-                    &edge.parent_id,
-                    &edge.my_socket,
-                    &edge.their_socket,
-                    edge.roll,
-                )
-                .await?;
             }
         }
         for constraint in &current.constraints {
@@ -971,6 +957,7 @@ impl<'a> Stage<'a> {
         let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
         let out = ResolvedVenue::from(&solved);
         venue_graph::commit_graph(access).await?;
+        crate::services::groups::invalidate_venue_fixture_cache();
         Ok(out)
     }
 
@@ -983,18 +970,13 @@ impl<'a> Stage<'a> {
     /// case; it is the caller naming a piece that does not exist, and the only
     /// moment anyone can say so usefully is the call that made it.
     ///
-    /// A fixture is exempt: its `catalog_ref` is a patch-row id, not a piece.
-    ///
     /// # Errors
     /// [`StageError::Refused`], naming the nearest entries the catalog does
     /// have, so the fix is in the message.
-    fn require_catalog_ref(&self, kind: &str, catalog_ref: Option<&str>) -> Result<()> {
-        let (Some(wanted), Some(kind)) = (catalog_ref, NodeKind::from_name(kind)) else {
+    fn require_catalog_ref(&self, catalog_ref: Option<&str>) -> Result<()> {
+        let Some(wanted) = catalog_ref else {
             return Ok(());
         };
-        if kind == NodeKind::Fixture {
-            return Ok(());
-        }
         let catalog = catalog(self.fixtures_root)?;
         if catalog.pieces.iter().any(|p| p.catalog_ref == wanted) {
             return Ok(());
@@ -1134,8 +1116,11 @@ impl<'a> Stage<'a> {
         Ok(venue_graph::ensure_migrated(self.pool, self.venue_id, self.fixtures_root).await?)
     }
 
-    /// Mint a row and its params. Every node this module creates comes through
-    /// here, so "a node exists" and "its params were written" are one step.
+    /// Mint a node where `edge` hangs it, with its params. Every piece this
+    /// module creates comes through here (a light through
+    /// [`Self::insert_light`]), so "a node exists", "it has a place" and "its
+    /// params were written" are one step. The joint is checked first, by
+    /// [`Self::admit`].
     async fn insert(
         &self,
         access: &mut VenueAccess<'_, Write>,
@@ -1143,39 +1128,102 @@ impl<'a> Stage<'a> {
         catalog_ref: Option<&str>,
         label: Option<&str>,
         params: BTreeMap<String, f64>,
+        edge: Edge,
     ) -> Result<String> {
-        let node_id = venue_graph_db::insert_node(access, kind, catalog_ref, label).await?;
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let node = Node {
+            id: node_id.clone(),
+            kind: NodeKind::from_name(kind)
+                .ok_or_else(|| StageError::Refused(format!("`{kind}` is not a node kind")))?,
+            catalog_ref: catalog_ref.map(str::to_string),
+            label: label.map(str::to_string),
+            params: params.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        };
+        self.admit(access, node, &edge).await?;
+        venue_graph_db::insert_node_with_id(
+            access,
+            &node_id,
+            kind,
+            catalog_ref,
+            label,
+            Some(&(&edge).into()),
+        )
+        .await?;
         if !params.is_empty() {
             venue_graph_db::set_params(access, &node_id, &keep(params)).await?;
         }
         Ok(node_id)
     }
 
-    /// Check the edge against the graph's invariants, then write it.
+    /// Copy one light onto `edge`: a new patch row (same definition and mode,
+    /// next free addresses) and its node, under one id. A light node never
+    /// exists without its patch row, so a copy of one is a copy of both.
     ///
-    /// The check is `luma_scene`'s, not a copy: acyclic, both sockets present
-    /// on their catalog entries, polarities compatible.
-    async fn check_and_write(
+    /// Addressed as [`distribute_service::distribute`] addresses a new row:
+    /// [`distribute_service::offer`] now, and the caller re-derives the run
+    /// it returns once every copy exists.
+    async fn insert_light(
         &self,
         access: &mut VenueAccess<'_, Write>,
-        node_id: &str,
+        numbering: &mut fixture_create::ModelNumbering,
+        source: &PatchedFixture,
+        params: BTreeMap<String, f64>,
         edge: Edge,
-    ) -> Result<()> {
-        let mut graph = venue_graph::graph(access).await?;
-        let sockets = venue_graph::sockets(self.fixtures_root)?;
-        graph
-            .attach(node_id, edge.clone(), sockets)
-            .map_err(|e| StageError::Refused(e.to_string()))?;
-        venue_graph_db::upsert_edge(
+    ) -> Result<(String, Option<String>)> {
+        let solved = venue_graph::resolved(access, self.fixtures_root).await?;
+        let rows = crate::database::local::fixtures::get_patched_fixtures(access).await?;
+        let run = distribute_service::run_of(&solved, &edge.parent);
+        let channels = u16::try_from(source.num_channels)
+            .map_err(|_| StageError::Internal(format!("`{}` has no channel count", source.id)))?;
+        let footprint = distribute_service::offer(&solved, &rows, run.as_deref(), channels, 1)?[0];
+        let term = source
+            .label
+            .as_deref()
+            .map(|label| fixture_create::ModelNumbering::term(label).unwrap_or(label));
+        let fixture = fixture_create::create(
             access,
-            node_id,
-            &edge.parent,
-            &edge.my_socket,
-            &edge.their_socket,
-            edge.roll,
+            numbering,
+            fixture_create::NewFixture {
+                manufacturer: &source.manufacturer,
+                model: &source.model,
+                mode_name: &source.mode_name,
+                fixture_path: &source.fixture_path,
+                footprint,
+                pinned: false,
+                name: fixture_create::Naming::Minted(term),
+                placement: (&edge).into(),
+            },
         )
         .await?;
-        Ok(())
+        let node = Node {
+            id: fixture.id.clone(),
+            kind: NodeKind::Fixture,
+            catalog_ref: Some(fixture.fixture_path.clone()),
+            label: fixture.label.clone(),
+            params: params.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        };
+        self.admit(access, node, &edge).await?;
+        if !params.is_empty() {
+            venue_graph_db::set_params(access, &fixture.id, &keep(params)).await?;
+        }
+        Ok((fixture.id, run))
+    }
+
+    /// Check the joint `edge` makes for `node` as it will be — its sockets
+    /// depend on its params — by `luma_scene`'s own check: acyclic, both
+    /// sockets present, polarities compatible.
+    async fn admit(
+        &self,
+        access: &mut VenueAccess<'_, Write>,
+        node: Node,
+        edge: &Edge,
+    ) -> Result<()> {
+        let mut graph = venue_graph::graph(access).await?;
+        let id = node.id.clone();
+        graph.insert(node);
+        graph
+            .attach(&id, edge.clone(), venue_graph::sockets(self.fixtures_root)?)
+            .map_err(|e| StageError::Refused(e.to_string()))
     }
 
     /// Solve, commit, and report — the tail of every verb.
@@ -1226,6 +1274,10 @@ pub struct NodeView {
     /// The node it is bolted to, or `None` for a piece on the room itself.
     pub host: Option<String>,
     pub at: build::Footprint,
+    /// The node's own `trim` parameter in metres: bottom clearance for a free
+    /// piece, lift off the mounting surface for a hosted one. Not `at.z`,
+    /// which is the centre height.
+    pub trim: f64,
     /// The outward normal of the face it sits on — for a light, the beam it
     /// leaves at rest.
     pub face: Option<[f64; 3]>,
@@ -1239,7 +1291,7 @@ impl NodeView {
         serde_json::json!({
             "id": self.id, "kind": self.kind, "catalogRef": self.catalog_ref,
             "short": self.short, "label": self.label, "host": self.host,
-            "at": self.at.at, "z": self.at.z, "size": self.at.size,
+            "at": self.at.at, "z": self.at.z, "trim": self.trim, "size": self.at.size,
             "face": self.face, "member_count": self.member_count,
             "tips": self.tips.iter().map(|tip| serde_json::json!({
                 "node": tip.node, "socket": tip.socket,
@@ -1267,7 +1319,7 @@ pub struct Filter {
     /// Only what hangs off this node, at any depth.
     pub on: Option<String>,
     /// `(u_min, v_min, u_max, v_max)` in the facade frame, against the
-    /// footprint centre.
+    /// footprint centre. Inclusive at both edges.
     pub region: Option<[f64; 4]>,
 }
 
@@ -1389,6 +1441,7 @@ pub(crate) fn views(
                 label: node.label.clone(),
                 host: graph.edge(&node.id).map(|e| e.parent.clone()),
                 at,
+                trim: node.params.get("trim", 0.0),
                 face: scene.mounted_face(&node.id),
                 tips: scene.tips(&node.id),
                 member_count: if node.kind == NodeKind::Array {
@@ -1664,15 +1717,9 @@ impl<'a> Stage<'a> {
         // mates the face that roll moved.
         if let (Some(roll), Some(edge)) = (plan.parent_roll, parent_edge) {
             if (edge.roll - roll).abs() > f64::EPSILON {
-                venue_graph_db::upsert_edge(
-                    &mut access,
-                    &plan.edge.parent,
-                    &edge.parent,
-                    &edge.my_socket,
-                    &edge.their_socket,
-                    roll,
-                )
-                .await?;
+                let rolled = Edge { roll, ..edge };
+                venue_graph_db::set_placement(&mut access, &plan.edge.parent, &(&rolled).into())
+                    .await?;
             }
         }
         let node_id = self
@@ -1682,9 +1729,8 @@ impl<'a> Stage<'a> {
                 Some(&plan.catalog_ref),
                 plan.label.as_deref(),
                 plan.params.clone(),
+                plan.edge.clone(),
             )
-            .await?;
-        self.check_and_write(&mut access, &node_id, plan.edge.clone())
             .await?;
         if let Some((mine, target_node, target_socket)) = plan.constraint.clone() {
             venue_graph_db::upsert_constraint(
@@ -1879,19 +1925,14 @@ impl<'a> Stage<'a> {
                     node.catalog_ref.as_deref(),
                     node.label.as_deref(),
                     params,
+                    Edge {
+                        parent,
+                        my_socket: edge.my_socket.clone(),
+                        their_socket: edge.their_socket.clone(),
+                        roll: if on_floor { edge.roll + yaw } else { edge.roll },
+                    },
                 )
                 .await?;
-            self.check_and_write(
-                &mut access,
-                &copy,
-                Edge {
-                    parent,
-                    my_socket: edge.my_socket.clone(),
-                    their_socket: edge.their_socket.clone(),
-                    roll: if on_floor { edge.roll + yaw } else { edge.roll },
-                },
-            )
-            .await?;
             if on_floor {
                 top.push(copy.clone());
             }
@@ -1990,7 +2031,7 @@ pub fn catalog(fixtures_root: &Path) -> Result<StageCatalog> {
 /// Public because the stage page previews a held copy by inserting exactly this
 /// plan into a clone of the graph and resolving it: the ghost and the commit
 /// walk one list, so a preview cannot draw a wing the verb would not build.
-/// `None` when the node is not in the graph.
+/// `None` when the node is not in the graph, or is the root.
 ///
 /// `flip` mirrors handedness about the joint. `u` changes sign — it runs along
 /// the host feature's tangent, so its sign is which side of that feature a
@@ -2010,20 +2051,15 @@ pub fn duplicate_plan(
 ) -> Option<Vec<CopyStep>> {
     let source = graph.node(node_id)?;
     // The copy meets its new host by the same socket the original does, so a
-    // wing bolted by a truss end is bolted by a truss end.
-    let my_socket = graph.edge(node_id).map_or_else(
-        || RUN_NEAR_END.to_string(),
-        |edge| {
-            if flip {
-                mirror_socket(&edge.my_socket)
-            } else {
-                edge.my_socket.clone()
-            }
-        },
-    );
-    let yaw = graph
-        .edge(node_id)
-        .map_or(0.0, |edge| if flip { -edge.roll } else { edge.roll });
+    // wing bolted by a truss end is bolted by a truss end. The root has no
+    // edge and is not something to copy.
+    let edge = graph.edge(node_id)?;
+    let my_socket = if flip {
+        mirror_socket(&edge.my_socket)
+    } else {
+        edge.my_socket.clone()
+    };
+    let yaw = if flip { -edge.roll } else { edge.roll };
     let mut steps = vec![CopyStep {
         source: node_id.to_string(),
         kind: source.kind,
@@ -2040,9 +2076,9 @@ pub fn duplicate_plan(
         .into_iter()
         .filter(|id| id != node_id)
     {
-        let (Some(node), Some(edge)) = (graph.node(&id), graph.edge(&id)) else {
-            continue;
-        };
+        // Every node of a subtree hangs on its parent; one that did not would
+        // leave its own children nowhere to go, so the plan is refused whole.
+        let (node, edge) = (graph.node(&id)?, graph.edge(&id)?);
         steps.push(CopyStep {
             source: id.clone(),
             kind: node.kind,
@@ -2207,8 +2243,6 @@ fn describe<S: luma_scene::venue::NodeSockets + ?Sized>(
     solved: &ResolvedVenue,
     scene: &build::Scene<'_, S>,
 ) -> String {
-    let placed: std::collections::HashSet<&str> =
-        solved.nodes.iter().map(|node| node.id.as_str()).collect();
     // Which way each light points, as the one stage word `StageDirection`
     // gives it. Only a fixture has a beam to report; a piece's `facing` is the
     // normal its own frame implies and means nothing to a reader.
@@ -2271,27 +2305,9 @@ fn describe<S: luma_scene::venue::NodeSockets + ?Sized>(
     let mut out = format!(
         "{root}  venue   at=(u, v, z) metres: +u stage right, +v toward the crowd, +z up\n"
     );
-    write_branch(graph, &placed, &poses, &beams, &children, root, 1, &mut out);
+    write_branch(graph, &poses, &beams, &children, root, 1, &mut out);
 
-    out.push_str("\nunplaced:");
-    if solved.unplaced.is_empty() {
-        out.push_str(" none\n");
-    } else {
-        out.push('\n');
-        for node in &solved.unplaced {
-            out.push_str(&format!(
-                "  {}  {}{}  (+{} below)\n",
-                node.node_id,
-                node.kind,
-                node.label
-                    .as_deref()
-                    .map(|l| format!("  \"{l}\""))
-                    .unwrap_or_default(),
-                node.descendants
-            ));
-        }
-    }
-
+    out.push('\n');
     out.push_str("dangling:");
     if solved.dangling.is_empty() {
         out.push_str(" none\n");
@@ -2355,9 +2371,8 @@ fn summary(graph: &VenueGraph, solved: &Solved, supply: &VenueSockets) -> String
     }
     let projected = ResolvedVenue::from(solved);
     out.push_str(&format!(
-        "{} placed nodes; {} unplaced branches; {} open sockets.\n",
+        "{} placed nodes; {} open sockets.\n",
         nodes.len(),
-        projected.unplaced.len(),
         projected.dangling.len()
     ));
     // Warnings precede potentially large inventories so they survive output caps.
@@ -2418,7 +2433,6 @@ fn summary(graph: &VenueGraph, solved: &Solved, supply: &VenueSockets) -> String
 
 fn write_branch(
     graph: &VenueGraph,
-    placed: &std::collections::HashSet<&str>,
     poses: &BTreeMap<&str, ([f64; 3], f64)>,
     beams: &BTreeMap<&str, &'static str>,
     children: &BTreeMap<&str, Vec<&str>>,
@@ -2472,12 +2486,9 @@ fn write_branch(
         if let Some(word) = beams.get(id) {
             line.push_str(&format!("  beam={word}"));
         }
-        if !placed.contains(id) {
-            line.push_str("  [unplaced]");
-        }
         out.push_str(&line);
         out.push('\n');
-        write_branch(graph, placed, poses, beams, children, id, depth + 1, out);
+        write_branch(graph, poses, beams, children, id, depth + 1, out);
     }
 }
 
@@ -2489,6 +2500,11 @@ fn require_kind(kind: &str) -> Result<()> {
     match NodeKind::from_name(kind) {
         Some(NodeKind::Venue) => Err(StageError::Refused(
             "a venue has exactly one root, and it is made with the venue".into(),
+        )),
+        // A light is two rows, its node and its patch row, and only
+        // `distribute` (or a duplicate of a light) writes both.
+        Some(NodeKind::Fixture) => Err(StageError::Refused(
+            "a light is added with `distribute`, which patches it as it places it".into(),
         )),
         Some(_) => Ok(()),
         None => Err(StageError::Refused(format!("`{kind}` is not a node kind"))),

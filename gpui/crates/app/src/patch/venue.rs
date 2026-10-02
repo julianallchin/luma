@@ -42,8 +42,6 @@ impl Luma {
 }
 
 pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let add = app.clone();
-    let venue = state.venue_id.clone();
     let details = app.clone();
     let body = div()
         .size_full()
@@ -92,14 +90,6 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                         .flex_1()
                         .text_size(px(12.5))
                         .child(format!("Fixtures · {}", state.rows().len())),
-                )
-                .child(
-                    float::btn("Add", "venue-add-fixtures")
-                        .id("venue-add-fixtures")
-                        .on_click(move |_, _, cx| {
-                            add.update(cx, |this, cx| this.open_add_fixtures(venue.clone(), cx))
-                        })
-                        .agent_node(Role::Button, "Add fixtures"),
                 )
                 .child(
                     float::btn("Patch", "venue-details")

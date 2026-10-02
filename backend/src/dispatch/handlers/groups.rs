@@ -494,8 +494,8 @@ mod tests {
         .unwrap()
         .len()
     }
-    async fn venue_with_movers(services: &AppServices, n: i64) -> (String, Vec<String>) {
-        let venue = dispatch(
+    async fn venue(services: &AppServices) -> String {
+        dispatch(
             services,
             "create_venue",
             &json!({ "name": "Golden room", "description": null }),
@@ -504,60 +504,34 @@ mod tests {
         .expect("the venue was not created")["id"]
             .as_str()
             .unwrap()
-            .to_string();
-
-        let mut fixtures = Vec::new();
-        for n in 0..n {
-            let patched = dispatch(
-                services,
-                "patch_fixture",
-                &json!({
-                    "venueId": venue,
-                    "universe": 0,
-                    "address": 1 + n * 20,
-                    "numChannels": 18,
-                    "manufacturer": "Chauvet",
-                    "model": "Rogue R2 Spot",
-                    "modeName": "18 Channel",
-                    "fixturePath": MOVER,
-                    "label": null,
-                }),
-            )
-            .await
-            .expect("the fixture was not patched");
-            fixtures.push(patched["id"].as_str().unwrap().to_string());
-        }
-        (venue, fixtures)
+            .to_string()
     }
-    async fn clamp(
-        services: &AppServices,
-        venue: &str,
-        fixture: &str,
-        piece: &str,
-        u: f64,
-        trim: f64,
-    ) {
-        dispatch(
+    /// Hang one mover on `piece`'s top at `trim`.
+    async fn hang(services: &AppServices, venue: &str, piece: &str, trim: f64) {
+        let report = dispatch(
             services,
-            "reattach",
+            "distribute",
             &json!({
                 "venueId": venue,
-                "nodeId": fixture,
-                "parentId": piece,
-                "mySocket": "clamp",
-                "theirSocket": "top",
-                "yaw": null,
+                "hostNodeId": piece,
+                "hostSocket": "top",
+                "fixturePath": MOVER,
+                "modeName": "18 Channel",
+                "count": 1,
+                "layout": { "kind": "even" },
+                "labelPrefix": null,
             }),
         )
         .await
-        .expect("the mover would not clamp to the piece");
+        .expect("the mover would not hang on the piece");
+        let fixture = report["fixtures"][0]["id"].as_str().unwrap().to_string();
         dispatch(
             services,
             "set_params",
             &json!({
                 "venueId": venue,
                 "nodeId": fixture,
-                "params": { "u": u, "v": 0.0, "trim": trim },
+                "params": { "u": 0.0, "v": 0.0, "trim": trim },
                 "label": null,
             }),
         )
@@ -567,7 +541,7 @@ mod tests {
     async fn rig() -> (tempfile::TempDir, AppServices, String) {
         let directory = tempfile::tempdir().unwrap();
         let services = seed(directory.path()).await;
-        let (venue, fixtures) = venue_with_movers(&services, 4).await;
+        let venue = venue(&services).await;
 
         let stage = place(
             &services,
@@ -607,9 +581,9 @@ mod tests {
             );
         }
 
-        for (n, fixture) in fixtures.iter().enumerate() {
+        for (n, tower) in towers.iter().enumerate() {
             let trim = 2.0 + (n % 2) as f64 * 3.0;
-            clamp(&services, &venue, fixture, &towers[n], 0.0, trim).await;
+            hang(&services, &venue, tower, trim).await;
         }
 
         dispatch(

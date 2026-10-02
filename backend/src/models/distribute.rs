@@ -7,7 +7,7 @@
 use luma_scene::distribute::Layout;
 use serde::{Deserialize, Serialize};
 
-use crate::models::venue_graph::{warning_line, ResolvedDangling, ResolvedUnplaced};
+use crate::models::venue_graph::{warning_line, ResolvedDangling};
 use crate::services::distribute::{Occupied, Placed, Refusal, Report};
 
 /// How the caller pinned the row's layout down.
@@ -186,8 +186,6 @@ pub struct DistributeReport {
     pub warnings: Vec<String>,
     /// Open structural sockets left in the venue.
     pub dangling: Vec<ResolvedDangling>,
-    /// Subtrees the solve could not reach — the tray, and anything detached.
-    pub unplaced: Vec<ResolvedUnplaced>,
 }
 
 impl From<Report> for DistributeReport {
@@ -210,7 +208,6 @@ impl From<Report> for DistributeReport {
                 .chain(report.announce.iter().cloned())
                 .collect(),
             dangling: report.dangling.iter().map(ResolvedDangling::from).collect(),
-            unplaced: report.unplaced.iter().map(ResolvedUnplaced::from).collect(),
         }
     }
 }

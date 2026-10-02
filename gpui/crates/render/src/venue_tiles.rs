@@ -69,7 +69,7 @@ impl TileMap {
 
     /// The map of one solved venue.
     ///
-    /// Total: an empty venue, a venue whose every node is unplaced, and a
+    /// Total: an empty venue, a venue with nothing reachable, and a
     /// nonsense `cell_m` all produce a map rather than an error — `cell_m` is
     /// clamped to `MIN_CELL_M..=MAX_CELL_M` and a non-finite one falls back to
     /// the default.
@@ -91,7 +91,6 @@ impl TileMap {
             writeln!(out, "gauntlet view · nothing is placed in this venue").ok();
             writeln!(out, "{ORIENTATION}").ok();
         }
-        write_unplaced(&mut out, venue);
         out
     }
 
@@ -705,24 +704,4 @@ fn write_header(out: &mut String, grid: &Grid, options: TileMap) {
         .collect();
     writeln!(out, "legend: {}", legend.join("  ")).ok();
     out.push('\n');
-}
-
-/// What the room has but has not placed, by the root of each branch — the same
-/// report `venue.unplaced` gives, so the map and the binding cannot disagree
-/// about whether a wing is missing or merely in the tray.
-fn write_unplaced(out: &mut String, venue: &ResolvedVenue) {
-    out.push('\n');
-    if venue.unplaced().is_empty() {
-        writeln!(out, "unplaced: none").ok();
-        return;
-    }
-    writeln!(out, "unplaced:").ok();
-    for node in venue.unplaced() {
-        let label = node.label.as_deref().unwrap_or(&node.node);
-        let more = match node.descendants {
-            0 => String::new(),
-            n => format!(" + {n} more"),
-        };
-        writeln!(out, "  {label} ({}){more}", node.kind.as_str()).ok();
-    }
 }

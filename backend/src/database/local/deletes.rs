@@ -21,8 +21,6 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
     (
         "venue_nodes",
         &[
-            ("venue_edges", "child_id"),
-            ("venue_edges", "parent_id"),
             ("venue_node_params", "node_id"),
             ("venue_constraints", "node_id"),
             ("venue_constraints", "target_node"),
@@ -33,13 +31,7 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
     ("folders", &[("folder_tracks", "folder_id")]),
     // No foreign key carries this one locally; see the folders migration.
     ("tracks", &[("folder_tracks", "track_id")]),
-    (
-        "scores",
-        &[
-            ("clips", "score_id"),
-            ("drafts", "score_id"),
-        ],
-    ),
+    ("scores", &[("clips", "score_id"), ("drafts", "score_id")]),
 ];
 
 /// Delete every row of `table` matching `where_sql`, and answer how many.

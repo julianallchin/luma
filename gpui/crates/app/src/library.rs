@@ -72,9 +72,7 @@ use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture
 use luma_lib::models::folders::Folder;
 use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
 use luma_lib::models::node_graph::BeatGrid;
-use luma_lib::models::patch::{
-    ArtNetNode, AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput,
-};
+use luma_lib::models::patch::{ArtNetNode, AutoPatchReport, UniverseCell, UniverseOutput};
 use luma_lib::models::patterns::AnnotationPreview;
 use luma_lib::models::scores::{Score, ScoreSummary};
 use luma_lib::models::selection::Selection;
@@ -84,7 +82,6 @@ use luma_lib::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, Venue
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
 use luma_lib::services::fixtures as fixtures_service;
-use luma_lib::services::group_derivation::FixtureRole;
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
@@ -2403,31 +2400,6 @@ impl Library {
         )
     }
 
-    /// Place a node that already exists — a re-attach, or a fixture dragged
-    /// out of the tray.
-    #[allow(clippy::too_many_arguments)]
-    pub fn reattach(
-        &self,
-        venue_id: &str,
-        node_id: &str,
-        parent_id: &str,
-        my_socket: &str,
-        their_socket: &str,
-        yaw: f64,
-    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "reattach",
-            json!({
-                "venueId": venue_id,
-                "nodeId": node_id,
-                "parentId": parent_id,
-                "mySocket": my_socket,
-                "theirSocket": their_socket,
-                "yaw": yaw,
-            }),
-        )
-    }
-
     /// Free placement: seat a new node on a surface at `(u, v, yaw, trim)`.
     #[allow(clippy::too_many_arguments)]
     pub fn place_free(
@@ -2467,15 +2439,6 @@ impl Library {
                 "params": params,
             }),
         )
-    }
-
-    /// Unplace a node. Its rows stay, so re-attaching restores the branch.
-    pub fn detach(
-        &self,
-        venue_id: &str,
-        node_id: &str,
-    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call("detach", json!({ "venueId": venue_id, "nodeId": node_id }))
     }
 
     /// Write down a far end: this socket meets that one. A check, never an
@@ -2591,17 +2554,18 @@ impl Library {
         )
     }
 
-    /// Replace the venue's graph with a snapshot of itself — the undo stack's
-    /// one verb. Structure only: a snapshot naming a fixture whose patch row
-    /// is gone is refused whole.
+    /// Replace the venue's graph and patch with a snapshot of themselves —
+    /// the undo stack's one verb. A light the snapshot names comes back with
+    /// its patch row; a light it does not name goes, with its patch row.
     pub fn restore_graph(
         &self,
         venue_id: &str,
         rows: &VenueGraphRows,
+        patch: &[PatchedFixture],
     ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
         self.call(
             "restore_graph",
-            json!({ "venueId": venue_id, "rows": rows }),
+            json!({ "venueId": venue_id, "rows": rows, "patch": patch }),
         )
     }
 
@@ -2721,8 +2685,7 @@ impl Library {
     ///
     /// One method for the same reason [`Self::venue_rig`] is one: these are
     /// only meaningful together — a patch list with no group tree is a table
-    /// with a blank column, and "placed" is a fact about the *solved* venue
-    /// rather than about a row — and a page that orchestrated six calls would
+    /// with a blank column — and a page that orchestrated six calls would
     /// be a page that knew which of them depend on each other.
     pub fn patch_data(&self, venue_id: &str) -> impl Future<Output = Result<Patch, LibraryError>> {
         let services = self.services.clone();
@@ -2730,7 +2693,6 @@ impl Library {
         let task = self.runtime().spawn(async move {
             let fixtures: Vec<PatchedFixture> =
                 command(&services, "get_patched_fixtures", &venue).await?;
-            let solved: ResolvedVenue = command(&services, "get_resolved_venue", &venue).await?;
             let groups: Vec<GroupTreeNode> = command(&services, "list_group_tree", &venue).await?;
             let (missing, missing_error) =
                 match command(&services, "missing_venue_groups", &venue).await {
@@ -2759,18 +2721,8 @@ impl Library {
                     definitions.insert(path, def);
                 }
             }
-            // Placed means the solve reached it. A fixture node the walk could
-            // not reach is in `unplaced` and has no pose at all — which is
-            // exactly what the tray is — so membership of the solved node list
-            // is the whole question, and there is no pose to copy out of it.
-            let placed: std::collections::HashSet<String> = fixtures
-                .iter()
-                .filter(|f| solved.nodes.iter().any(|node| node.id == f.id))
-                .map(|f| f.id.clone())
-                .collect();
             Ok::<_, LibraryError>(Patch {
                 fixtures,
-                placed,
                 definitions,
                 groups,
                 missing,
@@ -2882,71 +2834,6 @@ impl Library {
         self.call("auto_patch", json!({ "venueId": venue_id }))
     }
 
-    /// Patch `spec.count` unplaced copies, in one task.
-    ///
-    /// The allocator is asked once for the whole batch and then each row is
-    /// written at the slot it was given, so labels number consecutively and no
-    /// two copies race for one address. Chained here rather than in the page
-    /// because the second call depends on the first — the same reason
-    /// [`Self::venue_rig`] is one method.
-    pub fn add_fixtures(
-        &self,
-        venue_id: &str,
-        spec: NewFixtures,
-    ) -> impl Future<Output = Result<Vec<PatchedFixture>, LibraryError>> {
-        let services = self.services.clone();
-        let venue_id = venue_id.to_string();
-        let task = self.runtime().spawn(async move {
-            let slots: Vec<PatchAddress> = command(
-                &services,
-                "next_addresses",
-                &json!({
-                    "venueId": venue_id, "run": null,
-                    "channels": spec.channels, "count": spec.count,
-                }),
-            )
-            .await?;
-            let mut made = Vec::with_capacity(slots.len());
-            for slot in slots {
-                let row: PatchedFixture = command(
-                    &services,
-                    "patch_fixture",
-                    &json!({
-                        "venueId": venue_id,
-                        "universe": slot.universe,
-                        "address": slot.address,
-                        "numChannels": spec.channels,
-                        "manufacturer": spec.manufacturer,
-                        "model": spec.model,
-                        "modeName": spec.mode_name,
-                        "fixturePath": spec.fixture_path,
-                        "label": null,
-                    }),
-                )
-                .await?;
-                made.push(row);
-            }
-            Ok::<_, LibraryError>(made)
-        });
-        async move {
-            task.await
-                .map_err(|e| LibraryError::at("patch_fixture", Cause::Cancelled(e.to_string())))?
-        }
-    }
-
-    /// What a definition patched in `mode_name` would be *for* — the group
-    /// branch a new fixture lands under, answered by the derivation itself.
-    pub fn fixture_role(
-        &self,
-        path: &str,
-        mode_name: &str,
-    ) -> impl Future<Output = Result<FixtureRole, LibraryError>> + use<> {
-        self.call(
-            "fixture_role",
-            json!({ "path": path, "modeName": mode_name }),
-        )
-    }
-
     // -- outputs --------------------------------------------------------------
 
     /// Every Art-Net node that has answered a poll since discovery started.
@@ -3037,32 +2924,14 @@ async fn command<T: DeserializeOwned>(
 /// carries it rather than asking anyone to type it.
 const ARTNET_PORT: i64 = 6454;
 
-/// A batch of identical fixtures to bring into existence, unplaced.
-///
-/// `channels` is the mode's width, which the caller already read out of the
-/// definition to show it; passing it keeps [`Library::add_fixtures`] from
-/// re-parsing the same file once per copy.
-#[derive(Clone, Debug)]
-pub struct NewFixtures {
-    pub manufacturer: String,
-    pub model: String,
-    pub mode_name: String,
-    pub fixture_path: String,
-    pub channels: i64,
-    pub count: usize,
-}
-
 /// One venue's paperwork, as [`Library::patch_data`] resolves it.
 ///
 /// The patch is what *exists*; where a fixture hangs is the stage page's
-/// business and reaches here only as [`Patch::placed`] — a set, because
-/// "placed" is the one thing a patch row needs to know about the room and a
-/// pose would invite this page to edit one.
+/// business and never reaches here, because a pose would invite this page to
+/// edit one.
 pub struct Patch {
     /// Every patched fixture, in patch order.
     pub fixtures: Vec<PatchedFixture>,
-    /// The ids the resolver found a pose for. Everything else is in the tray.
-    pub placed: std::collections::HashSet<String>,
     /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
     /// absent rather than an error.
     pub definitions: HashMap<String, FixtureDefinition>,

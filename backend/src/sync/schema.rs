@@ -199,18 +199,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "kind",
             "catalog_ref",
             "label",
-            "created_at",
-            "updated_at"
-        ]
-    ),
-    table!(
-        "venue_edges",
-        "@.child_id",
-        "uid",
-        [
-            "child_id",
-            "uid",
-            "venue_id",
             "parent_id",
             "my_socket",
             "their_socket",

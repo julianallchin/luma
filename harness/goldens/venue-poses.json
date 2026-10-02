@@ -492,12 +492,5 @@
       "setPiece": true
     }
   ],
-  "unplaced": [
-    {
-      "descendants": 1,
-      "kind": "piece",
-      "node": "tray_speaker"
-    }
-  ],
   "warnings": 0
 }

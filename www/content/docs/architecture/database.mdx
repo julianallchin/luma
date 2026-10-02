@@ -45,7 +45,7 @@ The list is `SYNCED_TABLES` in `backend/src/sync/schema.rs`:
 
 | Area | Tables |
 |------|--------|
-| Venues | `venues`, `venue_members`, `venue_nodes`, `venue_edges`, `venue_node_params`, `venue_constraints` |
+| Venues | `venues`, `venue_members`, `venue_nodes`, `venue_node_params`, `venue_constraints` |
 | Fixtures and groups | `fixtures`, `fixture_groups`, `fixture_group_members` |
 | Tracks | `tracks`, `track_beats`, `track_roots`, `track_stems`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, `track_beat_validations` |
 | Scores | `scores`, `clips`, `drafts` |
@@ -104,7 +104,7 @@ differences onto the live rows, then deletes the draft.
 | `backend/src/sync/connector.rs` | Gets credentials and uploads changes to Supabase PostgREST. |
 | `backend/src/sync/media.rs`, `files.rs` | Moves audio, stems and album art through Supabase Storage. |
 | `backend/crates/sync` | PowerSync SDK glue. |
-| `deploy/sync-rules.yaml` | PowerSync sync rules. |
+| `deploy/powersync/sync-config.yaml` | PowerSync sync rules. |
 
 ## Media
 

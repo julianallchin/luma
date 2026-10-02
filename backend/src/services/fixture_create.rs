@@ -1,31 +1,18 @@
 //! The one way a fixture comes into existence.
 //!
 //! A fixture is two rows: a `fixtures` row (the paperwork — definition, mode,
-//! universe, address) and a `venue_nodes` row (the thing in the room). Before
-//! this module they were written in different places at different times, and a
-//! fixture added on the patch page got the first and not the second — so the
-//! resolver never saw it, `unplaced` never listed it, and the tray it was
-//! supposed to be sitting in was empty. "Patched but not placed" and "does not
-//! exist" were the same state.
+//! universe, address) and a `venue_nodes` row (the thing in the room, and where
+//! it hangs). A light never exists without a place in the room.
 //!
-//! [`create`] writes both, in the caller's transaction, and is the constructor
-//! both doors use: the patch page's non-placed add and
-//! [`crate::services::distribute`]. The gauntlet's AF9 — "a fixture exists that
-//! no distribution and no patch-page add created" — is unrepresentable because
-//! there is nowhere else to make one.
+//! [`create`] writes both, in the caller's transaction. Its callers are
+//! [`crate::services::distribute`] and a duplicate's copy of a light
+//! ([`crate::services::stage_ops::Stage::duplicate`]). [`restore`] writes both
+//! back from an undo snapshot. There is nowhere else to make a fixture.
 //!
-//! [`delete`] is its dual, and for the same reason: the row and the node go
+//! [`delete`] is their dual, and for the same reason: the row and the node go
 //! together or neither goes. Deleting only the paperwork left a node the
 //! resolver kept posing — a light in the render that nothing in the patch
 //! could name.
-//!
-//! # A new fixture has no edge, and that is the point
-//!
-//! [`create`] never writes a `venue_edges` row. A node with no edge is
-//! **unplaced** ([`luma_scene::venue::ResolvedVenue::unplaced`]) — which is
-//! exactly what a fixture in the tray is, and what lets the stage page's
-//! tray→truss drag `reattach` it rather than invent a placement. A distribution
-//! attaches its own edges afterwards; nothing here guesses one.
 //!
 //! # Naming
 //!
@@ -44,6 +31,7 @@ use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{VenueAccess, Write};
 use crate::database::local::venue_graph as venue_graph_db;
 use crate::models::fixtures::PatchedFixture;
+use crate::models::venue_graph::{NodePlacement, VenueNode};
 use crate::services::patch::PatchError;
 
 /// Running numbers per naming term, `<term> <n>`.
@@ -66,16 +54,24 @@ impl ModelNumbering {
     pub fn seeded_by_labels<'a>(labels: impl IntoIterator<Item = &'a str>) -> ModelNumbering {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for label in labels {
-            let Some((term, n)) = label.rsplit_once(' ') else {
-                continue;
-            };
-            let Ok(n) = n.parse::<usize>() else {
+            let Some((term, n)) = Self::split(label) else {
                 continue;
             };
             let claimed = counts.entry(term.to_string()).or_default();
             *claimed = (*claimed).max(n);
         }
         ModelNumbering(counts)
+    }
+
+    /// The term of a `<term> <n>` label — what a copy of it is numbered
+    /// under. `None` for a label that is not one.
+    pub fn term(label: &str) -> Option<&str> {
+        Self::split(label).map(|(term, _)| term)
+    }
+
+    fn split(label: &str) -> Option<(&str, usize)> {
+        let (term, n) = label.rsplit_once(' ')?;
+        Some((term, n.parse().ok()?))
     }
 
     /// The next label for `term`, consuming its number.
@@ -86,8 +82,7 @@ impl ModelNumbering {
     }
 }
 
-/// A fixture to bring into existence. Everything here is a fact about the
-/// paperwork; where it hangs is a separate write, and there may not be one.
+/// A fixture to bring into existence: the paperwork, and where it hangs.
 #[derive(Debug, Clone)]
 pub struct NewFixture<'a> {
     pub manufacturer: &'a str,
@@ -102,6 +97,8 @@ pub struct NewFixture<'a> {
     pub pinned: bool,
     /// What to call it.
     pub name: Naming<'a>,
+    /// Where it hangs, already admitted against the graph by the caller.
+    pub placement: NodePlacement,
 }
 
 /// How a new fixture gets its label.
@@ -118,7 +115,7 @@ pub enum Naming<'a> {
     Minted(Option<&'a str>),
 }
 
-/// Write the patch row and the tray node, in the caller's transaction.
+/// Write the patch row and the placed node, in the caller's transaction.
 ///
 /// The node carries the **same id** as the row — the contract
 /// [`luma_scene::patch::Fixture::id`] states and
@@ -159,19 +156,54 @@ pub async fn create(
         luma_scene::venue::NodeKind::Fixture.as_str(),
         Some(spec.fixture_path),
         Some(&label),
+        Some(&spec.placement),
     )
     .await?;
     Ok(fixture)
 }
 
+/// Bring a deleted fixture back, exactly as an undo snapshot recorded it: the
+/// patch row under its old id and address, and its node where it hung.
+///
+/// The address is admitted against the patch as it is now, because something
+/// may have been patched into the gap since.
+///
+/// # Errors
+/// [`PatchError::Collision`] or [`PatchError::OutOfRange`] if the old address
+/// is no longer free; otherwise only the database's.
+pub async fn restore(
+    access: &mut VenueAccess<'_, Write>,
+    row: &PatchedFixture,
+    node: &VenueNode,
+) -> Result<(), PatchError> {
+    let patched = crate::services::patch::occupancy(access).await?;
+    let narrow = |value: i64| u16::try_from(value).unwrap_or(u16::MAX);
+    patched.admit(
+        None,
+        narrow(row.universe),
+        narrow(row.address),
+        narrow(row.num_channels),
+    )?;
+    fixtures_db::insert_fixture_row(access, row).await?;
+    venue_graph_db::insert_node_with_id(
+        access,
+        &node.id,
+        &node.kind,
+        node.catalog_ref.as_deref(),
+        node.label.as_deref(),
+        node.placement.as_ref(),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Delete a fixture: the paperwork *and* the thing, in the caller's transaction.
 ///
-/// The dual of [`create`], and the only door out. Both callers — the patch
-/// page's `remove_patched_fixture` and `delete_subtree` on a fixture node —
-/// come through here, which is what makes "the row is gone but the resolver
-/// still poses it" unrepresentable rather than merely unlikely. The node's
-/// edge, its params and any constraint naming it go with it by the cascades
-/// `migrations/20260829000000_venue_graph.sql` declares.
+/// The dual of [`create`], and the only door out. Every caller — the patch
+/// page's `remove_patched_fixture`, `delete_subtree`, a re-distribution and an
+/// undo — comes through here, which is what makes "the row is gone but the
+/// resolver still poses it" unrepresentable rather than merely unlikely. The
+/// node's params and any constraint naming it go with it.
 ///
 /// The node is dropped through [`venue_graph_db::delete_nodes`] rather than
 /// with a `DELETE` of its own, because that module owns the promise that a
