@@ -131,7 +131,7 @@ them at m..M, so `shift' = m + shift·(M − m)` and `scale' = scale·(M − m)`
 along a mirror assumes a head on the plane: `m = at`, `M − m = max(at,
 1 − at)`.
 
-Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
+Kinds (14): `time`, `space`, `noise`, `audio`, `curve`, `math`, `value`, `mirror`,
 `shuffle`, `group`, `split`, `color`, `aim`, `strobe`. `clock` is gone.
 
 | Change | v3 |
