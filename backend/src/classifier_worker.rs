@@ -7,11 +7,11 @@
 //! Also bundles `tag_thresholds.json`: F1-optimal per-tag thresholds from the
 //! model's training-time LOTO sweep, read through [`bundled_thresholds`].
 //!
-//! Output: parsed [`BarClassification`] list, one per scored bar. The
-//! schema is intentionally text-LLM-friendly — see the python worker's
-//! module docstring for the canonical shape.
+//! Output: parsed [`BarClassification`] list, one per scored bar — see the
+//! python worker's module docstring for the canonical shape. What the
+//! database stores is the compact [`StoredBarClassifications`].
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -34,20 +34,66 @@ pub fn bundled_thresholds() -> &'static str {
     BUNDLED_THRESHOLDS
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BarClassification {
-    pub bar_idx: u32,
-    pub start: f64,
-    pub end: f64,
+    pub bar_idx: usize,
     /// `intensity` (continuous, clipped 0..5) plus per-tag sigmoid
-    /// probabilities. BTreeMap → stable JSON ordering downstream.
-    pub predictions: BTreeMap<String, f64>,
+    /// probabilities.
+    pub predictions: HashMap<String, f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ClassifierAnalysis {
     pub tag_order: Vec<String>,
     pub bars: Vec<BarClassification>,
+}
+
+/// `track_bar_classifications.classifications_json`. Index `i` of `intensity`
+/// and `scores` is bar `i` of `workers::build_bar_boundaries`, which is also
+/// where a bar's start and end come from. A bar the worker could not score is
+/// null in both. Values are rounded to 3 decimals: the row syncs, and more
+/// digits carry no information.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredBarClassifications {
+    /// `[start, end]` of bar 0 of the grid the classifier ran against, so
+    /// `list_pending_bar_aligned` can tell when the grid has moved since.
+    pub first_bar: (f64, f64),
+    /// The continuous intensity head, per bar.
+    pub intensity: Vec<Option<f64>>,
+    /// Per-tag probabilities, per bar, in the row's `tag_order_json` order.
+    pub scores: Vec<Option<Vec<f64>>>,
+}
+
+impl StoredBarClassifications {
+    pub fn new(analysis: &ClassifierAnalysis, first_bar: (f64, f64)) -> Result<Self, String> {
+        let n_bars = analysis.bars.iter().map(|bar| bar.bar_idx + 1).max();
+        let n_bars = n_bars.unwrap_or(0);
+        let mut stored = Self {
+            first_bar,
+            intensity: vec![None; n_bars],
+            scores: vec![None; n_bars],
+        };
+        for bar in &analysis.bars {
+            let score = |key: &str| {
+                bar.predictions.get(key).map(|v| round3(*v)).ok_or_else(|| {
+                    format!("classifier output for bar {} lacks '{key}'", bar.bar_idx)
+                })
+            };
+            stored.intensity[bar.bar_idx] = Some(score("intensity")?);
+            stored.scores[bar.bar_idx] = Some(
+                analysis
+                    .tag_order
+                    .iter()
+                    .map(|tag| score(tag))
+                    .collect::<Result<_, _>>()?,
+            );
+        }
+        Ok(stored)
+    }
+}
+
+fn round3(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
 }
 
 /// Write the bundled bar-classifier weights into the app cache once and

@@ -170,14 +170,14 @@ impl Fixture {
             .await
             .unwrap();
 
-        // The real shape: `intensity` is a continuous regression value mixed
-        // into the same map as the sigmoid tags.
-        let classifications = json!([
-            {"bar_idx": 0, "start": 0.032, "end": 1.81,
-             "predictions": {"intensity": 1.647, "kick": 0.101, "hats": 0.326}},
-            {"bar_idx": 1, "start": 1.81, "end": 3.59,
-             "predictions": {"intensity": 4.2, "kick": 0.9, "hats": 0.75}}
-        ]);
+        // The stored shape: bar i of the beat grid at index i, scores in
+        // tag_order, and `intensity` — a continuous regression value — beside
+        // the sigmoid tags.
+        let classifications = json!({
+            "first_bar": [0.5, 2.5],
+            "intensity": [1.647, 4.2],
+            "scores": [[0.101, 0.326], [0.9, 0.75]]
+        });
         sqlx::query(
             "INSERT INTO track_bar_classifications (track_id, classifications_json, tag_order_json)
              VALUES (?, ?, '[\"kick\",\"hats\"]')",
@@ -674,9 +674,15 @@ async fn bar_intensity_is_split_out_of_the_tag_predictions() {
         assert_eq!(&at(&v, path)["axes"][0], bar_axis, "{path}");
     }
 
+    // Bar times come from the beat grid: downbeats 0.5 and 2.5, then one
+    // 128 BPM 4/4 bar.
     assert_eq!(
         read_f64(&manifest, &store, "features.bars.starts_s"),
-        vec![0.032, 1.81]
+        vec![0.5, 2.5]
+    );
+    assert_eq!(
+        read_f64(&manifest, &store, "features.bars.ends_s"),
+        vec![2.5, 4.375]
     );
     assert_eq!(
         read_f32(&manifest, &store, "features.beats"),

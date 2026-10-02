@@ -41,7 +41,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::classifier_worker;
+use crate::classifier_worker::{self, StoredBarClassifications};
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
@@ -71,7 +71,7 @@ impl Preprocessor for ClassifierPreprocessor {
     }
 
     /// Bar-aligned staleness check — see [`list_pending_bar_aligned`]. The
-    /// classifier's `bar_idx` indexes the beat grid that was current when it
+    /// classifier's bars index the beat grid that was current when it
     /// ran, so a later grid change has to re-queue the track.
     async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
         list_pending_bar_aligned(
@@ -80,8 +80,8 @@ impl Preprocessor for ClassifierPreprocessor {
             self.version(),
             self.artifact_table(),
             "classifications_json",
-            "$[0].start",
-            "$[0].end",
+            "$.first_bar[0]",
+            "$.first_bar[1]",
         )
         .await
     }
@@ -109,6 +109,7 @@ impl Preprocessor for ClassifierPreprocessor {
             ));
         }
 
+        let first_bar = bar_boundaries[0];
         let workers = ctx.workers().clone();
         let analysis = tokio::task::spawn_blocking(move || {
             classifier_worker::classify_bars(&workers, Path::new(&mert_path), &bar_boundaries)
@@ -117,7 +118,8 @@ impl Preprocessor for ClassifierPreprocessor {
         .map_err(|e| format!("Classifier worker task failed: {e}"))??;
         ctx.checkpoint()?;
 
-        let classifications_json = serde_json::to_string(&analysis.bars)
+        let stored = StoredBarClassifications::new(&analysis, first_bar)?;
+        let classifications_json = serde_json::to_string(&stored)
             .map_err(|e| format!("Failed to serialize bar classifications: {e}"))?;
         let tag_order_json = serde_json::to_string(&analysis.tag_order)
             .map_err(|e| format!("Failed to serialize tag order: {e}"))?;
@@ -139,7 +141,7 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::ClassifierPreprocessor;
-    use crate::classifier_worker;
+    use crate::classifier_worker::{self, ClassifierAnalysis, StoredBarClassifications};
     use crate::preprocessing::preprocessor::Preprocessor;
     use crate::preprocessing::registry;
     use crate::preprocessing::scheduler::topo_layers;
@@ -227,8 +229,7 @@ mod tests {
         .unwrap();
     }
 
-    /// Classifier output for a synthetic two-bar stretch starting at 0.
-    /// `bar_secs` controls the bar duration encoded in `start`/`end`.
+    /// Classifier output whose first bar starts at 0 and lasts `bar_secs`.
     async fn insert_classifications(
         pool: &SqlitePool,
         track_id: &str,
@@ -236,15 +237,12 @@ mod tests {
         version: u32,
     ) {
         let json = format!(
-            r#"[{{"bar_idx":0,"start":0.0,"end":{0},"predictions":{{}}}},
-                {{"bar_idx":1,"start":{0},"end":{1},"predictions":{{}}}}]"#,
-            bar_secs,
-            bar_secs * 2.0,
+            r#"{{"first_bar":[0.0,{bar_secs}],"intensity":[1.0,2.0],"scores":[[0.1],[0.2]]}}"#
         );
         sqlx::query(
-            "INSERT INTO track_bar_classifications
+            r#"INSERT INTO track_bar_classifications
                 (track_id, classifications_json, tag_order_json, processor_version)
-             VALUES (?, ?, '[]', ?)",
+             VALUES (?, ?, '["kick"]', ?)"#,
         )
         .bind(track_id)
         .bind(json)
@@ -267,9 +265,9 @@ mod tests {
         assert_eq!(pending, vec!["t1".to_string()]);
 
         sqlx::query(
-            "INSERT INTO track_bar_classifications
+            r#"INSERT INTO track_bar_classifications
                 (track_id, classifications_json, tag_order_json, processor_version)
-             VALUES ('t1', '[]', '[]', ?)",
+             VALUES ('t1', '{"first_bar":[0.0,2.0],"intensity":[],"scores":[]}', '[]', ?)"#,
         )
         .bind(p.version() as i64)
         .execute(&pool)
@@ -349,6 +347,32 @@ mod tests {
 
         let pending = p.list_pending(&pool).await.unwrap();
         assert!(pending.is_empty());
+    }
+
+    /// The stored row is compact: one score array per bar in tag order,
+    /// rounded to 3 decimals, with a null for every bar the worker skipped so
+    /// index `i` stays bar `i` of the grid.
+    #[test]
+    fn stored_scores_follow_tag_order_and_keep_skipped_bars() {
+        let analysis: ClassifierAnalysis = serde_json::from_str(
+            r#"{"tag_order": ["kick", "hats"], "bars": [
+                {"bar_idx": 0, "start": 0.5, "end": 2.5,
+                 "predictions": {"hats": 0.12345, "intensity": 1.98765, "kick": 0.9}},
+                {"bar_idx": 2, "start": 4.5, "end": 6.5,
+                 "predictions": {"hats": 0.5, "intensity": 3.0, "kick": 0.0004}}
+            ]}"#,
+        )
+        .unwrap();
+        let stored = StoredBarClassifications::new(&analysis, (0.5, 2.5)).unwrap();
+        let json: serde_json::Value = serde_json::to_value(&stored).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "first_bar": [0.5, 2.5],
+                "intensity": [1.988, null, 3.0],
+                "scores": [[0.9, 0.123], null, [0.0, 0.5]],
+            })
+        );
     }
 
     #[test]
