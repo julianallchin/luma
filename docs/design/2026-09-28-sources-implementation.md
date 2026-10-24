@@ -48,18 +48,18 @@ in the batch. The initial recursive evaluator has been deleted.
 
 ## Migration and verification
 
-`backend/scripts/migrate_sources.py` converts stored clips, drafts and presets.
-It is a one-time data conversion, not a load-time compatibility layer. Dynamic
-old alpha sources move into brightness/rate amount; whole-clip alpha becomes
-fade. Noise keys preserve old random streams, and exact sine easing preserves
-Aim motion. There is no database schema change.
+A one-time script converted stored clips, drafts and presets. It was a data
+conversion, not a load-time compatibility layer, and it and its checker were
+deleted after the run (git history has them). Dynamic old alpha sources move
+into brightness/rate amount; whole-clip alpha becomes fade. Noise keys
+preserve old random streams, and exact sine easing preserves Aim motion.
+There is no database schema change.
 
-`backend/scripts/check_sources_migration.py` compares old and new evaluators,
-including saved drafts and optionally the original presets. Build the same
-`patterns/examples/source_parity.rs` against each version. It evaluates real
-clip playback, including the exclusive end and the immediately preceding
-representable beat. Audio clips are schema-validated and listed separately;
-output comparison requires their track analysis.
+The checker compared old and new evaluators, including saved drafts and
+optionally the original presets, with `patterns/examples/source_parity.rs`
+built against each version. It evaluated real clip playback, including the
+exclusive end and the immediately preceding representable beat. Audio clips
+were schema-validated and listed separately.
 
 The September 28 snapshot contains 5,492 clips and two drafts. The comparison
 checked 6,016 non-audio instances (including draft snapshots and all 30 shipped
@@ -81,7 +81,7 @@ verified snapshot. A fresh SQLite backup of both databases is in
 Supabase backups are `backup.clips_pre_sources_20260928` and
 `backup.drafts_pre_sources_20260928` (5,492 clips and two drafts).
 
-`curve_points_apply` applied the guarded transaction through the app database
+A one-time apply tool ran the guarded transaction through the app database
 connection, generating 5,494 upload entries. All local clips have the new
 fade input and SQLite integrity passes. The native Wayland app is running
 with the hardware renderer. Cloud sync completed: Supabase has all 5,492 clips in the new format, the local

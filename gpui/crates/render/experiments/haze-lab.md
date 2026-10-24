@@ -150,8 +150,7 @@ completion, so work moved outside the GPU timestamp bracket remains visible.
 It is an offscreen latency measurement, not displayed FPS.
 
 Detailed GPU pass brackets are opt-in with `LUMA_PROFILE_DETAIL=1`; they
-overlap and must not be summed. The Mac Gasworks profiling notes are in
-`harness/perf/mac-gasworks-2026-09-09/PROFILING.md`.
+overlap and must not be summed.
 The expensive fragment-candidate counter runs only when `fragment_stats()`
 is explicitly requested, after the frame. `haze-lab` does not request it;
 `profile-volumetrics` requests it once in sixteen measured frames, outside

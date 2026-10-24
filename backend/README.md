@@ -17,7 +17,7 @@ headless tools.
 - `src/agent/` and `src/agent_execution/`: agent turns, Python workspaces,
   tools and sandbox integration.
 - `src/bin/`: headless hosts (`agent_harness`, `luma-mcp`, `luma-record`) and
-  developer tools such as `render_venue` and `profile_score_timeline`.
+  developer tools such as `render_venue` and `profile_score`.
 - `crates/`: pattern evaluation, fixture kinematics, DJ protocols, MCP types and
   PowerSync SDK glue.
 - `python/`: analysis workers and their dependencies.
