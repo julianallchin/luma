@@ -234,6 +234,7 @@ impl Luma {
             self.split_view = values.split_view;
             cx.notify();
         }
+        self.set_auto_update(values.auto_update);
     }
 
     /// Open or dismiss the account menu that hangs off the sidebar's foot.
@@ -370,7 +371,7 @@ fn body(
             Tab::Account => account(shell, app),
             Tab::Ai => ai(state, values, app),
             Tab::Output => output(values, app),
-            Tab::About => about(),
+            Tab::About => about(shell, values, app),
         })
 }
 
@@ -548,20 +549,23 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
     rows
 }
 
-fn about() -> Vec<Div> {
+fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+    let channel = match luma_update::Channel::CURRENT {
+        luma_update::Channel::Stable => String::new(),
+        channel => format!(" ({})", channel.label()),
+    };
+    let (button, status) = crate::update::about(shell, app);
     vec![
         field(
             None,
-            luma_ui::caption(format!("Luma v{}", luma_lib::VERSION)).into_any_element(),
+            luma_ui::caption(format!("Luma v{}{channel}", luma_lib::VERSION)).into_any_element(),
             None,
         ),
+        field(None, button, status.as_deref()),
         field(
             None,
-            luma_ui::button("Check for Updates", Enabled::No)
-                .agent_node(Role::Button, "Check for Updates")
-                .agent_disabled(true)
-                .into_any_element(),
-            Some("Updates are delivered by the desktop host, not this one."),
+            checkbox(app, "auto_update", "Update automatically", values.auto_update),
+            Some("Checks for a new release every hour and installs it in the background. It takes effect after a restart."),
         ),
     ]
 }

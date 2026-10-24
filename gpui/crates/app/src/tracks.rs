@@ -801,6 +801,7 @@ pub(crate) fn sidebar(
                     el.child(div().absolute().inset_0().occlude())
                 }),
         )
+        .children(crate::update::sidebar(shell, app))
         .child(crate::sync_status::sidebar(shell, app))
         .child(account_foot(shell, app, window))
 }
