@@ -2865,7 +2865,7 @@ mod image_tests {
     fn test_image_to_image_data_applies_exif_orientation() {
         let image = Image::from_bytes(
             ImageFormat::Jpeg,
-            include_bytes!("../examples/image/exif-orientation-rotate-180.jpg").to_vec(),
+            include_bytes!("../tests/fixtures/exif-orientation-rotate-180.jpg").to_vec(),
         );
 
         let render_image = image.to_image_data(SvgRenderer::new(Arc::new(()))).unwrap();

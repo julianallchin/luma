@@ -84,6 +84,15 @@ diff is complete by construction. What the diff currently holds:
   motion receives the final anchor after collision flips, so its translation
   follows the displayed side without affecting the placement calculation.
 - **`filter_profile`** in `gpui_apple/src/metal_renderer.rs`.
+- **No `gpui/examples/`.** Upstream's examples directory (about 38k lines and
+  a 4.5 MB GIF) is deleted, with its `[[example]]` entries and the dev-dependencies
+  only examples used (`env_logger`, `gpui_platform`, `lyon` with `extra`,
+  `unicode-segmentation`, `reqwest_client`, and the wasm `gpui_web` and
+  `wasm-bindgen`). The one file a unit test reads, the EXIF-rotated JPEG in
+  `platform.rs`'s `image_tests`, moved to `gpui/tests/fixtures/`. A refresh
+  deletes the directory and those manifest entries again and repoints that
+  `include_bytes!`. `gpui_web` and `gpui_windows` themselves stay: Windows
+  support is planned, and a WASM visualizer may need the web platform.
 
 The workspace keeps its upstream Git dependency declarations so
 `gpui-component` and Luma resolve one GPUI type identity; `[patch]` redirects

@@ -69,178 +69,6 @@ name = "gpui"
 path = "src/gpui.rs"
 doctest = false
 
-[[example]]
-name = "a11y"
-path = "examples/a11y.rs"
-
-[[example]]
-name = "active_state_bug"
-path = "examples/active_state_bug.rs"
-
-[[example]]
-name = "anchor"
-path = "examples/anchor.rs"
-
-[[example]]
-name = "animation"
-path = "examples/animation.rs"
-
-[[example]]
-name = "data_table"
-path = "examples/data_table.rs"
-
-[[example]]
-name = "drag_drop"
-path = "examples/drag_drop.rs"
-
-[[example]]
-name = "focus_visible"
-path = "examples/focus_visible.rs"
-
-[[example]]
-name = "gif_viewer"
-path = "examples/gif_viewer.rs"
-
-[[example]]
-name = "gradient"
-path = "examples/gradient.rs"
-
-[[example]]
-name = "grid_layout"
-path = "examples/grid_layout.rs"
-
-[[example]]
-name = "hello_world"
-path = "examples/hello_world.rs"
-
-[[example]]
-name = "image"
-path = "examples/image/image.rs"
-
-[[example]]
-name = "image_gallery"
-path = "examples/image_gallery.rs"
-
-[[example]]
-name = "image_loading"
-path = "examples/image_loading.rs"
-
-[[example]]
-name = "input"
-path = "examples/input.rs"
-
-[[example]]
-name = "layer_shell"
-path = "examples/layer_shell.rs"
-
-[[example]]
-name = "list_example"
-path = "examples/list_example.rs"
-
-[[example]]
-name = "mouse_pressure"
-path = "examples/mouse_pressure.rs"
-
-[[example]]
-name = "move_entity_between_windows"
-path = "examples/move_entity_between_windows.rs"
-
-[[example]]
-name = "on_window_close_quit"
-path = "examples/on_window_close_quit.rs"
-
-[[example]]
-name = "opacity"
-path = "examples/opacity.rs"
-
-[[example]]
-name = "ownership_post"
-path = "examples/ownership_post.rs"
-
-[[example]]
-name = "painting"
-path = "examples/painting.rs"
-
-[[example]]
-name = "paths_bench"
-path = "examples/paths_bench.rs"
-
-[[example]]
-name = "pattern"
-path = "examples/pattern.rs"
-
-[[example]]
-name = "popover"
-path = "examples/popover.rs"
-
-[[example]]
-name = "scrollable"
-path = "examples/scrollable.rs"
-
-[[example]]
-name = "set_menus"
-path = "examples/set_menus.rs"
-
-[[example]]
-name = "shadow"
-path = "examples/shadow.rs"
-
-[[example]]
-name = "svg"
-path = "examples/svg/svg.rs"
-
-[[example]]
-name = "system_notifications"
-path = "examples/system_notifications.rs"
-
-[[example]]
-name = "tab_stop"
-path = "examples/tab_stop.rs"
-
-[[example]]
-name = "testing"
-path = "examples/testing.rs"
-
-[[example]]
-name = "text"
-path = "examples/text.rs"
-
-[[example]]
-name = "text_layout"
-path = "examples/text_layout.rs"
-
-[[example]]
-name = "text_wrapper"
-path = "examples/text_wrapper.rs"
-
-[[example]]
-name = "tree"
-path = "examples/tree.rs"
-
-[[example]]
-name = "uniform_list"
-path = "examples/uniform_list.rs"
-
-[[example]]
-name = "view_example"
-path = "examples/view_example/view_example_main.rs"
-
-[[example]]
-name = "window"
-path = "examples/window.rs"
-
-[[example]]
-name = "window_movable"
-path = "examples/window_movable.rs"
-
-[[example]]
-name = "window_positioning"
-path = "examples/window_positioning.rs"
-
-[[example]]
-name = "window_shadow"
-path = "examples/window_shadow.rs"
-
 [[test]]
 name = "action_macros"
 path = "tests/action_macros.rs"
@@ -490,24 +318,8 @@ version = "0.1.0"
 path = "../collections"
 features = ["test-support"]
 
-[dev-dependencies.env_logger]
-version = "0.11"
-
-[dev-dependencies.gpui_platform]
-path = "../gpui_platform"
-features = [
-    "font-kit",
-    "wayland",
-    "x11",
-]
-default-features = false
-
 [dev-dependencies.gpui_util]
 path = "../gpui_util"
-
-[dev-dependencies.lyon]
-version = "1.0"
-features = ["extra"]
 
 [dev-dependencies.rand]
 version = "0.9"
@@ -515,9 +327,6 @@ version = "0.9"
 [dev-dependencies.scheduler]
 path = "../scheduler"
 features = ["test-support"]
-
-[dev-dependencies.unicode-segmentation]
-version = "1.10"
 
 [build-dependencies.embed-resource]
 version = "3.0"
@@ -543,10 +352,6 @@ git = "https://github.com/proptest-rs/proptest"
 rev = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"
 features = ["attr-macro"]
 
-[target.'cfg(not(target_family = "wasm"))'.dev-dependencies.reqwest_client]
-path = "../reqwest_client"
-features = ["test-support"]
-
 [target.'cfg(target_family = "wasm")'.dependencies.getrandom]
 version = "0.3.4"
 features = ["wasm_js"]
@@ -560,12 +365,6 @@ features = [
     "serde",
     "js",
 ]
-
-[target.'cfg(target_family = "wasm")'.dev-dependencies.gpui_web]
-path = "../gpui_web"
-
-[target.'cfg(target_family = "wasm")'.dev-dependencies.wasm-bindgen]
-version = "0.2.120"
 
 [target.'cfg(target_os = "macos")'.dependencies.block]
 version = "0.1"

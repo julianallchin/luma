@@ -15,8 +15,6 @@
 //! GPUI integrates with [AccessKit] to provide programmatic accessibility
 //! features (referred to as simply "accessibility" for the rest of this guide).
 //!
-//! A minimal example can be found in the `examples/a11y` directory.
-//!
 //! ## Background
 //!
 //! Accessibility support is based on two key capabilities:
