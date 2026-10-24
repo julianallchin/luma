@@ -136,7 +136,9 @@ impl MorphTransition {
         match self {
             Self::Forward | Self::Back => {
                 // The new page always arrives from the side it travels
-                // toward; `sign` only picks which side that is.
+                // toward; `sign` only picks which side that is. Slide and
+                // fade only: a blur would send both pages through an
+                // offscreen target and a gaussian pass on every frame.
                 let sign = if matches!(self, Self::Forward) {
                     1.0
                 } else {
@@ -146,14 +148,12 @@ impl MorphTransition {
                     LayerRole::Outgoing => LayerPose {
                         x: -sign * 16.0 * progress,
                         opacity: 1.0 - progress,
-                        blur: 16.0 * progress,
-                        scale: 1.0,
+                        ..LayerPose::REST
                     },
                     LayerRole::Incoming => LayerPose {
                         x: sign * 16.0 * (1.0 - progress),
                         opacity: progress,
-                        blur: 16.0 * (1.0 - progress),
-                        scale: 1.0,
+                        ..LayerPose::REST
                     },
                 }
             }
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(opening.layers[0].pose, LayerPose::REST);
         assert_eq!(opening.layers[1].pose.x, 16.0);
         assert_eq!(opening.layers[1].pose.opacity, 0.0);
-        assert_eq!(opening.layers[1].pose.blur, 16.0);
+        assert_eq!(opening.layers[1].pose.blur, 0.0);
 
         let middle = dialog.sample(part(start, 0.5));
         // The shared spring has covered 96.233% of the distance at half-time.

@@ -519,7 +519,7 @@ fn edge_energy(image: &image::RgbaImage) -> f32 {
 }
 
 #[test]
-fn intrinsic_target_morphs_both_axes_while_outgoing_content_blurs() {
+fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
     let mut harness = harness();
     let out = run(
         &mut harness,
@@ -534,7 +534,7 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_blurs() {
         const middleShot = app.snapshot();
         const middle = middleShot.find({ role: "card", label: "Morph container" });
         const middleWrap = middleShot.find({ role: "row", label: "A wrapping copy" });
-        const midBlur = app.screenshot().path;
+        const midFade = app.screenshot().path;
         const nextDuring = middleShot.find({ role: "button", label: "Next" });
         const backDuring = middleShot.find({ role: "button", label: "Back" });
         settle((s) => s.find({ role: "button", label: "Back" }) !== undefined);
@@ -543,7 +543,7 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_blurs() {
         const back = settledShot.find({ role: "button", label: "Back" });
         ({ opening: opening.bounds, openingWrap: openingWrap.bounds,
            middle: middle.bounds, middleWrap: middleWrap.bounds, settled: settled.bounds,
-           nextDuring, backDuring, back, sharp, midBlur })
+           nextDuring, backDuring, back, sharp, midFade })
         "#,
     );
 
@@ -551,21 +551,21 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_blurs() {
         out["sharp"].as_str().unwrap(),
         "dialog-morph-sharp-full.png",
     );
-    let blurred_frame = preserve(
-        out["midBlur"].as_str().unwrap(),
+    let faded_frame = preserve(
+        out["midFade"].as_str().unwrap(),
         "dialog-morph-mid-full.png",
     );
     let sharp = crop(&sharp_frame, &out["opening"]);
-    let blurred = crop(&blurred_frame, &out["middle"]);
+    let faded = crop(&faded_frame, &out["middle"]);
     let sharp_crop = capture_dir().join("dialog-morph-sharp-a.png");
-    let blurred_crop = capture_dir().join("dialog-morph-mid-a.png");
+    let faded_crop = capture_dir().join("dialog-morph-mid-a.png");
     sharp.save(&sharp_crop).unwrap();
-    blurred.save(&blurred_crop).unwrap();
+    faded.save(&faded_crop).unwrap();
     println!("dialog morph capture {}", sharp_crop.display());
-    println!("dialog morph capture {}", blurred_crop.display());
+    println!("dialog morph capture {}", faded_crop.display());
     let sharp_energy = edge_energy(&sharp);
-    let blurred_energy = edge_energy(&blurred);
-    println!("dialog morph edge energy sharp={sharp_energy:.3} mid={blurred_energy:.3}");
+    let faded_energy = edge_energy(&faded);
+    println!("dialog morph edge energy sharp={sharp_energy:.3} mid={faded_energy:.3}");
 
     let width = |at: &str| out[at]["width"].as_f64().unwrap();
     let height = |at: &str| out[at]["height"].as_f64().unwrap();
@@ -607,8 +607,8 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_blurs() {
     // renderer, not in the morph, so the picture half runs only on macOS.
     #[cfg(target_os = "macos")]
     assert!(
-        blurred_energy < sharp_energy * 0.75,
-        "outgoing content did not visibly blur: {sharp_energy:.3} -> {blurred_energy:.3}"
+        faded_energy < sharp_energy * 0.75,
+        "outgoing content did not visibly blur: {sharp_energy:.3} -> {faded_energy:.3}"
     );
 }
 
@@ -821,7 +821,7 @@ fn scale_crossfade_and_custom_transitions_render_through_the_production_card() {
 /// The morph proof at production pacing, for measuring rather than asserting.
 ///
 /// [`harness`] runs at 10x so a screenshot burst can sample the curve; that is
-/// the wrong clock for a cost measurement, because it stretches the blurred
+/// the wrong clock for a cost measurement, because it stretches the moving
 /// stretch of the flight over ten times as many frames and flatters the
 /// average. This one runs the timeline a person actually sees.
 fn paced_harness() -> Harness {
