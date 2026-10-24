@@ -13,7 +13,7 @@
 //!
 //! Every command uses the same handler and argument schema as the native app.
 //!
-//! Deliberately absent: physical Art-Net output, audio
+//! Deliberately absent: physical DMX output, audio
 //! devices, and the loops — nothing spawns a render loop or a sync loop here,
 //! so a `RenderEngine` exists but drives nothing. Emitted events go to stderr.
 

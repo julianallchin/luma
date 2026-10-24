@@ -43,7 +43,7 @@ pub async fn render_clear_active_layer(
 }
 
 /// Trigger a two-blink identify sequence for one or more targets (visualizer +
-/// ArtNet). Targets are `"fixtureId"` (whole fixture) or `"fixtureId:head"`.
+/// DMX output). Targets are `"fixtureId"` (whole fixture) or `"fixtureId:head"`.
 pub async fn render_identify(
     services: &AppServices,
     targets: Vec<String>,

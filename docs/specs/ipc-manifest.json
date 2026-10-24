@@ -305,30 +305,31 @@
           "rust": "i64"
         },
         {
-          "name": "nodeIp",
+          "name": "deviceKind",
+          "rust": "DeviceKind"
+        },
+        {
+          "name": "deviceId",
           "rust": "String"
         },
         {
-          "name": "nodePort",
+          "name": "port",
           "rust": "i64"
         },
         {
-          "name": "portAddress",
-          "rust": "i64"
+          "name": "deviceName",
+          "rust": "Option<String>"
         },
         {
-          "name": "nodeName",
+          "name": "address",
           "rust": "Option<String>"
         }
       ],
-      "domain": "artnet",
+      "domain": "output",
       "handler": {
-        "file": "backend/src/dispatch/handlers/artnet.rs"
+        "file": "backend/src/dispatch/handlers/output.rs"
       },
-      "name": "bind_output",
-      "prose": {
-        "returns": "()"
-      },
+      "name": "bind_route",
       "returns": "()"
     },
     {
@@ -1109,22 +1110,6 @@
       "returns": "()"
     },
     {
-      "args": [],
-      "domain": "artnet",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/artnet.rs"
-      },
-      "name": "get_discovered_nodes",
-      "prose": {
-        "notes": "SNAKE_CASE over the wire (ArtNetNode is a bare serde::Serialize with no rename_all) and the TS type in settings-dialog.tsx:55 mirrors that — second place in this fragment where the wire contract diverges from the app-wide camelCase convention. Order is HashMap iteration order — NON-DETERMINISTIC; sort client-side if stability matters. port_address is packed as (net << 8) | (sub << 4). Entries are never evicted; last_seen is the only staleness signal.",
-        "returns": "ArtNetNode[] — { ip, name (ArtPoll short name), long_name, port_address: u16, last_seen: u64 unix secs }",
-        "sideEffects": [
-          "none; clones the current map values under the manager mutex"
-        ]
-      },
-      "returns": "Vec<ArtNetNode>"
-    },
-    {
       "args": [
         {
           "name": "path",
@@ -1716,15 +1701,21 @@
     },
     {
       "args": [],
-      "domain": "artnet",
+      "domain": "output",
       "handler": {
-        "file": "backend/src/dispatch/handlers/artnet.rs"
+        "file": "backend/src/dispatch/handlers/output.rs"
       },
-      "name": "list_outputs",
-      "prose": {
-        "returns": "Vec<UniverseOutput>"
+      "name": "list_output_devices",
+      "returns": "Vec<OutputDevice>"
+    },
+    {
+      "args": [],
+      "domain": "output",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/output.rs"
       },
-      "returns": "Vec<UniverseOutput>"
+      "name": "list_routes",
+      "returns": "Vec<DmxRoute>"
     },
     {
       "args": [
@@ -3312,44 +3303,6 @@
     },
     {
       "args": [],
-      "domain": "artnet",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/artnet.rs"
-      },
-      "name": "start_discovery",
-      "prose": {
-        "notes": "Idempotent: returns immediately if discovery_running. No result channel and no events — the UI must POLL get_discovered_nodes (settings dialog polls at 1Hz while `scanning`). A port that wants error reporting needs a new return type; today a bind failure is invisible to the frontend. Local IP is guessed by connecting a dummy UDP socket to 8.8.8.8 and assuming /24 — wrong on non-/24 or multi-homed hosts (see the StageLinQ multi-homed lesson).",
-        "returns": "void — SYNCHRONOUS `pub fn` returning `()`, not Result; failures are only eprintln'd",
-        "sideEffects": [
-          "sets ArtNetInner.discovery_running = true; rebinds the UDP socket if not already bound",
-          "spawns a std::thread that broadcasts ArtPoll (op 0x2000) to 255.255.255.255:6454 and to a guessed /24 directed broadcast, every 3s",
-          "fills ArtNetInner.discovered_nodes from ArtPollReply (0x2100) packets, keyed by source IP",
-          "joins and replaces any previous discovery thread handle; also joined on ArtNetManager::drop",
-          "noisy println logging on every packet"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "artnet",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/artnet.rs"
-      },
-      "name": "stop_discovery",
-      "prose": {
-        "notes": "Called from the settings dialog's effect cleanup. Cooperative stop, not a join — a caller that immediately restarts discovery relies on start_discovery joining the old handle.",
-        "returns": "void (synchronous `pub fn`, no Result)",
-        "sideEffects": [
-          "sets discovery_running = false (the thread exits at its next loop check, up to one socket timeout later)",
-          "ArtNetManager::rebind — may close the socket if output is also disabled",
-          "does NOT clear discovered_nodes (stale nodes persist until the next scan overwrites them by IP)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs"
@@ -3365,16 +3318,25 @@
         {
           "name": "universe",
           "rust": "i64"
+        },
+        {
+          "name": "deviceKind",
+          "rust": "DeviceKind"
+        },
+        {
+          "name": "deviceId",
+          "rust": "String"
+        },
+        {
+          "name": "port",
+          "rust": "i64"
         }
       ],
-      "domain": "artnet",
+      "domain": "output",
       "handler": {
-        "file": "backend/src/dispatch/handlers/artnet.rs"
+        "file": "backend/src/dispatch/handlers/output.rs"
       },
-      "name": "unbind_output",
-      "prose": {
-        "returns": "()"
-      },
+      "name": "unbind_route",
       "returns": "()"
     },
     {
@@ -3470,11 +3432,6 @@
       "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
     },
     {
-      "commandCount": 6,
-      "domain": "artnet",
-      "handlers": "backend/src/dispatch/handlers/artnet.rs"
-    },
-    {
       "commandCount": 7,
       "domain": "auth",
       "handlers": "backend/src/dispatch/handlers/auth.rs"
@@ -3538,6 +3495,11 @@
       "commandCount": 8,
       "domain": "mixer",
       "handlers": "backend/src/dispatch/handlers/mixer.rs"
+    },
+    {
+      "commandCount": 4,
+      "domain": "output",
+      "handlers": "backend/src/dispatch/handlers/output.rs"
     },
     {
       "commandCount": 8,
@@ -3710,7 +3672,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 153,
+    "commandCount": 151,
     "domainCount": 27,
     "eventCount": 13
   },

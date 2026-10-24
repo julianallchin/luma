@@ -619,7 +619,7 @@ impl VenueHost {
     /// The fixture constructor: place, name and patch a row in one
     /// transaction. A fit failure is a report, not an error.
     ///
-    /// Nothing republishes the Art-Net patch here: a cell has no live output,
+    /// Nothing republishes the DMX output patch here: a cell has no live output,
     /// and the desktop app re-reads the patch when the venue reloads.
     async fn distribute(&self, request: DistributeRequest) -> Result<Value, HostCallError> {
         // A draft has no patch, so a row it asks for is *recorded* and laid at

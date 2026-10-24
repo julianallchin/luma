@@ -1,6 +1,6 @@
 //! Business logic for fixture operations.
 //!
-//! Database layer handles CRUD only. File/resource access, ArtNet refresh, and
+//! Database layer handles CRUD only. File/resource access, DMX output refresh, and
 //! in-memory fixture index live here.
 
 use std::path::{Path, PathBuf};

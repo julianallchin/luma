@@ -13,7 +13,6 @@
 
 pub mod agent_execution;
 pub mod agent_threads;
-pub mod artnet;
 pub mod auth;
 pub mod composable_patterns;
 pub mod compositor;
@@ -26,6 +25,7 @@ pub mod groups;
 pub mod host_audio;
 pub mod midi;
 pub mod mixer;
+pub mod output;
 pub mod perform;
 pub mod rekordbox;
 pub mod render_engine;
