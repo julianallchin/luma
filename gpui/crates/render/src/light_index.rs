@@ -1,7 +1,7 @@
 //! One clustered light index, in one structure, for every consumer that asks
 //! "which fixtures can reach here".
 //!
-//! Drobot-style screen tiles + Z-bins (`docs/design/light-index-unification.md`):
+//! Drobot-style screen tiles + Z-bins:
 //! an 8 px full-resolution tile grid where each tile holds a fixed 512-bit
 //! light mask, and 4096 uniform view-depth bins each holding a `min|max`
 //! range of *depth-sorted* light ids. Point consumers intersect mask with the

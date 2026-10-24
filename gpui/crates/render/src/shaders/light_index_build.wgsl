@@ -1,6 +1,7 @@
 // GPU build of the unified light index's tile masks.
 //
-// Two dispatches, tile-major, no atomics (`docs/design/light-index-unification.md` §7):
+// Two dispatches, tile-major, no atomics. Light-major `atomicOr` would contend
+// on every word when near-fullscreen cones contain the eye:
 //
 // 1. `big_tile_prepass` — one workgroup per 64 px big tile, 16 threads, each
 //    owning one mask word (32 lights). Pure 2D rect overlap against the big

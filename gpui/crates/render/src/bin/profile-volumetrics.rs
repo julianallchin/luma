@@ -76,8 +76,7 @@ struct Case {
 /// by 2x (`dense-geometry-120`: 48, 53, 93 ms), so they are the worst of the
 /// three plus 30%. Re-derive them on an idle machine before treating a pass
 /// here as evidence of anything but the absence of a large regression. A 60 Hz frame is 16.7 ms and no case below is within
-/// an order of magnitude of it; closing that gap is what
-/// `docs/design/volumetrics-v2.md` exists for. Every GPU figure here was
+/// an order of magnitude of it. Every GPU figure here was
 /// re-baselined on 2026-08-25, against numbers near that deadline that were an
 /// artefact: the
 /// profiler differenced pass *starts*, read back only half its query set, and
@@ -92,7 +91,7 @@ struct Budgets {
     cpu_encode_p95: f64,
     /// Ceiling on mean cluster list length, set just above what the current
     /// builder achieves so drift is caught. High because the grid does not cull
-    /// well yet — see `docs/design/volumetrics-v2.md` §3.2.
+    /// well yet.
     mean_lights_per_tile: f64,
 }
 
@@ -117,7 +116,7 @@ struct CaseResult {
     cold_cluster_build_ms: f64,
     /// Mean `mask ∩ zbin` candidates the surface pass walked per lit
     /// fragment, over every measured frame — the number that predicts shading
-    /// cost (`light-index-unification.md` §8), from the GPU counter pair.
+    /// cost, from the GPU counter pair.
     mean_lights_per_fragment: f64,
     light_index_stats: luma_render::LightIndexStats,
     shadow_stats: luma_render::ShadowStats,

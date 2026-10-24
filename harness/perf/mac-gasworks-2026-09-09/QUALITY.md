@@ -210,7 +210,7 @@ for 107,352 indirect compute workgroups, above Metal's 65,535 limit, and left
 residual RGB unwritten. Its fireflies and large coherent error do not diagnose
 the 512-slot packing.
 
-The dispatch-safe `LUMA_HAZE_RESID_LANES=128,128,128` repeat is compact-active
+The dispatch-safe 128,128,128 residual-lane repeat is compact-active
 24/24 with no overflow or suspended slots and passes the image gates. Its
 whole-image RMSE is 0.01826 median / 0.01878 maximum, peak error is one code,
 gradient RMSE reaches 0.02647, worst-tile RMSE reaches 0.07273, and temporal
@@ -239,7 +239,7 @@ result.
 
 Using the same 2D/GC executable, the memory-heavy table-24 experiment also
 passes at 52 s. Its only runtime changes are
-`LUMA_INTERVAL_CACHE_TABLE_BITS=24` and a 40/50/10 residual split. The 24
+a 24-bit interval-cache table and a 40/50/10 residual split. The 24
 frames are active with no overflow or suspension and report segment counts
 `[6,870,502, 8,778,369, 1,215,955]`; dirty, rebuild, and classify stay false.
 Whole-image RMSE is 0.01807 median / 0.01859 maximum, peak error is one code,

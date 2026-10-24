@@ -120,8 +120,8 @@ pub struct FixtureCone {
     ///
     /// On the front of the head, so it swings with pan/tilt at a fixed
     /// distance in front of the tilt pivot on the beam axis. The pivot is what
-    /// stays still, which is what §7 of `docs/design/volumetrics-v2.md` needs
-    /// (§15.1: the offset is along the ray).
+    /// stays still, and the offset runs along the ray, so a depth map seen
+    /// from a fixed point stays valid under pan/tilt.
     pub position: Vec3,
     /// Cull radius from the lens, including the smoothly fading beam tail.
     pub range: f32,
@@ -163,8 +163,7 @@ impl FixtureCone {
     /// It lies on the beam's own axis. A ray from it to any point of the beam
     /// crosses the lens plane inside the lens disc, so once the segment behind
     /// the lens plane is excluded, visibility from the apex is visibility from
-    /// a point of the lens — exactly the lens centre on the axis (the argument
-    /// of §15.1 in `docs/design/volumetrics-v2.md`).
+    /// a point of the lens — exactly the lens centre on the axis.
     #[must_use]
     pub fn apex(&self) -> Vec3 {
         let direction = self.direction.try_normalize().unwrap_or(Vec3::NEG_Y);
@@ -1500,15 +1499,15 @@ mod tests {
         );
     }
 
-    /// §7's apex invariant, restated for a lens on the front of the head.
+    /// The apex invariant, restated for a lens on the front of the head.
     ///
-    /// §7 (`docs/design/volumetrics-v2.md`) rests on "the light-emitting point
-    /// does not move under pan/tilt". With the lens seated on the head's front
+    /// Caching a fixture's shadow map across frames rests on "the
+    /// light-emitting point does not move under pan/tilt". With the lens seated on the head's front
     /// face, the point that holds still is the head's **tilt pivot**: the lens
     /// sits a fixed distance in front of it on the beam axis and the virtual
     /// apex a fixed distance behind the lens on the same axis. Pivot, apex,
-    /// lens and every point of the axis stay collinear — the §15.1 case, an
-    /// offset *along* the ray — so an apex-anchored shadow cache keys on the
+    /// lens and every point of the axis stay collinear — an offset *along*
+    /// the ray — so an apex-anchored shadow cache keys on the
     /// pivot and derives lens and apex from the aim.
     #[test]
     fn the_tilt_pivot_holds_still_and_lens_and_apex_ride_the_beam_axis() {

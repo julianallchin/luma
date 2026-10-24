@@ -1,8 +1,7 @@
 # Handoff: every color effect from `color@1` and sources
 
 Date: 2026-09-28. Branch to start from: `patterns-principles` (not merged to
-dev). Owner: Julian. Background: `2026-09-27-tonight.md` and the flowcharts
-in `2026-09-28-presets-from-color.html` (open it in a browser; the charts are
+dev). Owner: Julian. Background: the flowcharts in `2026-09-28-presets-from-color.html` (open it in a browser; the charts are
 mermaid).
 
 ## Goal

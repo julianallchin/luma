@@ -78,7 +78,7 @@ Validation: 117 renderer unit tests and 7 transport integration tests pass. Dete
 
 `visibility.rs` builds a median-split, stackless triangle BVH over opaque stage geometry. It is retained across light/camera changes and rebuilt when stage mesh identities or transforms change. Fixture housings are excluded, matching the existing fixture shadow caster policy; transparent objects do not cast. The surface and haze shaders share the same buffer and ray/triangle traversal. Existing atlas residents keep their shadow maps; other lights query the BVH instead of being assumed unoccluded. Shadow mode changes invalidate temporal history.
 
-The initial full-sample prototype cost 21.47 ms GPU p95 in a 20-frame dense-scene smoke run. The bounded version uses up to two MIS integration samples per fallback beam, with existing temporal reconstruction; map-backed beams retain their normal sampling. `LUMA_GEOMETRY_SHADOW_SAMPLES=8` selects an eight-sample comparison, capped by the scene's haze step count. Lower sampling introduces visibly more volume grain. Surface visibility remains evaluated for each contributing light; there is no stochastic light selection or surface denoiser yet. The next performance work must address that repeated visibility cost, not shorten the accepted beam reach.
+The initial full-sample prototype cost 21.47 ms GPU p95 in a 20-frame dense-scene smoke run. The bounded version uses up to two MIS integration samples per fallback beam, with existing temporal reconstruction; map-backed beams retain their normal sampling. An eight-sample comparison, capped by the scene's haze step count, was selectable then (the switch was removed on 2026-10-24). Lower sampling introduces visibly more volume grain. Surface visibility remains evaluated for each contributing light; there is no stochastic light selection or surface denoiser yet. The next performance work must address that repeated visibility cost, not shorten the accepted beam reach.
 
 Release RTX 5090 / Vulkan, 1080p, half-resolution haze, 120 lights, 2,057 opaque draws, 120 warmup and 600 measured frames, live app suspended:
 
@@ -141,7 +141,7 @@ reservoir selection in groups of eight broad, open-wash candidates. An analytic,
 unshadowed equiangular estimate determines selection probability; the selected
 light retains all eight integration samples and its own cached visibility. The
 inverse probability preserves expected radiance before reconstruction. Narrow
-beams and gobos remain exhaustively integrated. `LUMA_WIDE_LIGHT_GROUP=1` disables
+beams and gobos remain exhaustively integrated. A switch disabled
 selection for an exhaustive comparison; rigs with at most 128 emitters bypass it.
 (Superseded 2026-10-24: reservoir selection, its sampled target and the temporal
 resolve are gone; every live frame and capture is deterministic compute haze, see
@@ -224,10 +224,10 @@ candidates once per tile removed a large amount of repeated per-pixel work.
 The two grid textures cost about 9.32 MiB at 1146×1051; the additional mask plane
 costs 1.16 MiB. Grid textures are allocated only when first used and retained
 across blackouts. Small rigs, haze-off frames, and frames without all-fixture
-shadows bypass grid computation. `LUMA_GRID_FOG=0` selects the previous per-ray
+shadows bypass grid computation. A switch selected the previous per-ray
 live method for A/B measurements. Standalone captures accumulating multiple
-subframes retain that method for converged spatial detail. `LUMA_WIDE_LIGHT_GROUP=1`
-remains the exhaustive per-ray reference and disables the grid too.
+subframes retain that method for converged spatial detail. The wide-group switch
+remained the exhaustive per-ray reference and disabled the grid too.
 (Superseded 2026-10-24: the grid runs on every hazy frame, captures included,
 with 8-pixel cells on every platform (16 at low quality); the switches are gone and the per-ray
 method is `Renderer::render_reference` alone.)
@@ -468,7 +468,7 @@ Both levels:
   pass and are added into the native haze target with the composite's
   depth-aware bilateral upsample (`shaders/haze_wide.wgsl`). The route is a
   pipeline constant: as a uniform branch it cost the unsplit pass 25%.
-  `LUMA_WIDE_BEAMS=0` keeps every beam native. Not on the Metal compute path.
+  A switch kept every beam native. Not on the Metal compute path.
   (Removed 2026-10-24 with the fragment grid path.)
 - **Plain-beam piece cap.** Below cloudiness 0.5, `lit_interval` uses at most
   8 pieces (Low: 4), never fewer than the equiangular criterion needs.

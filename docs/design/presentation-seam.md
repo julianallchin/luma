@@ -3,9 +3,8 @@
 How a frame drawn by `luma-render`'s wgpu device reaches the screen, and why it
 is shaped the way it is.
 
-This picks up where `volumetrics-v2.md` §4 "The presentation seam (vendor patch)"
-left off. That round removed the copies *around* the handoff; this one removes
-the handoff.
+An earlier round removed the copies *around* the handoff; this one removes the
+handoff.
 
 ---
 
@@ -229,8 +228,8 @@ dimensions alongside the timing, because a presentation cost quoted without the
 area it was paid for cannot be compared to anything — which is how the null
 result nearly got written down as "no change".
 
-This also puts a caveat on the earlier round's 12.3 → 7.2 ms table in
-`volumetrics-v2.md`: that measurement was of a drag, so it captured the copies
+This also puts a caveat on the earlier round's 12.3 → 7.2 ms measurement:
+it was of a drag, so it captured the copies
 that round removed from *prepaint* and could not have captured the atlas upload
 in paint. The 7.2 ms it attributed to "the `replace_region` upload itself" was
 not that.
