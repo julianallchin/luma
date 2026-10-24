@@ -75,7 +75,7 @@ Always use Nucleo icons for new or replaced icons. The local bundle lives at `~/
 
 ## Releases
 
-There is no release workflow. Configure native GPUI packaging before you publish a release.
+A `v*` tag matching `backend/Cargo.toml`'s version builds a draft release; a manual run of the Release workflow builds the `nightly` prerelease. Installed apps update themselves from those releases (`gpui/crates/update`). An installed build reads its runtimes, workers and fixtures from a bundled resource directory (`backend/src/resources.rs`); a new runtime file needs a line in `scripts/release/stage-resources`. See [RELEASING.md](RELEASING.md) for the steps and the secrets.
 
 ## Commit & Pull Request Guidelines
 

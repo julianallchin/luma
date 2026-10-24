@@ -46,6 +46,7 @@ scripts/*
 !scripts/headless/
 !scripts/arena/
 !scripts/library/
+!scripts/release/
 
 # Root docs (canonical docs live in www/)
 /docs/*

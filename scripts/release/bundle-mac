@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Build Luma.app for this Mac's architecture, sign and notarize it, and write
+#
+#   dist/Luma-<arch>.dmg           what a person downloads
+#   dist/Luma-<arch>.app.tar.gz    what the updater downloads (unsigned here;
+#                                  the release workflow signs it for updates)
+#
+# Signing follows Zed's script/bundle-mac: a throwaway keychain holding the
+# Developer ID certificate, every Mach-O signed inside-out with the hardened
+# runtime, then one notarization of the DMG, stapled to the DMG and the app.
+#
+# Environment (all optional; without the certificate the app is ad-hoc signed
+# and not notarized, which is enough to test the bundle locally):
+#   LUMA_RELEASE_CHANNEL         stable | nightly — compiled in, see luma-update
+#   LUMA_COMMIT_SHA              compiled in, compared by nightly updates
+#   MACOS_CERTIFICATE            base64 of the Developer ID Application .p12
+#   MACOS_CERTIFICATE_PASSWORD   its password
+#   MACOS_SIGNING_IDENTITY       e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+#                                notarytool credentials (app-specific password)
+set -euo pipefail
+
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+here="$repo/scripts/release"
+cd "$repo"
+
+keychain='' staging=''
+cleanup() {
+    if [[ -n $staging ]]; then rm -rf "$staging"; fi
+    if [[ -n $keychain ]]; then security delete-keychain "$keychain" || true; fi
+}
+trap cleanup EXIT
+
+arch=$(uname -m)
+[[ $arch == arm64 ]] && arch=aarch64
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/Cargo.toml | head -1)
+dist="$repo/dist"
+target_dir=$(cargo +1.97.1 metadata --manifest-path gpui/Cargo.toml --format-version 1 --no-deps |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+
+echo "Building Luma $version ($arch, ${LUMA_RELEASE_CHANNEL:-dev})"
+cargo +1.97.1 build --release --locked --manifest-path gpui/Cargo.toml -p luma-app
+
+app="$dist/Luma.app"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+# `luma`, not `luma-app`: the Tauri build's updater relaunches
+# `Contents/MacOS/luma` after it installs this bundle over itself.
+cp "$target_dir/release/luma-app" "$app/Contents/MacOS/luma"
+cp assets/app/icon.icns "$app/Contents/Resources/luma.icns"
+sed -e "s/@VERSION@/$version/g" "$here/macos/Info.plist" > "$app/Contents/Info.plist"
+"$here/stage-resources" "$app/Contents/Resources"
+
+if [[ -n ${MACOS_CERTIFICATE:-} ]]; then
+    : "${MACOS_SIGNING_IDENTITY:?MACOS_SIGNING_IDENTITY is required with MACOS_CERTIFICATE}"
+    scratch=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+    keychain="$scratch/luma-signing.keychain-db"
+    keychain_password=$(openssl rand -base64 32)
+    security create-keychain -p "$keychain_password" "$keychain"
+    security set-keychain-settings -lut 21600 "$keychain"
+    security unlock-keychain -p "$keychain_password" "$keychain"
+    echo "$MACOS_CERTIFICATE" | base64 --decode > "$scratch/certificate.p12"
+    security import "$scratch/certificate.p12" -k "$keychain" \
+        -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+    rm "$scratch/certificate.p12"
+    # shellcheck disable=SC2046 # one argument per keychain already listed
+    security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+    identity=$MACOS_SIGNING_IDENTITY
+else
+    echo "MACOS_CERTIFICATE is not set: ad-hoc signing, no notarization"
+    identity=-
+fi
+
+sign() { codesign --force --timestamp --options runtime --sign "$identity" "$@"; }
+if [[ $identity == - ]]; then
+    sign() { codesign --force --sign - "$@"; }
+fi
+
+# Inside-out: nested code first, the bundle last, or the bundle's seal covers
+# signatures that are about to change. Every Mach-O in Resources needs its own
+# signature for notarization; `file` finds them, since the Python runtime's
+# libraries do not all end in .so or .dylib.
+while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" | grep -q 'Mach-O'; then
+        case "$candidate" in
+            */python-runtime/python/bin/*)
+                # The interpreter loads wheels pip installs at first launch,
+                # which no one has signed with this team's identity.
+                sign --entitlements "$here/macos/python.entitlements" "$candidate" ;;
+            *)
+                sign "$candidate" ;;
+        esac
+    fi
+done < <(find "$app/Contents/Resources" -type f -print0)
+sign "$app/Contents/MacOS/luma"
+sign "$app"
+codesign --verify --deep --strict --verbose=2 "$app"
+
+dmg="$dist/Luma-$arch.dmg"
+staging=$(mktemp -d)
+cp -R "$app" "$staging/"
+ln -s /Applications "$staging/Applications"
+rm -f "$dmg"
+hdiutil create -volname Luma -srcfolder "$staging" -ov -format UDZO "$dmg"
+
+if [[ $identity != - ]]; then
+    codesign --force --timestamp --sign "$identity" "$dmg"
+    if [[ -n ${APPLE_ID:-} ]]; then
+        # One submission covers the DMG and the app inside it, so the app's
+        # own ticket exists afterwards and can be stapled to the update too.
+        xcrun notarytool submit "$dmg" --wait \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID"
+        xcrun stapler staple "$dmg"
+        xcrun stapler staple "$app"
+    else
+        echo "APPLE_ID is not set: signed but not notarized"
+    fi
+fi
+
+# COPYFILE_DISABLE keeps AppleDouble `._*` files out of the archive: unpacked
+# beside the real files they would break the bundle's seal.
+COPYFILE_DISABLE=1 tar -czf "$dist/Luma-$arch.app.tar.gz" -C "$dist" Luma.app
+echo "Wrote $dmg and $dist/Luma-$arch.app.tar.gz"
