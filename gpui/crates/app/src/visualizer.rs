@@ -1089,8 +1089,7 @@ struct RenderControls {
     /// in [`RenderScale::size`], and the rest inside the renderer.
     quality: scene_desc::Quality,
     /// The local reflection probes and their debug balls: a session view
-    /// choice, never saved. `LUMA_PROBES` and `LUMA_PROBE_DEBUG` set where
-    /// it starts.
+    /// choice, never saved.
     probes: scene_desc::ProbeView,
 }
 
@@ -1724,19 +1723,6 @@ impl Visualizer {
             exported: None,
         });
         true
-    }
-
-    /// Zoom in at the pane's centre, for the launch-time reproduction driver.
-    ///
-    /// Steps rather than a target distance: a step depends on what is under
-    /// the pointer, so repeating the gesture the operator makes is both
-    /// simpler and more faithful than computing where they would have ended
-    /// up. There is no near stop any more — enough steps dolly through the
-    /// rig.
-    pub(crate) fn zoom_in(&mut self, steps: usize) {
-        for _ in 0..steps {
-            self.zoom(ZOOM_IN, None);
-        }
     }
 
     /// The frame every camera in this viewport is fitted to: its shape, and the
@@ -3067,24 +3053,6 @@ struct CompletedFrame {
     spans: UiSpans,
 }
 
-/// Explicit diagnostic only: capture every prepaint, including submissions
-/// that delivered nothing. Buffered writes avoid flushing the UI thread each frame.
-fn trace_stage_frame(sample: &FrameSample) {
-    use std::io::Write;
-    thread_local! {
-        static TRACE: std::cell::RefCell<Option<std::io::BufWriter<std::fs::File>>> =
-            std::cell::RefCell::new(std::env::var_os("LUMA_STAGE_TRACE").map(|path| {
-                std::io::BufWriter::new(std::fs::File::create(path).expect("create stage trace"))
-            }));
-    }
-    TRACE.with_borrow_mut(|trace| {
-        if let Some(trace) = trace {
-            serde_json::to_writer(&mut *trace, sample).expect("write stage trace");
-            writeln!(trace).expect("write stage trace newline");
-        }
-    });
-}
-
 /// One frame's cost, small enough to keep several seconds of them.
 ///
 /// `Copy` and all-scalar on purpose: this is written every frame on the UI
@@ -3556,7 +3524,7 @@ pub(crate) struct Lit {
 }
 
 /// The 3D view's transitions, kept with the screen the way every other one is
-/// (`settings::open_settings`, `track_editor::open_track`), so `lib.rs` stays
+/// (`settings::open_settings`, `track_editor::open_score`), so `lib.rs` stays
 /// the list of what exists rather than the list of how each screen is reached.
 impl Luma {
     /// The room the stage should be showing this frame, and the score that
@@ -5410,7 +5378,6 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                         // no delivered frame.
                                         _ => stage.previous.clone().map(|frame| (frame, None)),
                                     };
-                                    trace_stage_frame(&sample);
                                     let now = Instant::now();
                                     stage.rendered.record(now, gpu.submission.finished);
                                     if let Some(run_up) = stage.hitches.record(sample, now) {

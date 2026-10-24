@@ -115,7 +115,6 @@ mod playback_clock;
 mod playback_surface;
 mod sheet;
 pub(crate) use sheet::Audition;
-mod trace;
 mod waveform;
 mod zoom_motion;
 
@@ -1842,34 +1841,6 @@ fn lane_count(clips: &[Clip]) -> usize {
 // screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Open the newest score `track_id` has in the selected venue — the
-    /// first row of the listing, which is the order the sidebar shows.
-    pub(crate) fn open_track(&mut self, track_id: &str, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
-            return;
-        };
-        let venue_id = browser.venue_id().to_string();
-        let track_id = track_id.to_string();
-        let listing = self.library.scores_across_venues(&track_id);
-        cx.spawn(async move |this, cx| {
-            let Ok(summaries) = listing.await else {
-                return;
-            };
-            this.update(cx, |this, cx| {
-                let user = this.library.user_id();
-                let newest = crate::tracks::scores::rows(&summaries, user.as_deref())
-                    .iter()
-                    .find(|row| row.venue_id.as_ref() == venue_id)
-                    .map(crate::tracks::scores::open_row);
-                if let Some(score) = newest {
-                    this.open_score(&track_id, score, None, cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Open `score` of `track_id` as a tab in the selected venue, or bring its
     /// tab to the front: the tab's identity is its score. `thread` is the chat
     /// a restored tab had open.
@@ -3564,7 +3535,6 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
             state.follow
                 && state.transport.playing
                 && view.zoom == state.view.zoom
-                && !waveform::updates_frozen()
         })
         .map(|(view, position)| {
             // At either scroll limit the waveform is stationary and reusable;
@@ -3584,7 +3554,6 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
         beats: state.beats.clone(),
         view,
         playhead,
-        trace_active: state.transport.playing && state.follow,
         selected: state.selected.clone(),
         cursor: state.cursor,
         loop_region: state.loop_region,
@@ -3658,7 +3627,6 @@ struct Scene {
     beats: Option<Rc<BeatGrid>>,
     view: View,
     playhead: f32,
-    trace_active: bool,
     selected: Vec<SharedString>,
     cursor: Option<Cursor>,
     loop_region: Option<(f64, f64)>,
@@ -3987,7 +3955,6 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
 /// run under both — which is what makes
 /// a clip's translucent body show the beats through it.
 fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut App) {
-    let started = std::time::Instant::now();
     window.paint_quad(fill(bounds, ladder::background()));
     window.paint_quad(fill(
         Bounds {
@@ -4054,14 +4021,6 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
         }
         paint_playhead(bounds, scene, start, end, window);
     });
-    trace::frame(
-        scene.trace_active,
-        started,
-        scene.view.scroll,
-        scene.view.zoom,
-        scene.playhead,
-        window.is_window_active(),
-    );
 }
 
 /// The box a canvas 2D stroke of `width` centred on `x + 0.5` actually covers.
