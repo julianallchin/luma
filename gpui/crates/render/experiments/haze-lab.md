@@ -63,7 +63,8 @@ Limits:
 - The reference shares the single-scattering model, the source-extinction cache
   and the fixture shadow maps. Agreement with it does not prove photographic
   realism.
-- Far-field lighting has finite grid precision. Gobos stay stochastic.
+- Far-field lighting has finite grid precision (16-pixel cells). Gobo beams
+  integrate deterministically per pixel and never enter the grid.
 - Fixture shadow cameras cap their field of view at 170°. Very wide washes are
   unshadowed outside that projection.
 
@@ -107,10 +108,10 @@ medium envelope; the two depth omissions remove only the selected extinction
 term. These timings help locate work;
 their deltas are not additive exclusive costs or quality-preserving speedups.
 
-Live calls use `LIVE_SUBFRAMES` (currently two). Deterministic transport is evaluated once and does not blend historical density; stochastic transport retains its sample budget.
-The compute pipeline specializes away MIS fallback, stochastic light selection
-and unused jitter. An unmapped scattering source selects the generic fragment
-path even when compute is requested; gobos also retain their existing path.
+Live calls pass `LIVE_SUBFRAMES`, but haze is deterministic: every frame and
+capture runs the compute kernels once, and subframes matter only to the
+reference modes. The compute kernels carry no MIS, light selection or jitter;
+a light without a shadow map integrates its whole span per pixel.
 
 `LUMA_PROFILE_REPEAT` accepts `scene`, `medium-cache`, `fog-prepare`,
 `fog-classify`, `fog-grid`, `fog-integrate`, or `haze-compute`. It executes the
@@ -123,9 +124,9 @@ performance-ineligible. Compare whole-frame deltas to nearby controls: cache
 behavior and overlap mean these deltas are not additive exclusive costs or
 the savings available from deleting a pass.
 
-Live captures warm for 64 frames with physical time frozen but temporal sample
-seeds advancing. Timings are the final 32 warm frames. Eight subsequent captures
-measure residual temporal variance. `first.png` shows cold history. `pan.png`
+Live captures warm for 64 frames with physical time frozen. Timings are the
+final 32 warm frames. Eight subsequent captures measure residual frame-to-frame
+variance. `first.png` shows cold caches. `pan.png`
 translates eye and target 20 cm over eight frames and is compared to the same
 pose in reference captures. `blackout.png` and `relight.png` switch the volumetric
 sources as a history diagnostic; fixture emissive materials stay pinned, so these

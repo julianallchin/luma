@@ -143,6 +143,9 @@ light retains all eight integration samples and its own cached visibility. The
 inverse probability preserves expected radiance before reconstruction. Narrow
 beams and gobos remain exhaustively integrated. `LUMA_WIDE_LIGHT_GROUP=1` disables
 selection for an exhaustive comparison; rigs with at most 128 emitters bypass it.
+(Superseded 2026-10-24: reservoir selection, its sampled target and the temporal
+resolve are gone; every live frame and capture is deterministic compute haze, see
+`haze-lit-interval-cache.md`.)
 
 A separate fog render target carries sampled washes. A depth-guided 3×3 resolve
 filters this target only, leaving narrow beams, gobos and ambient wisps outside
@@ -225,6 +228,9 @@ shadows bypass grid computation. `LUMA_GRID_FOG=0` selects the previous per-ray
 live method for A/B measurements. Standalone captures accumulating multiple
 subframes retain that method for converged spatial detail. `LUMA_WIDE_LIGHT_GROUP=1`
 remains the exhaustive per-ray reference and disables the grid too.
+(Superseded 2026-10-24: the grid runs on every hazy frame, captures included,
+with 16-pixel cells on every platform; the switches are gone and the per-ray
+method is `Renderer::render_reference` alone.)
 
 This is a live quality/performance tradeoff, not exact transport: fresh frames
 have less grain, but settled distant fog can be slightly softer than the per-ray
@@ -466,6 +472,7 @@ Both levels:
   depth-aware bilateral upsample (`shaders/haze_wide.wgsl`). The route is a
   pipeline constant: as a uniform branch it cost the unsplit pass 25%.
   `LUMA_WIDE_BEAMS=0` keeps every beam native. Not on the Metal compute path.
+  (Removed 2026-10-24 with the fragment grid path.)
 - **Plain-beam piece cap.** Below cloudiness 0.5, `lit_interval` uses at most
   8 pieces (Low: 4), never fewer than the equiangular criterion needs.
 - **Shadow redraw budget.** A moved head keeps its slot and its last map; at
