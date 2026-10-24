@@ -33,6 +33,9 @@ jobs:
       - name: Test composable pattern engine
         run: cargo test -p luma-patterns
         working-directory: gpui
+      - name: Test updater
+        run: cargo test -p luma-update
+        working-directory: gpui
       - name: Test native pattern workflow
         run: cargo test -p gpui-agent --test headless lighting_patterns
         working-directory: gpui

@@ -1,0 +1,190 @@
+name: Release
+
+# A `v*` tag builds a stable release as a *draft*: nothing reaches users until
+# a maintainer publishes it, because publishing is what moves
+# `releases/latest/download/latest.json` — the URL every install polls.
+#
+# A manual run builds the current commit into the rolling `nightly`
+# prerelease, which only nightly builds poll.
+#
+# See RELEASING.md for the secrets and the steps around a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.97.1"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.meta.outputs.channel }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        name: Resolve channel and version
+        run: |
+          crate_version=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/Cargo.toml | head -1)
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ "$GITHUB_REF_NAME" != "v$crate_version" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match backend/Cargo.toml version $crate_version"
+              exit 1
+            fi
+            {
+              echo "channel=stable"
+              echo "version=$crate_version"
+              echo "tag=$GITHUB_REF_NAME"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "channel=nightly"
+              echo "version=$crate_version-nightly.$(date -u +%Y%m%d)+${GITHUB_SHA::7}"
+              echo "tag=nightly"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+  bundle-mac:
+    needs: prepare
+    # Apple silicon only: PyTorch publishes no macOS x86_64 wheels past 2.2,
+    # so the managed Python environment could not be built on an Intel Mac.
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      LUMA_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      LUMA_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gpui -> target
+          key: release
+      - name: Bundle, sign and notarize
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: "${{ vars.APPLE_SIGNING_IDENTITY || 'Developer ID Application: PROGRAMIS PRIME LLC (75M525RTAZ)' }}"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/release/bundle-mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
+          path: |
+            dist/Luma-aarch64.dmg
+            dist/Luma-aarch64.app.tar.gz
+          if-no-files-found: error
+
+  bundle-linux:
+    needs: prepare
+    # The oldest supported runner, for the oldest glibc the binary needs.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      LUMA_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      LUMA_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libfontconfig1-dev libssl-dev libclang-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gpui -> target
+          key: release
+      - name: Bundle
+        run: scripts/release/bundle-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/luma-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # The only job that sees the update-signing key, and the only one that can
+  # write to the repository.
+  publish:
+    needs: [prepare, bundle-mac, bundle-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Sign update archives
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; installs would refuse an unsigned update"
+            exit 1
+          fi
+          for archive in dist/Luma-aarch64.app.tar.gz dist/luma-linux-x86_64.tar.gz; do
+            npx --yes @tauri-apps/cli@2.12.4 signer sign "$archive"
+          done
+      - name: Write latest.json
+        run: |
+          python3 scripts/release/manifest.py \
+            --version "$VERSION" \
+            --commit "$GITHUB_SHA" \
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            darwin-aarch64=dist/Luma-aarch64.app.tar.gz \
+            linux-x86_64=dist/luma-linux-x86_64.tar.gz \
+            > dist/latest.json
+          cat dist/latest.json
+          cp scripts/release/install.sh dist/install.sh
+      - name: Create draft release
+        if: env.CHANNEL == 'stable'
+        run: |
+          gh release create "$TAG" --draft --verify-tag --generate-notes \
+            --title "Luma $VERSION" \
+            dist/Luma-aarch64.dmg dist/Luma-aarch64.app.tar.gz dist/Luma-aarch64.app.tar.gz.sig \
+            dist/luma-linux-x86_64.tar.gz dist/luma-linux-x86_64.tar.gz.sig \
+            dist/latest.json dist/install.sh
+      - name: Replace the nightly prerelease
+        if: env.CHANNEL == 'nightly'
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Nightly $VERSION" \
+            --notes "Built from $GITHUB_SHA. Nightly builds update to each newer nightly." \
+            dist/Luma-aarch64.dmg dist/Luma-aarch64.app.tar.gz dist/Luma-aarch64.app.tar.gz.sig \
+            dist/luma-linux-x86_64.tar.gz dist/luma-linux-x86_64.tar.gz.sig \
+            dist/latest.json dist/install.sh
