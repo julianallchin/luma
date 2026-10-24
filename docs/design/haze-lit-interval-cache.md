@@ -1,8 +1,20 @@
 # Native haze: lit-interval cache
 
-Status: built. `gpui/crates/render/src/interval_cache.rs` holds the CPU
-side. The native compute haze kernel uses it when the device supports
-subgroups. `LUMA_INTERVAL_CACHE=0` turns it off for A/B runs.
+Status: built, and the only live haze path. `gpui/crates/render/src/interval_cache.rs`
+holds the CPU side, `shaders/haze_cache.wgsl` the GPU side, and
+`haze_compact.rs` / `shaders/haze_compact.wgsl` the residual compaction
+built on it. Every live frame and capture (gobos and multi-subframe exports
+included) runs the compute kernels with this cache, compaction, 2×2 quad
+sharing and 16-pixel far-field cells; the per-ray fragment pass is only
+`Renderer::render_reference`. There is no switch to turn the cache off.
+
+The device must offer subgroup operations. An 8×4 block that is one
+subgroup ballots and shuffles through it and may share quads; a block split
+over narrower subgroups (lavapipe's 8 lanes, Intel's 8 or 16) exchanges
+ballots through workgroup memory and integrates every pixel exactly. The
+sharing decision is taken from the recorded traversal on write and uncached
+frames and from the header on read frames, so the image does not depend on
+cache history.
 
 ## What is cached
 
@@ -163,7 +175,8 @@ branch around it.
 
 ## Probe before building
 
-One instrumented capture on the 3 s close view, using the existing
+(Historical: the work-count instrumentation has since been removed.)
+One instrumented capture on the 3 s close view, using the then-existing
 `LUMA_HAZE_WORK_COUNTS` machinery with two counters repurposed:
 
 1. Histogram of `lit_interval` calls per (pixel, light) pair, including
