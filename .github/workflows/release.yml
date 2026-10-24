@@ -160,13 +160,21 @@ jobs:
           done
       - name: Write latest.json
         run: |
+          # Nightly installs built before platforms were keyed by target
+          # triple look up these keys. Delete once every nightly install has
+          # updated past that change.
+          old_keys=()
+          if [[ $CHANNEL == nightly ]]; then
+            old_keys=(darwin-aarch64=dist/Luma-aarch64.app.tar.gz linux-x86_64=dist/luma-linux-x86_64.tar.gz)
+          fi
           python3 scripts/release/manifest.py \
             --version "$VERSION" \
             --commit "$GITHUB_SHA" \
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
-            darwin-aarch64=dist/Luma-aarch64.app.tar.gz \
-            linux-x86_64=dist/luma-linux-x86_64.tar.gz \
+            aarch64-apple-darwin=dist/Luma-aarch64.app.tar.gz \
+            x86_64-unknown-linux-gnu=dist/luma-linux-x86_64.tar.gz \
+            "${old_keys[@]}" \
             > dist/latest.json
           cat dist/latest.json
           cp scripts/release/install.sh dist/install.sh

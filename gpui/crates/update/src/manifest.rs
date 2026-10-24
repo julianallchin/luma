@@ -1,9 +1,5 @@
 //! The release manifest, `latest.json`, and the decision whether it is newer.
 //!
-//! The format is Tauri's static updater manifest, unchanged, so the file the
-//! release workflow publishes is also the one the retired Tauri build polls
-//! (see `RELEASING.md`):
-//!
 //! ```json
 //! {
 //!   "version": "0.6.0",
@@ -11,14 +7,16 @@
 //!   "pub_date": "2026-10-23T12:00:00Z",
 //!   "commit": "0123abc…",
 //!   "platforms": {
-//!     "darwin-aarch64": { "url": "https://…/Luma-aarch64.app.tar.gz", "signature": "…" },
-//!     "linux-x86_64":   { "url": "https://…/luma-linux-x86_64.tar.gz", "signature": "…" }
+//!     "aarch64-apple-darwin":     { "url": "https://…/Luma-aarch64.app.tar.gz", "signature": "…" },
+//!     "x86_64-unknown-linux-gnu": { "url": "https://…/luma-linux-x86_64.tar.gz", "signature": "…" }
 //!   }
 //! }
 //! ```
 //!
-//! `commit` is Luma's own addition; Tauri ignores it. A nightly has no version
-//! worth comparing, so it is the commit that says whether it moved.
+//! A nightly has no version worth comparing, so it is the commit that says
+//! whether it moved. Platforms are keyed by target triple, which the retired
+//! Tauri build (0.5.19 and older), polling the same URL for `darwin-aarch64`,
+//! never finds: the native app cannot open its library.
 
 use std::collections::HashMap;
 
@@ -56,7 +54,7 @@ impl Manifest {
         serde_json::from_str(json).map_err(|error| format!("unreadable release manifest: {error}"))
     }
 
-    /// The archive for this machine, under Tauri's `<os>-<arch>` key.
+    /// The archive for this machine, under its target triple.
     pub fn asset(&self, platform: &str) -> Option<&Asset> {
         self.platforms.get(platform)
     }
@@ -98,11 +96,11 @@ pub fn platform() -> Option<&'static str> {
 
 fn platform_key(os: &str, arch: &str) -> Option<&'static str> {
     Some(match (os, arch) {
-        ("macos", "aarch64") => "darwin-aarch64",
-        ("macos", "x86_64") => "darwin-x86_64",
-        ("linux", "x86_64") => "linux-x86_64",
-        ("linux", "aarch64") => "linux-aarch64",
-        ("windows", "x86_64") => "windows-x86_64",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         _ => return None,
     })
 }
@@ -117,8 +115,8 @@ mod tests {
         "pub_date": "2026-10-23T12:00:00Z",
         "commit": "bbbb",
         "platforms": {
-            "darwin-aarch64": { "url": "https://example.com/Luma-aarch64.app.tar.gz", "signature": "c2ln" },
-            "linux-x86_64": { "url": "https://example.com/luma-linux-x86_64.tar.gz", "signature": "c2ln" }
+            "aarch64-apple-darwin": { "url": "https://example.com/Luma-aarch64.app.tar.gz", "signature": "c2ln" },
+            "x86_64-unknown-linux-gnu": { "url": "https://example.com/luma-linux-x86_64.tar.gz", "signature": "c2ln" }
         }
     }"#;
 
@@ -131,14 +129,14 @@ mod tests {
     }
 
     #[test]
-    fn reads_a_tauri_manifest() {
+    fn reads_a_manifest() {
         let manifest = Manifest::parse(MANIFEST).unwrap();
         assert_eq!(manifest.version, "0.6.0");
         assert_eq!(
-            manifest.asset("linux-x86_64").unwrap().url,
+            manifest.asset("x86_64-unknown-linux-gnu").unwrap().url,
             "https://example.com/luma-linux-x86_64.tar.gz"
         );
-        assert!(manifest.asset("windows-x86_64").is_none());
+        assert!(manifest.asset("x86_64-pc-windows-msvc").is_none());
     }
 
     #[test]
@@ -201,9 +199,15 @@ mod tests {
     }
 
     #[test]
-    fn platform_keys_match_tauri() {
-        assert_eq!(platform_key("macos", "aarch64"), Some("darwin-aarch64"));
-        assert_eq!(platform_key("linux", "x86_64"), Some("linux-x86_64"));
+    fn platform_keys_are_target_triples() {
+        assert_eq!(
+            platform_key("macos", "aarch64"),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            platform_key("linux", "x86_64"),
+            Some("x86_64-unknown-linux-gnu")
+        );
         assert_eq!(platform_key("freebsd", "x86_64"), None);
     }
 }
