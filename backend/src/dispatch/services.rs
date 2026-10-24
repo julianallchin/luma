@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use super::CommandError;
 use crate::agent_execution::workspace::PythonWorkspaceService;
-use crate::artnet::ArtNetManager;
 use crate::audio::FftService;
 use crate::controller_manager::ControllerManager;
 use crate::database::local::auth;
@@ -17,6 +16,7 @@ use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
 use crate::mixer_manager::MixerManager;
+use crate::output::OutputHub;
 use crate::preprocessing::{AnalysisTaskGroup, WorkerEnvironment};
 use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
@@ -201,8 +201,8 @@ pub struct AppServices {
     pub(crate) stagelinq: Arc<StageLinqManager>,
     /// Pioneer Pro DJ Link deck telemetry. `Arc` for the same reason.
     pub(crate) prodjlink: Arc<ProDJLinkManager>,
-    /// Physical output is installed only by the desktop host.
-    pub(crate) artnet: Option<Arc<ArtNetManager>>,
+    /// Physical DMX output is installed only by the desktop host.
+    pub(crate) output: Option<Arc<OutputHub>>,
     pub(crate) host_audio: HostAudioState,
     pub(crate) track_audio: crate::sync::audio::TrackAudio,
     pub(crate) storage: StorageRoot,
@@ -250,7 +250,7 @@ impl AppServices {
     /// is configured. Events are discarded unless overridden with
     /// [`AppServices::with_events`].
     ///
-    /// The deliberate absences are ArtNet
+    /// The deliberate absences are DMX output
     /// and the loops: nothing spawns a render loop, a sync loop, or an audio
     /// broadcaster, so a `RenderEngine` and a `HostAudioState` exist here but
     /// drive nothing.
@@ -284,7 +284,7 @@ impl AppServices {
             mixer: Arc::new(MixerManager::new()),
             stagelinq: Arc::new(StageLinqManager::new()),
             prodjlink: Arc::new(ProDJLinkManager::new()),
-            artnet: None,
+            output: None,
             host_audio,
             storage,
             fixtures_root,
@@ -326,20 +326,22 @@ impl AppServices {
     }
 
     /// Enable physical output for the native desktop host. Harnesses retain
-    /// the headless service set and never bind sockets or start discovery.
-    pub async fn with_artnet(mut self) -> Result<Self, String> {
-        let artnet = Arc::new(ArtNetManager::new(&self.db.0, self.fixtures_root.clone()).await?);
+    /// the headless service set and never bind sockets or open devices.
+    pub async fn with_output(mut self) -> Result<Self, String> {
+        let output = Arc::new(OutputHub::new(&self.db.0, self.fixtures_root.clone()).await?);
         self.controller = Arc::new(ControllerManager::new(
             self.render_engine.clone(),
-            Some(artnet.clone()),
+            Some(output.clone()),
         ));
-        self.artnet = Some(artnet);
+        self.output = Some(output);
         Ok(self)
     }
 
-    /// Run the desktop's wire-rate output until its owning library shuts down.
-    pub async fn run_artnet(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
-        let Some(artnet) = &self.artnet else {
+    /// Render the desktop's DMX at wire rate until its owning library shuts
+    /// down. Each tick is published to the drivers, which send it at their
+    /// own pace.
+    pub async fn run_output(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+        let Some(output) = &self.output else {
             return;
         };
         let mut ticks = tokio::time::interval(std::time::Duration::from_millis(23));
@@ -350,10 +352,10 @@ impl AppServices {
                 _ = ticks.tick() => {
                     let frame = self.render_engine.sample(self.host_audio.render_time());
                     if let Some(frame) = frame {
-                        artnet.broadcast(&frame);
+                        output.publish(&frame);
                         had_output = true;
                     } else if had_output {
-                        artnet.broadcast(&crate::models::universe::UniverseState { primitives: Default::default() });
+                        output.publish(&crate::models::universe::UniverseState { primitives: Default::default() });
                         had_output = false;
                     }
                 }
@@ -363,7 +365,7 @@ impl AppServices {
             }
         }
         if had_output {
-            artnet.broadcast(&crate::models::universe::UniverseState {
+            output.publish(&crate::models::universe::UniverseState {
                 primitives: Default::default(),
             });
         }
@@ -403,19 +405,19 @@ impl AppServices {
     /// Push the persisted settings into the subsystems that read them.
     ///
     /// Settings live in a table, but two subsystems hold their own copy of the
-    /// ones they care about: Art-Net's manager and the audio host. A write goes
+    /// ones they care about: the DMX output hub and the audio host. A write goes
     /// through `set_setting`, which calls this — but a freshly built
     /// `AppServices` has never been told, so a host must call it once at
-    /// startup or it runs the whole session on the defaults. Art-Net is skipped
-    /// on a host with no manager (see [`AppServices::artnet`]).
+    /// startup or it runs the whole session on the defaults. Output is skipped
+    /// on a host with no hub (see [`AppServices::output`]).
     ///
     /// # Errors
     ///
     /// If the settings cannot be read, or a subsystem refuses what they say.
     pub async fn apply_persisted_settings(&self) -> Result<(), CommandError> {
         let pool = &self.db.0;
-        if let Some(artnet) = &self.artnet {
-            crate::artnet::reload_settings(artnet, pool).await?;
+        if let Some(output) = &self.output {
+            crate::output::reload_settings(output, pool).await?;
         }
         crate::host_audio::reload_settings(&self.host_audio, pool).await?;
         Ok(())

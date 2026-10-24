@@ -72,7 +72,7 @@ use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture
 use luma_lib::models::folders::Folder;
 use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
 use luma_lib::models::node_graph::BeatGrid;
-use luma_lib::models::patch::{ArtNetNode, AutoPatchReport, UniverseCell, UniverseOutput};
+use luma_lib::models::patch::{AutoPatchReport, DmxRoute, OutputDevice, OutputPort, UniverseCell};
 use luma_lib::models::patterns::AnnotationPreview;
 use luma_lib::models::scores::{Score, ScoreSummary};
 use luma_lib::models::selection::Selection;
@@ -763,7 +763,7 @@ impl Library {
                 None => services,
             };
             let services = if desktop {
-                services.with_artnet().await?
+                services.with_output().await?
             } else {
                 services
             };
@@ -832,7 +832,7 @@ impl Library {
             let output_services = services.clone();
             let output_shutdown = shutdown_rx.clone();
             runtime.spawn(async move {
-                output_services.run_artnet(output_shutdown).await;
+                output_services.run_output(output_shutdown).await;
             });
         }
 
@@ -2174,7 +2174,7 @@ impl Library {
     }
 
     /// Write one setting. The seam owns what a key means and what a write
-    /// costs (Art-Net and audio both reload on one), so the caller's only job
+    /// costs (DMX output and audio both reload on one), so the caller's only job
     /// afterwards is to read the settings back — which is also the only honest
     /// proof the write landed.
     ///
@@ -2706,8 +2706,7 @@ impl Library {
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 };
             let universes: Vec<u16> = command(&services, "universes_in_use", &venue).await?;
-            let outputs: Vec<UniverseOutput> =
-                command(&services, "list_outputs", &json!({})).await?;
+            let routes: Vec<DmxRoute> = command(&services, "list_routes", &json!({})).await?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -2734,7 +2733,7 @@ impl Library {
                 missing,
                 missing_error,
                 universes,
-                outputs,
+                routes,
             })
         });
         async move {
@@ -2842,38 +2841,49 @@ impl Library {
 
     // -- outputs --------------------------------------------------------------
 
-    /// Every Art-Net node that has answered a poll since discovery started.
-    /// Fails on a host with no Art-Net at all, which is a state the outputs
-    /// panel says out loud rather than drawing as an empty network.
-    pub fn artnet_nodes(
+    /// Every DMX device the drivers can see now. Fails on a host with no
+    /// output at all, which is a state the outputs panel says out loud rather
+    /// than drawing as an empty room.
+    pub fn output_devices(
         &self,
-    ) -> impl Future<Output = Result<Vec<ArtNetNode>, LibraryError>> + use<> {
-        self.call("get_discovered_nodes", json!({}))
+    ) -> impl Future<Output = Result<Vec<OutputDevice>, LibraryError>> + use<> {
+        self.call("list_output_devices", json!({}))
     }
 
-    /// Point one universe at one node's announced port address.
-    pub fn bind_output(
+    /// Send one universe to one port of a device, alongside wherever it
+    /// already goes.
+    pub fn bind_route(
         &self,
         universe: i64,
-        node: &ArtNetNode,
+        device: &OutputDevice,
+        port: &OutputPort,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
-            "bind_output",
+            "bind_route",
             json!({
                 "universe": universe,
-                "nodeIp": node.ip,
-                "nodePort": ARTNET_PORT,
-                "portAddress": node.port_address,
-                "nodeName": node.name,
+                "deviceKind": device.kind,
+                "deviceId": device.id,
+                "port": port.port,
+                "deviceName": device.name,
+                "address": device.address,
             }),
         )
     }
 
-    pub fn unbind_output(
+    pub fn unbind_route(
         &self,
-        universe: i64,
+        route: &DmxRoute,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("unbind_output", json!({ "universe": universe }))
+        self.call(
+            "unbind_route",
+            json!({
+                "universe": route.universe,
+                "deviceKind": route.device_kind,
+                "deviceId": route.device_id,
+                "port": route.port,
+            }),
+        )
     }
 
     /// Run one command on the Tokio runtime and decode its result.
@@ -2926,10 +2936,6 @@ async fn command<T: DeserializeOwned>(
         .map_err(|error| LibraryError::at(name, Cause::Shape(error.to_string())))
 }
 
-/// The Art-Net port every node listens on. Fixed by the protocol, so a binding
-/// carries it rather than asking anyone to type it.
-const ARTNET_PORT: i64 = 6454;
-
 /// One venue's paperwork, as [`Library::patch_data`] resolves it.
 ///
 /// The patch is what *exists*; where a fixture hangs is the stage page's
@@ -2947,9 +2953,9 @@ pub struct Patch {
     pub missing_error: Option<String>,
     /// Every universe the venue patches into, ascending.
     pub universes: Vec<u16>,
-    /// The universe→node table. Not per-venue: an output is a fact about this
-    /// machine's wiring.
-    pub outputs: Vec<UniverseOutput>,
+    /// Where each universe goes. Not per-venue: an output is a fact about
+    /// this machine's wiring.
+    pub routes: Vec<DmxRoute>,
 }
 
 /// One venue's 3D contents, as [`Library::venue_rig`] resolves them.

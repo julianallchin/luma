@@ -14,8 +14,9 @@ const EXTRAS = [
                          fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
    VALUES ('fixture-clash', '$PRINCIPAL', 'venue-main', 1, 5, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf', 'Clash 1', 0.0, 0.0, 3.0, 0.0, 0.0, 0.0),
           ('fixture-far', '$PRINCIPAL', 'venue-main', 17, 1, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf', 'Far 1', 0.0, 0.0, 3.0, 0.0, 0.0, 0.0)`,
-  `INSERT INTO universe_outputs (universe, node_ip, node_port, port_address, node_name)
-   VALUES (1, '10.0.0.5', 6454, 0, 'Node A'), (17, '10.0.0.6', 6454, 16, 'Node B')`,
+  `INSERT INTO dmx_routes (universe, device_kind, device_id, port, device_name, address)
+   VALUES (1, 'art-net', '10.0.0.5', 0, 'Node A', '10.0.0.5:6454'),
+          (17, 'art-net', '10.0.0.6', 16, 'Node B', '10.0.0.6:6454')`,
 ];
 
 const texts = () => app.snapshot().findAll({ role: "text" }).map((n) => n.label);
@@ -109,12 +110,25 @@ test("universe one and seventeen are different outputs", { fixture: { sql: EXTRA
   const seventeen = rows.find((l) => l.startsWith("Universe 17 →")).slice("Universe 17 →".length);
   assert(one !== seventeen, `the two universes resolved to the same output: ${rows}`);
 
-  // Unbinding one leaves the other alone, and names the fallback.
-  app.click(app.snapshot().find({ role: "button", label: "Unbind universe 17" }));
+  // Unbinding one leaves the other alone, and says the universe now goes
+  // nowhere rather than falling back to an address that aliases it.
+  const unbind = app.snapshot().find((n) => n.role === "button" && n.label.startsWith("Unbind universe 17 from Node B"));
+  app.click(unbind);
   until("the unbound row", (s) => s.findAll({ role: "row" }).some((n) => n.label === "Universe 17 → Not bound"));
   app.frames(4);
   expect(rowLabels().filter((l) => l.startsWith("Universe ")).length).toBe(2);
-  expect(texts().find((l) => l.startsWith("Universe 17 has no node"))).toContain("aliases it onto 1");
+  expect(texts()).toContain("Universe 17 is not sent anywhere");
+  assert(rowLabels().some((l) => l.startsWith("Universe 1 → Node A")), `universe 1 lost its route: ${rowLabels()}`);
+});
+
+// The headless host runs no output, so the device menu says that rather than
+// drawing an empty room.
+test("adding an output on a host with no DMX output says why", () => {
+  openPatch();
+  app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
+  until("the outputs table", (s) => s.find({ role: "button", label: "Add output to universe 1" }) !== undefined);
+  app.click(app.snapshot().find({ role: "button", label: "Add output to universe 1" }));
+  until("the device menu", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("not running on this host")));
 });
 
 // Auto Patch re-derives, asks before discarding an override, and says how

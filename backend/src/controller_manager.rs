@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 
-use crate::artnet::ArtNetManager;
 use crate::dispatch::Events;
 use crate::models::midi::{
     ControllerState, MidiAction, MidiBinding, MidiInput as MidiInputKind, ModifierDef,
 };
+use crate::output::OutputHub;
 use crate::render_engine::RenderEngine;
 
 const CLIENT_NAME: &str = "Luma";
@@ -166,13 +166,13 @@ pub struct ControllerManager {
     learn_state: Arc<Mutex<LearnState>>,
     snapshot: Arc<RwLock<ControllerMappingSnapshot>>,
     render_engine: RenderEngine,
-    /// Absent on a host with no ArtNet output. Used only to darken the rig when
+    /// Absent on a host with no DMX output. Used only to darken the rig when
     /// the manual layer goes idle — the render loop owns every other frame.
-    artnet: Option<Arc<ArtNetManager>>,
+    output: Option<Arc<OutputHub>>,
 }
 
 impl ControllerManager {
-    pub fn new(render_engine: RenderEngine, artnet: Option<Arc<ArtNetManager>>) -> Self {
+    pub fn new(render_engine: RenderEngine, output: Option<Arc<OutputHub>>) -> Self {
         Self {
             inner: Mutex::new(ControllerManagerInner {
                 connection: None,
@@ -187,7 +187,7 @@ impl ControllerManager {
             })),
             snapshot: Arc::new(RwLock::new(ControllerMappingSnapshot::default())),
             render_engine,
-            artnet,
+            output,
         }
     }
 
@@ -256,7 +256,7 @@ impl ControllerManager {
         let snapshot_arc = self.snapshot.clone();
         let render_engine = self.render_engine.clone();
         let events_cb = events.clone();
-        let artnet_cb = self.artnet.clone();
+        let output_cb = self.output.clone();
         let learn_state = self.learn_state.clone();
 
         let connection = midi_in
@@ -294,7 +294,7 @@ impl ControllerManager {
                         &snap,
                         &render_engine,
                         &events_cb,
-                        artnet_cb.as_ref(),
+                        output_cb.as_ref(),
                     );
                 },
                 (),
@@ -415,18 +415,18 @@ fn process_midi_event(
     snapshot: &ControllerMappingSnapshot,
     render_engine: &RenderEngine,
     events: &Events,
-    artnet: Option<&Arc<ArtNetManager>>,
+    output: Option<&Arc<OutputHub>>,
 ) {
     // 1. Check if event is a modifier press/release
     for modifier in &snapshot.modifiers {
         if event.matches_press(&modifier.input) {
             render_engine.modifier_on(&modifier.name);
-            emit_controller_state(render_engine, events, artnet);
+            emit_controller_state(render_engine, events, output);
             return;
         }
         if event.matches_release(&modifier.input) {
             render_engine.modifier_off(&modifier.name);
-            emit_controller_state(render_engine, events, artnet);
+            emit_controller_state(render_engine, events, output);
             return;
         }
     }
@@ -457,7 +457,7 @@ fn process_midi_event(
         }
     }
 
-    emit_controller_state(render_engine, events, artnet);
+    emit_controller_state(render_engine, events, output);
 }
 
 /// Find the binding that best matches the event + held modifiers.
@@ -529,21 +529,21 @@ fn event_to_midi_input(event: &MidiEvent) -> Option<MidiInputKind> {
 fn emit_controller_state(
     render_engine: &RenderEngine,
     events: &Events,
-    artnet: Option<&Arc<ArtNetManager>>,
+    output: Option<&Arc<OutputHub>>,
 ) {
     let state: ControllerState = render_engine.get_manual_state_snapshot();
     events.emit("controller_state", &state);
 
     // When output is off, push a dark universe frame so the visualizer clears
-    // and ArtNet fixtures go dark rather than holding the last lit frame.
+    // and the rig goes dark rather than holding the last lit frame.
     if !state.active {
         use std::collections::HashMap;
         let dark = crate::models::universe::UniverseState {
             primitives: HashMap::new(),
         };
         events.emit("universe-state-update", &dark);
-        if let Some(artnet) = artnet {
-            artnet.broadcast(&dark);
+        if let Some(output) = output {
+            output.publish(&dark);
         }
     }
 }

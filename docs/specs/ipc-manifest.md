@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**153 commands** across **27 domains** · **13 events**
+**151 commands** across **27 domains** · **13 events**
 
 ## Domains
 
@@ -15,7 +15,6 @@ name.
 | --- | ---: | --- |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 8 | `backend/src/dispatch/handlers/agent_threads.rs` |
-| `artnet` | 6 | `backend/src/dispatch/handlers/artnet.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
@@ -29,6 +28,7 @@ name.
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 8 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
+| `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
 | `perform` | 8 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
@@ -40,7 +40,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **153** | |
+| **total** | **151** | |
 
 ## Commands
 
@@ -65,17 +65,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `agent_thread_set_actor` | `threadId: String`<br>`actor: String` | `()` |
 | `agent_thread_record_usage` | `usage: AgentThreadUsage` | `()` |
 | `agent_thread_delete` | `threadId: String` | `()` |
-
-### `artnet`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `start_discovery` | — | `()` |
-| `stop_discovery` | — | `()` |
-| `get_discovered_nodes` | — | `Vec<ArtNetNode>` |
-| `list_outputs` | — | `Vec<UniverseOutput>` |
-| `bind_output` | `universe: i64`<br>`nodeIp: String`<br>`nodePort: i64`<br>`portAddress: i64`<br>`nodeName: Option<String>` | `()` |
-| `unbind_output` | `universe: i64` | `()` |
 
 ### `auth`
 
@@ -221,6 +210,15 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `mixer_open_port` | `venueId: String`<br>`portName: String` | `()` |
 | `mixer_start_learn` | `venueId: String` | `()` |
 | `mixer_cancel_learn` | `venueId: String` | `()` |
+
+### `output`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `list_output_devices` | — | `Vec<OutputDevice>` |
+| `list_routes` | — | `Vec<DmxRoute>` |
+| `bind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64`<br>`deviceName: Option<String>`<br>`address: Option<String>` | `()` |
+| `unbind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64` | `()` |
 
 ### `perform`
 

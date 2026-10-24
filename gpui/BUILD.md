@@ -33,6 +33,20 @@ A missing library shows up only at link time, as
 `rust-lld: error: unable to find library -l<name>`. The `-dev` package carries
 the `.so` symlink that the linker needs.
 
+### USB DMX dongles
+
+Luma opens USB DMX dongles (SoundSwitch Micro and Control One) directly, with
+no system library. On Linux a normal user cannot open them until a udev rule
+grants access:
+
+```sh
+sudo cp resources/linux/70-luma-dmx.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Unplug and replug the dongle. Without the rule, the Outputs panel shows the
+dongle with a permission message.
+
 ## Rebuild on save
 
 From the repository root, run:

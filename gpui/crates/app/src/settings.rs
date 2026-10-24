@@ -24,19 +24,19 @@ pub enum Tab {
     General,
     Account,
     Ai,
-    ArtNet,
+    Output,
     About,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [Tab::General, Tab::Account, Tab::Ai, Tab::ArtNet, Tab::About];
+    const ALL: [Tab; 5] = [Tab::General, Tab::Account, Tab::Ai, Tab::Output, Tab::About];
 
     fn label(self) -> &'static str {
         match self {
             Tab::General => "General",
             Tab::Account => "Account",
             Tab::Ai => "AI",
-            Tab::ArtNet => "Art-Net / DMX",
+            Tab::Output => "DMX Output",
             Tab::About => "About",
         }
     }
@@ -369,7 +369,7 @@ fn body(
             Tab::General => general(values, app),
             Tab::Account => account(shell, app),
             Tab::Ai => ai(state, values, app),
-            Tab::ArtNet => artnet(values, app),
+            Tab::Output => output(values, app),
             Tab::About => about(),
         })
 }
@@ -444,7 +444,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     fields
 }
 
-fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     vec![
         field(
             Some("Max Brightness"),
@@ -474,44 +474,18 @@ fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             None,
             checkbox(
                 app,
-                "artnet_enabled",
-                "Enable Art-Net Output",
-                values.artnet_enabled,
+                "dmx_output_enabled",
+                "Enable DMX Output",
+                values.dmx_output_enabled,
             ),
-            None,
+            Some("Sends to Art-Net nodes and USB DMX dongles. Choose where each universe goes under Outputs on a venue's patch page."),
         ),
         field(
-            None,
-            checkbox(
-                app,
-                "artnet_broadcast",
-                "Always Broadcast (255.255.255.255)",
-                values.artnet_broadcast,
-            ),
-            None,
-        ),
-        field(
-            Some("Interface IP (Bind Address)"),
+            Some("Art-Net Interface IP (Bind Address)"),
             readonly_value(&values.artnet_interface, "0.0.0.0"),
             Some("0.0.0.0 binds to all interfaces."),
         ),
-        field(
-            Some("Unicast Destination IP"),
-            readonly_value(&values.artnet_unicast_ip, "Broadcast only"),
-            None,
-        ),
-        field(
-            Some("Net / Subnet"),
-            readonly_value(
-                &format!("{} / {}", values.artnet_net, values.artnet_subnet),
-                "",
-            ),
-            None,
-        ),
-        // Node discovery is a poll loop over start/stop/get_discovered_nodes
-        // and the text fields above are the only thing that consumes its
-        // result, so it lands with them.
-        note("Text fields and node discovery are not editable from the native host yet."),
+        note("The Art-Net interface is not editable from the native host yet."),
     ]
 }
 

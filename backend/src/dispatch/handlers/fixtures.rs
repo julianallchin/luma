@@ -229,7 +229,7 @@ async fn fixture_write<'a>(
 /// Commit a patch-mutating write and republish the resulting patch.
 ///
 /// Every fixture mutation ends this way, so the read-back, the commit, the
-/// ArtNet push and the cache invalidation stay in one place and cannot drift
+/// DMX output push and the cache invalidation stay in one place and cannot drift
 /// apart per command.
 async fn commit_and_publish(
     services: &AppServices,
@@ -243,8 +243,8 @@ async fn commit_and_publish(
 }
 
 fn publish_patch(services: &AppServices, patch: Vec<PatchedFixture>) {
-    if let Some(artnet) = services.artnet.as_ref() {
-        artnet.update_patch(patch);
+    if let Some(output) = services.output.as_ref() {
+        output.update_patch(patch);
     }
 }
 

@@ -134,7 +134,7 @@ clips, midi_modifiers,
 midi_bindings, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts.
 
-Local only: settings, universe_outputs, preprocessing_failures,
+Local only: settings, dmx_routes, preprocessing_failures,
 track_waveforms, track_mert, fixture_group_overrides, agent_thread_runs,
 agent_thread_usage, stage_pieces, sync_rejections, auth_write_admission, the
 auth session, and the columns `venues.controller_port`, `venues.mixer_port`,

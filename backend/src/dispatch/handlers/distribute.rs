@@ -46,9 +46,9 @@ pub async fn distribute(
         .await?;
     // Only a host with live output republishes; the service places the row
     // either way, which is what lets an agent's cell build a rig on a machine
-    // that has no Art-Net at all.
-    if let Some(artnet) = services.artnet.as_ref() {
-        artnet.update_patch(distributed.patch);
+    // that has no DMX output at all.
+    if let Some(output) = services.output.as_ref() {
+        output.update_patch(distributed.patch);
     }
     Ok(distributed.report)
 }
@@ -71,8 +71,8 @@ pub async fn redistribute(
     let distributed = Stage::new(&services.db.0, &services.fixtures_root, &venue_id)
         .redistribute(&member_node_id, count, layout)
         .await?;
-    if let Some(artnet) = services.artnet.as_ref() {
-        artnet.update_patch(distributed.patch);
+    if let Some(output) = services.output.as_ref() {
+        output.update_patch(distributed.patch);
     }
     Ok(distributed.report)
 }
