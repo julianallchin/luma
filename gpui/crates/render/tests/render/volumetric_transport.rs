@@ -431,7 +431,7 @@ fn tiled_transport_accepts_32_128_and_512_cones() {
 }
 
 #[test]
-fn live_history_resets_on_camera_and_time_discontinuity() {
+fn live_frames_after_camera_and_time_jumps_match_a_fresh_renderer() {
     let mut live = Viewport::new().unwrap();
     live.set_subframes(1);
     let mut input = frame(Vec::new(), vec![light(0)]);
@@ -446,7 +446,7 @@ fn live_history_resets_on_camera_and_time_discontinuity() {
     assert_eq!(
         camera_reset,
         fresh.draw(&input, WIDTH, HEIGHT).unwrap().pixels,
-        "camera motion must reject all prior volumetric history"
+        "camera motion must leave no stale volumetric state"
     );
 
     live.draw(&input, WIDTH, HEIGHT).unwrap();
@@ -457,12 +457,12 @@ fn live_history_resets_on_camera_and_time_discontinuity() {
     assert_eq!(
         time_reset,
         fresh.draw(&input, WIDTH, HEIGHT).unwrap().pixels,
-        "track-time discontinuity must reject all prior volumetric history"
+        "a track-time jump must leave no stale volumetric state"
     );
 }
 
 #[test]
-fn live_history_rejects_a_moving_occluder_with_a_fixed_camera() {
+fn live_haze_follows_a_moving_occluder_with_a_fixed_camera() {
     let mut live = Viewport::new().unwrap();
     live.set_subframes(1);
     let open_input = frame(Vec::new(), vec![light(0)]);
@@ -527,7 +527,7 @@ fn live_history_rejects_a_moving_occluder_with_a_fixed_camera() {
 }
 
 #[test]
-fn async_viewport_advances_and_resets_production_temporal_history() {
+fn async_viewport_repeats_still_frames_and_matches_fresh_after_changes() {
     let mut live = AsyncViewport::new();
     live.set_subframes(1);
     let first = draw_async(
@@ -583,7 +583,7 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
     assert_eq!(
         camera_reset.image.to_bytes(),
         expected_camera.image.to_bytes(),
-        "the renderer-thread path must reject history on camera motion"
+        "the renderer-thread path must leave no stale state on camera motion"
     );
 
     let resized = draw_async(
@@ -613,7 +613,7 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
     assert_eq!(
         resized.image.to_bytes(),
         expected_resize.image.to_bytes(),
-        "resize must discard history and rebuild renderer-thread targets"
+        "resize must rebuild renderer-thread targets"
     );
 }
 

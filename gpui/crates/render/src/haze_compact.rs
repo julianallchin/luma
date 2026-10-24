@@ -210,8 +210,7 @@ pub(crate) struct FrameBindings<'a> {
     /// others, so fog-integrate's write to the grid need not wait for them.
     pub(crate) grid: &'a wgpu::TextureView,
     pub(crate) static_field: &'a wgpu::TextureView,
-    pub(crate) exact: &'a wgpu::TextureView,
-    pub(crate) sampled: &'a wgpu::TextureView,
+    pub(crate) output: &'a wgpu::TextureView,
     /// Interval cache: slot table, header words, claims, payload table.
     pub(crate) cache: [&'a wgpu::Buffer; 4],
 }
@@ -497,8 +496,7 @@ impl Compaction {
             layout,
             entries: &[
                 binding(0, TextureView(if hot { frame.grid } else { frame.static_field })),
-                binding(1, TextureView(frame.exact)),
-                binding(2, TextureView(frame.sampled)),
+                binding(1, TextureView(frame.output)),
                 binding(4, frame.cache[0].as_entire_binding()),
                 binding(5, frame.cache[1].as_entire_binding()),
                 binding(6, frame.cache[2].as_entire_binding()),

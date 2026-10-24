@@ -33,9 +33,9 @@ use super::{Bass, Visualizer};
 /// Output frames per second.
 pub(crate) const FPS: u32 = 60;
 
-/// Frames drawn and thrown away before score time 0, so the haze history has
-/// settled by the first frame kept. The temporal resolve keeps 82% of its
-/// history, so the first frame's weight is under 1% after 24.
+/// Frames drawn and thrown away before score time 0, so fixture shadow maps,
+/// redrawn a budget a frame, and the haze caches behind them have settled by
+/// the first frame kept.
 const WARMUP: u64 = 24;
 
 /// The stage as the viewport has it: the rig, its render settings and the

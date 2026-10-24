@@ -1,8 +1,8 @@
 // Shared single-scattering transport and camera/fixture shadow queries.
 // The compute kernels integrate visible shadow-map intervals
-// deterministically; the fragment pass (gobos, multi-subframe captures and the
-// exhaustive reference) uses the progressive MIS estimator. The same density,
-// photometry, and extinction model feed both integrators.
+// deterministically; the exhaustive reference's fragment pass uses the
+// progressive MIS estimator. The same density, photometry, gobo and
+// extinction model feed both integrators.
 
 // The compute kernels: the far-field grid carries broad washes beyond their
 // source region and camera transmittance, and no ray is jittered.
@@ -463,31 +463,6 @@ fn clip_to_lens_plane(t_a: ptr<function, f32>, t_b: ptr<function, f32>, axial: f
     return true;
 }
 
-// Unshadowed equiangular midpoint estimate guides reference light selection.
-// Positive support over the complete analytic span keeps
-// selection unbiased even where haze pockets or blockers defeat the estimate.
-fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
-    let span = beam_span(li, ray);
-    if span.y <= span.x { return 0.0; }
-    let core = light_core[li];
-    let rest = light_rest[li];
-    let oc = haze.camera_pos.xyz - core.position;
-    let b = dot(oc, ray.dir);
-    let h = sqrt(max(dot(oc, oc) - b * b, haze.tuning.z));
-    let theta_a = atan((span.x + b) / h);
-    let theta_b = atan((span.y + b) / h);
-    let t = -b + h * tan((theta_a + theta_b) * 0.5);
-    let q = oc + ray.dir * t;
-    let dist = max(length(q), 1e-4);
-    let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
-    let phase = henyey_greenstein(-(b + t) / dist, haze.transport.y);
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
-    let spectrum = max(max(tint.r, tint.g), tint.b);
-    let energy = rest.intensity * rest.haze_gain * spectrum;
-    return energy * max(1e-6, (theta_b - theta_a) / h * angular
-        * beam_range_falloff(dist, core.range) * phase * transport_transmittance(ray, li, t, haze.camera_pos.xyz + ray.dir * t));
-}
-
 /// Single-scattering radiance this ray receives from light `li`, already
 /// multiplied by sigma. Returns zero when the ray misses the light's
 /// cone∩ball, or the span it does cross is occluded by geometry.
@@ -616,14 +591,31 @@ const DETAIL_CLOUDINESS: f32 = 0.5;
 // equiangular span (0.4 rad each) and, in strongly cloudy haze, half the cloud
 // size. A plain beam in gentle haze is capped at `haze.quality.x` pieces: its
 // integrand is smooth apart from the cloud field's low contrast, and the cap
-// keeps long spans from paying for detail the image cannot show. Gobo beams
-// use the stochastic estimator and never reach this budget.
+// keeps long spans from paying for detail the image cannot show.
 fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
     let angular = (th1 - th0) / 0.4;
     let cloud = (b - a) / max(haze.medium.shape.y * 0.5, 0.1);
     let full = clamp(u32(ceil(max(cloud, angular))), 1u, 32u);
     if haze.medium.shape.x >= DETAIL_CLOUDINESS { return full; }
     return min(full, max(u32(haze.quality.x), u32(ceil(angular))));
+}
+
+// Pieces that resolve light `li`'s gobo along `[a, b]`, three per cycle of
+// its pattern. A ray crosses the aperture along a straight line (a line seen
+// from the apex), so the endpoints bound the cycles: the spokes' twelve per
+// turn of polar angle, the breakup's fifteen per radian of aperture.
+fn gobo_pieces(li: u32, ray: SceneRay, a: f32, b: f32) -> u32 {
+    let rest = light_rest[li];
+    if rest.gobo < 0.5 { return 1u; }
+    let oc = haze.camera_pos.xyz - light_core[li].position;
+    let pa = gobo_aperture(from_lens_apex(oc + ray.dir * a, rest.direction, rest.lens_distance), rest.direction, rest.cos_field);
+    let pb = gobo_aperture(from_lens_apex(oc + ray.dir * b, rest.direction, rest.lens_distance), rest.direction, rest.cos_field);
+    var cycles = length(pb - pa) * 15.0 / 6.2831853;
+    if rest.gobo < 1.5 {
+        let turn = acos(clamp(dot(pa, pb) / max(length(pa) * length(pb), 1e-8), -1.0, 1.0));
+        cycles = turn * 6.0 / 3.1415927;
+    }
+    return clamp(u32(ceil(cycles * 3.0)), 1u, 32u);
 }
 
 // Integrate a visible interval with Gauss-Legendre quadrature in equiangular
@@ -647,7 +639,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
     let h = sqrt(max(dot(oc, oc) - delta * delta, haze.tuning.z));
     let th0 = atan((a - delta) / h);
     let th1 = atan((b - delta) / h);
-    let pieces = quadrature_pieces(a, b, th0, th1);
+    let pieces = max(quadrature_pieces(a, b, th0, th1), gobo_pieces(li, ray, a, b));
     let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
@@ -679,12 +671,16 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             let distance = sqrt(d2);
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
             let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
-            let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH);
+            let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
             let world = haze.camera_pos.xyz + ray.dir * t;
             let field = mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
             var value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
                 * haze_density_at(world) * field
                 / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z);
+            if rest.gobo >= 0.5 {
+                value *= gobo_transmission(from_lens_apex(q, rest.direction, rest.lens_distance),
+                    rest.direction, rest.cos_field, rest.gobo, rest.gobo_rotation);
+            }
             if traced { value *= stage_visibility(world, core.position); }
             sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j];
         }

@@ -79,9 +79,9 @@ fn frame() -> Frame {
 
 /// Draw one deterministic frame on a viewport of its own.
 ///
-/// A fresh viewport per call is what makes the comparison fair: the live path
-/// accumulates blue-noise history across frames, so the first frame of a new
-/// renderer is the only frame with no history behind it.
+/// A fresh viewport per call is what makes the comparison fair: the renderer
+/// carries shadow and haze caches across frames, so the first frame of a new
+/// renderer is the only frame with nothing behind it.
 fn draw_one() -> AsyncPresentation {
     let mut viewport = AsyncViewport::new();
     viewport.set_subframes(1);
