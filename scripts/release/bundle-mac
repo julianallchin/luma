@@ -24,9 +24,8 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 here="$repo/scripts/release"
 cd "$repo"
 
-keychain='' staging=''
+keychain=''
 cleanup() {
-    if [[ -n $staging ]]; then rm -rf "$staging"; fi
     if [[ -n $keychain ]]; then security delete-keychain "$keychain" || true; fi
 }
 trap cleanup EXIT
@@ -98,11 +97,12 @@ sign "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
 dmg="$dist/Luma-$arch.dmg"
-staging=$(mktemp -d)
-cp -R "$app" "$staging/"
-ln -s /Applications "$staging/Applications"
 rm -f "$dmg"
-hdiutil create -volname Luma -srcfolder "$staging" -ov -format UDZO "$dmg"
+# dmgbuild lays the window out (background, icon positions) by writing the
+# volume's .DS_Store itself, so it needs no Finder session on the runner.
+dmgbuild -s "$here/macos/dmg-settings.py" \
+    -D app="$app" -D background="$here/macos/dmg-background.png" \
+    Luma "$dmg"
 
 if [[ $identity != - ]]; then
     codesign --force --timestamp --sign "$identity" "$dmg"

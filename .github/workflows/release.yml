@@ -76,6 +76,8 @@ jobs:
         with:
           workspaces: gpui -> target
           key: release
+      - name: Install dmgbuild
+        run: pipx install dmgbuild==1.6.7
       - name: Bundle, sign and notarize
         env:
           MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

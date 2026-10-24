@@ -90,4 +90,7 @@ library that old (`backend/migrations/20261024000000_baseline.sql`).
 
 `scripts/release/bundle-linux` and `scripts/release/bundle-mac` produce the
 same files in `dist/` without any secrets. They need Git LFS files and
-submodules, as in `gpui/BUILD.md`.
+submodules, as in `gpui/BUILD.md`. `bundle-mac` also needs `dmgbuild`
+(`pipx install dmgbuild`), which lays out the DMG window. The window's
+background is drawn by `scripts/release/macos/dmg-background.py`; rerun it
+after changing the layout, and commit the PNGs it writes.
