@@ -113,10 +113,6 @@ impl Luma {
         self.set_track_playback(!editor.transport.playing, editor.transport.position, cx);
     }
 
-    pub(crate) fn play_track_at(&mut self, seconds: f32, cx: &mut Context<Self>) {
-        self.set_track_playback(true, seconds, cx);
-    }
-
     fn set_track_playback(&mut self, playing: bool, seconds: f32, cx: &mut Context<Self>) {
         let Some(target) = self.workspace.active().cloned() else {
             return;

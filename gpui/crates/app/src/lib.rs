@@ -33,7 +33,6 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use std::time::Duration;
 
 mod add_tracks;
 mod agent;
@@ -350,7 +349,6 @@ impl Luma {
             app.show_sign_in(false, cx);
         }
         app.load_display_settings(cx);
-        app.auto_repro(cx);
         app.watch_session(cx);
         app.watch_sync(cx);
         app.watch_replica(cx);
@@ -358,20 +356,6 @@ impl Luma {
         app
     }
 
-    /// Drive the app into one reproduction state at launch.
-    ///
-    /// **A diagnostic instrument, not a feature, and env-gated so it does not
-    /// exist unless asked for.** `main` deliberately takes no flags because
-    /// every screen should be reachable by pressing something — this does not
-    /// change that. It exists because one bug appears only in a real window
-    /// presenting real surfaces to the compositor, which is exactly the
-    /// configuration the offscreen harness cannot produce, and reaching the
-    /// state by hand every time is how a measurement goes unrepeated.
-    ///
-    /// `LUMA_AUTOREPRO` is a substring of the track title to open;
-    /// `LUMA_AUTOREPRO_ZOOM` is how many dolly steps to take once the stage is
-    /// live (default 8, which reaches the near clamp on any rig).
-    ///
     /// Raise the gate the moment the backend learns the stored session is
     /// gone for good. The sync loop is what finds out — a refresh refused as
     /// spent or revoked — and nothing it could retry would change the answer,
@@ -413,70 +397,6 @@ impl Luma {
                 .is_err()
             {
                 return;
-            }
-        })
-        .detach();
-    }
-
-    /// Polls rather than chains callbacks: the venue restore and the track
-    /// open are each several awaited reads, and a poll that gives up after a
-    /// bounded number of tries cannot hang a launch that has nothing to open.
-    fn auto_repro(&mut self, cx: &mut Context<Self>) {
-        let Ok(wanted) = std::env::var("LUMA_AUTOREPRO") else {
-            return;
-        };
-        let steps = std::env::var("LUMA_AUTOREPRO_ZOOM")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(8);
-        let tick = || self.library.transport_after(Duration::from_millis(250));
-        let mut pending = tick();
-        cx.spawn(async move |this, cx| {
-            let mut opened = false;
-            for _ in 0..240 {
-                let _ = pending.await;
-                let outcome = this.update(cx, |this, cx| {
-                    if !opened {
-                        let found = this
-                            .sidebar
-                            .as_ref()
-                            .and_then(|browser| browser.find_titled(&wanted));
-                        if let Some(row) = found {
-                            this.open_track(&row.id, cx);
-                            opened = true;
-                        }
-                        return false;
-                    }
-                    // Only once the stage exists; before that there is no
-                    // camera to move and the gesture would be lost.
-                    match this.visualizer_mut() {
-                        Some(stage) => {
-                            stage.zoom_in(steps);
-                            cx.notify();
-                            // Seek into lit material and start the transport:
-                            // a stage with nothing lit is not the state the
-                            // report is about, and t=0 on this score is dark.
-                            let seek = std::env::var("LUMA_AUTOREPRO_SEEK")
-                                .ok()
-                                .and_then(|value| value.parse().ok())
-                                .unwrap_or(50.0);
-                            this.play_track_at(seek, cx);
-                            true
-                        }
-                        None => false,
-                    }
-                });
-                match outcome {
-                    Ok(true) | Err(_) => return,
-                    Ok(false) => {}
-                }
-                let next = this.read_with(cx, |this, _| {
-                    this.library.transport_after(Duration::from_millis(250))
-                });
-                match next {
-                    Ok(next) => pending = next,
-                    Err(_) => return,
-                }
             }
         })
         .detach();

@@ -450,8 +450,8 @@ waveform, and readback stalls rather than trimming them from the run.
    every image gate above. The 128-lane and 2D-dispatch 52 s diagnostics
    validate image quality but use a measurement-only 20 Mi-entry allocation.
 5. Record one uninterrupted shipping-app trace from bar 1 through bar 41 at the
-   target window/fullscreen size, with presented timestamps and
-   `LUMA_STAGE_TRACE`. Derive bar boundaries from the captured beat grid rather
+   target window/fullscreen size, with a presented timestamp per frame.
+   Derive bar boundaries from the captured beat grid rather
    than hard-coding seconds. Publish whole-run and rolling-window FPS plus GPU
    p50/p95/p99 and stall counts.
 6. Capture the post-compositor output at bars 1, 9, 17, 25, 33, and 41 and at

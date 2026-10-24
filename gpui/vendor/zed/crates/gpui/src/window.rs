@@ -2868,7 +2868,6 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
-        let _frame_trace = profiler::trace_frame_phase("draw");
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3031,7 +3030,6 @@ impl Window {
 
     #[profiling::function]
     fn present(&mut self) {
-        let _frame_trace = profiler::trace_frame_phase("present");
         #[cfg(feature = "profiler")]
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]

@@ -229,20 +229,6 @@ impl Tracks {
     /// The loaded row a click carries. Looked up by id rather than by index
     /// because the click was registered against a *filtered* list, and the
     /// filters can change before it lands.
-    /// First row whose title contains `needle`, for the launch-time
-    /// reproduction driver. Substring rather than exact because the titles this
-    /// is aimed at are long enough that nobody types them correctly.
-    pub(crate) fn find_titled(&self, needle: &str) -> Option<TrackBrowserRow> {
-        self.rows
-            .iter()
-            .find(|row| {
-                row.title
-                    .as_deref()
-                    .is_some_and(|title| title.to_lowercase().contains(&needle.to_lowercase()))
-            })
-            .cloned()
-    }
-
     pub(crate) fn find(&self, track_id: &str) -> Option<TrackBrowserRow> {
         self.rows.iter().find(|row| row.id == track_id).cloned()
     }
