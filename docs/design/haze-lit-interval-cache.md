@@ -5,7 +5,7 @@ holds the CPU side, `shaders/haze_cache.wgsl` the GPU side, and
 `haze_compact.rs` / `shaders/haze_compact.wgsl` the residual compaction
 built on it. Every live frame and capture (gobos and multi-subframe exports
 included) runs the compute kernels with this cache, compaction, 2×2 quad
-sharing and 16-pixel far-field cells; the per-ray fragment pass is only
+sharing and 8-pixel far-field cells (16 at low quality); the per-ray fragment pass is only
 `Renderer::render_reference`. There is no switch to turn the cache off.
 
 The device must offer subgroup operations. An 8×4 block that is one

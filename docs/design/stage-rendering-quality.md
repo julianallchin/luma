@@ -229,7 +229,7 @@ live method for A/B measurements. Standalone captures accumulating multiple
 subframes retain that method for converged spatial detail. `LUMA_WIDE_LIGHT_GROUP=1`
 remains the exhaustive per-ray reference and disables the grid too.
 (Superseded 2026-10-24: the grid runs on every hazy frame, captures included,
-with 16-pixel cells on every platform; the switches are gone and the per-ray
+with 8-pixel cells on every platform (16 at low quality); the switches are gone and the per-ray
 method is `Renderer::render_reference` alone.)
 
 This is a live quality/performance tradeoff, not exact transport: fresh frames

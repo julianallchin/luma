@@ -92,6 +92,8 @@ struct QualityBudget {
     shadow_steps: f32,
     /// Most moved fixture shadow maps redrawn in one frame.
     shadow_redraws: usize,
+    /// Far-field fog grid cell size in pixels.
+    fog_tile: u32,
     /// Scene-pass samples per pixel.
     msaa: u32,
 }
@@ -105,6 +107,7 @@ impl QualityBudget {
                 shadow_footprint: 1.0,
                 shadow_steps: 1.0,
                 shadow_redraws: 64,
+                fog_tile: crate::fog_grid::TILE_SIZE,
                 msaa: MSAA_SAMPLES,
             },
             // A laptop budget: twice the shadow walk's footprint allowance
@@ -115,6 +118,7 @@ impl QualityBudget {
                 shadow_footprint: if moving { 4.0 } else { 2.0 },
                 shadow_steps: if moving { 0.25 } else { 0.5 },
                 shadow_redraws: 16,
+                fog_tile: crate::fog_grid::LOW_TILE_SIZE,
                 msaa: 1,
             },
         }
@@ -2775,6 +2779,7 @@ impl Renderer {
         destination: Destination,
         grid_fog: bool,
         surface_depth_cull: bool,
+        fog_tile: u32,
         samples: u32,
     ) -> &Targets {
         let stale = self.targets.as_ref().is_none_or(|t| {
@@ -2875,7 +2880,7 @@ impl Renderer {
                         | wgpu::TextureUsages::STORAGE_BINDING,
                     "haze",
                 ),
-                fog: crate::fog_grid::Targets::new(&self.gpu.device, None),
+                fog: crate::fog_grid::Targets::new(&self.gpu.device, None, fog_tile),
                 presentations,
                 bytes_per_row,
             });
@@ -2910,7 +2915,7 @@ impl Renderer {
                 .as_mut()
                 .expect("just populated")
                 .fog
-                .ensure(&self.gpu.device, [width, height]);
+                .ensure(&self.gpu.device, [width, height], fog_tile);
         }
         self.targets.as_ref().expect("just populated")
     }
@@ -3490,7 +3495,7 @@ impl Renderer {
                 .is_some_and(|last| last != camera_bits);
         self.last_live_camera = temporal.then_some(camera_bits);
         let budget = QualityBudget::of(frame.quality, camera_moving);
-        let fog_tile = crate::fog_grid::TILE_SIZE;
+        let fog_tile = budget.fog_tile;
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         // Everything `draw_depth` rasterises, fixture bodies included: the
         // camera depth and the sun cascades draw the same opaque list.
@@ -4179,6 +4184,7 @@ impl Renderer {
                 destination,
                 grid_fog,
                 surface_depth_cull,
+                fog_tile,
                 budget.msaa,
             );
             let presentation = &t.presentations[slot];
