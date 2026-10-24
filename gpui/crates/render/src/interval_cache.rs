@@ -44,6 +44,9 @@ pub(crate) struct SlotKey {
     /// Whether the cone scatters at all; a non-scattering cone never traverses
     /// and therefore never writes its region.
     pub scatters: bool,
+    /// Whether the cone carries a gobo. Its intervals do not depend on it,
+    /// but the compaction's classification does: quads never share a gobo.
+    pub gobo: bool,
     /// `[x0, y0, width, height]` in 8×4 cache blocks. Part of the key because
     /// the region's addressing depends on it.
     pub rect: [u32; 4],
@@ -392,6 +395,7 @@ mod tests {
             lens_distance: 0,
             wash: 3,
             scatters: true,
+            gobo: false,
             rect,
         }
     }

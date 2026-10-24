@@ -109,7 +109,7 @@ impl QualityBudget {
             },
             // A laptop budget: twice the shadow walk's footprint allowance
             // and half its steps, and twice again while the camera moves,
-            // when history is rejected and nothing settles anyway.
+            // when nothing settles anyway.
             (Quality::Low, moving) => Self {
                 plain_pieces: 4.0,
                 shadow_footprint: if moving { 4.0 } else { 2.0 },
@@ -240,13 +240,6 @@ struct CompositeUniform {
     /// Read only by the [`Channels::Hdr`] pipeline. y: 1 when the sun
     /// shaft texture (`sun_shafts.rs`) holds this frame. zw unused.
     display: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct TemporalUniform {
-    /// x: history weight, y: history valid, z: depth rejection threshold.
-    params: [f32; 4],
 }
 
 /// Transport constants the look was dialled in on (spec §3.1). They are baked:
@@ -421,8 +414,7 @@ pub struct FrameTimings {
     /// pass feeds. Within ~10% of the wall clock around submit → queue drained
     /// on the workloads in `tests/timestamp_lie.rs`.
     pub gpu_total_ms: f64,
-    /// Scene completion through the last haze pass's (or the temporal
-    /// resolve's) completion. Zero when haze did not run — and also when it
+    /// Scene completion through the last haze pass's completion. Zero when haze did not run — and also when it
     /// ran entirely alongside the scene pass and finished first, in which case
     /// its cost is inside [`Self::gpu_scene_ms`].
     pub gpu_volumetric_ms: f64,
@@ -610,7 +602,7 @@ impl Channels {
 /// The device and the pipelines are *not* here — they are [`Gpu`], shared by
 /// every renderer in the process. What is left is exactly the state two
 /// renderers could not share without drawing into each other's picture: the
-/// shadow atlases, the sized render targets, the temporal history and the
+/// shadow atlases, the sized render targets, the haze caches and the
 /// resident-asset caches. One instance renders any number of frames at any
 /// number of sizes; render targets are reallocated on size change.
 pub struct Renderer {
@@ -659,23 +651,18 @@ pub struct Renderer {
     geometry_shadows: bool,
     visibility_reference: bool,
     geometry_shadow_samples: u32,
-    /// Broad washes per weighted reservoir in the fragment haze pass; one in
-    /// the exhaustive reference.
-    wide_light_group: u32,
+    /// Draw haze with the fragment pass's per-ray MIS estimator
+    /// ([`Self::render_reference`]).
+    reference: bool,
     fog_blocks_valid: bool,
     surface_depth_cull: bool,
     upload_stats: UploadStats,
     targets: Option<Targets>,
-    haze_history_valid: bool,
-    haze_history_index: usize,
-    haze_history_key: Option<HazeHistoryKey>,
     medium_cache: crate::medium::Cache,
     shadow_hierarchy: crate::shadow_hierarchy::Targets,
-    last_live_time: Option<f32>,
     /// The previous live frame's eye, target and field of view, to tell a
     /// moving camera from a still one.
     last_live_camera: Option<[u32; 7]>,
-    live_noise_frame: u32,
     profiler: Option<ProfilerResources>,
     light_index: LightIndex,
     shadow_stats: ShadowStats,
@@ -773,17 +760,6 @@ struct ProfilerSlot {
     query_set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct HazeHistoryKey {
-    output: [u32; 4],
-    camera: [u32; 6],
-    fov: u32,
-    density: u32,
-    topology: u64,
-    shadows: [bool; 2],
-    casters: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -937,9 +913,7 @@ struct Targets {
     scene: wgpu::TextureView,
     depth: wgpu::TextureView,
     haze: wgpu::TextureView,
-    haze_sampled: wgpu::TextureView,
     fog: crate::fog_grid::Targets,
-    haze_history: [wgpu::TextureView; 2],
     /// Independent presentation resources, one per in-flight frame.
     /// Intermediate passes may be shared because queue submissions execute in
     /// order; each submission's final output must remain private until the
@@ -1130,7 +1104,7 @@ pub(crate) struct CompletedFrame {
 /// # What is *not* in here
 ///
 /// Anything a frame writes. The shadow atlases, the render targets, the
-/// temporal history and every cache are [`Renderer`] state, because two
+/// haze caches and every other cache are [`Renderer`] state, because two
 /// renderers sharing one of those would draw into each other's picture. The
 /// rule that keeps this honest: a field belongs here only if no frame ever
 /// mutates it.
@@ -1164,7 +1138,6 @@ pub struct Gpu {
     /// and nothing else.
     haze_field: HazeField,
     light_index_pipelines: LightIndexPipelines,
-    temporal_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     overlay_layout: wgpu::BindGroupLayout,
     /// Scene-pass pipelines at [`MSAA_SAMPLES`].
@@ -1206,7 +1179,6 @@ pub struct Gpu {
     fog_tau_read_layout: wgpu::BindGroupLayout,
     fog_grid_write_layout: wgpu::BindGroupLayout,
     fog_grid_read_layout: wgpu::BindGroupLayout,
-    temporal_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`Channels::index`]: the same pass, targeting each output
     /// format. The [`Channels::Hdr`] one keeps highlights above SDR white.
     composite_pipelines: [wgpu::RenderPipeline; 4],
@@ -1614,16 +1586,6 @@ impl Gpu {
         // the haze pipeline binds as group 1.
         let light_index_pipelines = LightIndexPipelines::new(&device);
 
-        let temporal_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("haze-temporal"),
-            entries: &[
-                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
-                texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-            ],
-        });
-
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite"),
             entries: &[
@@ -1758,11 +1720,6 @@ impl Gpu {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
-        let temporal_module = shader(
-            &device,
-            "haze-temporal",
-            include_str!("shaders/haze_temporal.wgsl"),
-        );
         let composite_module = shader(&device, "composite", &composite_wgsl());
         let grid_module = shader(
             &device,
@@ -2198,6 +2155,8 @@ impl Gpu {
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("haze"),
+                        // The transport declares the compute kernels' grid
+                        // groups too; the reference reads neither.
                         bind_group_layouts: &[
                             Some(&haze_layout),
                             Some(light_index_pipelines.layout()),
@@ -2217,16 +2176,14 @@ impl Gpu {
                     module: &haze_module,
                     entry_point: Some("fs_main"),
                     // Subframes accumulate additively; each carries weight 1/K.
-                    targets: &std::array::from_fn::<_, 2, _>(|_| {
-                        Some(wgpu::ColorTargetState {
-                            format: SCENE_FORMAT,
-                            blend: Some(wgpu::BlendState {
-                                color: ADD,
-                                alpha: ADD,
-                            }),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })
-                    }),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(wgpu::BlendState {
+                            color: ADD,
+                            alpha: ADD,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[
                             ("PROFILE_SKIP_NATIVE_CLOUDS", omitted("native-clouds")),
@@ -2274,7 +2231,6 @@ impl Gpu {
                 count: None,
             },
             haze_output_entry(1),
-            haze_output_entry(2),
             uniform_entry(4, wgpu::ShaderStages::COMPUTE),
             rw_storage_entry(5, wgpu::ShaderStages::COMPUTE),
             rw_storage_entry(6, wgpu::ShaderStages::COMPUTE),
@@ -2336,34 +2292,6 @@ impl Gpu {
                 },
                 cache: None,
             });
-
-        let temporal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("haze-temporal"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("haze-temporal"),
-                    bind_group_layouts: &[Some(&temporal_layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &temporal_module,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &temporal_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(SCENE_FORMAT.into())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
 
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2621,7 +2549,6 @@ impl Gpu {
             shadow_hierarchy_pipelines,
             haze_field,
             light_index_pipelines,
-            temporal_layout,
             composite_layout,
             overlay_layout,
             scene_pipelines,
@@ -2650,7 +2577,6 @@ impl Gpu {
             fog_tau_read_layout,
             fog_grid_write_layout,
             fog_grid_read_layout,
-            temporal_pipeline,
             composite_pipelines,
             overlay_pipelines,
             hard_shadow_sampler,
@@ -2811,7 +2737,7 @@ impl Renderer {
                 .is_some_and(|v| v == "1"),
             surface_depth_cull: !std::env::var_os("LUMA_SURFACE_DEPTH_CULL")
                 .is_some_and(|v| v == "0"),
-            wide_light_group: 8,
+            reference: false,
             geometry_shadow_samples: std::env::var("LUMA_GEOMETRY_SHADOW_SAMPLES")
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
@@ -2823,14 +2749,9 @@ impl Renderer {
                 environments: 0,
             },
             targets: None,
-            haze_history_valid: false,
-            haze_history_index: 0,
-            haze_history_key: None,
             medium_cache,
             shadow_hierarchy,
-            last_live_time: None,
             last_live_camera: None,
-            live_noise_frame: 0,
             profiler,
             light_index,
             shadow_stats: ShadowStats::default(),
@@ -2865,8 +2786,6 @@ impl Renderer {
         });
         let channels = destination.staged_channels();
         if stale {
-            self.haze_history_valid = false;
-            self.haze_history_key = None;
             let color = |w, h, samples, usage, label| {
                 self.gpu
                     .device
@@ -2957,25 +2876,6 @@ impl Renderer {
                     "haze",
                 ),
                 fog: crate::fog_grid::Targets::new(&self.gpu.device, None),
-                haze_sampled: color(
-                    haze.0,
-                    haze.1,
-                    1,
-                    wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::STORAGE_BINDING,
-                    "haze-sampled",
-                ),
-                haze_history: std::array::from_fn(|_| {
-                    color(
-                        haze.0,
-                        haze.1,
-                        1,
-                        wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
-                        "haze-history",
-                    )
-                }),
                 presentations,
                 bytes_per_row,
             });
@@ -3018,12 +2918,10 @@ impl Renderer {
     /// Render one frame and read it back as sRGB-encoded RGBA8, row-major, no
     /// padding.
     ///
-    /// `subframes` is the jitter-accumulation count (spec §6): the same jitter
-    /// primitive the live temporal pass uses, applied deterministically.
-    ///
-    /// The frame stands alone: the temporal history is bypassed and reset, so
-    /// the image is a function of this `frame` and `subframes` alone. Sampling
-    /// a sequence of *consecutive* moments is [`Renderer::render_next`].
+    /// The haze is deterministic, so `subframes` matters only to
+    /// [`Self::render_reference`]. The image is a function of this `frame`
+    /// alone; sampling a sequence of *consecutive* moments is
+    /// [`Renderer::render_next`].
     ///
     /// # Errors
     /// Fails if the readback buffer cannot be mapped.
@@ -3039,10 +2937,11 @@ impl Renderer {
         Ok(out)
     }
 
-    /// Exhaustive per-ray reference capture, with no light selection, shared
-    /// volume interpolation, or spatial denoising. The caller controls pixel
-    /// resolution and sample count through `frame` and `subframes`.
-    /// This converges the renderer's transport model, not an independent tracer.
+    /// Exhaustive per-ray reference capture: the MIS estimator over every
+    /// light, with no shared volume, cache or quad sharing, accumulating
+    /// `subframes` jittered passes. The caller controls pixel resolution and
+    /// sample count through `frame` and `subframes`. This converges the
+    /// renderer's transport model, not an independent tracer.
     ///
     /// # Errors
     /// Fails if the readback buffer cannot be mapped.
@@ -3053,9 +2952,9 @@ impl Renderer {
         height: u32,
         subframes: u32,
     ) -> anyhow::Result<Vec<u8>> {
-        let group = std::mem::replace(&mut self.wide_light_group, 1);
+        self.reference = true;
         let result = self.render(frame, width, height, subframes);
-        self.wide_light_group = group;
+        self.reference = false;
         result
     }
 
@@ -3072,12 +2971,9 @@ impl Renderer {
     /// Render the *next* frame of a sequence and read it back as
     /// sRGB-encoded RGBA8, row-major, no padding.
     ///
-    /// Deterministic lighting is evaluated once at the current scene time.
-    /// Stochastic transport accumulates the requested subframes and, when
-    /// valid, temporal history. Changes to camera, medium, lighting, geometry,
-    /// or time continuity reject that history. [`Self::render`] captures an
-    /// isolated moment without history; [`Self::render_reference`] additionally
-    /// disables shared volume interpolation and light selection.
+    /// Lighting is evaluated once at the current scene time; a sequence
+    /// differs from [`Self::render`] only in the low-quality budget it takes
+    /// while the camera moves.
     ///
     /// # Errors
     /// Fails if the readback buffer cannot be mapped.
@@ -3093,7 +2989,7 @@ impl Renderer {
         Ok(out)
     }
 
-    /// Measure one frame through the production temporal/live pass chain.
+    /// Measure one frame through the production live pass chain.
     ///
     /// # Errors
     /// Fails if this renderer was not created by [`Self::new_profiled`] or if
@@ -3115,7 +3011,7 @@ impl Renderer {
     /// block; this measures serial renderer work, not display presentation.
     /// Devices without surface sharing use the viewport's pixel fallback.
     /// Keep this destination throughout a sequence: switching to a pixel
-    /// capture reallocates targets and resets temporal history.
+    /// capture reallocates targets.
     ///
     /// # Errors
     /// Fails when profiling is disabled, completion fails, or timestamps are
@@ -3275,10 +3171,7 @@ impl Renderer {
     /// Enable retained shadow maps for every fixture. Surfaces and haze share
     /// them; the software tracer is reserved for the reference harness.
     pub fn set_geometry_shadows(&mut self, enabled: bool) {
-        if self.geometry_shadows != enabled {
-            self.geometry_shadows = enabled;
-            self.haze_history_valid = false;
-        }
+        self.geometry_shadows = enabled;
     }
 
     /// Faces of the reflection probes still to capture since the stage last
@@ -3826,17 +3719,9 @@ impl Renderer {
             .map_or(Vec3::ZERO, |sky| sky.sun_radiance)
             .extend(Transport::PHASE_G)
             .to_array();
-        // The compute kernels draw the haze, except for the fragment pass's
-        // MIS estimator on frames with a gobo, captures accumulating several
-        // subframes and the exhaustive reference.
-        let stochastic_lights = fixture_cones
-            .iter()
-            .any(|c| c.gobo != 0 && c.haze_gain > 0.0);
-        let per_ray =
-            self.wide_light_group == 1 || stochastic_lights || (!temporal && subframes > 1);
-        // Transport quality is a render setting, independent of how many
-        // emitters a dimmer cue happens to leave active.
-        let sampled_haze = per_ray && cached_shadows && self.wide_light_group > 1;
+        // The compute kernels draw the haze, except for the exhaustive
+        // reference's per-ray fragment pass.
+        let per_ray = self.reference;
         // The far-field grid chain runs under the compute kernels whenever
         // there is haze to light.
         let grid_fog = !per_ray && haze_density >= 0.001;
@@ -4276,14 +4161,12 @@ impl Renderer {
             scene_view,
             depth_view,
             haze_view,
-            haze_sampled,
             fog_grid,
             fog_integral,
             fog_transmittance,
             fog_tau,
             fog_columns,
             fog_candidates,
-            haze_history,
             output_view,
             channels,
             finish,
@@ -4312,14 +4195,12 @@ impl Renderer {
                 t.scene.clone(),
                 t.depth.clone(),
                 t.haze.clone(),
-                t.haze_sampled.clone(),
                 t.fog.incident.clone(),
                 t.fog.integral.clone(),
                 t.fog.transmittance.clone(),
                 t.fog.tau.clone(),
                 t.fog.columns.clone(),
                 t.fog.candidates.clone(),
-                t.haze_history.clone(),
                 presentation.view().clone(),
                 presentation.channels(),
                 finish,
@@ -4385,33 +4266,6 @@ impl Renderer {
             .probes
             .cone_buffers()
             .map(|(core, rest)| cluster_group("probe-clusters", core, rest));
-        let history_key =
-            haze_history_key(frame, width, height, haze_size, haze_density, caster_hash);
-        let time_continuous = self
-            .last_live_time
-            .is_some_and(|previous| (-0.01..=0.25).contains(&(frame.time - previous)));
-        let history_valid = temporal
-            && self.haze_history_valid
-            && time_continuous
-            && self.haze_history_key.as_ref() == Some(&history_key);
-        let noise_seed = if temporal && history_valid {
-            self.live_noise_frame
-        } else {
-            0
-        };
-        if temporal {
-            self.haze_history_key = Some(history_key);
-            self.last_live_time = Some(frame.time);
-            self.live_noise_frame = if history_valid {
-                self.live_noise_frame.wrapping_add(1)
-            } else {
-                1
-            };
-        } else {
-            self.haze_history_valid = false;
-            self.haze_history_key = None;
-            self.last_live_time = None;
-        }
         // This block runs to the end of the function: `encode_scene` below
         // captures its draw closures and is called either here or, when the
         // surface pass reads the fog grid, after `fog-integrate`.
@@ -5109,7 +4963,6 @@ impl Renderer {
             }
 
             let haze_passes = if per_ray { subframes } else { 1 };
-            let resolve_haze = per_ray && (temporal || sampled_haze);
             let (cache_uniform, cache_header, cache_claims, cache_table) = self.plan_interval_cache(
                 &mut encoder,
                 frame,
@@ -5186,8 +5039,7 @@ impl Renderer {
                         uniform: compact_uniform.as_ref().expect("compact frame"),
                         grid: &fog_integral,
                         static_field: &self.gpu.haze_field.view,
-                        exact: &haze_view,
-                        sampled: &haze_sampled,
+                        output: &haze_view,
                         cache: [&cache_uniform, &cache_header, &cache_claims, &cache_table],
                     },
                     indirect,
@@ -5219,7 +5071,7 @@ impl Renderer {
                         haze_time,
                     ],
                     tuning: [
-                        (noise_seed.wrapping_add(k) & 4095) as f32,
+                        (k & 4095) as f32,
                         weight,
                         Transport::NEAR_CLAMP,
                         Transport::BEAM_GAIN,
@@ -5235,18 +5087,14 @@ impl Renderer {
                     tiles: [
                         width as f32 / haze_size.0 as f32,
                         height as f32 / haze_size.1 as f32,
-                        if per_ray { 1.0 } else { 2.0 },
+                        0.0,
                         0.0,
                     ],
                     depth: [
                         CAMERA_NEAR,
                         camera_far,
                         haze_density * Transport::EXTINCTION,
-                        if sampled_haze {
-                            self.wide_light_group as f32
-                        } else {
-                            1.0
-                        },
+                        0.0,
                     ],
                     shadow: [
                         fixture_shadow_count as f32,
@@ -5588,7 +5436,6 @@ impl Renderer {
                     let output_entries = [
                         binding(0, wgpu::BindingResource::TextureView(&fog_integral)),
                         binding(1, wgpu::BindingResource::TextureView(&haze_view)),
-                        binding(2, wgpu::BindingResource::TextureView(&haze_sampled)),
                         binding(4, cache_uniform.as_entire_binding()),
                         binding(5, cache_header.as_entire_binding()),
                         binding(6, cache_claims.as_entire_binding()),
@@ -5650,30 +5497,27 @@ impl Renderer {
                     }
                     continue;
                 }
+                // The reference's subframes accumulate additively.
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("haze"),
-                    color_attachments: &[&haze_view, &haze_sampled].map(|view| {
-                        Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: if k == 0 {
-                                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                                } else {
-                                    wgpu::LoadOp::Load
-                                },
-                                store: wgpu::StoreOp::Store,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &haze_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: if k == 0 {
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                            } else {
+                                wgpu::LoadOp::Load
                             },
-                        })
-                    }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
                     depth_stencil_attachment: None,
-                    // The haze region's end lands on the temporal resolve when one
-                    // runs, else on the last accumulation pass.
                     timestamp_writes: pass_queries.render(
                         "haze",
                         profile_resources.as_ref().and_then(|(queries, ..)| {
-                            (!resolve_haze && k + 1 == haze_passes).then_some(wgpu::RenderPassTimestampWrites {
+                            (k + 1 == haze_passes).then_some(wgpu::RenderPassTimestampWrites {
                                 query_set: queries,
                                 beginning_of_pass_write_index: None,
                                 end_of_pass_write_index: Some(2),
@@ -5690,74 +5534,6 @@ impl Renderer {
                 pass.draw(0..3, 0..1);
                 drop(pass);
             }
-
-            let composite_haze = if resolve_haze {
-                let read = self.haze_history_index;
-                let write = 1 - read;
-                let temporal_uniform = TemporalUniform {
-                    // Reject history when the represented surface moves by more
-                    // than 25 cm in linear view space.
-                    params: [
-                        0.82,
-                        f32::from(u8::from(history_valid)),
-                        0.25,
-                        f32::from(u8::from(sampled_haze)),
-                    ],
-                };
-                let uniform_buf = self.storage(
-                    &mut encoder,
-                    &[temporal_uniform],
-                    wgpu::BufferUsages::UNIFORM,
-                    "haze-temporal",
-                );
-                let bind_group = self
-                    .gpu
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("haze-temporal"),
-                        layout: &self.gpu.temporal_layout,
-                        entries: &[
-                            binding(0, uniform_buf.as_entire_binding()),
-                            binding(1, wgpu::BindingResource::TextureView(&haze_view)),
-                            binding(2, wgpu::BindingResource::TextureView(&haze_history[read])),
-                            binding(3, wgpu::BindingResource::TextureView(&haze_sampled)),
-                        ],
-                    });
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("haze-temporal"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &haze_history[write],
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: pass_queries.render(
-                        "haze-temporal",
-                        profile_resources.as_ref().map(|(queries, ..)| {
-                            wgpu::RenderPassTimestampWrites {
-                                query_set: queries,
-                                beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(2),
-                            }
-                        }),
-                    ),
-                    ..Default::default()
-                });
-                pass.set_pipeline(&self.gpu.temporal_pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.draw(0..3, 0..1);
-                drop(pass);
-                self.haze_history_index = write;
-                self.haze_history_valid = temporal;
-                haze_history[write].clone()
-            } else {
-                self.haze_history_valid = false;
-                haze_view.clone()
-            };
 
             // --- composite + readback --------------------------------------------
             let composite_uniform = CompositeUniform {
@@ -5801,7 +5577,7 @@ impl Renderer {
                     entries: &[
                         binding(0, composite_buf.as_entire_binding()),
                         binding(1, wgpu::BindingResource::TextureView(&scene_view)),
-                        binding(2, wgpu::BindingResource::TextureView(&composite_haze)),
+                        binding(2, wgpu::BindingResource::TextureView(&haze_view)),
                         binding(
                             5,
                             wgpu::BindingResource::TextureView(&self.gpu.haze_field.view),
@@ -6175,6 +5951,7 @@ impl Renderer {
                         lens_distance: rests[index].lens_distance.to_bits(),
                         wash: cone.wash.to_bits(),
                         scatters: rests[index].haze_gain > 0.0,
+                        gobo: cone.gobo != 0,
                         rect: block_rect(tiles, scale, [blocks.0, blocks.1]),
                     })
                 })
@@ -7092,10 +6869,10 @@ mod tests {
     }
 
     #[test]
-    fn sampled_washes_preserve_colour_energy_and_reset_on_cues() -> anyhow::Result<()> {
+    fn shared_washes_preserve_colour_energy_and_reset_on_cues() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        // Non-multiple of eight exercises the partial reservoir; one much
-        // brighter emitter and mixed colours challenge uniform sampling.
+        // One much brighter emitter and mixed colours challenge the shared
+        // grid and quad sharing against the per-ray reference.
         let mut frame = fixture_surface_frame(137);
         frame.geometry_shadows = true;
         frame.haze_density = 0.7;
@@ -7112,10 +6889,8 @@ mod tests {
             };
         }
         frame.fixture_cones[136].intensity *= 80.0;
-        renderer.wide_light_group = 1;
-        let reference = renderer.render(&frame, 160, 120, 32)?;
-        renderer.wide_light_group = 8;
-        let sampled = renderer.render(&frame, 160, 120, 32)?;
+        let reference = renderer.render_reference(&frame, 160, 120, 32)?;
+        let shared = renderer.render(&frame, 160, 120, 1)?;
         let energy = |p: &[u8], channel: usize| {
             p.chunks_exact(4)
                 .map(|p| f64::from(p[channel]))
@@ -7123,11 +6898,11 @@ mod tests {
         };
         for channel in 0..3 {
             let expected = energy(&reference, channel);
-            let actual = energy(&sampled, channel);
+            let actual = energy(&shared, channel);
             assert!(expected > 1000.0, "test must contain visible fog");
             assert!(
                 (actual - expected).abs() / expected < 0.05,
-                "sampling changed channel {channel} energy: {actual} vs {expected}"
+                "sharing changed channel {channel} energy: {actual} vs {expected}"
             );
         }
         for i in 0..8 {
@@ -7891,7 +7666,7 @@ mod tests {
         // The lighting shader trusts these source eligibility filters. A cue
         // must clear candidates that become ineligible, then restore them.
         frame.fixture_cones[0].wash = crate::fog_grid::BROAD_WASH - 0.01;
-        frame.fixture_cones[1].wash = crate::fog_grid::BROAD_WASH - 0.01;
+        frame.fixture_cones[1].gobo = 1;
         frame.fixture_cones[2].haze_gain = 0.0;
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
         assert!(
@@ -7903,7 +7678,7 @@ mod tests {
                 .all(|counts| *counts == [0, 0])
         );
         frame.fixture_cones[0].wash = 1.0;
-        frame.fixture_cones[1].wash = 1.0;
+        frame.fixture_cones[1].gobo = 0;
         frame.fixture_cones[2].haze_gain = 1.0;
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
         assert_eq!(renderer.fog_block_stats()?.unwrap().counts, first.counts);
@@ -8975,72 +8750,6 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         lens: crate::luminaire::Lens {
             radius: finite(light.lens.radius, 0.0).clamp(0.0, crate::luminaire::Lens::MAX_RADIUS_M),
         },
-    }
-}
-
-/// History is valid only while projection-affecting state and the physical
-/// light volumes are identical. Color/intensity may animate through history;
-/// moving a cone, changing a gobo, resizing, orbiting, or changing density
-/// resets it. Time continuity is checked separately at submission.
-fn haze_history_key(
-    frame: &Frame,
-    width: u32,
-    height: u32,
-    haze: (u32, u32),
-    density: f32,
-    casters: u64,
-) -> HazeHistoryKey {
-    let mut topology = 0xcbf2_9ce4_8422_2325u64;
-    let mut push = |value: u32| {
-        topology = (topology ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3);
-    };
-    let medium = crate::medium::Uniform::new(frame, density, 0.0);
-    for value in medium
-        .shape
-        .into_iter()
-        .chain(medium.wind)
-        .chain(medium.min)
-        .chain(medium.max)
-    {
-        push(value.to_bits());
-    }
-    push(u32::from(frame.quality == crate::scene_desc::Quality::Low));
-    push(frame.fixture_cones.len() as u32);
-    for light in &frame.fixture_cones {
-        for value in light.position.to_array() {
-            push(value.to_bits());
-        }
-        push(light.range.to_bits());
-        for value in light.direction.to_array() {
-            push(value.to_bits());
-        }
-        push(light.cos_beam.to_bits());
-        push(light.cos_field.to_bits());
-        push(light.wash.to_bits());
-        push(light.gobo);
-        push(light.gobo_rotation.to_bits());
-        push(light.intensity.to_bits());
-        push(light.haze_gain.to_bits());
-        push(light.lens.radius.to_bits());
-        for value in light.color.to_array() {
-            push(value.to_bits());
-        }
-    }
-    HazeHistoryKey {
-        output: [width, height, haze.0, haze.1],
-        camera: [
-            frame.camera.eye.x.to_bits(),
-            frame.camera.eye.y.to_bits(),
-            frame.camera.eye.z.to_bits(),
-            frame.camera.target.x.to_bits(),
-            frame.camera.target.y.to_bits(),
-            frame.camera.target.z.to_bits(),
-        ],
-        fov: frame.camera.fov_y_deg.to_bits(),
-        density: density.to_bits(),
-        topology,
-        shadows: [frame.fixture_shadows, frame.geometry_shadows],
-        casters,
     }
 }
 

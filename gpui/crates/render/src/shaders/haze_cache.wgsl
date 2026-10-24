@@ -41,7 +41,7 @@ fn block_locate(group: vec2<u32>, local: u32, sub_lane: u32, subgroups: u32) -> 
     cache_by = group.y;
     cache_block = cache_by * cache_params.params.x + cache_bx;
     let pixel = group * vec2<u32>(HAZE_GROUP_X, HAZE_GROUP_Y) + vec2<u32>(cache_lane & 7u, cache_lane >> 3u);
-    cache_in_bounds = all(pixel < textureDimensions(haze_exact_out));
+    cache_in_bounds = all(pixel < textureDimensions(haze_out));
     return pixel;
 }
 
@@ -111,7 +111,8 @@ struct IntervalCacheParams {
 // the image does not depend on cache history.
 //
 // Pairs whose ray passes within QUAD_APEX_PX pixels of the source on screen
-// are not shared: the 1/d² apex is too sharp for a quad-centre ray.
+// are not shared: the 1/d² apex is too sharp for a quad-centre ray. Nor are
+// gobos, whose pattern the quad-centre ray would blur.
 const QUAD_APEX_PX: f32 = 32.0;
 const QUAD_GATE_M: f32 = 0.25;
 const QUAD_GATE_FRAC: f32 = 0.01;
@@ -205,7 +206,7 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
         let distance = sqrt(d2);
         let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
         let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
-        let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH);
+        let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
         let world = haze.camera_pos.xyz + ray.dir * t;
         let field = mix(left_field, right_field, node * 0.5 + 0.5);
         let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
@@ -496,7 +497,7 @@ fn beam_scatter_cached(li: u32, ray: SceneRay) -> vec3<f32> {
         if live && !direct && !walked && cache_count <= CACHE_K { _ = cache_store(cache_block, lookup.key, lookup.gen); }
     }
     if share {
-        let whole = (direct || walked) && quad_apex_clear(li, ray);
+        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && quad_apex_clear(li, ray);
         if subgroupBallot(whole).x == 0xFFFFFFFFu { return quad_scatter(li, ray, span); }
     }
     if !live { return vec3<f32>(0.0); }

@@ -10,8 +10,7 @@
 //! panel with it — drops the stage far below display rate for the length of
 //! the slide. Every frame of that slide hands the renderer a width nobody has
 //! asked for before, and `Renderer::targets` reallocates on any size change:
-//! eight textures, five presentation surfaces, and the temporal haze history
-//! reset to invalid.
+//! the fixed-size targets and the presentation surfaces.
 //!
 //! So the question this answers is narrow and answerable without a window:
 //! holding scene, camera and cadence fixed, what does a per-frame size change

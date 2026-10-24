@@ -697,7 +697,7 @@ struct Stage {
     /// runs every frame, so it drains this.
     pending_hitch: Option<Vec<FrameSample>>,
     /// The inputs of the last submitted frame, with the settle countdown the
-    /// temporal haze still needs on them; `None` while inputs keep changing.
+    /// renderer still needs on them; `None` while inputs keep changing.
     idle: Option<(IdleKey, u32)>,
     /// True while the idle gate is skipping submissions: the settled frame is
     /// on screen and the renderer is doing nothing at all.
@@ -849,8 +849,9 @@ fn display_range(window: &Window) -> luma_render::DisplayRange {
         })
 }
 
-/// Frames of unchanged inputs the temporal haze needs before its blue-noise
-/// integration is visually converged and the stage may rest.
+/// Frames of unchanged inputs before the stage may rest: moved fixture
+/// shadow maps are redrawn a budget a frame, and the haze caches settle
+/// behind them.
 const SETTLE_FRAMES: u32 = 16;
 /// The same with auto exposure on: the exposure adapts over a few seconds
 /// (`post.rs`), and a stage that rested sooner would freeze it half way.
@@ -874,7 +875,7 @@ const DYNAMIC_TARGET_GPU_MS: f32 = 14.0;
 ///
 /// It steps down fast (three slow samples in a row take a fifth of the pixels
 /// away) and back up slowly (thirty quick ones give a tenth back), because a
-/// resize rejects the haze history and a size that hunts would never settle.
+/// resize discards the haze caches and a size that hunts would never settle.
 /// A quarter of the budget is the floor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DynamicBudget {
@@ -3107,8 +3108,8 @@ struct FrameSample {
     /// it to a frame that was never presented.
     cpu_encode_ms: Option<f32>,
     gpu_total_ms: Option<f32>,
-    /// Of `gpu_total_ms`, the part spent on haze accumulation and temporal
-    /// resolve. The volumetric march is fill-bound, so this is the term that
+    /// Of `gpu_total_ms`, the part spent on the haze passes. The volumetric
+    /// march is fill-bound, so this is the term that
     /// should grow when beams fill the viewport — and the one to check before
     /// blaming anything else for a heavy frame. Zero also means the haze
     /// passes finished before the scene pass they ran alongside, which puts
@@ -4963,7 +4964,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         "pick_ms": "hit-test rebuild, UI thread",
                         "cpu_encode_ms": "renderer CPU encode and submit; null when this frame carried no timestamps",
                         "gpu_total_ms": "GPU timeline from the first render pass to composite completion, from the most recently profiled frame (one in sixteen) rather than necessarily this one; null until the first lands",
-                        "gpu_volumetric_ms": "of gpu_total_ms, haze accumulation and temporal resolve — the fill-bound term; zero also means the haze passes finished before the scene pass they ran alongside, putting their cost in gpu_scene_ms",
+                        "gpu_volumetric_ms": "of gpu_total_ms, the haze passes — the fill-bound term; zero also means the haze passes finished before the scene pass they ran alongside, putting their cost in gpu_scene_ms",
                         "gpu_scene_ms": "of gpu_total_ms, the scene pass plus any shadow passes ahead of it (redrawn_shadow_maps==0 makes it scene alone)",
                         "gpu_composite_ms": "of gpu_total_ms, the composite pass; scene+volumetric+composite are cut at consecutive fragment-stage completions and exhaust the total exactly, with time two concurrent passes shared charged to whichever finished first",
                         "cluster_ms": "clustered-light rebuild; null when untimed, 0 on a cache hit",

@@ -72,6 +72,22 @@ fn angular_profile(cos_angle: f32, cos_beam: f32, cos_field: f32) -> f32 {
     return peak * cut;
 }
 
+/// Where `q` (from the lens to a point, world space) crosses the aperture,
+/// one at the field edge.
+fn gobo_aperture(q: vec3<f32>, direction: vec3<f32>, cos_field: f32) -> vec2<f32> {
+    let helper = select(
+        vec3<f32>(0.0, 0.0, 1.0),
+        vec3<f32>(0.0, 1.0, 0.0),
+        abs(direction.z) > 0.98,
+    );
+    let right = normalize(cross(direction, helper));
+    let up = cross(right, direction);
+    let axial = max(dot(q, direction), 1e-4);
+    let field_sine = sqrt(max(1.0 - cos_field * cos_field, 0.0));
+    let field_radius = axial * field_sine / max(abs(cos_field), 0.05);
+    return vec2<f32>(dot(q, right), dot(q, up)) / max(field_radius, 1e-4);
+}
+
 /// Procedural aperture shared by a fixture's visible pool and its haze cone.
 /// `q` points from the lens to the sample in world space.
 fn gobo_transmission(
@@ -84,17 +100,7 @@ fn gobo_transmission(
     if gobo < 0.5 {
         return 1.0;
     }
-    let helper = select(
-        vec3<f32>(0.0, 0.0, 1.0),
-        vec3<f32>(0.0, 1.0, 0.0),
-        abs(direction.z) > 0.98,
-    );
-    let right = normalize(cross(direction, helper));
-    let up = cross(right, direction);
-    let axial = max(dot(q, direction), 1e-4);
-    let field_sine = sqrt(max(1.0 - cos_field * cos_field, 0.0));
-    let field_radius = axial * field_sine / max(abs(cos_field), 0.05);
-    let aperture = vec2<f32>(dot(q, right), dot(q, up)) / max(field_radius, 1e-4);
+    let aperture = gobo_aperture(q, direction, cos_field);
     if gobo < 1.5 {
         let angle = atan2(aperture.y, aperture.x) + gobo_rotation;
         return smoothstep(0.18, 0.48, abs(cos(angle * 6.0)));

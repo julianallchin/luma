@@ -180,7 +180,7 @@ fn classify_light(li: u32, pixel_index: u32) {
         }
     }
     if block_one_subgroup {
-        let whole = (direct || walked) && quad_apex_clear(li, ray);
+        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && quad_apex_clear(li, ray);
         if subgroupBallot(whole).x == 0xFFFFFFFFu {
             if cache_lane == 0u {
                 resid_planes[plane] = 0u;
@@ -253,7 +253,7 @@ fn classify_residual(@builtin(workgroup_id) group: vec3<u32>,
     lazy_frag = frag;
     lazy_ray_ready = false;
     lazy_quad_ready = false;
-    if haze.params.y < 0.001 || haze.tiles.z <= 0.5 { return; }
+    if haze.params.y < 0.001 { return; }
     let pixel_index = pixel.y * u32(haze.transport.w) + pixel.x;
     var cursor = native_lights(frag);
     if !compact_tile_dirty(cursor) { return; }
@@ -447,7 +447,7 @@ fn compute_haze_hot(@builtin(workgroup_id) group: vec3<u32>,
     let ray = scene_ray(frag);
     if block_one_subgroup { quad_prepare(frag, ray); }
     var deterministic = vec3<f32>(0.0);
-    if haze.params.y >= 0.001 && haze.tiles.z > 0.5 {
+    if haze.params.y >= 0.001 {
         var cursor = native_lights(frag);
         var li = 0u;
         while light_index_next(&cursor, &li) {
@@ -455,7 +455,5 @@ fn compute_haze_hot(@builtin(workgroup_id) group: vec3<u32>,
         }
     }
     if !cache_in_bounds { return; }
-    let result = native_output(frag, ray, deterministic);
-    textureStore(haze_exact_out, vec2<i32>(pixel), result.exact);
-    textureStore(haze_sampled_out, vec2<i32>(pixel), result.sampled);
+    textureStore(haze_out, vec2<i32>(pixel), native_output(frag, ray, deterministic));
 }
