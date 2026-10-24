@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Build the Linux tarball, laid out like Zed's:
+#
+#   dist/luma-linux-<arch>.tar.gz
+#     luma.app/bin/luma
+#     luma.app/share/luma/                        resources (stage-resources)
+#     luma.app/share/applications/luma.desktop
+#     luma.app/share/icons/hicolor/512x512/apps/luma.png
+#
+# `scripts/release/install.sh` unpacks it into ~/.local, and the updater
+# replaces `luma.app` whole. System libraries are not bundled: the binary
+# links libxcb, libxkbcommon(-x11) and ALSA, and loads Vulkan and Wayland at
+# run time. Build on the oldest distribution you support, since glibc only
+# runs forward.
+#
+# Environment: LUMA_RELEASE_CHANNEL, LUMA_COMMIT_SHA — see bundle-mac.
+set -euo pipefail
+
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+here="$repo/scripts/release"
+cd "$repo"
+
+arch=$(uname -m)
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/Cargo.toml | head -1)
+dist="$repo/dist"
+target_dir=$(cargo +1.97.1 metadata --manifest-path gpui/Cargo.toml --format-version 1 --no-deps |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+
+echo "Building Luma $version ($arch, ${LUMA_RELEASE_CHANNEL:-dev})"
+cargo +1.97.1 build --release --locked --manifest-path gpui/Cargo.toml -p luma-app
+
+app="$dist/luma.app"
+rm -rf "$app"
+mkdir -p "$app/bin" "$app/share/applications" "$app/share/icons/hicolor/512x512/apps"
+install -m 755 "$target_dir/release/luma-app" "$app/bin/luma"
+strip "$app/bin/luma"
+install -m 644 "$here/linux/luma.desktop" "$app/share/applications/luma.desktop"
+install -m 644 assets/app/icon.png "$app/share/icons/hicolor/512x512/apps/luma.png"
+"$here/stage-resources" "$app/share/luma"
+# python-build-standalone ships libpython with its debug info: ~180 MB of the
+# runtime's ~350 MB.
+find "$app/share/luma/python-runtime" -type f -name '*.so*' -exec strip --strip-debug {} +
+
+tarball="$dist/luma-linux-$arch.tar.gz"
+tar -czf "$tarball" -C "$dist" luma.app
+echo "Wrote $tarball"

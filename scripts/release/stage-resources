@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Copy what an installed Luma reads at runtime into one resource directory.
+#
+#   scripts/release/stage-resources <dest>
+#
+# The layout is the contract `backend/src/resources.rs` reads:
+#
+#   <dest>/python-runtime/   standalone CPython (downloaded by backend/build.rs)
+#   <dest>/ffmpeg-runtime/   ffmpeg (downloaded by backend/build.rs)
+#   <dest>/python/           the analysis workers, without tests or caches
+#   <dest>/resources/        fixtures/, meshes/, skills/
+#
+# Run after a cargo build, which is what downloads the two runtimes.
+set -euo pipefail
+
+dest=${1:?usage: stage-resources <dest>}
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+
+python_bin="$repo/backend/python-runtime/python/bin/python3"
+ffmpeg_bin="$repo/backend/ffmpeg-runtime/ffmpeg"
+for required in "$python_bin" "$ffmpeg_bin" "$repo/backend/python/consonance-ACE/requirements.txt"; do
+    if [[ ! -e "$required" ]]; then
+        echo "stage-resources: missing $required" >&2
+        echo "  build first, with submodules initialised and Git LFS files pulled" >&2
+        exit 1
+    fi
+done
+# An LFS pointer is a few hundred bytes of text; the real weights are ~90 MB.
+if [[ $(wc -c < "$repo/backend/python/n2n/weights.pt") -lt 1000000 ]]; then
+    echo "stage-resources: backend/python/n2n/weights.pt is an LFS pointer; run git lfs pull" >&2
+    exit 1
+fi
+
+mkdir -p "$dest/resources"
+copy() { rsync -a --delete --exclude '__pycache__' --exclude '*.pyc' --exclude '.git' --exclude '.DS_Store' "$@"; }
+
+copy "$repo/backend/python-runtime/" "$dest/python-runtime/"
+copy "$repo/backend/ffmpeg-runtime/" "$dest/ffmpeg-runtime/"
+copy --exclude 'tests' --exclude '.gitkeep' "$repo/backend/python/" "$dest/python/"
+for tree in fixtures meshes skills; do
+    copy "$repo/resources/$tree/" "$dest/resources/$tree/"
+done

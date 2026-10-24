@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Luma
+GenericName=Lighting Control
+Comment=Node-based lighting control for live performance
+# install.sh rewrites Exec and Icon to absolute paths inside the install.
+Exec=luma
+Icon=luma
+Categories=AudioVideo;Audio;
+Terminal=false
