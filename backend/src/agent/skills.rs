@@ -168,14 +168,8 @@ fn bundled_roots() -> Vec<PathBuf> {
     if let Some(repo) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
         candidates.push(repo.join("resources/skills"));
     }
-    if let Some(root) = std::env::var_os("LUMA_RESOURCE_DIR") {
-        candidates.push(PathBuf::from(root).join("resources/skills"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("resources/skills"));
-            candidates.push(dir.join("../Resources/resources/skills"));
-        }
+    if let Some(root) = crate::resources::resource_dir() {
+        candidates.push(root.join("resources/skills"));
     }
     candidates
         .into_iter()

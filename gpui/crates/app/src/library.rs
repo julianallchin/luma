@@ -809,7 +809,7 @@ impl Library {
         if desktop {
             let ready = luma_lib::python_env::setup_python_env_background(
                 headless_env::cache_dir()?,
-                std::env::var_os("LUMA_RESOURCE_DIR").map(std::path::PathBuf::from),
+                luma_lib::resources::resource_dir(),
                 events.clone(),
             );
             let analysis_services = services.clone();
@@ -3009,7 +3009,8 @@ pub(crate) fn config_dir() -> Result<StorageRoot, String> {
 }
 
 /// Root of the bundled fixture definitions. Prefers the repo's newest bundle
-/// so a dev build sees today's fixtures, exactly as the headless harness does.
+/// so a dev build sees today's fixtures, exactly as the headless harness does;
+/// an installed build has no repo and reads its own resource directory.
 pub(crate) fn fixtures_root() -> Result<PathBuf, String> {
     if let Some(path) = luma_ui::runtime::Runtime::with(|runtime| runtime.fixtures_root.clone()) {
         return Ok(path);
@@ -3017,7 +3018,7 @@ pub(crate) fn fixtures_root() -> Result<PathBuf, String> {
     if let Some(path) = repo_fixtures_root() {
         return Ok(path);
     }
-    fixtures_service::resolve_fixtures_root_from(None)
+    fixtures_service::resolve_fixtures_root_from(luma_lib::resources::resource_dir().as_deref())
 }
 
 fn repo_fixtures_root() -> Option<PathBuf> {

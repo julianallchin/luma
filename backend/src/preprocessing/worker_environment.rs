@@ -43,8 +43,7 @@ impl WorkerEnvironment {
                 .map(|path| path.join("com.luma.luma"))
                 .ok_or_else(|| "could not locate a cache directory".to_string())?
         };
-        let resource_dir = std::env::var_os("LUMA_RESOURCE_DIR").map(PathBuf::from);
-        Ok(Self::new(cache_dir, resource_dir))
+        Ok(Self::new(cache_dir, crate::resources::resource_dir()))
     }
 
     pub fn cache_dir(&self) -> &Path {

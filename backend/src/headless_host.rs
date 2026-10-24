@@ -114,7 +114,7 @@ impl HostConfig {
         if let Some(path) = repo_fixtures_root() {
             return Ok(path);
         }
-        fixtures_service::resolve_fixtures_root_from(None)
+        fixtures_service::resolve_fixtures_root_from(crate::resources::resource_dir().as_deref())
     }
 }
 
