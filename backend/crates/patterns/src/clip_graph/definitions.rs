@@ -146,6 +146,9 @@ pub struct InputDef {
     /// The input refuses a wire that varies over heads; it takes a value
     /// or a wire over time only.
     pub time_only: bool,
+    /// The input sets a clock's period. A wire that follows events gives
+    /// it the newest event's value, so the clock's events stay its own.
+    pub clock: bool,
     /// A Python example value for error messages, such as `0.2`.
     pub example: &'static str,
 }
@@ -160,6 +163,7 @@ impl InputDef {
             above_min: false,
             geometry: None,
             time_only: false,
+            clock: false,
             example,
         }
     }
@@ -203,6 +207,10 @@ impl InputDef {
     }
     fn time_only(mut self) -> Self {
         self.time_only = true;
+        self
+    }
+    fn clock(mut self) -> Self {
+        self.clock = true;
         self
     }
 
@@ -357,8 +365,8 @@ fn build(kind: Kind) -> Definition {
         Kind::Time => (
             Produces::Coordinate,
             vec![
-                ("every", number(Unit::Beats, "1").above(0.)),
-                ("duration", number(Unit::Beats, "2").above(0.)),
+                ("every", number(Unit::Beats, "1").above(0.).clock()),
+                ("duration", number(Unit::Beats, "2").above(0.).clock()),
                 ("delay", number(Unit::Beats, "0.5")),
                 ("phase", number(Unit::Degrees, "90")),
             ],
@@ -398,7 +406,7 @@ fn build(kind: Kind) -> Definition {
             Produces::Coordinate,
             vec![
                 heads(),
-                ("period", number(Unit::Beats, "4").above(0.)),
+                ("period", number(Unit::Beats, "4").above(0.).clock()),
                 ("scale", number(Unit::Share, "0.5").above(0.)),
                 ("contrast", share("0")),
             ],

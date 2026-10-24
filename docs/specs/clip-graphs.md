@@ -293,7 +293,10 @@ Nothing else. `brightness=time()` is an error; `brightness=curve(time(), "Ramp u
 Axes. A wire carries a set of axes: `T` (time), `H` (heads), `E(k)` (the
 events of clock `k`). A value carries none. Some inputs refuse an axis; see
 each node. `E` is internal: users never see it, the output node resolves it
-(section 5.3).
+(section 5.3). An input that sets a clock's period (`time.every`,
+`time.duration`, `noise.period`) resolves it too: it takes the newest begun
+event's value, so `period=curve(time(every=1), …)` sets a speed that repeats
+each beat while the clock keeps counting up.
 
 ### 2.2 Output nodes
 

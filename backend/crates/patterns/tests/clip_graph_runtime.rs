@@ -2195,3 +2195,65 @@ fn a_shuffled_order_ignores_the_direction_and_gives_every_unit_a_slot() {
     assert!(close(&sorted, &want), "{sorted:?}");
     assert!(!close(&u, &want), "not in cell order");
 }
+
+/// A noise whose period follows a curve over `time1` (every 1 beat),
+/// read by brightness.
+fn noise_over_beats(points: Value, low: f64, high: f64) -> ClipGraph {
+    graph(json!({
+        "time1": {"kind": "time", "inputs": {"every": 1}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": low, "high": high,
+                   "shape": {"points": points}}},
+        "noise1": {"kind": "noise", "inputs": {"period": {"node": "curve1"}, "scale": 0.25}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
+}
+
+#[test]
+fn a_period_over_beats_is_the_newest_beats_value() {
+    // A flat curve over beats is that period: the same noise as a value.
+    let times = beats(0.25);
+    let flat = play(
+        &noise_over_beats(json!([[0, 0], [1, 1]]), 4., 4.),
+        &line(),
+        &times,
+    );
+    let value = play(
+        &graph(json!({
+            "noise1": {"kind": "noise", "inputs": {"period": 4, "scale": 0.25}},
+            "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}})),
+        &line(),
+        &times,
+    );
+    for n in 0..12 {
+        for t in 0..times.len() {
+            assert!((flat[[n, t, DIMMER]] - value[[n, t, DIMMER]]).abs() < 1e-6);
+        }
+    }
+}
+
+#[test]
+fn a_period_over_beats_eases_the_noise_each_beat_without_a_jump() {
+    // Slow on each beat, fast between: the noise moves least near the beat
+    // and never jumps where one beat hands over to the next.
+    let step = 1. / 64.;
+    let times = beats(step);
+    let light = play(
+        &noise_over_beats(json!([[0, 1], [0.5, 0], [1, 1]]), 0.5, 40.),
+        &line(),
+        &times,
+    );
+    let moved = |t: usize| {
+        (0..12)
+            .map(|n| (light[[n, t + 1, DIMMER]] - light[[n, t, DIMMER]]).abs())
+            .sum::<f64>()
+    };
+    let per_beat = (1. / step) as usize;
+    let (mut near, mut between) = (0., 0.);
+    for beat in 1..15 {
+        let at = beat * per_beat;
+        near += moved(at) + moved(at - 1);
+        between += moved(at + per_beat / 2) + moved(at + per_beat / 2 - 1);
+    }
+    assert!(between > 4. * near, "between {between}, near {near}");
+}

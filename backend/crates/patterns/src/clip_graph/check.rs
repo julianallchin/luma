@@ -901,13 +901,10 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
                 example(node.kind, name)
             ));
             }
-            if own.is_some() && matches!(*name, "every" | "duration") {
-                if let Some(clock) = carried.clocks.iter().next() {
-                    return fail(format!(
-                        "{id}.{name}: expected a value or a curve over the clip; got events of {} through {source}. Example: {name}=curve(time(), \"Ramp down\", low=0.5, high=2)",
-                        graph.clock_name(clock)
-                    ));
-                }
+            out.heads |= carried.heads;
+            // A period takes its newest event's value: the events stop here.
+            if def.clock {
+                continue;
             }
             if !node.kind.is_output() {
                 for clock in &carried.clocks {
@@ -933,7 +930,6 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
                     }
                 }
             }
-            out.heads |= carried.heads;
             out.clocks.extend(carried.clocks);
         }
     }
