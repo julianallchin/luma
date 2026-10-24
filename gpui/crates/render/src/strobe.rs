@@ -86,6 +86,105 @@ fn on_before(u: f64) -> f64 {
     whole * 0.5 + (u - whole).min(0.5)
 }
 
+/// The lowest and highest rate a fixture's own strobe runs at across its
+/// strobe range. A generic stand-in until fixture profiles carry the real
+/// curve: most budget fixtures span about this, and the DMX engine writes the
+/// rate linearly across the same range.
+pub const FIXTURE_HZ: (f64, f64) = (1.0, 20.0);
+
+/// Flashes per second a fixture's own strobe runs at for a strobe value;
+/// zero when the shutter is open.
+#[must_use]
+pub fn fixture_hz(strobe: f32) -> f64 {
+    if strobe.is_finite() && strobe > 0.0 {
+        let (low, high) = FIXTURE_HZ;
+        low + f64::from(strobe.min(1.0)) * (high - low)
+    } else {
+        0.0
+    }
+}
+
+/// A fixture that strobes on its own clock, as the rig does when the DMX
+/// engine writes its strobe channel rather than pulsing its dimmer.
+///
+/// It behaves like a budget fixture, the worst case: a strobe starts the
+/// moment the shutter leaves open, but a new rate only takes effect once the
+/// current flash cycle ends. A rate that changes every frame therefore
+/// flashes on screen exactly as rarely as it does on the rig. Each cycle is
+/// on for its first half, as [`gain`]'s gate is.
+#[derive(Debug, Clone, Default)]
+pub struct FixtureClock {
+    /// The running cycle as `(start, period)`; `None` while the shutter is open.
+    cycle: Option<(f64, f64)>,
+    /// The last slice answered, and its answer, so a frame that asks for one
+    /// head twice does not run the clock twice.
+    answered: Option<(Slice, f32)>,
+}
+
+impl FixtureClock {
+    /// The share of its steady brightness the light gives over `slice`, with
+    /// `strobe` the rate asked for during it. Slices are expected in order;
+    /// asking for the same slice again repeats the answer.
+    pub fn gain(&mut self, strobe: f32, slice: Slice) -> f32 {
+        if let Some((seen, answer)) = self.answered {
+            if seen == slice {
+                return answer;
+            }
+        }
+        let answer = self.advance(fixture_hz(strobe), slice);
+        self.answered = Some((slice, answer));
+        answer
+    }
+
+    fn advance(&mut self, hz: f64, slice: Slice) -> f32 {
+        if hz <= 0.0 {
+            self.cycle = None;
+            return 1.0;
+        }
+        let period = 1.0 / hz;
+        let open = slice.open;
+        let length = if slice.length.is_finite() && slice.length > 0.0 {
+            slice.length
+        } else {
+            0.0
+        };
+        let end = open + length;
+        let (mut start, mut current) = *self.cycle.get_or_insert((open, period));
+        // Catch up to the slice: the cycle in flight finishes at its own
+        // rate, then every later one runs at the rate asked for now.
+        if start + current <= open {
+            start += current;
+            current = period;
+            if start + current <= open {
+                start += ((open - start) / current).floor() * current;
+            }
+        }
+        let mut lit = 0.0;
+        let mut t = open;
+        loop {
+            let on_until = start + current * 0.5;
+            let cycle_end = start + current;
+            if length == 0.0 {
+                lit = if t < on_until { 1.0 } else { 0.0 };
+                break;
+            }
+            lit += (on_until.min(end) - t.max(start)).max(0.0);
+            if cycle_end >= end {
+                break;
+            }
+            t = cycle_end;
+            start = cycle_end;
+            current = period;
+        }
+        self.cycle = Some((start, current));
+        if length == 0.0 {
+            lit as f32
+        } else {
+            (lit / length).clamp(0.0, 1.0) as f32
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +358,68 @@ mod tests {
         let a = clock();
         let b = clock();
         assert!(b >= a && a >= 0.0);
+    }
+    #[test]
+    fn a_fixture_clock_is_steady_while_the_shutter_is_open() {
+        let mut clock = FixtureClock::default();
+        assert_eq!(clock.gain(0.0, slice(1.0, 0.02)), 1.0);
+        assert_eq!(clock.gain(-1.0, slice(1.02, 0.02)), 1.0);
+    }
+
+    #[test]
+    fn a_fixture_strobe_starts_with_a_flash_and_is_lit_half_the_time() {
+        let mut clock = FixtureClock::default();
+        // 0.5 is 10.5 Hz; the first cycle opens with the frame.
+        assert_eq!(clock.gain(0.5, slice(2.0, 0.01)), 1.0);
+        let frames = 2_000;
+        let length = 1.0 / 60.0;
+        let mut light = 0.0;
+        for n in 0..frames {
+            let open = 2.01 + f64::from(n) * length;
+            light += f64::from(clock.gain(0.5, slice(open, length))) * length;
+        }
+        let share = light / (f64::from(frames) * length);
+        assert!((share - 0.5).abs() < 0.01, "{share}");
+    }
+
+    #[test]
+    fn a_new_rate_waits_for_the_cycle_in_flight() {
+        let mut clock = FixtureClock::default();
+        // The slowest rate: a one-second cycle, on for its first half.
+        let slow = 1e-6_f32;
+        assert_eq!(clock.gain(slow, slice(0.0, 0.02)), 1.0);
+        // Asked to go fast at 0.6 s, inside the slow cycle's dark half, it
+        // stays dark until that cycle ends at 1.0 s.
+        for n in 0..19 {
+            let open = 0.6 + f64::from(n) * 0.02;
+            assert_eq!(clock.gain(1.0, slice(open, 0.02)), 0.0, "{open}");
+        }
+        // Then flashes at 20 Hz: on for [1.0, 1.025).
+        assert_eq!(clock.gain(1.0, slice(1.0, 0.02)), 1.0);
+        // The shared clock would have flashed long before.
+        assert!(gain(1.0, slice(0.6, 0.4)) > 0.4);
+    }
+
+    #[test]
+    fn asking_for_the_same_slice_twice_does_not_run_the_clock_twice() {
+        let mut clock = FixtureClock::default();
+        let first = clock.gain(0.5, slice(5.0, 0.03));
+        assert_eq!(clock.gain(0.5, slice(5.0, 0.03)), first);
+        let mut fresh = FixtureClock::default();
+        fresh.gain(0.5, slice(5.0, 0.03));
+        assert_eq!(
+            clock.gain(0.5, slice(5.03, 0.03)),
+            fresh.gain(0.5, slice(5.03, 0.03))
+        );
+    }
+
+    #[test]
+    fn opening_the_shutter_ends_the_strobe_at_once() {
+        let mut clock = FixtureClock::default();
+        clock.gain(1e-6, slice(0.0, 0.02));
+        assert_eq!(clock.gain(1e-6, slice(0.6, 0.02)), 0.0);
+        assert_eq!(clock.gain(0.0, slice(0.62, 0.02)), 1.0);
+        // And a strobe after it starts afresh, with a flash.
+        assert_eq!(clock.gain(1e-6, slice(0.64, 0.02)), 1.0);
     }
 }

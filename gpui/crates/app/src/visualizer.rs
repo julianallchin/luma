@@ -67,8 +67,8 @@ use luma_lib::models::universe::UniverseState;
 use luma_lib::stage_render;
 use luma_render::{
     assets, build_frame_at, coords, frame::EditorObject, house, scene_desc,
-    scene_desc::VenueEnvironment, AsyncViewport, FrameTimings, MetricSummary, Moment,
-    SubmitOutcome,
+    scene_desc::VenueEnvironment, strobe::FixtureClock, AsyncViewport, FrameTimings, MetricSummary,
+    Moment, SubmitOutcome,
 };
 use luma_scene::{
     apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, navigate, Aabb, Camera,
@@ -639,6 +639,8 @@ struct Stage {
     /// The rig. `None` until the load lands.
     scene: Option<scene_desc::Scene>,
     definitions: BTreeMap<String, scene_desc::Definition>,
+    /// The rig's fixtures that strobe on their own clock, and that clock.
+    strobes: FixtureStrobes,
     /// Acquired lazily on the first frame that has something to draw — see
     /// [`Visualizer::gpu_ready`].
     gpu: Option<Gpu>,
@@ -724,6 +726,60 @@ struct Stage {
 /// or not the show is playing. The air drifts and the strobes flash on it,
 /// and the DMX engine gates its strobes on the same clock, so the screen
 /// flashes in phase with the rig.
+/// The fixtures whose strobe the rig runs on the fixture's own clock — those
+/// whose mode has a strobe channel — and a [`FixtureClock`] per head of them.
+///
+/// The DMX engine writes those fixtures a strobe rate and lets them flash, so
+/// the stage view simulates the fixture's clock instead of flashing them on
+/// the shared one: a rate that changes faster than the fixture adopts it
+/// flashes on screen as rarely as it does on the rig. Every other fixture's
+/// strobe is the engine pulsing its dimmer on the shared clock, which the
+/// renderer already draws.
+#[derive(Default)]
+struct FixtureStrobes {
+    own_clock: std::collections::HashSet<String>,
+    clocks: HashMap<(String, usize), FixtureClock>,
+}
+
+impl FixtureStrobes {
+    fn new(rig: &crate::library::Rig) -> Self {
+        let own_clock = rig
+            .fixtures
+            .iter()
+            .filter(|fixture| {
+                rig.definitions
+                    .get(&fixture.fixture_path)
+                    .is_some_and(|def| {
+                        luma_lib::fixtures::engine::strobes_on_own_clock(def, &fixture.mode_name)
+                    })
+            })
+            .map(|fixture| fixture.id.clone())
+            .collect();
+        Self {
+            own_clock,
+            clocks: HashMap::new(),
+        }
+    }
+
+    /// `state` as the rig shows it over `slice`: a fixture on its own clock
+    /// has its flashing folded into its dimmer and no strobe left for the
+    /// renderer's shared clock.
+    fn apply(
+        &mut self,
+        id: &str,
+        head: usize,
+        mut state: scene_desc::PrimitiveState,
+        slice: luma_render::strobe::Slice,
+    ) -> scene_desc::PrimitiveState {
+        if self.own_clock.contains(id) {
+            let clock = self.clocks.entry((id.to_string(), head)).or_default();
+            state.dimmer *= clock.gain(state.strobe, slice);
+            state.strobe = 0.0;
+        }
+        state
+    }
+}
+
 #[derive(Default)]
 struct StageClock {
     /// The clock at the last submitted frame.
@@ -1635,6 +1691,7 @@ impl Visualizer {
         });
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
+        stage.strobes = FixtureStrobes::new(&rig);
         stage.scene = Some(scene);
         // A new scene is a frame owed. The idle gate's key deliberately does
         // not carry scene contents, so a resting viewport handed a reloaded
@@ -2929,6 +2986,8 @@ struct Submission {
 struct LiveFrameInputs<'a> {
     scene: &'a scene_desc::Scene,
     definitions: &'a BTreeMap<String, scene_desc::Definition>,
+    /// Fixtures that strobe on their own clock, advanced by this frame.
+    strobes: &'a mut FixtureStrobes,
     /// The frame's moment on the stage clock.
     moment: Moment,
     /// The heads' state at it.
@@ -3332,6 +3391,7 @@ impl Gpu {
         let LiveFrameInputs {
             scene,
             definitions,
+            strobes,
             moment,
             state,
             size: (width, height),
@@ -3340,10 +3400,18 @@ impl Gpu {
             export,
         } = input;
         let built = std::time::Instant::now();
+        let strobes = RefCell::new(strobes);
         let frame = build_frame_at(
             scene,
             definitions,
-            &|id, head| stage_render::primitive_state(state, id, head),
+            &|id, head| {
+                let primitive = stage_render::primitive_state(state, id, head)?;
+                Some(
+                    strobes
+                        .borrow_mut()
+                        .apply(id, head, primitive, moment.slice),
+                )
+            },
             moment,
             &mut self.assets,
         )
@@ -5175,6 +5243,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             match gpu.frame(LiveFrameInputs {
                                 scene,
                                 definitions: &stage.definitions,
+                                strobes: &mut stage.strobes,
                                 moment,
                                 state: universe.as_ref(),
                                 size: (width, height),
