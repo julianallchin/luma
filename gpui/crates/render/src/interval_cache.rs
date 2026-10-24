@@ -197,23 +197,6 @@ impl IntervalCacheState {
         self.epoch
     }
 
-    /// Per-slot classification identity retained by the CPU cache. A valid
-    /// generation survives ordinary inactivity even though the current GPU
-    /// slot entry is MODE_OFF. Invalidated or reclaimed contents use MAX.
-    pub(crate) fn retained_generations(&self) -> Vec<u32> {
-        self.slots
-            .iter()
-            .zip(&self.gens)
-            .map(|(slot, gen)| {
-                if slot.key.is_some() && slot.region.is_some() && slot.written {
-                    *gen
-                } else {
-                    u32::MAX
-                }
-            })
-            .collect()
-    }
-
     /// The pool was resized: nothing in it is trusted any more.
     pub(crate) fn resize(&mut self, header_words: u32) {
         self.allocator = RegionAllocator::new(header_words);
@@ -248,26 +231,6 @@ impl IntervalCacheState {
     /// first still frame writes, the second reads. A per-slot change on a
     /// still camera (a moving head) writes immediately.
     pub(crate) fn plan(&mut self, frame: FrameKey, keys: &[Option<SlotKey>]) -> Vec<SlotEntry> {
-        self.plan_impl(frame, keys, false)
-    }
-
-    /// Plan while retaining inactive slots' exact key and allocation. This is
-    /// an opt-in diagnostic; active entries and invalidation remain identical
-    /// to [`Self::plan`].
-    pub(crate) fn plan_retaining_inactive(
-        &mut self,
-        frame: FrameKey,
-        keys: &[Option<SlotKey>],
-    ) -> Vec<SlotEntry> {
-        self.plan_impl(frame, keys, true)
-    }
-
-    fn plan_impl(
-        &mut self,
-        frame: FrameKey,
-        keys: &[Option<SlotKey>],
-        retain_inactive: bool,
-    ) -> Vec<SlotEntry> {
         if self.slots.len() != keys.len() {
             self.allocator.reset();
             self.slots = vec![SlotState::default(); keys.len()];
@@ -294,12 +257,10 @@ impl IntervalCacheState {
             let state = &mut self.slots[slot];
             match key {
                 None => {
-                    if !retain_inactive {
-                        if let Some((start, len)) = state.region.take() {
-                            self.allocator.release(start, len);
-                        }
-                        state.key = None;
+                    if let Some((start, len)) = state.region.take() {
+                        self.allocator.release(start, len);
                     }
+                    state.key = None;
                 }
                 Some(key) => {
                     let same_key = state.key == Some(*key);
@@ -572,70 +533,6 @@ mod tests {
         state.plan(frame(1), &keys);
         keys[0] = Some(key(9, [1, 1, 3, 3]));
         assert_eq!(modes(&state.plan(frame(1), &keys)), [MODE_WRITE, MODE_READ]);
-    }
-
-    #[test]
-    fn retaining_inactive_reuses_only_the_same_written_key() {
-        let mut state = IntervalCacheState::new(1000);
-        let original = vec![Some(key(9, [1, 1, 3, 3]))];
-        state.plan_retaining_inactive(frame(1), &original);
-        state.plan_retaining_inactive(frame(1), &original);
-        let generation = state.retained_generations()[0];
-        let region = state.slots[0].region;
-
-        assert_eq!(
-            modes(&state.plan_retaining_inactive(frame(1), &[None])),
-            [MODE_OFF]
-        );
-        assert_eq!(state.slots[0].region, region);
-        assert_eq!(state.retained_generations()[0], generation);
-        assert_eq!(
-            modes(&state.plan_retaining_inactive(frame(1), &original)),
-            [MODE_READ]
-        );
-
-        let changed = vec![Some(key(10, [1, 1, 3, 3]))];
-        assert_eq!(
-            modes(&state.plan_retaining_inactive(frame(1), &changed)),
-            [MODE_WRITE]
-        );
-        assert_ne!(state.retained_generations()[0], generation);
-    }
-
-    #[test]
-    fn retaining_inactive_invalidates_contents_on_frame_change() {
-        let mut state = IntervalCacheState::new(1000);
-        let keys = vec![Some(key(1, [0, 0, 10, 10]))];
-        state.plan_retaining_inactive(frame(1), &keys);
-        state.plan_retaining_inactive(frame(1), &keys);
-        let region = state.slots[0].region;
-
-        state.plan_retaining_inactive(frame(2), &[None]);
-        assert_eq!(state.slots[0].region, region);
-        assert_eq!(state.retained_generations(), [u32::MAX]);
-        assert_eq!(
-            modes(&state.plan_retaining_inactive(frame(2), &keys)),
-            [MODE_WRITE]
-        );
-    }
-
-    #[test]
-    fn retaining_inactive_reclaims_under_allocator_pressure() {
-        let mut state = IntervalCacheState::new(250);
-        let a = Some(key(1, [0, 0, 10, 10]));
-        let b = Some(key(2, [0, 0, 10, 10]));
-        state.plan_retaining_inactive(frame(1), &[a, b, None]);
-        state.plan_retaining_inactive(frame(1), &[a, b, None]);
-        state.plan_retaining_inactive(frame(1), &[None, b, None]);
-
-        let c = Some(key(3, [0, 0, 10, 15]));
-        assert_eq!(
-            modes(&state.plan_retaining_inactive(frame(1), &[None, b, c])),
-            [MODE_OFF, MODE_WRITE, MODE_WRITE]
-        );
-        assert_eq!(state.slots[0].region, None);
-        assert_eq!(state.slots[0].key, None);
-        assert_eq!(state.retained_generations()[0], u32::MAX);
     }
 
     #[test]

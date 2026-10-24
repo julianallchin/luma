@@ -7,36 +7,20 @@ override GRID_FOG: bool = false;
 // The compute kernel is selected only for ungoboed transport with complete
 // shadow coverage. Its compiled path needs neither jitter nor MIS fallback.
 override NATIVE_DETERMINISTIC: bool = false;
-override HAZE_WORK_COUNTS: bool = false;
-// Diagnostic only: candidates, intersections, shadow segments, depth reads,
-// lit intervals, quadrature taps, shadow rays, whole-span first-block proofs.
-var<private> haze_work: array<u32, 8>;
-// Diagnostic histogram mode (`LUMA_HAZE_WORK_COUNTS=2`): per (pixel, light)
-// pair, the number of non-empty `lit_interval` calls the shadow traversal
-// makes (bins 0,1,2,3,4,5-8,9+), and how many pairs are exactly one call over
-// the full span. Sizes the lit-interval cache payload.
-override HAZE_WORK_HIST: bool = false;
-var<private> haze_hist: array<u32, 8>;
 
 // Lit-interval cache (`docs/design/haze-lit-interval-cache.md`). The shadow
 // traversal records every interval it hands to `lit_interval`, including empty
 // tails, in call order so the compute kernel can store and replay the sequence
 // bit-for-bit on later frames. The traversal itself is unchanged; only the
 // recording hook sits between it and the quadrature. Bindings and the cache
-// branch live in `haze.wgsl`, which alone reaches them.
-override INTERVAL_CACHE: bool = false;
-// The compaction's fill pass (`haze_compact.wgsl`) records the traversal's
-// call list without integrating anything.
+// branch live in `haze_cache.wgsl`, which alone reaches them.
+// The compaction's classify pass (`haze_compact.wgsl`) records the
+// traversal's call list without integrating anything.
 override FILL_ONLY: bool = false;
-// Period-1 arithmetic-floor control for temporal residual reuse. Only the
-// three residual evaluator pipelines enable this; whole-lit and fused paths
-// retain their established RGB arithmetic.
-override RESID_SCALAR_K: bool = false;
 const CACHE_K: u32 = 8u;
 // Every call, empty tails included: the replay must add the same terms in
 // the same expression shape, or float contraction rounds differently.
 var<private> cache_count: u32;
-var<private> cache_nonempty: u32;
 var<private> cache_intervals: array<vec2<f32>, CACHE_K>;
 // Lane within the 8×4 workgroup (one subgroup), its cache block, and the
 // block's coordinates in the 8×4 block grid. Set by the compute entry points.
@@ -527,7 +511,6 @@ fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
 /// multiplied by sigma. Returns zero when the ray misses the light's
 /// cone∩ball, or the span it does cross is occluded by geometry.
 fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
-    if HAZE_WORK_COUNTS { haze_work[0] += 1u; }
     // A source that does not scatter leaves before the sphere test. House
     // downlights reach every pixel in the room, so this is the first branch,
     // not a factor folded into the radiance at the end.
@@ -540,7 +523,6 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     let t_a = span.x;
     let t_b = span.y;
     if t_b <= t_a || PROFILE_SKIP_NATIVE_INTEGRALS { return vec3<f32>(0.0); }
-    if HAZE_WORK_COUNTS { haze_work[1] += 1u; }
     if NATIVE_DETERMINISTIC {
         if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS { return lit_interval(li, ray, span.x, span.y); }
         return beam_shadow_integral(li, ray, span);
@@ -678,7 +660,6 @@ fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
 // coordinates. Shadow boundaries are supplied by the shadow-map traversal.
 fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
     if b <= a { return vec3<f32>(0.0); }
-    if HAZE_WORK_COUNTS { haze_work[4] += 1u; }
     let core = light_core[li];
     let rest = light_rest[li];
     let oc = haze.camera_pos.xyz - core.position;
@@ -687,7 +668,6 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
     let th0 = atan((a - delta) / h);
     let th1 = atan((b - delta) / h);
     let pieces = quadrature_pieces(a, b, th0, th1);
-    if HAZE_WORK_COUNTS { haze_work[5] += pieces * 4u; }
     let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
@@ -729,20 +709,15 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
         }
         left_field = right_field;
     }
-    if RESID_SCALAR_K { return vec3<f32>(sum); }
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
 // Every quadrature call the shadow traversal makes goes through here so the
-// cache (and the diagnostic histogram) sees the exact call sequence, including
-// empty tails. An empty interval returns zero before any arithmetic, and adding
-// that zero is exact.
+// cache sees the exact call sequence, including empty tails. An empty interval
+// returns zero before any arithmetic, and adding that zero is exact.
 fn lit_counted(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
-    if INTERVAL_CACHE || HAZE_WORK_HIST {
-        if cache_count < CACHE_K { cache_intervals[cache_count] = vec2<f32>(a, b); }
-        cache_count += 1u;
-        if b > a { cache_nonempty += 1u; }
-    }
+    if cache_count < CACHE_K { cache_intervals[cache_count] = vec2<f32>(a, b); }
+    cache_count += 1u;
     if FILL_ONLY { return vec3<f32>(0.0); }
     return lit_interval(li, ray, a, b);
 }
@@ -764,7 +739,6 @@ const SHADOW_HARD_STEPS: i32 = 64;
 // Lit fraction of the chord between two clip-space points of one shadow layer,
 // from four stratified samples. The chord lies inside the clipped projection.
 fn chord_visibility(a: vec4<f32>, b: vec4<f32>, layer: i32, planes: vec4<f32>) -> f32 {
-    if HAZE_WORK_COUNTS { haze_work[3] += 4u; }
     let dims = vec2<i32>(textureDimensions(fixture_shadow_map));
     var lit = 0.0;
     for (var i = 0u; i < 4u; i += 1u) {
@@ -799,8 +773,7 @@ fn clip_shadow_plane(span: ptr<function, vec2<f32>>, offset: f32, slope: f32) ->
 // intervals, so the lit-interval cache replays them unchanged. With no
 // footprint block the walk and its intervals are exactly the texel walk's.
 fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f32> {
-    if HAZE_WORK_COUNTS { haze_work[6] += 1u; }
-    if INTERVAL_CACHE || HAZE_WORK_HIST { cache_count = 0u; cache_nonempty = 0u; }
+    cache_count = 0u;
     let layer = i32(light_rest[li].shadow_slot);
     let matrix = fixture_shadow_matrices[layer].view_proj;
     let origin = matrix * vec4<f32>(haze.camera_pos.xyz, 1.0);
@@ -851,7 +824,6 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
     // A clipped projected line cannot visit more than width + height cells.
     for (var iteration = 0; iteration < dims.x + dims.y + 2; iteration += 1) {
         if t >= span.y { break; }
-        if HAZE_WORK_COUNTS { haze_work[2] += 1u; }
         let capped = iteration >= hard_steps;
         let footprint = t * footprint_per_metre
             * exp2(f32(max(iteration - soft_steps, 0)) / SHADOW_DOUBLING_STEPS);
@@ -889,7 +861,6 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
             end = min(span.y, max(t, min(next_x, next_y)));
             var depth_range = vec2<f32>(0.0);
             if all(cell >= vec2<i32>(0)) && all(cell < dims) {
-                if HAZE_WORK_COUNTS { haze_work[3] += 1u; }
                 if level >= 0 {
                     if layer < 256 { depth_range = textureLoad(shadow_ranges, block_cell, layer, level).rg; }
                     else { depth_range = textureLoad(shadow_ranges_extra, block_cell, layer - 256, level).rg; }
@@ -901,7 +872,6 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
             let end_clip = origin + direction * end;
             let end_ref = shadow_compare_reference(end_clip.z / max(end_clip.w, 1e-6), planes.x, planes.y, 0.02);
             if min(start_ref, end_ref) >= depth_range.y {
-                if HAZE_WORK_COUNTS && iteration == 0 && descent == 0u && end >= span.y { haze_work[7] += 1u; }
                 visible_a = t; visible_b = end; break;
             }
             if max(start_ref, end_ref) < depth_range.x { break; }

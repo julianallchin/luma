@@ -1451,7 +1451,6 @@ fn frame_with_lights(
         floor: None,
         fixture_cones: Vec::with_capacity(count),
         fixture_shadow_capacity_hint: 0,
-        fixture_lighting_domain: None,
         fixture_surface_lighting: true,
         beam_proxy: false,
         fixture_shadows: true,

@@ -30,8 +30,7 @@ struct Globals {
     outdoor_sun: vec4<f32>,
     // Outdoor surface transmittance source. x: the fog grid's radial extent
     // in metres (the haze pass's `shadow.w`), y: 0 marches `medium_optical_depth`
-    // per fragment, 1 reads the grid's camera transmittance, 2 reads the grid
-    // only beyond z metres and marches nearer fragments. w unused.
+    // per fragment, 1 reads the grid's camera transmittance. zw unused.
     surface_fog: vec4<f32>,
     // xy: output size in pixels, zw: its reciprocal.
     viewport: vec4<f32>,
