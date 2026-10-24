@@ -161,6 +161,22 @@ fn build_strobe_inventory(def: &FixtureDefinition, mode: &Mode) -> StrobeInvento
     }
 }
 
+/// Whether a fixture in `mode_name` strobes on its own clock: its mode has a
+/// shutter channel, so the engine writes a strobe rate there and the fixture
+/// does the flashing, rather than the engine pulsing a dimmer or a color. The
+/// stage view simulates that clock for these fixtures so it flashes as the rig
+/// does. An unknown mode is `false`.
+#[must_use]
+pub fn strobes_on_own_clock(def: &FixtureDefinition, mode_name: &str) -> bool {
+    def.modes
+        .iter()
+        .find(|m| m.name == mode_name)
+        .is_some_and(|mode| {
+            let inv = build_strobe_inventory(def, mode);
+            inv.has_master_shutter || inv.per_head_shutter.iter().any(|&h| h)
+        })
+}
+
 fn resolve_strobe_rung(inv: &StrobeInventory, head_strobes: &[f32], agree: bool) -> StrobeRung {
     let strobing: Vec<usize> = head_strobes
         .iter()
@@ -2077,5 +2093,15 @@ mod tests {
             drive(&names, srgb([1.0, 0.0, 0.0]), 1.0),
             [255, 0, 255, 255]
         );
+    }
+
+    #[test]
+    fn a_mode_with_a_strobe_channel_strobes_on_its_own_clock() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../resources/fixtures/2511260420/Venue/Venue-Tetra-Bar.qxf");
+        let def = crate::fixtures::parser::parse_definition(&path).unwrap();
+        assert!(strobes_on_own_clock(&def, "24-CH"));
+        assert!(!strobes_on_own_clock(&def, "3-CH"));
+        assert!(!strobes_on_own_clock(&def, "no such mode"));
     }
 }
