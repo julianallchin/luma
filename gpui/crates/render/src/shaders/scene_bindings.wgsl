@@ -113,8 +113,8 @@ struct FixtureLightRest {
 };
 
 struct SurfaceClusterParams {
-    // x: fixture surface lighting enabled, y: cluster-occupancy debug, z: depth-refined surface mask,
-    // w: surface depth buckets per tile (0 = one sphere, 2 = split planes; see `light_index_build.wgsl`).
+    // x: fixture surface lighting enabled, y: cluster-occupancy debug, z: depth-refined surface mask
+    // (two depth buckets per tile; see `light_index_build.wgsl`), w: unused.
     // The culling structure itself is the shared light index (group 3,
     // bindings 8–10); only the pass flags remain here.
     flags: vec4<f32>,

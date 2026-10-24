@@ -951,8 +951,7 @@ fn reflection_probe_timings() {
 
 /// Diagnosis: dump the probe nearest the barrier on dirt: its captured
 /// albedo, normal and distance, and its change to the sky probe (black
-/// where negative) at every prefiltered mip, to `LUMA_PROBE_CAPTURE_DIR`. Run with `LUMA_PROBE_DEBUG=1` for the
-/// balls too.
+/// where negative) at every prefiltered mip, to `LUMA_PROBE_CAPTURE_DIR`, and the stage with the probes drawn as balls.
 #[test]
 #[ignore = "diagnosis"]
 fn dump_probe_textures() {
@@ -981,6 +980,7 @@ fn dump_probe_textures() {
             Vec3::new(0.2, 0.4, 1.0) * 4.0,
         ));
     }
+    stage_view.probes.debug = true;
     capture("dump-stage", &settled(&mut renderer, &stage_view));
     let _ = settled(&mut renderer, &frame);
     let positions = renderer.reflection_probe_positions();

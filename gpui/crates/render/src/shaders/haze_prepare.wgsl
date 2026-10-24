@@ -2,7 +2,6 @@
 // Retain the farthest prefix they can request, including both sides of thin
 // foreground geometry. The lighting pass may then omit only unused slices.
 @group(2) @binding(0) var columns: texture_storage_2d<rgba32float, write>;
-override DEPTH_CULL: bool = true;
 @compute @workgroup_size(8, 8, 1)
 fn prepare_columns(@builtin(global_invocation_id) column: vec3<u32>) {
     let size = textureDimensions(columns);
@@ -12,7 +11,7 @@ fn prepare_columns(@builtin(global_invocation_id) column: vec3<u32>) {
     let center = (vec2<f32>(column.xy) + 0.5) * step;
     let first = max(vec2<i32>(floor(center - step - 0.5)), vec2<i32>(0));
     let last = min(vec2<i32>(ceil(center + step - 0.5)), vec2<i32>(viewport) - 1);
-    var last_prefix = select(1.0, 0.0, DEPTH_CULL);
+    var last_prefix = 0.0;
     for (var y = first.y; y <= last.y && last_prefix < 1.0; y += 1) {
         for (var x = first.x; x <= last.x && last_prefix < 1.0; x += 1) {
             let ray = scene_ray(vec2<f32>(f32(x), f32(y)) + 0.5);

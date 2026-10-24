@@ -261,7 +261,7 @@ pub struct RenderSettings {
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
     /// The local reflection probes: a view choice for this session, never
-    /// saved. Defaults from `LUMA_PROBES` and `LUMA_PROBE_DEBUG`.
+    /// saved. Starts as [`ProbeView::PLAIN`].
     #[serde(skip)]
     pub probes: ProbeView,
     /// Vertical field of view, degrees.
@@ -289,8 +289,7 @@ pub struct ProbeView {
 }
 
 impl ProbeView {
-    /// On, balls off: the constant constructors' view, which no start-up
-    /// variable changes.
+    /// On, balls off: where every view starts.
     pub const PLAIN: Self = Self {
         enabled: true,
         debug: false,
@@ -298,14 +297,8 @@ impl ProbeView {
 }
 
 impl Default for ProbeView {
-    /// On, balls off, unless `LUMA_PROBES=0` or `LUMA_PROBE_DEBUG=1` say
-    /// otherwise at start-up.
     fn default() -> Self {
-        static DEFAULT: std::sync::OnceLock<ProbeView> = std::sync::OnceLock::new();
-        *DEFAULT.get_or_init(|| Self {
-            enabled: std::env::var_os("LUMA_PROBES").is_none_or(|value| value != "0"),
-            debug: std::env::var_os("LUMA_PROBE_DEBUG").is_some_and(|value| value == "1"),
-        })
+        Self::PLAIN
     }
 }
 

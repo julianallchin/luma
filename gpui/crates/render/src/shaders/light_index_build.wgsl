@@ -262,8 +262,7 @@ fn tile_fill(
 // split. Exactness: every production-shaded fragment's centre depth is within
 // that margin of a covered sample of its own pixel, the sample lies in exactly
 // one bucket, and the bucket's sphere spans the bucket's samples widened by
-// the margin. `SURFACE_SPLIT == 0u` is the single sphere over [z0, z1] with
-// the split left at the sentinel; the fourth plane is then never written.
+// the margin.
 @group(0) @binding(4) var surface_depth: texture_multisampled_2d<f32>;
 @group(0) @binding(5) var<storage, read_write> surface_splits: array<f32>;
 var<workgroup> surface_near: array<f32, 64>;
@@ -330,53 +329,49 @@ fn surface_fill(@builtin(workgroup_id) tile: vec3<u32>,
     let valid = z1 >= z0 && z0 >= params.depth.x && z1 <= 60000.0;
     // Every lane derives the same split from the same workgroup values.
     var split = SURFACE_UNSPLIT;
-    if SURFACE_SPLIT >= 2u && valid && z1 > 1.5 * z0 {
+    if valid && z1 > 1.5 * z0 {
         split = sqrt(z0 * z1);
     }
     // Bucket bounds: A holds the samples at or before the split, B the rest.
     // Unsplit, A is the whole span and B stays empty.
-    var lo_a = z0;
-    var hi_a = z1;
+    var lo_a = 1e20;
+    var hi_a = 0.0;
     var lo_b = 1e20;
     var hi_b = 0.0;
-    if SURFACE_SPLIT >= 2u {
-        lo_a = 1e20;
-        hi_a = 0.0;
-        if in_bounds {
-            for (var sample = 0u; sample < textureNumSamples(surface_depth); sample += 1u) {
-                let depth = textureLoad(surface_depth, vec2<i32>(pixel), i32(sample)).r;
-                if depth != 0.0 {
-                    if depth <= split {
-                        lo_a = min(lo_a, depth);
-                        hi_a = max(hi_a, depth);
-                    } else {
-                        lo_b = min(lo_b, depth);
-                        hi_b = max(hi_b, depth);
-                    }
+    if in_bounds {
+        for (var sample = 0u; sample < textureNumSamples(surface_depth); sample += 1u) {
+            let depth = textureLoad(surface_depth, vec2<i32>(pixel), i32(sample)).r;
+            if depth != 0.0 {
+                if depth <= split {
+                    lo_a = min(lo_a, depth);
+                    hi_a = max(hi_a, depth);
+                } else {
+                    lo_b = min(lo_b, depth);
+                    hi_b = max(hi_b, depth);
                 }
             }
         }
-        // Everyone has read z0/z1 before the arrays are reused.
-        workgroupBarrier();
-        surface_near[lane] = lo_a;
-        surface_far[lane] = hi_a;
-        surface_near_b[lane] = lo_b;
-        surface_far_b[lane] = hi_b;
-        workgroupBarrier();
-        for (var stride = 32u; stride > 0u; stride /= 2u) {
-            if lane < stride {
-                surface_near[lane] = min(surface_near[lane], surface_near[lane + stride]);
-                surface_far[lane] = max(surface_far[lane], surface_far[lane + stride]);
-                surface_near_b[lane] = min(surface_near_b[lane], surface_near_b[lane + stride]);
-                surface_far_b[lane] = max(surface_far_b[lane], surface_far_b[lane + stride]);
-            }
-            workgroupBarrier();
-        }
-        lo_a = surface_near[0];
-        hi_a = surface_far[0];
-        lo_b = surface_near_b[0];
-        hi_b = surface_far_b[0];
     }
+    // Everyone has read z0/z1 before the arrays are reused.
+    workgroupBarrier();
+    surface_near[lane] = lo_a;
+    surface_far[lane] = hi_a;
+    surface_near_b[lane] = lo_b;
+    surface_far_b[lane] = hi_b;
+    workgroupBarrier();
+    for (var stride = 32u; stride > 0u; stride /= 2u) {
+        if lane < stride {
+            surface_near[lane] = min(surface_near[lane], surface_near[lane + stride]);
+            surface_far[lane] = max(surface_far[lane], surface_far[lane + stride]);
+            surface_near_b[lane] = min(surface_near_b[lane], surface_near_b[lane + stride]);
+            surface_far_b[lane] = max(surface_far_b[lane], surface_far_b[lane + stride]);
+        }
+        workgroupBarrier();
+    }
+    lo_a = surface_near[0];
+    hi_a = surface_far[0];
+    lo_b = surface_near_b[0];
+    hi_b = surface_far_b[0];
     let margin_a = surface_margin(lo_a, hi_a);
     let margin_b = surface_margin(lo_b, hi_b);
     if lane == 0u {
@@ -407,7 +402,7 @@ fn surface_fill(@builtin(workgroup_id) tile: vec3<u32>,
         bits = mask;
     } else if z1 >= z0 {
         bits = surface_cull(sphere, margin_a, mask, word);
-        if SURFACE_SPLIT >= 2u && split < SURFACE_UNSPLIT {
+        if split < SURFACE_UNSPLIT {
             bits_b = surface_cull(sphere_b, margin_b, mask, word);
         }
     }
@@ -419,12 +414,10 @@ fn surface_fill(@builtin(workgroup_id) tile: vec3<u32>,
         let start = lane * 4u;
         tile_masks[2u * plane + base + lane] =
             surface_bits[start] | surface_bits[start + 1u] | surface_bits[start + 2u] | surface_bits[start + 3u];
-        if SURFACE_SPLIT >= 2u {
-            tile_masks[3u * plane + base + lane] =
-                surface_bits_b[start] | surface_bits_b[start + 1u] | surface_bits_b[start + 2u] | surface_bits_b[start + 3u];
-        }
+        tile_masks[3u * plane + base + lane] =
+            surface_bits_b[start] | surface_bits_b[start + 1u] | surface_bits_b[start + 2u] | surface_bits_b[start + 3u];
     }
-    if SURFACE_SPLIT >= 2u && lane == 0u {
+    if lane == 0u {
         surface_splits[tile.y * params.grid.x + tile.x] = split;
     }
 }

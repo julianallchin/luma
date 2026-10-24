@@ -394,7 +394,7 @@ struct SlotLookup {
 fn cache_slot(li: u32) -> SlotLookup {
     var out = SlotLookup(0u, 0u, 0u, 0u, CACHE_NONE);
     let shadow_slot = light_rest[li].shadow_slot;
-    if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS || shadow_slot < 0.0 { return out; }
+    if haze.shadow.x <= 0.0 || shadow_slot < 0.0 { return out; }
     let slot = u32(shadow_slot);
     out.slot = slot;
     let entry = cache_params.slots[slot];
@@ -413,7 +413,7 @@ fn cache_slot(li: u32) -> SlotLookup {
 
 // This lane's span of light `li`, empty past the image edge.
 fn lane_span(li: u32, ray: SceneRay) -> vec2<f32> {
-    if !cache_in_bounds || PROFILE_SKIP_NATIVE_INTEGRALS { return vec2<f32>(0.0); }
+    if !cache_in_bounds { return vec2<f32>(0.0); }
     return beam_span(li, ray);
 }
 
@@ -443,7 +443,7 @@ fn recorded_replay(li: u32, ray: SceneRay) -> vec3<f32> {
 // reference is on).
 fn beam_scatter_exact(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
     if span.y <= span.x { return vec3<f32>(0.0); }
-    if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS { return lit_interval(li, ray, span.x, span.y); }
+    if haze.shadow.x <= 0.0 { return lit_interval(li, ray, span.x, span.y); }
     if light_rest[li].shadow_slot < 0.0 {
         if haze.shadow.z > 0.0 { return traced_interval(li, ray, span.x, span.y); }
         return lit_interval(li, ray, span.x, span.y);

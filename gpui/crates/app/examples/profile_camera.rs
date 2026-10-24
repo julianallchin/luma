@@ -17,8 +17,7 @@
 //! ```
 //!
 //! `LUMA_PROFILE_DETAIL=1` adds a line for each named pass (the haze
-//! sub-passes among them). Renderer switches such as `LUMA_PROFILE_OMIT` apply
-//! as in the app. `--quality` defaults to the quality in the export.
+//! sub-passes among them). `--quality` defaults to the quality in the export.
 //! `--haze=DENSITY` replaces the haze density (0 turns haze off).
 //! `--compare` prints how far the written PNG is from another one.
 //! `--list-cones` prints the lit fixture cones at the playhead and exits.

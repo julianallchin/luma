@@ -56,21 +56,6 @@ pub(crate) const NARROW_PHASE: bool = true;
 /// when the tile is not split) and surface depth bucket B.
 pub(crate) const MASK_PLANES: usize = 4;
 
-/// Per-tile depth buckets the surface refinement builds:
-/// `LUMA_SURFACE_DEPTH_SPLIT=0|2`. `0` is the single sphere over the tile's
-/// whole visible depth span; `2` splits a tile whose span exceeds 1.5× at the
-/// geometric mean of its bounds (a cable or truss member over the ground
-/// otherwise admits every cone between them). Read once at pipeline creation.
-pub(crate) fn surface_depth_split() -> u32 {
-    match std::env::var("LUMA_SURFACE_DEPTH_SPLIT").ok().as_deref() {
-        None | Some("2") => 2,
-        Some("0") => 0,
-        Some(other) => panic!(
-            "LUMA_SURFACE_DEPTH_SPLIT must be 0 or 2 (4 was not built: the depth pre-check showed two-layer tiles dominate), got {other:?}"
-        ),
-    }
-}
-
 /// Sentinel Z-bin: `min > max`, so the id-range walk is empty.
 const EMPTY_BIN: u32 = 0xFFFF_0000;
 
@@ -403,8 +388,6 @@ pub struct LightIndexPipelines {
     fill: wgpu::ComputePipeline,
     /// `surface_fill` over a single-sampled (0) or multisampled (1) depth.
     surface: [(wgpu::BindGroupLayout, wgpu::ComputePipeline); 2],
-    /// Depth buckets `surface_fill` was compiled for; see [`surface_depth_split`].
-    surface_split: u32,
     count_layout: wgpu::BindGroupLayout,
     count: wgpu::ComputePipeline,
 }
@@ -551,12 +534,11 @@ impl LightIndexPipelines {
             ],
         });
 
-        let surface_split = surface_depth_split();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("light-index-build"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const NARROW_PHASE: bool = {NARROW_PHASE};\nconst SURFACE_SPLIT: u32 = {surface_split}u;\n{}",
+                    "const NARROW_PHASE: bool = {NARROW_PHASE};\n{}",
                     include_str!("shaders/light_index_build.wgsl")
                 )
                 .into(),
@@ -610,7 +592,7 @@ impl LightIndexPipelines {
                     label: Some("light-index-build-single"),
                     source: wgpu::ShaderSource::Wgsl(
                         format!(
-                            "const NARROW_PHASE: bool = {NARROW_PHASE};\nconst SURFACE_SPLIT: u32 = {surface_split}u;\n{}",
+                            "const NARROW_PHASE: bool = {NARROW_PHASE};\n{}",
                             include_str!("shaders/light_index_build.wgsl")
                                 .replace("texture_multisampled_2d<f32>", "texture_2d<f32>")
                                 .replace("textureNumSamples(surface_depth)", "1u")
@@ -687,7 +669,6 @@ impl LightIndexPipelines {
             prepass: pipeline("big_tile_prepass"),
             fill: pipeline("tile_fill"),
             surface,
-            surface_split,
             consumer_layout,
             build_layout,
             count_layout,
@@ -699,12 +680,6 @@ impl LightIndexPipelines {
     #[must_use]
     pub fn layout(&self) -> &wgpu::BindGroupLayout {
         &self.consumer_layout
-    }
-
-    /// Depth buckets per tile the surface refinement builds (0 or 2).
-    #[must_use]
-    pub fn surface_split(&self) -> u32 {
-        self.surface_split
     }
 }
 
