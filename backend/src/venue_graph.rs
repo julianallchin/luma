@@ -196,9 +196,9 @@ pub async fn graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraph, Stri
 /// it. It runs inside the caller's write transaction, so a failure leaves the
 /// old rows untouched.
 ///
-/// `stage_pieces` and `fixtures.pos_*`/`rot_*` are **read and left alone**. See
-/// the header of `migrations/20260829000000_venue_graph.sql` for why they are
-/// not dropped here.
+/// `stage_pieces` and `fixtures.pos_*`/`rot_*` are **read and left alone**: a
+/// venue that has not run this pass still needs them, and `fixtures.pos_*`
+/// also sync, so dropping them is a remote schema change of its own.
 ///
 /// # Errors
 /// Fails if the old rows cannot be read, the catalog cannot be resolved, or a

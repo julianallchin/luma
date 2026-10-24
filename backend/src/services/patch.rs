@@ -15,9 +15,9 @@
 //! # The invariant this buys
 //!
 //! An address in the database is always addressable: the writes here refuse a
-//! footprint that leaves its universe, and
-//! `migrations/20260830000000_patch_addressing.sql` refuses it again in a
-//! trigger, so a second writer (a sync pull, a repair script) cannot get one
+//! footprint that leaves its universe, and the
+//! `fixtures_address_fits_universe_*` triggers refuse it again, so a second
+//! writer (a sync pull, a repair script) cannot get one
 //! past. That is what lets `fixtures::engine` drop its truncation branch: the
 //! condition it guarded is now unrepresentable rather than merely unlikely.
 
@@ -77,12 +77,10 @@ impl From<String> for PatchError {
 /// The patch rows as the allocator's input.
 ///
 /// A channel count wider than a universe cannot exist: the
-/// `fixtures_address_fits_universe_*` triggers
-/// (`migrations/20260830000000_patch_addressing.sql`) test
+/// `fixtures_address_fits_universe_*` triggers test
 /// `address + num_channels - 1 > 512` with `address >= 1`, which no width over
-/// 512 can pass at any address, and
-/// `migrations/20260831000000_patch_width_repair.sql` clamped the rows written
-/// before them. So the conversion here is total, not a decision.
+/// 512 can pass at any address, and the rows written before them were clamped
+/// by the migration that added them. So the conversion here is total, not a decision.
 ///
 /// The row's *stored* footprint is carried across whether or not it is pinned:
 /// it is what a new address has to avoid colliding with, and dropping it here
