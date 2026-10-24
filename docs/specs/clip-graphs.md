@@ -76,8 +76,7 @@ Julian approved these from an audit: shaders and standard compositing.
     bounds and air around it, so handles and overshooting curves show
     outside the border.
 
-Migration (`migrate_clip_graphs_v3.py --cells`, the clip's own rig from
-`clip_cells`): `lighten` → `max`; `value` → `replace` with alpha ×
+Migration (one-time, on the stored library, each clip on its own rig): `lighten` → `max`; `value` → `replace` with alpha ×
 brightness; a phase of 0 goes; a radial or angle space takes `centre` at
 its old centroid, and a radial one takes its nearest head's share m of the
 largest distance into shift and scale (`shift' = m + shift·(1 − m)`,
@@ -157,8 +156,7 @@ bloom * fade`) when exactly one input reads it and its id is a numbered id
 (`curve3`, `math1`); a named or shared one gets its own line. Code → graph →
 code keeps nodes, names, inline curves and `a * b * c` exactly.
 
-Migration (`backend/scripts/migrate_clip_graphs_v3.py`, on top of 8.7):
-version 1 or 2 → 3. A clock node becomes the `every`/`duration` of each time
+Migration (one-time, on top of 8.5): version 1 or 2 → 3. A clock node becomes the `every`/`duration` of each time
 node that read it (shared clocks stay shared by equal inputs); a shuffle's
 clock becomes a time node with that `every`/`duration`; `time.delay` turns
 with a clock → beats (× the event duration); a delay with no clock meant a
@@ -179,8 +177,7 @@ an eased segment is refused). Dry run on a copy, 2026-09-30: 103 clips have
 such a space (101 angle, 2 line; scales 0.15–1.124); all 103 play exactly
 as before, and all 103 fail without the rewrite.
 
-Products as one math node (`backend/scripts/migrate_clip_math.py`,
-2026-10-01): a number curve with low empty or 0 and a wired `high` is
+Products as one math node (one-time migration, 2026-10-01): a number curve with low empty or 0 and a wired `high` is
 `high × curve(x)`, so each chain of them (Slash: curve4 → curve5.high →
 curve6.high) becomes one `*` math node with every factor, innermost first
 (`brightness = curve4 * curve5 * curve6`); the curves lose low and high and
@@ -191,8 +188,7 @@ of 2, 36 of 3; 151 curves, one math node added each, no node removed),
 1 draft; presets unchanged; every clip plays bit for bit as before on both
 stand-in rigs (audio read as `time()`).
 
-A sweeping front as a front (`backend/scripts/migrate_clip_front.py`,
-2026-10-01): migrated Slash and Backslash faked a hard front with a pill
+A sweeping front as a front (one-time migration, 2026-10-01): migrated Slash and Backslash faked a hard front with a pill
 over a 2-wide window sliding in from off the rig (shift −2 → −0.97, scale
 2.000000002). Its back edge never enters the rig, so a head is lit when
 `a < shift + scale`. It becomes the v3 Slash cut: the space along the
@@ -722,7 +718,7 @@ create table backup.drafts_pre_clip_graphs_20260929 as select * from public.draf
 
 `graph` and `inputs_json` stay in place tonight and are not read by new code.
 A follow-up migration pair (`20260930000000_drop_form_columns.sql`) drops them
-after the upload is verified (section 8.6). Reason: sqlx runs every pending
+after the upload is verified (section 8). Reason: sqlx runs every pending
 migration at launch, before the converter could run.
 
 `rows.rs` maps `name` ↔ `clips.name` and `graph` ↔ `clips.graph_json`.
@@ -1103,20 +1099,13 @@ when present; `still` when none apply. Example: `line · every 2`.
 
 ## 8. Migration
 
-One-time, offline, idempotent. Never at load time.
-
-### 8.1 Converter
-
-`backend/scripts/migrate_clip_graphs.py`:
-
-- `--database <copy of luma.db> --out <dir>`: writes `clips.sql`, `drafts.sql`,
-  `report.md`, `names.csv`.
-- JSON mode: a score document on stdin → converted document on stdout (the
-  parity tool uses this).
-
-Every output clip is named. Name = the matching shipped preset when the old
-inputs equal a preset's inputs (after conversion, ignoring color values and
-constants), else the output kind plus its summary ("Color · line · every 2").
+One-time, offline, idempotent. Never at load time. The library was converted
+in place on 2026-09-29 (form clips → version 1), 2026-09-30 (→ versions 2
+and 3) and 2026-10-01 (math products, fronts), through guarded `UPDATE`s on
+the app database so PowerSync carried them to Supabase. Every stored clip is
+now version 3, and this build reads no other version. The converters, parity
+checks and apply tools were deleted after the last run; git history has
+them. The tables below record what each conversion meant.
 
 ### 8.2 Mapping
 
@@ -1181,64 +1170,12 @@ varying every or life (taken at clip start); non-monotone offset with an
 asymmetric shape (no auto-reverse); overlap winners when color or alpha
 varies per event on the brightness clock (the effect now includes them).
 
-### 8.5 Parity
+### 8.5 Graph version 2: bands to shifted spaces (2026-09-30)
 
-`backend/scripts/check_clip_graphs_migration.py --database <copy> --old <old bin> --new <new bin> --out <dir>`:
-
-1. Old reference: `git archive 6ebfb8f4 | tar -x -C <scratch>/luma-6ebfb8f4`,
-   build `patterns/examples/source_parity.rs` there. It dumps frames per clip:
-   playback beats at 1/8 beat steps, plus the exclusive end and the
-   representable beat before it, on the stand-in rig the old check used.
-2. New: `patterns/examples/clip_graph_parity.rs` reads the converted
-   document, evaluates the same beats on the same rig, dumps frames.
-3. Compare: RGB and strobe within 1e-6, aim direction within 1e-6 rad and
-   weight within 1e-6, for every clip not in an approximate class. Approximate
-   classes: noise → mean and standard deviation per head within 0.05, and a
-   separate list; Fan/Bloom → listed, not compared; audio clips → evaluated
-   with the track's decoded mix when the track is present, else schema-checked
-   and listed. The 30 shipped presets are compared against their rewritten
-   graphs the same way.
-4. The report fails on any hard difference. Do not widen the tolerance.
-
-### 8.6 Local and Supabase steps
-
-1. Close `luma-app`. Copy `luma.db`, `luma.db-wal`, `luma.db-shm`, `state.db`
-   to `~/.config/com.luma.luma/backups/pre-clip-graphs-20260929/`.
-2. Run the converter and the parity check on a copy. Read `report.md`.
-3. Apply the Supabase migration (adds columns, takes the backup tables).
-   Redeploy `deploy/powersync/sync-config.yaml` (unchanged text) so PowerSync sees the
-   new columns.
-4. `backend/src/bin/clip_graphs_apply.rs --app-dir ~/.config/com.luma.luma
-   --sql <dir>/clips.sql`: opens with `open_app_db_at` so PowerSync queues
-   the uploads, runs the SQLite migration, applies the guarded updates
-   (`UPDATE clips SET name = ?, graph_json = ? WHERE id = ? AND graph = ? AND
-   inputs_json = ?`) in one transaction, and rolls back unless the changed
-   row count equals the expected count. Same for `drafts`. Prints
-   `ps_crud` and `clips` counts before and after, and runs
-   `PRAGMA integrity_check`.
-5. Relaunch `luma-app` natively on Sway (never XWayland). Wait until
-   `ps_crud` is empty.
-6. Verify in Supabase: `select count(*) from clips where graph_json <> '{}'`
-   equals `select count(*) from clips` (5,574 on 2026-09-28) and `name <> ''`
-   for all; `history` has the update rows; no rejected uploads.
-7. Next build: `20260930000000_drop_form_columns.sql` in both databases
-   (`ALTER TABLE clips DROP COLUMN graph; ... DROP COLUMN inputs_json;`),
-   `schema.rs` drops the two names, redeploy sync rules again.
-
-Ask before step 3 and step 4; Julian approved applying tonight but wants the
-report first.
-
-
-### 8.7 Graph version 2: bands to shifted spaces (2026-09-30)
-
-`backend/scripts/migrate_clip_clocks.py --database <copy> --out <dir>
-[--old <v1 clip_graph_parity> --new <v2 clip_graph_parity>]` converts every
-version 1 graph in `clips.graph_json` and in `drafts` documents and writes
-guarded `UPDATE`s (`clips.sql`, `drafts.sql`, first line `-- expected: N`)
-for `clip_graphs_apply`, which queues them for PowerSync, so Supabase
-follows the local database. With both binaries it plays every clip before
-and after on the stand-in rig (1/8 beat steps) and sorts the clips into
-exact, edge-only (a head exactly on a band's end) and approximate.
+Every version 1 graph in `clips.graph_json` and in `drafts` documents was
+converted, and each clip was played before and after on the stand-in rig
+(1/8 beat steps) and sorted into exact, edge-only (a head exactly on a band's
+end) and approximate.
 
 A version 1 band read `x = (a − offset) / width` (the difference wrapped
 first on a ring) and gave the curve's low outside [0, 1]. That is
@@ -1379,11 +1316,11 @@ files.
 
 | Agent | Owns |
 |---|---|
-| A patterns | `backend/crates/patterns/**` except `examples/clip_graph_parity.rs` |
-| B backend | `backend/src/**` except `agent/prompts/**` and `bin/clip_graphs_apply.rs`; `backend/migrations/*`; `supabase/migrations/*`; `deploy/powersync/sync-config.yaml` |
+| A patterns | `backend/crates/patterns/**` |
+| B backend | `backend/src/**` except `agent/prompts/**`; `backend/migrations/*`; `supabase/migrations/*`; `deploy/powersync/sync-config.yaml` |
 | C python | `backend/python/luma_exec/**`; `backend/src/agent/prompts/*.md`; `resources/skills/**`; `scripts/headless/mcp_smoke.ts`, `mcp-client.ts` |
 | D gpui | `gpui/crates/app/**`; `gpui/crates/ui/**`; `gpui/crates/agent/**` |
-| E migration | `backend/scripts/migrate_clip_graphs.py`, `check_clip_graphs_migration.py`; `backend/src/bin/clip_graphs_apply.rs`; `backend/crates/patterns/examples/clip_graph_parity.rs` |
+| E migration | the one-time converter, parity check and apply tool (section 8; deleted after the run) |
 
 ### Phase 1 (A first, 1–2 h): model and checker
 
@@ -1442,8 +1379,8 @@ from Clock 1 onto a second time's clock shares one clock; renaming stores
 curve; undo after a drag restores the graph in one step.
 
 E: converter with unit tests per row of 8.2 and 8.3 (fixed JSON in →
-expected graph out, then the checker passes), the SQL writer, `clip_graphs_apply`,
-`clip_graph_parity.rs`, the old-build export step scripted.
+expected graph out, then the checker passes), the SQL writer, the apply tool,
+the parity tool, the old-build export step scripted.
 
 ### Phase 3: integrate
 
@@ -1459,7 +1396,8 @@ expected graph out, then the checker passes), the SQL writer, `clip_graphs_apply
    back and print `clip.graph.source()`, then run a wrong cell
    (`brightness=time()`) and show the 3.2 error text. All steps pass; no
    "skip".
-4. Migration steps 8.6.1–8.6.6, with Julian's go at 3 and 4.
+4. The migration (section 8), with Julian's go before Supabase and the app
+   database were written.
 5. Relaunch `luma-app` natively on Sway after the final build. Open a score,
    select a migrated Chase, see the graph; scrub playback; resize the clip.
 6. Regenerate the www node reference from `definitions()` (follow-up, not
@@ -1524,7 +1462,7 @@ One line each; the alternative after "alt:".
 39. Migrated clips are named after the matching shipped preset when their converted graph matches one, else `<Kind> · <summary>`. alt: leave names empty for humans to fill.
 40. Sparkle rain ships as a preset marked "needs vertical bars". alt: leave it out of the shipped list.
 41. A wrapped `line` or `radial` axis is a ring of the span's n units, `(a·(n − 1) + 0.5)/n`, so its lowest and highest heads never share one place (changed 2026-09-29; before, both read 0 and 1 and lit together as a pill entered). alt: keep 0–1 and light both ends.
-42. A wrapped line stroke whose middle crossed the axis once per event migrates unwrapped with offset −w…1; migrated clips are fixed by `backend/scripts/fix_wrapped_strokes.py` (changed 2026-09-29). alt: keep wrap and show half a pill at the far end at every event start.
+42. A wrapped line stroke whose middle crossed the axis once per event migrates unwrapped with offset −w…1; migrated clips were fixed by a one-time rewrite (changed 2026-09-29). alt: keep wrap and show half a pill at the far end at every event start.
 43. Clips follow shaders: space is a pure field and motion is each head's own clock, `time(delay, length, phase)` (changed 2026-09-30). Decisions 1–4 (strokes, offset, width) are gone with the band. alt: keep bands on space.
 44. `time.length` is how long each head's clock runs, in turns of the event (≥ 0, empty 1; 0 is a jump); delay and phase take any number. alt: a rate, or a clamped 0–1 delay.
 45. A list on a 0–1 input multiplies its items; it is stored as a list. alt: chain a curve's `high`.
