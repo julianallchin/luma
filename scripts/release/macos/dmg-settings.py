@@ -1,6 +1,6 @@
 # dmgbuild settings for Luma's DMG: the app and an Applications link on the
 # background dmg-background.py draws. The window size and icon centres here
-# are the ones that script draws its tiles around; change both together.
+# are the ones that script draws its arrow between; change both together.
 #
 # Called by bundle-mac as
 #   dmgbuild -s dmg-settings.py -D app=<Luma.app> -D background=<png> Luma <out.dmg>
