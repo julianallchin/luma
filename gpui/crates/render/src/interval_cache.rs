@@ -65,6 +65,19 @@ pub(crate) type SlotEntry = [u32; 4];
 /// `beam_transport.wgsl`.
 pub(crate) const CACHE_K: u32 = 8;
 
+/// log2 of the payload table's entry count: 2^21 entries (144 MiB), or the
+/// most a storage binding of this device holds (lavapipe's 128 MiB).
+pub(crate) fn table_bits(limits: &wgpu::Limits) -> u32 {
+    let entry_bytes = 4 * u64::from(2 + 2 * CACHE_K);
+    let limit = limits
+        .max_storage_buffer_binding_size
+        .min(limits.max_buffer_size);
+    (10..=21)
+        .rev()
+        .find(|bits| (1_u64 << bits) * entry_bytes <= limit)
+        .unwrap_or(10)
+}
+
 pub(crate) const MODE_OFF: u32 = 0;
 pub(crate) const MODE_READ: u32 = 1;
 pub(crate) const MODE_WRITE: u32 = 2;
@@ -202,17 +215,6 @@ impl IntervalCacheState {
         self.allocator = RegionAllocator::new(header_words);
         self.slots.clear();
         self.frame = None;
-    }
-
-    /// The cache was disabled or reset: whatever the pool holds is no longer
-    /// known to match a later cached frame.
-    pub(crate) fn forget(&mut self) {
-        self.frame = None;
-        for slot in &mut self.slots {
-            slot.key = None;
-            slot.written = false;
-        }
-        self.stats = IntervalCacheStats::default();
     }
 
     /// The cached path did not run this frame. Its GPU storage remains intact,
@@ -575,17 +577,6 @@ mod tests {
         keys[1] = Some(key(4, [0, 0, 20, 20]));
         let too_big = state.plan(frame(1), &keys);
         assert_eq!(modes(&too_big), [MODE_WRITE, MODE_OFF]);
-    }
-
-    #[test]
-    fn forgetting_forces_a_full_miss() {
-        let mut state = IntervalCacheState::new(1000);
-        let keys = vec![Some(key(1, [0, 0, 10, 10]))];
-        state.plan(frame(1), &keys);
-        state.plan(frame(1), &keys);
-        state.forget();
-        assert_eq!(modes(&state.plan(frame(1), &keys)), [MODE_OFF]);
-        assert_eq!(modes(&state.plan(frame(1), &keys)), [MODE_WRITE]);
     }
 
     #[test]

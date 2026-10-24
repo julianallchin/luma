@@ -13,17 +13,20 @@
 //    kernel's decision per (block, light) — span, header bits, apex test,
 //    payload lookup — ending in one ballot. A write-mode slot is filled here
 //    first, exactly as the fused kernel's write path fills it. A uniform
-//    whole-lit light stores mask 0; any other stores mask = live lanes and a
-//    base index, and every live lane appends `{pixel | light}` to the residual
-//    list at base + prefix with its kind.
+//    whole-lit light of a one-subgroup block stores mask 0; any other stores
+//    mask = live lanes and a base index, and every live lane appends
+//    `{pixel | light}` to the residual list at base + prefix with its kind.
+//    Lights without a shadow map are not classified.
 // 2. `prepare_residual_work` and `scatter_residual_work` turn the list into
 //    three contiguous typed work ranges and their indirect dispatches.
 // 3. `compute_residual` (1D, one indirect dispatch per kind): each entry calls
 //    exactly the function the fused kernel would have (`lit_interval`,
 //    `cache_replay`, `beam_shadow_integral`) and stores its RGB as raw f32.
-// 4. `compute_haze_hot` (8×4): mask 0 → `quad_scatter`; otherwise lanes in
-//    the mask gather their stored RGB, other lanes add zero. The per-pixel sum
-//    stays `deterministic += term` in light order.
+// 4. `compute_haze_hot` (8×4): mask 0 → `quad_scatter` (each lane's own
+//    whole-lit interval when this pipeline's block is not one subgroup);
+//    otherwise lanes in the mask gather their stored RGB, other lanes add
+//    zero; a light without a shadow map integrates in place. The per-pixel
+//    sum stays `deterministic += term` in light order.
 //
 // A slot keeps its planes and list entries while its interval-cache
 // generation holds, so a still frame with no slot change runs only steps 3
@@ -101,10 +104,10 @@ fn lazy_scene_ray() -> SceneRay {
     return lazy_ray;
 }
 
-// Subgroup-uniform call sites only: `quad_prepare` shuffles.
+// Block-uniform call sites only: `quad_prepare` shuffles.
 fn lazy_quad_prepare() {
     if !lazy_quad_ready {
-        quad_prepare(lazy_frag, lazy_scene_ray());
+        if block_one_subgroup { quad_prepare(lazy_frag, lazy_scene_ray()); }
         lazy_quad_ready = true;
     }
 }
@@ -128,124 +131,89 @@ fn compact_dirty(slot: u32) -> bool {
     return ((compact.dirty[slot >> 7u][(slot >> 5u) & 3u] >> (slot & 31u)) & 1u) == 1u;
 }
 
-// The fused kernel's slot resolution: mode, generation, header word index and
-// payload key for this block, or mode 0 when the block lies outside the
-// slot's rect.
-struct SlotLookup {
-    mode: u32,
-    gen: u32,
-    header: u32,
-    key: u32,
-    slot: u32,
-};
-
-fn compact_slot(li: u32) -> SlotLookup {
-    var out = SlotLookup(0u, 0u, 0u, 0u, 0u);
-    let slot = u32(max(light_rest[li].shadow_slot, 0.0));
-    out.slot = slot;
-    let entry = cache_params.slots[slot];
-    let x0 = entry.y & 0xFFFFu;
-    let y0 = entry.y >> 16u;
-    let w = entry.z & 0xFFFFu;
-    let h = entry.z >> 16u;
-    if (entry.w & 0xFFu) != 0u && cache_bx >= x0 && cache_bx - x0 < w && cache_by >= y0 && cache_by - y0 < h {
-        out.mode = entry.w & 0xFFu;
-        out.gen = entry.w >> 8u;
-        out.header = entry.x + (cache_by - y0) * w + (cache_bx - x0);
-        out.key = slot << 5u | cache_lane;
-    }
-    return out;
-}
-
 // --- 1. classify -----------------------------------------------------------
 
-// Every in-bounds lane of the subgroup reaches every subgroup operation
-// here: the only early return is on a light-uniform condition.
+// Every lane of the block reaches every block exchange here: the early
+// returns are on light- and block-uniform conditions.
 fn classify_light(li: u32, pixel_index: u32) {
-    if light_rest[li].haze_gain <= 0.0 { return; }
-    let lookup = compact_slot(li);
-    if !compact_dirty(lookup.slot) { return; }
+    // Shadows are on (compaction runs only on cached frames); a light without
+    // a map has no slot to classify and integrates in the hot pass.
+    if light_rest[li].haze_gain <= 0.0 || light_rest[li].shadow_slot < 0.0 { return; }
+    let slot = u32(light_rest[li].shadow_slot);
+    if !compact_dirty(slot) { return; }
+    let lookup = cache_slot(li);
     lazy_quad_prepare();
-    let ray = lazy_ray;
-    let dense = compact_dense(lookup.slot);
+    let ray = lazy_scene_ray();
+    let dense = compact_dense(slot);
     let plane = (cache_block * compact.params.x + dense) * 2u;
-    let cached = lookup.mode != 0u && haze.shadow.x > 0.0;
-    var h0 = 0u;
-    var h1 = 0u;
-    var whole = false;
-    // A write-mode slot is filled here: the fused kernel's mode-2 path
-    // (traversal, header ballots, payload store) with its results kept in
-    // registers, so the classification below needs no header load and no
-    // payload lookup for it.
+    // The fused kernel's decision, lane for lane: whole-lit lanes from the
+    // header in read mode, else from the traversal recorded here (FILL_ONLY),
+    // which a write-mode slot also stores, keeping its payload entry in a
+    // register so the classification below needs no lookup for it.
+    var span = vec2<f32>(0.0);
+    var direct = false;
+    var walked = false;
     var filled = CACHE_NONE;
-    var fill_span = vec2<f32>(0.0);
-    var fill_live = false;
-    if cached && lookup.mode == 2u {
-        fill_span = beam_span(li, ray);
-        fill_live = fill_span.y > fill_span.x;
-        var direct = false;
-        var walked = false;
-        if fill_live {
-            _ = beam_shadow_integral(li, ray, fill_span);
+    if lookup.mode == 1u {
+        // A header bit is only ever set for a lane whose span was live when
+        // the slot was written, and the slot is valid only while every input
+        // to that span is unchanged: the whole-lit test needs no span here.
+        direct = ((cache_header[lookup.header * 2u] >> cache_lane) & 1u) == 1u;
+        walked = ((cache_header[lookup.header * 2u + 1u] >> cache_lane) & 1u) == 1u;
+    } else {
+        span = lane_span(li, ray);
+        if span.y > span.x {
+            _ = beam_shadow_integral(li, ray, span);
             direct = cache_count == 1u;
-            walked = cache_count == 3u && all(cache_intervals[2] == fill_span);
+            walked = cache_count == 3u && all(cache_intervals[2] == span);
         }
-        h0 = subgroupBallot(fill_live && direct).x;
-        h1 = subgroupBallot(fill_live && walked).x;
+    }
+    if lookup.mode == 2u {
+        let h0 = block_ballot(direct);
+        let h1 = block_ballot(walked);
         if cache_lane == 0u {
             cache_header[lookup.header * 2u] = h0;
             cache_header[lookup.header * 2u + 1u] = h1;
         }
-        if fill_live && !direct && !walked && cache_count <= CACHE_K {
+        if span.y > span.x && !direct && !walked && cache_count <= CACHE_K {
             filled = cache_store(cache_block, lookup.key, lookup.gen);
         }
-    } else if cached {
-        h0 = cache_header[lookup.header * 2u];
-        h1 = cache_header[lookup.header * 2u + 1u];
     }
-    if cached {
-        // A header bit is only ever set for a lane whose span was live when
-        // the slot was written, and the slot is valid only while every input
-        // to that span is unchanged: the whole-lit test needs no span here.
-        whole = (((h0 | h1) >> cache_lane) & 1u) == 1u && quad_apex_clear(li, ray);
-    }
-    if subgroupBallot(whole).x == 0xFFFFFFFFu {
-        if cache_lane == 0u {
-            resid_planes[plane] = 0u;
-            resid_planes[plane + 1u] = 0u;
+    if block_one_subgroup {
+        let whole = (direct || walked) && quad_apex_clear(li, ray);
+        if subgroupBallot(whole).x == 0xFFFFFFFFu {
+            if cache_lane == 0u {
+                resid_planes[plane] = 0u;
+                resid_planes[plane + 1u] = 0u;
+            }
+            return;
         }
-        return;
     }
-    var span = fill_span;
-    if !(cached && lookup.mode == 2u) { span = beam_span(li, ray); }
+    if lookup.mode == 1u { span = lane_span(li, ray); }
     let live = span.y > span.x;
     // 0: single direct, 1: single walked, 2: payload replay, 3: traversal.
     var kind = 3u;
     var found = CACHE_NONE;
-    if live && cached {
-        let direct = ((h0 >> cache_lane) & 1u) == 1u;
-        let walked = ((h1 >> cache_lane) & 1u) == 1u;
-        if direct {
-            kind = 0u;
-        } else if walked {
-            kind = 1u;
-        } else {
-            if lookup.mode == 2u {
-                found = filled;
-            } else {
-                found = cache_find(cache_block, lookup.key, lookup.gen);
-            }
-            if found != CACHE_NONE { kind = 2u; }
+    if direct {
+        kind = 0u;
+    } else if walked {
+        kind = 1u;
+    } else if live {
+        if lookup.mode == 2u {
+            found = filled;
+        } else if lookup.mode == 1u {
+            found = cache_find(cache_block, lookup.key, lookup.gen);
         }
+        if found != CACHE_NONE { kind = 2u; }
     }
-    let r = subgroupBallot(live).x;
+    let r = block_ballot(live);
     let n = countOneBits(r);
     var base = RESID_EMPTY;
     if n > 0u && cache_lane == 0u {
         base = atomicAdd(&resid_counters[3], n);
         if base + n > compact.params.y { atomicMax(&resid_counters[4], 1u); }
     }
-    base = subgroupBroadcast(base, 0u);
+    if n > 0u { base = block_broadcast_first(base); }
     if cache_lane == 0u {
         resid_planes[plane] = r;
         resid_planes[plane + 1u] = base;
@@ -254,8 +222,8 @@ fn classify_light(li: u32, pixel_index: u32) {
     let in_r = ((r >> cache_lane) & 1u) == 1u;
     let index = base + countOneBits(r & ((1u << cache_lane) - 1u));
     if in_r && index < compact.params.y {
-        let walked = select(0u, 0x80000000u, kind == 1u);
-        resid_list[index] = pixel_index | (dense << 22u) | walked;
+        let walked_bit = select(0u, 0x80000000u, kind == 1u);
+        resid_list[index] = pixel_index | (dense << 22u) | walked_bit;
         if kind == 0u {
             resid_aux[index] = RESID_DIRECT;
         } else if kind == 1u {
@@ -268,27 +236,26 @@ fn classify_light(li: u32, pixel_index: u32) {
     }
     let seg = select(select(0u, 1u, kind == 2u), 2u, kind == 3u);
     for (var t = 0u; t < 3u; t += 1u) {
-        let nt = countOneBits(subgroupBallot(in_r && seg == t).x);
+        let nt = countOneBits(block_ballot(in_r && seg == t));
         if nt > 0u && cache_lane == 0u {
             atomicAdd(&resid_counters[t], nt);
         }
     }
 }
 
-@compute @workgroup_size(HAZE_GROUP_X, HAZE_GROUP_Y)
-fn classify_residual(@builtin(global_invocation_id) pixel: vec3<u32>,
-                     @builtin(local_invocation_index) lane: u32) {
-    if any(pixel.xy >= textureDimensions(haze_exact_out)) { return; }
-    cache_locate(pixel.xy, lane);
-    let frag = vec2<f32>(pixel.xy) + 0.5;
+@compute @workgroup_size(HAZE_BLOCK_LANES)
+fn classify_residual(@builtin(workgroup_id) group: vec3<u32>,
+                     @builtin(local_invocation_index) local: u32,
+                     @builtin(subgroup_invocation_id) sub_lane: u32,
+                     @builtin(num_subgroups) subgroups: u32) {
+    let pixel = block_locate(group.xy, local, sub_lane, subgroups);
+    let frag = vec2<f32>(pixel) + 0.5;
     lazy_frag = frag;
     lazy_ray_ready = false;
     lazy_quad_ready = false;
     if haze.params.y < 0.001 || haze.tiles.z <= 0.5 { return; }
     let pixel_index = pixel.y * u32(haze.transport.w) + pixel.x;
-    var cursor = lights_along(frag * haze.tiles.xy);
-    cursor.base += light_index_params.grid.x * light_index_params.grid.y * LIGHT_INDEX_WORDS;
-    cursor.bits = light_index_masks[cursor.base + cursor.word];
+    var cursor = native_lights(frag);
     if !compact_tile_dirty(cursor) { return; }
     var li = 0u;
     while light_index_next(&cursor, &li) {
@@ -400,7 +367,10 @@ fn residual_entry(gid: u32) {
     let walked = entry >> 31u;
     let width = u32(haze.transport.w);
     let pixel = vec2<u32>(pixel_index % width, pixel_index / width);
-    cache_locate(pixel, (pixel.y & 3u) * 8u + (pixel.x & 7u));
+    cache_lane = (pixel.y & 3u) * 8u + (pixel.x & 7u);
+    cache_bx = pixel.x / HAZE_GROUP_X;
+    cache_by = pixel.y / HAZE_GROUP_Y;
+    cache_block = cache_by * cache_params.params.x + cache_bx;
     let ray = scene_ray(vec2<f32>(pixel) + 0.5);
     let span = beam_span(li, ray);
     var result = vec3<f32>(0.0);
@@ -414,7 +384,7 @@ fn residual_entry(gid: u32) {
         }
     } else if RESID_KIND == 1u {
         let descriptor = resid_aux[index];
-        let lookup = compact_slot(li);
+        let lookup = cache_slot(li);
         if lookup.mode != 0u
             && cache_entry_matches(descriptor, cache_block, lookup.key, lookup.gen) {
             result = cache_replay(li, ray, descriptor);
@@ -445,13 +415,19 @@ fn compute_residual(@builtin(workgroup_id) group: vec3<u32>,
 // from the classify pass.
 fn beam_scatter_hot(li: u32, ray: SceneRay) -> vec3<f32> {
     if light_rest[li].haze_gain <= 0.0 { return vec3<f32>(0.0); }
-    let lookup = compact_slot(li);
+    if light_rest[li].shadow_slot < 0.0 { return beam_scatter_exact(li, ray, lane_span(li, ray)); }
+    let lookup = cache_slot(li);
     let plane = (cache_block * compact.params.x + compact_dense(lookup.slot)) * 2u;
     let r = resid_planes[plane];
     if r == 0u {
         // Uniform whole-lit, or no lane sees the light at all.
         if resid_planes[plane + 1u] == RESID_EMPTY { return vec3<f32>(0.0); }
-        let span = beam_span(li, ray);
+        let span = lane_span(li, ray);
+        if !block_one_subgroup {
+            // Classified by a one-subgroup block; this pipeline's is not. Every
+            // lane is whole-lit, which the traversal integrates bit for bit.
+            return beam_scatter_exact(li, ray, span);
+        }
         if !subgroupAny(span.y > span.x) { return vec3<f32>(0.0); }
         return quad_scatter(li, ray, span);
     }
@@ -461,25 +437,25 @@ fn beam_scatter_hot(li: u32, ray: SceneRay) -> vec3<f32> {
     return vec3<f32>(resid_rgb[index * 3u], resid_rgb[index * 3u + 1u], resid_rgb[index * 3u + 2u]);
 }
 
-@compute @workgroup_size(HAZE_GROUP_X, HAZE_GROUP_Y)
-fn compute_haze_hot(@builtin(global_invocation_id) pixel: vec3<u32>,
-                    @builtin(local_invocation_index) lane: u32) {
-    if any(pixel.xy >= textureDimensions(haze_exact_out)) { return; }
-    cache_locate(pixel.xy, lane);
-    let frag = vec2<f32>(pixel.xy) + 0.5;
+@compute @workgroup_size(HAZE_BLOCK_LANES)
+fn compute_haze_hot(@builtin(workgroup_id) group: vec3<u32>,
+                    @builtin(local_invocation_index) local: u32,
+                    @builtin(subgroup_invocation_id) sub_lane: u32,
+                    @builtin(num_subgroups) subgroups: u32) {
+    let pixel = block_locate(group.xy, local, sub_lane, subgroups);
+    let frag = vec2<f32>(pixel) + 0.5;
     let ray = scene_ray(frag);
-    quad_prepare(frag, ray);
+    if block_one_subgroup { quad_prepare(frag, ray); }
     var deterministic = vec3<f32>(0.0);
     if haze.params.y >= 0.001 && haze.tiles.z > 0.5 {
-        var cursor = lights_along(frag * haze.tiles.xy);
-        cursor.base += light_index_params.grid.x * light_index_params.grid.y * LIGHT_INDEX_WORDS;
-        cursor.bits = light_index_masks[cursor.base + cursor.word];
+        var cursor = native_lights(frag);
         var li = 0u;
         while light_index_next(&cursor, &li) {
             deterministic += beam_scatter_hot(li, ray);
         }
     }
+    if !cache_in_bounds { return; }
     let result = native_output(frag, ray, deterministic);
-    textureStore(haze_exact_out, vec2<i32>(pixel.xy), result.exact);
-    textureStore(haze_sampled_out, vec2<i32>(pixel.xy), result.sampled);
+    textureStore(haze_exact_out, vec2<i32>(pixel), result.exact);
+    textureStore(haze_sampled_out, vec2<i32>(pixel), result.sampled);
 }

@@ -1037,20 +1037,15 @@ async fn score_content_provenance(
 
 fn renderer_environment() -> BTreeMap<&'static str, String> {
     const KEYS: &[&str] = &[
-        "LUMA_FOG_BLOCKS",
         "LUMA_FOG_DEPTH_CULL",
-        "LUMA_FOG_TILE_SIZE",
         "LUMA_GEOMETRY_SHADOWS",
         "LUMA_GEOMETRY_SHADOW_SAMPLES",
-        "LUMA_GRID_FOG",
-        "LUMA_HAZE_COMPUTE",
         "LUMA_PROFILE_DETAIL",
         "LUMA_PROFILE_OMIT",
         "LUMA_PROFILE_REPEAT",
         "LUMA_SURFACE_DEPTH_CULL",
         "LUMA_SURFACE_DEPTH_SPLIT",
         "LUMA_VISIBILITY_REFERENCE",
-        "LUMA_WIDE_LIGHT_GROUP",
         "LUMA_WITHHOLD_SHARED_SURFACES",
     ];
     KEYS.iter()

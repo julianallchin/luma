@@ -78,15 +78,11 @@ Keep each variant in its own output directory.
 | `live` | Native-resolution deterministic beams, shared far-field grid, production subframe budget |
 | `no-haze` | Zero haze density, to isolate the stage surface and submission path |
 | `uniform` | Cloudiness zero, to distinguish physical cloud variation |
-| `no-grid` | Per-ray broad-light integration, reservoir selection retained |
-| `exact-live` | Diagnostic MIS integration, every light evaluated at native resolution; 8 samples retained |
 | `full-live` | Same native target as current live defaults |
-| `reference16/32/64/128` | Native-resolution haze, every light, 32 integration samples, stated accumulated subframes, grid disabled |
-| `LUMA_FOG_TILE_SIZE=4/8/16/32` | Diagnostic grid resolution sweep; default 16 on macOS, 8 elsewhere, fixed for process lifetime |
-| `LUMA_FOG_BLOCKS=0` | Disable shared block visibility proofs; evaluate every candidate cell/light |
+| `reference16/32/64/128` | Native-resolution per-ray MIS haze, every light, 32 integration samples, stated accumulated subframes, grid disabled |
+| `export` | One isolated frame at the video export's subframe count, as `render` draws it |
 | `LUMA_FOG_DEPTH_CULL=0` | Retain all column prefixes, including those hidden behind geometry |
 | `LUMA_SURFACE_DEPTH_CULL=0` | Disable the conservative MSAA-depth refinement of surface light masks |
-| `LUMA_HAZE_COMPUTE=0/1` | Select fragment/compute execution for deterministic grid haze with complete shadow coverage; default compute on Metal, fragment elsewhere |
 | `LUMA_PROFILE_OMIT=NAME` | Diagnostic shader omission; changes the image and cannot pass the exact quality gate |
 | `LUMA_PROFILE_REPEAT=PASS` | Repeat one idempotent pass with identical inputs to measure incremental work; outputs must remain exact and timings are performance-ineligible |
 | `LUMA_VISIBILITY_REFERENCE=1 LUMA_GEOMETRY_SHADOW_SAMPLES=32` | Software triangle visibility instead of cached shadow maps; use with a reference mode |
@@ -160,8 +156,6 @@ is explicitly requested, after the frame. `haze-lab` does not request it;
 `profile-volumetrics` requests it once in sixteen measured frames, outside
 their timestamp brackets. Its counts describe the original ray-mask/Z-bin
 candidates, not MSAA invocations or the refined surface mask.
-`LUMA_FOG_BLOCKS=0` disables both the conservative classification dispatch and
-its use by grid lighting, so the diagnostic includes the work actually removed.
 Exhaustive offline captures may explicitly set `LUMA_READBACK_TIMEOUT_SECS`
 (30–600) when a laptop exceeds the default 30-second readback watchdog.
 

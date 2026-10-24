@@ -1,12 +1,12 @@
 // Shared single-scattering transport and camera/fixture shadow queries.
-// Live ungoboed beams integrate visible shadow-map intervals deterministically;
-// gobos and exhaustive reference captures use the progressive MIS estimator.
-// The same density, photometry, and extinction model feed both integrators.
+// The compute kernels integrate visible shadow-map intervals
+// deterministically; the fragment pass (gobos, multi-subframe captures and the
+// exhaustive reference) uses the progressive MIS estimator. The same density,
+// photometry, and extinction model feed both integrators.
 
+// The compute kernels: the far-field grid carries broad washes beyond their
+// source region and camera transmittance, and no ray is jittered.
 override GRID_FOG: bool = false;
-// The compute kernel is selected only for ungoboed transport with complete
-// shadow coverage. Its compiled path needs neither jitter nor MIS fallback.
-override NATIVE_DETERMINISTIC: bool = false;
 
 // Lit-interval cache (`docs/design/haze-lit-interval-cache.md`). The shadow
 // traversal records every interval it hands to `lit_interval`, including empty
@@ -15,19 +15,15 @@ override NATIVE_DETERMINISTIC: bool = false;
 // recording hook sits between it and the quadrature. Bindings and the cache
 // branch live in `haze_cache.wgsl`, which alone reaches them.
 // The compaction's classify pass (`haze_compact.wgsl`) records the
-// traversal's call list without integrating anything.
+// traversal's call list without integrating anything; so does the fused
+// kernel while `cache_record_only` is set, deciding what to share first.
 override FILL_ONLY: bool = false;
 const CACHE_K: u32 = 8u;
 // Every call, empty tails included: the replay must add the same terms in
 // the same expression shape, or float contraction rounds differently.
 var<private> cache_count: u32;
 var<private> cache_intervals: array<vec2<f32>, CACHE_K>;
-// Lane within the 8×4 workgroup (one subgroup), its cache block, and the
-// block's coordinates in the 8×4 block grid. Set by the compute entry points.
-var<private> cache_lane: u32;
-var<private> cache_block: u32;
-var<private> cache_bx: u32;
-var<private> cache_by: u32;
+var<private> cache_record_only: bool;
 
 override PROFILE_SKIP_NATIVE_SHADOWS: bool = false;
 override PROFILE_SKIP_NATIVE_INTEGRALS: bool = false;
@@ -97,21 +93,6 @@ struct Haze {
 // reduced-resolution pass; the two routes partition the beams, so every beam
 // is integrated once. A pipeline constant, not a uniform: the branch in the
 // light loop cost the unsplit pass a quarter of its time even when uniform.
-const BEAM_ROUTE_ALL: u32 = 0u;
-const BEAM_ROUTE_NARROW: u32 = 1u;
-const BEAM_ROUTE_WIDE: u32 = 2u;
-override BEAM_ROUTE: u32 = BEAM_ROUTE_ALL;
-// A beam whose field is wider than 35 degrees (half-angle 17.5) is wide.
-const WIDE_BEAM_COS: f32 = 0.9537;
-
-// Whether this pass integrates light `li`. Gobos keep native resolution.
-fn beam_routed(li: u32) -> bool {
-    if BEAM_ROUTE == BEAM_ROUTE_ALL { return true; }
-    let rest = light_rest[li];
-    let wide = rest.cos_field < WIDE_BEAM_COS && rest.gobo < 0.5;
-    return wide == (BEAM_ROUTE == BEAM_ROUTE_WIDE);
-}
-
 struct FixtureShadowMatrix {
     view_proj: mat4x4<f32>,
     // xy: shadow projection near/far planes in metres.
@@ -369,7 +350,7 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
     // the top, so the jitter pattern only lands on the same pixels as the
     // goldens' if the row index is flipped back.
     var j = 0.0;
-    if !NATIVE_DETERMINISTIC {
+    if !GRID_FOG {
         j = blue_noise(vec2<f32>(frag.x, haze.transport.z - frag.y), u32(haze.tuning.x + haze.tiles.w));
     }
     return SceneRay(ray_dir, hit_dist, view_depth, j, MediumRay(), uv, medium_lighting_span(haze.medium, haze.camera_pos.xyz, ray_dir, haze.shadow.w));
@@ -522,15 +503,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     let span = beam_span(li, ray);
     let t_a = span.x;
     let t_b = span.y;
-    if t_b <= t_a || PROFILE_SKIP_NATIVE_INTEGRALS { return vec3<f32>(0.0); }
-    if NATIVE_DETERMINISTIC {
-        if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS { return lit_interval(li, ray, span.x, span.y); }
-        return beam_shadow_integral(li, ray, span);
-    }
-    if GRID_FOG && light_rest[li].gobo < 0.5 {
-        if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS { return lit_interval(li, ray, span.x, span.y); }
-        if light_rest[li].shadow_slot >= 0.0 { return beam_shadow_integral(li, ray, span); }
-    }
+    if t_b <= t_a { return vec3<f32>(0.0); }
     let ray_dir = ray.dir;
     let near_clamp = haze.tuning.z;
     let beam_gain = haze.tuning.w * haze_gain;
@@ -626,9 +599,6 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         if haze.shadow.x > 0.0 {
             radiance *= fixture_shadow_visibility(sample_world, li);
         }
-        if GRID_FOG && rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5 {
-            radiance *= 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist);
-        }
         let nz = haze_density_at(sample_world);
         // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
         let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
@@ -659,6 +629,16 @@ fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
 // Integrate a visible interval with Gauss-Legendre quadrature in equiangular
 // coordinates. Shadow boundaries are supplied by the shadow-map traversal.
 fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
+    return interval_integral(li, ray, a, b, false);
+}
+
+// `lit_interval` for a light with no shadow map under the software
+// visibility reference: each node traces the stage toward the source.
+fn traced_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
+    return interval_integral(li, ray, a, b, true);
+}
+
+fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> vec3<f32> {
     if b <= a { return vec3<f32>(0.0); }
     let core = light_core[li];
     let rest = light_rest[li];
@@ -702,9 +682,10 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
             let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH);
             let world = haze.camera_pos.xyz + ray.dir * t;
             let field = mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
-            let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
+            var value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
                 * haze_density_at(world) * field
                 / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z);
+            if traced { value *= stage_visibility(world, core.position); }
             sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j];
         }
         left_field = right_field;
@@ -718,7 +699,7 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
 fn lit_counted(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
     if cache_count < CACHE_K { cache_intervals[cache_count] = vec2<f32>(a, b); }
     cache_count += 1u;
-    if FILL_ONLY { return vec3<f32>(0.0); }
+    if FILL_ONLY || cache_record_only { return vec3<f32>(0.0); }
     return lit_interval(li, ray, a, b);
 }
 

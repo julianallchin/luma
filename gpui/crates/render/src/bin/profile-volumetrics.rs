@@ -5,9 +5,6 @@
 //! CPU encode time ends at queue submission and excludes waits/readback.
 //! Saved venues: `--catalogue=PATH`; `--image=PATH` captures independently
 //! after timing. Add `--image-live --image-subframes=1` to retain live history.
-//! `LUMA_GRID_FOG=0` compares the prior per-ray fog path; default enables the
-//! shared grid for dense shadowed rigs. Multi-subframe standalone captures
-//! retain per-ray integration for converged detail.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -775,9 +772,7 @@ fn profile_catalogue(
         "arguments": arguments, "adapter": {"name": renderer.gpu().adapter_profile().name, "backend": format!("{:?}", renderer.gpu().adapter_profile().backend)},
         "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
         "width": width, "height": height, "geometry_shadows": enabled,
-        "grid_fog_enabled": !std::env::var_os("LUMA_GRID_FOG").is_some_and(|v| v == "0"),
         "image_live": arguments.iter().any(|a| a == "--image-live"),
-        "wide_light_group": std::env::var("LUMA_WIDE_LIGHT_GROUP").unwrap_or_else(|_| "8".into()),
         "visibility_reference": std::env::var_os("LUMA_VISIBILITY_REFERENCE").is_some_and(|v| v == "1"),
         "moving_cones": moving_cones, "blackout": blackout,
         "cold_frame": cold, "resident_shadow_maps": renderer.shadowed_fixture_count(),

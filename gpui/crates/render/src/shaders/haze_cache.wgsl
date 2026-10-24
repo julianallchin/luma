@@ -1,10 +1,77 @@
-// Lit-interval cache for the deterministic compute kernel
-// (`docs/design/haze-lit-interval-cache.md`). Appended to `haze.wgsl` only
-// when the device has subgroup ballots; otherwise `gpu.rs` appends a stub
-// whose `beam_scatter_cached` is plain `beam_scatter`. Bound only by the
-// compute pipelines (group 2, bindings 4-7).
+// Lit-interval cache for the deterministic compute kernels
+// (`docs/design/haze-lit-interval-cache.md`), appended to `haze.wgsl`. Bound
+// only by the compute pipelines (group 2, bindings 4-7).
+
+// The kernels run 8×4 workgroups, one pixel per invocation. Lane L of a block
+// is pixel (L & 7, L >> 3). When the workgroup is one subgroup (32 lanes or
+// wider, which every GPU Luma targets provides) L is the subgroup invocation
+// id: ballots are `subgroupBallot` and 2×2 quads share quadrature through
+// shuffles. A narrower subgroup (lavapipe's 8, Intel's 8 or 16) makes L the
+// local invocation index, exchanges ballots through workgroup memory and
+// shares nothing, which integrates every pixel exactly.
+//
+// A block exchange is a barrier, so every lane of a block must reach it the
+// same number of times: lanes past the image edge stay in the light loop with
+// empty spans, and a block walks one light list because the cache is active
+// only at native haze resolution, where an 8×4 block lies inside one 8-pixel
+// light-index tile.
+const HAZE_GROUP_X: u32 = 8u;
+const HAZE_GROUP_Y: u32 = 4u;
+// One-dimensional: naga takes subgroup builtins only in a 1D workgroup.
+const HAZE_BLOCK_LANES: u32 = 32u;
+var<private> cache_lane: u32;
+// The block's index into the header records, and its coordinates.
+var<private> cache_block: u32;
+var<private> cache_bx: u32;
+var<private> cache_by: u32;
+var<private> cache_in_bounds: bool;
+var<private> block_one_subgroup: bool;
+// Three exchange words in rotation: an exchange writes one, waits at the
+// barrier, reads it and clears the one the next exchange but one will use.
+// Each word's readers have passed a barrier before it is cleared, and its
+// clear precedes the barrier before its next writers.
+var<workgroup> block_exchange: array<atomic<u32>, 3>;
+var<private> block_exchanges: u32;
+
+// Sets up the lane and block state of an entry point and returns its pixel.
+fn block_locate(group: vec2<u32>, local: u32, sub_lane: u32, subgroups: u32) -> vec2<u32> {
+    block_one_subgroup = subgroups == 1u;
+    cache_lane = select(local, sub_lane, block_one_subgroup);
+    cache_bx = group.x;
+    cache_by = group.y;
+    cache_block = cache_by * cache_params.params.x + cache_bx;
+    let pixel = group * vec2<u32>(HAZE_GROUP_X, HAZE_GROUP_Y) + vec2<u32>(cache_lane & 7u, cache_lane >> 3u);
+    cache_in_bounds = all(pixel < textureDimensions(haze_exact_out));
+    return pixel;
+}
+
+fn block_exchange_finish(word: u32) -> u32 {
+    workgroupBarrier();
+    let value = atomicLoad(&block_exchange[word]);
+    if cache_lane == 0u { atomicStore(&block_exchange[(word + 2u) % 3u], 0u); }
+    block_exchanges += 1u;
+    return value;
+}
+
+// Bit L set when lane L's `p` holds. Block-uniform call sites only.
+fn block_ballot(p: bool) -> u32 {
+    if block_one_subgroup { return subgroupBallot(p).x; }
+    let word = block_exchanges % 3u;
+    if p { atomicOr(&block_exchange[word], 1u << cache_lane); }
+    return block_exchange_finish(word);
+}
+
+// Lane 0's `value` in every lane. Block-uniform call sites only.
+fn block_broadcast_first(value: u32) -> u32 {
+    if block_one_subgroup { return subgroupBroadcast(value, 0u); }
+    let word = block_exchanges % 3u;
+    if cache_lane == 0u { atomicStore(&block_exchange[word], value); }
+    return block_exchange_finish(word);
+}
+
 struct IntervalCacheParams {
-    // x: cache blocks per row, y: hash bucket count minus one, zw: unused.
+    // x: cache blocks per row, y: hash bucket count minus one, z: nonzero at
+    // native haze resolution, where quads may share; w: unused.
     params: vec4<u32>,
     // y: frame epoch, stamped into claims so an entry written this frame is
     //    never stolen by another writer while its body is in flight.
@@ -30,16 +97,18 @@ struct IntervalCacheParams {
 @group(2) @binding(7) var<storage, read_write> cache_table: array<u32>;
 
 // Quadrature quad-sharing. For a 2×2 pixel quad (lanes l, l^1, l^8, l^9 of
-// the 8×4 subgroup block) whose four header bits say whole-lit for this
-// light, one quadrature runs on the quad-centre ray over the quad mean of the
+// the 8×4 subgroup block) whose four traversals (or header bits) say
+// whole-lit for this light, one quadrature runs on the quad-centre ray over the quad mean of the
 // four spans, clamped at hit_min — the quad's nearest opaque hit — with Gauss
 // node j of every piece evaluated by quad lane j and the four partial sums
 // combined by two xor shuffles. Each pixel then integrates its own ray from
 // hit_min to its own span end, only when its surface is farther than
 // max(QUAD_GATE_M, QUAD_GATE_FRAC × hit_min) behind the quad's nearest hit,
-// so truss silhouettes stay exact. A block shares only when every lane of
-// the subgroup is active and whole-lit, so it never runs the shared loop and
-// the per-lane loop back to back.
+// so truss silhouettes stay exact. A block shares only when it is one
+// subgroup and every lane is in bounds and whole-lit, so it never runs the
+// shared loop and the per-lane loop back to back. Whether the cache read,
+// wrote or skipped the slot, the decision and the result are the same, so
+// the image does not depend on cache history.
 //
 // Pairs whose ray passes within QUAD_APEX_PX pixels of the source on screen
 // are not shared: the 1/d² apex is too sharp for a quad-centre ray.
@@ -51,11 +120,11 @@ var<private> quad_hit_min: f32;
 var<private> quad_apex: f32;
 var<private> quad_ray: SceneRay;
 
+// One-subgroup blocks only.
 fn quad_prepare(frag: vec2<f32>, ray: SceneRay) {
     quad_j = (cache_lane & 1u) | (((cache_lane >> 3u) & 1u) << 1u);
-    // Every in-bounds lane is active here; a quad with an out-of-bounds
-    // partner reads an undefined value, but its ballot below never lets it
-    // share.
+    // A quad with an out-of-bounds partner mixes in that lane's ray, but its
+    // ballot never lets it share.
     let near = min(ray.hit_dist, subgroupShuffleXor(ray.hit_dist, 1u));
     quad_hit_min = min(near, subgroupShuffleXor(near, 8u));
     // Radians per pixel at this ray, squared and scaled by the apex radius.
@@ -204,10 +273,6 @@ fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
     return result;
 }
 
-fn cache_ballot(whole: bool) -> u32 { return subgroupBallot(whole).x; }
-// The lowest active lane stores the block's header words.
-fn cache_elect() -> bool { return cache_lane == firstTrailingBit(subgroupBallot(true).x); }
-
 const CACHE_ENTRY_WORDS: u32 = 2u + 2u * CACHE_K;
 const CACHE_WAYS: u32 = 4u;
 const CACHE_NONE: u32 = 0xFFFFFFFFu;
@@ -313,76 +378,134 @@ fn cache_store(block: u32, key: u32, gen: u32) -> u32 {
     return chosen;
 }
 
-// `beam_scatter` for the deterministic compute kernel: the same prologue,
-// the same traversal, with the cache branch around the traversal.
-fn beam_scatter_cached(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
-    let haze_gain = light_rest[li].haze_gain;
-    if haze_gain <= 0.0 {
-        return vec3<f32>(0.0);
-    }
-    let span = beam_span(li, ray);
-    if span.y <= span.x || PROFILE_SKIP_NATIVE_INTEGRALS { return vec3<f32>(0.0); }
-    if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS { return lit_interval(li, ray, span.x, span.y); }
-    var mode = 0u;
-    var gen = 0u;
-    var header = 0u;
-    var key = 0u;
-    let slot = u32(max(light_rest[li].shadow_slot, 0.0));
+// The cache's view of light `li` in this block: mode, generation, header
+// record and payload key. `slot` is `CACHE_NONE` for a light without a
+// shadow map (or with shadows off), whose integral is never cached or
+// shared; mode 0 means its slot holds nothing for this block.
+struct SlotLookup {
+    mode: u32,
+    gen: u32,
+    header: u32,
+    key: u32,
+    slot: u32,
+};
+
+fn cache_slot(li: u32) -> SlotLookup {
+    var out = SlotLookup(0u, 0u, 0u, 0u, CACHE_NONE);
+    let shadow_slot = light_rest[li].shadow_slot;
+    if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS || shadow_slot < 0.0 { return out; }
+    let slot = u32(shadow_slot);
+    out.slot = slot;
     let entry = cache_params.slots[slot];
     let x0 = entry.y & 0xFFFFu;
     let y0 = entry.y >> 16u;
     let w = entry.z & 0xFFFFu;
     let h = entry.z >> 16u;
     if (entry.w & 0xFFu) != 0u && cache_bx >= x0 && cache_bx - x0 < w && cache_by >= y0 && cache_by - y0 < h {
-        mode = entry.w & 0xFFu;
-        gen = entry.w >> 8u;
-        header = entry.x + (cache_by - y0) * w + (cache_bx - x0);
-        key = slot << 5u | cache_lane;
+        out.mode = entry.w & 0xFFu;
+        out.gen = entry.w >> 8u;
+        out.header = entry.x + (cache_by - y0) * w + (cache_bx - x0);
+        out.key = slot << 5u | cache_lane;
     }
-    if mode == 1u {
-        let whole = (((cache_header[header * 2u] | cache_header[header * 2u + 1u]) >> cache_lane) & 1u) == 1u
-            && quad_apex_clear(li, ray);
-        // Every lane still active here shares this light; a lane that left
-        // early (empty span, out of bounds) reads as not whole-lit.
-        if subgroupBallot(whole).x == 0xFFFFFFFFu {
-            return quad_scatter(li, ray, span);
-        }
-        if ((cache_header[header * 2u] >> cache_lane) & 1u) == 1u {
-            return lit_interval(li, ray, span.x, span.y);
-        }
-        if ((cache_header[header * 2u + 1u] >> cache_lane) & 1u) == 1u {
-            // The traversal's `sum` started from two empty tails and took
-            // one run: the same product added to a zero the compiler
-            // cannot fold away (`haze.tiles.w` is always zero).
-            var sum = vec3<f32>(haze.tiles.w);
-            sum += lit_interval(li, ray, span.x, span.y);
-            return sum;
-        }
-        let found = cache_find(cache_block, key, gen);
-        if found != CACHE_NONE { return cache_replay(li, ray, found); }
-    }
-    let shadowed = beam_shadow_integral(li, ray, span);
-    if mode == 2u {
-        // One call over the full span: the ray was clipped out of the frustum.
-        let direct = cache_count == 1u;
-        // Two (empty) tails and one run equal to the full span.
-        let walked = cache_count == 3u && all(cache_intervals[2] == span);
-        // Every lane still active here shares this light and this block; the
-        // ballots are the whole block's header words in one store each.
-        let ballot_direct = cache_ballot(direct);
-        let ballot_walked = cache_ballot(walked);
-        if cache_elect() {
-            cache_header[header * 2u] = ballot_direct;
-            cache_header[header * 2u + 1u] = ballot_walked;
-        }
-        if !direct && !walked && cache_count <= CACHE_K { _ = cache_store(cache_block, key, gen); }
-    }
-    return shadowed;
+    return out;
 }
 
-fn cache_locate(pixel: vec2<u32>, lane: u32) {
-    cache_lane = lane;
-    cache_bx = pixel.x / HAZE_GROUP_X;
-    cache_by = pixel.y / HAZE_GROUP_Y;
-    cache_block = cache_by * cache_params.params.x + cache_bx;
+// This lane's span of light `li`, empty past the image edge.
+fn lane_span(li: u32, ray: SceneRay) -> vec2<f32> {
+    if !cache_in_bounds || PROFILE_SKIP_NATIVE_INTEGRALS { return vec2<f32>(0.0); }
+    return beam_span(li, ray);
+}
+
+// Records this lane's traversal of light `li`'s shadow map without
+// integrating; `cache_count` and `cache_intervals` hold the calls.
+fn record_traversal(li: u32, ray: SceneRay, span: vec2<f32>) {
+    cache_record_only = true;
+    _ = beam_shadow_integral(li, ray, span);
+    cache_record_only = false;
+}
+
+// The recorded traversal's integral: the same `lit_interval` calls in the
+// same order and expression shape as the traversal that recorded them.
+fn recorded_replay(li: u32, ray: SceneRay) -> vec3<f32> {
+    if cache_count == 1u { return lit_interval(li, ray, cache_intervals[0].x, cache_intervals[0].y); }
+    var sum = lit_interval(li, ray, cache_intervals[0].x, cache_intervals[0].y)
+        + lit_interval(li, ray, cache_intervals[1].x, cache_intervals[1].y);
+    for (var i = 2u; i < cache_count; i += 1u) {
+        sum += lit_interval(li, ray, cache_intervals[i].x, cache_intervals[i].y);
+    }
+    return sum;
+}
+
+// One lane's integral with nothing cached: the shadow-map traversal, the
+// plain interval with shadows off, or with no map the interval traced
+// against the stage (visible everywhere unless the software visibility
+// reference is on).
+fn beam_scatter_exact(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
+    if span.y <= span.x { return vec3<f32>(0.0); }
+    if haze.shadow.x <= 0.0 || PROFILE_SKIP_NATIVE_SHADOWS { return lit_interval(li, ray, span.x, span.y); }
+    if light_rest[li].shadow_slot < 0.0 {
+        if haze.shadow.z > 0.0 { return traced_interval(li, ray, span.x, span.y); }
+        return lit_interval(li, ray, span.x, span.y);
+    }
+    return beam_shadow_integral(li, ray, span);
+}
+
+// The integral of a whole-lit lane: `direct` when the traversal clipped the
+// ray out of the shadow frustum (one call over the full span), otherwise
+// walked (two empty tails and one run equal to the full span).
+fn whole_lit(li: u32, ray: SceneRay, span: vec2<f32>, direct: bool) -> vec3<f32> {
+    if direct { return lit_interval(li, ray, span.x, span.y); }
+    // The traversal's `sum` started from two empty tails and took one run:
+    // the same product added to a zero the compiler cannot fold away
+    // (`haze.tiles.w` is always zero).
+    var sum = vec3<f32>(haze.tiles.w);
+    sum += lit_interval(li, ray, span.x, span.y);
+    return sum;
+}
+
+// `beam_scatter` for the fused compute kernel, with the cache around the
+// shadow traversal. Every lane of the block calls it for the same light.
+fn beam_scatter_cached(li: u32, ray: SceneRay) -> vec3<f32> {
+    if light_rest[li].haze_gain <= 0.0 { return vec3<f32>(0.0); }
+    let span = lane_span(li, ray);
+    let lookup = cache_slot(li);
+    let share = block_one_subgroup && cache_params.params.z != 0u;
+    // Nothing to read, write or share: the plain traversal.
+    if lookup.slot == CACHE_NONE || (lookup.mode == 0u && !share) { return beam_scatter_exact(li, ray, span); }
+    let live = span.y > span.x;
+    // Whole-lit lanes, from the header in read mode, else from a traversal
+    // recorded here.
+    var direct = false;
+    var walked = false;
+    if lookup.mode == 1u {
+        direct = live && ((cache_header[lookup.header * 2u] >> cache_lane) & 1u) == 1u;
+        walked = live && ((cache_header[lookup.header * 2u + 1u] >> cache_lane) & 1u) == 1u;
+    } else if live {
+        record_traversal(li, ray, span);
+        direct = cache_count == 1u;
+        walked = cache_count == 3u && all(cache_intervals[2] == span);
+    }
+    if lookup.mode == 2u {
+        // Publish the block's header words and this lane's payload.
+        let ballot_direct = block_ballot(direct);
+        let ballot_walked = block_ballot(walked);
+        if cache_lane == 0u {
+            cache_header[lookup.header * 2u] = ballot_direct;
+            cache_header[lookup.header * 2u + 1u] = ballot_walked;
+        }
+        if live && !direct && !walked && cache_count <= CACHE_K { _ = cache_store(cache_block, lookup.key, lookup.gen); }
+    }
+    if share {
+        let whole = (direct || walked) && quad_apex_clear(li, ray);
+        if subgroupBallot(whole).x == 0xFFFFFFFFu { return quad_scatter(li, ray, span); }
+    }
+    if !live { return vec3<f32>(0.0); }
+    if direct || walked { return whole_lit(li, ray, span, direct); }
+    if lookup.mode == 1u {
+        let found = cache_find(cache_block, lookup.key, lookup.gen);
+        if found != CACHE_NONE { return cache_replay(li, ray, found); }
+        return beam_shadow_integral(li, ray, span);
+    }
+    if cache_count <= CACHE_K { return recorded_replay(li, ray); }
+    return beam_shadow_integral(li, ray, span);
 }

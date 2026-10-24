@@ -15,6 +15,23 @@ pub struct DeviceContext {
 
 static SHARED: Mutex<Option<Arc<DeviceContext>>> = Mutex::new(None);
 
+/// The haze kernels exchange ballots and quad values through subgroup
+/// operations (`haze_cache.wgsl`); a device without them cannot render.
+pub(crate) fn require_subgroups(
+    features: wgpu::Features,
+    adapter: &wgpu::AdapterInfo,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        features.contains(wgpu::Features::SUBGROUP),
+        "{} ({:?}, driver {} {}) has no subgroup operations, which Luma's renderer requires",
+        adapter.name,
+        adapter.backend,
+        adapter.driver,
+        adapter.driver_info,
+    );
+    Ok(())
+}
+
 impl DeviceContext {
     /// Acquire the process-wide device without constructing stage pipelines.
     pub fn shared() -> anyhow::Result<Arc<Self>> {
@@ -32,11 +49,9 @@ impl DeviceContext {
             apply_limit_buckets: false,
             ..Default::default()
         }))?;
-        // Subgroup ballots let the native haze pass write its lit-interval
-        // cache header in one store per (workgroup, light); without them the
-        // cache stays off and rendering is unchanged.
-        let features =
-            adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::SUBGROUP);
+        require_subgroups(adapter.features(), &adapter.get_info())?;
+        let features = wgpu::Features::SUBGROUP
+            | (adapter.features() & wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("luma"),
