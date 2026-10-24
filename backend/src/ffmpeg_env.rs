@@ -10,8 +10,8 @@ static FFMPEG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn init_headless() {
     let mut dirs = Vec::new();
-    if let Some(root) = std::env::var_os("LUMA_RESOURCE_DIR") {
-        dirs.push(PathBuf::from(root).join("ffmpeg-runtime"));
+    if let Some(root) = crate::resources::resource_dir() {
+        dirs.push(root.join("ffmpeg-runtime"));
     }
     dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ffmpeg-runtime"));
     dirs.extend(dev_runtime_dir());

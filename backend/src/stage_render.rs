@@ -808,8 +808,8 @@ fn one_frame(
 /// second search: a fixtures root is always `<resources>/fixtures/<version>`,
 /// so its grandparent's `meshes/` is the sibling tree, in the repo and in a
 /// bundle alike: `resources/fixtures` and `resources/meshes` are siblings.
-/// The repo's own copy is the last resort, and the only answer a caller with no
-/// fixtures root (the desktop viewport) gets.
+/// A caller with no fixtures root (the desktop viewport) gets the installed
+/// bundle's copy, and the repo's own copy is the last resort.
 #[must_use]
 pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
     if let Some(path) = std::env::var_os("LUMA_MESHES_ROOT") {
@@ -819,9 +819,14 @@ pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
         .and_then(Path::parent)
         .and_then(Path::parent)
         .map(|resources| resources.join("meshes"));
-    match sibling {
-        Some(path) if path.is_dir() => path,
-        _ => Path::new(env!("CARGO_MANIFEST_DIR")).parent().map_or_else(
+    let bundled = crate::resources::resource_dir().map(|root| root.join("resources/meshes"));
+    match [sibling, bundled]
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_dir())
+    {
+        Some(path) => path,
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).parent().map_or_else(
             || PathBuf::from("resources/meshes"),
             |repo| repo.join("resources/meshes"),
         ),
