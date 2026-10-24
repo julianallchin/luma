@@ -271,10 +271,6 @@ pub struct Frame {
     /// The renderer uses this only to reserve shadow storage; dark emitters do
     /// not enter [`Self::fixture_cones`] or receive a prewarmed shadow map.
     pub fixture_shadow_capacity_hint: usize,
-    /// Cue-independent support of every fixture and house cone this venue can
-    /// produce. This is geometry metadata only: dark emitters do not enter
-    /// [`Self::fixture_cones`] and receive no shading or shadow work.
-    pub fixture_lighting_domain: Option<FixtureLightingDomain>,
     /// Whether fixture cones illuminate opaque surfaces as well as haze.
     pub fixture_surface_lighting: bool,
     /// Whether beams draw through per-cone proxy geometry instead of the
@@ -361,45 +357,6 @@ pub struct Camera {
     pub target: Vec3,
     /// Vertical field of view in degrees.
     pub fov_y_deg: f32,
-}
-
-/// Cue-independent support of all beam emitters a venue can produce.
-///
-/// `fog_far` is the exact radial sphere bound `distance(camera, position) +
-/// range`, accumulated per emitter. It is deliberately not derived from an
-/// AABB corner, which would change the fog-grid sampling distance unnecessarily.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FixtureLightingDomain {
-    /// Union of potential emitter range spheres in renderer coordinates.
-    pub bounds: luma_scene::Aabb,
-    /// Maximum camera-to-emitter distance plus that emitter's range.
-    pub fog_far: f32,
-    /// Camera eye used to derive [`Self::fog_far`], in renderer coordinates.
-    pub source_camera_eye: [f32; 3],
-}
-
-fn include_fixture_lighting_extent(
-    domain: &mut Option<FixtureLightingDomain>,
-    camera_eye: Vec3,
-    position: Vec3,
-    range: f32,
-) {
-    let fog_far = camera_eye.distance(position) + range;
-    if !position.is_finite() || !range.is_finite() || range <= 0.0 || !fog_far.is_finite() {
-        return;
-    }
-    let radius = Vec3::splat(range);
-    if let Some(domain) = domain {
-        domain.bounds.expand(position - radius);
-        domain.bounds.expand(position + radius);
-        domain.fog_far = domain.fog_far.max(fog_far);
-    } else {
-        *domain = Some(FixtureLightingDomain {
-            bounds: luma_scene::Aabb::new(position - radius, position + radius),
-            fog_far: fog_far.max(1.0),
-            source_camera_eye: camera_eye.to_array(),
-        });
-    }
 }
 
 /// Deduplicating upload bank: one copy per (asset, primitive) and per (asset,
@@ -943,8 +900,6 @@ pub fn build_at(
     let mut draws = Vec::new();
     let mut fixture_cones = Vec::new();
     let mut fixture_shadow_capacity_hint: usize = 0;
-    let mut fixture_lighting_domain = None;
-    let camera_eye = world_from_three(Vec3::from(scene.camera.position));
 
     // --- sky ---------------------------------------------------------------
     // An atmosphere answers three questions a scene would otherwise answer
@@ -1092,16 +1047,8 @@ pub fn build_at(
                 let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
                     .min(pixels.len() - 1);
                 let position = base.transform_point3(pixels[idx]);
-                include_fixture_lighting_extent(
-                    &mut fixture_lighting_domain,
-                    camera_eye,
-                    position,
-                    cone.range,
-                );
-                // Keep enumerating fixed potential geometry after the active
-                // cap, without resolving state or creating a dark light.
                 if fixture_cones.len() >= MAX_FIXTURE_CONES {
-                    continue;
+                    break;
                 }
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
                 let intensity = exposed(head_state);
@@ -1134,18 +1081,10 @@ pub fn build_at(
         let potential_cone = kind
             .emits_beam()
             .then(|| cone_from_opening(luminaire_for(def, Some(kind))));
-        if let Some(cone) = potential_cone {
+        if potential_cone.is_some() {
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(1)
                 .min(MAX_FIXTURE_CONES);
-            // The lens swings with the head, within the housing: widening by
-            // the housing keeps the domain independent of pan/tilt.
-            include_fixture_lighting_extent(
-                &mut fixture_lighting_domain,
-                camera_eye,
-                base.transform_point3(Vec3::ZERO),
-                cone.range + Vec3::from(def.dimensions_m()).max_element(),
-            );
         }
         let head_state = state(&fixture.id, 0).unwrap_or(DARK);
         let intensity = exposed(head_state);
@@ -1202,14 +1141,6 @@ pub fn build_at(
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(potential.len())
                 .min(MAX_FIXTURE_CONES);
-            for lamp in potential {
-                include_fixture_lighting_extent(
-                    &mut fixture_lighting_domain,
-                    camera_eye,
-                    lamp.position,
-                    lamp.range,
-                );
-            }
         }
         for lamp in crate::house::lamps(environment, bounds) {
             if fixture_cones.len() >= MAX_FIXTURE_CONES {
@@ -1242,7 +1173,7 @@ pub fn build_at(
     // orbit pivot are the caller's and stay put.
     let camera = crate::footage::turned(
         Camera {
-            eye: camera_eye,
+            eye: world_from_three(Vec3::from(scene.camera.position)),
             target: world_from_three(Vec3::from(scene.camera.target)),
             fov_y_deg: scene.render.fov,
         },
@@ -1330,7 +1261,6 @@ pub fn build_at(
         gizmo_pivot,
         fixture_cones,
         fixture_shadow_capacity_hint,
-        fixture_lighting_domain,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
         beam_proxy: false,
         fixture_shadows: scene.render.fixture_shadows,
@@ -1511,29 +1441,6 @@ mod tests {
     }
 
     #[test]
-    fn fixture_lighting_extent_uses_sphere_union_and_exact_radial_far() {
-        let eye = Vec3::new(1.0, 2.0, 3.0);
-        let mut domain = None;
-        include_fixture_lighting_extent(&mut domain, eye, Vec3::new(4.0, 6.0, 3.0), 5.0);
-        include_fixture_lighting_extent(&mut domain, eye, Vec3::new(-2.0, 2.0, 3.0), 2.0);
-        let domain = domain.unwrap();
-        assert_eq!(domain.bounds.min, Vec3::new(-4.0, 0.0, -2.0));
-        assert_eq!(domain.bounds.max, Vec3::new(9.0, 11.0, 8.0));
-        assert_eq!(domain.fog_far, 10.0);
-        assert_eq!(domain.source_camera_eye, eye.to_array());
-        assert_ne!(
-            domain.fog_far,
-            domain
-                .bounds
-                .corners()
-                .into_iter()
-                .map(|p| eye.distance(p))
-                .fold(0.0, f32::max),
-            "radial far must not be inferred from the union AABB's loose corner"
-        );
-    }
-
-    #[test]
     fn shadow_capacity_hint_is_independent_of_output_and_house_level() {
         let definitions = Definitions::from([
             ("bar.qxf".into(), definition("LED Bar (Pixels)", "Three", 3)),
@@ -1559,7 +1466,6 @@ mod tests {
             lit.fixture_shadow_capacity_hint,
             dark.fixture_shadow_capacity_hint
         );
-        assert_eq!(lit.fixture_lighting_domain, dark.fixture_lighting_domain);
 
         for state in scene.state.values_mut() {
             state.strobe = 1.0;
@@ -1569,10 +1475,6 @@ mod tests {
         assert_eq!(
             strobed.fixture_shadow_capacity_hint,
             dark.fixture_shadow_capacity_hint
-        );
-        assert_eq!(
-            strobed.fixture_lighting_domain,
-            dark.fixture_lighting_domain
         );
 
         scene.state.clear();
@@ -1595,10 +1497,6 @@ mod tests {
         assert_eq!(
             house_dark.fixture_shadow_capacity_hint,
             house_lit.fixture_shadow_capacity_hint
-        );
-        assert_eq!(
-            house_dark.fixture_lighting_domain, house_lit.fixture_lighting_domain,
-            "house geometry is independent of the house dimmer"
         );
     }
 

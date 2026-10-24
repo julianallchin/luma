@@ -32,14 +32,13 @@ fn surface_haze_light(direction: vec3<f32>, frag_xy: vec2<f32>, depth: f32, rang
 }
 
 // Camera transmittance for an opaque surface fragment. The fog prefix already
-// integrated every column's extinction front to back for the haze pass; the
-// grid modes reuse it, and only the mean-density tail past the grid's radial
-// extent is still analytic. Mode 0 is the per-fragment march above.
+// integrated every column's extinction front to back for the haze pass; a
+// frame that ran it reuses it, and only the mean-density tail past the grid's
+// radial extent is still analytic. Other frames march per fragment.
 fn surface_transmittance(direction: vec3<f32>, distance: f32, frag_xy: vec2<f32>) -> f32 {
     let m = globals.medium;
     let origin = globals.camera_pos.xyz;
-    let mode = globals.surface_fog.y;
-    if mode <= 0.0 || (mode >= 2.0 && distance < globals.surface_fog.z) {
+    if globals.surface_fog.y <= 0.0 {
         return exp(-medium_optical_depth(m, origin, direction, distance));
     }
     let span = medium_lighting_span(m, origin, direction, globals.surface_fog.x);

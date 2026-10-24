@@ -87,8 +87,6 @@ Keep each variant in its own output directory.
 | `LUMA_FOG_DEPTH_CULL=0` | Retain all column prefixes, including those hidden behind geometry |
 | `LUMA_SURFACE_DEPTH_CULL=0` | Disable the conservative MSAA-depth refinement of surface light masks |
 | `LUMA_HAZE_COMPUTE=0/1` | Select fragment/compute execution for deterministic grid haze with complete shadow coverage; default compute on Metal, fragment elsewhere |
-| `LUMA_HAZE_WORK_COUNTS=1` | Count native compute-haze work and emit `work-counts.json`; instrumented timings are ineligible for performance comparisons |
-| `LUMA_FOG_GRID_COUNTS=1` | Diagnostic `fog-grid` kernel (`haze_grid_counted.wgsl`) counting every `segment_shadow_visibility` outcome (proven lit / proven shadowed / 4-tap fallback) and what a 4-cell column-block union proof would give; emits `fog-grid-counts.json` after `still-7`; timings ineligible |
 | `LUMA_PROFILE_OMIT=NAME` | Diagnostic shader omission; changes the image and cannot pass the exact quality gate |
 | `LUMA_PROFILE_REPEAT=PASS` | Repeat one idempotent pass with identical inputs to measure incremental work; outputs must remain exact and timings are performance-ineligible |
 | `LUMA_VISIBILITY_REFERENCE=1 LUMA_GEOMETRY_SHADOW_SAMPLES=32` | Software triangle visibility instead of cached shadow maps; use with a reference mode |
@@ -113,25 +111,10 @@ medium envelope; the two depth omissions remove only the selected extinction
 term. These timings help locate work;
 their deltas are not additive exclusive costs or quality-preserving speedups.
 
-`LUMA_HAZE_WORK_COUNTS=1` selects a separate diagnostic compute entry point.
-Each 8×4 workgroup reports eight sums followed by eight per-pixel maxima:
-candidate visits, positive ray/cone intersections, shadow traversal segments,
-depth reads, lit intervals, quadrature taps, shadow rays and first-block
-whole-span lit proofs. The JSON records the final `relight` probe's camera,
-which has moved 20 cm from the timed frozen pose. Padded edge lanes contribute
-zero. These are operation counts; mean-to-maximum ratios describe work
-distribution, not measured hardware occupancy. They do not count shared-grid
-or surface work. Normal rendering retains its original compute entry point
-and does not execute the counter reduction. The exact pixel gate still
-applies; `performanceReferenceEligible: false` prevents treating diagnostic
-timings as an optimization result. The API returns no counts after haze-off
-or fragment-haze frames.
-
 Live calls use `LIVE_SUBFRAMES` (currently two). Deterministic transport is evaluated once and does not blend historical density; stochastic transport retains its sample budget.
 The compute pipeline specializes away MIS fallback, stochastic light selection
 and unused jitter. An unmapped scattering source selects the generic fragment
 path even when compute is requested; gobos also retain their existing path.
-The counter API returns no counts for these fallback frames.
 
 `LUMA_PROFILE_REPEAT` accepts `scene`, `medium-cache`, `fog-prepare`,
 `fog-classify`, `fog-grid`, `fog-integrate`, or `haze-compute`. It executes the

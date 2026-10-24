@@ -24,7 +24,9 @@ impl DeviceContext {
         if let Some(context) = slot.as_ref().filter(|context| !context.is_lost()) {
             return Ok(context.clone());
         }
-        let instance = wgpu::Instance::default();
+        // `WGPU_BACKEND=vulkan` keeps a software Vulkan driver such as
+        // lavapipe (eight-lane subgroups) from losing to a GL adapter.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             apply_limit_buckets: false,

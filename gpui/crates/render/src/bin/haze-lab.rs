@@ -167,12 +167,10 @@ fn replay(suite_path: &Path, output: &Path) -> Result<()> {
                 "driver":renderer.gpu().adapter_profile().driver_info,
                 "backend":renderer.gpu().adapter_profile().backend},
             "environment":capture_environment(),
-            "fogVisibilityCache":renderer.fog_visibility_cache_stats()?,
             "qualityReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none(),
             "performanceReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none()
-                && std::env::var_os("LUMA_PROFILE_REPEAT").is_none()
-                && !std::env::var_os("LUMA_HAZE_WORK_COUNTS").is_some_and(|v| v == "1")
-                && !std::env::var_os("LUMA_FOG_VISIBILITY_ASSERT").is_some_and(|v| v == "1"),
+                && std::env::var_os("LUMA_PROFILE_REPEAT").is_none(),
+
             "note":"Offscreen production rendering of successive saved-score states. State evaluation and frame assembly occur before warmup; build_ms is reported separately. Each PNG is the same frame as its timing. PNG encoding occurs after all submissions. GPU timestamps exclude readback and presentation; blocking wall includes CPU submission, GPU completion and readback. This is not sustained presented FPS.",
             "frames":rows
         }),
@@ -186,7 +184,6 @@ fn capture_environment() -> std::collections::BTreeMap<&'static str, String> {
         "LUMA_SHADOW_UPDATE_PROBES",
         "LUMA_FOG_BLOCK_STATS",
         "LUMA_PROFILE_REPEAT",
-        "LUMA_HAZE_WORK_COUNTS",
         "LUMA_HAZE_COMPUTE",
         "LUMA_PROFILE_DETAIL",
         "LUMA_SURFACE_DEPTH_CULL",
@@ -198,41 +195,7 @@ fn capture_environment() -> std::collections::BTreeMap<&'static str, String> {
         "LUMA_FOG_TILE_SIZE",
         "LUMA_FOG_DEPTH_CULL",
         "LUMA_FOG_BLOCKS",
-        "LUMA_FOG_VISIBILITY_CACHE",
-        "LUMA_FOG_VISIBILITY_ASSERT",
         "LUMA_GEOMETRY_SHADOW_SAMPLES",
-        "LUMA_SURFACE_T_SOURCE",
-        "LUMA_HAZE_QUADSHARE",
-        "LUMA_HAZE_QUAD_UNIFORM",
-        "LUMA_HAZE_QUAD_APEX",
-        "LUMA_HAZE_QUAD_GATE",
-        "LUMA_HAZE_QUAD_GATE_FRAC",
-        "LUMA_HAZE_QUAD_SPAN_MEAN",
-        "LUMA_HAZE_QUAD_SPLIT_FETCH",
-        "LUMA_HAZE_QUAD_INTERP",
-        "LUMA_HAZE_COMPACT",
-        "LUMA_HAZE_RESID_AFTER",
-        "LUMA_HAZE_RESID_CAP",
-        "LUMA_HAZE_RESID_STAGE",
-        "LUMA_HAZE_RESID_LANES",
-        "LUMA_HAZE_RESID_MAX_AGE_MS",
-        "LUMA_HAZE_RESID_TEMPORAL",
-        "LUMA_HAZE_RESID_PER_RESIDENT",
-        "LUMA_HAZE_VENUE_DOMAIN",
-        "LUMA_HAZE_LIGHTING_DOMAIN",
-        "LUMA_HAZE_WHOLE_K_MB",
-        "LUMA_HAZE_DIRECT_ARENA_MB",
-        "LUMA_HAZE_SCENE_LATE",
-        "LUMA_HAZE_COMPACT_LATE",
-        "LUMA_HAZE_LIST_REUSE",
-        "LUMA_HAZE_COMPACT_RESERVE_HINT",
-        "LUMA_INTERVAL_RETAIN_INACTIVE",
-        "LUMA_INTERVAL_CACHE_TABLE_BITS",
-        "LUMA_INTERVAL_CACHE",
-        "LUMA_INTERVAL_CACHE_PAYLOAD",
-        "LUMA_INTERVAL_CACHE_UNIFY",
-        "LUMA_INTERVAL_CACHE_SKIP_RESIDUAL",
-        "LUMA_INTERVAL_CACHE_ALL_OFF",
     ]
     .into_iter()
     .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
@@ -362,6 +325,7 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
         "reference32",
         "reference64",
         "reference128",
+        "export",
     ]
     .contains(&mode)
     {
@@ -422,7 +386,24 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
         let dir = output.join(&case.id);
         fs::create_dir_all(&dir)?;
         let mut timings = Vec::new();
-        if reference_samples > 0 {
+        if mode == "export" {
+            // What a video export renders: one isolated frame, no history,
+            // `DEFAULT_SUBFRAMES` jitter subframes.
+            let started = Instant::now();
+            let pixels = renderer.render(
+                &frame,
+                suite.width,
+                suite.height,
+                luma_render::DEFAULT_SUBFRAMES,
+            )?;
+            timings.push(json!({"wall_ms":started.elapsed().as_secs_f64() * 1000.0}));
+            luma_render::image_out::write(
+                &dir.join("export.png"),
+                &pixels,
+                suite.width,
+                suite.height,
+            )?;
+        } else if reference_samples > 0 {
             let pixels =
                 renderer.render_reference(&frame, suite.width, suite.height, reference_samples)?;
             luma_render::image_out::write(
@@ -487,46 +468,6 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                     suite.height,
                 )?;
             }
-            // The counted build's still-frame record: the camera has not moved
-            // since warm-up, so this is the lit-interval cache's hit path.
-            if let Some(work) = renderer.haze_work_stats()? {
-                let mut work = serde_json::to_value(work)?;
-                work["probe"] = json!("still-7");
-                work["intervalCache"] = serde_json::to_value(renderer.interval_cache_stats())?;
-                work["compact"] = serde_json::to_value(renderer.compact_stats())?;
-                work["fogVisibilityCache"] =
-                    serde_json::to_value(renderer.fog_visibility_cache_stats()?)?;
-                write_json(&dir.join("work-counts-still.json"), &work)?;
-            }
-            if let Some(counts) = renderer.fog_grid_counts()? {
-                let names = [
-                    "cells",
-                    "visibility_calls",
-                    "calls_reference_layer",
-                    "cell_proven_lit",
-                    "cell_proven_shadowed",
-                    "cell_fallback",
-                    "union_proven_lit",
-                    "union_proven_shadowed",
-                    "union_unproven",
-                    "union_unproven_cell_proven",
-                    "union_proven_cell_unproven",
-                    "light_iterations",
-                    "block_visible_skips",
-                    "cells_depth_culled",
-                    "cells_span_culled",
-                    "quad_calls_z0",
-                ];
-                let mut out = serde_json::Map::new();
-                for (name, value) in names.iter().zip(counts) {
-                    out.insert((*name).to_string(), json!(value));
-                }
-                out.insert("probe".into(), json!("still-7"));
-                write_json(
-                    &dir.join("fog-grid-counts.json"),
-                    &serde_json::Value::Object(out),
-                )?;
-            }
             // Diagnostic copy runs after all timed frames, with their camera.
             if std::env::var_os("LUMA_FOG_BLOCK_STATS").is_some_and(|v| v == "1") {
                 if let Some(blocks) = renderer.fog_block_stats()? {
@@ -589,19 +530,6 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                 suite.height,
             )?;
         }
-        if let Some(work) = renderer.haze_work_stats()? {
-            let mut work = serde_json::to_value(work)?;
-            work["probe"] = json!("relight");
-            work["cameraEye"] = json!(frame.camera.eye.to_array());
-            work["cameraTarget"] = json!(frame.camera.target.to_array());
-            work["lightIndex"] = serde_json::to_value(renderer.light_index_stats())?;
-            work["shadowedFixtures"] = json!(renderer.shadowed_fixture_count());
-            work["intervalCache"] = serde_json::to_value(renderer.interval_cache_stats())?;
-            work["compact"] = serde_json::to_value(renderer.compact_stats())?;
-            work["fogVisibilityCache"] =
-                serde_json::to_value(renderer.fog_visibility_cache_stats()?)?;
-            write_json(&dir.join("work-counts.json"), &work)?;
-        }
         // Explicit update probes run after every quality capture and frozen
         // timing. Shift this in-memory rig by fractions of a millimetre so
         // every occupied map changes, without editing the saved venue/score.
@@ -653,12 +581,10 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
             &dir.join("capture.json"),
             &json!({"case":case,"mode":mode,"size":[suite.width,suite.height],
             "adapter":{"name":renderer.gpu().adapter_profile().name,"driver":renderer.gpu().adapter_profile().driver_info,"backend":renderer.gpu().adapter_profile().backend},"sourceCatalogue":suite.catalogue,
-            "fogVisibilityCache":renderer.fog_visibility_cache_stats()?,
             "qualityReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none(),
             "performanceReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none()
-                && std::env::var_os("LUMA_PROFILE_REPEAT").is_none()
-                && !std::env::var_os("LUMA_HAZE_WORK_COUNTS").is_some_and(|v| v == "1")
-                && !std::env::var_os("LUMA_FOG_VISIBILITY_ASSERT").is_some_and(|v| v == "1"),
+                && std::env::var_os("LUMA_PROFILE_REPEAT").is_none(),
+
             "settings":{"hazeResolution":frame.haze_resolution,"hazeSteps":frame.haze_steps,"density":frame.haze_density,"appearance":frame.haze_appearance,"geometryShadows":frame.geometry_shadows,"fixtureShadows":frame.fixture_shadows,"referenceSubframes":reference_samples,"liveSubframes":luma_render::LIVE_SUBFRAMES},
             "environment":capture_environment(),
             "note":"Reference converges current transport with full-resolution all-light integration; not an independent physical ground truth. GPU timings use the live path and exclude GPUI/presentation/readback waits. wall_ms includes CPU submission, the complete GPU queue, pixel/query readback and blocking completion; it is not displayed FPS.","frames":timings}),
