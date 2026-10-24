@@ -1,9 +1,8 @@
 //! The sidebar's second level: one track's scores.
 //!
 //! A score is a `(track, venue)` document owned by one principal, and a pair
-//! holds as many of them as there are principals who annotated it
-//! (`migrations/20260325000000_multi_score.sql`). Each score opens as its own
-//! tab, so two scores of one track can be open side by side.
+//! holds as many of them as there are principals who annotated it. Each score
+//! opens as its own tab, so two scores of one track can be open side by side.
 //!
 //! # Why a level and not a strip
 //!

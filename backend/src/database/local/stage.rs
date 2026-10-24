@@ -5,8 +5,9 @@
 //! rows into nodes and edges the first time a venue is opened; the writers are
 //! gone, so nothing adds to what it has to convert.
 //!
-//! The table itself is not dropped here — see the header of
-//! `migrations/20260829000000_venue_graph.sql`.
+//! The table is kept until every machine has run that pass, which cannot run
+//! in SQL: inverting a pose needs the catalog, the GLB bounding boxes and the
+//! truss generator.
 
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::stage::StagePiece;
