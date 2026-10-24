@@ -126,36 +126,89 @@ impl UniverseCell {
     }
 }
 
-/// An Art-Net node that answered a poll.
-///
-/// A wire model beside [`UniverseOutput`] rather than a struct inside the
-/// sender, because it is half of a binding: the outputs table names a node, and
-/// the two halves of one decision should be described in one place. `port_address`
-/// is the node's **own** announced Net/SubNet/Universe — never derived from a
-/// Luma universe number.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ArtNetNode {
-    pub ip: String,
-    pub name: String,
-    pub long_name: String,
-    pub port_address: u16,
-    /// Unix seconds at the last reply.
-    pub last_seen: u64,
+/// The transport a DMX device speaks. One driver per kind.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeviceKind {
+    /// A node on the network, reached over UDP.
+    ArtNet,
+    /// A dongle on this machine's USB bus.
+    Usb,
 }
 
-/// Where one universe goes on the wire: a row of `universe_outputs`.
+impl DeviceKind {
+    /// The `dmx_routes.device_kind` spelling, which is also the wire one.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeviceKind::ArtNet => "art-net",
+            DeviceKind::Usb => "usb",
+        }
+    }
+}
+
+impl TryFrom<String> for DeviceKind {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "art-net" => Ok(DeviceKind::ArtNet),
+            "usb" => Ok(DeviceKind::Usb),
+            other => Err(format!("unknown output device kind '{other}'")),
+        }
+    }
+}
+
+/// Something DMX can be sent to: an Art-Net node, a USB dongle.
 ///
-/// The table that replaces `(net << 8) | (subnet << 4) | (universe & 0xF)`.
-/// That arithmetic aliases universe 17 onto universe 1 and cannot name a second
-/// node at all; a binding names one.
+/// Every transport reduces to this, so the patch page draws one list whatever
+/// is plugged in. A device has ports, and a port carries one universe.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputDevice {
+    pub kind: DeviceKind,
+    /// Stable across restarts and replugs, and what a route names: a node's
+    /// MAC address (its IP when it announces none), or a dongle's
+    /// `vid:pid:serial`, falling back to where it is plugged in.
+    pub id: String,
+    pub name: String,
+    /// Where it is right now — an IP, a USB bus path. Shown, and kept on a
+    /// route so a node can be reached before it answers its first poll.
+    pub address: String,
+    pub ports: Vec<OutputPort>,
+    /// Takes any port number rather than a fixed list: Art-Net broadcast,
+    /// which a route binds with the universe's own number.
+    pub any_port: bool,
+    /// Why the device is seen but cannot be driven, such as a USB permission.
+    pub problem: Option<String>,
+}
+
+/// One output of an [`OutputDevice`]. For Art-Net, `port` is the 15-bit
+/// Net/SubNet/Universe the node announced — never derived from a Luma
+/// universe number. For USB it is the output's index.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputPort {
+    pub port: i64,
+    pub label: String,
+}
+
+/// Where one universe goes: a row of `dmx_routes`.
+///
+/// A universe may have several rows — the same light on a node and a dongle —
+/// and a universe with none is sent nowhere.
 #[derive(Serialize, Deserialize, Clone, Debug, FromRow, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct UniverseOutput {
+pub struct DmxRoute {
     pub universe: i64,
-    pub node_ip: String,
-    pub node_port: i64,
-    /// Art-Net's 15-bit Net/SubNet/Universe triple, as the node announced it.
-    pub port_address: i64,
-    pub node_name: Option<String>,
+    #[sqlx(try_from = "String")]
+    pub device_kind: DeviceKind,
+    pub device_id: String,
+    pub port: i64,
+    /// What the device called itself when it was bound, so an unplugged one
+    /// is still shown by name.
+    pub device_name: Option<String>,
+    /// The device's address when it was bound. For Art-Net, the `ip:port` to
+    /// send to until the node answers a poll with where it is now.
+    pub address: Option<String>,
 }

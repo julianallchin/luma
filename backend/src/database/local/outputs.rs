@@ -1,4 +1,4 @@
-//! `universe_outputs`: which node each DMX universe goes to.
+//! `dmx_routes`: which device and port each DMX universe goes to.
 //!
 //! Rows in, rows out. App-global rather than venue-scoped — which box is
 //! plugged in where is a property of the room, not of the venue document — so
@@ -6,69 +6,71 @@
 
 use sqlx::SqlitePool;
 
-use crate::models::patch::UniverseOutput;
+use crate::models::patch::{DeviceKind, DmxRoute};
 
-/// Every binding, by universe.
+/// Every route, by universe.
 ///
 /// # Errors
 /// Fails if the table cannot be read.
-pub async fn list(pool: &SqlitePool) -> Result<Vec<UniverseOutput>, String> {
-    sqlx::query_as::<_, UniverseOutput>(
-        "SELECT universe, node_ip, node_port, port_address, node_name
-         FROM universe_outputs ORDER BY universe ASC",
+pub async fn list(pool: &SqlitePool) -> Result<Vec<DmxRoute>, String> {
+    sqlx::query_as::<_, DmxRoute>(
+        "SELECT universe, device_kind, device_id, port, device_name, address
+         FROM dmx_routes ORDER BY universe ASC, device_kind ASC, device_id ASC, port ASC",
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to read universe outputs: {e}"))
+    .map_err(|e| format!("Failed to read DMX routes: {e}"))
 }
 
-/// Point `universe` at a node, replacing whatever it pointed at before.
-///
-/// An upsert rather than an insert plus a delete: a universe has exactly one
-/// output, which is what the primary key says, and rebinding is one write.
+/// Send `route.universe` to `route`'s device and port, alongside whatever it
+/// already goes to. Binding the same port twice refreshes its name and address.
 ///
 /// # Errors
-/// Fails if the row cannot be written — including a `port_address` outside
-/// Art-Net's 15 bits, which the table's own check refuses.
-pub async fn bind(
-    pool: &SqlitePool,
-    universe: i64,
-    node_ip: &str,
-    node_port: i64,
-    port_address: i64,
-    node_name: Option<&str>,
-) -> Result<(), String> {
+/// Fails if the row cannot be written — including a port outside 0..=32767,
+/// which the table's own check refuses.
+pub async fn bind(pool: &SqlitePool, route: &DmxRoute) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO universe_outputs (universe, node_ip, node_port, port_address, node_name)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(universe) DO UPDATE SET
-             node_ip = excluded.node_ip,
-             node_port = excluded.node_port,
-             port_address = excluded.port_address,
-             node_name = excluded.node_name,
+        "INSERT INTO dmx_routes (universe, device_kind, device_id, port, device_name, address)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(universe, device_kind, device_id, port) DO UPDATE SET
+             device_name = excluded.device_name,
+             address = excluded.address,
              updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
     )
-    .bind(universe)
-    .bind(node_ip)
-    .bind(node_port)
-    .bind(port_address)
-    .bind(node_name)
+    .bind(route.universe)
+    .bind(route.device_kind.as_str())
+    .bind(&route.device_id)
+    .bind(route.port)
+    .bind(&route.device_name)
+    .bind(&route.address)
     .execute(pool)
     .await
-    .map_err(|e| format!("Failed to bind universe {universe}: {e}"))?;
+    .map_err(|e| format!("Failed to bind universe {}: {e}", route.universe))?;
     Ok(())
 }
 
-/// Forget `universe`'s binding. Unbinding something that was never bound is
-/// not an error: the caller wanted no binding, and there is none.
+/// Stop sending `universe` to one device port. Unbinding a route that was
+/// never there is not an error: the caller wanted no route, and there is none.
 ///
 /// # Errors
 /// Fails if the row cannot be deleted.
-pub async fn unbind(pool: &SqlitePool, universe: i64) -> Result<(), String> {
-    sqlx::query("DELETE FROM universe_outputs WHERE universe = ?")
-        .bind(universe)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to unbind universe {universe}: {e}"))?;
+pub async fn unbind(
+    pool: &SqlitePool,
+    universe: i64,
+    device_kind: DeviceKind,
+    device_id: &str,
+    port: i64,
+) -> Result<(), String> {
+    sqlx::query(
+        "DELETE FROM dmx_routes
+         WHERE universe = ? AND device_kind = ? AND device_id = ? AND port = ?",
+    )
+    .bind(universe)
+    .bind(device_kind.as_str())
+    .bind(device_id)
+    .bind(port)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to unbind universe {universe}: {e}"))?;
     Ok(())
 }

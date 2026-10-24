@@ -1,10 +1,10 @@
 ---
 title: DMX Output Pipeline
-description: Lighting state to DMX channel values, strobe handling, color wheels and Art-Net output
+description: Lighting state to DMX channel values, strobe handling, color wheels, and output over Art-Net and USB
 ---
 
-The DMX pipeline converts lighting states into DMX values and sends them over
-Art-Net.
+The DMX pipeline converts lighting states into DMX values and sends them to
+Art-Net nodes and USB DMX dongles.
 
 ## Lighting state
 
@@ -98,9 +98,39 @@ When strobe is 0, the shutter writes its "Open" capability. If the channel has
 no "Open" capability, it holds the previous value. When the engine pulses
 another channel, the master shutter is set to "Open".
 
-## Art-Net
+## Output
 
-File: `backend/src/artnet.rs`.
+Files: `backend/src/output/` (`mod.rs`, `artnet.rs`, `usb.rs`).
+
+The desktop host runs `run_output` in `backend/src/dispatch/services.rs`. Every
+23 ms it samples the render engine at the audio playback time. `OutputHub`
+turns the sample into 512-slot universes and publishes them as the latest
+frame. When output stops, it publishes one empty frame.
+
+Each transport is a driver with its own thread. A driver reads the newest frame
+at its own pace and skips frames it missed. A slow or unplugged USB dongle
+cannot delay the render loop or the network.
+
+The `dmx_output_enabled` setting turns every driver on or off. While it is off,
+no driver holds a socket or a device.
+
+### Routes
+
+The local-only `dmx_routes` table says where each universe goes. A row names a
+device kind (`art-net` or `usb`), a device id, and a port on that device. A
+universe can have several rows. A universe with no row is not sent.
+
+Device ids are stable across restarts:
+
+- An Art-Net node is identified by the MAC address in its ArtPollReply, or by
+  its IP if it reports no MAC.
+- A USB dongle is identified by `vid:pid:serial`. If it has no serial, the bus
+  and port path replace the serial.
+
+The patch page's Outputs panel lists devices with `list_output_devices` and
+edits routes with `bind_route` and `unbind_route`.
+
+## Art-Net
 
 ### ArtDmx packet
 
@@ -111,28 +141,46 @@ File: `backend/src/artnet.rs`.
 | Protocol version | 14 |
 | Sequence | Increments once per frame |
 | Physical | 0 |
-| Port address | 15-bit universe address |
+| Port address | 15-bit Net/SubNet/Universe |
 | Length | 512 |
 | Data | 512 DMX values |
 
 ### Destinations
 
-- A universe bound to a discovered node goes to that node's IP and port, with
-  the node's port address.
-- An unbound universe uses the address
-  `(net << 8) | (subnet << 4) | (universe & 0xF)`. Universes above 15 alias
-  onto 0–15. The engine logs a warning once per universe.
-- An unbound universe goes to the unicast IP when one is set. It also goes to
-  `255.255.255.255:6454` when broadcast is on or when no unicast IP is set.
+- A route's port is the node's own port address, from its ArtPollReply. It is
+  not derived from the Luma universe number.
+- Packets go to the node's IP from its latest reply. Before the first reply,
+  they go to the address stored with the route.
+- The `broadcast` device sends to `255.255.255.255:6454` and to the directed
+  broadcast address of the local /24 network. A broadcast route uses the
+  universe number as its port address.
 
 ### Discovery
 
-Discovery sends ArtPoll (`0x2000`) every 3 seconds. It sends to
-`255.255.255.255` and to a directed broadcast address for the local network.
-It reads ArtPollReply (`0x2100`) packets to list nodes.
+While output is on, the driver sends ArtPoll (`0x2000`) every 3 seconds. It
+sends to the same two broadcast addresses. It reads ArtPollReply (`0x2100`)
+packets to list nodes and their output ports. A node that does not reply for
+10 seconds is removed from the list.
 
-## Output loop
+## USB dongles
 
-The desktop host runs `run_artnet` in `backend/src/dispatch/services.rs`. Every
-23 ms it samples the render engine at the audio playback time and sends the
-frame. When output stops, it sends one empty frame.
+The USB driver scans the bus every second. Each supported device gets its own
+thread. The thread sends the start-up packets, then one frame per output every
+25 ms. An output with no route gets zeros. When output turns off or the device
+thread stops, it sends three blackout frames.
+
+Supported devices:
+
+| Device | USB ID | Outputs |
+|--------|--------|---------|
+| SoundSwitch Micro DMX Interface | `15e4:0053`, `15e4:005a` | 1 |
+| SoundSwitch Control One | `15e4:0054` | 2 |
+
+The SoundSwitch protocol comes from the Apache-2.0
+[QLC+ SoundSwitch integration](https://github.com/jloops412/qlcplus-soundswitch-integration).
+Everything goes to bulk endpoint `0x01`. A DMX frame is `sTRt 01 00 02 02`,
+the output index, `00`, then 512 values.
+
+On Linux, the user needs permission to open the device. Install
+`resources/linux/70-luma-dmx.rules` (see `gpui/BUILD.md`). Without it, the
+device appears in the Outputs panel with a permission message.

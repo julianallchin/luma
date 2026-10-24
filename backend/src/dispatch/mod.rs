@@ -113,8 +113,7 @@ use crate::models::midi::{
 };
 use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::BeatGrid;
-use crate::models::patch::ArtNetNode;
-use crate::models::patch::{AutoPatchReport, UniverseCell, UniverseOutput};
+use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
 use crate::models::patterns::AnnotationPreview;
 use crate::models::perform::PerformTrackMatch;
 use crate::models::scores::{Score, ScoreSummary};
@@ -217,18 +216,22 @@ commands! {
         selection: Selection,
     ) -> UniverseState;
 
-    artnet::start_discovery() -> ();
-    artnet::stop_discovery() -> ();
-    artnet::get_discovered_nodes() -> Vec<ArtNetNode>;
-    artnet::list_outputs() -> Vec<UniverseOutput>;
-    artnet::bind_output(
+    output::list_output_devices() -> Vec<OutputDevice>;
+    output::list_routes() -> Vec<DmxRoute>;
+    output::bind_route(
         universe: i64,
-        node_ip: String,
-        node_port: i64,
-        port_address: i64,
-        node_name: Option<String>,
+        device_kind: DeviceKind,
+        device_id: String,
+        port: i64,
+        device_name: Option<String>,
+        address: Option<String>,
     ) -> ();
-    artnet::unbind_output(universe: i64) -> ();
+    output::unbind_route(
+        universe: i64,
+        device_kind: DeviceKind,
+        device_id: String,
+        port: i64,
+    ) -> ();
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 

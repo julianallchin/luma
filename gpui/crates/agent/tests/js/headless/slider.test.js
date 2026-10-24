@@ -1,7 +1,7 @@
 // The value slider, dragged through the same pointer path a person uses.
 //
 // Every slider is one `luma_ui::luma_slider`, which once painted a value
-// without accepting one. Art-Net's Max Brightness is the subject because its
+// without accepting one. DMX output's Max Brightness is the subject because its
 // value goes through the settings write seam and comes back out of a fresh
 // `get_settings`: a slider whose value lives in the view would pass on a
 // control wired to nothing.
@@ -18,15 +18,15 @@ function reading(shot) {
   return node === undefined ? null : Number(node.label.split(" = ")[1]);
 }
 
-function openArtnet() {
+function openOutput() {
   app.action("luma::OpenSettings");
-  nav.step("the Art-Net settings section", "toggle", "Art-Net / DMX");
-  return until("the loaded Art-Net settings", (s) => s.find(isMaxBrightness) !== undefined);
+  nav.step("the DMX output settings section", "toggle", "DMX Output");
+  return until("the loaded DMX output settings", (s) => s.find(isMaxBrightness) !== undefined);
 }
 
 test("dragging a slider moves its value and writes it through", () => {
   nav.venue("Test Venue");
-  const opened = openArtnet();
+  const opened = openOutput();
   const slider = opened.find(isMaxBrightness);
   const before = reading(opened);
 
@@ -52,5 +52,5 @@ test("dragging a slider moves its value and writes it through", () => {
   // database says, so a slider that moved its own paint and nothing else
   // fails here.
   nav.dismiss();
-  expect(reading(openArtnet())).toBe(dragged);
+  expect(reading(openOutput())).toBe(dragged);
 });

@@ -23,7 +23,7 @@ use gpui::Focusable as _;
 use gpui::{div, px, AnyElement, Context, Entity, Point, SharedString, Subscription, Window};
 
 use luma_lib::models::fixtures::PatchedFixture;
-use luma_lib::models::patch::{ArtNetNode, UniverseCell};
+use luma_lib::models::patch::{DmxRoute, OutputDevice, OutputPort, UniverseCell};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
@@ -139,10 +139,10 @@ pub(crate) struct Patch {
     /// The fixture a strip cell was clicked on, which is also a table selection.
     pub(crate) strip_refusal: Option<SharedString>,
 
-    /// Discovered Art-Net nodes, or why there are none.
-    pub(crate) nodes: Vec<ArtNetNode>,
-    pub(crate) discovery_error: Option<SharedString>,
-    /// Which universe row has its node menu open.
+    /// The DMX devices the drivers can see, or why there are none.
+    pub(crate) devices: Vec<OutputDevice>,
+    pub(crate) devices_error: Option<SharedString>,
+    /// Which universe row has its device menu open.
     pub(crate) bind_menu: Option<i64>,
     /// The one panel hanging off the header, if any. One at a time, because
     /// they are three answers to "and where does this come out" and a page
@@ -188,8 +188,8 @@ impl Patch {
             cells: Vec::new(),
             drag: None,
             strip_refusal: None,
-            nodes: Vec::new(),
-            discovery_error: None,
+            devices: Vec::new(),
+            devices_error: None,
             bind_menu: None,
             panel: None,
             universe_menu: false,
@@ -327,11 +327,11 @@ impl Luma {
         let universe = state.strip_universe;
         let data = self.library.patch_data(&venue_id);
         let cells = self.library.universe_occupancy(&venue_id, universe);
-        let nodes = self.library.artnet_nodes();
+        let devices = self.library.output_devices();
         cx.spawn(async move |this, cx| {
             let data = data.await;
             let cells = cells.await;
-            let nodes = nodes.await;
+            let devices = devices.await;
             this.update(cx, |this, cx| {
                 let Some(Body::Patch(state)) = this.workspace.body_mut(&target) else {
                     return;
@@ -339,7 +339,7 @@ impl Luma {
                 if state.generation != generation {
                     return;
                 }
-                state.landed(data, cells, nodes);
+                state.landed(data, cells, devices);
                 let repair = std::mem::take(&mut state.repair_after_save);
                 if repair {
                     this.open_group_repair(cx);
@@ -394,7 +394,7 @@ impl Patch {
         &mut self,
         data: Result<PatchData, LibraryError>,
         cells: Result<Vec<UniverseCell>, LibraryError>,
-        nodes: Result<Vec<ArtNetNode>, LibraryError>,
+        devices: Result<Vec<OutputDevice>, LibraryError>,
     ) {
         // A load the notice did not ask for: whatever it says happened is not
         // what these rows are.
@@ -428,19 +428,19 @@ impl Patch {
             Err(error) => self.error = Some(error.to_string()),
         }
         self.cells = cells.unwrap_or_default();
-        match nodes {
-            Ok(nodes) => {
-                self.nodes = nodes;
-                self.discovery_error = None;
+        match devices {
+            Ok(devices) => {
+                self.devices = devices;
+                self.devices_error = None;
             }
-            // A host with no Art-Net at all is a state the panel says out loud;
-            // an empty list would read as a quiet network.
+            // A host with no output at all is a state the panel says out loud;
+            // an empty list would read as an empty room.
             Err(error) => {
-                self.nodes.clear();
+                self.devices.clear();
                 // The seam's own sentence, without the wire verb it prefixes:
-                // an operator never typed `get_discovered_nodes` and should
-                // not have to read it to learn their machine has no Art-Net.
-                self.discovery_error = Some(refusal_message(&error).into());
+                // an operator never typed `list_output_devices` and should not
+                // have to read it to learn their machine sends no DMX.
+                self.devices_error = Some(refusal_message(&error).into());
             }
         }
     }
@@ -1110,13 +1110,14 @@ impl Luma {
         &mut self,
         venue_id: String,
         universe: i64,
-        node: ArtNetNode,
+        device: OutputDevice,
+        port: OutputPort,
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
             state.bind_menu = None;
         }
-        let pending = self.library.bind_output(universe, &node);
+        let pending = self.library.bind_route(universe, &device, &port);
         cx.spawn(async move |this, cx| {
             pending.await.ok();
             this.update(cx, |this, cx| this.reload_patch(venue_id, cx))
@@ -1128,13 +1129,13 @@ impl Luma {
     pub(crate) fn unbind_universe(
         &mut self,
         venue_id: String,
-        universe: i64,
+        route: DmxRoute,
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
             state.bind_menu = None;
         }
-        let pending = self.library.unbind_output(universe);
+        let pending = self.library.unbind_route(&route);
         cx.spawn(async move |this, cx| {
             pending.await.ok();
             this.update(cx, |this, cx| this.reload_patch(venue_id, cx))

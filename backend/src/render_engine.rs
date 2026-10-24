@@ -1,6 +1,6 @@
 //! Render Engine
 //!
-//! Owns all rendering state (layers, universe generation, ArtNet output).
+//! Owns all rendering state (layers, universe generation, DMX output).
 //! Decoupled from audio playback — reads time from HostAudioState only in
 //! edit mode. In perform mode it renders per-deck layers and blends by volume.
 

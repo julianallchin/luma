@@ -15,7 +15,7 @@
 //! picture promises and what the pointer does are then the same statement.
 //!
 //! A press with no movement changes nothing. That is not a limitation to route
-//! around: this control also sets Art-Net dimmer levels, and a stray click
+//! around: this control also sets DMX dimmer levels, and a stray click
 //! landing on the box should not slam a rig to full. Movement is consent.
 
 use gpui::*;

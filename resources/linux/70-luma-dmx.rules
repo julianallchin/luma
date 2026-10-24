@@ -1,0 +1,10 @@
+# Lets Luma open USB DMX dongles without root. Install with:
+#   sudo cp resources/linux/70-luma-dmx.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# then unplug and replug the dongle.
+
+# SoundSwitch Micro DMX Interface
+SUBSYSTEM=="usb", ATTRS{idVendor}=="15e4", ATTRS{idProduct}=="0053", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="15e4", ATTRS{idProduct}=="005a", TAG+="uaccess"
+# SoundSwitch Control One
+SUBSYSTEM=="usb", ATTRS{idVendor}=="15e4", ATTRS{idProduct}=="0054", TAG+="uaccess"

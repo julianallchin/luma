@@ -8,7 +8,7 @@
 //! startup recovery of half-deleted agent threads. Only the wire protocol
 //! differs, so only the wire protocol lives in the bins.
 //!
-//! Deliberately absent, exactly as [`AppServices::headless`] describes: ArtNet,
+//! Deliberately absent, exactly as [`AppServices::headless`] describes: DMX output,
 //! audio devices, and the loops. Events go to stderr, because these hosts put
 //! their protocol on stdout.
 
