@@ -92,8 +92,6 @@ struct QualityBudget {
     shadow_steps: f32,
     /// Most moved fixture shadow maps redrawn in one frame.
     shadow_redraws: usize,
-    /// Far-field fog grid cell size in pixels.
-    fog_tile: u32,
     /// Scene-pass samples per pixel.
     msaa: u32,
 }
@@ -107,7 +105,6 @@ impl QualityBudget {
                 shadow_footprint: 1.0,
                 shadow_steps: 1.0,
                 shadow_redraws: 64,
-                fog_tile: crate::fog_grid::default_tile_size(),
                 msaa: MSAA_SAMPLES,
             },
             // A laptop budget: twice the shadow walk's footprint allowance
@@ -118,7 +115,6 @@ impl QualityBudget {
                 shadow_footprint: if moving { 4.0 } else { 2.0 },
                 shadow_steps: if moving { 0.25 } else { 0.5 },
                 shadow_redraws: 16,
-                fog_tile: crate::fog_grid::default_tile_size().max(crate::fog_grid::LOW_TILE_SIZE),
                 msaa: 1,
             },
         }
@@ -180,13 +176,14 @@ struct OverlayInstance {
     color: [f32; 4],
 }
 
-/// Mirrors `IntervalCacheParams` in `haze.wgsl`.
+/// Mirrors `IntervalCacheParams` in `haze_cache.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct IntervalCacheUniform {
-    /// x: cache blocks per row, y: hash bucket count minus one.
+    /// x: cache blocks per row, y: hash bucket count minus one, z: nonzero at
+    /// native haze resolution, where 2×2 quads may share quadrature.
     params: [u32; 4],
-    /// x: bit 0 replays stored interval lists.
+    /// y: frame epoch.
     flags: [u32; 4],
     slots: [[u32; 4]; 512],
 }
@@ -206,16 +203,6 @@ struct HazeUniform {
     /// [`QualityBudget::haze`].
     quality: [f32; 4],
     medium: crate::medium::Uniform,
-}
-
-/// `shaders/haze_wide.wgsl`'s uniform.
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct WideMergeUniform {
-    /// xy: wide target size, z: bilateral depth sigma in metres.
-    params: [f32; 4],
-    /// xy: camera near/far planes.
-    depth: [f32; 4],
 }
 
 #[repr(C)]
@@ -410,16 +397,6 @@ impl RendererProfile {
             timestamp_period_ns: timestamp_query_supported.then(|| queue.get_timestamp_period()),
         }
     }
-}
-
-fn supports_haze_subgroups(
-    features: wgpu::Features,
-    subgroup_min_size: u32,
-    metal_backend: bool,
-    native_apple_silicon: bool,
-) -> bool {
-    features.contains(wgpu::Features::SUBGROUP)
-        && (subgroup_min_size >= 32 || (metal_backend && native_apple_silicon))
 }
 
 /// GPU-timeline timings for one production live render.
@@ -682,13 +659,9 @@ pub struct Renderer {
     geometry_shadows: bool,
     visibility_reference: bool,
     geometry_shadow_samples: u32,
+    /// Broad washes per weighted reservoir in the fragment haze pass; one in
+    /// the exhaustive reference.
     wide_light_group: u32,
-    grid_fog: bool,
-    /// Route wide beams to a half-resolution pass (`LUMA_WIDE_BEAMS=0` keeps
-    /// every beam native, for A/B runs).
-    wide_beams: bool,
-    /// Single-pass deterministic transport writes its outputs directly on Metal.
-    haze_compute: bool,
     fog_blocks_valid: bool,
     surface_depth_cull: bool,
     upload_stats: UploadStats,
@@ -965,9 +938,6 @@ struct Targets {
     depth: wgpu::TextureView,
     haze: wgpu::TextureView,
     haze_sampled: wgpu::TextureView,
-    /// Wide beams' reduced-resolution haze target and its unused stochastic
-    /// twin (the haze pipeline writes both), allocated on first use.
-    haze_wide: Option<((u32, u32), [wgpu::TextureView; 2])>,
     fog: crate::fog_grid::Targets,
     haze_history: [wgpu::TextureView; 2],
     /// Independent presentation resources, one per in-flight frame.
@@ -1206,22 +1176,17 @@ pub struct Gpu {
     shadow_pipeline: wgpu::RenderPipeline,
     fixture_shadow_layout: wgpu::BindGroupLayout,
     fixture_shadow_pipeline: wgpu::RenderPipeline,
+    /// The per-ray MIS haze pass: gobos, multi-subframe captures and the
+    /// exhaustive reference.
     haze_pipeline: wgpu::RenderPipeline,
-    haze_grid_pipeline: wgpu::RenderPipeline,
-    /// The grid haze pipeline integrating only narrow, then only wide beams.
-    haze_grid_routed: [wgpu::RenderPipeline; 2],
-    /// Adds the wide beams' half-resolution haze into the native target.
-    haze_wide_pipeline: wgpu::RenderPipeline,
-    haze_wide_layout: wgpu::BindGroupLayout,
+    /// The fused compute haze kernel, which caches its shadow-traversal
+    /// output (`interval_cache.rs`).
     haze_compute_pipeline: wgpu::ComputePipeline,
     haze_compute_layout: wgpu::BindGroupLayout,
-    /// The native compute kernel caches its shadow-traversal output
-    /// (`interval_cache.rs`). Needs subgroup ballots.
-    interval_cache: bool,
     /// log2 of the payload hash table's entry count.
     interval_cache_table_bits: u32,
     /// Residual compaction of the cached kernel (`haze_compact.rs`).
-    haze_compact_pipelines: Option<crate::haze_compact::Pipelines>,
+    haze_compact_pipelines: crate::haze_compact::Pipelines,
     profile_repeat: Option<String>,
     fog_grid_pipeline: wgpu::ComputePipeline,
     fog_prepare_pipeline: wgpu::ComputePipeline,
@@ -1358,6 +1323,8 @@ impl Gpu {
     pub(crate) fn build() -> anyhow::Result<Self> {
         let started = Instant::now();
         let context = crate::device::DeviceContext::shared()?;
+        // An adopted compositor device was made without asking us.
+        crate::device::require_subgroups(context.device.features(), &context.adapter.get_info())?;
         let profile = RendererProfile::of(&context.adapter, &context.device, &context.queue);
         Self::on(
             context.device.clone(),
@@ -1725,28 +1692,10 @@ impl Gpu {
         // `haze_field`, so they arrive as injected constants rather than as
         // uniform members nobody could see drift.
         let haze_field_prelude = crate::haze_field::prelude();
-        // The lit-interval cache writes one header word per 32-thread workgroup
-        // from a subgroup ballot. A narrower subgroup would elect multiple
-        // writers and its first ballot word would not cover the workgroup.
-        // wgpu's Metal limits are conservative, while native Apple GPUs have a
-        // documented 32-lane SIMD-group, so preserve that platform fast path.
-        let interval_cache = supports_haze_subgroups(
-            device.features(),
-            adapter_profile.subgroup_min_size,
-            adapter_profile.backend == "Metal",
-            cfg!(all(target_os = "macos", target_arch = "aarch64")),
-        );
-        let (haze_cache, haze_compact_text) = if interval_cache {
-            (
-                include_str!("shaders/haze_cache.wgsl"),
-                include_str!("shaders/haze_compact.wgsl"),
-            )
-        } else {
-            (include_str!("shaders/haze_cache_stub.wgsl"), "")
-        };
         let haze_base_text = format!(
-            "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}{haze_cache}",
-            include_str!("shaders/haze.wgsl")
+            "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}{}",
+            include_str!("shaders/haze.wgsl"),
+            include_str!("shaders/haze_cache.wgsl"),
         );
         let haze_module = shader(&device, "haze", &haze_base_text);
         let medium_cache_layout =
@@ -2218,16 +2167,10 @@ impl Gpu {
                 include_str!("shaders/haze_grid.wgsl")
             ),
         );
-        let fog_grid_constants = [
-            (
-                "BLOCK_VISIBILITY",
-                f64::from(u8::from(crate::fog_grid::block_visibility())),
-            ),
-            (
-                "PROFILE_SKIP_GRID_SHADOW_TESTS",
-                omitted("grid-shadow-tests"),
-            ),
-        ];
+        let fog_grid_constants = [(
+            "PROFILE_SKIP_GRID_SHADOW_TESTS",
+            omitted("grid-shadow-tests"),
+        )];
         let fog_grid_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("fog-grid"),
             layout: Some(
@@ -2250,8 +2193,7 @@ impl Gpu {
             cache: None,
         });
 
-        let make_haze_pipeline = |grid: bool, route: u32| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let haze_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("haze"),
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2287,10 +2229,6 @@ impl Gpu {
                     }),
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[
-                            ("GRID_FOG", f64::from(u8::from(grid))),
-                            ("BEAM_ROUTE", f64::from(route)),
-                            ("PROFILE_SKIP_NATIVE_SHADOWS", omitted("native-shadows")),
-                            ("PROFILE_SKIP_NATIVE_INTEGRALS", omitted("native-integrals")),
                             ("PROFILE_SKIP_NATIVE_CLOUDS", omitted("native-clouds")),
                             (
                                 "PROFILE_SKIP_NATIVE_LIGHT_DEPTH",
@@ -2309,8 +2247,7 @@ impl Gpu {
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
-            })
-        };
+            });
 
         let haze_output_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -2322,7 +2259,10 @@ impl Gpu {
             },
             count: None,
         };
-        let mut haze_compute_entries = vec![
+        // Lit-interval cache: slot table, header words, payload claims and
+        // payload entries. Writable bindings, but this layout belongs to the
+        // compute kernels alone, so no other pass is serialized against them.
+        let haze_compute_entries = [
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::COMPUTE,
@@ -2335,28 +2275,17 @@ impl Gpu {
             },
             haze_output_entry(1),
             haze_output_entry(2),
+            uniform_entry(4, wgpu::ShaderStages::COMPUTE),
+            rw_storage_entry(5, wgpu::ShaderStages::COMPUTE),
+            rw_storage_entry(6, wgpu::ShaderStages::COMPUTE),
+            rw_storage_entry(7, wgpu::ShaderStages::COMPUTE),
         ];
-        if interval_cache {
-            // Lit-interval cache: slot table, header words, payload claims and
-            // payload entries. Writable bindings, but this layout belongs to
-            // the compute kernel alone, so no other pass is serialized against
-            // them.
-            haze_compute_entries.extend([
-                uniform_entry(4, wgpu::ShaderStages::COMPUTE),
-                rw_storage_entry(5, wgpu::ShaderStages::COMPUTE),
-                rw_storage_entry(6, wgpu::ShaderStages::COMPUTE),
-                rw_storage_entry(7, wgpu::ShaderStages::COMPUTE),
-            ]);
-        }
         let haze_compute_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("haze-compute"),
                 entries: &haze_compute_entries,
             });
         let haze_constants = [
-            ("NATIVE_DETERMINISTIC", 1.0),
-            ("HAZE_GROUP_X", f64::from(HAZE_WORKGROUP[0])),
-            ("HAZE_GROUP_Y", f64::from(HAZE_WORKGROUP[1])),
             ("GRID_FOG", 1.0),
             ("PROFILE_SKIP_NATIVE_SHADOWS", omitted("native-shadows")),
             ("PROFILE_SKIP_NATIVE_INTEGRALS", omitted("native-integrals")),
@@ -2370,19 +2299,20 @@ impl Gpu {
                 omitted("native-camera-depth"),
             ),
         ];
-        let haze_compact_pipelines = interval_cache.then(|| {
-            crate::haze_compact::Pipelines::new(
-                &device,
-                [
-                    &haze_layout,
-                    light_index_pipelines.layout(),
-                    &fog_grid_read_layout,
-                ],
-                &haze_compute_entries,
-                &format!("{haze_base_text}{haze_compact_text}"),
-                &haze_constants,
-            )
-        });
+        let haze_compact_pipelines = crate::haze_compact::Pipelines::new(
+            &device,
+            [
+                &haze_layout,
+                light_index_pipelines.layout(),
+                &fog_grid_read_layout,
+            ],
+            &haze_compute_entries,
+            &format!(
+                "{haze_base_text}{}",
+                include_str!("shaders/haze_compact.wgsl")
+            ),
+            &haze_constants,
+        );
         let haze_compute_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("haze-compute"),
@@ -2406,70 +2336,6 @@ impl Gpu {
                 },
                 cache: None,
             });
-
-        let haze_pipeline = make_haze_pipeline(false, 0);
-        let haze_grid_pipeline = make_haze_pipeline(true, 0);
-        // Wide-beam routing (`BEAM_ROUTE` in `beam_transport.wgsl`).
-        let haze_grid_routed = [make_haze_pipeline(true, 1), make_haze_pipeline(true, 2)];
-
-        let haze_wide_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("haze-wide-merge"),
-            entries: &[
-                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
-                texture_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let haze_wide_module = shader(&device, "haze-wide", include_str!("shaders/haze_wide.wgsl"));
-        let haze_wide_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("haze-wide-merge"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("haze-wide-merge"),
-                    bind_group_layouts: &[Some(&haze_wide_layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &haze_wide_module,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &haze_wide_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(wgpu::BlendState {
-                        color: ADD,
-                        alpha: ADD,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
 
         let temporal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("haze-temporal"),
@@ -2734,6 +2600,7 @@ impl Gpu {
             &queue,
             &Channels::ALL.map(|channels| (channels.format(), channels.display_constants())),
         );
+        let interval_cache_table_bits = crate::interval_cache::table_bits(&device.limits());
         Ok(Self {
             sky_visibility,
             post,
@@ -2765,14 +2632,9 @@ impl Gpu {
             fixture_shadow_layout,
             fixture_shadow_pipeline,
             haze_pipeline,
-            haze_grid_pipeline,
-            haze_grid_routed,
-            haze_wide_pipeline,
-            haze_wide_layout,
             haze_compute_pipeline,
             haze_compute_layout,
-            interval_cache,
-            interval_cache_table_bits: 21,
+            interval_cache_table_bits,
             haze_compact_pipelines,
             profile_repeat,
             fog_grid_pipeline,
@@ -2919,13 +2781,10 @@ impl Renderer {
             FIXTURE_SHADOW_SIZE,
             MAX_FIXTURE_SHADOWS,
         );
-        let haze_compute = std::env::var_os("LUMA_HAZE_COMPUTE")
-            .map_or(gpu.adapter_profile.backend == "Metal", |v| v == "1");
         let compaction = crate::haze_compact::Compaction::new(&gpu.device);
         let probes = crate::probes::Probes::new(&gpu.device);
         Self {
             gpu,
-            haze_compute,
             fog_blocks_valid: false,
             environment: EnvironmentCache::default(),
             atmosphere: AtmosphereCache::default(),
@@ -2952,13 +2811,7 @@ impl Renderer {
                 .is_some_and(|v| v == "1"),
             surface_depth_cull: !std::env::var_os("LUMA_SURFACE_DEPTH_CULL")
                 .is_some_and(|v| v == "0"),
-            grid_fog: !std::env::var_os("LUMA_GRID_FOG").is_some_and(|v| v == "0"),
-            wide_beams: !std::env::var_os("LUMA_WIDE_BEAMS").is_some_and(|v| v == "0"),
-            wide_light_group: std::env::var("LUMA_WIDE_LIGHT_GROUP")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(8)
-                .clamp(1, 8),
+            wide_light_group: 8,
             geometry_shadow_samples: std::env::var("LUMA_GEOMETRY_SHADOW_SAMPLES")
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
@@ -3001,8 +2854,6 @@ impl Renderer {
         destination: Destination,
         grid_fog: bool,
         surface_depth_cull: bool,
-        wide: Option<(u32, u32)>,
-        fog_tile: u32,
         samples: u32,
     ) -> &Targets {
         let stale = self.targets.as_ref().is_none_or(|t| {
@@ -3105,7 +2956,7 @@ impl Renderer {
                         | wgpu::TextureUsages::STORAGE_BINDING,
                     "haze",
                 ),
-                fog: crate::fog_grid::Targets::new(&self.gpu.device, None, fog_tile),
+                fog: crate::fog_grid::Targets::new(&self.gpu.device, None),
                 haze_sampled: color(
                     haze.0,
                     haze.1,
@@ -3115,7 +2966,6 @@ impl Renderer {
                         | wgpu::TextureUsages::STORAGE_BINDING,
                     "haze-sampled",
                 ),
-                haze_wide: None,
                 haze_history: std::array::from_fn(|_| {
                     color(
                         haze.0,
@@ -3156,41 +3006,11 @@ impl Renderer {
             }
         }
         if grid_fog {
-            self.targets.as_mut().expect("just populated").fog.ensure(
-                &self.gpu.device,
-                [width, height],
-                fog_tile,
-            );
-        }
-        if let Some(size) = wide {
-            let targets = self.targets.as_mut().expect("just populated");
-            if targets
-                .haze_wide
-                .as_ref()
-                .is_none_or(|(held, _)| *held != size)
-            {
-                let device = &self.gpu.device;
-                let view = |label| {
-                    device
-                        .create_texture(&wgpu::TextureDescriptor {
-                            label: Some(label),
-                            size: wgpu::Extent3d {
-                                width: size.0,
-                                height: size.1,
-                                depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: SCENE_FORMAT,
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                | wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
-                        })
-                        .create_view(&wgpu::TextureViewDescriptor::default())
-                };
-                targets.haze_wide = Some((size, [view("haze-wide"), view("haze-wide-sampled")]));
-            }
+            self.targets
+                .as_mut()
+                .expect("just populated")
+                .fog
+                .ensure(&self.gpu.device, [width, height]);
         }
         self.targets.as_ref().expect("just populated")
     }
@@ -3495,16 +3315,6 @@ impl Renderer {
         self.probes.positions()
     }
 
-    /// Route wide beams to the half-resolution haze pass (the default) or
-    /// keep every beam native. Native is the reference for integrator tests
-    /// that must not also measure the upsample's silhouette error.
-    pub fn set_wide_beams(&mut self, enabled: bool) {
-        if self.wide_beams != enabled {
-            self.wide_beams = enabled;
-            self.haze_history_valid = false;
-        }
-    }
-
     /// Number of fixtures with resident shadow maps on the last frame.
     #[must_use]
     pub fn shadowed_fixture_count(&self) -> usize {
@@ -3787,7 +3597,7 @@ impl Renderer {
                 .is_some_and(|last| last != camera_bits);
         self.last_live_camera = temporal.then_some(camera_bits);
         let budget = QualityBudget::of(frame.quality, camera_moving);
-        let fog_tile = budget.fog_tile;
+        let fog_tile = crate::fog_grid::TILE_SIZE;
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         // Everything `draw_depth` rasterises, fixture bodies included: the
         // camera depth and the sun cascades draw the same opaque list.
@@ -4016,12 +3826,20 @@ impl Renderer {
             .map_or(Vec3::ZERO, |sky| sky.sun_radiance)
             .extend(Transport::PHASE_G)
             .to_array();
+        // The compute kernels draw the haze, except for the fragment pass's
+        // MIS estimator on frames with a gobo, captures accumulating several
+        // subframes and the exhaustive reference.
+        let stochastic_lights = fixture_cones
+            .iter()
+            .any(|c| c.gobo != 0 && c.haze_gain > 0.0);
+        let per_ray =
+            self.wide_light_group == 1 || stochastic_lights || (!temporal && subframes > 1);
         // Transport quality is a render setting, independent of how many
         // emitters a dimmer cue happens to leave active.
-        let sampled_haze = cached_shadows && self.wide_light_group > 1;
-        // Captures accumulating several subframes retain full per-ray detail.
-        let grid_fog =
-            sampled_haze && self.grid_fog && haze_density >= 0.001 && (temporal || subframes <= 1);
+        let sampled_haze = per_ray && cached_shadows && self.wide_light_group > 1;
+        // The far-field grid chain runs under the compute kernels whenever
+        // there is haze to light.
+        let grid_fog = !per_ray && haze_density >= 0.001;
         // The far-field grid's radial extent: the haze uniform's `shadow.w`,
         // and the surface pass's `surface_fog.x` when it reads that grid.
         let fog_far = fixture_cones
@@ -4450,13 +4268,6 @@ impl Renderer {
             ((width as f32 * scale).round() as u32).max(1),
             ((height as f32 * scale).round() as u32).max(1),
         );
-        // Wide beams are soft across their width, so a native haze target
-        // hands them to a half-resolution pass and upsamples the result with
-        // the same depth-aware weights the composite uses. Narrow beams and
-        // gobos, whose edges carry the picture, stay native. Only the live
-        // fragment grid path splits; below native the haze is already coarse.
-        let wide_size = (self.wide_beams && grid_fog && !self.haze_compute && scale >= 1.0)
-            .then(|| (haze_size.0.div_ceil(2), haze_size.1.div_ceil(2)));
         let targets_started = Instant::now();
         let (
             msaa_color,
@@ -4466,7 +4277,6 @@ impl Renderer {
             depth_view,
             haze_view,
             haze_sampled,
-            haze_wide,
             fog_grid,
             fog_integral,
             fog_transmittance,
@@ -4486,8 +4296,6 @@ impl Renderer {
                 destination,
                 grid_fog,
                 surface_depth_cull,
-                wide_size,
-                fog_tile,
                 budget.msaa,
             );
             let presentation = &t.presentations[slot];
@@ -4505,7 +4313,6 @@ impl Renderer {
                 t.depth.clone(),
                 t.haze.clone(),
                 t.haze_sampled.clone(),
-                wide_size.and(t.haze_wide.clone()),
                 t.fog.incident.clone(),
                 t.fog.integral.clone(),
                 t.fog.transmittance.clone(),
@@ -5139,7 +4946,9 @@ impl Renderer {
             // The light index was built (and its SoA uploaded) before the scene
             // passes; the haze passes bind the same frame's index as group 1.
             let subframes = subframes.max(1);
-            let weight = 1.0 / subframes as f32;
+            // The compute kernels write each pixel once; the fragment pass
+            // accumulates its subframes.
+            let weight = if per_ray { 1.0 / subframes as f32 } else { 1.0 };
             let grid_prepare = self
                 .gpu
                 .device
@@ -5299,23 +5108,12 @@ impl Renderer {
                 encode_medium_cache(&mut encoder, &mut pass_queries, &self.gpu);
             }
 
-            let stochastic_lights = fixture_cones.iter().any(|c| c.gobo != 0);
-            let complete_shadow_coverage = fixture_shadow_count == 0
-                || rests
-                    .iter()
-                    .all(|r| r.shadow_slot >= 0.0 || r.haze_gain <= 0.0);
-            let haze_passes = if grid_fog && !stochastic_lights {
-                1
-            } else {
-                subframes
-            };
-            let resolve_haze = (temporal || sampled_haze) && (!grid_fog || stochastic_lights);
-            let native_compute =
-                grid_fog && !stochastic_lights && complete_shadow_coverage && self.haze_compute;
-            let interval_cache_bindings = self.plan_interval_cache(
+            let haze_passes = if per_ray { subframes } else { 1 };
+            let resolve_haze = per_ray && (temporal || sampled_haze);
+            let (cache_uniform, cache_header, cache_claims, cache_table) = self.plan_interval_cache(
                 &mut encoder,
                 frame,
-                native_compute
+                grid_fog
                     && cached_shadows
                     && frame.fixture_shadows
                     && !fixture_cones.is_empty(),
@@ -5333,7 +5131,7 @@ impl Renderer {
             // kernel does as fast), and list entries carry a 22-bit pixel
             // index.
             let cache = self.interval_cache.stats();
-            let compact_plan = if native_compute {
+            let compact_plan = if grid_fog {
                 // Shadow slot → this frame's light-index id, for the residual list.
                 let source_to_sorted = self.light_index.source_to_sorted();
                 let slot_lights: Vec<u32> = shadow_slots
@@ -5361,8 +5159,7 @@ impl Renderer {
                 self.compaction.plan(
                     &self.gpu.device,
                     &mut encoder,
-                    self.gpu.haze_compact_pipelines.is_some()
-                        && cache.read + cache.write > 0
+                    cache.read + cache.write > 0
                         && u64::from(haze_size.0) * u64::from(haze_size.1) <= 1 << 22,
                     haze_size,
                     &slot_words,
@@ -5372,7 +5169,7 @@ impl Renderer {
                 self.compaction.idle();
                 None
             };
-            let compact_pipes = self.gpu.haze_compact_pipelines.as_ref();
+            let compact_pipes = &self.gpu.haze_compact_pipelines;
             let compact_uniform = compact_plan.as_ref().map(|plan| {
                 self.storage(
                     &mut encoder,
@@ -5382,19 +5179,16 @@ impl Renderer {
                 )
             });
             let compact_bind_group = |indirect: bool, hot: bool| -> wgpu::BindGroup {
-                let (cache_uniform, header, claims, table) = interval_cache_bindings
-                    .as_ref()
-                    .expect("compact frames have cache bindings");
                 self.compaction.bind_group(
                     &self.gpu.device,
-                    &compact_pipes.expect("compact frame").layout,
+                    &compact_pipes.layout,
                     &crate::haze_compact::FrameBindings {
                         uniform: compact_uniform.as_ref().expect("compact frame"),
                         grid: &fog_integral,
                         static_field: &self.gpu.haze_field.view,
                         exact: &haze_view,
                         sampled: &haze_sampled,
-                        cache: [cache_uniform, header, claims, table],
+                        cache: [&cache_uniform, &cache_header, &cache_claims, &cache_table],
                     },
                     indirect,
                     hot,
@@ -5441,7 +5235,7 @@ impl Renderer {
                     tiles: [
                         width as f32 / haze_size.0 as f32,
                         height as f32 / haze_size.1 as f32,
-                        if grid_fog && k == 0 { 2.0 } else { 1.0 },
+                        if per_ray { 1.0 } else { 2.0 },
                         0.0,
                     ],
                     depth: [
@@ -5592,13 +5386,11 @@ impl Renderer {
                                            pass_queries: &mut crate::pass_profile::PassQueries<
                         '_,
                     >| {
-                        if let (Some(_), Some(pipes)) =
-                            (compact_plan.as_ref().filter(|plan| plan.classify), compact_pipes)
-                        {
+                        if compact_plan.as_ref().is_some_and(|plan| plan.classify) {
                             self.compaction.encode_classify(
                                 encoder,
                                 pass_queries,
-                                pipes,
+                                compact_pipes,
                                 &crate::haze_compact::Groups {
                                     haze: &bind_group_early,
                                     light_index: &light_index_bg,
@@ -5677,29 +5469,26 @@ impl Renderer {
                     if medium_cache_late {
                         encode_medium_cache(&mut encoder, &mut pass_queries, &self.gpu);
                     }
-                    if crate::fog_grid::block_visibility() {
-                        self.fog_blocks_valid = true;
-                        let repeat_count = self.gpu.profile_copies("fog-classify");
-                        for _repeat_index in 0..repeat_count {
-                            let mut pass =
-                                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                    label: Some("fog-classify"),
-                                    timestamp_writes: pass_queries.compute("fog-classify", None),
-                                });
-                            pass.set_pipeline(&self.gpu.fog_classify_pipeline);
-                            pass.set_bind_group(0, &bind_group, &[]);
-                            pass.set_bind_group(1, &light_index_bg, &[]);
-                            pass.set_bind_group(2, &grid_classify, &[]);
-                            pass.dispatch_workgroups(
-                                width
-                                    .div_ceil(fog_tile)
-                                    .div_ceil(crate::fog_grid::BLOCK_SIDE),
-                                height
-                                    .div_ceil(fog_tile)
-                                    .div_ceil(crate::fog_grid::BLOCK_SIDE),
-                                crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
-                            );
-                        }
+                    self.fog_blocks_valid = true;
+                    let repeat_count = self.gpu.profile_copies("fog-classify");
+                    for _repeat_index in 0..repeat_count {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("fog-classify"),
+                            timestamp_writes: pass_queries.compute("fog-classify", None),
+                        });
+                        pass.set_pipeline(&self.gpu.fog_classify_pipeline);
+                        pass.set_bind_group(0, &bind_group, &[]);
+                        pass.set_bind_group(1, &light_index_bg, &[]);
+                        pass.set_bind_group(2, &grid_classify, &[]);
+                        pass.dispatch_workgroups(
+                            width
+                                .div_ceil(fog_tile)
+                                .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                            height
+                                .div_ceil(fog_tile)
+                                .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                            crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
+                        );
                     }
                     let repeat_count = self.gpu.profile_copies("fog-grid");
                     for repeat_index in 0..repeat_count {
@@ -5774,11 +5563,11 @@ impl Renderer {
                             1,
                         );
                     }
-                    if let (Some(plan), Some(pipes)) = (compact_plan.as_ref(), compact_pipes) {
+                    if let Some(plan) = compact_plan.as_ref() {
                         self.compaction.encode_residual(
                             &mut encoder,
                             &mut pass_queries,
-                            pipes,
+                            compact_pipes,
                             &crate::haze_compact::Groups {
                                 haze: &bind_group,
                                 light_index: &light_index_bg,
@@ -5792,26 +5581,19 @@ impl Renderer {
                         );
                     }
                 }
-                // Deterministic grid transport emits each pixel exactly once.
-                // Direct stores preserve its output without fragment blending;
-                // stochastic subframes still need the accumulation pass below.
-                // The specialized kernel contains no MIS fallback. An unmapped
-                // scattering source keeps the generic fragment path, including
-                // its established arithmetic for partially dark rigs.
-                if native_compute {
-                    let mut output_entries = vec![
+                // Deterministic transport emits each pixel exactly once, as
+                // direct stores; the fragment pass below accumulates the MIS
+                // estimator's subframes.
+                if !per_ray {
+                    let output_entries = [
                         binding(0, wgpu::BindingResource::TextureView(&fog_integral)),
                         binding(1, wgpu::BindingResource::TextureView(&haze_view)),
                         binding(2, wgpu::BindingResource::TextureView(&haze_sampled)),
+                        binding(4, cache_uniform.as_entire_binding()),
+                        binding(5, cache_header.as_entire_binding()),
+                        binding(6, cache_claims.as_entire_binding()),
+                        binding(7, cache_table.as_entire_binding()),
                     ];
-                    if let Some((uniform, header, claims, table)) = &interval_cache_bindings {
-                        output_entries.extend([
-                            binding(4, uniform.as_entire_binding()),
-                            binding(5, header.as_entire_binding()),
-                            binding(6, claims.as_entire_binding()),
-                            binding(7, table.as_entire_binding()),
-                        ]);
-                    }
                     let output = self
                         .gpu
                         .device
@@ -5835,11 +5617,11 @@ impl Renderer {
                                 beginning_of_pass_write_index: None,
                                 end_of_pass_write_index: Some(2),
                             });
-                        if let (Some(plan), Some(pipes)) = (compact_plan.as_ref(), compact_pipes) {
+                        if let Some(plan) = compact_plan.as_ref() {
                             self.compaction.encode_output(
                                 &mut encoder,
                                 &mut pass_queries,
-                                pipes,
+                                compact_pipes,
                                 &groups,
                                 [
                                     &compact_bind_group(true, false),
@@ -5891,10 +5673,7 @@ impl Renderer {
                     timestamp_writes: pass_queries.render(
                         "haze",
                         profile_resources.as_ref().and_then(|(queries, ..)| {
-                            (!resolve_haze
-                                && k + 1 == haze_passes
-                                && !(k == 0 && wide_size.is_some()))
-                            .then_some(wgpu::RenderPassTimestampWrites {
+                            (!resolve_haze && k + 1 == haze_passes).then_some(wgpu::RenderPassTimestampWrites {
                                 query_set: queries,
                                 beginning_of_pass_write_index: None,
                                 end_of_pass_write_index: Some(2),
@@ -5903,124 +5682,13 @@ impl Renderer {
                     ),
                     ..Default::default()
                 });
-                pass.set_pipeline(if grid_fog && wide_size.is_some() && k == 0 {
-                    &self.gpu.haze_grid_routed[0]
-                } else if grid_fog {
-                    &self.gpu.haze_grid_pipeline
-                } else {
-                    &self.gpu.haze_pipeline
-                });
+                pass.set_pipeline(&self.gpu.haze_pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.set_bind_group(1, &light_index_bg, &[]);
                 pass.set_bind_group(2, &grid_read, &[]);
                 pass.set_bind_group(3, &grid_read, &[]);
                 pass.draw(0..3, 0..1);
                 drop(pass);
-                let wide = wide_size.zip(haze_wide.as_ref()).filter(|_| k == 0);
-                if let Some((wide, (_, [wide_view, wide_sampled]))) = wide {
-                    let wide_uniform = HazeUniform {
-                        transport: [
-                            uniform.transport[0],
-                            uniform.transport[1],
-                            wide.1 as f32,
-                            wide.0 as f32,
-                        ],
-                        tiles: [
-                            width as f32 / wide.0 as f32,
-                            height as f32 / wide.1 as f32,
-                            1.0,
-                            uniform.tiles[3],
-                        ],
-                        ..uniform
-                    };
-                    let wide_buf = self.storage(
-                        &mut encoder,
-                        &[wide_uniform],
-                        wgpu::BufferUsages::UNIFORM,
-                        "haze-wide",
-                    );
-                    let wide_bind_group = haze_bind_group(&wide_buf);
-                    {
-                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("haze-wide"),
-                            color_attachments: &[wide_view, wide_sampled].map(|view| {
-                                Some(wgpu::RenderPassColorAttachment {
-                                    view,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })
-                            }),
-                            depth_stencil_attachment: None,
-                            timestamp_writes: pass_queries.render("haze-wide", None),
-                            ..Default::default()
-                        });
-                        pass.set_pipeline(&self.gpu.haze_grid_routed[1]);
-                        pass.set_bind_group(0, &wide_bind_group, &[]);
-                        pass.set_bind_group(1, &light_index_bg, &[]);
-                        pass.set_bind_group(2, &grid_read, &[]);
-                        pass.set_bind_group(3, &grid_read, &[]);
-                        pass.draw(0..3, 0..1);
-                    }
-                    let merge_buf = self.storage(
-                        &mut encoder,
-                        &[WideMergeUniform {
-                            // Bilateral sigma in metres, as the composite's.
-                            params: [wide.0 as f32, wide.1 as f32, 0.25, 0.0],
-                            depth: [CAMERA_NEAR, camera_far, 0.0, 0.0],
-                        }],
-                        wgpu::BufferUsages::UNIFORM,
-                        "haze-wide-merge",
-                    );
-                    let merge_bind_group =
-                        self.gpu
-                            .device
-                            .create_bind_group(&wgpu::BindGroupDescriptor {
-                                label: Some("haze-wide-merge"),
-                                layout: &self.gpu.haze_wide_layout,
-                                entries: &[
-                                    binding(0, merge_buf.as_entire_binding()),
-                                    binding(1, wgpu::BindingResource::TextureView(wide_view)),
-                                    binding(
-                                        2,
-                                        wgpu::BindingResource::Sampler(&self.gpu.linear_sampler),
-                                    ),
-                                    binding(3, wgpu::BindingResource::TextureView(&depth_view)),
-                                ],
-                            });
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("haze-wide-merge"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &haze_view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: pass_queries.render(
-                            "haze-wide-merge",
-                            profile_resources.as_ref().and_then(|(queries, ..)| {
-                                (!resolve_haze && haze_passes == 1).then_some(
-                                    wgpu::RenderPassTimestampWrites {
-                                        query_set: queries,
-                                        beginning_of_pass_write_index: None,
-                                        end_of_pass_write_index: Some(2),
-                                    },
-                                )
-                            }),
-                        ),
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(&self.gpu.haze_wide_pipeline);
-                    pass.set_bind_group(0, &merge_bind_group, &[]);
-                    pass.draw(0..3, 0..1);
-                }
             }
 
             let composite_haze = if resolve_haze {
@@ -6033,7 +5701,7 @@ impl Renderer {
                         0.82,
                         f32::from(u8::from(history_valid)),
                         0.25,
-                        f32::from(u8::from(sampled_haze && !grid_fog)),
+                        f32::from(u8::from(sampled_haze)),
                     ],
                 };
                 let uniform_buf = self.storage(
@@ -6399,15 +6067,10 @@ impl Renderer {
         }
     }
 
-    /// Every slot's classification key from the last interval-cache plan:
-    /// its generation while cached (a write frame and the read frames after
-    /// it share the header and payload state that classification depends on).
-    /// `u32::MAX` means invalid or unwritten; an ordinary retained inactive
-    /// slot keeps its generation.
     /// Decide which shadow slots' cached traversal output is still exact this
     /// frame, upload the per-slot table and return the compute kernel's cache
-    /// bindings. With `active` false (no native compute path, or no cached
-    /// shadows) every slot is off and the bookkeeping forgets its contents.
+    /// bindings. With `active` false (no lit compute haze, or no cached
+    /// shadows) every slot is off.
     #[allow(clippy::too_many_arguments)]
     fn plan_interval_cache(
         &mut self,
@@ -6422,12 +6085,8 @@ impl Renderer {
         shadow_slots: &[Option<usize>],
         fixture_cones: &[crate::frame::FixtureCone],
         rests: &[LightRest],
-    ) -> Option<(wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, wgpu::Buffer)> {
+    ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
         use crate::interval_cache::{FrameKey, SlotKey, block_rect};
-        if !self.gpu.interval_cache {
-            self.interval_cache.forget();
-            return None;
-        }
         let blocks = (
             haze_size.0.div_ceil(HAZE_WORKGROUP[0]),
             haze_size.1.div_ceil(HAZE_WORKGROUP[1]),
@@ -6435,14 +6094,14 @@ impl Renderer {
         let blocks_total = blocks.0 * blocks.1;
         let capacity = shadow_slots.len().min(512);
         let mut uniform = IntervalCacheUniform {
-            params: [blocks.0, 0, 0, 0],
+            params: [blocks.0, 0, u32::from(haze_size == size), 0],
             flags: [0, self.interval_cache.epoch(), 0, 0],
             slots: [[0; 4]; 512],
         };
         // Each 8×4 workgroup must lie inside one light-index tile so every
-        // lane of a subgroup walks the same light list: true at native haze
-        // resolution, which is the only live setting.
-        let active = active && self.gpu.interval_cache && capacity > 0 && haze_size == size;
+        // lane of a block walks the same light list (`haze_cache.wgsl`):
+        // true at native haze resolution, which is the only live setting.
+        let active = active && capacity > 0 && haze_size == size;
         if active {
             let limits = self.gpu.device.limits();
             let table_entries = 1u64 << self.gpu.interval_cache_table_bits;
@@ -6526,7 +6185,7 @@ impl Renderer {
             }
             self.interval_cache_entries = entries;
             let pools = self.interval_pools.as_ref().expect("allocated above");
-            uniform.params = [blocks.0, pools.bucket_mask, 0, 0];
+            uniform.params = [blocks.0, pools.bucket_mask, 1, 0];
         } else {
             self.interval_cache.idle();
             self.interval_cache_entries.clear();
@@ -6554,12 +6213,12 @@ impl Renderer {
                 bucket_mask: 0,
             }
         });
-        Some((
+        (
             uniform_buf,
             pools.header.clone(),
             pools.claims.clone(),
             pools.table.clone(),
-        ))
+        )
     }
 
     fn scene_bind_group(
@@ -6820,7 +6479,7 @@ mod tests {
         CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, Channels, CompositeUniform, FixtureShadowMatrix,
         Globals, Gpu, HazeUniform, LightCore, LightRest, Renderer, SHADOW_SIZE,
         SurfaceClusterUniform, TextureEncoding, cascade_matrices, downsample,
-        specialize_wgsl_overrides, supports_haze_subgroups,
+        specialize_wgsl_overrides,
     };
 
     #[test]
@@ -6836,28 +6495,6 @@ mod tests {
             specialize_wgsl_overrides(source, &[]),
             "const A: bool = false;\nconst B: u32 = 7u;\nconst C: f32 = 2.5;\nconst D: i32 = -3;"
         );
-    }
-
-    #[test]
-    fn haze_subgroups_require_one_group_of_32_threads() {
-        let subgroup = wgpu::Features::SUBGROUP;
-        assert!(!supports_haze_subgroups(
-            wgpu::Features::empty(),
-            64,
-            false,
-            false
-        ));
-        assert!(!supports_haze_subgroups(subgroup, 8, false, false));
-        assert!(!supports_haze_subgroups(subgroup, 16, false, false));
-        assert!(supports_haze_subgroups(subgroup, 32, false, false));
-        assert!(supports_haze_subgroups(subgroup, 64, false, false));
-
-        // wgpu-hal reports conservative [4, 64] limits for Metal. Apple
-        // documents 32-lane SIMD-groups on native Apple GPUs; x86/Rosetta and
-        // non-Metal adapters keep the exact fused/stub fallback.
-        assert!(supports_haze_subgroups(subgroup, 4, true, true));
-        assert!(!supports_haze_subgroups(subgroup, 4, true, false));
-        assert!(!supports_haze_subgroups(subgroup, 4, false, true));
     }
 
     #[test]
@@ -7602,12 +7239,6 @@ mod tests {
     #[test]
     fn interval_cache_and_compact_list_resume_after_empty_blackout() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        if !renderer.gpu.interval_cache || renderer.gpu.haze_compact_pipelines.is_none() {
-            return Ok(());
-        }
-        // Compaction runs only under the compute haze pass, the default on
-        // Metal alone; take that path on every backend.
-        renderer.haze_compute = true;
         let mut frame = fixture_surface_frame(300);
         frame.geometry_shadows = true;
         frame.fixture_surface_lighting = false;
@@ -7641,12 +7272,6 @@ mod tests {
     #[test]
     fn partial_blackout_retains_only_resident_interval_slots() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        if !renderer.gpu.interval_cache || renderer.gpu.haze_compact_pipelines.is_none() {
-            return Ok(());
-        }
-        // Compaction runs only under the compute haze pass, the default on
-        // Metal alone; take that path on every backend.
-        renderer.haze_compute = true;
         let mut frame = fixture_surface_frame(300);
         frame.geometry_shadows = true;
         frame.fixture_surface_lighting = false;
@@ -7687,12 +7312,6 @@ mod tests {
         let mut gpu = Gpu::build()?;
         gpu.interval_cache_table_bits = 10;
         let mut renderer = Renderer::on(Arc::new(gpu));
-        if renderer.gpu.haze_compact_pipelines.is_none() {
-            return Ok(());
-        }
-        // Compaction runs only under the compute haze pass, the default on
-        // Metal alone; take that path on every backend.
-        renderer.haze_compute = true;
         renderer.compaction.group_columns = 2;
         let light_count = 300;
         let high_start = 256;
@@ -7794,13 +7413,7 @@ mod tests {
     #[test]
     fn residual_overflow_falls_back_on_its_first_frame() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        if renderer.gpu.haze_compact_pipelines.is_none() {
-            return Ok(());
-        }
         renderer.compaction.capacity = 64;
-        // Compaction runs only under the compute haze pass, the default on
-        // Metal alone; take that path on every backend.
-        renderer.haze_compute = true;
         let mut frame = fixture_surface_frame(300);
         frame.geometry_shadows = true;
         frame.fixture_surface_lighting = false;
@@ -7850,12 +7463,6 @@ mod tests {
     #[test]
     fn shared_residual_queue_repacks_incremental_and_gc_lists() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        if renderer.gpu.haze_compact_pipelines.is_none() {
-            return Ok(());
-        }
-        // Compaction runs only under the compute haze pass, the default on
-        // Metal alone; take that path on every backend.
-        renderer.haze_compute = true;
         let mut frame = fixture_surface_frame(300);
         frame.geometry_shadows = true;
         frame.fixture_surface_lighting = false;
@@ -7906,12 +7513,6 @@ mod tests {
     #[test]
     fn compact_output_dispatch_tracks_equal_area_reshape() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        if renderer.gpu.haze_compact_pipelines.is_none() {
-            return Ok(());
-        }
-        // Compaction runs only under the compute haze pass, the default on
-        // Metal alone; take that path on every backend.
-        renderer.haze_compute = true;
         let mut frame = fixture_surface_frame(300);
         frame.geometry_shadows = true;
         frame.fixture_surface_lighting = false;
@@ -8183,8 +7784,6 @@ mod tests {
         let gpu = Arc::new(Gpu::build()?);
         let mut renderer = Renderer::on(gpu.clone());
         let mut reference = Renderer::on(gpu);
-        renderer.haze_compute = true;
-        reference.haze_compute = true;
         let mut first = Vec::new();
         let original_intensity = frame.fixture_cones[1].intensity;
         for (probe, (width, height), settle) in [
@@ -8257,7 +7856,6 @@ mod tests {
     #[test]
     fn fog_block_stats_follow_frames_and_resizes() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
-        renderer.grid_fog = true;
         assert!(renderer.fog_block_stats()?.is_none());
         let mut frame = fixture_surface_frame(3);
         frame.geometry_shadows = true;
@@ -8269,13 +7867,9 @@ mod tests {
             light.cos_beam = 0.1;
         }
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
-        if !crate::fog_grid::block_visibility() {
-            assert!(renderer.fog_block_stats()?.is_none());
-            return Ok(());
-        }
         let first = renderer.fog_block_stats()?.expect("classified frame");
         assert_eq!(first.image_size, [127, 97]);
-        let tile = crate::fog_grid::default_tile_size();
+        let tile = crate::fog_grid::TILE_SIZE;
         let first_grid = [127_u32.div_ceil(tile), 97_u32.div_ceil(tile), 128];
         let first_blocks = first_grid.map(|n| n.div_ceil(4));
         assert_eq!(first.grid_size, first_grid);
@@ -8297,7 +7891,7 @@ mod tests {
         // The lighting shader trusts these source eligibility filters. A cue
         // must clear candidates that become ineligible, then restore them.
         frame.fixture_cones[0].wash = crate::fog_grid::BROAD_WASH - 0.01;
-        frame.fixture_cones[1].gobo = 1;
+        frame.fixture_cones[1].wash = crate::fog_grid::BROAD_WASH - 0.01;
         frame.fixture_cones[2].haze_gain = 0.0;
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
         assert!(
@@ -8309,7 +7903,7 @@ mod tests {
                 .all(|counts| *counts == [0, 0])
         );
         frame.fixture_cones[0].wash = 1.0;
-        frame.fixture_cones[1].gobo = 0;
+        frame.fixture_cones[1].wash = 1.0;
         frame.fixture_cones[2].haze_gain = 1.0;
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
         assert_eq!(renderer.fog_block_stats()?.unwrap().counts, first.counts);
@@ -8324,10 +7918,6 @@ mod tests {
             resized_blocks.into_iter().product::<u32>() as usize
         );
         frame.haze_density = 0.0;
-        renderer.render_next(&frame, 65, 49, crate::LIVE_SUBFRAMES)?;
-        assert!(renderer.fog_block_stats()?.is_none());
-        frame.haze_density = 0.6;
-        renderer.grid_fog = false;
         renderer.render_next(&frame, 65, 49, crate::LIVE_SUBFRAMES)?;
         assert!(renderer.fog_block_stats()?.is_none());
         Ok(())

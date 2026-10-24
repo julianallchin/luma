@@ -287,6 +287,12 @@ impl WgpuContext {
         if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             required_features |= wgpu::Features::TIMESTAMP_QUERY;
         }
+        // LUMA LOCAL EDIT: the renderer's haze kernels need subgroup
+        // operations. Without them the compositor still opens and the
+        // renderer reports the missing feature itself.
+        if adapter.features().contains(wgpu::Features::SUBGROUP) {
+            required_features |= wgpu::Features::SUBGROUP;
+        }
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
         #[cfg(target_family = "wasm")]

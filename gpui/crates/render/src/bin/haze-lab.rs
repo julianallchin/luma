@@ -184,17 +184,12 @@ fn capture_environment() -> std::collections::BTreeMap<&'static str, String> {
         "LUMA_SHADOW_UPDATE_PROBES",
         "LUMA_FOG_BLOCK_STATS",
         "LUMA_PROFILE_REPEAT",
-        "LUMA_HAZE_COMPUTE",
         "LUMA_PROFILE_DETAIL",
         "LUMA_SURFACE_DEPTH_CULL",
         "LUMA_PROFILE_OMIT",
-        "LUMA_GRID_FOG",
-        "LUMA_WIDE_LIGHT_GROUP",
         "LUMA_VISIBILITY_REFERENCE",
         "LUMA_GEOMETRY_SHADOWS",
-        "LUMA_FOG_TILE_SIZE",
         "LUMA_FOG_DEPTH_CULL",
-        "LUMA_FOG_BLOCKS",
         "LUMA_GEOMETRY_SHADOW_SAMPLES",
     ]
     .into_iter()
@@ -318,8 +313,6 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
         "live",
         "uniform",
         "no-haze",
-        "no-grid",
-        "exact-live",
         "full-live",
         "reference16",
         "reference32",
@@ -330,14 +323,6 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
     .contains(&mode)
     {
         bail!("unknown experiment {mode}");
-    }
-    // Set before creating the GPU or renderer. Independent invocations isolate
-    // process-wide shader/environment switches; no changes to app defaults.
-    if mode == "no-grid" || mode == "exact-live" || reference_samples > 0 {
-        std::env::set_var("LUMA_GRID_FOG", "0");
-    }
-    if mode == "exact-live" || reference_samples > 0 {
-        std::env::set_var("LUMA_WIDE_LIGHT_GROUP", "1");
     }
     let suite: Suite = serde_json::from_slice(&fs::read(suite_path)?)?;
     anyhow::ensure!(

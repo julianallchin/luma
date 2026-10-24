@@ -568,6 +568,7 @@ mod tests {
             let Ok((device, queue)) =
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                     // What gpui's compositor asks for (`gpui_wgpu::WgpuContext`).
+                    required_features: adapter.features() & wgpu::Features::SUBGROUP,
                     required_limits: wgpu::Limits {
                         max_storage_buffer_binding_size:
                             adapter.limits().max_storage_buffer_binding_size,
