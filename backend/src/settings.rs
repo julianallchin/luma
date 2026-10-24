@@ -73,6 +73,14 @@ pub struct AppSettings {
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
     pub agent_model: String,
+    /// Whether the app looks for, downloads and installs releases by itself.
+    /// A fact about this install, so it is not synced.
+    #[serde(default = "enabled")]
+    pub auto_update: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -92,6 +100,7 @@ impl Default for AppSettings {
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
+            auto_update: true,
         }
     }
 }
@@ -153,6 +162,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .map_err(|e| e.to_string())?
             .key()
             .into(),
+        auto_update: map.get("auto_update").map_or(true, |v| v == "true"),
     })
 }
 
