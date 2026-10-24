@@ -32,7 +32,7 @@ The main parts are:
   lighting (`environment.rs`) and a physically based sky (`atmosphere.rs`). AgX
   tonemapping. There is no bloom.
 - **Light index.** Screen tiles plus Z-bins, built in compute
-  (`light_index.rs`). See `docs/design/light-index-unification.md`.
+  (`light_index.rs`).
 - **Shadows.** Sun cascades, and per-fixture shadow maps (`shadow.rs`). By default
   every active emitter keeps a map, up to 512 layers.
 - **Haze.** Analytic beam transport in `shaders/beam_transport.wgsl`, a baked
@@ -40,7 +40,6 @@ The main parts are:
   lit-interval cache (`interval_cache.rs`).
 - **Overlay.** Gizmos, selection and socket marks (`overlay.rs`).
 
-`docs/design/volumetrics-v2.md` has the phase status of the volumetric work.
 `docs/design/stage-rendering-quality.md` has the quality targets and measurements.
 
 ## 4. Presentation
@@ -84,6 +83,6 @@ Future work: an app dialog, a Python binding, and recording many scores in one r
 ## 8. Future work
 
 - Geometry-aware indirect lighting. There is no GI.
-- Shadow tiers and moment maps (`docs/design/shadows-phase3.md`).
+- Shadow tiers and moment maps.
 - Calibrated fixture photometry. `luminaire.rs` reads lens angles from the fixture
   definition where present and uses relative per-kind lumen budgets.

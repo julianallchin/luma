@@ -177,7 +177,7 @@ branch around it.
 
 (Historical: the work-count instrumentation has since been removed.)
 One instrumented capture on the 3 s close view, using the then-existing
-`LUMA_HAZE_WORK_COUNTS` machinery with two counters repurposed:
+work-count machinery with two counters repurposed:
 
 1. Histogram of `lit_interval` calls per (pixel, light) pair, including
    tails. Sets `K` and the overflow fraction.

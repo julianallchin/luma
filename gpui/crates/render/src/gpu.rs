@@ -559,7 +559,7 @@ pub struct ShadowStats {
     /// Instanced draws actually encoded — one per (map, distinct mesh). When
     /// `caster_draws / mesh_draws` approaches 1 the venue has many distinct
     /// meshes rather than many copies, mesh grouping has stopped paying, and
-    /// the merged-index-buffer escalation (`shadows-phase3.md` §5.3) is due.
+    /// merging every caster into one index buffer is the next step.
     pub mesh_draws: usize,
 }
 

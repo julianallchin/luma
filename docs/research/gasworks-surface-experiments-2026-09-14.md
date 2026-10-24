@@ -131,12 +131,12 @@ constant during the camera orbit. Output files must be new.
 ```sh
 cargo +1.97.1 build --manifest-path gpui/Cargo.toml -p luma-render --bin profile-surfaces
 gpui/target/debug/profile-surfaces experiments/surface-gasworks-20260914/suite.json /tmp/gasworks-control.json 600
-LUMA_PROFILE_OMIT=face-lights gpui/target/debug/profile-surfaces experiments/surface-gasworks-20260914/suite.json /tmp/gasworks-no-face.json 600
-LUMA_PROFILE_OMIT=surface-shadows gpui/target/debug/profile-surfaces experiments/surface-gasworks-20260914/suite.json /tmp/gasworks-no-shadows.json 600
-LUMA_PROFILE_OMIT=surface-lighting gpui/target/debug/profile-surfaces experiments/surface-gasworks-20260914/suite.json /tmp/gasworks-no-lighting.json 600
 ```
 
-Use a clean renderer environment apart from the named omission, the same power
+The omission runs (face lights, surface shadows, surface lighting) used shader
+omission switches that were removed on 2026-10-24.
+
+Use a clean renderer environment, the same power
 conditions, and no concurrent build or GPU workload. Do not compare results
 from different viewport sizes or light states.
 

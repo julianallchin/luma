@@ -56,8 +56,8 @@ The renderer's cost model, from the code: `subframes` loops **only the haze pass
 Offscreen uses `HAZE_RESOLUTION = 1.0` and `subframes = 16`; live uses `0.5` and `2`.
 That is 4× the march invocations and 8× the passes — 32× the live haze cost.
 
-Calibrating against `docs/design/volumetrics-v2.md` §1.2 (M3 Max, 1920×1080,
-subframes=2, haze_resolution 0.5, haze_steps 8):
+Calibrating against a live-path measurement (M3 Max, 1920×1080, subframes=2,
+haze_resolution 0.5, haze_steps 8):
 
 | cones | measured `gpu_volumetric` p50 | ⇒ per subframe @1.0 res, 1080p | ⇒ ×16 subframes |
 |---|---|---|---|

@@ -67,7 +67,7 @@ use crate::metrics::MetricSummary;
 /// honest — but it was taken in a latency-bound regime, where `until_signalled`
 /// was 14.5 ms against 0.72 ms of GPU pass time, and latency is precisely what
 /// a pipeline hides. The machine that matters is throughput-bound at its window
-/// size, and nothing hides that. See `docs/design/volumetrics-v2.md` §26–§29.
+/// size, and nothing hides that.
 ///
 /// Five, not four, because [`RESERVED`] is three: usable depth is the
 /// difference, and it is **two** either way. The count moved to keep that

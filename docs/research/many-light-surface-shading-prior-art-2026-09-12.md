@@ -78,7 +78,7 @@ map is physically exact.
 
 | Rank | Technique | Quality class | Why it fits this case |
 |---:|---|---|---|
-| 1 | Put face point lights behind conservative tiled/depth culling | Exact | Removes a currently unbounded `pixels × active face lights` loop. Small cutoff spheres should produce sparse masks. Confirm first with `LUMA_PROFILE_OMIT=face-lights`. A fixture-local implementation could be simpler and matches the type's stated intent, but needs a contract test because it can differ from today's incidental lighting of nearby geometry. |
+| 1 | Put face point lights behind conservative tiled/depth culling | Exact | Removes a currently unbounded `pixels × active face lights` loop. Small cutoff spheres should produce sparse masks. A fixture-local implementation could be simpler and matches the type's stated intent, but needs a contract test because it can differ from today's incidental lighting of nearby geometry. |
 | 2 | Use the existing shadow min/max hierarchy for conservative all-lit/all-shadowed early exits before the full PCF filter | Exact if receiver-depth bounds include every tap | The hierarchy is already resident and valid when maps are cached. Large uniform regions can avoid four gathers, sixteen metric depth conversions/comparisons, and weight accumulation. A conservative miss falls through to the current code. |
 | 3 | Remove avoidable per-candidate arithmetic and divergence | Exact | Compare squared distance with squared range before `sqrt`; use the uploaded gobo basis invariants; specialize or bucket plain washes and gobo lights if Xcode shows divergent transcendental work. These changes are small and independently testable. |
 | 4 | Sweep the current exact culler rather than replace it: 4/8/16 px tiles, one/two surface-depth buckets, and tighter rasterized cone coverage only if candidate counters remain high | Exact | The 0.38 ms index time leaves some room to spend on culling if it saves several milliseconds of shading. Tiled-light-tree work shows that hierarchical traversal helps worst cases but can be slower than ordinary clustering, motivating a hybrid only after occupancy proves the need ([O'Donnell and Chajdas 2017](https://anteru.net/research/tiled-light-trees/)). |
@@ -150,13 +150,9 @@ not one retained sample.
 
 ### 1. Attribute the current scene shader
 
-Run the baseline and one process restart for each existing specialization:
-
-```text
-LUMA_PROFILE_OMIT=surface-lighting
-LUMA_PROFILE_OMIT=surface-shadows
-LUMA_PROFILE_OMIT=face-lights
-```
+Run the baseline and one process restart for each shader omission:
+`surface-lighting`, `surface-shadows` and `face-lights`. (The omission switches
+were removed on 2026-10-24; a rerun needs them patched back in.)
 
 Use `gpu_scene_ms` when `redrawn_shadow_maps == 0`; also retain `gpu_total_ms`,
 viewport pixels, lit cone count, active face-light count, refined candidate
@@ -179,7 +175,7 @@ register-limited occupancy.
   face-light count, removed by the face-light ablation, licenses indexing them.
 - Sweep viewport area at fixed camera and light state. Per-fragment shading
   should scale with shaded pixels; an index-build problem scales with tile count.
-- Run `LUMA_SURFACE_DEPTH_CULL=0` against the default and collect **refined**
+- Run without the surface depth refinement against the default and collect **refined**
   candidate visits. Existing `fragment_stats()` counts the original mask/Z-bin
   candidates, not the two refined surface planes, so it cannot evaluate this
   optimization by itself.

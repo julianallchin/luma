@@ -381,8 +381,7 @@ mod tests {
     ///
     /// Asserting the churn rather than wishing it away, because the fix is a
     /// policy change (tenancy hysteresis over time, the temporal twin of
-    /// `EVICTION_MARGIN`) that wants its own measurement — see
-    /// `docs/design/volumetrics-v2.md`. When that lands, this test is the one
+    /// `EVICTION_MARGIN`) that wants its own measurement. When that lands, this test is the one
     /// that should start failing.
     /// Camera motion does NOT churn shadow tenancy — `EVICTION_MARGIN` is what
     /// stops it, and this pins that so a tuning change cannot quietly undo it.
