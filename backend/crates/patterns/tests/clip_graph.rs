@@ -482,16 +482,16 @@ fn rule_5_axes() {
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
     .check()
     .unwrap();
-    // A time node's own every cannot follow events.
-    assert_eq!(
-        error(json!({
-            "time2": {"kind": "time", "inputs": {"every": 2}},
-            "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "low": 1, "high": 2}},
-            "time1": {"kind": "time", "inputs": {"every": {"node": "curve4"}}},
-            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
-            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
-        r#"time1.every: expected a value or a curve over the clip; got events of time2 through curve4. Example: every=curve(time(), "Ramp down", low=0.5, high=2)"#
-    );
+    // A period that follows events takes the newest event's value: the
+    // events stop there, so its time node keeps its own clock.
+    graph(json!({
+        "time2": {"kind": "time", "inputs": {"every": 2}},
+        "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "low": 1, "high": 2}},
+        "time1": {"kind": "time", "inputs": {"every": {"node": "curve4"}}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+    .check()
+    .unwrap();
     assert_eq!(
         error(json!({
             "space1": {"kind": "space"},

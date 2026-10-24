@@ -43,6 +43,10 @@ pub enum Kernel {
     /// channel (light), or each newer event over the older by its weight
     /// (aim). No live event is transparent.
     Combine,
+    /// The value of the newest event that has begun, so a curve over
+    /// events can set a clock's period. Before the first event, the first
+    /// channel's value.
+    Newest,
     /// Two values combined by a math node's op: `*`, `+`, `-`, `max` or
     /// `min`.
     Math,
@@ -55,7 +59,7 @@ pub enum Kernel {
 pub(crate) const AIM_MIRRORS: usize = 4;
 
 impl Kernel {
-    pub const ALL: [Kernel; 17] = [
+    pub const ALL: [Kernel; 18] = [
         Kernel::ClockTable,
         Kernel::Clock,
         Kernel::Events,
@@ -69,6 +73,7 @@ impl Kernel {
         Kernel::Noise4,
         Kernel::Curve,
         Kernel::Combine,
+        Kernel::Newest,
         Kernel::Math,
         Kernel::ColorOut,
         Kernel::StrobeOut,
@@ -91,6 +96,7 @@ impl Kernel {
             Kernel::Noise4 => "kernel/noise4",
             Kernel::Curve => "kernel/curve",
             Kernel::Combine => "kernel/combine",
+            Kernel::Newest => "kernel/newest",
             Kernel::Math => "kernel/math",
             Kernel::ColorOut => "kernel/color_out",
             Kernel::StrobeOut => "kernel/strobe_out",
@@ -176,6 +182,7 @@ impl Kernel {
                 &["over"],
                 &["value", "alpha"],
             ),
+            Kernel::Newest => (names(&["value", "present", "progress"]), &[], &["value"]),
             Kernel::Math => (names(&["a", "b"]), &["op"], &["value"]),
             Kernel::ColorOut => (names(&["r", "g", "b", "alpha"]), &[], &["color"]),
             Kernel::StrobeOut => (names(&["rate", "alpha"]), &[], &["strobe"]),
@@ -909,6 +916,20 @@ pub(crate) fn run(
                 ("value".into(), signal(values, Channels::Value, &batch)?),
                 ("alpha".into(), signal(alphas, Channels::Value, &batch)?),
             ]))
+        }
+        Kernel::Newest => {
+            let (value, present, progress) = (s("value"), s("present"), s("progress"));
+            let dims = shape(&[value, present, progress])?;
+            let values = Array3::from_shape_fn((dims.0, dims.1, 1), |(n, t, _)| {
+                // Events lie in birth order; one that has begun is live or
+                // has run its course, and an unused channel is neither.
+                let newest = (0..dims.2)
+                    .rev()
+                    .find(|e| present.at(n, t, *e) > 0. || progress.at(n, t, *e) > 0.)
+                    .unwrap_or(0);
+                value.at(n, t, newest)
+            });
+            single("value", signal(values, Channels::Value, &batch)?)
         }
         Kernel::Math => {
             let (a, b) = (s("a"), s("b"));

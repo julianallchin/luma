@@ -240,6 +240,27 @@ impl Lowering<'_> {
 
     // ---- clocks ----
 
+    /// A clock table over `period`. A period that follows events takes the
+    /// newest event's value.
+    fn clock_table(&mut self, period: &Lowered) -> String {
+        let period = match &period.clock {
+            None => period.parts[0].clone(),
+            Some(clock) => {
+                let events = self.clocks[clock].clone();
+                let newest = self.kernel(
+                    Kernel::Newest,
+                    vec![
+                        ("value", period.parts[0].clone()),
+                        ("present", events.present),
+                        ("progress", events.progress),
+                    ],
+                );
+                output(&newest, "value")
+            }
+        };
+        self.kernel(Kernel::ClockTable, vec![("period", period)])
+    }
+
     /// The events of time node `id`, which has `every`: one event table
     /// per clock key, so time nodes with equal `every` and `duration`
     /// share their events.
@@ -253,11 +274,8 @@ impl Lowering<'_> {
         }
         let every = self.number(id, "every", 1.)?;
         let duration = self.duration(id)?;
-        let every_table = self.kernel(Kernel::ClockTable, vec![("period", every.parts[0].clone())]);
-        let duration_table = self.kernel(
-            Kernel::ClockTable,
-            vec![("period", duration.parts[0].clone())],
-        );
+        let every_table = self.clock_table(&every);
+        let duration_table = self.clock_table(&duration);
         let events = self.kernel(
             Kernel::Events,
             vec![
@@ -300,10 +318,7 @@ impl Lowering<'_> {
             // Once, `duration` beats long from the clip start; past its end
             // the clock runs on above 1, so curves hold their last value.
             let duration = self.number(id, "duration", 1.)?;
-            let table = self.kernel(
-                Kernel::ClockTable,
-                vec![("period", duration.parts[0].clone())],
-            );
+            let table = self.clock_table(&duration);
             let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
             (output(&turns, "value"), None)
         } else {
@@ -434,10 +449,7 @@ impl Lowering<'_> {
         let uniform = !self.node(id).inputs.contains_key("scale");
         let scale = self.number(id, "scale", 1.)?;
         let contrast = self.number(id, "contrast", 0.)?;
-        let table = self.kernel(
-            Kernel::ClockTable,
-            vec![("period", period.parts[0].clone())],
-        );
+        let table = self.clock_table(&period);
         let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
         let salt = super::noise::fnv(id);
         let span = self.index_field(&heads.units.span)?;
