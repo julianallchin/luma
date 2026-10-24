@@ -4,7 +4,6 @@
 @group(2) @binding(0) var fog_grid: texture_storage_3d<rgba16float, write>;
 @group(2) @binding(1) var fog_columns: texture_2d<f32>;
 @group(2) @binding(2) var<storage, read> candidates: array<u32>;
-override PROFILE_SKIP_GRID_SHADOW_TESTS: bool = false;
 
 @compute @workgroup_size(FOG_BLOCK_SIDE, FOG_BLOCK_SIDE, FOG_BLOCK_SIDE)
 fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
@@ -48,7 +47,7 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
             if angular <= 0.0 { continue; }
             var visibility = 1.0;
-            if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u && !PROFILE_SKIP_GRID_SHADOW_TESTS {
+            if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u {
                 visibility = segment_shadow_visibility(ray_dir, start, end, li);
             }
             if visibility <= 0.0 { continue; }

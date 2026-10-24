@@ -1,6 +1,3 @@
-// Diagnostic omissions specialize away at pipeline creation. Never quality references.
-override PROFILE_SKIP_FIXTURES: bool = false;
-override PROFILE_SKIP_SURFACE_SHADOWS: bool = false;
 
 // Opaque scene pass. One material path, three.js `MeshStandardMaterial`
 // semantics: metallic-roughness GGX, one ambient term, one shadowed
@@ -170,7 +167,6 @@ fn fixture_shadow_tap(base: vec2<f32>, offset: vec2<f32>, uv: vec2<f32>,
 }
 
 fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u32) -> f32 {
-    if PROFILE_SKIP_SURFACE_SHADOWS { return 1.0; }
     // The software oracle is populated only by the reference harness.
     let slot = fixture_rests[light_index].shadow_slot;
     if slot < 0.0 {
@@ -634,7 +630,7 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
         }
     }
 
-    if surface_clusters.flags.x > 0.5 && !PROFILE_SKIP_FIXTURES {
+    if surface_clusters.flags.x > 0.5 {
         var cursor = lights_at(in.clip.xy, view_depth);
         if surface_clusters.flags.z > 0.5 {
             // Plane 2 is the tile's surface bucket A; plane 3 bucket B beyond
@@ -642,14 +638,12 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             // fragment's stored sample may sit in either bucket, so it keeps
             // the full-range plane 0, a superset of both.
             var plane = 2u;
-            if surface_clusters.flags.w > 0.5 {
-                let split = surface_splits[cursor.base / LIGHT_INDEX_WORDS];
-                let margin = abs(view_depth) * 0.001 + 0.001;
-                if view_depth > split + margin {
-                    plane = 3u;
-                } else if view_depth >= split - margin {
-                    plane = 0u;
-                }
+            let split = surface_splits[cursor.base / LIGHT_INDEX_WORDS];
+            let margin = abs(view_depth) * 0.001 + 0.001;
+            if view_depth > split + margin {
+                plane = 3u;
+            } else if view_depth >= split - margin {
+                plane = 0u;
             }
             if plane != 0u {
                 cursor.base += plane * light_index_params.grid.x * light_index_params.grid.y * LIGHT_INDEX_WORDS;

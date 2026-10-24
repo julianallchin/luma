@@ -74,7 +74,7 @@ Each invocation starts a fresh process. Use a clean environment: externally set
 `LUMA_*` renderer switches remain effective and are recorded in `capture.json`.
 Keep each variant in its own output directory.
 
-| Mode / switch | Change from live defaults |
+| Mode | Change from live defaults |
 | --- | --- |
 | `live` | Native-resolution deterministic beams, shared far-field grid, production subframe budget |
 | `no-haze` | Zero haze density, to isolate the stage surface and submission path |
@@ -82,47 +82,17 @@ Keep each variant in its own output directory.
 | `full-live` | Same native target as current live defaults |
 | `reference16/32/64/128` | Native-resolution per-ray MIS haze, every light, 32 integration samples, stated accumulated subframes, grid disabled |
 | `export` | One isolated frame at the video export's subframe count, as `render` draws it |
-| `LUMA_FOG_DEPTH_CULL=0` | Retain all column prefixes, including those hidden behind geometry |
-| `LUMA_SURFACE_DEPTH_CULL=0` | Disable the conservative MSAA-depth refinement of surface light masks |
-| `LUMA_PROFILE_OMIT=NAME` | Diagnostic shader omission; changes the image and cannot pass the exact quality gate |
-| `LUMA_PROFILE_REPEAT=PASS` | Repeat one idempotent pass with identical inputs to measure incremental work; outputs must remain exact and timings are performance-ineligible |
-| `LUMA_VISIBILITY_REFERENCE=1 LUMA_GEOMETRY_SHADOW_SAMPLES=32` | Software triangle visibility instead of cached shadow maps; use with a reference mode |
 
 The reference converges our current single-scattering model. It is not an
 independent path-traced physical ground truth: source extinction still uses its
 angular cache, density has finite quadrature, and accumulation uses half-float
 render targets. Compare two reference sample counts before treating small image
-differences as meaningful. A triangle-visibility reference additionally removes
-the shadow-map approximation, at considerable cost for dense geometry.
-
-`LUMA_PROFILE_OMIT` accepts `surface-clouds`, `surface-lighting`,
-`surface-shadows`, `native-shadows`, `native-integrals`,
-`native-clouds`, `native-light-depth`, `native-camera-depth`, or
-`grid-shadow-tests`. Unknown values fail at pipeline creation. An invocation
-with this variable set is tagged both `qualityReferenceEligible: false` and
-`performanceReferenceEligible: false`, and the
-Mac exact pixel audit rejects it. Omissions specialize only the named consumer:
-native omissions leave grid lighting and surface shading intact, and grid shadow
-omission leaves block classification intact. `native-clouds` retains the physical
-medium envelope; the two depth omissions remove only the selected extinction
-term. These timings help locate work;
-their deltas are not additive exclusive costs or quality-preserving speedups.
+differences as meaningful.
 
 Live calls pass `LIVE_SUBFRAMES`, but haze is deterministic: every frame and
 capture runs the compute kernels once, and subframes matter only to the
 reference modes. The compute kernels carry no MIS, light selection or jitter;
 a light without a shadow map integrates its whole span per pixel.
-
-`LUMA_PROFILE_REPEAT` accepts `scene`, `medium-cache`, `fog-prepare`,
-`fog-classify`, `fog-grid`, `fog-integrate`, or `haze-compute`. It executes the
-selected pass twice when that pass is active. With `LUMA_PROFILE_DETAIL=1`,
-each copy has its own timestamp bracket; the completion-cut endpoints belong
-to the last copy. Scene copies clear and redraw the same attachments; compute
-copies overwrite the same outputs using unchanged inputs. Unknown names fail
-at pipeline creation. These runs remain quality-eligible but are explicitly
-performance-ineligible. Compare whole-frame deltas to nearby controls: cache
-behavior and overlap mean these deltas are not additive exclusive costs or
-the savings available from deleting a pass.
 
 Live captures warm for 64 frames with physical time frozen. Timings are the
 final 32 warm frames. Eight subsequent captures measure residual frame-to-frame

@@ -77,6 +77,9 @@ const CAMERA_FAR: f32 = 2000.0;
 /// is dark. The frame builder already drops dimmers under 1%; this catches a
 /// lit dimmer on a black colour.
 const DARK_CONE: f32 = 1e-4;
+/// Haze march samples per light for a light the software visibility
+/// reference (`visibility_reference`, which only tests turn on) traces.
+const REFERENCE_GEOMETRY_SHADOW_SAMPLES: f32 = 2.0;
 
 /// The per-frame work a [`Quality`](crate::scene_desc::Quality) level buys.
 /// `High` is the reference picture: its shadow walk is the one the renderer
@@ -654,7 +657,6 @@ pub struct Renderer {
     visibility: crate::visibility::Visibility,
     geometry_shadows: bool,
     visibility_reference: bool,
-    geometry_shadow_samples: u32,
     /// Draw haze with the fragment pass's per-ray MIS estimator
     /// ([`Self::render_reference`]).
     reference: bool,
@@ -1164,7 +1166,6 @@ pub struct Gpu {
     interval_cache_table_bits: u32,
     /// Residual compaction of the cached kernel (`haze_compact.rs`).
     haze_compact_pipelines: crate::haze_compact::Pipelines,
-    profile_repeat: Option<String>,
     fog_grid_pipeline: wgpu::ComputePipeline,
     fog_prepare_pipeline: wgpu::ComputePipeline,
     fog_prepare_layout: wgpu::BindGroupLayout,
@@ -1259,10 +1260,6 @@ impl Gpu {
         Ok(gpu)
     }
 
-    fn profile_copies(&self, pass: &str) -> u32 {
-        1 + u32::from(self.profile_repeat.as_deref() == Some(pass))
-    }
-
     /// Whether the driver has told us this device is gone.
     #[must_use]
     pub fn is_lost(&self) -> bool {
@@ -1302,14 +1299,14 @@ impl Gpu {
         // An adopted compositor device was made without asking us.
         crate::device::require_subgroups(context.device.features(), &context.adapter.get_info())?;
         let profile = RendererProfile::of(&context.adapter, &context.device, &context.queue);
-        Self::on(
+        Ok(Self::on(
             context.device.clone(),
             context.queue.clone(),
             profile,
             context.lost.clone(),
             context.adopted,
             started,
-        )
+        ))
     }
 
     /// Every pipeline, on a device somebody has already made.
@@ -1320,39 +1317,7 @@ impl Gpu {
         lost: Arc<AtomicBool>,
         adopted: bool,
         started: Instant,
-    ) -> anyhow::Result<Self> {
-        let profile_omit = std::env::var("LUMA_PROFILE_OMIT").unwrap_or_default();
-        anyhow::ensure!(
-            matches!(
-                profile_omit.as_str(),
-                "" | "surface-clouds"
-                    | "surface-lighting"
-                    | "surface-shadows"
-                    | "native-shadows"
-                    | "native-integrals"
-                    | "native-clouds"
-                    | "native-light-depth"
-                    | "native-camera-depth"
-                    | "grid-shadow-tests"
-            ),
-            "unknown LUMA_PROFILE_OMIT component: {profile_omit}"
-        );
-        let omitted = |name: &str| f64::from(u8::from(profile_omit == name));
-        let profile_repeat = std::env::var("LUMA_PROFILE_REPEAT").ok();
-        anyhow::ensure!(
-            profile_repeat.as_deref().is_none_or(|name| matches!(
-                name,
-                "scene"
-                    | "medium-cache"
-                    | "fog-prepare"
-                    | "fog-classify"
-                    | "fog-grid"
-                    | "fog-integrate"
-                    | "haze-compute"
-            )),
-            "unknown LUMA_PROFILE_REPEAT pass: {profile_repeat:?}"
-        );
-
+    ) -> Self {
         let environment = EnvironmentPipelines::new(&device, &queue);
         let atmosphere = AtmospherePipelines::new(&device, &queue);
         let mut scene_entries = vec![
@@ -1767,11 +1732,6 @@ impl Gpu {
             scene: scene_module.clone(),
             grid: grid_module.clone(),
             cables: cable_module.clone(),
-            skips: [
-                omitted("surface-clouds"),
-                omitted("surface-lighting"),
-                omitted("surface-shadows"),
-            ],
         };
         let scene_pipelines = scene_source.build(&device, MSAA_SAMPLES);
 
@@ -1894,17 +1854,7 @@ impl Gpu {
                 ),
                 module: &fog_prepare_module,
                 entry_point: Some("prepare_columns"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[(
-                        "DEPTH_CULL",
-                        if std::env::var_os("LUMA_FOG_DEPTH_CULL").is_some_and(|v| v == "0") {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    )],
-                    ..Default::default()
-                },
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
         let fog_classify_layout =
@@ -2128,10 +2078,6 @@ impl Gpu {
                 include_str!("shaders/haze_grid.wgsl")
             ),
         );
-        let fog_grid_constants = [(
-            "PROFILE_SKIP_GRID_SHADOW_TESTS",
-            omitted("grid-shadow-tests"),
-        )];
         let fog_grid_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("fog-grid"),
             layout: Some(
@@ -2147,68 +2093,52 @@ impl Gpu {
             ),
             module: &fog_grid_module,
             entry_point: Some("light_grid"),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &fog_grid_constants,
-                ..Default::default()
-            },
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
 
         let haze_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("haze"),
-                layout: Some(
-                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("haze"),
-                        // The transport declares the compute kernels' grid
-                        // groups too; the reference reads neither.
-                        bind_group_layouts: &[
-                            Some(&haze_layout),
-                            Some(light_index_pipelines.layout()),
-                            Some(&fog_grid_read_layout),
-                            Some(&fog_grid_read_layout),
-                        ],
-                        immediate_size: 0,
-                    }),
-                ),
-                vertex: wgpu::VertexState {
-                    module: &haze_module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &haze_module,
-                    entry_point: Some("fs_main"),
-                    // Subframes accumulate additively; each carries weight 1/K.
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: SCENE_FORMAT,
-                        blend: Some(wgpu::BlendState {
-                            color: ADD,
-                            alpha: ADD,
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[
-                            ("PROFILE_SKIP_NATIVE_CLOUDS", omitted("native-clouds")),
-                            (
-                                "PROFILE_SKIP_NATIVE_LIGHT_DEPTH",
-                                omitted("native-light-depth"),
-                            ),
-                            (
-                                "PROFILE_SKIP_NATIVE_CAMERA_DEPTH",
-                                omitted("native-camera-depth"),
-                            ),
-                        ],
-                        ..Default::default()
-                    },
+            label: Some("haze"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("haze"),
+                    // The transport declares the compute kernels' grid
+                    // groups too; the reference reads neither.
+                    bind_group_layouts: &[
+                        Some(&haze_layout),
+                        Some(light_index_pipelines.layout()),
+                        Some(&fog_grid_read_layout),
+                        Some(&fog_grid_read_layout),
+                    ],
+                    immediate_size: 0,
                 }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+            ),
+            vertex: wgpu::VertexState {
+                module: &haze_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &haze_module,
+                entry_point: Some("fs_main"),
+                // Subframes accumulate additively; each carries weight 1/K.
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: ADD,
+                        alpha: ADD,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let haze_output_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -2245,20 +2175,7 @@ impl Gpu {
                 label: Some("haze-compute"),
                 entries: &haze_compute_entries,
             });
-        let haze_constants = [
-            ("GRID_FOG", 1.0),
-            ("PROFILE_SKIP_NATIVE_SHADOWS", omitted("native-shadows")),
-            ("PROFILE_SKIP_NATIVE_INTEGRALS", omitted("native-integrals")),
-            ("PROFILE_SKIP_NATIVE_CLOUDS", omitted("native-clouds")),
-            (
-                "PROFILE_SKIP_NATIVE_LIGHT_DEPTH",
-                omitted("native-light-depth"),
-            ),
-            (
-                "PROFILE_SKIP_NATIVE_CAMERA_DEPTH",
-                omitted("native-camera-depth"),
-            ),
-        ];
+        let haze_constants = [("GRID_FOG", 1.0)];
         let haze_compact_pipelines = crate::haze_compact::Pipelines::new(
             &device,
             [
@@ -2533,7 +2450,7 @@ impl Gpu {
             &Channels::ALL.map(|channels| (channels.format(), channels.display_constants())),
         );
         let interval_cache_table_bits = crate::interval_cache::table_bits(&device.limits());
-        Ok(Self {
+        Self {
             sky_visibility,
             post,
             composite_linear_pipeline,
@@ -2567,7 +2484,6 @@ impl Gpu {
             haze_compute_layout,
             interval_cache_table_bits,
             haze_compact_pipelines,
-            profile_repeat,
             fog_grid_pipeline,
             fog_prepare_pipeline,
             fog_prepare_layout,
@@ -2594,7 +2510,7 @@ impl Gpu {
             lost,
             adopted,
             built_in: started.elapsed(),
-        })
+        }
     }
 
     /// The device every renderer draws with.
@@ -2737,16 +2653,9 @@ impl Renderer {
             geometry: None,
             visibility,
             geometry_shadows: false,
-            visibility_reference: std::env::var_os("LUMA_VISIBILITY_REFERENCE")
-                .is_some_and(|v| v == "1"),
-            surface_depth_cull: !std::env::var_os("LUMA_SURFACE_DEPTH_CULL")
-                .is_some_and(|v| v == "0"),
+            visibility_reference: false,
+            surface_depth_cull: true,
             reference: false,
-            geometry_shadow_samples: std::env::var("LUMA_GEOMETRY_SHADOW_SAMPLES")
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(2)
-                .clamp(2, 32),
             upload_stats: UploadStats {
                 geometry: 0,
                 textures: 0,
@@ -4021,11 +3930,6 @@ impl Renderer {
         let surface_depth_cull = self.surface_depth_cull
             && frame.fixture_surface_lighting
             && self.light_index.stats().lights_on_screen >= 32;
-        let surface_split = if surface_depth_cull {
-            self.gpu.light_index_pipelines.surface_split() as f32
-        } else {
-            0.0
-        };
         let cluster_uniform = self.storage(
             &mut encoder,
             &[SurfaceClusterUniform {
@@ -4033,7 +3937,7 @@ impl Renderer {
                     f32::from(u8::from(frame.fixture_surface_lighting)),
                     f32::from(u8::from(frame.cluster_debug)),
                     f32::from(u8::from(surface_depth_cull)),
-                    surface_split,
+                    0.0,
                 ],
                 shadow: [
                     fixture_shadow_count as f32,
@@ -4739,58 +4643,53 @@ impl Renderer {
             // of the haze pass, so the legacy timestamp slots keep their order.
             let samples = budget.msaa;
             let encode_scene = scene_encoder(|encoder, pass_queries, gpu, queries| {
-                let repeat_count = gpu.profile_copies("scene");
-                for repeat_index in 0..repeat_count {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("scene"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: msaa_color.as_ref().unwrap_or(&scene_view),
-                            resolve_target: msaa_color.as_ref().map(|_| &scene_view),
-                            depth_slice: None,
-                            // Premultiplied radiance and coverage, including each
-                            // surface's horizon fade. Transparent draws blend over
-                            // them before the composite supplies the background.
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: Some(depth_attachment_transient(&msaa_depth)),
-                        timestamp_writes: pass_queries.render(
-                            "scene",
-                            queries
-                                .filter(|_| repeat_index + 1 == repeat_count)
-                                .map(|queries| wgpu::RenderPassTimestampWrites {
-                                    query_set: queries,
-                                    beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(1),
-                                }),
-                        ),
-                        ..Default::default()
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("scene"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: msaa_color.as_ref().unwrap_or(&scene_view),
+                        resolve_target: msaa_color.as_ref().map(|_| &scene_view),
+                        depth_slice: None,
+                        // Premultiplied radiance and coverage, including each
+                        // surface's horizon fade. Transparent draws blend over
+                        // them before the composite supplies the background.
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(depth_attachment_transient(&msaa_depth)),
+                    timestamp_writes: pass_queries.render(
+                        "scene",
+                        queries.map(|queries| wgpu::RenderPassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: None,
+                            end_of_pass_write_index: Some(1),
+                        }),
+                    ),
+                    ..Default::default()
+                });
+                let pipelines = gpu.scene_pipelines(samples);
+                pass.set_bind_group(0, &lit_bg, &[]);
+                pass.set_bind_group(2, &environment_bg, &[]);
+                pass.set_bind_group(3, &cluster_bg, &[]);
+                if !floor_draws.is_empty() {
+                    pass.set_pipeline(&pipelines.ground);
+                    draw_range(&mut pass, &floor_draws);
+                }
+                pass.set_pipeline(&pipelines.scene);
+                draw_range(&mut pass, &lit_draws);
+                if let Some(balls) = probe_debug_balls {
+                    pass.set_pipeline(&pipelines.probe_debug);
+                    pass.set_bind_group(1, &gpu.white_material, &[]);
+                    pass.draw(0..crate::probes::DEBUG_BALL_VERTICES, 0..balls);
+                }
+                for (slot, kind) in frame.transparent.iter().enumerate() {
+                    pass.set_pipeline(match kind {
+                        crate::frame::Transparent::Grid => &pipelines.grid,
+                        crate::frame::Transparent::Compass => &pipelines.compass,
+                        crate::frame::Transparent::Cables => &pipelines.cables,
                     });
-                    let pipelines = gpu.scene_pipelines(samples);
-                    pass.set_bind_group(0, &lit_bg, &[]);
-                    pass.set_bind_group(2, &environment_bg, &[]);
-                    pass.set_bind_group(3, &cluster_bg, &[]);
-                    if !floor_draws.is_empty() {
-                        pass.set_pipeline(&pipelines.ground);
-                        draw_range(&mut pass, &floor_draws);
-                    }
-                    pass.set_pipeline(&pipelines.scene);
-                    draw_range(&mut pass, &lit_draws);
-                    if let Some(balls) = probe_debug_balls {
-                        pass.set_pipeline(&pipelines.probe_debug);
-                        pass.set_bind_group(1, &gpu.white_material, &[]);
-                        pass.draw(0..crate::probes::DEBUG_BALL_VERTICES, 0..balls);
-                    }
-                    for (slot, kind) in frame.transparent.iter().enumerate() {
-                        pass.set_pipeline(match kind {
-                            crate::frame::Transparent::Grid => &pipelines.grid,
-                            crate::frame::Transparent::Compass => &pipelines.compass,
-                            crate::frame::Transparent::Cables => &pipelines.cables,
-                        });
-                        draw_range(&mut pass, &transparent[slot..=slot]);
-                    }
+                    draw_range(&mut pass, &transparent[slot..=slot]);
                 }
             });
             if !scene_after_fog {
@@ -4941,20 +4840,17 @@ impl Renderer {
                 let Some(group) = medium_cache_group.as_ref() else {
                     return;
                 };
-                let repeat_count = gpu.profile_copies("medium-cache");
-                for _repeat_index in 0..repeat_count {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("medium-cache"),
-                        timestamp_writes: pass_queries.compute("medium-cache", None),
-                    });
-                    pass.set_pipeline(&gpu.medium_cache_pipeline);
-                    pass.set_bind_group(0, group, &[]);
-                    pass.dispatch_workgroups(
-                        medium_cache_dispatch[0],
-                        medium_cache_dispatch[1],
-                        medium_cache_dispatch[2],
-                    );
-                }
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("medium-cache"),
+                    timestamp_writes: pass_queries.compute("medium-cache", None),
+                });
+                pass.set_pipeline(&gpu.medium_cache_pipeline);
+                pass.set_bind_group(0, group, &[]);
+                pass.dispatch_workgroups(
+                    medium_cache_dispatch[0],
+                    medium_cache_dispatch[1],
+                    medium_cache_dispatch[2],
+                );
             };
             // Compute-lane order: on a grid-fed surface frame the medium cache
             // and the compaction classify are encoded after the scene pass.
@@ -5109,7 +5005,7 @@ impl Renderer {
                             && (self.geometry_shadows || frame.geometry_shadows)
                             && frame.fixture_shadows
                         {
-                            self.geometry_shadow_samples as f32
+                            REFERENCE_GEOMETRY_SHADOW_SAMPLES
                         } else {
                             0.0
                         },
@@ -5265,34 +5161,29 @@ impl Renderer {
                     // group binds the static field in its slot so they do not wait
                     // for the medium-cache pass.
                     let prefix_group = &bind_group_early;
-                    let repeat_count = self.gpu.profile_copies("fog-prepare");
-                    for repeat_index in 0..repeat_count {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("fog-grid"),
-                            timestamp_writes: pass_queries.compute(
-                                "fog-prepare",
-                                profile_resources.as_ref().and_then(|(queries, ..)| {
-                                    (k == 0).then_some(wgpu::ComputePassTimestampWrites {
-                                        query_set: queries,
-                                        beginning_of_pass_write_index: (repeat_index == 0)
-                                            .then_some(6),
-                                        end_of_pass_write_index: (repeat_index + 1 == repeat_count)
-                                            .then_some(8),
-                                    })
-                                }),
-                            ),
-                        });
-                        pass.set_pipeline(&self.gpu.fog_prepare_pipeline);
-                        pass.set_bind_group(0, prefix_group, &[]);
-                        pass.set_bind_group(1, &light_index_bg, &[]);
-                        pass.set_bind_group(2, &grid_prepare, &[]);
-                        pass.dispatch_workgroups(
-                            width.div_ceil(fog_tile).div_ceil(8),
-                            height.div_ceil(fog_tile).div_ceil(8),
-                            1,
-                        );
-                        drop(pass);
-                    }
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fog-grid"),
+                        timestamp_writes: pass_queries.compute(
+                            "fog-prepare",
+                            profile_resources.as_ref().and_then(|(queries, ..)| {
+                                (k == 0).then_some(wgpu::ComputePassTimestampWrites {
+                                    query_set: queries,
+                                    beginning_of_pass_write_index: Some(6),
+                                    end_of_pass_write_index: Some(8),
+                                })
+                            }),
+                        ),
+                    });
+                    pass.set_pipeline(&self.gpu.fog_prepare_pipeline);
+                    pass.set_bind_group(0, prefix_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(2, &grid_prepare, &[]);
+                    pass.dispatch_workgroups(
+                        width.div_ceil(fog_tile).div_ceil(8),
+                        height.div_ceil(fog_tile).div_ceil(8),
+                        1,
+                    );
+                    drop(pass);
                     if scene_after_fog {
                         // Grid-sourced surface transmittance: the camera prefix
                         // needs only the columns, so the surface pass follows it
@@ -5324,99 +5215,88 @@ impl Renderer {
                         encode_medium_cache(&mut encoder, &mut pass_queries, &self.gpu);
                     }
                     self.fog_blocks_valid = true;
-                    let repeat_count = self.gpu.profile_copies("fog-classify");
-                    for _repeat_index in 0..repeat_count {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("fog-classify"),
-                            timestamp_writes: pass_queries.compute("fog-classify", None),
-                        });
-                        pass.set_pipeline(&self.gpu.fog_classify_pipeline);
-                        pass.set_bind_group(0, &bind_group, &[]);
-                        pass.set_bind_group(1, &light_index_bg, &[]);
-                        pass.set_bind_group(2, &grid_classify, &[]);
-                        pass.dispatch_workgroups(
-                            width
-                                .div_ceil(fog_tile)
-                                .div_ceil(crate::fog_grid::BLOCK_SIDE),
-                            height
-                                .div_ceil(fog_tile)
-                                .div_ceil(crate::fog_grid::BLOCK_SIDE),
-                            crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
-                        );
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fog-classify"),
+                        timestamp_writes: pass_queries.compute("fog-classify", None),
+                    });
+                    pass.set_pipeline(&self.gpu.fog_classify_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(2, &grid_classify, &[]);
+                    pass.dispatch_workgroups(
+                        width
+                            .div_ceil(fog_tile)
+                            .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                        height
+                            .div_ceil(fog_tile)
+                            .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                        crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
+                    );
+                    drop(pass);
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fog-grid"),
+                        timestamp_writes: pass_queries.compute(
+                            "fog-grid",
+                            profile_resources.as_ref().map(|(queries, ..)| {
+                                wgpu::ComputePassTimestampWrites {
+                                    query_set: queries,
+                                    beginning_of_pass_write_index: None,
+                                    end_of_pass_write_index: Some(9),
+                                }
+                            }),
+                        ),
+                    });
+                    pass.set_pipeline(&self.gpu.fog_grid_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(2, &grid_write, &[]);
+                    pass.dispatch_workgroups(
+                        width
+                            .div_ceil(fog_tile)
+                            .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                        height
+                            .div_ceil(fog_tile)
+                            .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                        crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
+                    );
+                    drop(pass);
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fog-integrate"),
+                        timestamp_writes: pass_queries.compute(
+                            "fog-integrate",
+                            profile_resources.as_ref().and_then(|(queries, ..)| {
+                                (k == 0).then_some(wgpu::ComputePassTimestampWrites {
+                                    query_set: queries,
+                                    beginning_of_pass_write_index: None,
+                                    end_of_pass_write_index: Some(7),
+                                })
+                            }),
+                        ),
+                    });
+                    // `fog-transmittance` ran this frame iff the surface reads
+                    // the grid; its per-slice τ then replaces the density taps.
+                    if scene_after_fog {
+                        pass.set_pipeline(&self.gpu.fog_integrate_reuse_pipeline);
+                    } else {
+                        pass.set_pipeline(&self.gpu.fog_integrate_pipeline);
                     }
-                    let repeat_count = self.gpu.profile_copies("fog-grid");
-                    for repeat_index in 0..repeat_count {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("fog-grid"),
-                            timestamp_writes: pass_queries.compute(
-                                "fog-grid",
-                                profile_resources
-                                    .as_ref()
-                                    .filter(|_| repeat_index + 1 == repeat_count)
-                                    .map(|(queries, ..)| wgpu::ComputePassTimestampWrites {
-                                        query_set: queries,
-                                        beginning_of_pass_write_index: None,
-                                        end_of_pass_write_index: Some(9),
-                                    }),
-                            ),
-                        });
-                        pass.set_pipeline(&self.gpu.fog_grid_pipeline);
-                        pass.set_bind_group(0, &bind_group, &[]);
-                        pass.set_bind_group(1, &light_index_bg, &[]);
-                        pass.set_bind_group(2, &grid_write, &[]);
-                        pass.dispatch_workgroups(
-                            width
-                                .div_ceil(fog_tile)
-                                .div_ceil(crate::fog_grid::BLOCK_SIDE),
-                            height
-                                .div_ceil(fog_tile)
-                                .div_ceil(crate::fog_grid::BLOCK_SIDE),
-                            crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
-                        );
-                        drop(pass);
-                    }
-                    let repeat_count = self.gpu.profile_copies("fog-integrate");
-                    for repeat_index in 0..repeat_count {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("fog-integrate"),
-                            timestamp_writes: pass_queries.compute(
-                                "fog-integrate",
-                                profile_resources
-                                    .as_ref()
-                                    .filter(|_| repeat_index + 1 == repeat_count)
-                                    .and_then(|(queries, ..)| {
-                                        (k == 0).then_some(wgpu::ComputePassTimestampWrites {
-                                            query_set: queries,
-                                            beginning_of_pass_write_index: None,
-                                            end_of_pass_write_index: Some(7),
-                                        })
-                                    }),
-                            ),
-                        });
-                        // `fog-transmittance` ran this frame iff the surface reads
-                        // the grid; its per-slice τ then replaces the density taps.
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(
+                        2,
                         if scene_after_fog {
-                            pass.set_pipeline(&self.gpu.fog_integrate_reuse_pipeline);
+                            &grid_integrate_reuse
                         } else {
-                            pass.set_pipeline(&self.gpu.fog_integrate_pipeline);
-                        }
-                        pass.set_bind_group(0, &bind_group, &[]);
-                        pass.set_bind_group(1, &light_index_bg, &[]);
-                        pass.set_bind_group(
-                            2,
-                            if scene_after_fog {
-                                &grid_integrate_reuse
-                            } else {
-                                &grid_integrate
-                            },
-                            &[],
-                        );
-                        pass.dispatch_workgroups(
-                            width.div_ceil(fog_tile),
-                            height.div_ceil(fog_tile),
-                            1,
-                        );
-                    }
+                            &grid_integrate
+                        },
+                        &[],
+                    );
+                    pass.dispatch_workgroups(
+                        width.div_ceil(fog_tile),
+                        height.div_ceil(fog_tile),
+                        1,
+                    );
+                    drop(pass);
                     if let Some(plan) = compact_plan.as_ref() {
                         self.compaction.encode_residual(
                             &mut encoder,
@@ -5460,47 +5340,43 @@ impl Renderer {
                         light_index: &light_index_bg,
                         grid: &grid_read,
                     };
-                    let repeat_count = self.gpu.profile_copies("haze-compute");
-                    for repeat_index in 0..repeat_count {
-                        let timestamp_writes = profile_resources
-                            .as_ref()
-                            .filter(|_| repeat_index + 1 == repeat_count)
-                            .map(|(queries, ..)| wgpu::ComputePassTimestampWrites {
-                                query_set: queries,
-                                beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(2),
-                            });
-                        if let Some(plan) = compact_plan.as_ref() {
-                            self.compaction.encode_output(
-                                &mut encoder,
-                                &mut pass_queries,
-                                compact_pipes,
-                                &groups,
-                                [
-                                    &compact_bind_group(true, false),
-                                    &compact_bind_group(false, true),
-                                ],
-                                (&self.gpu.haze_compute_pipeline, &output),
-                                timestamp_writes,
-                                plan.readback && repeat_index + 1 == repeat_count,
-                            );
-                            continue;
+                    let timestamp_writes = profile_resources.as_ref().map(|(queries, ..)| {
+                        wgpu::ComputePassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: None,
+                            end_of_pass_write_index: Some(2),
                         }
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("haze-compute"),
-                            timestamp_writes: pass_queries.compute("haze-compute", timestamp_writes),
-                        });
-                        pass.set_pipeline(&self.gpu.haze_compute_pipeline);
-                        pass.set_bind_group(0, &bind_group, &[]);
-                        pass.set_bind_group(1, &light_index_bg, &[]);
-                        pass.set_bind_group(2, &output, &[]);
-                        pass.set_bind_group(3, &grid_read, &[]);
-                        pass.dispatch_workgroups(
-                            haze_size.0.div_ceil(HAZE_WORKGROUP[0]),
-                            haze_size.1.div_ceil(HAZE_WORKGROUP[1]),
-                            1,
+                    });
+                    if let Some(plan) = compact_plan.as_ref() {
+                        self.compaction.encode_output(
+                            &mut encoder,
+                            &mut pass_queries,
+                            compact_pipes,
+                            &groups,
+                            [
+                                &compact_bind_group(true, false),
+                                &compact_bind_group(false, true),
+                            ],
+                            (&self.gpu.haze_compute_pipeline, &output),
+                            timestamp_writes,
+                            plan.readback,
                         );
+                        continue;
                     }
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("haze-compute"),
+                        timestamp_writes: pass_queries.compute("haze-compute", timestamp_writes),
+                    });
+                    pass.set_pipeline(&self.gpu.haze_compute_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(2, &output, &[]);
+                    pass.set_bind_group(3, &grid_read, &[]);
+                    pass.dispatch_workgroups(
+                        haze_size.0.div_ceil(HAZE_WORKGROUP[0]),
+                        haze_size.1.div_ceil(HAZE_WORKGROUP[1]),
+                        1,
+                    );
                     continue;
                 }
                 // The reference's subframes accumulate additively.
@@ -7838,43 +7714,41 @@ mod tests {
             "surface plane did not prune: {original} -> {refined}"
         );
         // The straddling tiles (cable over ground) must have been split into
-        // two buckets when the split build is active.
-        if renderer.gpu.light_index_pipelines.surface_split() >= 2 {
-            let splits = renderer.light_index.bindings().surface_splits;
-            let readback = renderer.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("surface-split-test"),
-                size: splits.size(),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            let mut encoder = renderer
-                .gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            encoder.copy_buffer_to_buffer(&splits, 0, &readback, 0, splits.size());
-            renderer.gpu.queue.submit([encoder.finish()]);
-            let (tx, rx) = std::sync::mpsc::channel();
-            readback
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-            renderer
-                .gpu
-                .device
-                .poll(wgpu::PollType::wait_indefinitely())?;
-            rx.recv()??;
-            let split_mapped = readback.slice(..).get_mapped_range()?;
-            let split_depths: &[f32] = bytemuck::cast_slice(&split_mapped);
-            let split_tiles = split_depths.iter().filter(|s| **s < 1e29).count();
-            let refined_b: u32 = surface_b.iter().map(|b| b.count_ones()).sum();
-            assert!(
-                split_tiles > 0 && refined_b > 0,
-                "no straddling tile was split: {split_tiles} tiles, {refined_b} bucket-B bits"
-            );
-            assert!(
-                refined_b < refined,
-                "bucket B did not prune below bucket A: {refined} vs {refined_b}"
-            );
-        }
+        // two buckets.
+        let splits = renderer.light_index.bindings().surface_splits;
+        let readback = renderer.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("surface-split-test"),
+            size: splits.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = renderer
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_buffer_to_buffer(&splits, 0, &readback, 0, splits.size());
+        renderer.gpu.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        renderer
+            .gpu
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())?;
+        rx.recv()??;
+        let split_mapped = readback.slice(..).get_mapped_range()?;
+        let split_depths: &[f32] = bytemuck::cast_slice(&split_mapped);
+        let split_tiles = split_depths.iter().filter(|s| **s < 1e29).count();
+        let refined_b: u32 = surface_b.iter().map(|b| b.count_ones()).sum();
+        assert!(
+            split_tiles > 0 && refined_b > 0,
+            "no straddling tile was split: {split_tiles} tiles, {refined_b} bucket-B bits"
+        );
+        assert!(
+            refined_b < refined,
+            "bucket B did not prune below bucket A: {refined} vs {refined_b}"
+        );
         Ok(())
     }
 
@@ -8486,8 +8360,6 @@ struct ScenePipelineSource {
     scene: wgpu::ShaderModule,
     grid: wgpu::ShaderModule,
     cables: wgpu::ShaderModule,
-    /// `LUMA_PROFILE_OMIT` switches of the scene shader.
-    skips: [f64; 3],
 }
 
 const MESH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
@@ -8537,14 +8409,7 @@ impl ScenePipelineSource {
                     module: &self.scene,
                     entry_point: Some(entry_point),
                     targets: &[Some(SCENE_FORMAT.into())],
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[
-                            ("PROFILE_SKIP_SURFACE_CLOUDS", self.skips[0]),
-                            ("PROFILE_SKIP_FIXTURES", self.skips[1]),
-                            ("PROFILE_SKIP_SURFACE_SHADOWS", self.skips[2]),
-                        ],
-                        ..Default::default()
-                    },
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(depth_state(true)),

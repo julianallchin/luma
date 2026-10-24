@@ -25,11 +25,6 @@ var<private> cache_count: u32;
 var<private> cache_intervals: array<vec2<f32>, CACHE_K>;
 var<private> cache_record_only: bool;
 
-override PROFILE_SKIP_NATIVE_SHADOWS: bool = false;
-override PROFILE_SKIP_NATIVE_INTEGRALS: bool = false;
-override PROFILE_SKIP_NATIVE_CLOUDS: bool = false;
-override PROFILE_SKIP_NATIVE_LIGHT_DEPTH: bool = false;
-override PROFILE_SKIP_NATIVE_CAMERA_DEPTH: bool = false;
 const MAX_SAMPLES: i32 = 32;
 
 struct LightCore {
@@ -120,7 +115,6 @@ struct FixtureShadowMatrix {
 
 fn transport_transmittance(ray: SceneRay, li: u32, t: f32, world: vec3<f32>) -> f32 {
     let light_depth = light_optical_depth(li, world);
-    if PROFILE_SKIP_NATIVE_CAMERA_DEPTH { return exp(-light_depth); }
     if GRID_FOG {
         let size = vec3<f32>(textureDimensions(camera_fog));
         let span = ray.fog_span;
@@ -134,12 +128,10 @@ fn transport_transmittance(ray: SceneRay, li: u32, t: f32, world: vec3<f32>) -> 
 }
 
 fn haze_density_at(p: vec3<f32>) -> f32 {
-    if PROFILE_SKIP_NATIVE_CLOUDS { return medium_envelope(haze.medium, p); }
     return medium_density(haze.medium, p);
 }
 
 fn light_optical_depth(li: u32, world: vec3<f32>) -> f32 {
-    if PROFILE_SKIP_NATIVE_LIGHT_DEPTH { return 0.0; }
     let core = light_core[li];
     let q = world - core.position;
     let dist = length(q);

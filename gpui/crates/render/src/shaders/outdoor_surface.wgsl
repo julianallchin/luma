@@ -1,9 +1,7 @@
-override PROFILE_SKIP_SURFACE_CLOUDS: bool = false;
 // Apply outdoor transport before alpha blending. A nearby cable sees only
 // the air in front of itself, not the kilometres of air behind it.
 fn scene_radiance(color: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
     let aerial = aerial_radiance(color, delta);
-    if PROFILE_SKIP_SURFACE_CLOUDS { return aerial; }
     let debug = u32(globals.params.w + 0.5);
     if globals.medium.max.w <= 0.0 || globals.medium.min.w <= 0.0
         || (debug >= 1u && debug <= 5u) { return aerial; }
@@ -74,7 +72,6 @@ fn surface_radiance(color: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> v
 // aerial perspective already. `range` is the view depths the fragment
 // covers (`upsample_shafts`).
 fn surface_haze(aerial: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>, range: vec2<f32>) -> vec3<f32> {
-    if PROFILE_SKIP_SURFACE_CLOUDS { return aerial; }
     let debug = u32(globals.params.w + 0.5);
     if globals.medium.max.w <= 0.0 || globals.medium.min.w <= 0.0
         || (debug >= 1u && debug <= 5u) { return aerial; }

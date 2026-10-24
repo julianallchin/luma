@@ -52,8 +52,7 @@ fn the_probe_switches_change_what_the_renderer_draws() {
     let result = harness.exec(&script, Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out = result.result;
-    // The start-up defaults: probes on, balls off (no LUMA_PROBES or
-    // LUMA_PROBE_DEBUG in the test's environment).
+    // The start-up view: probes on, balls off.
     assert_eq!(out["before"]["probes"], true, "{out:#}");
     assert_eq!(out["before"]["balls"], false, "{out:#}");
     assert_eq!(out["before"]["sent"], "on, balls off", "{out:#}");

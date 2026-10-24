@@ -167,10 +167,6 @@ fn replay(suite_path: &Path, output: &Path) -> Result<()> {
                 "driver":renderer.gpu().adapter_profile().driver_info,
                 "backend":renderer.gpu().adapter_profile().backend},
             "environment":capture_environment(),
-            "qualityReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none(),
-            "performanceReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none()
-                && std::env::var_os("LUMA_PROFILE_REPEAT").is_none(),
-
             "note":"Offscreen production rendering of successive saved-score states. State evaluation and frame assembly occur before warmup; build_ms is reported separately. Each PNG is the same frame as its timing. PNG encoding occurs after all submissions. GPU timestamps exclude readback and presentation; blocking wall includes CPU submission, GPU completion and readback. This is not sustained presented FPS.",
             "frames":rows
         }),
@@ -183,14 +179,8 @@ fn capture_environment() -> std::collections::BTreeMap<&'static str, String> {
     [
         "LUMA_SHADOW_UPDATE_PROBES",
         "LUMA_FOG_BLOCK_STATS",
-        "LUMA_PROFILE_REPEAT",
         "LUMA_PROFILE_DETAIL",
-        "LUMA_SURFACE_DEPTH_CULL",
-        "LUMA_PROFILE_OMIT",
-        "LUMA_VISIBILITY_REFERENCE",
         "LUMA_GEOMETRY_SHADOWS",
-        "LUMA_FOG_DEPTH_CULL",
-        "LUMA_GEOMETRY_SHADOW_SAMPLES",
     ]
     .into_iter()
     .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
@@ -566,10 +556,6 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
             &dir.join("capture.json"),
             &json!({"case":case,"mode":mode,"size":[suite.width,suite.height],
             "adapter":{"name":renderer.gpu().adapter_profile().name,"driver":renderer.gpu().adapter_profile().driver_info,"backend":renderer.gpu().adapter_profile().backend},"sourceCatalogue":suite.catalogue,
-            "qualityReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none(),
-            "performanceReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none()
-                && std::env::var_os("LUMA_PROFILE_REPEAT").is_none(),
-
             "settings":{"hazeResolution":frame.haze_resolution,"hazeSteps":frame.haze_steps,"density":frame.haze_density,"appearance":frame.haze_appearance,"geometryShadows":frame.geometry_shadows,"fixtureShadows":frame.fixture_shadows,"referenceSubframes":reference_samples,"liveSubframes":luma_render::LIVE_SUBFRAMES},
             "environment":capture_environment(),
             "note":"Reference converges current transport with full-resolution all-light integration; not an independent physical ground truth. GPU timings use the live path and exclude GPUI/presentation/readback waits. wall_ms includes CPU submission, the complete GPU queue, pixel/query readback and blocking completion; it is not displayed FPS.","frames":timings}),
