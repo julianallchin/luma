@@ -55,6 +55,9 @@ const ART_SIZE: f32 = 32.0;
 pub(crate) enum Route {
     TrackBrowser,
     SourceLibrary,
+    /// The import in flight, song by song. Where the dialog goes the moment
+    /// an import starts, so "Import" visibly does something.
+    Progress,
 }
 
 /// Where a track can come from. A closed vocabulary, listed once: the menu's
@@ -112,6 +115,120 @@ pub(crate) struct TrackImportActivity {
     progress: Option<TrackImportProgress>,
     active: bool,
     error: Option<String>,
+    /// The venue the dialog was adding to when the import started. Every
+    /// imported song joins it, which is what the person asked for by
+    /// importing from there.
+    venue_id: Option<String>,
+    /// One per imported song, known once the files are in the library.
+    /// Empty while they are still being copied in.
+    items: Vec<ImportItem>,
+    /// Whether the progress page has been looked at since the import ended,
+    /// so the sidebar keeps a failed import on screen until it has been.
+    seen: bool,
+}
+
+pub(crate) struct ImportItem {
+    track_id: String,
+    title: String,
+    art: Option<String>,
+    stage: ItemStage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ItemStage {
+    Waiting,
+    /// Analysis running, at the named step once one has been announced.
+    Analyzing(Option<String>),
+    Done,
+    Failed(String),
+}
+
+impl ItemStage {
+    fn finished(&self) -> bool {
+        matches!(self, Self::Done | Self::Failed(_))
+    }
+}
+
+impl TrackImportActivity {
+    /// Fold one progress event into the per-song stages.
+    ///
+    /// The scheduler announces a song twice with no step — once as it starts,
+    /// once as it finishes — and once per step in between, all from the same
+    /// task, so the order is the song's own order.
+    fn apply(&mut self, event: &TrackImportProgress) {
+        if event.phase == TrackImportPhase::Complete {
+            for item in &mut self.items {
+                if !item.stage.finished() {
+                    item.stage = ItemStage::Done;
+                }
+            }
+            return;
+        }
+        let Some(track_id) = &event.track_id else {
+            return;
+        };
+        let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| &item.track_id == track_id)
+        else {
+            return;
+        };
+        if item.stage.finished() {
+            return;
+        }
+        item.stage = match (&event.error, &event.step, &item.stage) {
+            (Some(error), _, _) => ItemStage::Failed(error.clone()),
+            (None, Some(step), _) => ItemStage::Analyzing(Some(step.clone())),
+            (None, None, ItemStage::Waiting) => ItemStage::Analyzing(None),
+            (None, None, _) => ItemStage::Done,
+        };
+    }
+
+    fn failed(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| matches!(item.stage, ItemStage::Failed(_)))
+            .count()
+    }
+
+    /// The one line that says where the import is — the sidebar row and the
+    /// progress page's title both read it.
+    fn summary(&self) -> String {
+        let (done, total) = self
+            .progress
+            .as_ref()
+            .map_or((0, 0), |progress| (progress.done, progress.total));
+        let phase = self.progress.as_ref().map(|progress| &progress.phase);
+        if self.active {
+            let verb = match phase {
+                Some(TrackImportPhase::Analyzing) => "Analyzing",
+                _ => "Importing",
+            };
+            if total == 0 {
+                format!("{verb} songs…")
+            } else {
+                format!("{verb} {} of {total} songs…", (done + 1).min(total))
+            }
+        } else {
+            let failed = self.failed();
+            if failed > 0 {
+                format!("{} failed to import", plural(failed, "song"))
+            } else if self.error.is_some() && self.items.is_empty() {
+                "Import failed".to_string()
+            } else {
+                format!("Imported {}", plural(self.items.len(), "song"))
+            }
+        }
+    }
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
 }
 
 impl Route {
@@ -124,7 +241,7 @@ impl Route {
     fn parent(self) -> Option<Self> {
         match self {
             Self::TrackBrowser => None,
-            Self::SourceLibrary => Some(Self::TrackBrowser),
+            Self::SourceLibrary | Self::Progress => Some(Self::TrackBrowser),
         }
     }
 }
@@ -157,9 +274,6 @@ pub(crate) struct AddTracks {
     selected: HashSet<String>,
     browser_generation: u64,
     initial_focus_pending: bool,
-    /// The source-choice route's first control. The other two routes focus
-    /// their filter field instead, which owns its own handle.
-    picker_focus: FocusHandle,
     /// One handle per header control. A `tab_index` alone makes an element a
     /// stop that cannot *hold* focus — gpui then settles focus on the nearest
     /// focusable ancestor (the dialog container) and the ring reads as broken.
@@ -201,7 +315,7 @@ pub(crate) struct AddTracks {
 }
 
 impl AddTracks {
-    fn new(venue_id: String, cx: &mut Context<Luma>) -> Self {
+    fn new(venue_id: String, route: Route, cx: &mut Context<Luma>) -> Self {
         let browser_filter = cx.new(|cx| TextInput::search("Search all tracks…", cx));
         let source_filter = cx.new(|cx| TextInput::search("Search source…", cx));
         let browser_filter_focus = browser_filter.read(cx).focus_handle(cx);
@@ -230,7 +344,7 @@ impl AddTracks {
         Self {
             instance_id: uuid::Uuid::new_v4(),
             venue_id,
-            morph: MorphDialog::new(Route::TrackBrowser.descriptor(), PALETTE_SIZE),
+            morph: MorphDialog::new(route.descriptor(), PALETTE_SIZE),
             browser_rows: Rc::from(Vec::new()),
             browser_shown: Rc::from(Vec::new()),
             browser_loaded: false,
@@ -247,7 +361,6 @@ impl AddTracks {
             selected: HashSet::new(),
             browser_generation: 0,
             initial_focus_pending: true,
-            picker_focus: cx.focus_handle().tab_stop(true),
             back_focus: cx.focus_handle().tab_stop(true),
             submit_focus: cx.focus_handle().tab_stop(true),
             close_focus: cx.focus_handle().tab_stop(true),
@@ -270,6 +383,7 @@ impl AddTracks {
         match self.morph.target_key() {
             Route::TrackBrowser => Some(&self.browser_filter),
             Route::SourceLibrary => Some(&self.source_filter),
+            Route::Progress => None,
         }
     }
 
@@ -324,6 +438,7 @@ impl AddTracks {
         match route {
             Route::TrackBrowser => self.browser_shown.len(),
             Route::SourceLibrary => self.source_rows.len(),
+            Route::Progress => 0,
         }
     }
 
@@ -333,6 +448,7 @@ impl AddTracks {
         match route {
             Route::TrackBrowser => self.browser_filter.read(cx).is_empty(),
             Route::SourceLibrary => self.source_filter.read(cx).is_empty(),
+            Route::Progress => true,
         }
     }
 
@@ -351,6 +467,18 @@ impl AddTracks {
 
 impl Luma {
     pub(crate) fn show_add_tracks(&mut self, cx: &mut Context<Self>) {
+        self.open_add_tracks(Route::TrackBrowser, cx);
+    }
+
+    /// The sidebar's import row: the dialog, opened on the import's progress.
+    fn show_track_import(&mut self, cx: &mut Context<Self>) {
+        if let Some(activity) = &mut self.track_import {
+            activity.seen = true;
+        }
+        self.open_add_tracks(Route::Progress, cx);
+    }
+
+    fn open_add_tracks(&mut self, route: Route, cx: &mut Context<Self>) {
         let Some(venue_id) = self
             .sidebar
             .as_ref()
@@ -358,7 +486,7 @@ impl Luma {
         else {
             return;
         };
-        let state = AddTracks::new(venue_id, cx);
+        let state = AddTracks::new(venue_id, route, cx);
         self.overlay
             .open(crate::shell::Overlay::AddTracks(Box::new(state)));
         cx.notify();
@@ -459,6 +587,7 @@ impl Luma {
         let (active, scroll) = match route {
             Route::TrackBrowser => (&mut state.browser_active, &state.browser_scroll),
             Route::SourceLibrary => (&mut state.source_active, &state.source_scroll),
+            Route::Progress => return,
         };
         *active = (*active as isize + delta).rem_euclid(count as isize) as usize;
         scroll.scroll_to_item(*active, ScrollStrategy::Nearest);
@@ -489,6 +618,7 @@ impl Luma {
                 };
                 self.toggle_source_track(&id, cx);
             }
+            Route::Progress => {}
         }
     }
 
@@ -499,6 +629,7 @@ impl Luma {
             // menu that asks it rather than guessing a source.
             Route::TrackBrowser => self.toggle_source_menu(cx),
             Route::SourceLibrary => self.import_source_selection(cx),
+            Route::Progress => self.dismiss_overlay(cx),
         }
     }
 
@@ -826,12 +957,22 @@ impl Luma {
             .checked_add(1)
             .expect("track import generation exhausted");
         let generation = self.next_track_import;
+        let venue_id = match self.overlay.open_mut() {
+            Some(crate::shell::Overlay::AddTracks(state)) => {
+                state.request(Route::Progress, cx);
+                Some(state.venue_id.clone())
+            }
+            _ => None,
+        };
         self.track_import = Some(TrackImportActivity {
             generation,
             import_id: None,
             progress: None,
             active: true,
             error: None,
+            venue_id,
+            items: Vec::new(),
+            seen: false,
         });
         let mut progress = self.library.import_progress();
         let pending = self.library.import_tracks(request);
@@ -856,6 +997,7 @@ impl Luma {
             };
             let import_id = result.import_id.clone();
             this.update(cx, |this, cx| {
+                let mut venue = None;
                 if let Some(activity) = &mut this.track_import {
                     if activity.generation == generation {
                         activity.import_id = Some(import_id.clone());
@@ -867,7 +1009,27 @@ impl Luma {
                                 .collect::<Vec<_>>()
                                 .join("\n")
                         });
+                        activity.items = result
+                            .tracks
+                            .iter()
+                            .map(|track| ImportItem {
+                                track_id: track.id.clone(),
+                                title: track
+                                    .title
+                                    .clone()
+                                    .filter(|title| !title.is_empty())
+                                    .or_else(|| track.source_filename.clone())
+                                    .unwrap_or_else(|| track.file_path.clone()),
+                                art: track.album_art_path.clone(),
+                                stage: ItemStage::Waiting,
+                            })
+                            .collect();
+                        venue = activity.venue_id.clone();
                     }
+                }
+                if let Some(venue_id) = venue {
+                    let track_ids = result.tracks.iter().map(|track| track.id.clone()).collect();
+                    this.add_imported_to_venue(venue_id, track_ids, cx);
                 }
                 this.refresh_open_track_browser(cx);
                 cx.notify();
@@ -886,6 +1048,7 @@ impl Luma {
                 this.update(cx, |this, cx| {
                     if let Some(activity) = &mut this.track_import {
                         if activity.generation == generation {
+                            activity.apply(&event);
                             activity.progress = Some(event.clone());
                             activity.active = !complete;
                             if let Some(error) = &event.error {
@@ -903,6 +1066,64 @@ impl Luma {
                     break;
                 }
             }
+        })
+        .detach();
+    }
+
+    /// Put every song an import brought in into the venue it was imported
+    /// from, then show them in the sidebar. The dialog stays open: it is
+    /// showing the import's progress, which is still going.
+    fn add_imported_to_venue(
+        &mut self,
+        venue_id: String,
+        track_ids: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if track_ids.is_empty() {
+            return;
+        }
+        let pending: Vec<_> = track_ids
+            .iter()
+            .map(|track_id| {
+                let request_id = uuid::Uuid::new_v4().to_string();
+                self.library
+                    .ensure_track_in_venue(&request_id, track_id, &venue_id, None)
+            })
+            .collect();
+        cx.spawn(async move |this, cx| {
+            let mut errors = Vec::new();
+            for added in pending {
+                if let Err(error) = added.await {
+                    errors.push(error.to_string());
+                }
+            }
+            let Ok(rows) = this.read_with(cx, |this, _| this.library.tracks(&venue_id)) else {
+                return;
+            };
+            let rows = rows.await;
+            this.update(cx, |this, cx| {
+                let generation = this
+                    .sidebar
+                    .as_ref()
+                    .filter(|sidebar| sidebar.venue_id() == venue_id)
+                    .map(crate::tracks::Tracks::load_generation);
+                if let (Ok(rows), Some(generation)) = (rows, generation) {
+                    this.with_tracks_for_venue(&venue_id, generation, cx, |sidebar| {
+                        sidebar.replace_rows(rows)
+                    });
+                }
+                if !errors.is_empty() {
+                    if let Some(activity) = &mut this.track_import {
+                        let message = format!("Could not add to venue: {}", errors.join("\n"));
+                        activity.error = Some(match activity.error.take() {
+                            Some(error) => format!("{error}\n{message}"),
+                            None => message,
+                        });
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -1005,7 +1226,7 @@ pub(crate) fn tick(
 fn focus_route(state: &AddTracks, window: &mut Window, cx: &mut Context<Luma>) {
     let focus = match state.active_filter() {
         Some(filter) => filter.read(cx).focus_handle(cx),
-        None => state.picker_focus.clone(),
+        None => state.submit_focus.clone(),
     };
     window.defer(cx, move |window, cx| window.focus(&focus, cx));
 }
@@ -1038,6 +1259,7 @@ fn route_content(
     let body = match route {
         Route::TrackBrowser => track_browser(state, mode, app, cx),
         Route::SourceLibrary => source_library(state, mode, app, cx),
+        Route::Progress => import_progress(activity, app, cx),
     };
     palette(state, activity, route, mode, app, window, body)
 }
@@ -1074,7 +1296,7 @@ fn palette(
         });
     }
     frame
-        .child(header(state, route, mode, app, window))
+        .child(header(state, activity, route, mode, app, window))
         .child(div().flex_1().min_h_0().flex().child(body))
         .child(footer(activity, route))
         .into_any_element()
@@ -1082,6 +1304,7 @@ fn palette(
 
 fn header(
     state: &AddTracks,
+    activity: Option<&TrackImportActivity>,
     route: Route,
     mode: ContentMode,
     app: &Entity<Luma>,
@@ -1114,7 +1337,7 @@ fn header(
         );
     }
 
-    band = band.child(filter_field(state, route, mode, window));
+    band = band.child(filter_field(state, activity, route, mode, window));
 
     if let Some(chip) = submit_chip(state, route, mode, app, window) {
         band = band.child(chip);
@@ -1145,8 +1368,23 @@ fn header(
 /// A paint-only morph copy renders the typed text as plain glyphs instead of
 /// the field: a live [`TextInput`] would register a focus handle, and the
 /// morph contract says an in-flight copy owns none.
-fn filter_field(state: &AddTracks, route: Route, mode: ContentMode, window: &Window) -> AnyElement {
+fn filter_field(
+    state: &AddTracks,
+    activity: Option<&TrackImportActivity>,
+    route: Route,
+    mode: ContentMode,
+    window: &Window,
+) -> AnyElement {
     let slot = div().flex_1().min_w_0().text_size(px(14.0));
+    if route == Route::Progress {
+        let title = activity.map_or_else(|| "No import running".to_string(), |a| a.summary());
+        return slot
+            .truncate()
+            .font_weight(FontWeight::MEDIUM)
+            .child(title.clone())
+            .agent_node(Role::Text, title)
+            .into_any_element();
+    }
     let (field, placeholder, query) = match route {
         Route::TrackBrowser => (
             Some(&state.browser_filter),
@@ -1158,6 +1396,7 @@ fn filter_field(state: &AddTracks, route: Route, mode: ContentMode, window: &Win
             "Search source…",
             state.source_query(),
         ),
+        Route::Progress => unreachable!("the progress route has a title, not a field"),
     };
     let Some(field) = field else {
         return slot
@@ -1185,6 +1424,7 @@ fn filter_field(state: &AddTracks, route: Route, mode: ContentMode, window: &Win
     let focused = match route {
         Route::TrackBrowser => state.browser_filter_focus.is_focused(window),
         Route::SourceLibrary => state.source_filter_focus.is_focused(window),
+        Route::Progress => false,
     };
     slot.child(field.clone())
         .agent_node(Role::Input, placeholder)
@@ -1218,6 +1458,7 @@ fn submit_chip(
             "add-tracks-import-selected",
             "Import selected",
         ),
+        Route::Progress => ("Done".to_string(), true, "add-tracks-done", "Done"),
     };
     let submit = app.clone();
     let menu = (route == Route::TrackBrowser)
@@ -1316,9 +1557,15 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
 /// strip that appears and disappears mid-flow shifts everything under it, and
 /// the footer is already reserved space on every route.
 fn footer(activity: Option<&TrackImportActivity>, route: Route) -> Div {
+    if route == Route::Progress {
+        // The page is the progress, so the footer does not repeat it.
+        return float::footer_band()
+            .child(float::key_hint(IconName::ArrowLeft, "Add more"))
+            .child(float::key_hint_text("⌘↵", "Done"));
+    }
     let mut band = float::nav_legend(match route {
         Route::SourceLibrary => "Select",
-        Route::TrackBrowser => "Open",
+        Route::TrackBrowser | Route::Progress => "Open",
     });
     band = band.child(float::key_hint_text("⌘↵", "Import"));
     band = band.child(div().flex_1().min_w_0());
@@ -1380,6 +1627,156 @@ fn import_status(activity: &TrackImportActivity) -> Div {
 // ---------------------------------------------------------------------------
 // Route bodies
 // ---------------------------------------------------------------------------
+
+/// The import, one row per song: copying first, then each song's analysis.
+fn import_progress(
+    activity: Option<&TrackImportActivity>,
+    app: &Entity<Luma>,
+    cx: &mut gpui::App,
+) -> AnyElement {
+    let Some(activity) = activity else {
+        return empty_body("No import running");
+    };
+    if activity.items.is_empty() {
+        if activity.active {
+            return loading_body(
+                "add-tracks-import-skeleton",
+                "Copying songs into the library…",
+                app.entity_id(),
+                cx,
+            );
+        }
+        let message = activity
+            .error
+            .clone()
+            .unwrap_or_else(|| "Nothing was imported".to_string());
+        return float::viewport()
+            .child(
+                float::list()
+                    .child(float::error_row(message.clone()).agent_node(Role::Text, message)),
+            )
+            .into_any_element();
+    }
+    let rows: Vec<(String, String, Option<String>, ItemStage)> = activity
+        .items
+        .iter()
+        .map(|item| {
+            (
+                item.track_id.clone(),
+                item.title.clone(),
+                item.art.clone(),
+                item.stage.clone(),
+            )
+        })
+        .collect();
+    let rows: Rc<[_]> = rows.into();
+    float::viewport()
+        .child(
+            uniform_list("track-import-progress", rows.len(), move |range, _, _| {
+                range
+                    .map(|index| {
+                        let (id, title, art, stage) = &rows[index];
+                        let (status, color): (String, Hsla) = match stage {
+                            ItemStage::Waiting => {
+                                ("Waiting".to_string(), ladder::muted_foreground().into())
+                            }
+                            ItemStage::Analyzing(Some(step)) => (
+                                format!("Analyzing · {step}"),
+                                ladder::foreground_alpha(0.7),
+                            ),
+                            ItemStage::Analyzing(None) => (
+                                "Analyzing".to_string(),
+                                ladder::foreground_alpha(0.7),
+                            ),
+                            ItemStage::Done => {
+                                ("Ready".to_string(), ladder::muted_foreground().into())
+                            }
+                            ItemStage::Failed(_) => ("Failed".to_string(), ladder::danger().into()),
+                        };
+                        let subtitle = match stage {
+                            ItemStage::Failed(error) => Some(error.as_str()),
+                            _ => None,
+                        };
+                        let key = format!("import-{id}");
+                        track_row(RowState::Rest, &key, art.as_deref(), title, subtitle, false)
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.0))
+                                    .text_size(px(11.0))
+                                    .text_color(color)
+                                    .when(*stage == ItemStage::Done, |el| {
+                                        el.child(Icon::new(IconName::Check).size(px(11.0)))
+                                    })
+                                    .child(status.clone()),
+                            )
+                            .id(SharedString::from(key))
+                            .agent_node(Role::Row, format!("{title}: {status}"))
+                    })
+                    .collect()
+            })
+            .size_full()
+            .px(px(8.0)),
+        )
+        .into_any_element()
+}
+
+/// The sidebar's row for an import: there while one runs, and after one
+/// that failed until its page has been opened. A click opens that page.
+pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
+    let activity = shell.track_import.as_ref()?;
+    let failed = !activity.active && (activity.failed() > 0 || activity.error.is_some());
+    if !activity.active && (!failed || activity.seen) {
+        return None;
+    }
+    let label = activity.summary();
+    let open = app.clone();
+    let keyed = app.clone();
+    Some(
+        div()
+            .flex_shrink_0()
+            .px(px(12.))
+            .pb(px(4.))
+            .child(
+                float::nav_row(RowState::Rest, "track-import-status")
+                    .id("track-import-status")
+                    .tab_stop(true)
+                    .on_key_down(move |event, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            keyed.update(cx, |this, cx| this.show_track_import(cx));
+                        }
+                    })
+                    .on_click(move |_, _, cx| {
+                        open.update(cx, |this, cx| this.show_track_import(cx));
+                    })
+                    .child(
+                        Icon::new(IconName::ArrowDown)
+                            .size(px(12.))
+                            .text_color(if failed {
+                                Hsla::from(ladder::danger())
+                            } else {
+                                glass::ink(0.72)
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(if failed {
+                                Hsla::from(ladder::danger())
+                            } else {
+                                glass::ink(0.85)
+                            })
+                            .child(label.clone()),
+                    )
+                    .agent_node(Role::Button, label),
+            )
+            .into_any_element(),
+    )
+}
 
 fn track_browser(
     state: &AddTracks,
@@ -1746,4 +2143,84 @@ fn audio_files_in(paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ImportItem, ItemStage, TrackImportActivity, TrackImportPhase, TrackImportProgress,
+    };
+
+    fn event(
+        phase: TrackImportPhase,
+        track_id: Option<&str>,
+        step: Option<&str>,
+        error: Option<&str>,
+    ) -> TrackImportProgress {
+        TrackImportProgress {
+            import_id: "import".into(),
+            source: "files".into(),
+            phase,
+            done: 0,
+            total: 2,
+            track_id: track_id.map(Into::into),
+            current_track: None,
+            step: step.map(Into::into),
+            error: error.map(Into::into),
+        }
+    }
+
+    fn activity() -> TrackImportActivity {
+        let item = |id: &str| ImportItem {
+            track_id: id.into(),
+            title: id.into(),
+            art: None,
+            stage: ItemStage::Waiting,
+        };
+        TrackImportActivity {
+            generation: 1,
+            import_id: Some("import".into()),
+            progress: None,
+            active: true,
+            error: None,
+            venue_id: None,
+            items: vec![item("a"), item("b")],
+            seen: false,
+        }
+    }
+
+    #[test]
+    fn a_song_starts_steps_and_finishes_in_order() {
+        let mut activity = activity();
+        let analyzing = TrackImportPhase::Analyzing;
+        activity.apply(&event(analyzing.clone(), Some("a"), None, None));
+        assert_eq!(activity.items[0].stage, ItemStage::Analyzing(None));
+        activity.apply(&event(analyzing.clone(), Some("a"), Some("beats"), None));
+        assert_eq!(
+            activity.items[0].stage,
+            ItemStage::Analyzing(Some("beats".into()))
+        );
+        activity.apply(&event(analyzing, Some("a"), None, None));
+        assert_eq!(activity.items[0].stage, ItemStage::Done);
+        assert_eq!(activity.items[1].stage, ItemStage::Waiting);
+    }
+
+    #[test]
+    fn a_failure_sticks_and_completion_settles_the_rest() {
+        let mut activity = activity();
+        let analyzing = TrackImportPhase::Analyzing;
+        activity.apply(&event(analyzing.clone(), Some("a"), None, None));
+        activity.apply(&event(
+            analyzing.clone(),
+            Some("a"),
+            Some("stems"),
+            Some("boom"),
+        ));
+        activity.apply(&event(analyzing, Some("a"), None, None));
+        assert_eq!(activity.items[0].stage, ItemStage::Failed("boom".into()));
+        activity.apply(&event(TrackImportPhase::Complete, None, None, None));
+        activity.active = false;
+        assert_eq!(activity.items[1].stage, ItemStage::Done);
+        assert_eq!(activity.summary(), "1 song failed to import");
+    }
 }

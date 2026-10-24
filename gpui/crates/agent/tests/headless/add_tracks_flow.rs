@@ -182,13 +182,17 @@ const SCRIPT: &str = r#"
     const reconciled = until("terminal import event and enriched row", (s) =>
         s.find({ role: "chip", label: "Track import phase: complete" }) !== undefined
             && s.find({ role: "text", label: "Track import progress: 1/1" }) !== undefined
-            && s.find({ role: "row", label: "Needle" }) !== undefined);
-    const importedRow = reconciled.find({ role: "row", label: "Needle" });
+            && browserRow(s, "Needle") !== undefined);
+    // An import started from a venue puts what it brought in into that venue,
+    // with no second click — so Needle is in the sidebar as well as the browser.
+    const joined = until("Needle in the venue without a click", (s) =>
+        s.find({ role: "text", label: "Needle venue scores: 1" }) !== undefined);
+    const importedRow = browserRow(reconciled, "Needle");
     const rows = reconciled.findAll({ role: "row" })
         .filter((row) => Math.abs(row.bounds.x - importedRow.bounds.x) < 1
             && Math.abs(row.bounds.width - importedRow.bounds.width) < 1)
         .map((row) => row.label);
-    app.click(reconciled.find({ role: "row", label: "Needle" }));
+    app.click(browserRow(joined, "Needle") ?? importedRow);
     const member = until("Needle in the active venue exactly once", (s) =>
         s.find({ role: "text", label: "Needle venue scores: 1" }) !== undefined
             && s.find({ role: "button", label: "Close" }) === undefined);
@@ -209,6 +213,7 @@ const SCRIPT: &str = r#"
        analyzing: analyzing.find({ role: "chip", label: "Track import phase: analyzing" }) !== undefined,
        terminal: reconciled.find({ role: "chip", label: "Track import phase: complete" }) !== undefined,
        rows,
+       joined: joined.find({ role: "text", label: "Needle venue scores: 1" }) !== undefined,
        member: member.find({ role: "text", label: "Needle venue scores: 1" }) !== undefined,
        retried: retried.find({ role: "text", label: "Needle venue scores: 1" }) !== undefined })
 "#;
@@ -229,6 +234,7 @@ fn source_import_survives_close_reconciles_newest_and_joins_the_venue() {
     assert_eq!(out["reopenedBeforeInsert"], true);
     assert_eq!(out["analyzing"], true);
     assert_eq!(out["terminal"], true);
+    assert_eq!(out["joined"], true);
     assert_eq!(out["member"], true);
     assert_eq!(out["retried"], true);
     assert_eq!(
