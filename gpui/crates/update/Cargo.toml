@@ -1,0 +1,31 @@
+[package]
+name = "luma-update"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Checks the release manifest, downloads and verifies a release, and swaps it
+# in for the installed one. No gpui: the app crate owns the UI and the timer,
+# and this crate is the part a unit test can reach.
+[dependencies]
+# Blocking, on the updater's own thread. The same spec as the backend's, so
+# cargo unifies them rather than building a second client.
+reqwest = { version = "0.12", features = ["blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+# Verifies the minisign signature `tauri signer sign` writes, which is what the
+# release workflow publishes beside every archive.
+minisign-verify = "0.2"
+base64 = "0.22"
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"
+log = "0.4"
+# `watch` only. tokio's sync primitives run on any executor, gpui's included.
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+# Signs test archives with a throwaway key, in the format the release
+# workflow's signer writes.
+minisign = "0.7"
