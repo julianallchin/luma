@@ -62,6 +62,7 @@ mod tab_chrome;
 mod tabs;
 mod track_editor;
 mod tracks;
+mod update;
 mod visualizer;
 mod welcome;
 mod workspace;
@@ -200,6 +201,8 @@ pub struct Luma {
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
     pub(crate) sync_status: sync_status::SidebarSync,
+    /// The self-updater and what it last said — see [`update`].
+    pub(crate) update: update::AutoUpdate,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
     /// The dialog on screen, and — for the frames after it is dismissed —
     /// the one leaving. See [`luma_ui::dialog::Popup`]: gpui unmounts an
@@ -310,6 +313,7 @@ impl Luma {
             sign_in: None,
             refreshing_session: false,
             sync_status: sync_status::SidebarSync::default(),
+            update: update::AutoUpdate::new(),
             overlay: luma_ui::dialog::Popup::default(),
             account_menu: luma_ui::dialog::Popup::default(),
             account_focus: cx.focus_handle().tab_stop(true),
@@ -350,6 +354,7 @@ impl Luma {
         app.watch_session(cx);
         app.watch_sync(cx);
         app.watch_replica(cx);
+        app.watch_updates(cx);
         app
     }
 
