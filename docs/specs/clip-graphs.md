@@ -1353,7 +1353,7 @@ usual pairing.
 |---|---|---|
 | Strobe | `strobe(rate=0.9)` | strobe |
 | Ramp | `t = time(); rise = curve(t, "Ramp up"); strobe(rate=rise)` | time → curve → rate |
-| Strobe follows a band | `bass = audio(60, 300); rate = curve(bass, "Ramp up", low=0.3, high=1); strobe(rate=rate)` | audio → curve → rate |
+| Strobe steps up | `t = time(); rate = curve(t, "Steps 4", low=0.4, high=0.9); strobe(rate=rate)` | time → curve → rate |
 
 ### Not one clip
 
@@ -1509,7 +1509,7 @@ One line each; the alternative after "alt:".
 24. `add_clip` and `update_clip` check that one clip at once through `track.clip_check`; `add_clip` without a name and without a preset is an error. alt: check only in `edit.check()`.
 25. Python does no type checking; Rust is the one checker. alt: mirror the checks in Python.
 26. Shipped clip presets are copied graphs named as the effect; user-saved presets are out of scope tonight. alt: a user preset table now.
-27. Preset names are unique across kinds ("Wave" color, "Nod wave" aim, "Strobe follows a band"). alt: names scoped by kind as today.
+27. Preset names are unique across kinds ("Wave" color, "Nod wave" aim, "Strobe steps up"). alt: names scoped by kind as today.
 28. The inspector is a node-and-wire canvas with automatic, deterministic layout and no stored positions (changed 2026-09-29; was a tree of nested cards with link chips). alt: the tree.
 29. Promotion inserts nodes with the defaults table in 7.2. alt: empty nodes.
 30. The timeline header shows `Name · summary` with the verb/detail colors. alt: name only.

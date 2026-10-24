@@ -113,7 +113,7 @@ under them.
 |---|---|---|
 | Strobe | `strobe(rate=0.9)` | strobe |
 | Ramp | `t = time(); strobe(rate=curve(t, "Ramp up"))` | time → curve → rate |
-| Strobe follows a band | `bass = audio(low_hz=60, high_hz=300); strobe(rate=curve(bass, "Ramp up", low=0.3, high=1))` | audio → curve → rate |
+| Strobe steps up | `t = time(); strobe(rate=curve(t, "Steps 4", low=0.4, high=0.9))` | time → curve → rate |
 
 ## Not one clip
 
