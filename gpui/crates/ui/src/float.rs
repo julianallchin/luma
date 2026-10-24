@@ -287,25 +287,6 @@ pub fn section_heading(text: impl Into<SharedString>) -> Div {
     label(text).px(rpx(8.0)).pb(rpx(4.0))
 }
 
-/// A heading over a group of labelled rows inside one setting, such as a
-/// source's Range, Motion and Look. Flush with the rows and a step brighter
-/// and heavier than their [`label`]s, so it never reads as one of them. Every
-/// group but the `first` starts with a hairline [`divider`] and air above it.
-pub fn group_heading(text: impl Into<SharedString>, first: bool) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(rpx(10.0))
-        .when(!first, |heading| heading.pt(rpx(6.0)).child(divider()))
-        .child(
-            div()
-                .text_size(rpx(12.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(ladder::foreground_90())
-                .child(text.into()),
-        )
-}
-
 /// The scroll viewport for a picker's list, with its vertical gutters on a
 /// **wrapper** outside the scroller.
 ///
@@ -876,31 +857,6 @@ pub fn scrub(
     scrub_with_power(id, value, min..=max, step, width, 1.0, on_change)
 }
 
-/// A [`scrub`] that shows `unit` after the value, dim, as a
-/// [`crate::arg::number::DraftedNumber`] field does: "°", "beats".
-#[allow(clippy::too_many_arguments)]
-pub fn scrub_with_unit(
-    id: impl Into<SharedString>,
-    value: f64,
-    min: f64,
-    max: f64,
-    step: f64,
-    width: f32,
-    unit: &'static str,
-    on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
-) -> gpui::Stateful<Div> {
-    scrub_box(
-        id,
-        value,
-        min..=max,
-        step,
-        width,
-        1.0,
-        Some(unit),
-        on_change,
-    )
-}
-
 /// A value scrub with a power curve. Powers above one give small values more
 /// pointer travel; the fill follows the pointer and the readout stays in units.
 pub fn scrub_with_power(
@@ -910,20 +866,6 @@ pub fn scrub_with_power(
     step: f64,
     width: f32,
     power: f64,
-    on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
-) -> gpui::Stateful<Div> {
-    scrub_box(id, value, range, step, width, power, None, on_change)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn scrub_box(
-    id: impl Into<SharedString>,
-    value: f64,
-    range: std::ops::RangeInclusive<f64>,
-    step: f64,
-    width: f32,
-    power: f64,
-    unit: Option<&'static str>,
     on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<Div> {
     assert!(power.is_finite() && power > 0.0);
@@ -954,19 +896,10 @@ fn scrub_box(
                 .px(rpx(PICKER_CHIP_PAD))
                 .flex()
                 .items_center()
-                .gap(rpx(4.0))
                 .font_family(crate::fonts::MONO)
                 .text_size(rpx(11.0))
                 .text_color(ladder::foreground())
                 .child(div().flex_1().min_w_0().child(text.clone()))
-                .when_some(unit, |row, unit| {
-                    row.child(
-                        div()
-                            .flex_none()
-                            .text_color(ladder::foreground_alpha(0.45))
-                            .child(unit),
-                    )
-                })
                 // The number the box draws, published — see
                 // [`crate::luma_slider`]: without it a driver can sweep the
                 // control and has no way to read what it landed on.

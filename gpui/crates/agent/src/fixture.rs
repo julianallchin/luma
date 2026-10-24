@@ -44,7 +44,7 @@ pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";
 pub const TRACK_NAME: &str = "Aurora";
 
-/// How far off the `y = 0` plane [`Fixture::with_skewed_rig`] patches its
+/// How far off the `y = 0` plane a `skewed_rig` fixture patches its
 /// movers, in metres. Public because a test that projects one has to know.
 pub const SKEW_DEPTH_M: f64 = 2.0;
 
@@ -129,7 +129,9 @@ pub struct Fixture {
     /// Patched movers. 0 is no rig: most fixtures test rows and geometry, and
     /// a rig would only be a slower seed.
     rig: usize,
-    /// See [`Fixture::with_skewed_rig`].
+    /// `rig` movers placed off the `y = 0` plane, and no deck. The default rig
+    /// lies on the one plane the data→world mirror leaves fixed, so a screen
+    /// that drew in the wrong space could look correct.
     skewed_rig: bool,
     #[serde(rename = "track")]
     seed_track: bool,
@@ -236,32 +238,9 @@ impl Fixture {
         Ok(fixture)
     }
 
-    /// Mint `count` further scores on the seeded `(track, venue)`, after the
-    /// one the clips are authored on, through the same `create_score` seam.
-    pub fn with_extra_scores(mut self, count: usize) -> Self {
-        self.extra_scores = count;
-        self
-    }
-
-    /// Give every score on the seeded pair a track-agent conversation with a
-    /// message already in it, so a thread's *arrival* is observable.
-    pub fn with_seeded_threads(mut self) -> Self {
-        self.seeded_threads = true;
-        self
-    }
-
     /// Open the window at `width` × `height` instead of the default 1200×800.
     pub fn window(mut self, width: f32, height: f32) -> Self {
         self.window = Some(gpui::size(gpui::px(width), gpui::px(height)));
-        self
-    }
-
-    pub fn with_graph_score(mut self, score: Value) -> Self {
-        assert!(
-            self.clips.is_empty(),
-            "graph fixture uses its canonical document"
-        );
-        self.graph_score = Some(score);
         self
     }
 
@@ -269,15 +248,6 @@ impl Fixture {
     /// and point the harness's fixtures root at that bundle.
     pub fn with_rig(self) -> Self {
         self.with_rig_of(4)
-    }
-
-    /// `count` movers placed off the `y = 0` plane, and no deck.
-    ///
-    /// The default rig lies on the one plane the data→world mirror leaves
-    /// fixed, so a screen that drew in the wrong space could look correct.
-    pub fn with_skewed_rig(mut self, count: usize) -> Self {
-        self.skewed_rig = true;
-        self.with_rig_of(count)
     }
 
     /// Patch `count` movers instead of the default four. Rig size is the axis
@@ -303,20 +273,6 @@ impl Fixture {
         self
     }
 
-    /// Hold the first normalized source read, for a loading-state snapshot.
-    pub fn with_source_fixture_delay(mut self, delay: Duration) -> Self {
-        self.source_fixture_delay = Some(delay);
-        self
-    }
-
-    pub fn with_source_search_responses(
-        mut self,
-        responses: Vec<luma_app::SourceSearchFixtureResponse>,
-    ) -> Self {
-        self.source_search_responses = responses;
-        self
-    }
-
     pub fn with_source_import_fixture_delay(mut self, delay: Duration) -> Self {
         self.source_import_fixture_delay = Some(delay);
         self
@@ -324,13 +280,6 @@ impl Fixture {
 
     pub fn with_equal_timestamp_track(mut self) -> Self {
         self.equal_timestamp_track = true;
-        self
-    }
-
-    /// A second playable song with an observably different audio duration.
-    pub fn with_second_track(mut self, seconds: u32) -> Self {
-        self.equal_timestamp_track = true;
-        self.second_track_seconds = Some(seconds);
         self
     }
 
@@ -344,12 +293,6 @@ impl Fixture {
     /// [`Self::with_motion`].
     pub fn with_motion_scale(mut self, scale: f32) -> Self {
         self.motion_scale = Some(scale);
-        self
-    }
-
-    /// Keep the venue but omit the library track and its score.
-    pub fn without_track(mut self) -> Self {
-        self.seed_track = false;
         self
     }
 
