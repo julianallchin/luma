@@ -63,7 +63,7 @@ Limits:
 - The reference shares the single-scattering model, the source-extinction cache
   and the fixture shadow maps. Agreement with it does not prove photographic
   realism.
-- Far-field lighting has finite grid precision (16-pixel cells). Gobo beams
+- Far-field lighting has finite grid precision (8-pixel cells). Gobo beams
   integrate deterministically per pixel and never enter the grid.
 - Fixture shadow cameras cap their field of view at 170°. Very wide washes are
   unshadowed outside that projection.

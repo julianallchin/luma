@@ -646,7 +646,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
     var sum = 0.0;
     let width = (th1 - th0) / f32(pieces);
     // The two extinction terms — camera transmittance and source optical depth —
-    // come from coarse trilinear volumes (a 16-pixel × 128-slice camera grid and
+    // come from coarse trilinear volumes (an 8-pixel × 128-slice camera grid and
     // a 16×16×32 per-light angular cache). Sampling them once per Gauss node
     // carries no information those textures hold, so evaluate their product once
     // per piece boundary and interpolate linearly in theta across the piece's
