@@ -4894,6 +4894,19 @@ impl Renderer {
         result
     }
 
+    /// Drop every piece of haze state carried between frames, as a new
+    /// renderer would start; the reference for transition tests.
+    #[cfg(test)]
+    fn forget_haze_history(&mut self) {
+        self.interval_cache = crate::interval_cache::IntervalCacheState::new(0);
+        self.interval_pools = None;
+        self.interval_cache_entries.clear();
+        self.compact_pools = None;
+        self.compact_dense.clear();
+        self.compact_full_count = 0;
+        self.compact_stats = CompactStats::default();
+    }
+
     /// Render the *next* frame of a sequence and read it back as
     /// sRGB-encoded RGBA8, row-major, no padding.
     ///
@@ -11503,12 +11516,14 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        not(target_os = "macos"),
-        ignore = "bug: off Metal the lit-interval cache never misses here, so the exact-traversal segment stays empty; same cache divergence as compute_haze_preserves_fragment_output_through_frame_transitions"
-    )]
     fn residual_compaction_encodes_more_than_256_resident_lights() -> anyhow::Result<()> {
-        let mut renderer = Renderer::new()?;
+        // A payload table of 256 four-way buckets cannot hold every pair, so
+        // the lost entries exercise the exact-traversal segment on any
+        // adapter rather than only where the interval counts happen to
+        // overflow `CACHE_K`.
+        let mut gpu = Gpu::build()?;
+        gpu.interval_cache_table_bits = 10;
+        let mut renderer = Renderer::on(Arc::new(gpu));
         if renderer.gpu.haze_compact_pipelines.is_none() {
             return Ok(());
         }
@@ -12316,12 +12331,15 @@ mod tests {
         Ok(())
     }
 
+    /// The interval cache, its write generations and the compaction's
+    /// per-slot classification carry state from frame to frame. Through
+    /// transitions (a moved occluder, a resize, haze off, a camera move, a gobo
+    /// toggle, a dark cone, shadows off) a settled frame must equal what the
+    /// same renderer settles to from cold haze caches, bit for bit. The
+    /// unsettled steps in between render once each, so state such as a
+    /// classification kept across a resize meets the frames that reuse it.
     #[test]
-    #[cfg_attr(
-        not(target_os = "macos"),
-        ignore = "bug: off Metal the lit-interval cache replays settled and gobo-toggled frames up to 133 codes away from the fragment pass (LUMA_INTERVAL_CACHE=0 matches)"
-    )]
-    fn compute_haze_preserves_fragment_output_through_frame_transitions() -> anyhow::Result<()> {
+    fn haze_state_survives_frame_transitions() -> anyhow::Result<()> {
         let mut frame = fixture_surface_frame(3);
         frame.geometry_shadows = true;
         frame.haze_density = 0.6;
@@ -12336,35 +12354,30 @@ mod tests {
             textures: MaterialTextures::default(),
             editor_object: None,
         });
-        let mut compute = Renderer::new()?;
-        let mut fragment = Renderer::new()?;
-        compute.grid_fog = true;
-        fragment.grid_fog = true;
-        compute.haze_compute = true;
-        fragment.haze_compute = false;
-        // Wide beams take the half-resolution pass only on the fragment path;
-        // keep both native so the two integrators see the same beams.
-        compute.set_wide_beams(false);
-        fragment.set_wide_beams(false);
+        // The reference sees the same frames, so state outside the haze
+        // (shadow-slot residency, cached maps) has the same history; only its
+        // haze caches start cold at every probe.
+        let gpu = Arc::new(Gpu::build()?);
+        let mut renderer = Renderer::on(gpu.clone());
+        let mut reference = Renderer::on(gpu);
+        renderer.haze_compute = true;
+        reference.haze_compute = true;
         let mut first = Vec::new();
         let original_intensity = frame.fixture_cones[1].intensity;
-        for (probe, (width, height)) in [
-            (127, 97),
-            (127, 97),
-            (127, 97),
-            (65, 49),
-            (127, 97),
-            (127, 97),
-            (127, 97),
-            (127, 97),
-            (127, 97),
-            (127, 97),
-            (127, 97),
-            (127, 97),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (probe, (width, height), settle) in [
+            (0, (127, 97), true),
+            (1, (127, 97), false),
+            (2, (127, 97), false),
+            (3, (65, 49), false),
+            (4, (127, 97), false),
+            (5, (127, 97), false),
+            (6, (127, 97), false),
+            (7, (127, 97), true),
+            (8, (127, 97), true),
+            (9, (127, 97), false),
+            (10, (127, 97), true),
+            (11, (127, 97), true),
+        ] {
             match probe {
                 2 => frame.draws[1].model = Mat4::from_translation(Vec3::new(20.0, 0.0, 2.0)),
                 4 => frame.haze_density = 0.0,
@@ -12381,21 +12394,38 @@ mod tests {
                     frame.fixture_cones[1].intensity = original_intensity;
                 }
                 11 => {
-                    compute.visibility_reference = true;
-                    fragment.visibility_reference = true;
+                    renderer.visibility_reference = true;
+                    reference.visibility_reference = true;
                 }
                 _ => {}
             }
-            let actual = compute.render_next(&frame, width, height, crate::LIVE_SUBFRAMES)?;
-            let expected = fragment.render_next(&frame, width, height, crate::LIVE_SUBFRAMES)?;
-            assert_eq!(actual, expected, "compute haze differs at probe {probe}");
+            if !settle {
+                let actual = renderer.render_next(&frame, width, height, crate::LIVE_SUBFRAMES)?;
+                reference.render_next(&frame, width, height, crate::LIVE_SUBFRAMES)?;
+                if probe == 4 {
+                    assert_ne!(actual, first, "haze-off transition did not change the image");
+                }
+                continue;
+            }
+            // Cold, write, read: three frames settle a fresh cache.
+            reference.forget_haze_history();
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            for _ in 0..3 {
+                actual = renderer.render_next(&frame, width, height, crate::LIVE_SUBFRAMES)?;
+                expected = reference.render_next(&frame, width, height, crate::LIVE_SUBFRAMES)?;
+            }
+            if actual != expected {
+                let pixels = actual
+                    .chunks_exact(4)
+                    .zip(expected.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count();
+                let max = actual.iter().zip(&expected).map(|(a, b)| a.abs_diff(*b)).max();
+                panic!("probe {probe}: {pixels} pixels differ from a cold haze cache, max {max:?}");
+            }
             if probe == 0 {
                 first = actual;
-            } else if probe == 4 {
-                assert_ne!(
-                    actual, first,
-                    "haze-off transition did not change the image"
-                );
             }
         }
         Ok(())

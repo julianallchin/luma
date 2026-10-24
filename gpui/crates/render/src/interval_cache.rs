@@ -74,8 +74,6 @@ struct SlotState {
     key: Option<SlotKey>,
     /// `(start, length)` in header words, when the slot holds a region.
     region: Option<(u32, u32)>,
-    /// Write generation, bumped on every write frame. 24 bits reach the GPU.
-    gen: u32,
     /// The region holds this key's output: a write frame has run since the
     /// key was set.
     written: bool,
@@ -162,6 +160,12 @@ impl RegionAllocator {
 pub(crate) struct IntervalCacheState {
     allocator: RegionAllocator,
     slots: Vec<SlotState>,
+    /// Write generation per slot, bumped on every write frame; 24 bits reach
+    /// the GPU. Kept apart from `slots` because nothing resets it: payload
+    /// entries and the compaction's per-slot classification are keyed by
+    /// generation, so a generation reissued after a resize or a slot-count
+    /// change would replay output written under an older key.
+    gens: Vec<u32>,
     frame: Option<FrameKey>,
     /// Slots whose region was compacted or freshly allocated this frame.
     pub(crate) reallocated: usize,
@@ -175,6 +179,7 @@ impl IntervalCacheState {
         Self {
             allocator: RegionAllocator::new(header_words),
             slots: Vec::new(),
+            gens: Vec::new(),
             frame: None,
             reallocated: 0,
             stats: IntervalCacheStats::default(),
@@ -198,9 +203,10 @@ impl IntervalCacheState {
     pub(crate) fn retained_generations(&self) -> Vec<u32> {
         self.slots
             .iter()
-            .map(|slot| {
+            .zip(&self.gens)
+            .map(|(slot, gen)| {
                 if slot.key.is_some() && slot.region.is_some() && slot.written {
-                    slot.gen
+                    *gen
                 } else {
                     u32::MAX
                 }
@@ -266,6 +272,9 @@ impl IntervalCacheState {
             self.allocator.reset();
             self.slots = vec![SlotState::default(); keys.len()];
             self.frame = None;
+        }
+        if self.gens.len() < keys.len() {
+            self.gens.resize(keys.len(), 0);
         }
         let same_frame = self.frame == Some(frame);
         self.frame = Some(frame);
@@ -351,16 +360,16 @@ impl IntervalCacheState {
             .map(|(slot, key)| match (key, self.slots[slot].region) {
                 (Some(key), Some((start, _))) if key.scatters && same_frame => {
                     let mode = if hits[slot] { MODE_READ } else { MODE_WRITE };
-                    let state = &mut self.slots[slot];
+                    let gen = &mut self.gens[slot];
                     if mode == MODE_WRITE {
-                        state.gen = state.gen.wrapping_add(1) & 0x00FF_FFFF;
-                        state.written = true;
+                        *gen = gen.wrapping_add(1) & 0x00FF_FFFF;
+                        self.slots[slot].written = true;
                     }
                     [
                         start,
                         key.rect[0] | key.rect[1] << 16,
                         key.rect[2] | key.rect[3] << 16,
-                        mode | state.gen << 8,
+                        mode | *gen << 8,
                     ]
                 }
                 _ => [0, 0, 0, MODE_OFF],
@@ -439,6 +448,24 @@ mod tests {
         let c = state.plan(frame(2), &keys)[0][3] >> 8;
         assert_eq!(a, b, "a read frame keeps the generation");
         assert_ne!(b, c, "a write frame bumps it");
+    }
+
+    #[test]
+    fn generations_survive_resizes_and_slot_count_changes() {
+        // The compaction keeps a slot's classification while its generation
+        // holds, so a resize must never hand out a generation again.
+        let mut state = IntervalCacheState::new(1000);
+        let keys = vec![Some(key(1, [0, 0, 10, 10]))];
+        state.plan(frame(1), &keys);
+        let before = state.plan(frame(1), &keys)[0][3] >> 8;
+        state.resize(2000);
+        state.plan(frame(1), &keys);
+        let resized = state.plan(frame(1), &keys)[0][3] >> 8;
+        assert_ne!(before, resized);
+        let wider = vec![keys[0], None];
+        state.plan(frame(1), &wider);
+        let widened = state.plan(frame(1), &wider)[0][3] >> 8;
+        assert!(![before, resized].contains(&widened));
     }
 
     #[test]
