@@ -183,7 +183,7 @@ CATALOG = {
     'Ballyhoo': "period = value(4); scale = value(0.02); drift = noise(period=period, scale=scale); wander = noise(period=period, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=high, high=low), pitch=curve(wander, 'Ramp up', low=low, high=high))",
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
-    'Strobe follows a band': "bass = audio(low_hz=60, high_hz=300); strobe(rate=curve(bass, 'Ramp up', low=0.3, high=1))",
+    'Strobe steps up': "t = time(); strobe(rate=curve(t, 'Steps 4', low=0.4, high=0.9))",
     # Not shipped presets.
     "Slash": EXAMPLE_SLASH,
     "Slash with values": EXAMPLE_SLASH_VALUES,

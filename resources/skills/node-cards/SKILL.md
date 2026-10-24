@@ -153,6 +153,12 @@ pitch to the aim underneath.
 Shutter = rate. `alpha` is the clip's opacity over the strobe below, as on
 color. Blend modes: the same as color.
 
+Hold `rate` steady: a constant, or steps (`"Steps 4"`) that change at most
+once a bar. Never drive `rate` from `audio`. A real fixture strobes on its own
+clock and restarts it whenever the rate changes, so a rate that moves every
+frame barely flashes on the rig even though the stage view strobes. Let the
+music decide *where* strobe clips go, not how fast they flash.
+
 ## Coordinate nodes
 
 **time** `time(every=None, duration=None, delay=None, phase=None)` → coordinate
