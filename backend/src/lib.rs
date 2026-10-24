@@ -36,6 +36,7 @@ pub mod python_env;
 pub mod recording;
 mod rekordbox;
 mod render_engine;
+pub mod resources;
 mod root_worker;
 pub mod services;
 pub mod settings;
