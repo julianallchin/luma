@@ -44,7 +44,7 @@ cargo +1.97.1 build --release --locked --manifest-path gpui/Cargo.toml -p luma-a
 app="$dist/Luma.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-# `luma`, not `luma-app`: the Tauri build's updater relaunches
+# `luma`, not `luma-app`: an installed build relaunches
 # `Contents/MacOS/luma` after it installs this bundle over itself.
 cp "$target_dir/release/luma-app" "$app/Contents/MacOS/luma"
 cp assets/app/icon.icns "$app/Contents/Resources/luma.icns"

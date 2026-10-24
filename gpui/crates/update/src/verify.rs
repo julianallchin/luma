@@ -4,9 +4,9 @@
 //! holds the release key. Without it, anyone able to publish a release asset
 //! (a leaked token, a compromised workflow) could ship code to every install.
 //!
-//! The encoding is the one `tauri signer sign` writes and Tauri's updater
-//! reads: the key and the signature are each the base64 of a whole minisign
-//! file, comment lines included.
+//! The key and the signature are each the base64 of a whole minisign file,
+//! comment lines included, which is what the release workflow's signer
+//! writes.
 
 use std::io::Read;
 use std::path::Path;
@@ -14,16 +14,14 @@ use std::path::Path;
 use base64::Engine as _;
 use minisign_verify::{PublicKey, Signature};
 
-/// The release public key. The default is the key the Tauri build shipped
-/// with (minisign key id `D0F3AAE2A309160A`), so one secret signs for both the
-/// old updater and this one. A build can embed another through
-/// `LUMA_UPDATE_PUBKEY` — see `RELEASING.md`.
+/// The release public key (minisign key id `D0F3AAE2A309160A`). A build can
+/// embed another through `LUMA_UPDATE_PUBKEY` — see `RELEASING.md`.
 pub const PUBLIC_KEY: &str = match option_env!("LUMA_UPDATE_PUBKEY") {
     Some(key) => key,
     None => "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwRjNBQUUyQTMwOTE2MEEKUldRS0ZnbWo0cXJ6ME5zZzlVdlVuRisxRk9oSzNQSDUwTm1CWHdId09uYlF3ekNhYWpJQVdybmwK",
 };
 
-/// Check `file` against `signature`, both in the Tauri encoding.
+/// Check `file` against `signature`, both base64-encoded minisign files.
 pub fn verify_file(file: &Path, signature: &str, public_key: &str) -> Result<(), String> {
     let key = PublicKey::decode(&decode(public_key, "public key")?)
         .map_err(|error| format!("bad update public key: {error}"))?;
@@ -61,7 +59,8 @@ pub(crate) mod tests {
     use super::*;
     use base64::engine::general_purpose::STANDARD;
 
-    /// A throwaway key and the Tauri-encoded signature of `data` under it.
+    /// A throwaway key and the signature of `data` under it, encoded as the
+    /// release workflow publishes them.
     pub(crate) fn sign(data: &[u8]) -> (String, String) {
         let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
         let signature = minisign::sign(Some(&pair.pk), &pair.sk, data, None, None).unwrap();

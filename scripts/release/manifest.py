@@ -2,12 +2,11 @@
 """Write the updater manifest, latest.json, for one release.
 
     manifest.py --version 0.6.0 --commit <sha> --base-url <release download url> \
-        darwin-aarch64=dist/Luma-aarch64.app.tar.gz \
-        linux-x86_64=dist/luma-linux-x86_64.tar.gz > latest.json
+        aarch64-apple-darwin=dist/Luma-aarch64.app.tar.gz \
+        x86_64-unknown-linux-gnu=dist/luma-linux-x86_64.tar.gz > latest.json
 
-Each archive needs its `<archive>.sig` beside it (`tauri signer sign` writes
-that). The format is Tauri's static manifest plus a `commit` field — see
-gpui/crates/update/src/manifest.rs, which reads it.
+Each archive needs its signature, `<archive>.sig`, beside it. The format is
+documented in gpui/crates/update/src/manifest.rs, which reads it.
 """
 
 import argparse

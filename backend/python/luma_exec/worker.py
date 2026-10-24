@@ -2,7 +2,7 @@
 """Persistent Python execution kernel for one Luma agent thread (contract C2).
 
 One worker owns one durable user namespace. It speaks newline-delimited JSON
-over pipes and knows nothing about tracks, patterns, scores, venues, Tauri, or
+over pipes and knows nothing about tracks, patterns, scores, venues or
 SQLite — only the binding-manifest schema and this protocol.
 
 CLI:

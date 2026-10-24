@@ -35,8 +35,7 @@ differs from their own. Install one on Linux with
 
 ## Secrets and variables
 
-Set these under Settings → Secrets and variables → Actions. The names match the
-ones the retired Tauri workflow used, so existing values carry over.
+Set these under Settings → Secrets and variables → Actions.
 
 | Name | Kind | Used for |
 |---|---|---|
@@ -45,8 +44,8 @@ ones the retired Tauri workflow used, so existing values carry over.
 | `APPLE_ID` | secret | notarytool Apple ID |
 | `APPLE_PASSWORD` | secret | an app-specific password for that Apple ID |
 | `APPLE_TEAM_ID` | secret | the team ID the certificate belongs to |
-| `APPLE_SIGNING_IDENTITY` | variable, optional | codesign identity; defaults to the one the Tauri workflow used |
-| `TAURI_SIGNING_PRIVATE_KEY` | secret | minisign key that signs update archives |
+| `APPLE_SIGNING_IDENTITY` | variable, optional | codesign identity; defaults to the one in `release.yml` |
+| `TAURI_SIGNING_PRIVATE_KEY` | secret | minisign key that signs update archives (the name is the one the signer, `@tauri-apps/cli signer`, reads) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | secret | its password (may be empty) |
 
 Without the Apple secrets the DMG is ad-hoc signed and not notarized:
@@ -56,9 +55,8 @@ fails, because installs refuse unsigned archives.
 ### The update key
 
 Installs verify each archive against the public key compiled into
-`gpui/crates/update/src/verify.rs`. It is the key from the Tauri build's
-`tauri.conf.json` (minisign key ID `D0F3AAE2A309160A`), so
-`TAURI_SIGNING_PRIVATE_KEY` must still be its private half. To rotate it:
+`gpui/crates/update/src/verify.rs` (minisign key ID `D0F3AAE2A309160A`);
+`TAURI_SIGNING_PRIVATE_KEY` is its private half. To rotate it:
 
 ```sh
 npx @tauri-apps/cli@2.12.4 signer generate -w luma-update.key
@@ -70,20 +68,12 @@ key (`luma-update.key.pub`) in `verify.rs`, or build with
 signed with the new one. Ship one release signed with the old key that
 carries the new public key before switching the secret.
 
-## Existing Tauri installs
+## Tauri installs
 
-`latest.json` uses Tauri's updater format at the URL the Tauri build polled.
-**The first published stable release is therefore offered to every Tauri
-install on Apple silicon.** Tauri's updater unpacks `Luma-aarch64.app.tar.gz`
-over its own bundle and relaunches `Contents/MacOS/luma`, which is the
-executable name the native bundle keeps. Both apps use the same bundle ID and
-the same library directory, so before the first publish, check that a
-library written by Tauri 0.5.19 opens in the native app. Intel and Windows
-Tauri installs find no entry for their platform and keep their version.
-
-If those installs should not migrate, rename the platform keys in the
-workflow's `manifest.py` call and in `gpui/crates/update/src/manifest.rs`
-(for example `darwin-aarch64-native`).
+The retired Tauri build (0.5.19 and older) polls the same stable `latest.json`
+but looks for `darwin-aarch64`, and the manifest keys platforms by target
+triple, so those installs keep their version. The native app cannot open a
+library that old (`backend/migrations/20261024000000_baseline.sql`).
 
 ## Build switches
 
