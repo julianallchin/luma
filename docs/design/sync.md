@@ -135,11 +135,19 @@ midi_bindings, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts.
 
 Local only: settings, dmx_routes, preprocessing_failures,
-track_waveforms, track_mert, fixture_group_overrides, agent_thread_runs,
-agent_thread_usage, stage_pieces, sync_rejections, auth_write_admission, the
+track_waveforms, track_mert, agent_thread_runs,
+agent_thread_usage, sync_rejections, auth_write_admission, the
 auth session, and the columns `venues.controller_port`, `venues.mixer_port`,
 `venues.mixer_mapping_json`, `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
+
+The local copy is a projection of the server and is never converted in place.
+A local migration is DDL only; a format change is a server migration. When a
+client can no longer read what an older one downloaded, bump
+`PROJECTION_VERSION` in `backend/src/database/local/database.rs`. At startup a
+library at another version clears its synced tables without queueing anything
+for upload, and PowerSync downloads them again. A change still waiting to
+upload postpones that to a later launch.
 
 `venues.environment` and `venues.haze` are **not** on that list: what kind of
 room a venue is and what atmosphere it has are venue truth, so they follow the

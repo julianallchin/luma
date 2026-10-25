@@ -64,6 +64,9 @@ pub const LINE_HEIGHT: f32 = 22.75;
 /// The field's text size.
 pub const TEXT_SIZE: f32 = 14.0;
 
+/// What a [`TextInput::secret`] field draws in place of each character.
+const MASK: char = '•';
+
 /// Caret blink half-period — the standard textarea cadence.
 pub const CARET_BLINK_MS: u64 = 500;
 
@@ -153,6 +156,21 @@ fn run_lengths(len: usize, spans: &[(Range<usize>, Hsla)]) -> Vec<(usize, Option
         runs.push((len - at, None));
     }
     runs
+}
+
+/// The byte offset in a [`MASK`]ed rendering of `content` that content byte
+/// `index` (a char boundary) lands on.
+fn masked_offset(content: &str, index: usize) -> usize {
+    content[..index].chars().count() * MASK.len_utf8()
+}
+
+/// The inverse of [`masked_offset`]: the content char boundary a masked
+/// offset falls on, clamped to the content's end.
+fn unmasked_offset(content: &str, masked: usize) -> usize {
+    content
+        .char_indices()
+        .nth(masked / MASK.len_utf8())
+        .map_or(content.len(), |(at, _)| at)
 }
 
 /// Per-frame drag-selection scroll. Distance past the edge increases speed,
@@ -406,6 +424,9 @@ enum EditKind {
 /// mapping and auto-grow are both read from.
 pub struct TextInput {
     mode: Mode,
+    /// Draws [`MASK`] for every character and refuses to copy — see
+    /// [`TextInput::secret`].
+    secret: bool,
     style: Style,
     /// The glyph size. [`TEXT_SIZE`] unless a host sets a smaller one to
     /// match the controls beside the field.
@@ -481,6 +502,18 @@ impl TextInput {
         Self::new(Mode::Search, placeholder, LINE_HEIGHT, cx)
     }
 
+    /// A single-line field whose content is never drawn: a password or an API
+    /// key. Every character shows as one [`MASK`], copy and cut do nothing,
+    /// and word motion treats the content as one word, so neither the
+    /// clipboard nor the caret gives away its shape. The host still reads
+    /// [`Self::text`] — what it does with it is the host's to keep safe.
+    pub fn secret(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+        Self {
+            secret: true,
+            ..Self::new(Mode::Search, placeholder, LINE_HEIGHT, cx)
+        }
+    }
+
     fn new(
         mode: Mode,
         placeholder: impl Into<SharedString>,
@@ -489,6 +522,7 @@ impl TextInput {
     ) -> Self {
         Self {
             mode,
+            secret: false,
             style: Style::default(),
             text_size: TEXT_SIZE,
             max_content_height,
@@ -818,6 +852,9 @@ impl TextInput {
     }
 
     fn previous_word_boundary(&self, offset: usize) -> usize {
+        if self.secret {
+            return 0;
+        }
         self.content
             .split_word_bound_indices()
             .rev()
@@ -826,6 +863,9 @@ impl TextInput {
     }
 
     fn next_word_boundary(&self, offset: usize) -> usize {
+        if self.secret {
+            return self.content.len();
+        }
         self.content
             .split_word_bound_indices()
             .find_map(|(ix, word)| {
@@ -1048,6 +1088,9 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.secret {
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -1062,7 +1105,7 @@ impl TextInput {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.secret && !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
@@ -1104,8 +1147,28 @@ impl TextInput {
 
     // ---- geometry ----
 
+    /// Where a content byte offset falls in the shaped text. The two differ
+    /// only in a secret field, whose every character shapes as one [`MASK`].
+    fn display_offset(&self, index: usize) -> usize {
+        if self.secret {
+            masked_offset(&self.content, index)
+        } else {
+            index
+        }
+    }
+
+    /// The content byte offset of a shaped-text offset, clamped to the content.
+    fn content_offset(&self, display: usize) -> usize {
+        if self.secret {
+            unmasked_offset(&self.content, display)
+        } else {
+            display.min(self.content.len())
+        }
+    }
+
     /// Content-local point for a byte index; y grows down from the content top.
     fn point_for_index(&self, index: usize) -> Option<Point<Pixels>> {
+        let index = self.display_offset(index);
         for (line_ix, line) in self.last_lines.iter().enumerate() {
             let line_start = *self.line_starts.get(line_ix)?;
             if index < line_start {
@@ -1142,7 +1205,7 @@ impl TextInput {
                 let ix = line
                     .closest_index_for_position(local, self.line_height)
                     .unwrap_or_else(|ix| ix);
-                return (line_start + ix).min(self.content.len());
+                return self.content_offset(line_start + ix);
             }
             y -= height;
         }
@@ -1350,6 +1413,9 @@ impl TextInput {
     ) -> f32 {
         let (display, is_placeholder) = if self.content.is_empty() {
             (self.placeholder.clone(), true)
+        } else if self.secret {
+            let mask: String = self.content.chars().map(|_| MASK).collect();
+            (SharedString::from(mask), false)
         } else {
             (SharedString::from(self.content.clone()), false)
         };
@@ -1376,7 +1442,10 @@ impl TextInput {
         // run. Filtering empties matters — a zero-length run makes the shaper
         // disagree with the byte offsets every other method here uses.
         let runs: Vec<TextRun> = match self.marked_range.as_ref() {
-            Some(marked) if !is_placeholder => [
+            // A secret field shapes as one plain run: its display offsets are
+            // not content offsets, and an underlined composition would only
+            // mark where the hidden text is being typed.
+            Some(marked) if !is_placeholder && !self.secret => [
                 run_for(marked.start, false),
                 run_for(marked.end.saturating_sub(marked.start), true),
                 run_for(display.len().saturating_sub(marked.end), false),
@@ -1384,7 +1453,7 @@ impl TextInput {
             .into_iter()
             .filter(|run| run.len > 0)
             .collect(),
-            None if !is_placeholder && self.highlight.is_some() => {
+            None if !is_placeholder && !self.secret && self.highlight.is_some() => {
                 let spans = (self.highlight.as_ref().unwrap())(&display);
                 run_lengths(display.len(), &spans)
                     .into_iter()
@@ -1970,6 +2039,20 @@ mod tests {
             run_lengths(0, &[(0..3, red)]),
             Vec::<(usize, Option<Hsla>)>::new()
         );
+    }
+
+    /// A masked field maps every content boundary to a mask boundary and back,
+    /// multi-byte characters included, so caret, selection and mouse mapping
+    /// never land inside a character of the hidden text.
+    #[test]
+    fn masked_offsets_round_trip_through_every_char_boundary() {
+        let content = "sk-é漢🙂z";
+        for (at, _) in content.char_indices().chain([(content.len(), ' ')]) {
+            let masked = masked_offset(content, at);
+            assert!(masked % MASK.len_utf8() == 0);
+            assert_eq!(unmasked_offset(content, masked), at);
+        }
+        assert_eq!(unmasked_offset(content, usize::MAX / 2), content.len());
     }
 
     /// The two contexts are a pair, and both halves have to be spelled: the

@@ -7,9 +7,10 @@
 //! deterministic: the same venue derives the same tree, with the same ids,
 //! every time.
 //!
-//! Manual work sits *on top* as overrides ([`crate::database::local::
-//! group_overrides`]). A node with an override is never re-derived; deleting the
-//! override restores derivation. That is the whole edit model.
+//! Derivation proposes; it does not own. A derived set becomes a group when
+//! it is saved as a `fixture_groups` row
+//! ([`crate::services::groups::snapshot_generated_groups`]), and from then on
+//! it is edited like any other row.
 //!
 //! # The tree
 //!
@@ -86,7 +87,6 @@ use glam::{DMat4, DVec3};
 use luma_scene::coords::data_pose_of_d;
 use luma_scene::venue::{NodeKind, NodeSockets, ResolvedVenue, VenueGraph};
 
-use crate::database::local::group_overrides::GroupOverride;
 use crate::models::fixtures::{ChannelType, FixtureDefinition, Mode};
 use crate::models::groups::{normalize_group_name, GroupOrigin, GroupTreeNode};
 
@@ -1096,7 +1096,7 @@ fn hangs_off_a_stage(graph: &VenueGraph, node: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Derivation + overrides + authored groups: the merged tree
+// Derivation + authored groups: the merged tree
 // ---------------------------------------------------------------------------
 
 /// An authored `fixture_groups` row and the fixtures in it.
@@ -1111,102 +1111,17 @@ pub struct ManualGroup {
     pub fixtures: Vec<String>,
 }
 
-/// The tree the patch page shows: derivation, with the overrides applied, plus
-/// the groups someone made by hand.
+/// Derivation and the groups someone made by hand, as one tree.
 ///
-/// Pure, so the edit model is testable without a database. The model is one
-/// sentence: **an override names a derived node, it does not replace it.** A
-/// renamed node keeps its new name and goes on collecting whatever the rule
-/// puts in it — which is why renaming `spots/left wing/top` and then hanging
-/// four more movers on that wing files the new movers under the name you gave
-/// it, rather than under a set that stopped listening.
-///
-/// Merge is the one edit that moves fixtures, and it moves them by *reference*:
-/// the target counts the source's members alongside its own, both still
-/// derived, and deleting the row undoes it.
-///
-/// Merge is also **total here**, whatever the rows say. A chain — a merged into
-/// b, b into c — lands every fixture in c, because a set that was folded away
-/// cannot be somewhere the tree does not show. A cycle folds nothing, because
-/// there is no terminal set to fold into. And the children of a node that was
-/// merged away re-parent onto its target rather than vanishing with it. The
-/// write path refuses to *create* a cycle ([`merged_terminal`] is what it asks);
-/// this reader still has to survive one, because rows outlive the code that
-/// wrote them.
-///
-/// Parents come before children, and the authored groups come last — which is
-/// what [`make_names_distinct`], the step after this one, reads to decide who
-/// keeps a name two nodes spelled the same way.
+/// Pure, so it is testable without a database. Parents come before children,
+/// and the authored groups come last — which is what [`make_names_distinct`],
+/// the step after this one, reads to decide who keeps a name two nodes spelled
+/// the same way.
 #[must_use]
-pub fn merge_tree(
-    tree: &DerivedTree,
-    overrides: &[GroupOverride],
-    manual: &[ManualGroup],
-) -> Vec<GroupTreeNode> {
-    let lookup = |id: &str| overrides.iter().find(|row| row.group_id == id);
-    // Where each merged node's fixtures actually end up, and what each surviving
-    // node therefore absorbs. Read once: a merge is rare and a scan per node
-    // would be quadratic in the tree.
-    let mut folded: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    let mut absorbed: BTreeMap<&str, &str> = BTreeMap::new();
-    for row in overrides {
-        if row.merged_into.is_none() {
-            continue;
-        }
-        let Some(target) = merged_terminal(overrides, &row.group_id) else {
-            continue;
-        };
-        folded.entry(target).or_default().push(&row.group_id);
-        absorbed.insert(&row.group_id, target);
-    }
-    let own_members = |id: &str| -> &[String] {
-        tree.groups
-            .iter()
-            .find(|group| group.id == id)
-            .map(|group| group.members.as_slice())
-            .or_else(|| {
-                manual
-                    .iter()
-                    .find(|group| group.id == id)
-                    .map(|group| group.fixtures.as_slice())
-            })
-            .unwrap_or_default()
-    };
-    let members_of = |id: &str, own: &[String]| -> Vec<String> {
-        let mut members = own.to_vec();
-        for source in folded.get(id).into_iter().flatten() {
-            for fixture in own_members(source) {
-                if !members.contains(fixture) {
-                    members.push(fixture.clone());
-                }
-            }
-        }
-        members
-    };
-    // A parent that was merged away is not a place to hang from; the set that
-    // absorbed it is.
-    let parent_of = |parent: Option<String>| -> Option<String> {
-        let parent = parent?;
-        Some(
-            absorbed
-                .get(parent.as_str())
-                .map_or(parent, |target| (*target).to_string()),
-        )
-    };
-
+pub fn merge_tree(tree: &DerivedTree, manual: &[ManualGroup]) -> Vec<GroupTreeNode> {
     let mut nodes = Vec::with_capacity(tree.groups.len() + manual.len());
     for group in &tree.groups {
-        let row = lookup(&group.id);
-        // Merged away: its fixtures are counted under the target, and showing
-        // the husk would count them twice.
-        if absorbed.contains_key(group.id.as_str()) {
-            continue;
-        }
-        let label = row
-            .and_then(|row| row.label.clone())
-            .unwrap_or_else(|| group.label().to_string());
-        // A rename renames the leaf, not the branch above it, so the selection
-        // name keeps its namespace and stays unique.
+        let label = group.label().to_string();
         let mut path = group.path.clone();
         path.pop();
         path.push(label.clone());
@@ -1214,58 +1129,34 @@ pub fn merge_tree(
             id: group.id.clone(),
             name: normalize_group_name(&path.join(" ")),
             label,
-            parent_id: parent_of(match row.and_then(|row| row.parent_id.as_deref()) {
-                None => group.parent.clone(),
-                Some("") => None,
-                Some(parent) => Some(parent.to_string()),
-            }),
-            origin: if row.is_some() {
-                GroupOrigin::Edited
-            } else {
-                GroupOrigin::Derived
-            },
+            parent_id: group.parent.clone(),
+            origin: GroupOrigin::Derived,
             role: Some(group.role),
-            fixtures: members_of(&group.id, &group.members),
+            fixtures: group.members.clone(),
         });
     }
-
-    // An authored group can be the *target* of a merge, and can be renamed or
-    // moved like anything else. Same rule: the row names it, the members are
-    // still whoever is in it.
     for group in manual {
-        let row = lookup(&group.id);
-        if absorbed.contains_key(group.id.as_str()) {
-            continue;
-        }
         // A name the row does not have is not minted here: `unnamed group` as
         // a label is a thing to show, and as a selection name it would be a
         // word an expression could say for a set nobody has described.
-        let named = row
-            .and_then(|row| row.label.clone())
-            .or_else(|| group.name.clone());
-        let name = named
+        let name = group
+            .name
             .as_deref()
             .map_or_else(String::new, normalize_group_name);
-        let label = named.unwrap_or_else(|| "unnamed group".to_string());
+        let label = group
+            .name
+            .clone()
+            .unwrap_or_else(|| "unnamed group".to_string());
         nodes.push(GroupTreeNode {
             id: group.id.clone(),
             name,
             label,
-            parent_id: parent_of(
-                row.and_then(|row| row.parent_id.as_deref())
-                    .filter(|parent| !parent.is_empty())
-                    .map(str::to_string),
-            ),
-            origin: if row.is_some() {
-                GroupOrigin::Edited
-            } else {
-                GroupOrigin::Manual
-            },
+            parent_id: None,
+            origin: GroupOrigin::Manual,
             role: None,
-            fixtures: members_of(&group.id, &group.fixtures),
+            fixtures: group.fixtures.clone(),
         });
     }
-
     nodes
 }
 
@@ -1292,36 +1183,6 @@ pub fn make_names_distinct(nodes: &mut [GroupTreeNode]) {
             .chain(derived.iter_mut())
             .map(|node| &mut node.name),
     );
-}
-
-/// Where `group_id`'s fixtures end up once every merge in `overrides` is
-/// followed: the first node in the chain that is not itself merged away.
-///
-/// `None` when `group_id` is not merged at all, and `None` when the chain
-/// closes on itself — a cycle has no terminal set, so a cycle folds nothing.
-/// The write path uses this to refuse the row that would close one; the reader
-/// uses it to stay total when a row already did.
-#[must_use]
-pub fn merged_terminal<'a>(overrides: &'a [GroupOverride], group_id: &str) -> Option<&'a str> {
-    let target = |id: &str| {
-        overrides
-            .iter()
-            .find(|row| row.group_id == id)
-            .and_then(|row| row.merged_into.as_deref())
-    };
-    let mut seen: Vec<&str> = vec![];
-    let mut at = target(group_id)?;
-    if at == group_id {
-        return None;
-    }
-    while let Some(next) = target(at) {
-        if next == group_id || seen.contains(&next) {
-            return None;
-        }
-        seen.push(at);
-        at = next;
-    }
-    Some(at)
 }
 
 #[cfg(test)]
@@ -2063,7 +1924,7 @@ mod tests {
             name: Some("washes_horizontal_truss_1".into()),
             fixtures: vec!["a".into()],
         };
-        let mut merged = merge_tree(&tree, &[], &[manual]);
+        let mut merged = merge_tree(&tree, &[manual]);
         make_names_distinct(&mut merged);
         let named = |id: &str| {
             merged
@@ -2078,109 +1939,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Overrides
+    // The rig moves, the sets follow
     // -----------------------------------------------------------------------
-
-    fn override_row(group_id: &str, path: &str) -> GroupOverride {
-        GroupOverride {
-            group_id: group_id.into(),
-            path: path.into(),
-            label: None,
-            parent_id: None,
-            merged_into: None,
-        }
-    }
 
     fn top_of(tree: &DerivedTree) -> &DerivedGroup {
         tree.groups
             .iter()
             .find(|group| group.path == ["washes", "horizontal", "top"])
             .expect("the split derives")
-    }
-
-    #[test]
-    fn a_rename_survives_the_rig_growing_and_still_collects() {
-        let tree = derive_groups(&horizontal_facts());
-        let top = top_of(&tree);
-        let mut row = override_row(&top.id, &top.path.join("/"));
-        row.label = Some("house left".into());
-
-        // One more par on the high run, after the rename.
-        let mut grown = horizontal_facts();
-        grown
-            .fixtures
-            .push(fixture("g", FixtureRole::Wash, "high", [4.0, 0.0, 5.0]));
-        let merged = merge_tree(&derive_groups(&grown), std::slice::from_ref(&row), &[]);
-
-        let node = merged
-            .iter()
-            .find(|node| node.id == top.id)
-            .expect("still in the tree");
-        assert_eq!(node.label, "house left");
-        assert_eq!(node.origin, GroupOrigin::Edited);
-        // The rename keeps its namespace, so the name stays unique.
-        assert_eq!(node.name, "washes_horizontal_house_left");
-        // And the new par filed itself under the name a human gave it.
-        assert!(node.fixtures.contains(&"g".to_string()));
-
-        // Its untouched sibling is still plain derivation.
-        let bottom = merged
-            .iter()
-            .find(|node| node.label == "bottom")
-            .expect("the sibling derives");
-        assert_eq!(bottom.origin, GroupOrigin::Derived);
-    }
-
-    #[test]
-    fn deleting_the_override_restores_derivation() {
-        let tree = derive_groups(&horizontal_facts());
-        let top = top_of(&tree);
-        let mut row = override_row(&top.id, &top.path.join("/"));
-        row.label = Some("renamed".into());
-        let renamed = merge_tree(&tree, std::slice::from_ref(&row), &[]);
-        assert_eq!(
-            renamed.iter().find(|n| n.id == top.id).map(|n| &n.label),
-            Some(&"renamed".to_string())
-        );
-
-        let plain = merge_tree(&tree, &[], &[]);
-        let node = plain.iter().find(|n| n.id == top.id).expect("derives");
-        assert_eq!(node.label, "top");
-        assert_eq!(node.origin, GroupOrigin::Derived);
-    }
-
-    #[test]
-    fn a_merged_node_leaves_the_tree_and_its_fixtures_arrive_in_the_target() {
-        let tree = derive_groups(&horizontal_facts());
-        let top = top_of(&tree);
-        let bottom = tree
-            .groups
-            .iter()
-            .find(|group| group.path == ["washes", "horizontal", "bottom"])
-            .expect("derives");
-
-        let mut row = override_row(&top.id, &top.path.join("/"));
-        row.merged_into = Some(bottom.id.clone());
-        let merged = merge_tree(&tree, &[row], &[]);
-
-        assert!(!merged.iter().any(|node| node.id == top.id));
-        let target = merged
-            .iter()
-            .find(|node| node.id == bottom.id)
-            .expect("the target stays");
-        assert_eq!(target.fixtures, ["d", "e", "f", "a", "b", "c"]);
-    }
-
-    #[test]
-    fn an_override_whose_path_stopped_deriving_is_inert() {
-        // The truss came down: there is no node for the patch to name, so it
-        // says nothing rather than inventing a group nobody built.
-        let tree = derive_groups(&horizontal_facts());
-        let mut row = override_row("gone", "washes/gone/top");
-        row.label = Some("the old wing".into());
-        let merged = merge_tree(&tree, &[row], &[]);
-        assert!(!merged.iter().any(|node| node.id == "gone"));
-        assert_eq!(merged.len(), tree.groups.len());
     }
 
     #[test]
@@ -2200,111 +1966,6 @@ mod tests {
         let after = derive_groups(&moved);
         assert_eq!(top_before, ["a", "b", "c"]);
         assert_eq!(top_of(&after).members, ["d", "e", "f"]);
-    }
-
-    // -----------------------------------------------------------------------
-    // Merge, as a total operation
-    // -----------------------------------------------------------------------
-
-    /// The three nodes of `horizontal_facts`'s wash class: the class and its
-    /// two rows.
-    fn class_and_rows(tree: &DerivedTree) -> (String, String, String) {
-        let id = |path: &[&str]| {
-            tree.groups
-                .iter()
-                .find(|group| group.path == path)
-                .expect("derives")
-                .id
-                .clone()
-        };
-        (
-            id(&["washes", "horizontal"]),
-            id(&["washes", "horizontal", "top"]),
-            id(&["washes", "horizontal", "bottom"]),
-        )
-    }
-
-    fn merged_row(from: &str, into: &str) -> GroupOverride {
-        let mut row = override_row(from, "");
-        row.merged_into = Some(into.into());
-        row
-    }
-
-    /// A into B into C lands everything in C. Following one hop and stopping
-    /// left A's fixtures in a node the tree does not show.
-    #[test]
-    fn a_merge_chain_resolves_to_its_terminal() {
-        let facts = horizontal_facts();
-        let mut grown = facts.clone();
-        grown
-            .fixtures
-            .push(fixture("g", FixtureRole::Wash, "high", [4.0, 0.0, 5.0]));
-        let tree = derive_groups(&grown);
-        let (class, top, bottom) = class_and_rows(&tree);
-
-        let merged = merge_tree(
-            &tree,
-            &[merged_row(&top, &bottom), merged_row(&bottom, &class)],
-            &[],
-        );
-        assert!(!merged.iter().any(|node| node.id == top));
-        assert!(!merged.iter().any(|node| node.id == bottom));
-        let target = merged
-            .iter()
-            .find(|node| node.id == class)
-            .expect("the terminal stays");
-        for fixture in ["a", "b", "c", "d", "e", "f", "g"] {
-            assert!(
-                target.fixtures.contains(&fixture.to_string()),
-                "{fixture} fell out of the chain"
-            );
-        }
-    }
-
-    /// A cycle has no terminal set, so it folds nothing — rather than deleting
-    /// both nodes and every fixture in them.
-    #[test]
-    fn a_merge_cycle_folds_nothing() {
-        let tree = derive_groups(&horizontal_facts());
-        let (_, top, bottom) = class_and_rows(&tree);
-        let merged = merge_tree(
-            &tree,
-            &[merged_row(&top, &bottom), merged_row(&bottom, &top)],
-            &[],
-        );
-        assert_eq!(merged.len(), tree.groups.len(), "no node disappeared");
-        for id in [&top, &bottom] {
-            let node = merged.iter().find(|node| &node.id == id).expect("stays");
-            assert_eq!(node.fixtures.len(), 3, "and neither absorbed the other");
-        }
-    }
-
-    /// Merging a parent into its own child cannot orphan the child: whatever
-    /// hung off the husk hangs off the target instead.
-    #[test]
-    fn children_of_a_merged_parent_reparent_onto_the_target() {
-        let tree = derive_groups(&horizontal_facts());
-        let (class, top, bottom) = class_and_rows(&tree);
-        let merged = merge_tree(&tree, &[merged_row(&class, &top)], &[]);
-
-        assert!(!merged.iter().any(|node| node.id == class));
-        let sibling = merged
-            .iter()
-            .find(|node| node.id == bottom)
-            .expect("the other row is still in the tree");
-        assert_eq!(sibling.parent_id.as_deref(), Some(top.as_str()));
-        // And the target counts everything the class did.
-        let target = merged.iter().find(|node| node.id == top).expect("stays");
-        assert_eq!(target.fixtures.len(), 6);
-    }
-
-    /// A node merged into itself is a no-op, not a disappearance.
-    #[test]
-    fn merging_a_node_into_itself_folds_nothing() {
-        let tree = derive_groups(&horizontal_facts());
-        let (_, top, _) = class_and_rows(&tree);
-        let merged = merge_tree(&tree, &[merged_row(&top, &top)], &[]);
-        assert_eq!(merged.len(), tree.groups.len());
     }
 }
 

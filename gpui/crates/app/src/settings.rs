@@ -12,9 +12,10 @@ use gpui::*;
 use luma_ui::arg::select::luma_arg_select;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::text_input::{self, TextInput};
 use luma_ui::Enabled;
 
-use luma_lib::settings::{agent_models, AppSettings, AGENT_PROVIDERS};
+use luma_lib::settings::{agent_models, ApiKeyStatus, AppSettings, AGENT_PROVIDERS};
 
 use crate::Luma;
 
@@ -53,16 +54,74 @@ pub struct Settings {
     /// the key is enough of an identity because no two selects on this screen
     /// write the same setting.
     open_menu: Option<&'static str>,
+    /// One key field per [`AGENT_PROVIDERS`] service, in that order.
+    keys: Vec<KeyField>,
 }
 
 impl Settings {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Luma>) -> Self {
         Self {
             tab: Tab::General,
             values: None,
             error: None,
             open_menu: None,
+            keys: AGENT_PROVIDERS
+                .iter()
+                .map(|(provider, label)| KeyField::new(provider, label, cx))
+                .collect(),
         }
+    }
+}
+
+/// One service's API key field. It holds only what is being typed: the
+/// stored key never comes back across the seam, so there is nothing here to
+/// leak, and what the field shows about the stored one is its hint.
+struct KeyField {
+    /// The [`AGENT_PROVIDERS`] id, matched against [`ApiKeyStatus::provider`].
+    provider: &'static str,
+    label: &'static str,
+    input: Entity<TextInput>,
+    /// Whether the draft holds anything. Cached from the field's own edits
+    /// because the screen renders without a context to read the field from.
+    has_draft: bool,
+    _events: Subscription,
+}
+
+impl KeyField {
+    fn new(provider: &'static str, label: &'static str, cx: &mut Context<Luma>) -> Self {
+        let input = cx.new(|cx| {
+            let mut input = TextInput::secret("Paste a key", cx);
+            input.set_text_size(12., cx);
+            input
+        });
+        let events = cx.subscribe(&input, move |this, field, event, cx| match event {
+            text_input::Event::Edited => {
+                let has_draft = !field.read(cx).is_empty();
+                this.with_settings(cx, |state| {
+                    if let Some(key) = state.key_field_mut(provider) {
+                        key.has_draft = has_draft;
+                    }
+                });
+            }
+            text_input::Event::Submitted => this.save_api_key(provider, cx),
+            text_input::Event::Cancelled => {
+                field.update(cx, |input, cx| input.set_text("", cx));
+            }
+            _ => cx.notify(),
+        });
+        Self {
+            provider,
+            label,
+            input,
+            has_draft: false,
+            _events: events,
+        }
+    }
+}
+
+impl Settings {
+    fn key_field_mut(&mut self, provider: &str) -> Option<&mut KeyField> {
+        self.keys.iter_mut().find(|key| key.provider == provider)
     }
 }
 
@@ -97,8 +156,8 @@ impl Luma {
         ) {
             return;
         }
-        self.overlay
-            .open(crate::shell::Overlay::Settings(Settings::new()));
+        let state = Settings::new(cx);
+        self.overlay.open(crate::shell::Overlay::Settings(state));
         cx.notify();
         self.reload_settings(cx);
     }
@@ -191,6 +250,102 @@ impl Luma {
         .detach();
     }
 
+    /// Store the typed key for `provider`, or nothing if the draft is blank.
+    /// The draft is emptied only once the write has landed, so a failed save
+    /// leaves the key where it was typed.
+    fn save_api_key(&mut self, provider: &'static str, cx: &mut Context<Self>) {
+        let Some((setting, input, key)) = self.key_draft(provider, cx) else {
+            return;
+        };
+        if key.is_empty() {
+            return;
+        }
+        self.write_api_key(setting, key, Some(input), cx);
+    }
+
+    /// Remove `provider`'s stored key. An empty row is how the agent's key
+    /// lookup already reads "no key" ([`luma_lib::agent::model::api_key`]),
+    /// so clearing is a write like any other.
+    fn clear_api_key(&mut self, provider: &'static str, cx: &mut Context<Self>) {
+        let Some((setting, _, _)) = self.key_draft(provider, cx) else {
+            return;
+        };
+        self.write_api_key(setting, String::new(), None, cx);
+    }
+
+    /// The settings row `provider`'s key lives in, its field, and the trimmed
+    /// draft in that field.
+    fn key_draft(&self, provider: &str, cx: &App) -> Option<(String, Entity<TextInput>, String)> {
+        let Some(crate::shell::Overlay::Settings(state)) = self.overlay.as_open() else {
+            return None;
+        };
+        let setting = state
+            .values
+            .as_ref()?
+            .agent_api_keys
+            .iter()
+            .find(|status| status.provider == provider)?
+            .setting
+            .clone();
+        let input = state
+            .keys
+            .iter()
+            .find(|key| key.provider == provider)?
+            .input
+            .clone();
+        let draft = input.read(cx).text().trim().to_string();
+        Some((setting, input, draft))
+    }
+
+    /// [`Self::write_setting`] for a key: the same ordered write and re-read,
+    /// plus emptying the field that held the draft once it is stored. Never
+    /// the value in an error — `set_setting`'s errors name the key only.
+    fn write_api_key(
+        &mut self,
+        setting: String,
+        value: String,
+        drafted_in: Option<Entity<TextInput>>,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = self.library.set_setting(&setting, &value);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => {
+                    if let Some(input) = drafted_in {
+                        input.update(cx, |input, cx| input.set_text("", cx));
+                    }
+                    this.reload_settings(cx);
+                }
+                Err(error) => this.with_settings(cx, |state| state.error = Some(error.to_string())),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Put each stored key's hint in its field's placeholder. Here rather than
+    /// in the render because a field's placeholder is the field's own state.
+    fn show_key_hints(&self, values: &AppSettings, cx: &mut Context<Self>) {
+        let Some(crate::shell::Overlay::Settings(state)) = self.overlay.as_open() else {
+            return;
+        };
+        let updates: Vec<_> = state
+            .keys
+            .iter()
+            .filter_map(|key| {
+                let status = values
+                    .agent_api_keys
+                    .iter()
+                    .find(|status| status.provider == key.provider)?;
+                Some((key.input.clone(), key_placeholder(status)))
+            })
+            .collect();
+        for (input, placeholder) in updates {
+            input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        }
+    }
+
     fn reload_settings(&self, cx: &mut Context<Self>) {
         let pending = self.library.settings();
         cx.spawn(async move |this, cx| {
@@ -198,6 +353,7 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Ok(values) = &result {
                     this.apply_display_settings(values, cx);
+                    this.show_key_hints(values, cx);
                 }
                 this.with_settings(cx, |state| match result {
                     Ok(values) => {
@@ -440,9 +596,77 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             ),
             Some("Used for new API conversations."),
         ),
-        note("API keys are not editable from the native host yet."),
     ]);
+    fields.extend(state.keys.iter().filter_map(|key| {
+        let status = values
+            .agent_api_keys
+            .iter()
+            .find(|status| status.provider == key.provider)?;
+        Some(api_key(key, status, app))
+    }));
+    fields.push(note(
+        "Keys are kept on this device only. They are not synced to your account.",
+    ));
     fields
+}
+
+/// One service's key: the masked draft field, Save, and Clear while a key is
+/// stored. The field's placeholder is the stored key's hint (see
+/// [`key_placeholder`]), so the row reads "saved, ending in …" at rest and a
+/// typed draft replaces it.
+fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Div {
+    let provider = key.provider;
+    let label = format!("{} API key", key.label);
+    let save = app.clone();
+    let clear = app.clone();
+    let controls = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            luma_ui::float::field()
+                .w(px(320.))
+                .when(key.has_draft, |field| {
+                    field.key_context(text_input::DRAFT_CONTEXT)
+                })
+                .child(div().flex_1().min_w_0().child(key.input.clone()))
+                // The automation label names the field, never what is in it.
+                .agent_node(Role::Input, label.clone()),
+        )
+        .child(
+            luma_ui::button("Save", Enabled::from(key.has_draft))
+                .id(SharedString::from(format!("save-key-{provider}")))
+                .when(key.has_draft, |button| {
+                    button.on_click(move |_, _, cx| {
+                        save.update(cx, |this, cx| this.save_api_key(provider, cx));
+                    })
+                })
+                .agent_node(Role::Button, format!("Save {label}"))
+                .agent_disabled(!key.has_draft),
+        )
+        .when(status.hint.is_some(), |row| {
+            row.child(
+                luma_ui::button("Clear", Enabled::Yes)
+                    .id(SharedString::from(format!("clear-key-{provider}")))
+                    .on_click(move |_, _, cx| {
+                        clear.update(cx, |this, cx| this.clear_api_key(provider, cx));
+                    })
+                    .agent_node(Role::Button, format!("Clear {label}")),
+            )
+        });
+    let help = status
+        .overridden_by
+        .as_ref()
+        .map(|env| format!("{env} is set in the environment and is used instead of this key."));
+    field(Some(&label), controls.into_any_element(), help.as_deref())
+}
+
+/// What an empty key field says: the stored key's hint, or the invitation.
+fn key_placeholder(status: &ApiKeyStatus) -> String {
+    match &status.hint {
+        Some(hint) => format!("Saved key {hint}"),
+        None => "Paste a key".to_string(),
+    }
 }
 
 fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {

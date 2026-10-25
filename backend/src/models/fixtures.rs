@@ -414,16 +414,6 @@ pub struct PatchedFixture {
     /// The address was set by hand, so auto-patch derives around it rather than
     /// over it. Local-only.
     pub address_pinned: bool,
-    /// The old, pre-venue-graph pose. Superseded by the resolved venue graph
-    /// (`crate::venue_graph::resolved`) for every placed fixture; these stay
-    /// `0.0` after that conversion runs and are read only by
-    /// `crate::venue_graph::migrate`, never for a live position.
-    pub pos_x: f64,
-    pub pos_y: f64,
-    pub pos_z: f64,
-    pub rot_x: f64,
-    pub rot_y: f64,
-    pub rot_z: f64,
 }
 
 /// Which way a patched fixture points, derived from its mount.

@@ -991,12 +991,6 @@ mod tests {
             fixture_path: "Test/Test.qxf".into(),
             label: None,
             address_pinned: false,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            pos_z: 0.0,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
         }];
 
         let mut primitives = HashMap::new();
@@ -1058,12 +1052,6 @@ mod tests {
             fixture_path: "Test/Test.qxf".into(),
             label: None,
             address_pinned: false,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            pos_z: 0.0,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
         }];
 
         // Only head primitive exists (this matches how the current "select" node emits IDs)
@@ -1192,12 +1180,6 @@ mod tests {
             fixture_path: "Test/Test.qxf".into(),
             label: None,
             address_pinned: false,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            pos_z: 0.0,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
         }];
 
         let def = FixtureDefinition {
@@ -1292,12 +1274,6 @@ mod tests {
             fixture_path: "Test/Test.qxf".into(),
             label: None,
             address_pinned: false,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            pos_z: 0.0,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
         }];
 
         // Previous buffer has some pan value already set
@@ -1424,12 +1400,6 @@ mod tests {
             fixture_path: "T/T.qxf".into(),
             label: None,
             address_pinned: false,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            pos_z: 0.0,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
         }
     }
 

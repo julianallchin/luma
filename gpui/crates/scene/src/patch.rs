@@ -155,8 +155,8 @@ impl Address {
 /// account of where it currently is.
 #[derive(Clone, Debug)]
 pub struct Fixture {
-    /// The patch row id. A fixture's venue node carries the same id
-    /// (`crate::venue_graph::migrate`), which is how a placement is found.
+    /// The patch row id. A fixture's venue node carries the same id, which is
+    /// how a placement is found.
     pub id: String,
     /// The mode's channel count.
     pub channels: u16,

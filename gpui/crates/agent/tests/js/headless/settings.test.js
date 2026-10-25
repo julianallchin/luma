@@ -47,6 +47,38 @@ test("the model picker writes through the seam and reads back", () => {
   expect(selects(openAiSettings("Codex subscription"))).toEqual(["Codex subscription"]);
 });
 
+// An API key goes in through the masked field and is stored where the agent
+// reads it; the screen never shows it back. A reopen re-reads the seam, so
+// "Clear" surviving it is the database saying a key is stored.
+test("an API key is saved and cleared without being shown", () => {
+  const SECRET = "sk-or-v1-harness-0123456789-wxyz";
+  const field = { role: "input", label: "OpenRouter API key" };
+  const clear = { role: "button", label: "Clear OpenRouter API key" };
+  const leaked = (shot) => shot.nodes.some((n) => (n.label || "").includes("0123456789"));
+  nav.venue("Test Venue");
+
+  const opened = openAiSettings("Claude Opus 5");
+  assert(opened.find(clear) === undefined, "a fresh library already has a key");
+  app.type(opened.find(field), SECRET);
+  assert(!leaked(app.snapshot()), "the typed key is in the automation tree");
+  app.key("enter");
+  const saved = until("the stored key", (s) => s.find(clear));
+  assert(!leaked(saved), "the stored key is in the automation tree");
+
+  nav.dismiss();
+  const reopened = openAiSettings("Claude Opus 5");
+  assert(reopened.find(clear) !== undefined, "the key did not survive a re-read");
+  assert(!leaked(reopened), "the re-read key is in the automation tree");
+  // The gateway, which was never given a key, still has none.
+  assert(reopened.find({ role: "button", label: "Clear Vercel AI Gateway API key" }) === undefined,
+    "a key written for one service shows on another");
+
+  app.click(reopened.find(clear));
+  until("the cleared key", (s) => s.find(field) && s.find(clear) === undefined);
+  nav.dismiss();
+  assert(openAiSettings("Claude Opus 5").find(clear) === undefined, "the cleared key came back");
+});
+
 // The HDR output row on General: present, and a press writes through the seam
 // without a save error. The automation tree carries no checked state, and the
 // harness has no HDR display, so what the window does with it is not visible.

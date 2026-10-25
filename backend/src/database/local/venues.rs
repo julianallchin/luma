@@ -93,7 +93,7 @@ pub async fn create_venue(
     .map_err(|error| format!("Failed to authorize venue creation: {error}"))?
     .ok_or_else(|| "Venue creation is not currently admitted".to_string())?;
 
-    sqlx::query("INSERT INTO venues (id, name, description, uid, groups_initialized) VALUES (?, ?, ?, ?, 1)")
+    sqlx::query("INSERT INTO venues (id, name, description, uid) VALUES (?, ?, ?, ?)")
         .bind(&id)
         .bind(&name)
         .bind(&description)
@@ -101,6 +101,15 @@ pub async fn create_venue(
         .execute(&mut *transaction)
         .await
         .map_err(|e| format!("Failed to create venue: {}", e))?;
+    // The root is part of the venue, so it is written with it: a venue with
+    // no root is one whose rows are still arriving from sync.
+    sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
+        .bind(crate::venue_graph::root_id(&id))
+        .bind(&principal)
+        .bind(&id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| format!("Failed to create the venue's root: {e}"))?;
     let query = format!("SELECT {} FROM venues WHERE id = ?", VENUE_COLUMNS);
     let venue = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
         .bind(&id)

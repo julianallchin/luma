@@ -355,8 +355,8 @@ async fn until(
 /// is also an upload.
 async fn seed(pool: &SqlitePool, user: &str, venue: &str, score: &str, clips: &[(&str, f64)]) {
     sqlx::query(
-        "INSERT INTO venues (id, uid, name, role, groups_initialized)
-         VALUES (?, ?, 'Test Room', 'owner', 1)",
+        "INSERT INTO venues (id, uid, name, role)
+         VALUES (?, ?, 'Test Room', 'owner')",
     )
     .bind(venue)
     .bind(user)

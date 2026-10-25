@@ -73,6 +73,12 @@ pub struct AppSettings {
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
     pub agent_model: String,
+    /// One entry per [`AGENT_PROVIDERS`] service, in that order: whether it
+    /// has a key, and enough of it to recognise. Never the key itself — this
+    /// struct crosses the seam whole, so a secret placed here is a secret
+    /// handed to every caller of `get_settings`.
+    #[serde(default)]
+    pub agent_api_keys: Vec<ApiKeyStatus>,
     /// Whether the app looks for, downloads and installs releases by itself.
     /// A fact about this install, so it is not synced.
     #[serde(default = "enabled")]
@@ -81,6 +87,53 @@ pub struct AppSettings {
 
 fn enabled() -> bool {
     true
+}
+
+/// What the settings screen may know about one service's API key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeyStatus {
+    /// The [`AGENT_PROVIDERS`] id.
+    pub provider: String,
+    /// The `settings` row a key for this service is written to.
+    pub setting: String,
+    /// A masked rendering of the stored key, `None` while none is stored.
+    pub hint: Option<String>,
+    /// The environment variable that, when set, is used instead of the stored
+    /// key — see [`crate::agent::model::api_key`]. `None` while it is unset.
+    pub overridden_by: Option<String>,
+}
+
+/// Enough of a key to tell two apart, and no more: the last four characters,
+/// and only when the key is long enough that four of them give little away.
+fn key_hint(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() < 16 {
+        return "••••".to_string();
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("••••{tail}")
+}
+
+fn api_key_statuses(map: &std::collections::HashMap<String, String>) -> Vec<ApiKeyStatus> {
+    AGENT_PROVIDERS
+        .iter()
+        .filter_map(|(id, _)| crate::agent::model::Provider::parse(id))
+        .map(|provider| {
+            let env = provider.key_env_var();
+            ApiKeyStatus {
+                provider: provider.as_str().to_string(),
+                setting: provider.key_setting().to_string(),
+                hint: map
+                    .get(provider.key_setting())
+                    .map(|key| key.trim())
+                    .filter(|key| !key.is_empty())
+                    .map(key_hint),
+                overridden_by: std::env::var(env)
+                    .is_ok_and(|key| !key.trim().is_empty())
+                    .then(|| env.to_string()),
+            }
+        })
+        .collect()
 }
 
 impl Default for AppSettings {
@@ -100,6 +153,7 @@ impl Default for AppSettings {
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
+            agent_api_keys: api_key_statuses(&Default::default()),
             auto_update: true,
         }
     }
@@ -162,6 +216,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .map_err(|e| e.to_string())?
             .key()
             .into(),
+        agent_api_keys: api_key_statuses(&map),
         auto_update: map.get("auto_update").map_or(true, |v| v == "true"),
     })
 }
@@ -180,6 +235,32 @@ mod tests {
             );
         }
         assert!(crate::agent::model::ModelId::parse(DEFAULT_AGENT_MODEL).is_some());
+    }
+
+    /// A stored key reads back as set, recognisable and never whole; a
+    /// cleared (empty) row reads as unset, the same way `api_key` resolves it.
+    #[test]
+    fn key_status_says_a_key_is_set_without_carrying_it() {
+        let provider = crate::agent::model::Provider::OpenRouter;
+        let secret = "sk-or-v1-0123456789abcdef0123456789wxyz";
+        let map = [(provider.key_setting().to_string(), secret.to_string())].into();
+        let statuses = api_key_statuses(&map);
+        assert_eq!(statuses.len(), AGENT_PROVIDERS.len());
+        let status = statuses
+            .iter()
+            .find(|status| status.provider == provider.as_str())
+            .expect("a status per offered provider");
+        let hint = status.hint.as_deref().expect("a stored key reads as set");
+        assert!(hint.ends_with("wxyz"));
+        let wire = serde_json::to_string(&statuses).expect("serializable");
+        assert!(!wire.contains(secret) && !wire.contains("0123456789"));
+
+        let short = [(provider.key_setting().to_string(), "short-key".to_string())].into();
+        let short = api_key_statuses(&short);
+        assert!(!serde_json::to_string(&short).unwrap().contains("short"));
+
+        let cleared = [(provider.key_setting().to_string(), "  ".to_string())].into();
+        assert!(api_key_statuses(&cleared).iter().all(|s| s.hint.is_none()));
     }
 
     /// Same contract one axis over: the picker must not offer a service the

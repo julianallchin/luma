@@ -96,18 +96,16 @@ pub async fn highlight_selection(
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// The derived group tree, and the overrides on top of it
+// The group tree
 // -----------------------------------------------------------------------------
 
-/// The venue's group tree: derivation, the manual edits on top, and the
-/// authored groups beside them.
+/// The venue's group tree: its saved groups.
 ///
 /// Flat with `parentId`, parents before children — build the tree in one pass.
 pub async fn list_group_tree(
     services: &AppServices,
     venue_id: String,
 ) -> Result<Vec<GroupTreeNode>, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(GroupSources::read(&services.fixtures_root, &mut access)
@@ -400,76 +398,6 @@ mod tests {
             "a repair is an edit, and the score says so"
         );
     }
-    #[tokio::test]
-    async fn legacy_conversion_preserves_overridden_names_and_member_sets() {
-        use crate::database::local::venue_access::{
-            AuthorizedVenue, VenueAccess, VenueResource, Write,
-        };
-        let (_dir, services, venue) = rig().await;
-        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
-            .await
-            .unwrap();
-        crate::database::local::deletes::delete_where(
-            access.connection(),
-            "fixture_groups",
-            "venue_id = ?",
-            &[&venue],
-        )
-        .await
-        .unwrap();
-        sqlx::query("UPDATE venues SET groups_initialized = 0 WHERE id=?")
-            .bind(&venue)
-            .execute(&mut *access.connection())
-            .await
-            .unwrap();
-        sqlx::query("UPDATE venue_nodes SET label='same tower' WHERE venue_id=? AND kind='piece'")
-            .bind(&venue)
-            .execute(&mut *access.connection())
-            .await
-            .unwrap();
-        let derived =
-            crate::services::groups::GroupSources::read(&services.fixtures_root, &mut access)
-                .await
-                .unwrap()
-                .tree();
-        crate::database::local::group_overrides::put(
-            &mut access,
-            &crate::database::local::group_overrides::GroupOverride {
-                group_id: derived[0].id.clone(),
-                path: String::new(),
-                label: Some("my lights".into()),
-                parent_id: None,
-                merged_into: None,
-            },
-        )
-        .await
-        .unwrap();
-        let before =
-            crate::services::groups::GroupSources::read(&services.fixtures_root, &mut access)
-                .await
-                .unwrap()
-                .tree();
-        crate::services::groups::snapshot_generated_groups(
-            &services.fixtures_root,
-            &mut access,
-            false,
-        )
-        .await
-        .unwrap();
-        access.commit().await.unwrap();
-        let after = tree(&services, &venue).await;
-        for node in before {
-            let saved = after
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|g| g["name"] == node.name)
-                .unwrap();
-            assert_eq!(saved["name"], node.name);
-            assert_eq!(saved["fixtures"], json!(node.fixtures));
-            assert_eq!(saved["parentId"], Value::Null);
-        }
-    }
     async fn tree(services: &AppServices, venue: &str) -> Value {
         dispatch(services, "list_group_tree", &json!({"venueId":venue}))
             .await
@@ -661,7 +589,6 @@ pub async fn save_venue_group(
     added: Vec<String>,
     removed: Vec<String>,
 ) -> Result<(), CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     groups_service::save_group_changes(
@@ -683,10 +610,9 @@ pub async fn generate_venue_groups(
     services: &AppServices,
     venue_id: String,
 ) -> Result<(), CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    crate::services::groups::snapshot_generated_groups(&services.fixtures_root, &mut access, true)
+    crate::services::groups::snapshot_generated_groups(&services.fixtures_root, &mut access)
         .await?;
     access.commit().await?;
     invalidate_venue_fixture_cache();

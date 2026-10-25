@@ -479,9 +479,6 @@ impl VenueHost {
     }
 
     async fn group(&self, request: GroupRequest) -> Result<Value, HostCallError> {
-        crate::venue_graph::ensure_migrated(&self.pool, &self.venue_id, &self.resource_root)
-            .await
-            .map_err(|error| HostCallError::new("invalid_group", error))?;
         let mut access = self
             .write_access()
             .await
@@ -505,14 +502,11 @@ impl VenueHost {
     }
 
     async fn generate_groups(&self) -> Result<Value, HostCallError> {
-        crate::venue_graph::ensure_migrated(&self.pool, &self.venue_id, &self.resource_root)
-            .await
-            .map_err(|error| HostCallError::new("invalid_group", error))?;
         let mut access = self
             .write_access()
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
-        groups::snapshot_generated_groups(&self.resource_root, &mut access, true)
+        groups::snapshot_generated_groups(&self.resource_root, &mut access)
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
         access

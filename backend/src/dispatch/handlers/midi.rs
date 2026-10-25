@@ -89,8 +89,6 @@ pub async fn midi_reload_mapping(
     services: &AppServices,
     venue_id: String,
 ) -> Result<(), CommandError> {
-    // The group map is the merged tree, which needs the venue's graph.
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     let modifiers = midi_db::list_modifiers(&mut access).await?;

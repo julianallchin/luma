@@ -219,21 +219,22 @@ fn boolean_columns_match_rather_than_cast() {
 async fn a_downloaded_boolean_becomes_an_integer() {
     let (_directory, pool) = database("boolean.db").await;
     let mut connection = pool.acquire().await.expect("acquire");
-    let venues = table("venues").expect("venues is synced");
-    assert!(venues.local_defaults.is_empty());
-    let (put, _) = statements(venues);
+    let bindings = table("midi_bindings").expect("midi_bindings is synced");
+    assert!(bindings.local_defaults.is_empty());
+    let (put, _) = statements(bindings);
     for (sent, expected) in [("true", 1), ("false", 0), ("1", 1), ("0", 0)] {
         let mut query = sqlx::query(sqlx::AssertSqlSafe(put.clone()));
-        for column in venues.columns {
+        for column in bindings.columns {
             query = query.bind(match *column {
-                "id" => "venue-1",
-                "groups_initialized" => sent,
+                "id" => "binding-1",
+                "exclusive" => sent,
+                "display_order" => "0",
                 _ => "x",
             });
         }
         query.execute(&mut *connection).await.expect("put");
         let stored: i64 =
-            sqlx::query_scalar("SELECT groups_initialized FROM venues WHERE id = 'venue-1'")
+            sqlx::query_scalar("SELECT exclusive FROM midi_bindings WHERE id = 'binding-1'")
                 .fetch_one(&mut *connection)
                 .await
                 .expect("read");
@@ -248,26 +249,80 @@ async fn an_uploaded_boolean_is_a_json_boolean() {
     let (_directory, pool) = database("upload-boolean.db").await;
     let mut connection = writer(&pool).await;
     sqlx::query(
-        "INSERT INTO venues (id, uid, name, groups_initialized) \
-         VALUES ('venue-1', 'user-1', 'Room', 0)",
+        "INSERT INTO midi_bindings (id, uid, venue_id, trigger_json, exclusive, action_json) \
+         VALUES ('binding-1', 'user-1', 'venue-1', '{}', 0, '{}')",
     )
     .execute(&mut *connection)
     .await
     .expect("insert");
-    sqlx::query("UPDATE venues SET groups_initialized = 1 WHERE id = 'venue-1'")
+    sqlx::query("UPDATE midi_bindings SET exclusive = 1 WHERE id = 'binding-1'")
         .execute(&mut *connection)
         .await
         .expect("update");
-    let entries = queue(&mut connection, "venues").await;
+    let entries = queue(&mut connection, "midi_bindings").await;
     let put: serde_json::Value =
         serde_json::from_str(entries[0].3.as_deref().expect("put")).expect("json");
-    assert_eq!(put["groups_initialized"], serde_json::Value::Bool(false));
+    assert_eq!(put["exclusive"], serde_json::Value::Bool(false));
     let patch: serde_json::Value =
         serde_json::from_str(entries[1].3.as_deref().expect("patch")).expect("json");
     assert_eq!(
-        patch["groups_initialized"],
+        patch["exclusive"],
         serde_json::Value::Bool(true),
         "a PATCH keeps the JSON boolean through re-aggregation"
+    );
+}
+
+/// A library downloaded in an older projection is cleared for a fresh
+/// download, and the clear reaches nobody: nothing is queued for upload, and
+/// write admission is as it was.
+#[tokio::test]
+async fn a_stale_projection_clears_without_uploading() {
+    use crate::database::local::database::{reset_stale_projection, PROJECTION_VERSION};
+
+    let (_directory, pool) = database("projection.db").await;
+    let mut connection = writer(&pool).await;
+    sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue-1', 'user-1', 'Room')")
+        .execute(&mut *connection)
+        .await
+        .expect("insert");
+    sqlx::raw_sql("DELETE FROM powersync_crud; PRAGMA user_version = 0;")
+        .execute(&mut *connection)
+        .await
+        .expect("age the library");
+    drop(connection);
+
+    reset_stale_projection(&pool).await.expect("reset");
+
+    let mut connection = pool.acquire().await.expect("acquire");
+    let count = |sql: &'static str| sqlx::query_scalar::<_, i64>(sql);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM venues")
+            .fetch_one(&mut *connection)
+            .await
+            .expect("venues"),
+        0
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM powersync_crud")
+            .fetch_one(&mut *connection)
+            .await
+            .expect("queue"),
+        0,
+        "an eviction is not an edit"
+    );
+    assert_eq!(
+        count("PRAGMA user_version")
+            .fetch_one(&mut *connection)
+            .await
+            .expect("version"),
+        PROJECTION_VERSION
+    );
+    assert_eq!(
+        count("SELECT armed FROM auth_write_admission WHERE singleton = 1")
+            .fetch_one(&mut *connection)
+            .await
+            .expect("admission"),
+        1
     );
 }
 

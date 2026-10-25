@@ -61,7 +61,7 @@ impl SyncedTable {
     /// `json_object('column', <row>.column, ...)` for one side of a change.
     ///
     /// `id` leads whether or not it is stored: the server's copy of the row has
-    /// one and a composite-key table's local copy computes it. The three boolean
+    /// one and a composite-key table's local copy computes it. The boolean
     /// columns are 0/1 integers in SQLite and `boolean` in Postgres, and
     /// PostgREST refuses a JSON `0` for a boolean — so they are injected as
     /// real JSON `true`/`false`.
@@ -117,8 +117,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at",
             "environment",
-            "haze",
-            "groups_initialized"
+            "haze"
         ]
     ),
     table!(
@@ -143,12 +142,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "mode_name",
             "fixture_path",
             "label",
-            "pos_x",
-            "pos_y",
-            "pos_z",
-            "rot_x",
-            "rot_y",
-            "rot_z",
             "created_at",
             "updated_at",
             "address_pinned"
@@ -532,12 +525,12 @@ pub fn table(name: &str) -> Option<&'static SyncedTable> {
     SYNCED_TABLES.iter().find(|table| table.name == name)
 }
 
-/// The three columns Postgres declares `boolean` while SQLite stores 0/1.
+/// The columns Postgres declares `boolean` while SQLite stores 0/1.
 ///
 /// They need coercion in both directions. PostgREST will not accept a JSON `0`
 /// for a boolean, and `CAST('true' AS INTEGER)` is 0 in SQLite — so neither end
 /// can be left to convert implicitly.
-pub const BOOLEAN_COLUMNS: &[&str] = &["groups_initialized", "address_pinned", "exclusive"];
+pub const BOOLEAN_COLUMNS: &[&str] = &["address_pinned", "exclusive"];
 
 /// The column a `*_updated_at` trigger writes and nothing else means.
 ///
@@ -551,7 +544,7 @@ pub const TOUCH_COLUMN: &str = "updated_at";
 /// Raw-table put parameters arrive as text from the sync protocol. SQLite would
 /// store `"3"` in an `INTEGER` column as text and then compare it unequal to
 /// the `3` a local write put there, so numeric columns cast explicitly. The
-/// three boolean columns cannot cast at all — Postgres sends `true`, and
+/// boolean columns cannot cast at all — Postgres sends `true`, and
 /// `CAST('true' AS INTEGER)` is `0` — so they match against the set of
 /// truthy spellings instead.
 #[must_use]
@@ -563,9 +556,8 @@ pub fn column_expression(column: &str) -> &'static str {
         "universe" | "address" | "num_channels" | "track_number" | "disc_number" | "head_index"
         | "display_order" | "z_index" | "processor_version" | "beats_per_bar" | "depth"
         | "message_count" => "CAST(? AS INTEGER)",
-        "pos_x" | "pos_y" | "pos_z" | "rot_x" | "rot_y" | "rot_z" | "axis_lr" | "axis_fb"
-        | "axis_ab" | "roll" | "value" | "duration_seconds" | "bpm" | "downbeat_offset"
-        | "start" | "duration" => "CAST(? AS REAL)",
+        "axis_lr" | "axis_fb" | "axis_ab" | "roll" | "value" | "duration_seconds" | "bpm"
+        | "downbeat_offset" | "start" | "duration" => "CAST(? AS REAL)",
         _ => "?",
     }
 }

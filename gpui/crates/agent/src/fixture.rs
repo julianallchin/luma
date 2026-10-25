@@ -375,10 +375,8 @@ impl Fixture {
                 }
                 if let Some(tools) = &tools {
                     // Checked in `from_json`, so this cannot fail here.
-                    library.set_agent_tools(
-                        agent::registry(tools, &storage)
-                            .expect("fixture tools"),
-                    );
+                    library
+                        .set_agent_tools(agent::registry(tools, &storage).expect("fixture tools"));
                 }
                 let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
@@ -458,6 +456,14 @@ impl Fixture {
             .execute(pool)
             .await
             .expect("failed to seed the venue");
+        // Every venue has its root from the moment it exists.
+        sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
+            .bind(luma_lib::venue_graph::root_id(VENUE))
+            .bind(session::PRINCIPAL)
+            .bind(VENUE)
+            .execute(pool)
+            .await
+            .expect("failed to seed the venue root");
         if self.seed_track {
             sqlx::query(
                 "INSERT INTO tracks
@@ -560,24 +566,6 @@ impl Fixture {
         luma_lib::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .expect("failed to arm admission");
-        // A patched venue is not yet a room: its graph is built the first
-        // time a venue is opened, and previews and playback evaluate against
-        // it. Here because the conversion needs admission armed, and for
-        // every fixture because an empty venue still has a root. `migrate`,
-        // not `ensure_migrated`: the latter also snapshots derived groups,
-        // which would hand every picker groups no test asked for.
-        {
-            use luma_lib::database::local::venue_access::{VenueAccess, VenueResource, Write};
-            let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(VENUE))
-                .await
-                .expect("failed to open the fixture venue");
-            luma_lib::venue_graph::migrate(&mut access, &config_dir.join("fixtures"))
-                .await
-                .expect("failed to build the venue graph");
-            luma_lib::venue_graph::commit_graph(access)
-                .await
-                .expect("failed to commit the venue graph");
-        }
         let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
         let workspaces = Arc::new(
             luma_lib::agent_execution::workspace::PythonWorkspaceService::new(
@@ -755,24 +743,36 @@ impl Fixture {
             // big rig rolls to the next universe the way the allocator does.
             let universe = i as i64 / FIXTURES_PER_UNIVERSE + 1;
             let address = (i as i64 % FIXTURES_PER_UNIVERSE) * 8 + 1;
+            let id = format!("fixture-{i}");
             sqlx::query(
                 "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
-                                       manufacturer, model, mode_name, fixture_path, label,
-                                       pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-                 VALUES (?, ?, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, ?, 3.0, 0.0, 0.0, 0.0)",
+                                       manufacturer, model, mode_name, fixture_path, label)
+                 VALUES (?, ?, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?)",
             )
-            .bind(format!("fixture-{i}"))
+            .bind(&id)
             .bind(session::PRINCIPAL)
             .bind(VENUE)
             .bind(universe)
             .bind(address)
             .bind(MOVER_PATH)
             .bind(format!("Mover {i}"))
-            .bind((i as f64 / (count.max(2) - 1) as f64 - 0.5) * span)
-            .bind(depth)
             .execute(pool)
             .await
             .expect("failed to patch a fixture");
+            // Hung from the grid three metres up: `u` runs across the room
+            // and `v` into it.
+            let x = (i as f64 / (count.max(2) - 1) as f64 - 0.5) * span;
+            self.seed_node(
+                pool,
+                &id,
+                "fixture",
+                MOVER_PATH,
+                &format!("Mover {i}"),
+                "clamp",
+                "rig",
+                [x, depth, 3.0],
+            )
+            .await;
         }
 
         // Two groups, left half and right half: the smallest rig where a
@@ -817,17 +817,63 @@ impl Fixture {
         if self.skewed_rig {
             return;
         }
-        sqlx::query(
-            "INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label,
-                                       pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, scale)
-             VALUES ('piece-deck', ?, ?, 'stage_lab/stage_praticavel_2x1x1.glb', 'floor', 'Deck',
-                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)",
+        self.seed_node(
+            pool,
+            "piece-deck",
+            "stage",
+            "stage_lab/stage_praticavel_2x1x1.glb",
+            "Deck",
+            "bottom",
+            "floor",
+            [0.0, 0.0, 0.0],
         )
+        .await;
+    }
+
+    /// One node on one of the root's two surfaces, at `(u, v, trim)`.
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_node(
+        &self,
+        pool: &SqlitePool,
+        id: &str,
+        kind: &str,
+        catalog_ref: &str,
+        label: &str,
+        my_socket: &str,
+        their_socket: &str,
+        [u, v, trim]: [f64; 3],
+    ) {
+        sqlx::query(
+            "INSERT INTO venue_nodes
+                 (id, uid, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0)",
+        )
+        .bind(id)
         .bind(session::PRINCIPAL)
         .bind(VENUE)
+        .bind(kind)
+        .bind(catalog_ref)
+        .bind(label)
+        .bind(luma_lib::venue_graph::root_id(VENUE))
+        .bind(my_socket)
+        .bind(their_socket)
         .execute(pool)
         .await
-        .expect("failed to place the stage piece");
+        .expect("failed to place a venue node");
+        for (key, value) in [("u", u), ("v", v), ("trim", trim)] {
+            sqlx::query(
+                "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(session::PRINCIPAL)
+            .bind(VENUE)
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await
+            .expect("failed to set a venue node param");
+        }
     }
 
     /// A steady 120 bpm grid in 4/4 over the whole track, so the editor draws

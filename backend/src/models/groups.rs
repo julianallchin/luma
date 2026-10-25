@@ -193,19 +193,14 @@ pub struct HeadNode {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupOrigin {
-    /// The rule produced it and nobody has touched it. It re-derives on every
-    /// read, so it tracks the rig.
+    /// The rule proposed it and it has not been saved.
     Derived,
-    /// The rule produced it and somebody renamed, moved or merged it. Frozen:
-    /// a touched node is never re-derived. Delete the override to get
-    /// [`GroupOrigin::Derived`] back.
-    Edited,
     /// A `fixture_groups` row someone created outright.
     Manual,
 }
 
-/// One node of the group tree — the merged answer: derivation, with overrides
-/// on top, plus whatever was authored by hand.
+/// One node of the group tree — the merged answer: whatever was derived, plus
+/// whatever was authored by hand.
 ///
 /// Flat with a `parent_id` rather than a recursive type, for the same reason
 /// [`crate::models::venue_graph::ResolvedVenue`] is: parents come before

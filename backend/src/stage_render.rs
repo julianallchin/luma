@@ -4,8 +4,8 @@
 //! # Why this lives here and not in the visualizer
 //!
 //! A venue's 3D description is *database shape brought into renderer shape*:
-//! [`PatchedFixture`] and [`StagePiece`] rows become [`scene_desc::Fixture`] and
-//! [`scene_desc::Piece`], a parent chain gets flattened, and a
+//! [`PatchedFixture`] rows and solved venue nodes become [`scene_desc::Fixture`]
+//! and [`scene_desc::Piece`], and a
 //! [`UniverseState`] key becomes a head's [`scene_desc::PrimitiveState`]. That
 //! translation belongs next to the models it reads, so the desktop viewport and
 //! an agent's offscreen frame describe the same room the same way rather than
@@ -273,8 +273,8 @@ pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
 /// The palette taxonomy of a catalog entry — `floor`, `truss`, `cdj`, ... —
 /// which is what `scene_desc` and the booth search key on.
 ///
-/// Read off [`luma_scene::catalog`] rather than stored: it was a column on
-/// `stage_pieces` and drifted from the catalog it was copied out of.
+/// Read off [`luma_scene::catalog`] rather than stored, so it cannot drift
+/// from the catalog.
 pub fn catalog_kind(catalog_ref: Option<&str>) -> &'static str {
     catalog_ref
         .and_then(luma_scene::catalog::piece)
@@ -875,12 +875,6 @@ mod tests {
             fixture_path: "test.qxf".into(),
             label: None,
             address_pinned: false,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            pos_z: 0.0,
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
         }
     }
 

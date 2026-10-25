@@ -108,16 +108,13 @@ pub async fn fetch_track_waveform_for_connection(
     .map_err(|e| format!("Failed to fetch waveform: {}", e))
 }
 
-/// The units a track's stored band envelopes are in, or `None` for a row
-/// written before they were kept — see [`StoredWaveform::band_gains`].
-///
-/// All three columns are written together, so a row with one has all three;
-/// a row missing any is treated as a row missing all of them.
+/// The units a track's stored band envelopes are in, or `None` when this
+/// device has no cached row for it.
 pub async fn fetch_band_gains(
     connection: &mut SqliteConnection,
     track_id: &str,
 ) -> Result<Option<BandGains>, String> {
-    let row: Option<(Option<f64>, Option<f64>, Option<f64>)> = sqlx::query_as(
+    let row: Option<(f64, f64, f64)> = sqlx::query_as(
         "SELECT band_gain_low, band_gain_mid, band_gain_high
          FROM track_waveforms WHERE track_id = ?",
     )
@@ -126,12 +123,9 @@ pub async fn fetch_band_gains(
     .await
     .map_err(|error| format!("Failed to fetch waveform band gains: {error}"))?;
 
-    Ok(match row {
-        Some((Some(low), Some(mid), Some(high))) => Some(BandGains {
-            low: low as f32,
-            mid: mid as f32,
-            high: high as f32,
-        }),
-        _ => None,
-    })
+    Ok(row.map(|(low, mid, high)| BandGains {
+        low: low as f32,
+        mid: mid as f32,
+        high: high as f32,
+    }))
 }

@@ -1062,7 +1062,7 @@ class Group:
     """One set of lights, as the venue describes it.
 
     Groups are saved collections, authored or explicitly generated from placement.
-    `origin` reports `derived`, `edited`, or `manual` for this set. Inspect the
+    `origin` reports `derived` or `manual` for this set. Inspect the
     live `groups()` result after changing the rig rather than assuming a name.
 
     `name` is the exact snake_case identifier a score selects by, such as
