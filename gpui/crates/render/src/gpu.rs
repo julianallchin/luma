@@ -5488,7 +5488,9 @@ impl Renderer {
                 });
                 // Diagnostic views are exact channel dumps; the camera stays
                 // out of them.
-                let post = (frame.look.needs_post()
+                // Lasers draw into the post chain's HDR scene, so a frame with
+                // any takes the chain even under a look that needs none.
+                let post = ((frame.look.needs_post() || !frame.lasers.is_empty())
                     && frame.debug_view == crate::scene_desc::DebugView::Pbr
                     && !frame.cluster_debug)
                     .then(|| self.post.scene_target(&self.gpu.device, t_width, t_height));

@@ -23,6 +23,11 @@ const HEIGHT: u32 = 160;
 const EYE: Vec3 = Vec3::new(0.0, -10.0, 1.6);
 
 fn frame(haze: f32) -> Frame {
+    frame_with(haze, |_| {})
+}
+
+/// [`frame`], with `settings` changed last.
+fn frame_with(haze: f32, settings: impl FnOnce(&mut RenderSettings)) -> Frame {
     let mut library = Library::new(crate::common::meshes());
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
@@ -34,6 +39,7 @@ fn frame(haze: f32) -> Frame {
     render.haze.enabled = haze > 0.0;
     render.debug_view = DebugView::Pbr;
     render.look = Look::STAGE;
+    settings(&mut render);
     let scene = Scene {
         id: "laser".into(),
         times: vec![0.0],
@@ -134,6 +140,37 @@ fn beams_show_in_haze_and_not_in_clear_air() {
         brightness(&after),
         brightness(&before),
         "with nothing to scatter off, a beam is invisible"
+    );
+}
+
+/// A look with no post chain of its own still shows the beams, in a lit
+/// room.
+#[test]
+fn beams_show_under_the_neutral_look() {
+    let mut renderer = Renderer::new().unwrap();
+    let mut f = frame_with(0.6, |render| {
+        render.look = Look::NEUTRAL;
+        render.environment = Environment {
+            background: [0.2; 3],
+            ambient_color: [1.0; 3],
+            ambient_intensity: 0.5,
+            probe: None,
+        };
+    });
+    let dark = render(&mut renderer, &f, "neutral-dark");
+    // Taking the post chain for the lasers leaves the rest of the picture
+    // as it was, but for the chain's own dither.
+    f.lasers = vec![projector(vec![point(0.0, 0.0, false); 100])];
+    let unlit = render(&mut renderer, &f, "neutral-unlit");
+    let most = unlit.iter().zip(&dark).map(|(a, b)| a.abs_diff(*b)).max();
+    assert!(most <= Some(2), "{most:?}");
+    f.lasers = vec![projector(fan(5, 120))];
+    let lit = render(&mut renderer, &f, "neutral-fan");
+    assert!(
+        brightness(&lit) > brightness(&dark) + 2_000,
+        "{} vs {}",
+        brightness(&lit),
+        brightness(&dark)
     );
 }
 

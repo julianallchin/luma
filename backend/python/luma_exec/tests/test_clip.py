@@ -184,6 +184,14 @@ CATALOG = {
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
     'Strobe steps up': "t = time(); strobe(rate=curve(t, 'Steps 4', low=0.4, high=0.9))",
+    # Laser (no laser presets ship).
+    "Laser fan": "laser(beams=8, size=1)",
+    "Laser sheet": "laser(beams=16, size=1, join=1)",
+    "Laser fan sweep": "t = time(every=4); laser(beams=6, x=curve(t, 'Sine', low=-0.6, high=0.6))",
+    "Laser fan opens from the left": "t = time(every=2); laser(beams=8, size=curve(t, 'Ramp up'), x=curve(t, 'Ramp up', low=-1, high=0))",
+    "Laser beam wave": "t = time(every=2, phase=curve(space(), 'Ramp up', high=360)); laser(beams=8, size=1, y=curve(t, 'Sine', low=-0.5, high=0.5))",
+    "Laser spinning ring": "t = time(every=4); laser(beams=12, shape='circle', rotation=curve(t, 'Ramp up', low=-180, high=180))",
+    "Laser mirrored fans": "laser(heads=mirror(direction=(1, 0, 0)), beams=8, size=0.5, x=-0.5)",
     # Not shipped presets.
     "Slash": EXAMPLE_SLASH,
     "Slash with values": EXAMPLE_SLASH_VALUES,

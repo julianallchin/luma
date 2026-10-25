@@ -46,7 +46,6 @@
 //! [`coords::three_from_world`].
 
 mod camera_export;
-mod lasers;
 mod motors;
 mod settings;
 pub(crate) mod show_export;
@@ -3393,7 +3392,7 @@ impl Gpu {
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
         if let Some(state) = state {
-            frame.lasers = lasers::scans(lasers, state, moment.time);
+            frame.lasers = stage_render::laser_scans(lasers, state, moment.time);
         }
         let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;

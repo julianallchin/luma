@@ -90,6 +90,9 @@ pub struct VenueGeometry {
     /// an offscreen frame of a hazy room has to be hazy, or the picture an
     /// agent reasons about is not the picture the operator is looking at.
     pub haze: VenueHaze,
+    /// The laser projectors and zones, solved each frame into the scans the
+    /// picture draws (`docs/design/lasers.md`).
+    pub lasers: crate::laser::LaserRig,
 }
 
 impl VenueGeometry {
@@ -136,12 +139,16 @@ impl VenueGeometry {
                 definitions.insert(path, definition);
             }
         }
+        let lasers =
+            crate::laser::LaserRig::read(access, &fixtures, |path| definitions.get(path), &venue)
+                .await?;
         Ok(Self {
             fixtures,
             venue,
             definitions,
             environment,
             haze,
+            lasers,
         })
     }
 
@@ -435,6 +442,8 @@ pub struct Shot {
     pub time: f32,
     /// Frame size in pixels. Both sides are clamped to [`MAX_DIMENSION`].
     pub size: (u32, u32),
+    /// The projectors that draw `state`'s beams.
+    pub lasers: crate::laser::LaserRig,
 }
 
 /// Render one frame of `scene` as tightly packed RGBA8, plus its true size.
@@ -457,6 +466,7 @@ pub fn render_rgba(
     let sequence = Sequence::install(
         scene,
         definitions,
+        shot.lasers,
         meshes_root,
         shot.view,
         shot.booth,
@@ -518,6 +528,7 @@ impl Sequence {
     pub fn install(
         scene: scene_desc::Scene,
         definitions: BTreeMap<String, scene_desc::Definition>,
+        lasers: crate::laser::LaserRig,
         meshes_root: PathBuf,
         view: View,
         booth: Option<Vec3>,
@@ -540,6 +551,7 @@ impl Sequence {
                 id,
                 scene,
                 definitions,
+                lasers,
                 camera,
                 size,
                 meshes_root,
@@ -656,6 +668,7 @@ struct Installed {
     /// making a round trip through a mirror space to say where it is.
     camera: Camera,
     definitions: BTreeMap<String, scene_desc::Definition>,
+    lasers: crate::laser::LaserRig,
     size: (u32, u32),
     meshes_root: PathBuf,
 }
@@ -791,6 +804,9 @@ fn one_frame(
         library,
     )
     .map_err(|error| format!("could not assemble the frame: {error}"))?;
+    if let Some(state) = state {
+        frame.lasers = laser_scans(&scene.lasers, state, moment.time);
+    }
     // The fitted camera, turned by the footage look's shake at this moment
     // as `build_frame_at` turns the scene's own.
     frame.camera = footage::turned(
@@ -858,10 +874,55 @@ fn confined(path: &str) -> Option<&Path> {
     (!escapes).then_some(relative)
 }
 
+/// Every projector's scan for `state`, in the renderer's world, at `clock`
+/// seconds on the free-running clock: how far through its stream each
+/// projector has got. The solve is the one a DAC would play, so the picture
+/// is the output (`docs/design/lasers.md`).
+pub fn laser_scans(
+    rig: &crate::laser::LaserRig,
+    state: &UniverseState,
+    clock: f64,
+) -> Vec<luma_render::laser::LaserScan> {
+    if rig.is_empty() {
+        return Vec::new();
+    }
+    let world =
+        |v: glam::DVec3| coords::three_to_world_basis() * coords::three_from_data(v.as_vec3());
+    rig.solve(state)
+        .into_iter()
+        .filter_map(|frame| {
+            let projector = rig.projector(&frame.projector)?;
+            let basis = projector.basis;
+            Some(luma_render::laser::LaserScan {
+                origin: world(basis.origin),
+                forward: world(basis.forward),
+                right: world(basis.right),
+                up: world(basis.up),
+                half_field: projector.field.map(|f| (f / 2.) as f32),
+                rate: frame.rate as f32,
+                phase: (clock * f64::from(frame.rate)).rem_euclid(frame.points.len().max(1) as f64)
+                    as f32,
+                points: frame
+                    .points
+                    .iter()
+                    .map(|p| luma_render::laser::LaserPoint {
+                        x: p.x,
+                        y: p.y,
+                        rgb: p.rgb,
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::laser::{Basis, LaserRig, Projector};
     use crate::models::universe::PrimitiveState;
+    use glam::DVec3;
+    use luma_patterns::laser::Beam;
     use luma_scene::venue::NodeKind as VenueNodeKind;
 
     fn patched(id: &str) -> PatchedFixture {
@@ -1033,6 +1094,7 @@ mod tests {
             definitions: HashMap::new(),
             environment: VenueEnvironment::default(),
             haze: VenueHaze::default(),
+            lasers: Default::default(),
         }
     }
 
@@ -1128,5 +1190,66 @@ mod tests {
         );
         assert!(primitive_state(Some(&state), "other", 0).is_none());
         assert!(primitive_state(None, "par", 0).is_none());
+    }
+
+    #[test]
+    fn a_venue_with_no_projectors_draws_no_lasers() {
+        assert!(laser_scans(&LaserRig::default(), &UniverseState::default(), 0.).is_empty());
+    }
+
+    /// A projector upstage at data (2, 3, 1) facing the house: its scan
+    /// starts where it hangs, and the beam in the middle of the default zone
+    /// leaves toward the house, a little above level, in the renderer's
+    /// world (data with Y mirrored).
+    #[test]
+    fn a_scan_is_posed_in_world_space() {
+        let rig = LaserRig {
+            projectors: vec![Projector {
+                id: "p".into(),
+                basis: Basis {
+                    origin: DVec3::new(2., 3., 1.),
+                    forward: DVec3::NEG_Y,
+                    right: DVec3::X,
+                    up: DVec3::Z,
+                },
+                field: [60., 60.],
+                rate: 30_000,
+                limit: None,
+            }],
+            zones: Vec::new(),
+        };
+        let state = UniverseState {
+            beams: vec![Beam {
+                projector: "p".into(),
+                zone: String::new(),
+                path: 0,
+                s: 0.,
+                x: 0.,
+                y: 0.,
+                join: 0.,
+                intensity: 1.,
+            }],
+            ..Default::default()
+        };
+        let scans = laser_scans(&rig, &state, 0.);
+        let [scan] = scans.as_slice() else {
+            panic!("one projector, one scan: {scans:?}");
+        };
+        assert!(
+            (scan.origin - Vec3::new(2., -3., 1.)).length() < 1e-5,
+            "{scan:?}"
+        );
+        let lit = scan
+            .points
+            .iter()
+            .find(|p| p.rgb != [0.; 3])
+            .expect("a lit point");
+        let elevation = 15_f32.to_radians();
+        let toward = Vec3::new(0., elevation.cos(), elevation.sin());
+        let direction = scan.direction(lit.x, lit.y);
+        assert!(
+            (direction - toward).length() < 1e-3,
+            "{direction} vs {toward}"
+        );
     }
 }

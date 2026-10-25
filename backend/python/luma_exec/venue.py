@@ -147,7 +147,8 @@ Reading this surface
 
 Everything that *asks the room* is a verb and takes parentheses: `render()`,
 `tiles()`, `catalog()`, `fixture_library()`, `describe()`, `nodes()`, `extent()`,
-`tip()`, `dangling()`, `groups()`, `group()`, `generate_groups()`, and the build verbs. Everything already
+`tip()`, `dangling()`, `groups()`, `group()`, `generate_groups()`, `laser_zones()`,
+`laser_zone()`, and the build verbs. Everything already
 *in your hand* is a plain attribute — `venue.views`, `cursor.at`,
 `cursor.size`, `placement.parent_id`, `distribution.ok`, `head.path`.
 `draft.extent` is a convenience property that queries the whole draft. A
@@ -1058,6 +1059,28 @@ class GroupFixture:
         return f"<{self.id} {self.label}{part}>"
 
 
+class LaserZone:
+    """A named window of directions that laser clips draw in, shared by
+    every projector.
+
+    `turn` is degrees round the vertical, 0 toward the house and positive
+    toward stage right; `tilt` is degrees up from level; each is `(min, max)`.
+    A laser clip's canvas runs from -1 to 1 across `turn` and up `tilt`, and
+    names its zone by `id`: `laser(zone=zone.id)`.
+    """
+
+    __slots__ = ("id", "name", "turn", "tilt")
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.id = str(row["id"])
+        self.name = str(row["name"])
+        self.turn = tuple(float(v) for v in row["turn"])
+        self.tilt = tuple(float(v) for v in row["tilt"])
+
+    def __repr__(self) -> str:
+        return f"LaserZone({self.name!r}, id={self.id!r}, turn={self.turn}, tilt={self.tilt})"
+
+
 class Group:
     """One set of lights, as the venue describes it.
 
@@ -1584,6 +1607,22 @@ class Venue:
         saved collections. Use `group(name, fixtures, replace=True)` to edit one.
         """
         return GroupTree(self._verb("venue.generate_groups", {})["groups"])
+
+    def laser_zones(self) -> tuple[LaserZone, ...]:
+        """The venue's laser zones, read live, in order. A laser clip with no
+        zone draws in the first; with none at all, ahead into the house 5 to
+        25 degrees up."""
+        return tuple(LaserZone(row) for row in self._verb("venue.laser_zones", {})["zones"])
+
+    def laser_zone(self, name: str, *, turn: Sequence[float], tilt: Sequence[float]) -> LaserZone:
+        """Create the zone called `name`, or change the one already called
+        that, and return it. `turn` and `tilt` are `(min, max)` in degrees:
+        `laser_zone("Over the crowd", turn=(-40, 40), tilt=(10, 25))`."""
+        window = {
+            axis: [_finite(axis, v) for v in values]
+            for axis, values in (("turn", turn), ("tilt", tilt))
+        }
+        return LaserZone(self._verb("venue.laser_zone", {"name": str(name), **window})["zone"])
 
     def reach(self, node: Any, socket: str) -> Reach | None:
         """What a run out of `socket` would meet, and the buildable gap to it.
