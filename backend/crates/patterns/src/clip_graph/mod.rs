@@ -15,13 +15,13 @@ pub mod grid;
 mod heads;
 pub(crate) mod kernels;
 mod lower;
-mod noise;
+mod random;
 mod summary;
 
 pub use check::{blend_modes, check, check_clip};
 pub use kernels::Kernel;
 pub(crate) use lower::lower;
-pub use noise::sample_noise;
+pub use random::sample_random;
 
 /// The output of a prepared clip graph that carries its lighting.
 pub const OUTPUT: &str = "lighting";
@@ -47,7 +47,7 @@ pub const MAX_NODES: usize = 64;
 pub enum Kind {
     Time,
     Space,
-    Noise,
+    Random,
     Audio,
     Curve,
     Math,
@@ -67,7 +67,7 @@ impl Kind {
     pub const ALL: [Kind; 15] = [
         Kind::Time,
         Kind::Space,
-        Kind::Noise,
+        Kind::Random,
         Kind::Audio,
         Kind::Curve,
         Kind::Math,
@@ -87,7 +87,7 @@ impl Kind {
         match self {
             Kind::Time => "time",
             Kind::Space => "space",
-            Kind::Noise => "noise",
+            Kind::Random => "random",
             Kind::Audio => "audio",
             Kind::Curve => "curve",
             Kind::Math => "math",
@@ -108,7 +108,7 @@ impl Kind {
         match self {
             Kind::Time => "Time",
             Kind::Space => "Space",
-            Kind::Noise => "Noise",
+            Kind::Random => "Random",
             Kind::Audio => "Audio",
             Kind::Curve => "Curve",
             Kind::Math => "Math",

@@ -1,7 +1,7 @@
 //! Clip graphs played: every preset lights a stand-in rig and plays as its
 //! version 2 form did, the key presets light the heads they should, and
 //! shuffle, curve, per-head clocks, math, overlap, mirrors, wrapping,
-//! turning line and noise behave as the spec says.
+//! turning line and random behave as the spec says.
 use luma_patterns::clip_graph::{ClipGraph, Input, Kind, OUTPUT};
 use luma_patterns::{presets, standard_library, Cell, FeatureRequest, FeatureSource, Frame};
 use luma_patterns::{PreparedGraph, Result};
@@ -529,18 +529,18 @@ fn turning_line_lights_two_opposite_arms() {
 }
 
 #[test]
-fn noise_nodes_draw_their_own_streams_and_a_linked_node_is_shared() {
+fn random_nodes_draw_their_own_streams_and_a_linked_node_is_shared() {
     let ballyhoo = &presets().clip("Ballyhoo").unwrap().graph;
     let times = beats(1.);
     let (_, turn) = run(ballyhoo, &bars(), &times);
     let turn = turn.unwrap();
     let differs =
         (0..12).any(|n| (0..times.len()).any(|t| (turn[[n, t, 3]] - turn[[n, t, 4]]).abs() > 1e-6));
-    assert!(differs, "two noise nodes with the same settings differ");
+    assert!(differs, "two random nodes with the same settings differ");
     let linked = graph(json!({
-        "noise1": {"kind": "noise", "inputs": {"period": 4, "scale": 0.02}},
-        "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise1"}, "low": -40, "high": 40}},
-        "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise1"}, "low": -40, "high": 40}},
+        "random1": {"kind": "random", "inputs": {"every": 4, "glide": 1, "scale": 0.02}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}, "low": -40, "high": 40}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}, "low": -40, "high": 40}},
         "aim1": {"kind": "aim", "settings": {"base": "direction"},
                  "inputs": {"yaw": {"node": "curve1"}, "pitch": {"node": "curve2"}}}}));
     let (_, turn) = run(&linked, &bars(), &times);
@@ -832,25 +832,26 @@ fn a_space_node_gives_each_head_its_place() {
 }
 
 #[test]
-fn sample_noise_matches_the_noise_playback_reads() {
+fn sample_random_matches_the_random_playback_reads() {
     let cells = line();
     let graph = graph(json!({
-        "noise1": {"kind": "noise", "inputs": {"period": 4, "scale": 0.3, "contrast": 0.2}},
-        "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
+        "random1": {"kind": "random", "inputs": {"every": 4, "glide": 0.5, "scale": 0.3, "contrast": 0.2}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
-    for beat in [0., 2.5, 9.] {
+    for beat in [0., 1.5, 3.5, 9.] {
         let at = graph
-            .coordinate_at_heads("noise1", frame(&cells, beat))
+            .coordinate_at_heads("random1", frame(&cells, beat))
             .unwrap();
         for (n, value) in at.iter().enumerate() {
             // The line spans 11 m along U: head n sits at n / 11.
             let place = [n as f64 / 11., 0., 0.];
-            let sampled = luma_patterns::clip_graph::sample_noise(
-                "noise1",
+            let sampled = luma_patterns::clip_graph::sample_random(
+                "random1",
                 7,
                 place,
                 beat,
                 4.,
+                0.5,
                 Some(0.3),
                 0.2,
             )
@@ -861,6 +862,74 @@ fn sample_noise_matches_the_noise_playback_reads() {
             );
         }
     }
+}
+
+/// Each head of `line()` on a random every 4 beats with `glide`, at
+/// `beat`.
+fn random_at(glide: f64, beat: f64) -> Vec<f64> {
+    graph(json!({
+        "random1": {"kind": "random", "inputs": {"every": 4, "glide": glide, "scale": 0.3}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+    .coordinate_at_heads("random1", frame(&line(), beat))
+    .unwrap()
+    .into_iter()
+    .map(Option::unwrap)
+    .collect()
+}
+
+#[test]
+fn random_without_glide_jumps_on_the_turn_and_holds() {
+    let start = random_at(0., 4.);
+    for beat in [4.5, 6., 7.99] {
+        assert_eq!(random_at(0., beat), start, "beat {beat}");
+    }
+    assert_ne!(random_at(0., 8.), start, "a new draw on the next turn");
+    assert_ne!(random_at(0., 3.99), start, "a jump into the turn");
+    assert!(start.iter().all(|v| (0. ..=1.).contains(v)));
+}
+
+#[test]
+fn random_glides_over_the_last_share_of_each_turn() {
+    // A quarter glide holds for three beats of four, then eases to the
+    // next turn's draw, meeting it without a jump.
+    let start = random_at(0.25, 4.);
+    assert_eq!(random_at(0.25, 6.9), start);
+    assert_ne!(random_at(0.25, 7.5), start);
+    let next = random_at(0., 8.);
+    let end = random_at(0.25, 8. - 1e-6);
+    assert!(close_to(&end, &next, 1e-6), "{end:?} {next:?}");
+    // Every glide passes through the same draw at a turn.
+    for glide in [0.25, 0.5, 1.] {
+        assert!(
+            close_to(&random_at(glide, 8.), &next, 1e-9),
+            "glide {glide}"
+        );
+    }
+    // A full glide never holds.
+    assert_ne!(random_at(1., 4.5), random_at(1., 4.));
+}
+
+#[test]
+fn random_gives_mirrored_heads_one_value() {
+    let at = graph(json!({
+        "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
+        "random1": {"kind": "random", "inputs": {"heads": {"node": "mirror1"}, "every": 2, "scale": 0.2}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+    .coordinate_at_heads("random1", frame(&line(), 3.))
+    .unwrap();
+    for n in 0..6 {
+        assert!(
+            (at[n].unwrap() - at[11 - n].unwrap()).abs() < 1e-9,
+            "{at:?}"
+        );
+    }
+    assert!((0..5).any(|n| (at[n].unwrap() - at[n + 1].unwrap()).abs() > 1e-6));
+}
+
+fn close_to(a: &[f64], b: &[f64], tolerance: f64) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a - b).abs() < tolerance)
 }
 
 // ---- key presets ----
@@ -2219,31 +2288,31 @@ fn a_shuffle_keeps_mirrored_pairs_paired_either_way_round() {
     }
 }
 
-/// A noise whose period follows a curve over `time1` (every 1 beat),
-/// read by brightness.
-fn noise_over_beats(points: Value, low: f64, high: f64) -> ClipGraph {
+/// A gliding random whose every follows a curve over `time1` (every 1
+/// beat), read by brightness.
+fn random_over_beats(points: Value, low: f64, high: f64) -> ClipGraph {
     graph(json!({
         "time1": {"kind": "time", "inputs": {"every": 1}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": low, "high": high,
                    "shape": {"points": points}}},
-        "noise1": {"kind": "noise", "inputs": {"period": {"node": "curve1"}, "scale": 0.25}},
-        "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
+        "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}, "glide": 1, "scale": 0.25}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
 }
 
 #[test]
 fn a_period_over_beats_is_the_newest_beats_value() {
-    // A flat curve over beats is that period: the same noise as a value.
+    // A flat curve over beats is that every: the same random as a value.
     let times = beats(0.25);
     let flat = play(
-        &noise_over_beats(json!([[0, 0], [1, 1]]), 4., 4.),
+        &random_over_beats(json!([[0, 0], [1, 1]]), 4., 4.),
         &line(),
         &times,
     );
     let value = play(
         &graph(json!({
-            "noise1": {"kind": "noise", "inputs": {"period": 4, "scale": 0.25}},
-            "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
+            "random1": {"kind": "random", "inputs": {"every": 4, "glide": 1, "scale": 0.25}},
+            "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}})),
         &line(),
         &times,
@@ -2256,13 +2325,13 @@ fn a_period_over_beats_is_the_newest_beats_value() {
 }
 
 #[test]
-fn a_period_over_beats_eases_the_noise_each_beat_without_a_jump() {
-    // Slow on each beat, fast between: the noise moves least near the beat
+fn a_period_over_beats_eases_the_random_each_beat_without_a_jump() {
+    // Slow on each beat, fast between: the random moves least near the beat
     // and never jumps where one beat hands over to the next.
     let step = 1. / 64.;
     let times = beats(step);
     let light = play(
-        &noise_over_beats(json!([[0, 1], [0.5, 0], [1, 1]]), 0.5, 40.),
+        &random_over_beats(json!([[0, 1], [0.5, 0], [1, 1]]), 0.5, 40.),
         &line(),
         &times,
     );

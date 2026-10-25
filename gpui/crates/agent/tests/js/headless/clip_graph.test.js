@@ -18,7 +18,7 @@ const node = (role, label) => until(label, (s) => s.find({ role, label })).find(
 const settle = () => app.frames(4);
 const stored = () => library.score().clips["graph-clip"];
 const nodes = () => stored().graph.nodes;
-const KINDS = ["time", "space", "noise", "audio", "curve", "math", "value", "mirror", "shuffle", "group", "split", "color", "aim", "strobe"];
+const KINDS = ["time", "space", "random", "audio", "curve", "math", "value", "mirror", "shuffle", "group", "split", "color", "aim", "strobe"];
 // A node's card title: a kind and a number for an id such as `curve2`
 // ("Curve 2"), and a given name (`pill`) as it is.
 const titleOf = (id) => {
@@ -295,16 +295,16 @@ test("a wire the input cannot take is refused and says why", () => {
 test("a node from the add menu joins the graph when its output is wired", { fixture: { clips: [clipOf("Wash")] } }, () => {
   open("Wash");
   app.click(node("button", "Add node"));
-  app.click(node("button", "Noise"));
-  const draft = node("card", "New noise");
+  app.click(node("button", "Random"));
+  const draft = node("card", "New random");
   expect(Object.keys(nodes()).length).toBe(1);
-  app.drag(shown("button", "New noise output port"), shown("button", "Color 1 brightness port"), { steps: 8, restale: "match" });
-  until("noise stored", () => Object.values(nodes()).some((n) => n.kind === "noise"));
+  app.drag(shown("button", "New random output port"), shown("button", "Color 1 brightness port"), { steps: 8, restale: "match" });
+  until("random stored", () => Object.values(nodes()).some((n) => n.kind === "random"));
   const curve = nodes()[nodes().color1.inputs.brightness.node];
   expect(curve.kind).toBe("curve");
-  expect(nodes()[curve.inputs.x.node].kind).toBe("noise");
-  until("the draft gone", (s) => s.find({ role: "card", label: "New noise" }) === undefined);
-  expect(draft.label).toBe("New noise");
+  expect(nodes()[curve.inputs.x.node].kind).toBe("random");
+  until("the draft gone", (s) => s.find({ role: "card", label: "New random" }) === undefined);
+  expect(draft.label).toBe("New random");
 });
 
 test("the add menu offers math, which multiplies what the input held", { fixture: { clips: [clipOf("Wash")] } }, () => {
@@ -624,15 +624,15 @@ test("the fade handle writes an alpha curve over the clip", { fixture: { clips: 
   assert(Math.abs(points[0][1]) < 1e-9 && Math.abs(points[1][0] - 0.25) < 0.02, `fade: ${JSON.stringify(points)}`);
 });
 
-test("a noise source shows its preview in the noise card", { fixture: { clips: [clipOf("Wash")] } }, () => {
+test("a random source shows its preview in the random card", { fixture: { clips: [clipOf("Wash")] } }, () => {
   open("Wash");
-  source("Color 1", "Brightness", "Value", "Noise");
-  until("noise stored", () => Object.values(nodes()).some((n) => n.kind === "noise"));
-  const preview = shown("card", "Noise 1 preview");
-  assert(inside(node("card", "Noise 1").bounds, preview.bounds), "the preview sits in the Noise 1 card");
-  node("text", "Noise 1 over time");
-  node("text", "Noise 1 along the rig");
-  expect(app.snapshot().find({ label: "These settings give no noise to show" })).toBe(undefined);
+  source("Color 1", "Brightness", "Value", "Random");
+  until("random stored", () => Object.values(nodes()).some((n) => n.kind === "random"));
+  const preview = shown("card", "Random 1 preview");
+  assert(inside(node("card", "Random 1").bounds, preview.bounds), "the preview sits in the Random 1 card");
+  node("text", "Random 1 over time");
+  node("text", "Random 1 along the rig");
+  expect(app.snapshot().find({ label: "These settings give no value to show" })).toBe(undefined);
 });
 
 test("Math on a brightness multiplies it through a math node, and its items edit", { fixture: { clips: [clipOf("Wash")] } }, () => {

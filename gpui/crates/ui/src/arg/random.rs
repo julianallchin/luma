@@ -1,5 +1,5 @@
-//! The noise preview: what a noise node gives, drawn with the host's own
-//! sampler — the patterns crate's noise — so it shows what playback does.
+//! The random preview: what a random node gives, drawn with the host's own
+//! sampler — the patterns crate's random — so it shows what playback does.
 //!
 //! Over time, three heads at 15 %, 50 % and 85 % along a line rig draw a line
 //! each over 16 beats, 0 at the bottom and 1 at the top. Along the rig, 48
@@ -28,7 +28,7 @@ pub struct Transport {
     /// The clip's seed.
     pub seed: u64,
     /// Beats since the clip start, the time origin playback evaluates the
-    /// noise from; 0 while the playhead is outside the clip.
+    /// random from; 0 while the playhead is outside the clip.
     pub beat: f64,
     /// The transport runs, so the beat moves between notifies.
     pub playing: bool,
@@ -37,22 +37,24 @@ pub struct Transport {
 /// Reads the clip's transport.
 pub type TransportSource = Rc<dyn Fn(&App) -> Transport>;
 
-/// A noise node's settings as fixed numbers.
+/// A random node's settings as fixed numbers.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
-    /// Beats per turn of the noise clock.
-    pub period: f64,
+    /// Beats per turn: each turn draws a new value.
+    pub every: f64,
+    /// The share of each turn that eases to the next value.
+    pub glide: f64,
     /// The blob size, a share of the rig; `None` is one value for all heads.
     pub scale: Option<f64>,
     pub contrast: f64,
     /// The settings that follow a wire, each with the stand-in it is shown
-    /// at, such as "period at 4 beats".
+    /// at, such as "every at 4 beats".
     pub held: Vec<String>,
 }
 
-/// The noise at a head: the settings, the clip's seed, the head's place
+/// The random at a head: the settings, the clip's seed, the head's place
 /// (U, V, Z, 0–1 over the rig) and the beats since the clip start. `None`
-/// when the settings give no noise.
+/// when the settings give no value.
 pub type Sampler = Rc<dyn Fn(&Settings, u64, [f64; 3], f64) -> Option<f64>>;
 
 /// Beats the line graph spans.
@@ -68,7 +70,7 @@ const RIG_H: f32 = 14.;
 /// The longest wait between two drawn frames of the animation.
 const FRAME: Duration = Duration::from_millis(33);
 
-pub struct NoisePreview {
+pub struct RandomPreview {
     id: SharedString,
     settings: Option<Settings>,
     sampler: Sampler,
@@ -77,7 +79,7 @@ pub struct NoisePreview {
     watching: bool,
 }
 
-impl NoisePreview {
+impl RandomPreview {
     pub fn new(id: impl Into<SharedString>, sampler: Sampler, transport: TransportSource) -> Self {
         Self {
             id: id.into(),
@@ -160,7 +162,7 @@ fn head_color(level: f64) -> Hsla {
     hsla(36. / 360., 0.55, level.clamp(0., 1.) as f32 * 0.86, 1.)
 }
 
-impl Render for NoisePreview {
+impl Render for RandomPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = self.id.clone();
         let Some(settings) = self.settings.clone() else {
@@ -251,7 +253,7 @@ impl Render for NoisePreview {
                 div()
                     .text_size(rpx(11.))
                     .text_color(ladder::foreground_alpha(0.5))
-                    .child("These settings give no noise to show")
+                    .child("These settings give no value to show")
             }))
             .children((!held.is_empty()).then(|| {
                 div()

@@ -309,8 +309,8 @@ mod tests {
 
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
-        // Noise whose speed drops to almost nothing past the clip's middle:
-        // its turns then leave the range the noise accepts.
+        // A random whose every drops to almost nothing past the clip's
+        // middle: its turns then leave the range the random accepts.
         let clip = test_clip(
             json!({
                 "time1": {"kind": "time"},
@@ -318,9 +318,9 @@ mod tests {
                            "inputs": {"x": {"node": "time1"},
                                       "shape": {"points": [[0, 0, "hold"], [0.5, 1], [1, 1]]},
                                       "low": 4, "high": 1e-13}},
-                "noise1": {"kind": "noise", "inputs": {"speed": {"node": "curve1"}}},
+                "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},
-                           "inputs": {"x": {"node": "noise1"}, "low": 1, "high": 1}},
+                           "inputs": {"x": {"node": "random1"}, "low": 1, "high": 1}},
                 "color1": {"kind": "color",
                            "inputs": {"brightness": 0.5, "alpha": {"node": "curve2"}}},
             }),

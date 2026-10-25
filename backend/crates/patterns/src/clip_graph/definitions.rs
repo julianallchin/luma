@@ -26,7 +26,7 @@ pub enum InputType {
     Heads,
     /// A wire from a `time` node: its events.
     Time,
-    /// A wire from `time`, `space`, `noise` or `audio`.
+    /// A wire from `time`, `space`, `random` or `audio`.
     Coordinate,
     /// A math node's items: two or more numbers and value wires.
     Values,
@@ -448,11 +448,12 @@ fn build(kind: Kind) -> Definition {
                 ),
             ],
         ),
-        Kind::Noise => (
+        Kind::Random => (
             Produces::Coordinate,
             vec![
                 heads(),
-                ("period", number(Unit::Beats, "4").above(0.).clock()),
+                ("every", number(Unit::Beats, "4").above(0.).clock()),
+                ("glide", share("0.5")),
                 ("scale", number(Unit::Share, "0.5").above(0.)),
                 ("contrast", share("0")),
             ],

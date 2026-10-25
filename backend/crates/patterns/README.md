@@ -85,7 +85,7 @@ clip holds all its form's inputs; missing or unknown inputs are errors.
 Color has color, brightness and clip fade. Aim has a position and numeric
 spatial/horizontal/vertical offsets. Presets are saved inputs.
 
-Inputs use Time, Space, Random, Noise and Audio sources. Source numeric
+Inputs use Time, Space, Random and Audio sources. Source numeric
 inputs recursively accept sources. Time and Random own events, inherit an
 enclosing clock, or follow another input with `events.same_as`. Space offset
 from Time produces overlapping strokes. Brightness keeps the strongest

@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use luma_patterns as p;
-use luma_ui::arg::noise;
+use luma_ui::arg::random;
 use luma_ui::arg::strip::{self, CurveStrip, StripChanged, StripValue};
 use luma_ui::icons::IconName;
 use luma_ui::{icon_button, rpx, Enabled};
@@ -74,8 +74,8 @@ pub(super) struct Controls {
     /// By node and [`item_key`]: an input, or one number of a math node's
     /// values.
     fields: BTreeMap<(String, String), Field>,
-    /// A preview per noise node.
-    noise: BTreeMap<String, Entity<noise::NoisePreview>>,
+    /// A preview per random node.
+    random: BTreeMap<String, Entity<random::RandomPreview>>,
     _subs: Vec<Subscription>,
 }
 
@@ -529,16 +529,16 @@ pub(super) fn build(graph: &ClipGraph, window: &mut Window, cx: &mut Context<Lum
             }
         }
     }
-    let noise = graph
+    let random = graph
         .nodes
         .iter()
-        .filter(|(_, node)| node.kind == Kind::Noise)
-        .map(|(id, node)| (id.clone(), noise_preview(graph, id, node, cx)))
+        .filter(|(_, node)| node.kind == Kind::Random)
+        .map(|(id, node)| (id.clone(), random_preview(graph, id, node, cx)))
         .collect();
     Controls {
         synced: graph.clone(),
         fields,
-        noise,
+        random,
         _subs: subs,
     }
 }
@@ -586,9 +586,9 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
             _ => {}
         }
     }
-    for (id, preview) in &controls.noise {
+    for (id, preview) in &controls.random {
         if let Some(node) = graph.nodes.get(id) {
-            let settings = noise_settings(graph, node);
+            let settings = random_settings(graph, node);
             preview.update(cx, |preview, cx| preview.set_value(settings, cx));
         }
     }
@@ -651,9 +651,9 @@ fn clip_beats(editor: &Editor, clip: &Clip) -> Option<(f64, f64, f64)> {
     Some((start, length, now - start))
 }
 
-/// A noise node's settings as the preview draws them: a value node's value,
-/// and a wired one held at its empty value, which the preview says.
-fn noise_settings(graph: &ClipGraph, node: &Node) -> noise::Settings {
+/// A random node's settings as the preview draws them: a value node's
+/// value, and a wired one held at its empty value, which the preview says.
+fn random_settings(graph: &ClipGraph, node: &Node) -> random::Settings {
     let mut held = Vec::new();
     let mut number = |input: &str, empty: f64, note: &str| match node
         .inputs
@@ -667,39 +667,42 @@ fn noise_settings(graph: &ClipGraph, node: &Node) -> noise::Settings {
         }
         None => None,
     };
-    let period = number("period", 4., "period at 4 beats").unwrap_or(4.);
+    let every = number("every", 4., "every at 4 beats").unwrap_or(4.);
+    let glide = number("glide", 0., "glide at 0").unwrap_or(0.);
     let scale = number("scale", 0.25, "scale at 25 %");
     let contrast = number("contrast", 0., "contrast at 0").unwrap_or(0.);
-    noise::Settings {
-        period,
+    random::Settings {
+        every,
+        glide,
         scale,
         contrast,
         held,
     }
 }
 
-/// The noise preview of node `id`, sampled as playback samples it.
-fn noise_preview(
+/// The random preview of node `id`, sampled as playback samples it.
+fn random_preview(
     graph: &ClipGraph,
     id: &str,
     node: &Node,
     cx: &mut Context<Luma>,
-) -> Entity<noise::NoisePreview> {
+) -> Entity<random::RandomPreview> {
     let at = id.to_owned();
-    let sampler: noise::Sampler = Rc::new(move |settings, seed, place, beats| {
-        p::clip_graph::sample_noise(
+    let sampler: random::Sampler = Rc::new(move |settings, seed, place, beats| {
+        p::clip_graph::sample_random(
             &at,
             seed,
             place,
             beats,
-            settings.period,
+            settings.every,
+            settings.glide,
             settings.scale,
             settings.contrast,
         )
         .ok()
     });
     let app = cx.entity().downgrade();
-    let transport: noise::TransportSource = Rc::new(move |cx| {
+    let transport: random::TransportSource = Rc::new(move |cx| {
         let transport = |cx: &App| {
             let app = app.upgrade()?;
             let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
@@ -707,7 +710,7 @@ fn noise_preview(
             };
             let clip = primary_clip(editor)?;
             let (_, length, elapsed) = clip_beats(editor, clip)?;
-            Some(noise::Transport {
+            Some(random::Transport {
                 seed: clip.core.as_ref()?.seed,
                 beat: if (0. ..=length).contains(&elapsed) {
                     elapsed
@@ -719,9 +722,9 @@ fn noise_preview(
         };
         transport(cx).unwrap_or_default()
     });
-    let settings = noise_settings(graph, node);
+    let settings = random_settings(graph, node);
     cx.new(|cx| {
-        let mut preview = noise::NoisePreview::new(edit::label(id), sampler, transport);
+        let mut preview = random::RandomPreview::new(edit::label(id), sampler, transport);
         preview.set_value(settings, cx);
         preview
     })

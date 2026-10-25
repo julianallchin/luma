@@ -218,7 +218,7 @@ fn over_clip<'a>(graph: &'a ClipGraph, out: &str) -> Option<(&'a str, &'a Node)>
     (time.kind == Kind::Time && once && zero("delay") && zero("phase")).then_some((id, curve))
 }
 
-/// The alpha of a clip. `None` for an alpha that is noise, audio, space or
+/// The alpha of a clip. `None` for an alpha that is random, audio, space or
 /// a per-hit curve: those change on their own and have no one line to draw.
 pub(super) fn alpha(clip: &Clip) -> Option<Alpha> {
     alpha_of(&clip.core.as_ref()?.graph)
