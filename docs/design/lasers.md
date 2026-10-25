@@ -24,29 +24,35 @@ that into a point stream, the way aim becomes pan and tilt.
   canvas from −1 to 1 that maps onto the window, so (0, 0) is the same
   direction from every projector and six projectors give six parallel fans.
   Clips reference a zone by id; an empty or unknown id is the venue's first
-  zone, and a venue with none draws ahead into the house, 5° to 25° up.
+  zone. A venue with none draws ahead into the house: two thirds of the
+  narrowest projector's scan across, and from 5° up through two thirds of
+  its half-field above that, so a full-size fan stays inside every scan.
 - **Limit** (`laser_limits`): optional, per projector, a polygon in the
   projector's own view, galvo coordinates −1 to 1. Light outside it is
   blanked, never bent or clamped.
 
 ## Clips
 
-- **Laser** output node, the geometry: `beams` (a whole number fixed for
-  the clip), `shape` (`fan`, `circle`, `grid`), `size`, `x` and `y`,
-  `rotation`, `join` (0 beams, 1 lines), `alpha`, and the `zone` setting.
-  Motion is a Time and a Curve into any number, as for every node. Size and
-  offset are enough to anchor a growing fan on one side. A laser clip's
-  heads are its beams, `projector:0` to `projector:{beams − 1}`, spread a
-  little across each projector's scan so Space and Mirror read them; a
-  mirror reflects the canvas.
-- **Color** is the existing Color output. A projector gives a Color clip 32
-  heads, the colour along a laser clip's order; a beam at place `s` (0 to 1
-  within its clip) takes the colour at `s`, so a gradient never depends on
-  how many beams exist. One Color clip can cover lights and lasers. With no
-  colour on a projector, its beams are white at full.
+- **Laser** output node: `kind` (`beams`, `line`, `ring`, `polygon` with
+  `sides`, `grid`) and `count` (whole numbers fixed for the clip), the
+  per-element inputs `x`, `y`, `size`, `rotation` and `color`, `alpha`,
+  and the `zone` setting. A clip's heads are its elements,
+  `projector:0` to `projector:{count − 1}`, spread a little across each
+  projector's scan so Space and Mirror read them; a mirror reflects each
+  element. An empty `x` or `y` is the element's home place: beams in a row
+  and a grid in rows, `size` wide and turned by `rotation`; one line, ring
+  or polygon in the middle.
+- **Along** (`along()`) is 0 to 1 within an element. Only the laser's
+  per-element inputs read it, through curves and math; the lowering
+  evaluates those inputs at 32 places along each line, ring or polygon
+  (`luma_patterns::laser::ALONG_SAMPLES`) and the solver interpolates
+  between them. Black along an element is the light off: dashes.
+- Each element is a place, a frame (2×2: size and rotation, a mirror's
+  reflection), a figure and its samples (`luma_patterns::laser::Element`).
 - Layers (`luma_patterns::laser`): Add draws both. Replace morphs: on each
-  projector and zone the top draws, the beams under it and its own meet by
-  `s`, place and `join` included, by the top's alpha.
+  projector and zone the elements under the top and its own meet by their
+  place along their order, place and frame by the top's alpha. Colours
+  never blend: a morphing element takes the top's colour.
 
 ## Output
 
@@ -60,12 +66,14 @@ The solver runs before the output hub, so the visualizer reads the same
 frames a DAC would and keeps working with physical output off. The hub only
 sends.
 
-The solver (`backend/src/laser`) maps canvas → zone → galvo angles, plans
-the scan (blanked jumps that settle, lit lines in short steps, and what is
-left of a 30-scans-a-second budget shared out as dwell on the beams), blanks
-outside the limit, and keeps lit points an overshoot margin inside it.
-Brightness is power times time: sixteen beams each get a sixteenth of the
-frame, and nothing hides that.
+The solver (`backend/src/laser`) maps canvas → zone → galvo angles, turns
+each element into strokes (a beam a dot; a line, ring or polygon lit runs
+between its corners and dark stretches, a closed figure drawn once round),
+plans the scan (blanked jumps that settle, lit runs in short steps, and
+what is left of a 30-scans-a-second budget shared out as dwell on the
+beams), blanks outside the limit, and keeps lit points an overshoot margin
+inside it. Brightness is power times time: sixteen beams each get a
+sixteenth of the frame, and nothing hides that.
 
 ## Preview
 
