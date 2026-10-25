@@ -126,17 +126,20 @@ impl Editor {
                     .beat_at(clip.start)
                     .map_err(|error| error.to_string())?;
             }
-            let old_end = clip.core.as_ref().unwrap().start + clip.core.as_ref().unwrap().duration;
-            let end = if clock
+            let core = clip.core.as_ref().unwrap();
+            let old_end = core.start + core.duration;
+            // An untouched span keeps its exact duration: `end - start` need
+            // not give it back, and a save sends every clip that differs.
+            if clock
                 .seconds_at(old_end)
                 .map_err(|error| error.to_string())?
-                == clip.end
+                != clip.end
             {
-                old_end
-            } else {
-                clock.beat_at(clip.end).map_err(|error| error.to_string())?
-            };
-            authored.duration = end - authored.start;
+                authored.duration =
+                    clock.beat_at(clip.end).map_err(|error| error.to_string())? - authored.start;
+            } else if authored.start != core.start {
+                authored.duration = old_end - authored.start;
+            }
             authored.z_index = clip.z;
             authored.blend_mode = clip.blend;
             score.clips.insert(clip.id.to_string(), authored);
@@ -177,10 +180,14 @@ impl Luma {
             }
         };
         editor.dirty = false;
-        if Some(&candidate) == editor.graph_score.as_ref() {
+        let Some(base) = editor.graph_score.as_ref() else {
+            return;
+        };
+        let edit = p::ScoreEdit::between(base, &candidate);
+        if edit.is_empty() {
             return;
         }
-        let pending = self.library.apply_score_document(&score_id, &candidate);
+        let pending = self.library.edit_score_document(&score_id, &edit);
         editor.saving = true;
         editor.error = None;
         cx.notify();
@@ -218,6 +225,9 @@ impl Luma {
                 }
                 if again {
                     this.commit_graph_score_for(target, cx);
+                } else {
+                    // A re-read this write held off.
+                    this.refresh_agent_tabs(cx);
                 }
             })
             .ok();
@@ -241,12 +251,14 @@ impl Luma {
                 let mut previews = Vec::new();
                 let mut changed = false;
                 let mut split = false;
+                let mut held = None;
                 this.edit_track_tab(&target, cx, |editor| {
-                    // The sync layer announces every write to a synced table,
-                    // our own included. A read that overlapped a local edit or
-                    // save is that save, or older than it: installing it would
-                    // drop the selection and can put back the old value.
+                    // A read that overlapped a local edit or save may be
+                    // older than it: installing it would drop the selection
+                    // and can put back the old value. Storage still moved, so
+                    // read again once the editor's own write is in.
                     if editor.dirty || editor.saving || editor.writes != writes {
+                        held = Some(editor.dirty || editor.saving);
                         return;
                     }
                     match result {
@@ -293,8 +305,16 @@ impl Luma {
                 if changed {
                     this.refresh_working_scene_for(&target, cx);
                 }
-                if split {
-                    this.commit_graph_score_for(target, cx);
+                match held {
+                    // The write's return reads it.
+                    Some(true) => {
+                        if !this.agent_stale_tabs.contains(&target) {
+                            this.agent_stale_tabs.push(target);
+                        }
+                    }
+                    Some(false) => this.reload_score_contents(target, cx),
+                    None if split => this.commit_graph_score_for(target, cx),
+                    None => {}
                 }
             })
             .ok();
