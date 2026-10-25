@@ -509,3 +509,51 @@ because it darkened everything else under the deck. Limit: in the second
 cascade (from 12 m, about 4 cm texels), the 3×3 filter still lets a little sun
 into the first 10 cm under a flat occluder (sun visibility 0.23 at 5 cm under a
 plate from 14 m, 40° sun).
+
+## Haze glow (2026-10-25)
+
+Status: built on `agent/lasers`, not yet accepted on a real venue.
+
+A beam in haze is seen because the haze scatters some of its light toward the
+camera. It scatters the rest every other way, and that light lit nothing. Now
+it lights the room and the haze round the beam, for every source alike:
+fixture cones and laser beams and sheets (`haze_glow.rs`,
+`shaders/haze_glow*.wgsl`). This is not the removed ambient fill: with no
+haze there is no glow, and its light comes from where the beams actually
+scatter, not from the emitters' sum.
+
+- **Inject.** A world grid over the medium's bounds (64×64×32 at High,
+  32×32×16 at Low). Each cell holds `σ · density · E`, the power its haze
+  scatters per cubic metre, from every cone (one shadow-map tap at the cell,
+  so a cone's light stops at what it hits) and every laser beam and sheet. A
+  source narrower than a cell is spread over a cell's width keeping its power,
+  so no beam falls between cells; laser sheets are merged into fans of at most
+  0.06 rad first.
+- **Spread.** The grid's mips. The fluence from scattering haze falls as
+  `e^(−σr)/4πr²`; over a shell r..2r that is `S̄ r e^(−σr)`, so each level's
+  average stands for the shell it is as wide as (`haze_glow_sample.wgsl`).
+- **Use.** Surfaces take a quarter of the fluence as irradiance; the
+  composite marches 12 steps of the camera ray through the grid and adds the
+  haze's second scattering of it, `σ · density · φ`.
+
+The glow seen grows about with σ² while the room is thinner than one mean
+free path: three times the haze lit the floor of the laser test room 40 times
+as much (`laser::haze_lit_by_lasers_lights_the_room`). For a fixture beam the
+glow sits about `σw/2` under the beam's own radiance, eight stops at density
+0.3, so it shows in thick haze and in a dark room, and barely otherwise.
+
+The meter counted everything above 2⁻¹⁴ as lit, so that glow, black in the
+picture, outweighed the beams and sent every hazy room to the top clamp. It
+now ignores light more than six stops under the top of its band
+(`SHOWN_STOPS` in `post_exposure.wgsl`).
+
+Limits: nothing but a cone's own shadow map occludes the glow, so it reaches
+round truss and through thin walls; indoors the haze ends at the room. The
+grid is coarse, and its trilinear cells show as a faint blocky edge a level or
+two of 255 deep where the glow fades out. Laser beams are not occluded at all.
+
+Cost, RTX 5090 / Vulkan, `profile-volumetrics --cones=450`, two alternating
+runs of 300 frames: GPU total p50 +0.5 ms (17.23 → 17.76 ms on transport-32),
+of which the scene pass +0.25 ms (inject and surface sampling) and the
+composite +0.26 ms (the glow march). The contract and volumetric-stress
+goldens were regenerated for the glow and inspected.

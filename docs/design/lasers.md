@@ -75,3 +75,11 @@ frame, and nothing hides that.
   thin triangle from the projector whose brightness is time spent over angle
   swept. A dwell collapses to a bright line, a sweep spreads to a dim sheet.
   The result is added into the HDR target before glare.
+- A scan shorter than the persistence window counts as one whole scan, so it
+  does not flicker as the window slides; a longer one's window fades at its
+  ends. Beams widen with distance (1.5 mrad) and fade across their width.
+  Beams and sheets scatter by the haze's own density field, so they show its
+  clouds and wind.
+- What the beams scatter lights the room and the haze round them, through
+  the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
+  glow").

@@ -12,7 +12,12 @@
 // grazing angle picks up more of it.
 //
 // Both lose light to the haze on the way out from the projector and on the
-// way to the camera.
+// way to the camera. What they scatter is the haze's own density where the
+// light is (`medium.wgsl`), so a beam or sheet shows the clouds and wisps
+// the fixtures' beams do, moving with the same wind.
+//
+// A beam widens as it goes, and fades to nothing across its width, so its
+// edges blend into the pixels they cross instead of stepping.
 
 struct Uniform {
     view_proj: mat4x4<f32>,
@@ -39,11 +44,19 @@ struct SheetVertex {
 @group(0) @binding(0) var<uniform> u: Uniform;
 @group(0) @binding(1) var<storage, read> beams: array<BeamInstance>;
 @group(0) @binding(2) var<storage, read> sheets: array<SheetVertex>;
+@group(0) @binding(3) var<uniform> medium: ProceduralMedium;
+@group(0) @binding(4) var haze_noise_field: texture_3d<f32>;
+@group(0) @binding(5) var haze_noise_sampler: sampler;
 
-// Half a beam's thickness, metres.
+// Half a beam's thickness at the projector, metres.
 const HALF_WIDTH_M: f32 = 0.002;
-// The strip is at least this many pixels wide.
-const MIN_PIXELS: f32 = 1.5;
+// Half the angle a beam spreads by, radians: a projector's 1.5 mrad.
+const HALF_DIVERGENCE: f32 = 0.00075;
+// The strip is at least this many pixels wide: enough for its fade across
+// to blend into the pixels rather than alias.
+const MIN_PIXELS: f32 = 2.5;
+// `PIECES`, the pieces a beam's strip is cut into along its length, comes
+// from `laser.rs`.
 // The most a grazing ray multiplies the light, so an edge-on sheet or a
 // beam seen end-on stays finite.
 const GRAZE: f32 = 0.05;
@@ -62,8 +75,8 @@ fn scattered(world: vec3<f32>, origin: vec3<f32>, along: vec3<f32>) -> f32 {
     let to_camera = u.camera_pos.xyz - world;
     let toward = normalize(to_camera);
     let travelled = distance(world, origin) + length(to_camera);
-    let tail = 1.0 - smoothstep(0.85 * u.haze.w, u.haze.w, distance(world, origin));
-    return sigma * u.haze.z * phase(dot(along, toward), u.haze.y) * exp(-sigma * travelled) * tail;
+    let density = medium_density(medium, world);
+    return sigma * density * u.haze.z * phase(dot(along, toward), u.haze.y) * exp(-sigma * travelled);
 }
 
 struct BeamOut {
@@ -71,31 +84,37 @@ struct BeamOut {
     @location(0) world: vec3<f32>,
     @location(1) @interpolate(flat) instance: u32,
     @location(2) width: f32,
+    // −1 to 1 across the strip.
+    @location(3) across: f32,
 };
 
 @vertex
 fn vs_beam(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> BeamOut {
-    // Two triangles: (along, side) at each corner.
+    // Two triangles a piece: (along, side) at each corner.
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(0.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
     );
-    let corner = corners[vertex];
+    let corner = corners[vertex % 6u];
+    let along = (f32(vertex / 6u) + corner.x) / f32(PIECES);
     let beam = beams[instance];
     let direction = beam.direction.xyz;
-    let world = beam.origin.xyz + direction * (corner.x * u.haze.w);
+    let r = along * u.haze.w;
+    let world = beam.origin.xyz + direction * r;
+    let half_width = HALF_WIDTH_M + r * HALF_DIVERGENCE;
     let across = cross(direction, u.camera_pos.xyz - world);
     let reach = length(across);
     let side = select(vec3<f32>(0.0, 0.0, 1.0), across / max(reach, 1e-6), reach > 1e-5);
     let centre = u.view_proj * vec4<f32>(world, 1.0);
-    let offset = (u.view_proj * vec4<f32>(side * HALF_WIDTH_M, 0.0)).xy;
+    let offset = (u.view_proj * vec4<f32>(side * half_width, 0.0)).xy;
     let pixels = length(offset * u.viewport.xy * 0.5) / max(centre.w, 1e-4);
     let widen = max(1.0, MIN_PIXELS * 0.5 / max(pixels, 1e-8));
     var out: BeamOut;
     out.clip = vec4<f32>(centre.xy + offset * corner.y * widen, centre.z, centre.w);
     out.world = world;
     out.instance = instance;
-    out.width = 2.0 * HALF_WIDTH_M * widen;
+    out.width = 2.0 * half_width * widen;
+    out.across = corner.y;
     return out;
 }
 
@@ -105,7 +124,11 @@ fn fs_beam(in: BeamOut) -> @location(0) vec4<f32> {
     let direction = beam.direction.xyz;
     let view = normalize(in.world - u.camera_pos.xyz);
     let sideways = max(length(cross(direction, view)), GRAZE);
-    let light = beam.power.xyz * scattered(in.world, beam.origin.xyz, direction) / (sideways * in.width);
+    // A smooth bump across the strip whose mean is 1, so the beam's light
+    // is the same however wide it is drawn.
+    let edge = 1.0 - in.across * in.across;
+    let profile = 1.875 * edge * edge;
+    let light = beam.power.xyz * profile * scattered(in.world, beam.origin.xyz, direction) / (sideways * in.width);
     return vec4<f32>(light, 0.0);
 }
 

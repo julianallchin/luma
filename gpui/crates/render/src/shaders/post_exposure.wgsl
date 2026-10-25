@@ -10,6 +10,12 @@ const BINS: u32 = 128u;
 const LOG_MIN: f32 = -14.0;
 /// Stops the bins cover, from LOG_MIN up.
 const LOG_RANGE: f32 = 24.0;
+/// Stops below the top of the metered band that a picture shows with any
+/// detail: the zone system's highlights down to its darkest textured shadow.
+/// Light further down is shadow, not subject. A hazy room glows about eight
+/// stops under its beams (σ times a beam's width over two), and metering
+/// that glow exposed every hazy room as if it held nothing but the glow.
+const SHOWN_STOPS: f32 = 6.0;
 /// Centre weight at the middle of the frame, relative to 1 at its edges.
 /// Integer weights keep the histogram in atomics.
 const CENTRE_WEIGHT: f32 = 4.0;
@@ -81,6 +87,23 @@ fn histogram_main(
 
 var<workgroup> bins: array<f32, 129>;
 
+/// log2 luminance at the top edge of bin `i`.
+fn bin_top(i: u32) -> f32 {
+    return LOG_MIN + f32(i + 1u) / f32(BINS) * LOG_RANGE;
+}
+
+/// log2 luminance of the bin `weight` of the lit pixels' weight is under.
+fn log2_at(weight: f32) -> f32 {
+    var below = 0.0;
+    for (var i = 0u; i < BINS; i++) {
+        below += bins[i];
+        if below >= weight {
+            return bin_top(i);
+        }
+    }
+    return LOG_MIN + LOG_RANGE;
+}
+
 /// Meter the histogram, move the exposure toward it and clear the histogram
 /// for the next frame.
 @compute @workgroup_size(128)
@@ -111,12 +134,26 @@ fn adapt_main(@builtin(local_invocation_index) lindex: u32) {
         // must not open the iris so the next cue arrives blinding.
         let lit = total > 0.002 * (total + bins[BINS]);
         if lit {
+            // The top of the band over everything lit, and what is too far
+            // under it to show counted with the black.
+            let top = log2_at(cfg.meter.y * total);
+            let floor = top - SHOWN_STOPS;
+            var shown = 0.0;
+            for (var i = 0u; i < BINS; i++) {
+                if bin_top(i) >= floor {
+                    shown += bins[i];
+                }
+            }
+            total = shown;
             let lo = cfg.meter.x * total;
             let hi = cfg.meter.y * total;
             var below = 0.0;
             var sum = 0.0;
             var weight = 0.0;
             for (var i = 0u; i < BINS; i++) {
+                if bin_top(i) < floor {
+                    continue;
+                }
                 // The part of this bin's weight inside [lo, hi].
                 let a = max(below, lo);
                 let b = min(below + bins[i], hi);

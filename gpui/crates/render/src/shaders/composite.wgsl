@@ -43,6 +43,10 @@ override TEN_BIT_OUTPUT: bool = false;
 // the clouds, g: the linear view depth it stands for (`sun_shafts.wgsl`).
 // Read for the sky only; the scene pass applied it to the surfaces.
 @group(0) @binding(7) var shaft_tex: texture_2d<f32>;
+// The haze's glow (`haze_glow.rs`, `haze_glow_sample.wgsl`).
+@group(0) @binding(8) var haze_glow_volume: texture_3d<f32>;
+@group(0) @binding(9) var haze_glow_sampler: sampler;
+@group(0) @binding(10) var<uniform> haze_glow: HazeGlow;
 
 struct EnvironmentParams {
     intensity: f32,
@@ -215,6 +219,9 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(vec3<f32>(1.0 - raw_depth), 1.0);
     }
     var haze = upsample_haze(uv, depth);
+    if cfg.medium.min.w > 0.0 {
+        haze += glow_along(uv, raw_depth);
+    }
     var medium = 1.0;
     let outdoor = sky.sun.w > 0.5;
     // Outdoor surfaces already include their own fog. Only uncovered sky
@@ -274,6 +281,43 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // noise included. An 8-bit target clamps at zero anyway.
     return vec4<f32>(max(display + sky_dither(display, frag.xy), vec3<f32>(0.0)), 1.0);
 }
+
+/// The haze's second scattering of its own glow (`haze_glow_sample.wgsl`)
+/// toward the camera, from the eye to the pixel's depth: where the haze is
+/// lit by its beams, it lights the haze round it, and that haze is seen.
+/// The glow is smooth over a cell, so a few steps through the grid hold it.
+fn glow_along(uv: vec2<f32>, raw_depth: f32) -> vec3<f32> {
+    if haze_glow.max.w <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let eye = cfg.camera_pos.xyz;
+    // The direction from a point at middle depth: reverse-Z puts depth 0,
+    // where nothing is drawn, at infinity.
+    let clip = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let middle = cfg.inv_view_proj * vec4<f32>(clip, 0.5, 1.0);
+    let ray_dir = normalize(middle.xyz / middle.w - eye);
+    // Nothing drawn: the grid's bounds end the ray.
+    var distance = 1e5;
+    if raw_depth > 0.0 {
+        let hit = cfg.inv_view_proj * vec4<f32>(clip, raw_depth, 1.0);
+        distance = length(hit.xyz / hit.w - eye);
+    }
+    let span = medium_lighting_span(cfg.medium, eye, ray_dir, distance);
+    if span.y <= span.x {
+        return vec3<f32>(0.0);
+    }
+    let sigma = haze_glow.min.w;
+    let step = (span.y - span.x) / f32(GLOW_STEPS);
+    var light = vec3<f32>(0.0);
+    for (var i = 0u; i < GLOW_STEPS; i += 1u) {
+        let t = span.x + (f32(i) + 0.5) * step;
+        let p = eye + ray_dir * t;
+        let scattering = sigma * medium_density(cfg.medium, p);
+        light += scattering * haze_glow_fluence(p) * exp(-sigma * t) * step;
+    }
+    return light;
+}
+const GLOW_STEPS: u32 = 12u;
 
 /// One least-significant bit of triangular noise, under a sky only.
 ///

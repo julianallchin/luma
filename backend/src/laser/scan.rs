@@ -218,9 +218,14 @@ fn plan(paths: &[Vec<Vertex>], rate: u32) -> Vec<([f64; 2], [f64; 3])> {
         out.extend(steps(at, path[0].at, BLANK_STEP).map(|p| (p, black)));
         out.extend(std::iter::repeat_n((path[0].at, black), SETTLE));
         for (i, vertex) in path.iter().enumerate() {
+            // A lit move ends on its vertex, and that point is the first of
+            // the dwell. Another on top would hold the mirrors there while
+            // the line goes on, and a sheet would show a bright ray at every
+            // vertex.
+            let arrived = usize::from(i > 0 && path[i - 1].join > 0.);
             out.extend(std::iter::repeat_n(
                 (vertex.at, vertex.rgb),
-                dwell(beamness(path, i)),
+                dwell(beamness(path, i)).saturating_sub(arrived),
             ));
             let Some(next) = path.get(i + 1) else {
                 break;
@@ -358,6 +363,24 @@ mod tests {
         let places: std::collections::BTreeSet<i32> =
             lit(&frame).iter().map(|p| (p.x * 1e4) as i32).collect();
         assert!(places.len() > 20, "{}", places.len());
+    }
+
+    /// A fan joined all the way is a sweep at an even pace: the mirrors
+    /// never stop on a vertex on the way, only at the end.
+    #[test]
+    fn a_joined_fan_sweeps_without_stopping() {
+        let frame = solve(
+            (0..9)
+                .map(|i| beam("p", 0, i as f64 / 8., i as f64 / 8. - 0.5, 1.))
+                .collect(),
+        );
+        let points = lit(&frame);
+        let end = points.last().expect("lit").x;
+        let sweep: Vec<f32> = points.iter().map(|p| p.x).filter(|&x| x != end).collect();
+        assert!(sweep.len() > 20, "{}", sweep.len());
+        for pair in sweep.windows(2) {
+            assert_ne!(pair[0], pair[1], "the mirrors stop mid-sweep");
+        }
     }
 
     /// Splitting the frame over more beams gives each less time: the
