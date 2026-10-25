@@ -45,6 +45,8 @@ pub(crate) struct Shot {
     definitions: std::collections::BTreeMap<String, scene_desc::Definition>,
     /// The track's bass, for the footage look's shake.
     bass: Option<Bass>,
+    /// The laser projectors, solved each frame as on the stage.
+    lasers: luma_lib::laser::LaserRig,
 }
 
 impl Visualizer {
@@ -73,6 +75,7 @@ impl Visualizer {
             scene,
             definitions: stage.definitions.clone(),
             bass: self.bass.clone(),
+            lasers: stage.lasers.clone(),
         })
     }
 
@@ -252,7 +255,7 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
             .map_or(0.0, |bass| bass.bass_at(tick.score));
         let moment = luma_render::footage::moment(tick.clock, 1.0 / f64::from(FPS), bass);
         let universe = motors.step(tick.clock, tick.score, sample(tick.score));
-        let frame = build_frame_at(
+        let mut frame = build_frame_at(
             &shot.scene,
             &shot.definitions,
             &|id, head| stage_render::primitive_state(universe.as_ref(), id, head),
@@ -260,6 +263,9 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
             &mut assets,
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
+        if let Some(state) = &universe {
+            frame.lasers = super::lasers::scans(&shot.lasers, state, tick.clock);
+        }
         in_flight.push_back(tick.kept);
         if let Some(pixels) = recorder
             .push(&frame, width, height)

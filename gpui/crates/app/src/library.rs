@@ -2290,6 +2290,7 @@ impl Library {
             // pieces before the light would draw a frame of the wrong room.
             // Both off one read — they are two columns of the same row.
             let room = command::<Venue>(&services, "get_venue", &json!({ "id": venue_id })).await?;
+            let lasers = command(&services, "get_laser_rig", &venue).await?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -2311,6 +2312,7 @@ impl Library {
                 rows,
                 environment: room.environment,
                 haze: room.haze,
+                lasers,
             })
         });
         async move {
@@ -2988,6 +2990,9 @@ pub struct Rig {
     /// click — so the two arrive together rather than as a second fetch that
     /// could disagree with the first.
     pub rows: VenueGraphRows,
+    /// The projectors and zones the visualizer solves each frame's beams
+    /// with, as a DAC would (`docs/design/lasers.md`).
+    pub lasers: luma_lib::laser::LaserRig,
 }
 
 impl Rig {

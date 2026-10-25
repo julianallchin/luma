@@ -1172,6 +1172,20 @@
           "rust": "String"
         }
       ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "get_laser_rig",
+      "returns": "crate::laser::LaserRig"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
@@ -3589,7 +3603,7 @@
       "handlers": "backend/src/dispatch/handlers/host_audio.rs"
     },
     {
-      "commandCount": 5,
+      "commandCount": 6,
       "domain": "lasers",
       "handlers": "backend/src/dispatch/handlers/lasers.rs"
     },
@@ -3779,7 +3793,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 156,
+    "commandCount": 157,
     "domainCount": 28,
     "eventCount": 13
   },

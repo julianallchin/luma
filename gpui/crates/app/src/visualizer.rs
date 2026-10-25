@@ -46,6 +46,7 @@
 //! [`coords::three_from_world`].
 
 mod camera_export;
+mod lasers;
 mod motors;
 mod settings;
 pub(crate) mod show_export;
@@ -641,6 +642,8 @@ struct Stage {
     definitions: BTreeMap<String, scene_desc::Definition>,
     /// The rig's fixtures that strobe on their own clock, and that clock.
     strobes: FixtureStrobes,
+    /// The rig's laser projectors and zones, solved each frame.
+    lasers: luma_lib::laser::LaserRig,
     /// Acquired lazily on the first frame that has something to draw — see
     /// [`Visualizer::gpu_ready`].
     gpu: Option<Gpu>,
@@ -1692,6 +1695,7 @@ impl Visualizer {
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
         stage.strobes = FixtureStrobes::new(&rig);
+        stage.lasers = rig.lasers.clone();
         stage.scene = Some(scene);
         // A new scene is a frame owed. The idle gate's key deliberately does
         // not carry scene contents, so a resting viewport handed a reloaded
@@ -2979,6 +2983,8 @@ struct LiveFrameInputs<'a> {
     moment: Moment,
     /// The heads' state at it.
     state: Option<&'a UniverseState>,
+    /// The projectors that turn its beams into point streams.
+    lasers: &'a luma_lib::laser::LaserRig,
     size: (u32, u32),
     camera: Camera,
     /// Measured in the prepaint that is submitting this frame, so they come
@@ -3363,6 +3369,7 @@ impl Gpu {
             strobes,
             moment,
             state,
+            lasers,
             size: (width, height),
             camera,
             spans,
@@ -3370,7 +3377,7 @@ impl Gpu {
         } = input;
         let built = std::time::Instant::now();
         let strobes = RefCell::new(strobes);
-        let frame = build_frame_at(
+        let mut frame = build_frame_at(
             scene,
             definitions,
             &|id, head| {
@@ -3385,6 +3392,9 @@ impl Gpu {
             &mut self.assets,
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
+        if let Some(state) = state {
+            frame.lasers = lasers::scans(lasers, state, moment.time);
+        }
         let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;
         let picked = std::time::Instant::now();
@@ -5215,6 +5225,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 strobes: &mut stage.strobes,
                                 moment,
                                 state: universe.as_ref(),
+                                lasers: &stage.lasers,
                                 size: (width, height),
                                 camera,
                                 spans,
@@ -6818,6 +6829,7 @@ mod orbit_selection_tests {
             definitions: HashMap::new(),
             environment: Default::default(),
             haze: Default::default(),
+            lasers: Default::default(),
             rows: VenueGraphRows {
                 nodes: vec![VenueNode {
                     id: "venue".into(),
