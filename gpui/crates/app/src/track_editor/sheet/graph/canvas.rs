@@ -269,7 +269,7 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
 /// kind it has (`value`).
 fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
-        Kind::Time | Kind::Space | Kind::Random | Kind::Audio => Signal::Coordinate,
+        Kind::Time | Kind::Space | Kind::Along | Kind::Random | Kind::Audio => Signal::Coordinate,
         Kind::Curve | Kind::Math | Kind::Value => match value {
             Some("vector") => Signal::Vector,
             Some("color") => Signal::Color,
@@ -305,9 +305,10 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
-const ADDABLE: [Kind; 11] = [
+const ADDABLE: [Kind; 12] = [
     Kind::Time,
     Kind::Space,
+    Kind::Along,
     Kind::Random,
     Kind::Audio,
     Kind::Curve,

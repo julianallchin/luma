@@ -72,11 +72,11 @@ pub(crate) struct State {
     heads: Heads,
 }
 
-/// The heads a selection resolves to, asked once per venue, selection and
-/// seed. `cells` is `None` until the answer lands.
+/// The heads a selection resolves to, asked once per venue, selection,
+/// seed and laser element count. `cells` is `None` until the answer lands.
 #[derive(Default)]
 struct Heads {
-    key: Option<(String, String, u64)>,
+    key: Option<(String, String, u64, Option<usize>)>,
     cells: Option<Rc<[luma_patterns::Cell]>>,
 }
 
@@ -318,10 +318,12 @@ fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
     }
     let seed = core.selection_seed.unwrap_or(core.seed);
     let selection = core.selection.clone();
+    let elements = core.graph.laser().map(|laser| laser.count);
     let key = (
         editor.venue_id.clone(),
         selection.to_value().to_string(),
         seed,
+        elements,
     );
     if editor.sheet.heads.key.as_ref() == Some(&key) {
         return;
@@ -332,7 +334,8 @@ fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
     };
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| {
-            this.library.selection_cells(&key.0, &selection, seed)
+            this.library
+                .selection_cells(&key.0, &selection, seed, elements)
         }) else {
             return;
         };

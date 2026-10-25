@@ -380,8 +380,34 @@ pub(crate) fn source_label(kind: Kind) -> &'static str {
     match kind {
         Kind::Time => "Over time",
         Kind::Space => "Over space",
+        Kind::Along => "Along each element",
         other => other.label(),
     }
+}
+
+/// The coordinate kinds `input` offers: along too where a laser reads it
+/// per element.
+pub(crate) fn sources(graph: &ClipGraph, id: &str, input: &str) -> Vec<Kind> {
+    let mut out = SOURCES.to_vec();
+    if reads_along(graph, id, input) {
+        out.push(Kind::Along);
+    }
+    out
+}
+
+/// Whether a new along node can feed `input`: the graph still checks with
+/// one wired there.
+fn reads_along(graph: &ClipGraph, id: &str, input: &str) -> bool {
+    let Some(spec) = spec(graph, id, input) else {
+        return false;
+    };
+    let mut trial = graph.clone();
+    if spec.ty == Ty::Coordinate {
+        recoordinate(&mut trial, id, Kind::Along);
+    } else {
+        promote(&mut trial, id, input, Kind::Along);
+    }
+    trial.check().is_ok()
 }
 
 /// The shapers a heads input takes.
@@ -918,6 +944,7 @@ pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> b
     match spec.ty {
         Ty::Number | Ty::Vector | Ty::Color | Ty::Values if kind == Kind::Value => true,
         Ty::Number | Ty::Vector | Ty::Color if kind == Kind::Math => can_multiply(graph, id, input),
+        _ if kind == Kind::Along => reads_along(graph, id, input),
         Ty::Number | Ty::Vector | Ty::Color | Ty::Values => {
             SOURCES.contains(&kind) || kind == Kind::Curve
         }
@@ -1196,6 +1223,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn along_is_offered_only_where_a_laser_reads_it() {
+        let mut graph = ClipGraph::new([("laser1".to_owned(), Node::new(Kind::Laser))]);
+        assert!(sources(&graph, "laser1", "x").contains(&Kind::Along));
+        assert!(!sources(&graph, "laser1", "alpha").contains(&Kind::Along));
+        assert!(attach(&mut graph, "laser1", "x", Kind::Along).is_some());
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        assert!(!sources(&wash(), "color1", "brightness").contains(&Kind::Along));
+        assert!(attach(&mut wash(), "color1", "brightness", Kind::Along).is_none());
     }
 
     #[test]

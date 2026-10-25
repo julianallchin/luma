@@ -143,7 +143,7 @@ commands! {
         venue_id: String,
         selection: Selection,
         seed: u64,
-        beams: Option<usize>,
+        elements: Option<usize>,
     ) -> Vec<luma_patterns::Cell>;
 
     agent_threads::agent_thread_list(

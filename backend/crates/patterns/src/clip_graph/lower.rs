@@ -14,7 +14,7 @@ use crate::{
     Rate, Result, Signal, SignalType, Unit, Value, ValueType,
 };
 use ndarray::Array3;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// The empty aim direction: the venue's default aim.
@@ -68,6 +68,12 @@ struct Lowering<'a> {
     clocks: HashMap<String, Events>,
     values: HashMap<String, Lowered>,
     heads: HashMap<String, Heads>,
+    /// The place along a laser element that `along` reads, while the
+    /// inputs that read it are lowered once per place.
+    along: Option<f64>,
+    /// The nodes whose value varies along a laser element: `along` and
+    /// every node that reads it.
+    along_readers: HashSet<String>,
 }
 
 fn number(value: f64) -> Binding {
@@ -211,12 +217,24 @@ impl Lowering<'_> {
             .map(str::to_string)
     }
 
-    /// A value wire from a coordinate node or a curve.
+    /// Whether `id`'s value varies along a laser element: it is `along`,
+    /// or reads it.
+    fn reads_along(&self, id: &str) -> bool {
+        self.along_readers.contains(id)
+    }
+
+    /// A value wire from a coordinate node or a curve. One that reads
+    /// `along` is lowered once per place along the element.
     fn value(&mut self, id: &str) -> Result<Lowered> {
-        if let Some(known) = self.values.get(id) {
+        let key = match self.along.filter(|_| self.reads_along(id)) {
+            Some(along) => format!("{id}@{along}"),
+            None => id.to_string(),
+        };
+        if let Some(known) = self.values.get(&key) {
             return Ok(known.clone());
         }
         let lowered = match self.node(id).kind {
+            Kind::Along => constant(self.along.unwrap_or(0.)),
             Kind::Time => self.time(id)?,
             Kind::Space => self.space(id)?,
             Kind::Random => self.random(id)?,
@@ -235,7 +253,7 @@ impl Lowering<'_> {
                 )))
             }
         };
-        self.values.insert(id.to_string(), lowered.clone());
+        self.values.insert(key, lowered.clone());
         Ok(lowered)
     }
 
@@ -852,7 +870,33 @@ impl<'a> Lowering<'a> {
             clocks: HashMap::new(),
             values: HashMap::new(),
             heads: HashMap::new(),
+            along: None,
+            along_readers: along_readers(graph),
         }
+    }
+}
+
+/// `along` and every node that reads it, through any number of wires.
+fn along_readers(graph: &ClipGraph) -> HashSet<String> {
+    let mut readers: HashSet<String> = graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.kind == Kind::Along)
+        .map(|(id, _)| id.clone())
+        .collect();
+    loop {
+        let more: Vec<String> = graph
+            .nodes
+            .iter()
+            .filter(|(id, node)| {
+                !readers.contains(*id) && node.wires().any(|(_, source)| readers.contains(source))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if more.is_empty() {
+            return readers;
+        }
+        readers.extend(more);
     }
 }
 
@@ -892,9 +936,10 @@ pub(crate) fn lower_coordinate(
     })
 }
 
-/// Each cell's beam index and its projector's beam count, for a laser: a
-/// cell `projector:i` is beam `i` of as many as its projector has cells.
-fn beam_indices(cells: &[Cell]) -> (Vec<usize>, Vec<usize>) {
+/// Each cell's element index and its projector's element count, for a
+/// laser: a cell `projector:i` is element `i` of as many as its projector
+/// has cells.
+fn element_indices(cells: &[Cell]) -> (Vec<usize>, Vec<usize>) {
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for cell in cells {
         *counts.entry(fixture_of(&cell.id)).or_default() += 1;
@@ -1025,66 +1070,10 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
             );
             Some(("aim", output(&out, "aim")))
         }
-        // A laser writes no light of its own: its beams leave by their own
-        // output, and colour comes from the Color clips over the projector.
+        // A laser writes no light of its own: its elements leave by their
+        // own output, colour and all.
         Kind::Laser => {
-            let heads = lowering.heads_input(&id)?;
-            if heads.mirrors.len() > AIM_MIRRORS {
-                return Err(Error(format!(
-                    "{id}.heads: a laser reads at most {AIM_MIRRORS} stacked mirrors; got {}",
-                    heads.mirrors.len()
-                )));
-            }
-            let shape = match out.setting("shape") {
-                Some("circle") => 1.,
-                Some("grid") => 2.,
-                _ => 0.,
-            };
-            let x = lowering.number(&id, "x", 0.)?;
-            let y = lowering.number(&id, "y", 0.)?;
-            let size = lowering.number(&id, "size", 0.5)?;
-            let rotation = lowering.number(&id, "rotation", 0.)?;
-            let join = lowering.number(&id, "join", 0.)?;
-            let alpha = lowering.number(&id, "alpha", 1.)?;
-            let parts = vec![vec![x], vec![y], vec![size], vec![rotation], vec![join]];
-            let (parts, alpha) = lowering.layer(parts, alpha, true)?;
-            let (index, count) = beam_indices(&lowering.cells);
-            let mut ports = vec![
-                ("x", parts[0].clone()),
-                ("y", parts[1].clone()),
-                ("size", parts[2].clone()),
-                ("rotation", parts[3].clone()),
-                ("join", parts[4].clone()),
-                ("alpha", alpha),
-                ("index", lowering.index_field(&index)?),
-                ("count", lowering.index_field(&count)?),
-                ("shape", number(shape)),
-                ("mirrors", number(heads.mirrors.len() as f64)),
-            ];
-            let names: Vec<(String, String)> = (0..AIM_MIRRORS)
-                .map(|m| (format!("fold{m}"), format!("normal{m}")))
-                .collect();
-            for (m, (fold, normal)) in names.iter().enumerate() {
-                let (folded, plane) = heads
-                    .mirrors
-                    .get(m)
-                    .map(|mirror| (mirror.folded.clone(), mirror.direction.clone()))
-                    .unwrap_or_else(|| (number(0.), number(0.)));
-                ports.push((fold.as_str(), folded));
-                ports.push((normal.as_str(), plane));
-            }
-            let out = lowering.kernel(Kernel::LaserOut, ports);
-            outputs.insert(crate::laser::BEAM_OUTPUT.to_string(), output(&out, "beam"));
-            types.insert(
-                crate::laser::BEAM_OUTPUT.to_string(),
-                Output {
-                    value_type: ValueType::Signal(SignalType::new(
-                        Unit::Number,
-                        Channels::components(crate::laser::BEAM_CHANNELS)?,
-                    )),
-                    rate: Rate::Frame,
-                },
-            );
+            laser(&mut lowering, &id, out, &mut outputs, &mut types)?;
             None
         }
         kind => {
@@ -1112,4 +1101,141 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
             outputs,
         }),
     })
+}
+
+/// The per-element inputs of a laser node, in the order its kernel reads
+/// them per sample: x, y, size, rotation, then the colour's r, g and b.
+const LASER_PARTS: [&str; 7] = ["x", "y", "size", "rotation", "r", "g", "b"];
+
+/// A laser node's kernel and its element output. An input that reads
+/// `along` is lowered at [`crate::laser::ALONG_SAMPLES`] places along the
+/// element, ends included; every other input once, for every place.
+fn laser(
+    lowering: &mut Lowering<'_>,
+    id: &str,
+    out: &ClipNode,
+    outputs: &mut BTreeMap<String, Binding>,
+    types: &mut BTreeMap<String, Output>,
+) -> Result<()> {
+    let heads = lowering.heads_input(id)?;
+    if heads.mirrors.len() > AIM_MIRRORS {
+        return Err(Error(format!(
+            "{id}.heads: a laser reads at most {AIM_MIRRORS} stacked mirrors; got {}",
+            heads.mirrors.len()
+        )));
+    }
+    let kind = crate::laser::Kind::from_setting(out.setting("kind"));
+    let sampled = |lowering: &Lowering<'_>, input: &str| {
+        lowering
+            .node(id)
+            .inputs
+            .get(input)
+            .and_then(Input::source)
+            .is_some_and(|source| lowering.reads_along(source))
+    };
+    // A point has one place along it.
+    let samples = if !kind.is_point()
+        && ["x", "y", "size", "rotation", "color"]
+            .iter()
+            .any(|input| sampled(lowering, input))
+    {
+        crate::laser::ALONG_SAMPLES
+    } else {
+        1
+    };
+    // Each sample's parts, and every distinct part once for the layer.
+    let mut unique: Vec<Lowered> = Vec::new();
+    let mut per_sample: Vec<[usize; 7]> = Vec::new();
+    let mut fixed: Option<[usize; 7]> = None;
+    for k in 0..samples {
+        let along = (samples > 1).then(|| k as f64 / (samples - 1) as f64);
+        lowering.along = along;
+        let x = lowering.number(id, "x", 0.)?;
+        let y = lowering.number(id, "y", 0.)?;
+        let size = lowering.number(id, "size", 0.5)?;
+        let rotation = lowering.number(id, "rotation", 0.)?;
+        let color = lowering.triple(id, "color", [1.; 3])?;
+        let parts = [
+            x,
+            y,
+            size,
+            rotation,
+            component(&color, 0),
+            component(&color, 1),
+            component(&color, 2),
+        ];
+        let reads = [
+            sampled(lowering, "x"),
+            sampled(lowering, "y"),
+            sampled(lowering, "size"),
+            sampled(lowering, "rotation"),
+            sampled(lowering, "color"),
+            sampled(lowering, "color"),
+            sampled(lowering, "color"),
+        ];
+        let mut slots = [0; 7];
+        for (p, part) in parts.into_iter().enumerate() {
+            slots[p] = match fixed {
+                Some(first) if !reads[p] => first[p],
+                _ => {
+                    unique.push(part);
+                    unique.len() - 1
+                }
+            };
+        }
+        fixed.get_or_insert(slots);
+        per_sample.push(slots);
+    }
+    lowering.along = None;
+    let alpha = lowering.number(id, "alpha", 1.)?;
+    let parts = unique.into_iter().map(|part| vec![part]).collect();
+    let (parts, alpha) = lowering.layer(parts, alpha, true)?;
+    let (index, count) = element_indices(&lowering.cells);
+    let given = |name: &str| {
+        number(if out.inputs.contains_key(name) {
+            1.
+        } else {
+            0.
+        })
+    };
+    let mut ports: Vec<(String, Binding)> = vec![
+        ("alpha".into(), alpha),
+        ("index".into(), lowering.index_field(&index)?),
+        ("count".into(), lowering.index_field(&count)?),
+        ("kind".into(), number(kind.code())),
+        ("samples".into(), number(samples as f64)),
+        ("has_x".into(), given("x")),
+        ("has_y".into(), given("y")),
+        ("mirrors".into(), number(heads.mirrors.len() as f64)),
+    ];
+    for (k, slots) in per_sample.iter().enumerate() {
+        for (name, slot) in LASER_PARTS.iter().zip(slots) {
+            ports.push((format!("{name}{k}"), parts[*slot].clone()));
+        }
+    }
+    for m in 0..AIM_MIRRORS {
+        let (folded, plane) = heads
+            .mirrors
+            .get(m)
+            .map(|mirror| (mirror.folded.clone(), mirror.direction.clone()))
+            .unwrap_or_else(|| (number(0.), number(0.)));
+        ports.push((format!("fold{m}"), folded));
+        ports.push((format!("normal{m}"), plane));
+    }
+    let kernel = lowering.kernel_named(Kernel::LaserOut, ports);
+    outputs.insert(
+        crate::laser::ELEMENT_OUTPUT.to_string(),
+        output(&kernel, "element"),
+    );
+    types.insert(
+        crate::laser::ELEMENT_OUTPUT.to_string(),
+        Output {
+            value_type: ValueType::Signal(SignalType::new(
+                Unit::Number,
+                Channels::components(1 + samples * crate::laser::SAMPLE_CHANNELS)?,
+            )),
+            rate: Rate::Frame,
+        },
+    );
+    Ok(())
 }
