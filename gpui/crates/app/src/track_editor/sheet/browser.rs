@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn presets_group_by_output_in_shipped_order() {
         let kinds: Vec<&str> = grouped("").iter().map(|(kind, _)| *kind).collect();
-        assert_eq!(kinds, ["Color", "Aim", "Strobe"]);
+        assert_eq!(kinds, ["Color", "Aim", "Strobe", "Laser"]);
         let color = &grouped("")[0].1;
         assert_eq!(color.first().map(|p| p.name.as_str()), Some("Wash"));
     }
