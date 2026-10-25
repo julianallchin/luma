@@ -88,7 +88,7 @@ mod tests {
                 },
             )]
             .into(),
-            beams: Vec::new(),
+            lasers: Vec::new(),
         })
     }
 

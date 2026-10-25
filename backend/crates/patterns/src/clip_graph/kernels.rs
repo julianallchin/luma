@@ -28,15 +28,16 @@ pub enum Kernel {
     Group,
     /// Positions folded across a mirror plane.
     Fold,
-    /// Each unit's rank in its span, shuffled per event.
+    /// Each unit's rank in its span, shuffled per event; a folded unit
+    /// shares its image's rank.
     Rank,
     /// The raw axis coordinate of each head within its span.
     Axis,
     /// A coordinate slid by a shift and read over a scale, wrapped on a
     /// ring: the shader's `(p - shift) / scale`.
     Slide,
-    /// Coherent noise over normalized position and time.
-    Noise4,
+    /// A Random's field over normalized position and its glided clock.
+    Random,
     /// A curve's shape between low and high, or through a gradient.
     Curve,
     /// The live events of one clock as one layer: the largest value per
@@ -53,9 +54,10 @@ pub enum Kernel {
     ColorOut,
     StrobeOut,
     AimOut,
-    /// Each beam's canvas place, join and alpha: its shape's place for its
-    /// index, scaled, turned and moved, then reflected by every mirror that
-    /// folded it.
+    /// Each laser element's alpha and, at each place along it, its centre,
+    /// frame and colour: an empty x or y is the kind's home place for its
+    /// index, scaled and turned; then every mirror that folded it reflects
+    /// it.
     LaserOut,
 }
 
@@ -74,7 +76,7 @@ impl Kernel {
         Kernel::Rank,
         Kernel::Axis,
         Kernel::Slide,
-        Kernel::Noise4,
+        Kernel::Random,
         Kernel::Curve,
         Kernel::Combine,
         Kernel::Newest,
@@ -98,7 +100,7 @@ impl Kernel {
             Kernel::Rank => "kernel/rank",
             Kernel::Axis => "kernel/axis",
             Kernel::Slide => "kernel/slide",
-            Kernel::Noise4 => "kernel/noise4",
+            Kernel::Random => "kernel/random",
             Kernel::Curve => "kernel/curve",
             Kernel::Combine => "kernel/combine",
             Kernel::Newest => "kernel/newest",
@@ -117,7 +119,8 @@ impl Kernel {
         )
     }
 
-    /// (numeric ports, fixed number ports, outputs).
+    /// (numeric ports, fixed number ports, outputs). A port of
+    /// [`Kernel::optional`] may be left unbound.
     fn ports(
         self,
     ) -> (
@@ -154,7 +157,11 @@ impl Kernel {
                 &["has_normal"],
                 &["positions", "folded", "normal"],
             ),
-            Kernel::Rank => (names(&["index", "unit", "span", "first"]), &[], &["value"]),
+            Kernel::Rank => (
+                names(&["index", "positions", "base", "unit", "span", "first"]),
+                &[],
+                &["value"],
+            ),
             Kernel::Axis => (
                 names(&[
                     "positions",
@@ -173,8 +180,8 @@ impl Kernel {
                 &["value"],
             ),
             Kernel::Slide => (names(&["a", "at", "shift", "scale"]), &["wrap"], &["value"]),
-            Kernel::Noise4 => (
-                names(&["positions", "span", "turns", "scale", "contrast"]),
+            Kernel::Random => (
+                names(&["positions", "span", "turns", "glide", "scale", "contrast"]),
                 &["uniform", "salt_lo", "salt_hi"],
                 &["value"],
             ),
@@ -212,16 +219,25 @@ impl Kernel {
                 (ports, &["base", "mirrors"], &["aim", "turn"])
             }
             Kernel::LaserOut => {
-                let mut ports = names(&[
-                    "x", "y", "size", "rotation", "join", "alpha", "index", "count",
-                ]);
+                let mut ports = names(&["alpha", "index", "count"]);
                 for m in 0..AIM_MIRRORS {
                     ports.push(format!("fold{m}"));
                     ports.push(format!("normal{m}"));
                 }
-                (ports, &["shape", "mirrors"], &["beam"])
+                ports.extend(laser_sample_ports());
+                (
+                    ports,
+                    &["kind", "samples", "has_x", "has_y", "mirrors"],
+                    &["element"],
+                )
             }
         }
+    }
+
+    /// Whether port `name` may be left unbound: a laser's samples past the
+    /// ones its graph reads.
+    fn optional(self, name: &str) -> bool {
+        self == Kernel::LaserOut && laser_sample_ports().any(|port| port == name)
     }
 
     pub(crate) fn definition(self) -> Definition {
@@ -231,7 +247,10 @@ impl Kernel {
             .map(|name| {
                 (
                     name.clone(),
-                    crate::graph::port(name, ValueType::Signal(SignalType::ANY), None),
+                    Input {
+                        optional: self.optional(name),
+                        ..crate::graph::port(name, ValueType::Signal(SignalType::ANY), None)
+                    },
                 )
             })
             .collect();
@@ -280,6 +299,16 @@ impl Kernel {
             body: Body::Primitive(Primitive::Kernel(self)),
         }
     }
+}
+
+/// A laser kernel's per-sample ports: x, y, size, rotation, r, g and b at
+/// each place along an element, `x0` to `b{n - 1}`.
+fn laser_sample_ports() -> impl Iterator<Item = String> {
+    (0..crate::laser::ALONG_SAMPLES).flat_map(|k| {
+        ["x", "y", "size", "rotation", "r", "g", "b"]
+            .into_iter()
+            .map(move |name| format!("{name}{k}"))
+    })
 }
 
 /// The broadcast shape of `signals`.
@@ -561,28 +590,57 @@ pub(crate) fn run(
         }
         Kernel::Rank => {
             let index = s("index");
+            let positions = s("positions");
+            let base = s("base");
             let unit = s("unit");
             let span = s("span");
             let first = s("first");
             let groups = spans(span, heads);
             // A random key per unit and event; ties (never in practice)
-            // fall back to cell order.
-            let ranking = |event: i64| {
+            // fall back to cell order. Only the units no mirror moved draw
+            // a key; a folded unit takes the rank of the one nearest the
+            // place it folded onto, so mirrored pairs stay paired.
+            let ranking = |event: i64, t: usize| {
                 let mut rank = vec![0.; heads];
+                let seed = crate::spatial::epoch_seed(batch.frame.seed, event);
                 for members in groups.values() {
-                    let mut units: Vec<(f64, usize)> = unit_heads(unit, members)
-                        .into_iter()
+                    let firsts = unit_heads(unit, members);
+                    let moved = |n: usize| {
+                        let (p, b) = (vector_at(positions, n, t), vector_at(base, n, t));
+                        (0..3).any(|a| (p[a] - b[a]).abs() > 1e-9)
+                    };
+                    let mut keepers: Vec<usize> =
+                        firsts.iter().copied().filter(|n| !moved(*n)).collect();
+                    if keepers.is_empty() {
+                        keepers = firsts.clone();
+                    }
+                    let mut keys: Vec<(f64, usize)> = keepers
+                        .iter()
                         .map(|n| {
-                            let id = &batch.fixtures[first.at(n, 0, 0) as usize];
-                            let seed = crate::spatial::epoch_seed(batch.frame.seed, event);
-                            (crate::spatial::threshold(id, seed), n)
+                            let id = &batch.fixtures[first.at(*n, 0, 0) as usize];
+                            (crate::spatial::threshold(id, seed), *n)
                         })
                         .collect();
-                    units.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-                    let place: HashMap<i64, f64> = units
+                    keys.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                    let kept: HashMap<usize, f64> = keys
                         .iter()
                         .enumerate()
-                        .map(|(r, (_, n))| (unit.at(*n, 0, 0) as i64, r as f64))
+                        .map(|(r, (_, n))| (*n, r as f64))
+                        .collect();
+                    let place: HashMap<i64, f64> = firsts
+                        .iter()
+                        .map(|n| {
+                            let p = vector_at(positions, *n, t);
+                            let distance = |k: &usize| {
+                                let q = vector_at(positions, *k, t);
+                                (0..3).map(|a| (p[a] - q[a]).powi(2)).sum::<f64>()
+                            };
+                            let nearest = keepers
+                                .iter()
+                                .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+                                .expect("a span has a unit");
+                            (unit.at(*n, 0, 0) as i64, kept[nearest])
+                        })
                         .collect();
                     for n in members {
                         rank[*n] = place[&(unit.at(*n, 0, 0) as i64)];
@@ -590,13 +648,16 @@ pub(crate) fn run(
                 }
                 rank
             };
-            let (_, times, width) = index.values().dim();
-            let mut cache: HashMap<i64, Vec<f64>> = HashMap::new();
+            let (_, index_times, width) = index.values().dim();
+            let place_times = positions.values().dim().1.max(base.values().dim().1);
+            let times = index_times.max(place_times);
+            let mut cache: HashMap<(i64, usize), Vec<f64>> = HashMap::new();
             let mut values = Array3::zeros((heads, times, width));
             for t in 0..times {
+                let at = if place_times == 1 { 0 } else { t };
                 for e in 0..width {
                     let k = index.at(0, t, e) as i64;
-                    let rank = cache.entry(k).or_insert_with(|| ranking(k));
+                    let rank = cache.entry((k, at)).or_insert_with(|| ranking(k, at));
                     for n in 0..heads {
                         values[[n, t, e]] = rank[n];
                     }
@@ -618,14 +679,16 @@ pub(crate) fn run(
             let shuffled = f("shuffled")? != 0.;
             let groups = spans(span, heads);
             if kind == 1 && shuffled {
-                // Shuffled, each unit is its own slot in a random order.
+                // Shuffled, each unit no mirror moved is its own slot in a
+                // random order; a folded unit shares its image's slot.
                 let (_, times, width) = rank.values().dim();
                 let mut values = Array3::zeros((heads, times, width));
                 for members in groups.values() {
-                    let count = unit_heads(unit, members).len().max(1) as f64;
-                    for n in members {
-                        for t in 0..times {
-                            for e in 0..width {
+                    for t in 0..times {
+                        for e in 0..width {
+                            let count =
+                                members.iter().map(|n| rank.at(*n, t, e)).fold(0., f64::max) + 1.;
+                            for n in members {
                                 values[[*n, t, e]] = (rank.at(*n, t, e) + 0.5) / count;
                             }
                         }
@@ -798,20 +861,21 @@ pub(crate) fn run(
             });
             single("value", events(values, &batch)?)
         }
-        Kernel::Noise4 => {
+        Kernel::Random => {
             let positions = s("positions");
             let span = s("span");
             let turns = s("turns");
+            let glide = s("glide");
             let scale = s("scale");
             let contrast = s("contrast");
             let uniform = f("uniform")? != 0.;
             let salt = (f("salt_lo")? as u64) | ((f("salt_hi")? as u64) << 32);
             let seed = batch.frame.seed ^ salt;
-            let mut dims = shape(&[turns, scale, contrast])?;
+            let mut dims = shape(&[turns, glide, scale, contrast])?;
             let place_times = positions.values().dim().1;
             if !uniform {
                 dims.0 = heads;
-                dims.1 = shape(&[turns, scale, contrast, positions])?.1;
+                dims.1 = shape(&[turns, glide, scale, contrast, positions])?.1;
             }
             // Positions over the span's largest extent, per span and time.
             let mut unit_positions = vec![[0.; 3]; heads * place_times];
@@ -847,13 +911,13 @@ pub(crate) fn run(
                         } else {
                             unit_positions[n * place_times + if place_times == 1 { 0 } else { t }]
                         };
-                        let size = scale.at(n, t, e).max(1e-6);
-                        let raw = super::noise::coherent_noise(
-                            [p[0] / size, p[1] / size, p[2] / size, turns.at(n, t, e)],
+                        values[[n, t, e]] = super::random::field(
+                            p,
+                            scale.at(n, t, e),
+                            super::random::glided(turns.at(n, t, e), glide.at(n, t, e)),
+                            contrast.at(n, t, e),
                             seed,
                         )?;
-                        let c = contrast.at(n, t, e);
-                        values[[n, t, e]] = ((raw - 0.5) * (1. + 3. * c) + 0.5).clamp(0., 1.);
                     }
                 }
             }
@@ -1063,54 +1127,83 @@ pub(crate) fn run(
         }
 
         Kernel::LaserOut => {
-            let layout = match f("shape")? as u8 {
-                1 => crate::laser::Shape::Circle,
-                2 => crate::laser::Shape::Grid,
-                _ => crate::laser::Shape::Fan,
-            };
+            let kind = crate::laser::Kind::from_code(f("kind")?);
+            let samples = f("samples")? as usize;
+            let given = [f("has_x")? != 0., f("has_y")? != 0.];
             let mirrors = f("mirrors")? as usize;
-            let names = [
-                "x", "y", "size", "rotation", "join", "alpha", "index", "count",
-            ];
-            let all: Vec<&Signal> = names.iter().map(|k| s(k)).collect();
+            let (alpha, index, count) = (s("alpha"), s("index"), s("count"));
+            let parts: Vec<[&Signal; 7]> = (0..samples)
+                .map(|k| {
+                    std::array::from_fn(|p| {
+                        s(&format!(
+                            "{}{k}",
+                            ["x", "y", "size", "rotation", "r", "g", "b"][p]
+                        ))
+                    })
+                })
+                .collect();
             let folds: Vec<(&Signal, &Signal)> = (0..mirrors)
                 .map(|m| (s(&format!("fold{m}")), s(&format!("normal{m}"))))
                 .collect();
-            let mut every = all.clone();
+            let mut every = vec![alpha, index, count];
+            every.extend(parts.iter().flatten());
             for (fold, normal) in &folds {
                 every.push(fold);
                 every.push(normal);
             }
             let times = shape(&every)?.1;
-            let mut beams = Array3::zeros((heads, times, crate::laser::BEAM_CHANNELS));
+            let width = 1 + samples * crate::laser::SAMPLE_CHANNELS;
+            let mut elements = Array3::zeros((heads, times, width));
             for n in 0..heads {
                 for t in 0..times {
-                    let v = |i: usize| all[i].at(n, t, 0);
-                    let (index, count) = (v(6) as usize, v(7) as usize);
-                    let mut at =
-                        crate::laser::place(layout, index, count, v(2).max(0.), v(3), [v(0), v(1)]);
+                    let (i, of) = (index.at(n, t, 0) as usize, count.at(n, t, 0) as usize);
                     // The canvas runs across (U) and up (Z): a mirror
                     // reflects it as it would the stage.
-                    for (fold, normal) in &folds {
-                        if fold.at(n, t, 0) > 0.5 {
-                            let reflected =
-                                crate::aim::reflect([at[0], 0., at[1]], vector_at(normal, n, t));
-                            at = [reflected[0], reflected[2]];
+                    let reflect = |p: [f64; 2]| {
+                        folds
+                            .iter()
+                            .filter(|(fold, _)| fold.at(n, t, 0) > 0.5)
+                            .fold(p, |p, (_, normal)| {
+                                let r =
+                                    crate::aim::reflect([p[0], 0., p[1]], vector_at(normal, n, t));
+                                [r[0], r[2]]
+                            })
+                    };
+                    elements[[n, t, 0]] = alpha.at(n, t, 0).clamp(0., 1.);
+                    for (k, part) in parts.iter().enumerate() {
+                        let v = |p: usize| part[p].at(n, t, 0);
+                        let turn = crate::laser::frame(v(2).max(0.), v(3));
+                        let home = crate::laser::apply(turn, kind.home(i, of));
+                        let at = reflect([
+                            if given[0] { v(0) } else { home[0] },
+                            if given[1] { v(1) } else { home[1] },
+                        ]);
+                        // A point's size and turn lay out its home places;
+                        // it has no figure of its own to scale.
+                        let frame = if kind.is_point() { [[0.; 2]; 2] } else { turn };
+                        let [a, c] = reflect([frame[0][0], frame[1][0]]);
+                        let [b, d] = reflect([frame[0][1], frame[1][1]]);
+                        let channels = [
+                            at[0],
+                            at[1],
+                            a,
+                            b,
+                            c,
+                            d,
+                            v(4).clamp(0., 1.),
+                            v(5).clamp(0., 1.),
+                            v(6).clamp(0., 1.),
+                        ];
+                        let base = 1 + k * crate::laser::SAMPLE_CHANNELS;
+                        for (ch, value) in channels.into_iter().enumerate() {
+                            elements[[n, t, base + ch]] = value;
                         }
-                    }
-                    let out = [at[0], at[1], v(4).clamp(0., 1.), v(5).clamp(0., 1.)];
-                    for (ch, value) in out.into_iter().enumerate() {
-                        beams[[n, t, ch]] = value;
                     }
                 }
             }
             single(
-                "beam",
-                signal(
-                    beams,
-                    Channels::components(crate::laser::BEAM_CHANNELS)?,
-                    &batch,
-                )?,
+                "element",
+                signal(elements, Channels::components(width)?, &batch)?,
             )
         }
     }

@@ -9,7 +9,7 @@
     edit.apply()
 
 A clip has a name, a time range, a selection, a blend mode, a seed and one
-graph. Build the graph with the bare builders (time, space, noise, audio,
+graph. Build the graph with the bare builders (time, space, along, random, audio,
 curve, mirror, shuffle, group, split, then color, aim, strobe or laser) and math on
 curves (cut * fade, max(a, b)), or start from preset("Chase"). add_clip and update_clip run the Rust checker on
 that clip at once and raise ClipError with its text.
@@ -504,13 +504,16 @@ class Edit:
         return _check_result(self._track._call("track.score_check", {"candidate": self.candidate}))
 
     def apply(self):
-        """Validate and commit the complete candidate, then close this edit.
+        """Validate and commit the candidate, then close this edit.
 
-        Advances luma.track and returns the saved score. A subagent saves into
-        its own draft, which its parent merges per clip when the child is done.
+        Writes only the clips this edit changed against the score it captured,
+        so a clip someone else saved meanwhile stays. Advances luma.track and
+        returns the score as saved. A subagent saves into its own draft, which
+        its parent merges per clip when the child is done.
         """
         self._open()
-        result = self._track._call("track.score_apply", {"candidate": self.candidate})
+        result = self._track._call("track.score_apply",
+                                   {"base": self._base, "candidate": self.candidate})
         self._track._advance(result)
         self._closed = True
         return result

@@ -371,6 +371,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn random_node_turns_every_saved_noise_node_into_a_gliding_random() {
+        use luma_patterns::clip_graph::{check, ClipGraph, Input, Kind};
+        use serde_json::{json, Value};
+
+        const RANDOM_NODE: i64 = 20_261_025_120_000;
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(directory.path().join("luma.db"))
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+        sqlx::migrate!("./migrations")
+            .run_to(RANDOM_NODE - 1, &pool)
+            .await
+            .unwrap();
+        let noise = |nodes: Value| {
+            let mut nodes = nodes;
+            nodes["curve1"] = json!({"kind": "curve", "inputs": {"x": {"node": "noise1"}}});
+            nodes["color1"] =
+                json!({"kind": "color", "inputs": {"brightness": {"node": "curve1"}}});
+            json!({"version": 3, "nodes": nodes})
+        };
+        let mut clouds = noise(json!({
+            "noise1": {"kind": "noise", "inputs": {"period": 8.0, "scale": 0.4, "contrast": 0.6}},
+            "noise2": {"kind": "noise", "inputs": {"period": {"node": "beats"}}},
+            "beats": {"kind": "value", "inputs": {"value": 2.0}},
+            "curve2": {"kind": "curve", "inputs": {"x": {"node": "noise2"}}}}));
+        clouds["nodes"]["color1"]["inputs"]["alpha"] = json!({"node": "curve2"});
+        let plain = noise(json!({"noise1": {"kind": "noise", "inputs": {}}}));
+        let still =
+            r#"{"version":3,"nodes":{"color1":{"kind":"color","inputs":{"brightness":0.5}}}}"#;
+        // A draft's seed is past i64: it must come back digit for digit.
+        let draft = json!({"clips": {"c-1": {"seed": 13369261119795889533_u64, "graph": clouds}}})
+            .to_string();
+        for (id, graph) in [("clouds", clouds.to_string()), ("plain", plain.to_string())]
+            .into_iter()
+            .chain([("still", still.to_owned())])
+        {
+            sqlx::query(
+                "INSERT INTO clips (id, uid, score_id, graph, graph_json, start, duration, seed,
+                                    selection_json, blend_mode)
+                 VALUES (?, 'u', 's', '', ?, 0, 4, '7', '{}', 'replace')",
+            )
+            .bind(id)
+            .bind(graph)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO drafts (id, uid, score_id, base_json, state_json) VALUES ('d', 'u', 's', ?, ?)",
+        )
+        .bind(&draft)
+        .bind(&draft)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let db = init_app_db_at(directory.path()).await.unwrap();
+        let graph = |id: &'static str| {
+            let db = db.clone();
+            async move {
+                let text: String = sqlx::query_scalar("SELECT graph_json FROM clips WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&db.0)
+                    .await
+                    .unwrap();
+                text
+            }
+        };
+        let parsed = |text: &str| {
+            let graph: ClipGraph = serde_json::from_str(text).unwrap();
+            check(&graph).unwrap();
+            graph
+        };
+        let clouds = parsed(&graph("clouds").await);
+        let first = &clouds.nodes["noise1"];
+        assert_eq!(first.kind, Kind::Random);
+        assert_eq!(first.inputs["every"], Input::Number(8.));
+        assert_eq!(first.inputs["glide"], Input::Number(1.));
+        assert_eq!(first.inputs["scale"], Input::Number(0.4));
+        assert_eq!(first.inputs["contrast"], Input::Number(0.6));
+        let wired = &clouds.nodes["noise2"];
+        assert_eq!(wired.inputs["every"], Input::wire("beats"));
+        assert!(!wired.inputs.contains_key("period"));
+        // No period is the same four beats as no every.
+        let plain = parsed(&graph("plain").await);
+        assert_eq!(plain.nodes["noise1"].kind, Kind::Random);
+        assert!(!plain.nodes["noise1"].inputs.contains_key("every"));
+        assert_eq!(
+            graph("still").await,
+            still,
+            "a graph with no noise is untouched"
+        );
+
+        let (base, state): (String, String) =
+            sqlx::query_as("SELECT base_json, state_json FROM drafts WHERE id = 'd'")
+                .fetch_one(&db.0)
+                .await
+                .unwrap();
+        for text in [base, state] {
+            assert!(text.contains("13369261119795889533"), "{text}");
+            let clip: Value = serde_json::from_str::<Value>(&text).unwrap()["clips"]["c-1"].clone();
+            assert_eq!(parsed(&clip["graph"].to_string()), clouds);
+        }
+    }
+
+    #[tokio::test]
     async fn an_older_library_is_refused_and_left_alone() {
         let directory = tempfile::tempdir().unwrap();
         // The last migration Luma 0.5.19 shipped.

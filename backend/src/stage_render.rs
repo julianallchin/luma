@@ -423,7 +423,7 @@ pub fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
     }
     UniverseState {
         primitives,
-        beams: Vec::new(),
+        lasers: Vec::new(),
     }
 }
 
@@ -922,7 +922,7 @@ mod tests {
     use crate::laser::{Basis, LaserRig, Projector};
     use crate::models::universe::PrimitiveState;
     use glam::DVec3;
-    use luma_patterns::laser::Beam;
+    use luma_patterns::laser::{Element, Figure, Sample};
     use luma_scene::venue::NodeKind as VenueNodeKind;
 
     fn patched(id: &str) -> PatchedFixture {
@@ -1143,7 +1143,7 @@ mod tests {
                     },
                 )]
                 .into(),
-                beams: Vec::new(),
+                lasers: Vec::new(),
             };
             primitive_state(Some(&state), "par", 0).unwrap()
         };
@@ -1213,14 +1213,17 @@ mod tests {
             zones: Vec::new(),
         };
         let state = UniverseState {
-            beams: vec![Beam {
+            lasers: vec![Element {
                 projector: "p".into(),
                 zone: String::new(),
-                path: 0,
+                layer: 0,
+                figure: Figure::Point,
                 s: 0.,
-                x: 0.,
-                y: 0.,
-                join: 0.,
+                samples: vec![Sample {
+                    at: [0., 0.],
+                    frame: [[0.; 2]; 2],
+                    rgb: [1.; 3],
+                }],
                 intensity: 1.,
             }],
             ..Default::default()

@@ -1610,8 +1610,9 @@ class Venue:
 
     def laser_zones(self) -> tuple[LaserZone, ...]:
         """The venue's laser zones, read live, in order. A laser clip with no
-        zone draws in the first; with none at all, ahead into the house 5 to
-        25 degrees up."""
+        zone draws in the first; with none at all, ahead into the house from 5
+        degrees up, two thirds of the narrowest projector's scan across and
+        up."""
         return tuple(LaserZone(row) for row in self._verb("venue.laser_zones", {})["zones"])
 
     def laser_zone(self, name: str, *, turn: Sequence[float], tilt: Sequence[float]) -> LaserZone:

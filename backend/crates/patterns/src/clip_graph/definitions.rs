@@ -5,8 +5,8 @@ use super::{Input, Kind};
 use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::Serialize;
 
-/// The most beams one laser clip draws on each projector.
-pub const MAX_BEAMS: usize = 64;
+/// The most elements one laser clip draws on each projector.
+pub const MAX_ELEMENTS: usize = 64;
 
 /// The type of an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -26,7 +26,7 @@ pub enum InputType {
     Heads,
     /// A wire from a `time` node: its events.
     Time,
-    /// A wire from `time`, `space`, `noise` or `audio`.
+    /// A wire from `time`, `space`, `along`, `random` or `audio`.
     Coordinate,
     /// A math node's items: two or more numbers and value wires.
     Values,
@@ -381,22 +381,36 @@ fn build(kind: Kind) -> Definition {
             vec![
                 heads(),
                 (
-                    "beams",
-                    number(Unit::Heads, "8").range(1., MAX_BEAMS as f64).fixed(),
+                    "count",
+                    number(Unit::Heads, "8")
+                        .range(1., MAX_ELEMENTS as f64)
+                        .fixed(),
+                ),
+                (
+                    "sides",
+                    InputDef::new(T::Number, None, "5")
+                        .range(
+                            crate::laser::MIN_SIDES as f64,
+                            crate::laser::MAX_SIDES as f64,
+                        )
+                        .fixed(),
                 ),
                 ("x", number(Unit::Share, "0").range(-1., 1.)),
                 ("y", number(Unit::Share, "0").range(-1., 1.)),
                 ("size", share("0.5")),
                 ("rotation", number(Unit::Degrees, "0").range(-180., 180.)),
-                ("join", share("0")),
+                (
+                    "color",
+                    InputDef::new(T::Color, Some(Unit::Rgb), "(1, 1, 1)").range(0., 1.),
+                ),
                 ("alpha", share("1")),
             ],
             vec![
                 (
-                    "shape",
+                    "kind",
                     SettingDef {
-                        options: &["fan", "circle", "grid"],
-                        default: "fan",
+                        options: &["beams", "line", "ring", "polygon", "grid"],
+                        default: "beams",
                     },
                 ),
                 (
@@ -408,6 +422,7 @@ fn build(kind: Kind) -> Definition {
                 ),
             ],
         ),
+        Kind::Along => (Produces::Coordinate, vec![], vec![]),
         Kind::Time => (
             Produces::Coordinate,
             vec![
@@ -448,11 +463,12 @@ fn build(kind: Kind) -> Definition {
                 ),
             ],
         ),
-        Kind::Noise => (
+        Kind::Random => (
             Produces::Coordinate,
             vec![
                 heads(),
-                ("period", number(Unit::Beats, "4").above(0.).clock()),
+                ("every", number(Unit::Beats, "4").above(0.).clock()),
+                ("glide", share("0.5")),
                 ("scale", number(Unit::Share, "0.5").above(0.)),
                 ("contrast", share("0")),
             ],

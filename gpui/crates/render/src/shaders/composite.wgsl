@@ -285,7 +285,8 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
 /// The haze's second scattering of its own glow (`haze_glow_sample.wgsl`)
 /// toward the camera, from the eye to the pixel's depth: where the haze is
 /// lit by its beams, it lights the haze round it, and that haze is seen.
-/// The glow is smooth over a cell, so a few steps through the grid hold it.
+/// The glow is smooth over a cell, so a few steps through the grid hold it,
+/// and their sum hides the trilinear read's creases.
 fn glow_along(uv: vec2<f32>, raw_depth: f32) -> vec3<f32> {
     if haze_glow.max.w <= 0.0 {
         return vec3<f32>(0.0);
@@ -313,7 +314,7 @@ fn glow_along(uv: vec2<f32>, raw_depth: f32) -> vec3<f32> {
         let t = span.x + (f32(i) + 0.5) * step;
         let p = eye + ray_dir * t;
         let scattering = sigma * medium_density(cfg.medium, p);
-        light += scattering * haze_glow_fluence(p) * exp(-sigma * t) * step;
+        light += scattering * haze_glow_fluence_coarse(p) * exp(-sigma * t) * step;
     }
     return light;
 }

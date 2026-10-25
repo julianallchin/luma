@@ -143,7 +143,7 @@ commands! {
         venue_id: String,
         selection: Selection,
         seed: u64,
-        beams: Option<usize>,
+        elements: Option<usize>,
     ) -> Vec<luma_patterns::Cell>;
 
     agent_threads::agent_thread_list(
@@ -271,7 +271,7 @@ commands! {
     scores::delete_score(id: String) -> ();
     scores::rename_score(score_id: String, name: String) -> ();
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
-    scores::apply_score_document(score_id: String, score: luma_patterns::Score) -> ();
+    scores::edit_score_document(score_id: String, edit: luma_patterns::ScoreEdit) -> ();
     scores::preview_score_clip(score_id: String, clip_id: String, score: Option<luma_patterns::Score>) -> AnnotationPreview;
     scores::clip_graph_definitions() -> Value;
     scores::clip_presets() -> Value;

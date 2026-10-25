@@ -5,9 +5,10 @@
 //! the key is read back off it. A score id is a uuid and
 //! carries no colon, so the split is unambiguous however the key is spelled.
 //!
-//! [`save_score`] writes only what differs. There is no revision token: a
-//! stale candidate overwrites the rows it touches one column at a time, so two
-//! people editing different clips of one score do not collide.
+//! [`save_score`] makes the rows match a whole document, writing only what
+//! differs. A writer's stale copy would revert every clip someone else wrote
+//! since it read, so a writer sends a [`luma_patterns::ScoreEdit`] and the
+//! document saved is that edit over the rows as they stand.
 
 use luma_patterns::{BlendMode, Clip, Score, Selection};
 use sqlx::{Row, SqliteConnection};
