@@ -1,7 +1,7 @@
 use crate::clip_graph::ClipGraph;
 use crate::{Error, Frame, Library, PreparedGraph, Result, Value};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -197,6 +197,56 @@ impl Score {
         cells: &[crate::Cell],
     ) -> Result<BTreeMap<String, Value>> {
         self.prepare_clip(base, clip_id, cells)?.evaluate(beat)
+    }
+}
+
+/// One writer's changes to a score, against the copy it read: each clip it
+/// added or changed, whole, and each id it removed.
+///
+/// Applied over whatever is stored now, so a clip the writer did not touch
+/// stays as storage has it — another writer's new clip survives, and a clip
+/// another writer deleted stays deleted. A clip both changed is the later
+/// writer's, whole.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScoreEdit {
+    #[serde(default)]
+    pub clips: BTreeMap<String, Clip>,
+    #[serde(default)]
+    pub removed: BTreeSet<String>,
+}
+impl ScoreEdit {
+    /// What turns `base` into `candidate`.
+    #[must_use]
+    pub fn between(base: &Score, candidate: &Score) -> Self {
+        Self {
+            clips: candidate
+                .clips
+                .iter()
+                .filter(|(id, clip)| base.clips.get(*id) != Some(*clip))
+                .map(|(id, clip)| (id.clone(), clip.clone()))
+                .collect(),
+            removed: base
+                .clips
+                .keys()
+                .filter(|id| !candidate.clips.contains_key(*id))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.clips.is_empty() && self.removed.is_empty()
+    }
+
+    /// `score` with this edit on it.
+    #[must_use]
+    pub fn applied_to(&self, score: &Score) -> Score {
+        let mut clips = score.clips.clone();
+        clips.retain(|id, _| !self.removed.contains(id));
+        clips.extend(self.clips.clone());
+        Score { clips }
     }
 }
 
