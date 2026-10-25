@@ -15,7 +15,7 @@ functions. The Rust checker reads the same graph that the inspector shows.
 3. Every node has one output wire. A wire goes into an input of another node.
 4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
-6. Coordinate nodes give a raw coordinate per head: `time`, `space`, `noise`, `audio`.
+6. Coordinate nodes give a raw coordinate per head: `time`, `space`, `random`, `audio`.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color. `math` combines values.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no `every` = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
@@ -49,7 +49,7 @@ back as variables, so a round trip keeps the names. It writes a curve or a
 math with a numbered id that one input reads in place:
 `space(shift=curve(t, 'Ramp up'))`, `color(brightness=cut * fade)`. An id is
 a Python name of at most 32 characters that is not a builder name (`time`,
-`space`, `noise`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
+`space`, `random`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
 `split`, `color`, `aim`, `strobe`, `laser`, `preset`, `max`, `min`) or a keyword.
 
 ## Values and units
@@ -89,7 +89,7 @@ of curves is an error: to multiply, write `brightness=cut * fade`.
 |---|---|---|
 | time | `time` | `shuffle.time` (and `curve.x`) |
 | heads | `mirror`, `shuffle`, `group`, `split` | any `heads` input |
-| coordinate | `time`, `space`, `noise`, `audio` | `curve.x` |
+| coordinate | `time`, `space`, `random`, `audio` | `curve.x` |
 | number | `curve` (number), `math` | any number input, a curve's `low`/`high` |
 | vector | `curve` (vector), `math` | any vector input, a curve's `low`/`high` |
 | color | `curve` (color), `math` | `color.color` |
@@ -295,20 +295,24 @@ is a narrow curve with scale 1 (`[[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]`),
 not a smaller scale, which tiles. A curve over time on a wrapped scale
 zooms: `scale` 0.5 → 0.125 turns 2 copies into 8.
 
-**noise** `noise(heads=None, period=None, scale=None, contrast=None)` → coordinate
+**random** `random(heads=None, every=None, glide=None, scale=None, contrast=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
-| period | number | beats | above 0 | 4 |
+| every | number | beats | above 0 | 4 |
+| glide | number | share | 0–1 | 0 |
 | scale | number | share | above 0 | one value for all heads |
 | contrast | number | share | 0–1 | 0 |
 
-Smooth noise 0–1 over head position and time. `scale` is a share of the
-rig's largest extent: 0.5 gives slow clouds, 0.02 gives each head its own
-wander. `period` is the beats for the noise to move to a new value.
-`contrast` 1 spreads the values 4 times wider about 0.5, clipped to 0–1.
-Each noise node has its own stream.
+Random gives a value, Shuffle gives an order. Each turn of `every` draws a
+new value 0–1 per head. `glide` 0 jumps on the turn and holds; 1 drifts the
+whole turn (slow clouds, a wandering aim); 0.25 holds three quarters of the
+turn, then eases to the next value. `scale` is a share of the rig's largest
+extent: how much neighbouring heads agree. 0.5 gives broad patches, 0.02
+gives each head its own value. Mirrored heads get one value. `contrast` 1
+spreads the values 4 times wider about 0.5, clipped to 0–1. Each random node
+has its own stream.
 
 **audio** `audio(low_hz=None, high_hz=None)` → coordinate
 
@@ -401,15 +405,16 @@ Folds the heads across a plane, as a shader's reflect. `at` places the plane
 along the direction, across the positions of the selection before any fold:
 0.5 is always the centre, also for stacked mirrors. Heads on the low side
 reflect. A mirror moves heads, never a space's ruler. An `order` space
-reads a folded head at the slot it folds onto; a shuffled order does not
-change. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
+reads a folded head at the slot it folds onto, shuffled or not. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
 symmetry.
 
 **shuffle** `shuffle(heads=None, time=None)` → heads
 
 A random order of the heads, from the clip seed. `time` is a wire from a
 time node: with `every`, a new order per event; without, one order.
-Positions do not change. Read it with `space(kind="order")`.
+Positions do not change. Read it with `space(kind="order")`. A mirror's
+pairs keep one slot, with the mirror before or after the shuffle. Shuffle
+gives an order, random gives a value.
 `curve(space(shuffle(time=time(every=1)), kind="order"), [[0, 1], [0.3, 1], [0.3, 0], [1, 0]])`
 lights a random 30% of the heads each beat.
 

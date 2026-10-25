@@ -54,7 +54,7 @@ name on its card: `pill = curve(...)`.
 | Sparkle | `k = time(every=0.125, duration=0.5); order = shuffle(time=k); rank = space(heads=order, kind="order"); color(brightness=curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]) * curve(k, "Spike"))` | one time node: a random 30% × a spike over time |
 | Build | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp up"), kind="order"); color(brightness=curve(rank, "Step down"))` | each head turns on when the clip's progress passes its random number: the shuffled rank shifted by progress over the clip, then a step. Stretches with the clip |
 | Dissolve | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp down"), kind="order"); color(brightness=curve(rank, "Step down"))` | as Build backwards: each head goes off when the clip's progress passes its random number |
-| Clouds | `cloud = noise(period=8, scale=0.5); color(color=curve(cloud, "Ramp up", gradient="Ocean"), brightness=curve(cloud, "Ramp up", low=0.2, high=1))` | one noise → two curves |
+| Clouds | `cloud = random(every=8, glide=1, scale=0.5); color(color=curve(cloud, "Ramp up", gradient="Ocean"), brightness=curve(cloud, "Ramp up", low=0.2, high=1))` | one random → two curves |
 | Sparkle rain | `bars = group(); columns = split(); k = time(every=0.25, duration=1); order = shuffle(heads=bars, time=k); drop = space(heads=columns, direction=(0, 0, -1), shift=curve(k, "Ramp up", low=-0.3, high=1), scale=0.3); rank = space(heads=order, kind="order"); color(brightness=curve(drop, "Comet") * curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]))` | needs vertical bars; each event's fall is a shift down each bar; × a random 20% per bar |
 
 ## Movement
@@ -102,7 +102,7 @@ name on its card: `pill = curve(...)`.
 | Pinwheel | `turn = space(kind="angle"); t = time(every=4, phase=curve(turn, "Ramp up", high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, "Cosine", low=high, high=low), pitch=curve(t, "Sine", low=low, high=high))` | Circle with phase by angle |
 | Scissor | `halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, "Sine", low=30, high=-30))` | mirrored heads yaw the other way |
 | Up/down flip | `t = time(every=2); aim(direction=D, pitch=curve(t, "Square", low=-30, high=30))` | held pitch |
-| Ballyhoo | `period = value(4); scale = value(0.02); drift = noise(period=period, scale=scale); wander = noise(period=period, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, "Ramp up", low=high, high=low), pitch=curve(wander, "Ramp up", low=low, high=high))` | two noise nodes, two streams, one period, scale and swing |
+| Ballyhoo | `period = value(4); scale = value(0.02); drift = random(every=period, glide=1, scale=scale); wander = random(every=period, glide=1, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, "Ramp up", low=high, high=low), pitch=curve(wander, "Ramp up", low=low, high=high))` | two random nodes, two streams, one period, scale and swing |
 
 Motion presets ship with blend `offset`. Put a Position clip (`replace`)
 under them.

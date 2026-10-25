@@ -62,7 +62,7 @@ graph to `edit.update_clip(clip, graph=...)`.
 - **Events come from `time(every=...)`.** For once over the clip, give
   `time()` no every. Every, duration and delay are beats; phase is degrees (360 is one event).
 - **Reuse a variable to share a node.** `t = time(every=2)` used twice is one
-  time node. Two `noise(...)` calls are two streams.
+  time node. Two `random(...)` calls are two streams.
 - **Two ways to move.** Slide the place: a curve over time or audio on
   `space(shift=...)` moves a shape along the heads with its own ease
   (chase, bounce, meter); on `space(scale=...)` it grows (bloom). Or give
