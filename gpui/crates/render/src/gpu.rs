@@ -251,18 +251,18 @@ struct CompositeUniform {
 
 /// Transport constants the look was dialled in on (spec §3.1). They are baked:
 /// the keyboard dials that produced them do not port.
-struct Transport;
+pub(crate) struct Transport;
 impl Transport {
     const BEAM_GAIN: f32 = 180.0;
     const WHITE_LEAK: f32 = 0.03;
-    const PHASE_G: f32 = 0.6;
+    pub(crate) const PHASE_G: f32 = 0.6;
     const NEAR_CLAMP: f32 = 0.06;
     /// Extinction per unit haze density, in 1/metres. One σ serves the whole
     /// transport: the haze pass integrates in-scatter against it and the
     /// composite attenuates the scene by it — if they disagree, surfaces and
     /// the medium disagree about how much fog sits in front of them and
     /// geometry silhouettes through the fog.
-    const EXTINCTION: f32 = 0.06;
+    pub(crate) const EXTINCTION: f32 = 0.06;
 }
 
 /// The output texture's format: the byte order a readback is written in, or
@@ -1130,6 +1130,7 @@ pub struct Gpu {
     environment: EnvironmentPipelines,
     atmosphere: AtmospherePipelines,
     sun_shafts: crate::sun_shafts::Pipelines,
+    laser: crate::laser::Pipelines,
     /// The local reflection probes' capture, relight and prefilter.
     probes: crate::probes::Pipelines,
     scene_layout: wgpu::BindGroupLayout,
@@ -1606,6 +1607,7 @@ impl Gpu {
             &queue,
             &format!("{bindings}{}", include_str!("shaders/sun_shafts.wgsl")),
         );
+        let laser = crate::laser::Pipelines::new(&device, crate::post::SCENE_FORMAT);
         let fixture_light = include_str!("shaders/fixture_light.wgsl");
         let visibility = include_str!("shaders/visibility.wgsl");
         let haze_visibility = visibility.replace("@group(3) @binding(11)", "@group(0) @binding(8)");
@@ -2460,6 +2462,7 @@ impl Gpu {
             environment,
             atmosphere,
             sun_shafts,
+            laser,
             probes,
             scene_layout,
             material_layout,
@@ -5523,6 +5526,24 @@ impl Renderer {
                     pass.set_bind_group(2, &sky_bg, &[]);
                     pass.draw(0..3, 0..1);
                 }
+                // Lasers add their light to the scene before the camera sees
+                // it, so glare blooms them as it does the beams.
+                if let Some(scene) = &post {
+                    self.gpu.laser.encode(
+                        &self.gpu.device,
+                        &mut encoder,
+                        scene,
+                        &depth_view,
+                        &crate::laser::FrameInput {
+                            scans: &frame.lasers,
+                            view_proj,
+                            eye: frame.camera.eye,
+                            haze_density,
+                            width: t_width,
+                            height: t_height,
+                        },
+                    );
+                }
                 if post.is_some() {
                     self.post.encode(
                         &self.gpu.post,
@@ -7809,6 +7830,7 @@ mod tests {
             overlays: Vec::new(),
             floor: None,
             fixture_cones,
+            lasers: Vec::new(),
             fixture_shadow_capacity_hint: 0,
             fixture_surface_lighting: true,
             beam_proxy: false,
@@ -7911,6 +7933,7 @@ mod tests {
                 depth,
             }],
             fixture_cones: Vec::new(),
+            lasers: Vec::new(),
             fixture_shadow_capacity_hint: 0,
             fixture_surface_lighting: false,
             beam_proxy: false,

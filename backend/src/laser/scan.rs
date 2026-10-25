@@ -21,8 +21,9 @@ pub const FRAME_RATE: u32 = 30;
 /// off.
 const BLANK_STEP: f64 = 0.08;
 /// Points spent still at either end of a jump, so the mirrors settle before
-/// the light turns on and do not trail it when it turns off.
-const SETTLE: usize = 3;
+/// the light turns on and do not trail it when it turns off: about two of
+/// the mirrors' time constants at 30k points a second.
+const SETTLE: usize = 8;
 /// The longest move between two points of a lit line: short enough that the
 /// mirrors follow the line rather than cut its corners.
 const LINE_STEP: f64 = 0.02;
