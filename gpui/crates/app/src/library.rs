@@ -115,6 +115,12 @@ pub struct NavigationFixture {
     /// Per-write delays consumed by the FIFO session actor. A delayed A then
     /// immediate B must still persist B.
     pub session_write_delays: Vec<Duration>,
+    /// Another writer's edit, landed while the editor's next score save is in
+    /// flight: written and announced as a download, and the save held until
+    /// the editor has begun re-reading the score. Taken once.
+    pub outside_score_edit: Option<luma_patterns::ScoreEdit>,
+    /// Woken by every score read, for [`Self::outside_score_edit`].
+    pub score_reads: Arc<tokio::sync::Notify>,
 }
 
 struct LibraryEvents {
@@ -1870,6 +1876,12 @@ impl Library {
         score_id: &str,
         track_id: &str,
     ) -> impl Future<Output = Result<ScoreContents, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        self.navigation_fixture
+            .lock()
+            .unwrap()
+            .score_reads
+            .notify_waiters();
         let services = self.services.clone();
         let score_id = score_id.to_owned();
         let track_id = track_id.to_owned();
@@ -1896,17 +1908,58 @@ impl Library {
         }
     }
 
-    /// Save a whole score. The rows it touches are overwritten — there is no
-    /// revision to compare against and nothing to lose a race with.
-    pub(crate) fn apply_score_document(
+    /// Save the editor's changes against the score it read. A clip the edit
+    /// does not name keeps whatever storage holds now, so an agent's write
+    /// that landed since the read survives.
+    pub(crate) fn edit_score_document(
         &self,
         score_id: &str,
-        score: &luma_patterns::Score,
+        edit: &luma_patterns::ScoreEdit,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "apply_score_document",
-            json!({"scoreId":score_id,"score":score}),
-        )
+        let args = json!({"scoreId":score_id,"edit":edit});
+        #[cfg(feature = "agent")]
+        let outside = self.outside_score_edit(score_id);
+        let services = self.services.clone();
+        let task = self.runtime().spawn(async move {
+            #[cfg(feature = "agent")]
+            if let Some(outside) = outside {
+                outside.await?;
+            }
+            command(&services, "edit_score_document", &args).await
+        });
+        async move {
+            task.await.map_err(|error| {
+                LibraryError::at("edit_score_document", Cause::Cancelled(error.to_string()))
+            })?
+        }
+    }
+
+    /// [`NavigationFixture::outside_score_edit`], once: write it, announce it
+    /// as a download, and resolve when the editor has begun re-reading.
+    #[cfg(feature = "agent")]
+    fn outside_score_edit(
+        &self,
+        score_id: &str,
+    ) -> Option<impl Future<Output = Result<(), LibraryError>> + Send + use<>> {
+        let (edit, reread) = {
+            let mut fixture = self.navigation_fixture.lock().unwrap();
+            (
+                fixture.outside_score_edit.take()?,
+                fixture.score_reads.clone(),
+            )
+        };
+        let services = self.services.clone();
+        let replica_changed = self.replica_changed.clone();
+        let args = json!({"scoreId":score_id,"edit":edit});
+        Some(async move {
+            command::<()>(&services, "edit_score_document", &args).await?;
+            let read = reread.notified();
+            tokio::pin!(read);
+            read.as_mut().enable();
+            let _ = replica_changed.send(vec!["clips".into()]);
+            read.await;
+            Ok(())
+        })
     }
 
     pub(crate) fn preview_score_clip(

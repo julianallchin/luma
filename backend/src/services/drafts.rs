@@ -6,7 +6,7 @@
 //! parent did meanwhile survives — a whole-document overwrite would silently
 //! undo it.
 
-use luma_patterns::Score;
+use luma_patterns::{Score, ScoreEdit};
 use sqlx::SqliteConnection;
 
 use crate::database::local::scores::rows;
@@ -91,20 +91,8 @@ pub async fn apply(
 pub async fn merge(connection: &mut SqliteConnection, draft_id: &str) -> Result<Score, String> {
     let (base, state) = both(&mut *connection, draft_id).await?;
     let (score_id, uid) = scope(&mut *connection, draft_id).await?;
-    let mut live = rows::load_score(&mut *connection, &score_id).await?;
-
-    for (id, clip) in &state.clips {
-        if base.clips.get(id) != Some(clip) {
-            live.clips.insert(id.clone(), clip.clone());
-        }
-    }
-    for id in base
-        .clips
-        .keys()
-        .filter(|id| !state.clips.contains_key(*id))
-    {
-        live.clips.remove(id);
-    }
+    let live = ScoreEdit::between(&base, &state)
+        .applied_to(&rows::load_score(&mut *connection, &score_id).await?);
     rows::save_score(&mut *connection, &score_id, &uid, &live).await?;
     discard(connection, draft_id).await?;
     Ok(live)
