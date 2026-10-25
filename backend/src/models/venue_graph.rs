@@ -184,9 +184,8 @@ impl VenueGraphRows {
 /// One node's solved pose, in the stored convention: metres and radians, data
 /// space (Z-up).
 ///
-/// This is what `stage_pieces.pos_*`/`rot_*` and `fixtures.pos_*`/`rot_*` used
-/// to hold, and it is derived on every read rather than stored — see the design
-/// doc's "Live graph, no baked poses, no hybrid."
+/// Derived on every read rather than stored — see the design doc's "Live
+/// graph, no baked poses, no hybrid."
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedNode {

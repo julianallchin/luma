@@ -292,48 +292,54 @@ impl Fixture {
             .execute(&self.pool)
             .await
             .unwrap();
+        let root = crate::venue_graph::root_id(&self.venue_id);
+        self.seed_node(&root, "venue", None, None, None, &[]).await;
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
                 "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
-                    manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z)
+                    manufacturer, model, mode_name, fixture_path, label)
                  VALUES (?, ?, ?, 1, ?, 8, 'Chauvet', 'SlimPAR', '8-Channel',
-                    'Chauvet/SlimPAR.qxf', ?, ?, 0.0, 2.0)",
+                    'Chauvet/SlimPAR.qxf', ?)",
             )
             .bind(id)
             .bind(OWNER)
             .bind(&self.venue_id)
             .bind(1 + i as i64 * 8)
             .bind(format!("PAR {}", i + 1))
-            .bind(i as f64)
             .execute(&self.pool)
             .await
             .unwrap();
+            // Hung from the grid two metres up, a metre apart.
+            self.seed_node(
+                id,
+                "fixture",
+                Some("Chauvet/SlimPAR.qxf"),
+                Some(&format!("PAR {}", i + 1)),
+                Some((&root, "clamp", "rig")),
+                &[("u", i as f64), ("v", 0.0), ("trim", 2.0)],
+            )
+            .await;
         }
-        // A deck with a CDJ standing on it. Real catalog ids, because what is
-        // under test is the conversion recovering *which socket met which* —
-        // an id the catalog has dropped exercises the fallback instead.
-        sqlx::query(
-            "INSERT INTO stage_pieces
-                (id, venue_id, mesh_path, kind, label, pos_x, pos_y, pos_z,
-                 rot_x, rot_y, rot_z, scale, parent_piece_id)
-             VALUES ('pie-truss', ?, 'stage_lab/stage_praticavel_2x1x1.glb', 'floor',
-                     'Front riser', 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, NULL)",
+        // A deck with a CDJ standing on it. Real catalog ids, so the sockets
+        // the joint names are ones the catalog actually has.
+        self.seed_node(
+            "pie-truss",
+            "stage",
+            Some("stage_lab/stage_praticavel_2x1x1.glb"),
+            Some("Front riser"),
+            Some((&root, "bottom", "floor")),
+            &[("u", 1.0), ("v", 2.0), ("trim", 0.0)],
         )
-        .bind(&self.venue_id)
-        .execute(&self.pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO stage_pieces
-                (id, venue_id, mesh_path, kind, label, pos_x, pos_y, pos_z,
-                 rot_x, rot_y, rot_z, scale, parent_piece_id)
-             VALUES ('pie-cdj', ?, 'stage_lab/cdj_3000x.glb', 'cdj', 'Deck',
-                     0.5, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0, 'pie-truss')",
+        .await;
+        self.seed_node(
+            "pie-cdj",
+            "piece",
+            Some("stage_lab/cdj_3000x.glb"),
+            Some("Deck"),
+            Some(("pie-truss", "mount", "top")),
+            &[("u", 0.5), ("v", 0.0), ("trim", 0.0)],
         )
-        .bind(&self.venue_id)
-        .execute(&self.pool)
-        .await
-        .unwrap();
+        .await;
         sqlx::query(
             "INSERT INTO fixture_groups (id, venue_id, name, axis_lr, display_order)
              VALUES ('grp-1', ?, 'front_wash', -1.0, 0)",
@@ -349,6 +355,50 @@ impl Fixture {
         .execute(&self.pool)
         .await
         .unwrap();
+    }
+
+    /// One venue-graph node, written as the rows a synced venue holds.
+    async fn seed_node(
+        &self,
+        id: &str,
+        kind: &str,
+        catalog_ref: Option<&str>,
+        label: Option<&str>,
+        at: Option<(&str, &str, &str)>,
+        params: &[(&str, f64)],
+    ) {
+        sqlx::query(
+            "INSERT INTO venue_nodes
+                 (id, uid, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(OWNER)
+        .bind(&self.venue_id)
+        .bind(kind)
+        .bind(catalog_ref)
+        .bind(label)
+        .bind(at.map(|(parent, _, _)| parent))
+        .bind(at.map(|(_, mine, _)| mine))
+        .bind(at.map(|(_, _, theirs)| theirs))
+        .bind(at.map(|_| 0.0))
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        for (key, value) in params {
+            sqlx::query(
+                "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(OWNER)
+            .bind(&self.venue_id)
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        }
     }
 
     async fn seed_score(&self) {
@@ -530,16 +580,12 @@ async fn full_assembly_covers_every_schema_branch() {
     // `cos(PI/2)` lands at 6e-17, not 0) and are compared with a tolerance.
     close3(&fixtures[0]["face"], [0.0, 0.0, -1.0]);
     assert_eq!(fixtures[0]["facing_word"], "down");
-    // Generated sets are snapshotted into saved groups when the venue is
-    // initialized. The provider serves those collections beside front_wash.
+    // The provider serves the venue's saved groups, and nothing derived: a
+    // generated set exists only once someone has asked for it to be saved.
     let groups = at(&v, "venue.group_snapshot");
     let rows = groups.as_array().expect("the tree is a list");
     let names: Vec<&str> = rows.iter().map(|g| g["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"front_wash"), "{names:?}");
-    assert!(
-        names.len() > 1,
-        "the saved generated sets come with it: {names:?}"
-    );
+    assert_eq!(names, ["front_wash"]);
     let authored = rows
         .iter()
         .find(|g| g["name"] == "front_wash")
@@ -968,8 +1014,6 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
     use crate::database::local::venue_graph as venue_graph_db;
 
     let f = Fixture::new().await;
-    // The first assembly converts the venue off the old schema, which is what
-    // gives it a graph root to hang an array from.
     let before = at(&root(&f.assemble(&f.scope()).await.0), "venue.pieces")
         .as_array()
         .unwrap()
@@ -981,7 +1025,7 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
     let parent = venue_graph_db::root_id(&mut access)
         .await
         .unwrap()
-        .expect("the conversion left a root");
+        .expect("the venue has a root");
     let array = venue_graph_db::insert_node(
         &mut access,
         "array",
@@ -1058,11 +1102,14 @@ async fn missing_mix_cache_with_a_missing_source_file_says_so() {
 async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
     let f = Fixture::new().await;
     // Nonzero depth and height catch swapped axes and an omitted depth mirror.
-    // Seed before migration, so the resolver converts this stored data pose.
-    sqlx::query("UPDATE fixtures SET pos_x = 1.25, pos_y = 3.5, pos_z = 4.75 WHERE id = 'fix-a'")
-        .execute(&f.pool)
-        .await
-        .unwrap();
+    for (key, value) in [("u", 1.25), ("v", 3.5), ("trim", 4.75)] {
+        sqlx::query("UPDATE venue_node_params SET value = ? WHERE node_id = 'fix-a' AND key = ?")
+            .bind(value)
+            .bind(key)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
     let (manifest, store) = f.assemble(&f.scope()).await;
     let v = root(&manifest);
 
@@ -1083,7 +1130,7 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
 
     let positions = read_f32(&manifest, &store, "venue.positions");
     assert_eq!(positions.len(), 6);
-    assert_eq!(&positions[..3], &[1.25, -3.5, 4.75]);
+    assert_eq!(&positions[..2], &[1.25, -3.5]);
     for (row, (_, data)) in positions.chunks_exact(3).zip(&resolved) {
         assert_eq!(
             row,
@@ -1094,7 +1141,7 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
     let patch = at(&v, "venue.fixtures").as_array().unwrap();
     let fixture = patch.iter().find(|f| f["id"] == "fix-a").unwrap();
     assert_eq!(fixture["at"], json!([1.25, -3.5]));
-    assert_eq!(fixture["z"], 4.75);
+    assert!((fixture["z"].as_f64().unwrap() - f64::from(positions[2])).abs() < 1e-5);
 }
 
 #[tokio::test]

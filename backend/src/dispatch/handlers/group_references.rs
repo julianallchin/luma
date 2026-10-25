@@ -48,7 +48,6 @@ pub async fn missing_venue_groups(
     services: &AppServices,
     venue_id: String,
 ) -> Result<Vec<MissingGroup>, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     let known: HashSet<String> = groups::GroupSources::read(&services.fixtures_root, &mut access)

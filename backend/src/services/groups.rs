@@ -11,10 +11,7 @@ use once_cell::sync::Lazy;
 use rand::prelude::*;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::database::local;
 use crate::database::local::fixtures as fixtures_db;
-use crate::database::local::group_overrides as overrides_db;
-use crate::database::local::group_overrides::GroupOverride;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::fixtures::layout::{fixture_mount, head_geometry};
@@ -129,26 +126,6 @@ async fn get_cached_venue_fixtures(
                 *entry = HeadMembership::All;
             } else if let HeadMembership::Heads(heads) = entry {
                 heads.insert(row.head_index as usize);
-            }
-        }
-
-        // Derived groups are selectable by name like anything else: a score
-        // naming `spots_top` has to resolve, and there is one membership
-        // answer rather than a derived one and an authored one. A venue whose
-        // graph has not been built has no structure to derive from, which is an
-        // empty tree rather than an error.
-        if local::venue_graph::root_id(access).await?.is_some() {
-            for node in GroupSources::read(resource_path, access).await?.tree() {
-                if node.name.is_empty() {
-                    continue;
-                }
-                for fixture_id in &node.fixtures {
-                    by_fixture
-                        .entry(fixture_id.clone())
-                        .or_default()
-                        .entry(node.name.clone())
-                        .or_insert(HeadMembership::All);
-                }
             }
         }
 
@@ -744,19 +721,17 @@ pub async fn resolve_selection_expression_with_path(
 /// Everything the group tree is made of, read once.
 ///
 /// **The** read: every surface that asks a venue what its groups are asks
-/// this, and gets one answer — the derivation, the overrides on top of it, and
-/// saved `fixture_groups` rows. Derivation is used only while converting an
-/// older library or explicitly generating a starting set.
+/// this, and gets one answer — the saved `fixture_groups` rows. Derivation
+/// runs only when someone asks for a starting set
+/// ([`snapshot_generated_groups`]), which saves what it derives.
 ///
-/// One derivation per command. The tree, a node in it, the derivation path an
-/// override row records and the tree the command hands back afterwards are all
-/// questions about the same solve — asking each of them separately re-solved
-/// the venue and re-parsed every `.qxf` in it, four times over for a rename.
+/// One solve per command. The tree, a node in it and the tree the command
+/// hands back afterwards are all questions about the same solve.
 pub struct GroupSources {
     root: PathBuf,
     solved: Solved,
+    /// Empty on a read; [`snapshot_generated_groups`] fills it.
     derived: DerivedTree,
-    overrides: Vec<GroupOverride>,
     manual: Vec<ManualGroup>,
     /// Every authored membership row, which is where per-head membership lives.
     /// Derivation has none: a derived set holds whole fixtures.
@@ -766,30 +741,15 @@ pub struct GroupSources {
 }
 
 impl GroupSources {
-    /// Solve the venue, derive, and read the two group tables beside it.
+    /// Solve the venue and read the group tables beside it.
     ///
     /// # Errors
-    /// Fails if the rows cannot be read, if the catalog cannot be resolved, or
-    /// if the venue has no graph root (`crate::venue_graph::ensure_migrated`
-    /// has never run for it).
+    /// Fails if the rows cannot be read or the catalog cannot be resolved.
     pub async fn read(
         resource_path: &Path,
         access: &mut impl AuthorizedVenue,
     ) -> Result<Self, String> {
         let solved = solve(resource_path, access).await?;
-        let venue = access.venue_id().to_owned();
-        let initialized: bool =
-            sqlx::query_scalar("SELECT groups_initialized FROM venues WHERE id = ?")
-                .bind(&venue)
-                .fetch_one(&mut *access.connection())
-                .await
-                .map_err(|e| e.to_string())?;
-        let derived = if initialized {
-            DerivedTree::default()
-        } else {
-            group_derivation::derive_groups(&solved.facts)
-        };
-        let overrides = overrides_db::list(access).await?;
         let members = groups_db::venue_memberships(access).await?;
         let authored = groups_db::list_groups(access).await?;
 
@@ -815,8 +775,7 @@ impl GroupSources {
         Ok(GroupSources {
             root: resource_path.to_path_buf(),
             solved,
-            derived,
-            overrides,
+            derived: DerivedTree::default(),
             manual,
             members,
             authored,
@@ -939,9 +898,8 @@ impl GroupSources {
         (!heads.is_empty()).then_some(heads)
     }
 
-    /// The merged group tree: derivation, the overrides on top, and the
-    /// authored groups beside them. Parents before children, and every name
-    /// distinct.
+    /// The group tree: whatever was derived, and the authored groups beside
+    /// it. Parents before children, and every name distinct.
     #[must_use]
     pub fn tree(&self) -> Vec<GroupTreeNode> {
         let mut nodes = self.named();
@@ -954,7 +912,7 @@ impl GroupSources {
     /// questions it answers, and nothing else should have to know that
     /// distinctness is a second step.
     fn named(&self) -> Vec<GroupTreeNode> {
-        group_derivation::merge_tree(&self.derived, &self.overrides, &self.manual)
+        group_derivation::merge_tree(&self.derived, &self.manual)
     }
 
     /// The node already answering to the name `group_id` asks for, if any.
@@ -1247,7 +1205,7 @@ pub async fn set_named_group(
     let existing = node_answering_to(&tree, &normalized, "");
     let id = if replace {
         if let Some(existing) = existing {
-            // A legacy derived set is not an authored collection to overwrite.
+            // Only an authored collection can be overwritten.
             groups_db::get_group(access, &existing.id).await?;
             Some(existing.id.as_str())
         } else {
@@ -1295,129 +1253,40 @@ pub fn validate_selection_names(expression: &str, tree: &[GroupTreeNode]) -> Res
         missing.join(", "), if available.is_empty() { "none".into() } else { available.join(", ") }))
 }
 
-/// Materialize generated sets once. Explicit generation only adds missing names;
-/// it never replaces the memberships of a user's existing collections.
+/// Save a derived starting set. Only adds names nobody has taken; it never
+/// replaces the memberships of a user's existing collections.
 pub async fn snapshot_generated_groups(
     resource_path: &Path,
     access: &mut VenueAccess<'_, Write>,
-    explicit: bool,
 ) -> Result<(), String> {
     let venue = access.venue_id().to_owned();
-    let initialized: bool =
-        sqlx::query_scalar("SELECT groups_initialized FROM venues WHERE id = ?")
-            .bind(&venue)
-            .fetch_one(&mut *access.connection())
-            .await
-            .map_err(|e| e.to_string())?;
-    if initialized && !explicit {
-        return Ok(());
-    }
     let mut sources = GroupSources::read(resource_path, access).await?;
     sources.derived = group_derivation::derive_groups(&sources.solved.facts);
-    if initialized {
-        sources.manual.clear();
-        sources.overrides.clear();
-    }
+    sources.manual.clear();
     let nodes = sources.tree();
     let uid = access.principal().map(str::to_owned);
-    if !initialized {
-        // Make room for names which were swapped by old overrides. The
-        // transaction hides temporary names from readers and sync.
-        for group in &sources.authored {
-            sqlx::query("UPDATE fixture_groups SET name = ? WHERE id = ? AND venue_id = ?")
-                .bind(format!("migration_{}", uuid::Uuid::new_v4().simple()))
-                .bind(&group.id)
-                .bind(&venue)
-                .execute(&mut *access.connection())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    let mut saved_ids = std::collections::HashSet::new();
     for (order, node) in nodes.iter().enumerate() {
-        if node.name.is_empty() {
-            if !initialized {
-                sqlx::query("UPDATE fixture_groups SET name = NULL WHERE id = ? AND venue_id = ?")
-                    .bind(&node.id)
-                    .bind(&venue)
-                    .execute(&mut *access.connection())
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
+        if node.name.is_empty() || sources.authored.iter().any(|g| g.id == node.id) {
             continue;
         }
-        let existing = sources.authored.iter().find(|g| g.id == node.id);
-        if existing.is_some() && initialized {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM fixture_groups WHERE venue_id = ? AND name = ?)",
+        )
+        .bind(&venue)
+        .bind(&node.name)
+        .fetch_one(&mut *access.connection())
+        .await
+        .map_err(|e| e.to_string())?;
+        if exists {
             continue;
         }
-        // Preserve the canonical selector, not the old tree's leaf label.
-        if existing.is_some() {
-            sqlx::query("UPDATE fixture_groups SET name = ? WHERE id = ? AND venue_id = ?")
-                .bind(&node.name)
-                .bind(&node.id)
-                .bind(&venue)
-                .execute(&mut *access.connection())
-                .await
-                .map_err(|e| e.to_string())?;
-            for fixture in &node.fixtures {
-                if !sources
-                    .members
-                    .iter()
-                    .any(|m| m.group_id == node.id && m.fixture_id == *fixture)
-                {
-                    groups_db::add_member_to_group(
-                        access,
-                        fixture,
-                        &node.id,
-                        groups_db::WHOLE_FIXTURE,
-                    )
-                    .await?;
-                }
-            }
-        } else {
-            // Old derivation could mint the same id for identically labelled
-            // structures. Preserve both selector names with distinct saved ids.
-            let id = if initialized || !saved_ids.insert(node.id.clone()) {
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                node.id.clone()
-            };
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM fixture_groups WHERE venue_id = ? AND name = ?)",
-            )
-            .bind(&venue)
-            .bind(&node.name)
-            .fetch_one(&mut *access.connection())
-            .await
-            .map_err(|e| e.to_string())?;
-            if exists {
-                continue;
-            }
-            sqlx::query("INSERT INTO fixture_groups (id, uid, venue_id, name, display_order) VALUES (?, ?, ?, ?, ?)")
-                .bind(&id).bind(&uid).bind(&venue).bind(&node.name).bind(order as i64).execute(&mut *access.connection()).await.map_err(|e| e.to_string())?;
-            for fixture in &node.fixtures {
-                groups_db::add_member_to_group(access, fixture, &id, groups_db::WHOLE_FIXTURE)
-                    .await?;
-            }
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO fixture_groups (id, uid, venue_id, name, display_order) VALUES (?, ?, ?, ?, ?)")
+            .bind(&id).bind(&uid).bind(&venue).bind(&node.name).bind(order as i64).execute(&mut *access.connection()).await.map_err(|e| e.to_string())?;
+        for fixture in &node.fixtures {
+            groups_db::add_member_to_group(access, fixture, &id, groups_db::WHOLE_FIXTURE).await?;
         }
     }
-    if !initialized {
-        for group in &sources.authored {
-            if !nodes.iter().any(|node| node.id == group.id) {
-                groups_db::delete_group(access, &group.id).await?;
-            }
-        }
-    }
-    sqlx::query("DELETE FROM fixture_group_overrides WHERE venue_id = ?")
-        .bind(&venue)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE venues SET groups_initialized = 1 WHERE id = ?")
-        .bind(&venue)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -186,26 +186,47 @@ impl Fixture {
         )
         .unwrap();
 
-        sqlx::query("INSERT INTO venues (id, name) VALUES (?, 'Basement')")
-            .bind(&self.venue_id)
-            .execute(&self.pool)
-            .await
-            .unwrap();
+        seed_venue(&self.pool, &self.venue_id, "Basement").await;
+        let root = crate::venue_graph::root_id(&self.venue_id);
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
                 "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
-                    manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z)
+                    manufacturer, model, mode_name, fixture_path, label)
                  VALUES (?, ?, 1, ?, 7, 'Chauvet', 'SlimPAR 64', '7ch',
-                    'Chauvet/Chauvet-SlimPAR-64.qxf', ?, ?, 0.0, 2.0)",
+                    'Chauvet/Chauvet-SlimPAR-64.qxf', ?)",
             )
             .bind(id)
             .bind(&self.venue_id)
             .bind(1 + i as i64 * 8)
             .bind(format!("PAR {}", i + 1))
-            .bind(i as f64)
             .execute(&self.pool)
             .await
             .unwrap();
+            // Hung from the grid two metres up, a metre apart.
+            sqlx::query(
+                "INSERT INTO venue_nodes
+                     (id, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
+                 VALUES (?, ?, 'fixture', 'Chauvet/Chauvet-SlimPAR-64.qxf', ?, ?, 'clamp', 'rig', 0.0)",
+            )
+            .bind(id)
+            .bind(&self.venue_id)
+            .bind(format!("PAR {}", i + 1))
+            .bind(&root)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+            for (key, value) in [("u", i as f64), ("v", 0.0), ("trim", 2.0)] {
+                sqlx::query(
+                    "INSERT INTO venue_node_params (node_id, venue_id, key, value) VALUES (?, ?, ?, ?)",
+                )
+                .bind(id)
+                .bind(&self.venue_id)
+                .bind(key)
+                .bind(value)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+            }
         }
     }
 
@@ -682,11 +703,7 @@ impl Fixture {
     /// anything seeded here would be a piece the program did not put there.
     async fn empty_venue(&self) -> (String, String) {
         let venue_id = format!("ven-empty-{}", uuid::Uuid::new_v4());
-        sqlx::query("INSERT INTO venues (id, name) VALUES (?, 'Empty Room')")
-            .bind(&venue_id)
-            .execute(&self.pool)
-            .await
-            .unwrap();
+        seed_venue(&self.pool, &venue_id, "Empty Room").await;
         crate::database::local::auth::arm_write_admission(&self.pool, None)
             .await
             .unwrap();
@@ -1355,4 +1372,20 @@ assert row.ok
     expect_ok(&out, "read venue alias in next cell");
     assert_eq!(out.repr.as_deref(), Some("(True, 2, 2, 0)"));
     f.service.shutdown_all();
+}
+
+/// A guest venue and its root, as `create_venue` writes them.
+async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
+    sqlx::query("INSERT INTO venues (id, name) VALUES (?, ?)")
+        .bind(venue_id)
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO venue_nodes (id, venue_id, kind) VALUES (?, ?, 'venue')")
+        .bind(crate::venue_graph::root_id(venue_id))
+        .bind(venue_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }

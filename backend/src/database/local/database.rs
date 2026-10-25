@@ -5,12 +5,20 @@ use sqlx::{
 };
 use std::path::Path;
 
+/// The format of the synced tables' local copy.
+///
+/// Bump it when a client can no longer read rows an older one downloaded. A
+/// library whose `user_version` differs clears its synced tables at startup,
+/// keeping its upload queue, and PowerSync downloads them again — so no code
+/// ever converts a local row. Migrations set the version their schema reads.
+pub const PROJECTION_VERSION: i64 = 1;
+
 /// `SqlitePool` is itself a shared handle, so cloning `Db` hands out another
 /// reference to the same pool, never a second pool.
 #[derive(Clone)]
 pub struct Db(pub SqlitePool);
 
-/// Create the directory, upgrade legacy payloads and run every migration.
+/// Create the directory and run every migration.
 ///
 /// Migrations run on their own connection with foreign keys off — several of
 /// them rebuild a table and would trip over their own child rows otherwise —
@@ -186,8 +194,100 @@ pub async fn open_app_db_at(app_dir: &Path) -> Result<(Db, Connections), String>
             db_path.display()
         )
     })?;
+    reset_stale_projection(connections.sql()).await?;
 
     Ok((Db(connections.sql().clone()), connections))
+}
+
+/// Clear the synced tables if they hold an older projection, so PowerSync
+/// downloads them again in the current format.
+///
+/// Runs before sync starts. The clear is marked local, so nothing it removes
+/// reaches the server. A change still waiting to upload postpones the reset to
+/// a later launch: clearing PowerSync's download state drops its queue, and
+/// a local edit is not this function's to discard.
+///
+/// # Errors
+///
+/// If the version or the queue cannot be read, or the clear fails.
+pub(crate) async fn reset_stale_projection(pool: &SqlitePool) -> Result<(), String> {
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("Failed to begin the projection check: {error}"))?;
+    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to read the projection version: {error}"))?;
+    if version == PROJECTION_VERSION {
+        return Ok(());
+    }
+    // PowerSync creates its tables the first time it opens a library.
+    let synced_before: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ps_buckets')",
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to inspect the sync state: {error}"))?;
+    if synced_before {
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ps_crud")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|error| format!("Failed to count changes waiting to sync: {error}"))?;
+        if pending > 0 {
+            log::warn!(
+                "[sync] projection {version} is not {PROJECTION_VERSION}; {pending} change(s) wait to upload, so the re-download waits for a later launch"
+            );
+            return Ok(());
+        }
+    }
+    crate::sync::triggers::local_only(&mut transaction).await?;
+    // Every synced table goes, so a reference between two of them is gone by
+    // the commit whichever order they are cleared in. Admission guards a write
+    // made *as* someone; an eviction is nobody's, so it is disarmed for the
+    // clear and put back as it was.
+    let armed: Option<i64> =
+        sqlx::query_scalar("SELECT armed FROM auth_write_admission WHERE singleton = 1")
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|error| format!("Failed to read write admission: {error}"))?;
+    sqlx::raw_sql(
+        "PRAGMA defer_foreign_keys = ON;
+         UPDATE auth_write_admission SET armed = 0 WHERE singleton = 1;",
+    )
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to prepare the projection reset: {error}"))?;
+    for table in crate::sync::schema::SYNCED_TABLES.iter().rev() {
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table.name)))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("Failed to clear {}: {error}", table.name))?;
+    }
+    sqlx::query("UPDATE auth_write_admission SET armed = ? WHERE singleton = 1")
+        .bind(armed.unwrap_or(0))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to restore write admission: {error}"))?;
+    if synced_before {
+        sqlx::query("SELECT powersync_clear(0)")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("Failed to reset the sync state: {error}"))?;
+    }
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA user_version = {PROJECTION_VERSION}"
+    )))
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to record the projection version: {error}"))?;
+    crate::sync::triggers::uploading(&mut transaction).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to commit the projection reset: {error}"))?;
+    log::info!("[sync] projection {version} cleared for a fresh download at {PROJECTION_VERSION}");
+    Ok(())
 }
 
 #[cfg(test)]

@@ -118,8 +118,7 @@ pub enum Naming<'a> {
 /// Write the patch row and the placed node, in the caller's transaction.
 ///
 /// The node carries the **same id** as the row — the contract
-/// [`luma_scene::patch::Fixture::id`] states and
-/// [`crate::venue_graph::migrate`] establishes — so a placement is found by
+/// [`luma_scene::patch::Fixture::id`] states — so a placement is found by
 /// looking up the fixture, with no join table between them.
 ///
 /// # Errors

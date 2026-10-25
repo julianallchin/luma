@@ -41,12 +41,6 @@ struct FixtureRow {
     model: String,
     mode_name: String,
     label: Option<String>,
-    pos_x: f64,
-    pos_y: f64,
-    pos_z: f64,
-    rot_x: f64,
-    rot_y: f64,
-    rot_z: f64,
     num_channels: i64,
 }
 
@@ -190,8 +184,7 @@ async fn main() -> Result<(), String> {
         .map_err(|e| format!("venue lookup failed: {e}"))?;
 
     let fixtures: Vec<FixtureRow> = sqlx::query_as(
-        "SELECT id, venue_id, manufacturer, model, mode_name, label,
-                pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, num_channels
+        "SELECT id, venue_id, manufacturer, model, mode_name, label, num_channels
          FROM fixtures WHERE venue_id = ?",
     )
     .bind(&args.venue_id)
@@ -226,8 +219,7 @@ async fn main() -> Result<(), String> {
         .collect();
 
     // The same solve the group tree came from, read a second time for the raw
-    // facts: the `fixtures` rows carry table positions (all zero), which say
-    // nothing about where anything hangs.
+    // facts: where each fixture hangs is the graph's answer, not the patch row's.
     let solved = luma_lib::services::groups::solve(&fixtures_root, &mut access)
         .await
         .map_err(|e| format!("solve failed: {e}"))?;

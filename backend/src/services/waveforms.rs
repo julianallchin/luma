@@ -188,12 +188,10 @@ async fn compute_waveform_payload(
     })
 }
 
-/// Get waveform for a track, computing if missing.
+/// Get waveform for a track, computing this device's cache if it is missing.
 ///
-/// A row written before the band gains were stored counts as missing: the
-/// envelopes without their units are not a waveform anything else can be drawn
-/// against, and recomputing is how such a row is backfilled — one measurement
-/// of one decode produces both, so they cannot disagree.
+/// The envelopes and their band gains are one row, from one measurement of
+/// one decode, so they cannot disagree.
 pub async fn get_track_waveform(
     pool: &SqlitePool,
     tasks: &AnalysisTaskGroup,
@@ -211,11 +209,9 @@ pub async fn get_track_waveform(
             .map_err(|error| format!("Failed to load track duration: {error}"))?;
     let duration_seconds = duration_seconds.unwrap_or(0.0);
 
-    // Try cached waveform
     let row = local::waveforms::fetch_track_waveform_for_connection(access.connection(), track_id)
         .await?;
     let gains = local::waveforms::fetch_band_gains(access.connection(), track_id).await?;
-
     if let (Some(row), Some(gains)) = (row, gains) {
         return Ok((build_waveform(track_id, duration_seconds, row)?, gains));
     }
@@ -227,7 +223,7 @@ pub async fn get_track_waveform(
 /// The units a track's band envelopes are in.
 ///
 /// Total wherever [`get_track_waveform`] is: the fast path is the stored
-/// scalars, and a row that predates them is materialised through the one path
+/// scalars, and a track with no cached row is computed through the one path
 /// that computes them rather than re-derived here — a second derivation would
 /// be a second unit system, which is exactly what these exist to prevent.
 async fn band_gains(

@@ -163,11 +163,8 @@ pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRo
     })
 }
 
-/// The venue's root node id, or `None` if the graph has not been built yet.
-///
-/// Its absence is what [`crate::venue_graph::migrate`] uses as the "this venue
-/// has not been converted" marker — a marker column would be a second fact
-/// about the same thing.
+/// The venue's root node id, or `None` while its rows are still arriving from
+/// sync.
 ///
 /// # Errors
 /// Fails if `venue_nodes` cannot be read.
@@ -203,10 +200,8 @@ pub async fn insert_node(
     Ok(id)
 }
 
-/// Insert a node under an id the caller chose: the root, a fixture (whose
-/// node id is its patch-row id), a restored row, or the conversion pass,
-/// which reuses the old row's id so that a group membership or a saved
-/// selection naming a stage piece still names the same thing.
+/// Insert a node under an id the caller chose: a fixture (whose node id is
+/// its patch-row id) or a restored row.
 ///
 /// `placement` is `None` for the root and only for the root.
 ///

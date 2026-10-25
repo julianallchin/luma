@@ -11,9 +11,14 @@ fixture({ seconds: 20, rig: 4, window: [1500, 950] });
 // each universe whose only difference is the node it names.
 const EXTRAS = [
   `INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name,
-                         fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-   VALUES ('fixture-clash', '$PRINCIPAL', 'venue-main', 1, 5, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf', 'Clash 1', 0.0, 0.0, 3.0, 0.0, 0.0, 0.0),
-          ('fixture-far', '$PRINCIPAL', 'venue-main', 17, 1, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf', 'Far 1', 0.0, 0.0, 3.0, 0.0, 0.0, 0.0)`,
+                         fixture_path, label)
+   VALUES ('fixture-clash', '$PRINCIPAL', 'venue-main', 1, 5, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf', 'Clash 1'),
+          ('fixture-far', '$PRINCIPAL', 'venue-main', 17, 1, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf', 'Far 1')`,
+  `INSERT INTO venue_nodes (id, uid, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
+   VALUES ('fixture-clash', '$PRINCIPAL', 'venue-main', 'fixture', 'Luma/Mover.qxf', 'Clash 1', 'venue-main:venue', 'clamp', 'rig', 0.0),
+          ('fixture-far', '$PRINCIPAL', 'venue-main', 'fixture', 'Luma/Mover.qxf', 'Far 1', 'venue-main:venue', 'clamp', 'rig', 0.0)`,
+  `INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
+   VALUES ('fixture-clash', '$PRINCIPAL', 'venue-main', 'trim', 3.0), ('fixture-far', '$PRINCIPAL', 'venue-main', 'trim', 3.0)`,
   `INSERT INTO dmx_routes (universe, device_kind, device_id, port, device_name, address)
    VALUES (1, 'art-net', '10.0.0.5', 0, 'Node A', '10.0.0.5:6454'),
           (17, 'art-net', '10.0.0.6', 16, 'Node B', '10.0.0.6:6454')`,

@@ -39,7 +39,6 @@ pub async fn get_fixture_facings(
     services: &AppServices,
     venue_id: String,
 ) -> Result<Vec<FixtureFacing>, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     let venue = crate::venue_graph::resolved(&mut access, &services.fixtures_root).await?;
@@ -121,7 +120,6 @@ pub async fn auto_patch(
     services: &AppServices,
     venue_id: String,
 ) -> Result<AutoPatchReport, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     let report = patch_service::auto_patch(&mut access, &services.fixtures_root).await?;
@@ -163,7 +161,6 @@ pub async fn set_fixture_mode(
     mode_name: String,
     allow_move: bool,
 ) -> Result<PatchedFixture, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access = fixture_write(services, &venue_id, &id).await?;
     let fixture = patch_service::set_mode(
         &mut access,

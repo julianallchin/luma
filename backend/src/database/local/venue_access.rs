@@ -15,7 +15,6 @@ pub enum VenueResource<'a> {
     Group(&'a str),
     Folder(&'a str),
     GroupMember(&'a str),
-    StagePiece(&'a str),
     MidiModifier(&'a str),
     MidiBinding(&'a str),
     Score(&'a str),
@@ -242,7 +241,6 @@ async fn resolve_venue_id(
              WHERE member.id = ?",
             id,
         ),
-        VenueResource::StagePiece(id) => ("SELECT venue_id FROM stage_pieces WHERE id = ?", id),
         VenueResource::MidiModifier(id) => ("SELECT venue_id FROM midi_modifiers WHERE id = ?", id),
         VenueResource::MidiBinding(id) => ("SELECT venue_id FROM midi_bindings WHERE id = ?", id),
         VenueResource::Score(id) => ("SELECT venue_id FROM scores WHERE id = ?", id),
@@ -318,13 +316,7 @@ mod tests {
         let mut connection = pool.acquire().await.unwrap();
         let tables = venue_owned_tables(&mut connection).await.unwrap();
 
-        for owned in [
-            "fixtures",
-            "stage_pieces",
-            "venue_nodes",
-            "scores",
-            "midi_bindings",
-        ] {
+        for owned in ["fixtures", "venue_nodes", "scores", "midi_bindings"] {
             assert!(
                 tables.iter().any(|t| t == owned),
                 "{owned} carries a venue_id and is venue content: {tables:?}"
@@ -374,9 +366,7 @@ mod tests {
              INSERT INTO fixture_group_members (id, uid, fixture_id, group_id)
                 VALUES ('shared-member', 'alice', 'shared-fixture', 'shared-group');
              INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
-                VALUES ('shared-modifier', 'alice', 'shared', 'Shift', '{}');
-             INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label)
-                VALUES ('alice-stage', 'alice', 'alice', 'booth.glb', 'stand', 'Booth')",
+                VALUES ('shared-modifier', 'alice', 'shared', 'Shift', '{}')",
         )
         .execute(&pool)
         .await
@@ -415,7 +405,7 @@ mod tests {
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
-        VenueAccess::<Write>::write(&pool, VenueResource::StagePiece("alice-stage"))
+        VenueAccess::<Write>::write(&pool, VenueResource::Fixture("alice-fixture"))
             .await
             .unwrap()
             .commit()

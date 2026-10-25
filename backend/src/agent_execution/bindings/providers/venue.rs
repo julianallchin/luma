@@ -122,14 +122,6 @@ pub async fn provide(
         return Ok(());
     };
 
-    // Convert off the old schema first: everything below reads through one
-    // read transaction, and the conversion needs a write one. Cheap and
-    // idempotent after the first time this venue is looked at.
-    if let Err(e) = crate::venue_graph::ensure_migrated(ctx.pool, venue_id, ctx.resource_root).await
-    {
-        log::warn!("[venue] {venue_id} could not be converted to a graph: {e}");
-    }
-
     let mut access = match VenueAccess::<Read>::read(ctx.pool, VenueResource::Venue(venue_id)).await
     {
         Ok(access) => access,
@@ -327,7 +319,6 @@ pub(crate) fn group_rows(nodes: &[FixtureGroupNode]) -> Vec<GroupBinding> {
             parent_id: node.parent_id.clone(),
             origin: match node.origin {
                 GroupOrigin::Derived => "derived",
-                GroupOrigin::Edited => "edited",
                 GroupOrigin::Manual => "manual",
             },
             role: node.role.map(FixtureRole::as_str),

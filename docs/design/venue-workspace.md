@@ -33,10 +33,10 @@ no split between automatic and authored membership. A new venue can use
 names and keeps existing collections. Later geometry changes never rewrite
 memberships.
 
-An older venue converts once, on first read (`venue_graph::ensure_migrated`).
-The conversion derives the effective groups, keeps the selector names and
-members, saves them into `fixture_groups`, and sets `venues.groups_initialized`.
-The local-only `fixture_group_overrides` table is read only by this conversion.
+Creating a venue writes its root node in the same transaction. A venue
+without a root is one whose rows are still arriving from sync, and every reader
+shows it empty. No client converts an older venue; format changes are server
+migrations.
 
 The group editor supports naming, fixture membership and confirmed deletion.
 Deleting a group leaves the physical fixtures in place. Whole-fixture

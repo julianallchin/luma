@@ -20,6 +20,12 @@
 //! model. So each entry carries the actor, read off [`ACTOR_TABLE`], as its
 //! metadata, and the connector sends it with the request. An empty table is the
 //! signed-in person.
+//!
+//! A write this device makes to its own copy and to nobody else's — evicting a
+//! signed-out account's cache — is not an edit either, and must never reach
+//! the server. [`local_only`] marks the open transaction so, and every trigger
+//! stands down while the mark is there. A cascade a local delete sets off runs
+//! in the same transaction, so it stands down too.
 
 use sqlx::SqliteConnection;
 
@@ -34,6 +40,16 @@ const TOUCH_VALUE: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// it too.
 const ACTOR_TABLE: &str = "CREATE TEMP TABLE IF NOT EXISTS luma_actor (actor TEXT NOT NULL)";
 
+/// The connection-local mark that the open transaction's writes are this
+/// device's alone. Like [`ACTOR_TABLE`] it holds a row only inside a
+/// transaction: [`local_only`] writes it, [`uploading`] clears it before
+/// commit, and a rollback clears it with everything else.
+const LOCAL_ONLY_TABLE: &str =
+    "CREATE TEMP TABLE IF NOT EXISTS luma_local_only (mark INTEGER PRIMARY KEY CHECK (mark = 1))";
+
+/// The `WHEN` every upload trigger carries.
+const UPLOADING: &str = "NOT EXISTS (SELECT 1 FROM temp.luma_local_only)";
+
 /// Install the upload queue on one writer connection. Call this from the app
 /// pool's `after_connect` hook.
 ///
@@ -47,6 +63,13 @@ pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
         ACTOR_TABLE,
         "the actor table",
         "luma_actor",
+    )
+    .await?;
+    run(
+        &mut *connection,
+        LOCAL_ONLY_TABLE,
+        "the local-only mark",
+        "luma_local_only",
     )
     .await?;
     for table in SYNCED_TABLES {
@@ -78,6 +101,44 @@ pub async fn attribute(connection: &mut SqliteConnection, actor: &str) -> Result
         .await
         .map(|_| ())
         .map_err(|error| format!("failed to attribute the write: {error}"))
+}
+
+/// Keep the rest of this transaction's writes on this device: nothing it
+/// inserts, updates or deletes — cascades included — is queued for upload.
+/// Call inside a transaction, and call [`uploading`] before its commit.
+///
+/// On a connection without the queue — a host that does not sync — the mark
+/// is made and nothing reads it.
+///
+/// # Errors
+///
+/// If a statement fails.
+pub async fn local_only(connection: &mut SqliteConnection) -> Result<(), String> {
+    run(
+        &mut *connection,
+        LOCAL_ONLY_TABLE,
+        "the local-only mark",
+        "luma_local_only",
+    )
+    .await?;
+    sqlx::query("INSERT OR IGNORE INTO temp.luma_local_only (mark) VALUES (1)")
+        .execute(connection)
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("failed to keep the write local: {error}"))
+}
+
+/// Queue this connection's writes for upload again.
+///
+/// # Errors
+///
+/// If the statement fails.
+pub async fn uploading(connection: &mut SqliteConnection) -> Result<(), String> {
+    sqlx::query("DELETE FROM temp.luma_local_only")
+        .execute(connection)
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("failed to resume uploading: {error}"))
 }
 
 /// Give the connection back to the signed-in person.
@@ -149,6 +210,7 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
         format!(
             "CREATE TEMP TRIGGER IF NOT EXISTS ps_crud_{name}_insert
              AFTER INSERT ON main.{name}
+             WHEN {UPLOADING}
              BEGIN
                INSERT INTO powersync_crud(op, id, type, data, metadata)
                VALUES ('PUT', {insert_id}, '{name}', {}, {ACTOR});
@@ -161,7 +223,7 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
         format!(
             "CREATE TEMP TRIGGER IF NOT EXISTS ps_crud_{name}_update
              AFTER UPDATE ON main.{name}
-             WHEN {guard}
+             WHEN {UPLOADING} AND {guard}
              BEGIN
                INSERT INTO powersync_crud(op, id, type, data, metadata)
                SELECT 'PATCH', {insert_id}, '{name}', json_group_object(n.key, CASE n.type
@@ -176,6 +238,7 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
         format!(
             "CREATE TEMP TRIGGER IF NOT EXISTS ps_crud_{name}_delete
              AFTER DELETE ON main.{name}
+             WHEN {UPLOADING}
              BEGIN
                INSERT INTO powersync_crud(op, id, type, data, metadata)
                VALUES ('DELETE', {delete_id}, '{name}', NULL, {ACTOR});

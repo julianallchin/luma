@@ -25,8 +25,8 @@ pub async fn insert_fixture(
     let uid = access.principal().map(str::to_owned);
 
     sqlx::query(
-        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&uid)
@@ -40,12 +40,6 @@ pub async fn insert_fixture(
     .bind(fixture_path)
     .bind(label)
     .bind(i64::from(address_pinned))
-    .bind(0.0_f64)
-    .bind(0.0_f64)
-    .bind(0.0_f64)
-    .bind(0.0_f64)
-    .bind(0.0_f64)
-    .bind(0.0_f64)
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to insert fixture: {}", e))?;
@@ -63,12 +57,6 @@ pub async fn insert_fixture(
         fixture_path: fixture_path.to_string(),
         label: label.map(|s| s.to_string()),
         address_pinned,
-        pos_x: 0.0,
-        pos_y: 0.0,
-        pos_z: 0.0,
-        rot_x: 0.0,
-        rot_y: 0.0,
-        rot_z: 0.0,
     })
 }
 
@@ -84,8 +72,8 @@ pub async fn insert_fixture_row(
     let venue_id = access.venue_id().to_owned();
     let uid = access.principal().map(str::to_owned);
     sqlx::query(
-        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)",
+        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&row.id)
     .bind(&uid)
@@ -252,7 +240,7 @@ pub async fn get_patched_fixtures(
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned
          FROM fixtures WHERE venue_id = ? ORDER BY id ASC",
     )
     .bind(access.venue_id().to_owned())
@@ -267,7 +255,7 @@ pub async fn get_fixture(
     id: &str,
 ) -> Result<PatchedFixture, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned
          FROM fixtures WHERE id = ? AND venue_id = ?",
     )
     .bind(id)

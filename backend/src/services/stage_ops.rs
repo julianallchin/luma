@@ -1098,22 +1098,16 @@ impl<'a> Stage<'a> {
     /// takes one, commits it, and then opens the snapshot. Ordinary reads —
     /// every one after the first — never take a write lock.
     async fn read(&self) -> Result<VenueAccess<'a, Read>> {
-        self.ensure_migrated().await?;
         Ok(VenueAccess::<Read>::read(self.pool, VenueResource::Venue(self.venue_id)).await?)
     }
 
     async fn write(&self) -> Result<VenueAccess<'a, Write>> {
-        self.ensure_migrated().await?;
         Ok(VenueAccess::<Write>::write_as(
             self.pool,
             VenueResource::Venue(self.venue_id),
             self.actor,
         )
         .await?)
-    }
-
-    async fn ensure_migrated(&self) -> Result<()> {
-        Ok(venue_graph::ensure_migrated(self.pool, self.venue_id, self.fixtures_root).await?)
     }
 
     /// Mint a node where `edge` hangs it, with its params. Every piece this

@@ -77,13 +77,6 @@ pub async fn resolve_primitive_ids(
     venue_id: &str,
     resource_root: &Path,
 ) -> Vec<(String, [f32; 3])> {
-    // The pool-owning form is the only one that can take the write transaction
-    // the old-schema conversion needs; the `_with_access` form is handed a read
-    // transaction and an unconverted venue simply resolves to nothing.
-    if let Err(e) = crate::venue_graph::ensure_migrated(project_pool, venue_id, resource_root).await
-    {
-        log::warn!("[ctx] venue {venue_id} could not be converted to a graph: {e}");
-    }
     let Ok(mut access) = crate::database::local::venue_access::VenueAccess::<
         crate::database::local::venue_access::Read,
     >::read(
