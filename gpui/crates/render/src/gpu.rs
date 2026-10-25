@@ -5541,6 +5541,8 @@ impl Renderer {
                             view_proj,
                             eye: frame.camera.eye,
                             haze_density,
+                            medium,
+                            haze_field: &self.gpu.haze_field,
                             width: t_width,
                             height: t_height,
                         },
