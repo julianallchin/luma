@@ -183,8 +183,8 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
         (Kind::Space, "centre") => Input::Vector([0.5; 3]),
         (Kind::Space, "scale") => Input::Number(1.),
         (Kind::Mirror, "at") => Input::Number(0.5),
-        (Kind::Noise, "period") => Input::Number(4.),
-        (Kind::Noise, "contrast") => Input::Number(0.),
+        (Kind::Random, "every") => Input::Number(4.),
+        (Kind::Random, "glide" | "contrast") => Input::Number(0.),
         (Kind::Audio, "low_hz") => Input::Number(p::empty_band().0),
         (Kind::Audio, "high_hz") => Input::Number(p::empty_band().1),
         (Kind::Curve, "shape") => Input::Points(preset_curve("Ramp up")),
@@ -198,7 +198,7 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
 pub(crate) fn empty_note(node: &Node, input: &str) -> &'static str {
     match (node.kind, input) {
         (_, "direction") => "Best fit",
-        (Kind::Noise, "scale") => "Uniform",
+        (Kind::Random, "scale") => "Uniform",
         (Kind::Group, "size") => "One fixture",
         (Kind::Time, "every") => "Once",
         (Kind::Time, "duration") if node.inputs.contains_key("every") => "Same as every",
@@ -220,7 +220,7 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
                 Some(Input::Number(every)) => *every,
                 _ => 1.,
             },
-            (Kind::Noise, "scale") => 0.5,
+            (Kind::Random, "scale") => 0.5,
             _ => 1.,
         }),
         Ty::Vector if spec.unit == Some(Unit::Metres) => Input::Vector([0., 0., 0.]),
@@ -373,7 +373,7 @@ fn signature(graph: &ClipGraph, values: bool) -> String {
 // -- edits --------------------------------------------------------------------
 
 /// Where a promoted input's values come from: the coordinate node kinds.
-pub(crate) const SOURCES: [Kind; 4] = [Kind::Time, Kind::Space, Kind::Noise, Kind::Audio];
+pub(crate) const SOURCES: [Kind; 4] = [Kind::Time, Kind::Space, Kind::Random, Kind::Audio];
 
 /// A coordinate kind's menu entry.
 pub(crate) fn source_label(kind: Kind) -> &'static str {
@@ -1216,10 +1216,10 @@ mod tests {
     #[test]
     fn a_link_never_makes_a_cycle() {
         let mut graph = wash();
-        promote(&mut graph, "color1", "brightness", Kind::Noise);
+        promote(&mut graph, "color1", "brightness", Kind::Random);
         let above = wired(&graph, "color1", "brightness");
-        let noise = wired(&graph, &above, "x");
-        assert!(!link_candidates(&graph, &noise, "contrast").contains(&above));
+        let random = wired(&graph, &above, "x");
+        assert!(!link_candidates(&graph, &random, "contrast").contains(&above));
     }
 
     fn chase() -> ClipGraph {
@@ -1281,7 +1281,7 @@ mod tests {
     fn attach_puts_a_curve_between_a_new_source_and_a_value() {
         let mut graph = wash();
         assert!(attach(&mut graph, "color1", "brightness", Kind::Shuffle).is_none());
-        assert!(attach(&mut graph, "color1", "brightness", Kind::Noise).is_some());
+        assert!(attach(&mut graph, "color1", "brightness", Kind::Random).is_some());
         assert!(graph.check().is_ok(), "{:?}", graph.check());
         let curve = wired(&graph, "color1", "brightness");
         let time = {
@@ -1291,7 +1291,7 @@ mod tests {
             graph.nodes[&wired(&graph, &curve, "x")].kind
         };
         assert_eq!(time, Kind::Time);
-        assert_eq!(graph.nodes[&wired(&graph, &curve, "x")].kind, Kind::Noise);
+        assert_eq!(graph.nodes[&wired(&graph, &curve, "x")].kind, Kind::Random);
     }
 
     #[test]
@@ -1367,7 +1367,7 @@ mod tests {
         insert(&mut graph, &space, "heads", Kind::Shuffle);
         let shuffle = wired(&graph, &space, "heads");
         assert!(accepts(&graph, &shuffle, "time", Kind::Time));
-        assert!(!accepts(&graph, &shuffle, "time", Kind::Noise));
+        assert!(!accepts(&graph, &shuffle, "time", Kind::Random));
         insert(&mut graph, &shuffle, "time", Kind::Time);
         let time = wired(&graph, &shuffle, "time");
         assert_eq!(

@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec import clip as clip_module  # noqa: E402
 from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, curve, group,  # noqa: E402
-                            laser, mirror, noise, preset, shuffle, space, split, strobe, time, value)
+                            laser, mirror, preset, random, shuffle, space, split, strobe, time, value)
 from luma_exec.clip import max as clip_max, min as clip_min  # noqa: E402
 from luma_exec.score import GraphTrack  # noqa: E402
 
@@ -144,7 +144,7 @@ CATALOG = {
     'Sparkle': "k = time(every=0.125, duration=0.5); order = shuffle(time=k); rank = space(heads=order, kind='order'); color(brightness=curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]) * curve(k, 'Spike'))",
     'Build': "clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, 'Ramp up'), kind='order'); color(brightness=curve(rank, 'Step down'))",
     'Dissolve': "clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, 'Ramp down'), kind='order'); color(brightness=curve(rank, 'Step down'))",
-    'Clouds': "cloud = noise(period=8, scale=0.5); color(color=curve(cloud, 'Ramp up', gradient='Ocean'), brightness=curve(cloud, 'Ramp up', low=0.2, high=1))",
+    'Clouds': "cloud = random(every=8, glide=1, scale=0.5); color(color=curve(cloud, 'Ramp up', gradient='Ocean'), brightness=curve(cloud, 'Ramp up', low=0.2, high=1))",
     'Sparkle rain': "bars = group(); columns = split(); k = time(every=0.25, duration=1); order = shuffle(heads=bars, time=k); drop = space(heads=columns, direction=(0, 0, -1), shift=curve(k, 'Ramp up', low=-0.3, high=1), scale=0.3); rank = space(heads=order, kind='order'); color(brightness=curve(drop, 'Comet') * curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]))",
     'Chase': "t = time(every=2); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))",
     'Wave': "place = space(); t = time(every=2, phase=curve(place, 'Ramp down', low=180, high=360)); color(brightness=curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))",
@@ -180,7 +180,7 @@ CATALOG = {
     'Pinwheel': "turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp up', high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, 'Cosine', low=high, high=low), pitch=curve(t, 'Sine', low=low, high=high))",
     'Scissor': "halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, 'Sine', low=30, high=-30))",
     'Up/down flip': "t = time(every=2); aim(direction=D, pitch=curve(t, 'Square', low=-30, high=30))",
-    'Ballyhoo': "period = value(4); scale = value(0.02); drift = noise(period=period, scale=scale); wander = noise(period=period, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=high, high=low), pitch=curve(wander, 'Ramp up', low=low, high=high))",
+    'Ballyhoo': "period = value(4); scale = value(0.02); drift = random(every=period, glide=1, scale=scale); wander = random(every=period, glide=1, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=high, high=low), pitch=curve(wander, 'Ramp up', low=low, high=high))",
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
     'Strobe steps up': "t = time(); strobe(rate=curve(t, 'Steps 4', low=0.4, high=0.9))",
@@ -328,7 +328,7 @@ class ClipBuilderTests(unittest.TestCase):
         self.assertEqual(clip_max("ab", key=str.upper), "b")
 
     def test_coordinates_and_lists_are_not_values(self):
-        for code in ("time() * 2", "2 * time()", "curve(time()) + space()", "max(curve(time()), noise())"):
+        for code in ("time() * 2", "2 * time()", "curve(time()) + space()", "max(curve(time()), random())"):
             with self.subTest(code), self.assertRaisesRegex(ClipError, r"curve\(\.\.\.\)"):
                 run(code)
         with self.assertRaisesRegex(ClipError, "is not a value"):
@@ -429,9 +429,9 @@ class ClipBuilderTests(unittest.TestCase):
         self.assertEqual(kinds.count("time"), 1)
         wires = {node.inputs["x"]["node"] for node in graph.nodes.values() if node.kind == "curve"}
         self.assertEqual(len(wires), 1)
-        # Two calls with the same arguments are two nodes: two noise streams.
+        # Two calls with the same arguments are two nodes: two random streams.
         two = run(CATALOG["Ballyhoo"])
-        self.assertEqual([node.kind for node in two.nodes.values()].count("noise"), 2)
+        self.assertEqual([node.kind for node in two.nodes.values()].count("random"), 2)
 
     def test_source_round_trips_every_catalog_effect(self):
         for name, code in CATALOG.items():

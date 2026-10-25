@@ -353,7 +353,7 @@ class Worker:
         if self._current is not None:
             self.namespace["luma"] = self._current
         # The clip graph builders are bare names in every cell (decision 23:
-        # bare `time` shadows the stdlib module here).
+        # bare `time` and `random` shadow the stdlib modules here).
         for name in clip.BUILDERS:
             self.namespace[name] = getattr(clip, name)
 

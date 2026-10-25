@@ -1,5 +1,5 @@
 //! The heads pipeline: which cells form one unit, which span each unit
-//! belongs to, and the stage geometry that `space`, `mirror` and `noise`
+//! belongs to, and the stage geometry that `space`, `mirror` and `random`
 //! read. Units and spans are fixed at preparation; positions may move when
 //! a mirror's plane is wired, so the geometry helpers here serve both the
 //! lowering and the kernels.

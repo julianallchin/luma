@@ -410,10 +410,10 @@ fn rule_4_wire() {
     assert_eq!(
         error(json!({
             "space1": {"kind": "space"},
-            "noise2": {"kind": "noise", "inputs": {"heads": {"node": "space1"}}},
-            "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise2"}}},
+            "random2": {"kind": "random", "inputs": {"heads": {"node": "space1"}}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "random2"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
-        "noise2.heads: expected a heads wire; got a coordinate wire from space1. Example: heads=group()"
+        "random2.heads: expected a heads wire; got a coordinate wire from space1. Example: heads=group()"
     );
 }
 
@@ -585,7 +585,7 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
     let curve_of = |x: &str| Node::new(Kind::Curve).with_input("x", Input::wire(x));
     match kind {
         Kind::Color | Kind::Aim | Kind::Strobe | Kind::Laser => {}
-        Kind::Time | Kind::Space | Kind::Noise | Kind::Audio => {
+        Kind::Time | Kind::Space | Kind::Random | Kind::Audio => {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push(("color9".into(), color("curve9")));
         }

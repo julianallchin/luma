@@ -36,8 +36,8 @@ pub enum Kernel {
     /// A coordinate slid by a shift and read over a scale, wrapped on a
     /// ring: the shader's `(p - shift) / scale`.
     Slide,
-    /// Coherent noise over normalized position and time.
-    Noise4,
+    /// A Random's field over normalized position and its glided clock.
+    Random,
     /// A curve's shape between low and high, or through a gradient.
     Curve,
     /// The live events of one clock as one layer: the largest value per
@@ -75,7 +75,7 @@ impl Kernel {
         Kernel::Rank,
         Kernel::Axis,
         Kernel::Slide,
-        Kernel::Noise4,
+        Kernel::Random,
         Kernel::Curve,
         Kernel::Combine,
         Kernel::Newest,
@@ -99,7 +99,7 @@ impl Kernel {
             Kernel::Rank => "kernel/rank",
             Kernel::Axis => "kernel/axis",
             Kernel::Slide => "kernel/slide",
-            Kernel::Noise4 => "kernel/noise4",
+            Kernel::Random => "kernel/random",
             Kernel::Curve => "kernel/curve",
             Kernel::Combine => "kernel/combine",
             Kernel::Newest => "kernel/newest",
@@ -178,8 +178,8 @@ impl Kernel {
                 &["value"],
             ),
             Kernel::Slide => (names(&["a", "at", "shift", "scale"]), &["wrap"], &["value"]),
-            Kernel::Noise4 => (
-                names(&["positions", "span", "turns", "scale", "contrast"]),
+            Kernel::Random => (
+                names(&["positions", "span", "turns", "glide", "scale", "contrast"]),
                 &["uniform", "salt_lo", "salt_hi"],
                 &["value"],
             ),
@@ -837,20 +837,21 @@ pub(crate) fn run(
             });
             single("value", events(values, &batch)?)
         }
-        Kernel::Noise4 => {
+        Kernel::Random => {
             let positions = s("positions");
             let span = s("span");
             let turns = s("turns");
+            let glide = s("glide");
             let scale = s("scale");
             let contrast = s("contrast");
             let uniform = f("uniform")? != 0.;
             let salt = (f("salt_lo")? as u64) | ((f("salt_hi")? as u64) << 32);
             let seed = batch.frame.seed ^ salt;
-            let mut dims = shape(&[turns, scale, contrast])?;
+            let mut dims = shape(&[turns, glide, scale, contrast])?;
             let place_times = positions.values().dim().1;
             if !uniform {
                 dims.0 = heads;
-                dims.1 = shape(&[turns, scale, contrast, positions])?.1;
+                dims.1 = shape(&[turns, glide, scale, contrast, positions])?.1;
             }
             // Positions over the span's largest extent, per span and time.
             let mut unit_positions = vec![[0.; 3]; heads * place_times];
@@ -886,13 +887,13 @@ pub(crate) fn run(
                         } else {
                             unit_positions[n * place_times + if place_times == 1 { 0 } else { t }]
                         };
-                        let size = scale.at(n, t, e).max(1e-6);
-                        let raw = super::noise::coherent_noise(
-                            [p[0] / size, p[1] / size, p[2] / size, turns.at(n, t, e)],
+                        values[[n, t, e]] = super::random::field(
+                            p,
+                            scale.at(n, t, e),
+                            super::random::glided(turns.at(n, t, e), glide.at(n, t, e)),
+                            contrast.at(n, t, e),
                             seed,
                         )?;
-                        let c = contrast.at(n, t, e);
-                        values[[n, t, e]] = ((raw - 0.5) * (1. + 3. * c) + 0.5).clamp(0., 1.);
                     }
                 }
             }

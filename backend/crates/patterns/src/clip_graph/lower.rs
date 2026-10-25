@@ -219,7 +219,7 @@ impl Lowering<'_> {
         let lowered = match self.node(id).kind {
             Kind::Time => self.time(id)?,
             Kind::Space => self.space(id)?,
-            Kind::Noise => self.noise(id)?,
+            Kind::Random => self.random(id)?,
             Kind::Audio => self.audio(id)?,
             Kind::Curve => self.curve(id)?,
             Kind::Math => self.math(id)?,
@@ -446,22 +446,24 @@ impl Lowering<'_> {
         Ok(output(&rank, "value"))
     }
 
-    fn noise(&mut self, id: &str) -> Result<Lowered> {
+    fn random(&mut self, id: &str) -> Result<Lowered> {
         let heads = self.heads_input(id)?;
-        let period = self.number(id, "period", 4.)?;
+        let every = self.number(id, "every", 4.)?;
+        let glide = self.number(id, "glide", 0.)?;
         let uniform = !self.node(id).inputs.contains_key("scale");
         let scale = self.number(id, "scale", 1.)?;
         let contrast = self.number(id, "contrast", 0.)?;
-        let table = self.clock_table(&period);
+        let table = self.clock_table(&every);
         let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
-        let salt = super::noise::fnv(id);
+        let salt = super::random::fnv(id);
         let span = self.index_field(&heads.units.span)?;
-        let noise = self.kernel(
-            Kernel::Noise4,
+        let random = self.kernel(
+            Kernel::Random,
             vec![
                 ("positions", heads.positions.clone()),
                 ("span", span),
                 ("turns", output(&turns, "value")),
+                ("glide", glide.parts[0].clone()),
                 ("scale", scale.parts[0].clone()),
                 ("contrast", contrast.parts[0].clone()),
                 ("uniform", number(if uniform { 1. } else { 0. })),
@@ -470,8 +472,8 @@ impl Lowering<'_> {
             ],
         );
         Ok(Lowered {
-            parts: std::array::from_fn(|_| output(&noise, "value")),
-            clock: clock_of([&scale.clock, &contrast.clock]),
+            parts: std::array::from_fn(|_| output(&random, "value")),
+            clock: clock_of([&glide.clock, &scale.clock, &contrast.clock]),
         })
     }
 

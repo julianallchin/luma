@@ -22,7 +22,7 @@ list of `(t, color)` pairs, or `{"stops": ...}`. `None` is the empty input.
 Math is Python operators on values (curve results and math results):
 `cut * bloom * fade`, `a + b`, `1 - a`, `0.5 * a`, `max(a, b)`, `min(a, b)`.
 Each is a `math` node; a chain of one operator is one node with all its
-items. Coordinates (time, space, noise, audio) are not values: wrap them in
+items. Coordinates (time, space, random, audio) are not values: wrap them in
 curve(...) first.
 
 A value used in more than one place is a value node: `d = value((0.57, 0,
@@ -53,7 +53,7 @@ from types import MappingProxyType
 from .color import from_srgb
 
 
-BUILDERS = ("time", "space", "noise", "audio", "curve", "value", "mirror", "shuffle", "group",
+BUILDERS = ("time", "space", "random", "audio", "curve", "value", "mirror", "shuffle", "group",
             "split", "color", "aim", "strobe", "laser", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
@@ -65,7 +65,7 @@ VERSION = 3  # clip_graph::VERSION
 _INPUTS = {
     "time": ("every", "duration", "delay", "phase"),
     "space": ("heads", "direction", "centre", "at", "shift", "scale"),
-    "noise": ("heads", "period", "scale", "contrast"),
+    "random": ("heads", "every", "glide", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
     "math": ("values",),
@@ -81,7 +81,8 @@ _INPUTS = {
 }
 # Inputs that take one number 0-1. A list there was the version 2 product.
 _SCALARS = {("color", "brightness"), ("color", "alpha"), ("aim", "alpha"),
-            ("strobe", "rate"), ("strobe", "alpha"), ("noise", "contrast"),
+            ("strobe", "rate"), ("strobe", "alpha"), ("random", "glide"),
+            ("random", "contrast"),
             ("laser", "beams"), ("laser", "x"), ("laser", "y"), ("laser", "size"),
             ("laser", "rotation"), ("laser", "join"), ("laser", "alpha")}
 # Math operators that chain: `a * b * c` is one node.
@@ -265,7 +266,7 @@ class _Output(Node):
     """The output node of a graph."""
 
 
-_CLASSES = {"time": Coordinate, "space": Coordinate, "noise": Coordinate, "audio": Coordinate,
+_CLASSES = {"time": Coordinate, "space": Coordinate, "random": Coordinate, "audio": Coordinate,
             "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
             "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output, "laser": _Output}
 
@@ -468,16 +469,22 @@ def space(heads=None, direction=None, centre=None, at=None, shift=None, scale=No
                  scale=scale)
 
 
-def noise(heads=None, period=None, scale=None, contrast=None) -> Coordinate:
-    """Coherent value noise, 0-1 at each head.
+def random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate:
+    """A random value, 0-1 at each head, drawn anew each turn of `every`.
 
-    period: beats (above 0) for the noise to move to a new value. Default 4.
-    scale: the blob size, as a share (above 0) of the largest extent of the
-    heads. No scale gives one value for all heads; 0.02 gives each head its own.
-    contrast: 0-1. 0 is plain noise; 1 spreads the values 4 times wider
-    about 0.5 and clips them to 0-1. Default 0.
+    Random gives a value, shuffle gives an order.
+    every: beats (above 0) per turn. Default 4.
+    glide: 0-1. 0 jumps to the new value on the turn and holds it; 1 drifts
+    the whole turn; 0.25 holds for the first three quarters, then eases to
+    the next value. Default 0.
+    scale: how much neighbouring heads agree, as a share (above 0) of the
+    largest extent of the heads. No scale gives one value for all heads;
+    0.02 gives each head its own. Mirrored heads get one value.
+    contrast: 0-1. 0 is plain; 1 spreads the values 4 times wider about 0.5
+    and clips them to 0-1. Default 0.
     """
-    return _make("noise", heads=heads, period=period, scale=scale, contrast=contrast)
+    return _make("random", heads=heads, every=every, glide=glide, scale=scale,
+                 contrast=contrast)
 
 
 def audio(low_hz=None, high_hz=None) -> Coordinate:
@@ -541,7 +548,9 @@ def mirror(heads=None, direction=None, at=None) -> Heads:
 
 def shuffle(heads=None, time=None) -> Heads:
     """A random order of the heads: one order, or a new order per event of
-    `time` (a time node with every). Read it with space(kind="order")."""
+    `time` (a time node with every). Read it with space(kind="order").
+    Shuffle gives an order, random gives a value. Mirrored heads share a
+    place in the order, before or after the mirror."""
     return _make("shuffle", heads=heads, time=time)
 
 
