@@ -277,6 +277,7 @@ fn strip(
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
     let width = (clip.duration * 16.0).ceil().clamp(8.0, 512.0) as usize;
     let aim = aims(&clip.graph);
+    let laser = clip.graph.laser().is_some();
     let mut frames = Vec::new();
     if let Some(annotation) = scene.annotations.first() {
         if (annotation.plan.primitive_ids.len()).saturating_mul(width) > 1_000_000 {
@@ -284,9 +285,11 @@ fn strip(
         }
         // A column per step for a heatmap. An aim's curves also need the
         // clip's last moment, and the solver's pan and tilt, which only the
-        // composite gives.
+        // composite gives; so do a laser clip's beams.
         let (count, scope) = if aim {
             (width + 1, crate::eval::Scope::Composite)
+        } else if laser {
+            (width, crate::eval::Scope::Composite)
         } else {
             (width, crate::eval::Scope::Single(0))
         };
@@ -306,6 +309,12 @@ fn strip(
             .rig()
             .and_then(|rig| crate::annotation_preview::aim_curves(&frames, cells, rig));
         return Ok(preview);
+    }
+    if laser {
+        return Ok(crate::annotation_preview::render_laser_preview(
+            clip_id.to_owned(),
+            &frames,
+        ));
     }
     // The strip orders heads along a line through the rig.
     let order = crate::annotation_preview::head_order(cells);
@@ -336,6 +345,13 @@ pub fn stand_in_strip(
     beats: f64,
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
     let mut cells = line_cells(STAND_IN_HEADS);
+    // A laser clip's heads are one projector's beams.
+    if let Some(heads) = graph.laser() {
+        cells = line_cells(heads.beams);
+        for (i, cell) in cells.iter_mut().enumerate() {
+            cell.id = format!("projector:{i}");
+        }
+    }
     // An aim reads against the room: the line hangs a metre up and a metre
     // upstage of center stage, so a point at the origin is in front of it.
     if aims(graph) {
@@ -481,6 +497,27 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{}: {error}", preset.name));
             assert_eq!(strip.width, 128, "{}", preset.name);
         }
+    }
+
+    /// A fan of five beams across the whole canvas, still: five lit rows
+    /// from the top of the strip to the bottom, the same in every column.
+    #[test]
+    fn a_laser_clip_strip_is_its_beams_across_the_canvas() {
+        let graph: luma_patterns::ClipGraph = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": {"laser1": {"kind": "laser", "inputs": {"beams": 5, "size": 1}}},
+        }))
+        .unwrap();
+        let strip = stand_in_strip(&graph, 4.0).unwrap();
+        let lit = |col: u32| -> Vec<u32> {
+            (0..strip.height)
+                .filter(|row| strip.pixels[((row * strip.width + col) * 4) as usize] > 0)
+                .collect()
+        };
+        let first = lit(0);
+        assert_eq!(first.len(), 5, "{first:?}");
+        assert_eq!((first[0], first[4]), (0, strip.height - 1));
+        assert_eq!(lit(strip.width - 1), first);
     }
 
     /// The row with the most light in each column, or `None` for a dark one.

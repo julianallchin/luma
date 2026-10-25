@@ -310,6 +310,70 @@ pub(crate) fn render_aim_preview(
     }
 }
 
+/// Rows of a laser clip's strip: the canvas across, −1 at the top.
+const LASER_ROWS: u32 = 32;
+
+/// A laser clip's picture: where its beams sit across the canvas over its
+/// span. Rows are the canvas from −1 (top) to 1, columns are `frames` in
+/// order, and each beam lights its row by its intensity; a lit join lights
+/// the rows between it and the next beam on its path. Every projector draws
+/// the same canvas, so they share the strip. A laser clip has no colour of
+/// its own, so the picture is white.
+pub(crate) fn render_laser_preview(
+    annotation_id: String,
+    frames: &[UniverseState],
+) -> AnnotationPreview {
+    let (width, height) = (frames.len() as u32, LASER_ROWS);
+    if width == 0 {
+        return empty_preview(annotation_id);
+    }
+    let row = |x: f64| ((x + 1.) / 2. * f64::from(height - 1)).round();
+    let mut level = vec![0f64; (width * height) as usize];
+    for (col, frame) in frames.iter().enumerate() {
+        let mut light = |from: f64, to: f64, value: f64| {
+            let (low, high) = (
+                row(from.min(to)).max(0.),
+                row(from.max(to)).min(f64::from(height - 1)),
+            );
+            let mut r = low;
+            while r <= high {
+                let at = (r as u32 * width + col as u32) as usize;
+                level[at] = level[at].max(value);
+                r += 1.;
+            }
+        };
+        for (i, beam) in frame.beams.iter().enumerate() {
+            light(beam.x, beam.x, beam.intensity);
+            let next = frame.beams.get(i + 1).filter(|next| {
+                (&next.projector, &next.zone, next.path) == (&beam.projector, &beam.zone, beam.path)
+            });
+            if let Some(next) = next {
+                light(
+                    beam.x,
+                    next.x,
+                    beam.join.min(1.) * beam.intensity.min(next.intensity),
+                );
+            }
+        }
+    }
+    let mean = (level.iter().sum::<f64>() / level.len() as f64) as f32;
+    let pixels = level
+        .iter()
+        .flat_map(|value| {
+            let v = (value.clamp(0., 1.) * 255.).round() as u8;
+            [v, v, v, 255]
+        })
+        .collect();
+    AnnotationPreview {
+        annotation_id,
+        width,
+        height,
+        pixels,
+        dominant_color: [mean; 3],
+        aim: None,
+    }
+}
+
 /// Most curves a band of [`aim_curves`] holds. Past this many distinct
 /// tracks the band is a texture, and an even pick of them reads the same.
 const AIM_CURVES: usize = 16;
@@ -475,5 +539,55 @@ mod tests {
     fn a_still_head_is_a_flat_line_in_the_middle() {
         let still = distinct_curves(std::iter::once(vec![12.; 16]));
         assert_eq!(still, vec![vec![0.5; 16]]);
+    }
+
+    fn beam(path: u32, x: f64, join: f64) -> luma_patterns::laser::Beam {
+        luma_patterns::laser::Beam {
+            projector: "p".into(),
+            zone: String::new(),
+            path,
+            s: 0.,
+            x,
+            y: 0.,
+            join,
+            intensity: 1.,
+        }
+    }
+
+    fn lit_rows(preview: &AnnotationPreview, col: u32) -> Vec<u32> {
+        (0..preview.height)
+            .filter(|row| preview.pixels[((row * preview.width + col) * 4) as usize] > 0)
+            .collect()
+    }
+
+    #[test]
+    fn a_beam_moving_across_the_canvas_moves_down_the_strip() {
+        let frames: Vec<UniverseState> = [-1., 0., 1.]
+            .into_iter()
+            .map(|x| UniverseState {
+                beams: vec![beam(0, x, 0.)],
+                ..Default::default()
+            })
+            .collect();
+        let preview = render_laser_preview("clip".into(), &frames);
+        assert_eq!(lit_rows(&preview, 0), [0]);
+        assert_eq!(lit_rows(&preview, 1).len(), 1);
+        assert_eq!(lit_rows(&preview, 2), [preview.height - 1]);
+    }
+
+    #[test]
+    fn a_lit_join_fills_between_beams_and_a_dark_one_does_not() {
+        let frame = |join| UniverseState {
+            beams: vec![beam(0, -0.5, join), beam(0, 0.5, join), beam(1, 0.9, 1.)],
+            ..Default::default()
+        };
+        let preview = render_laser_preview("clip".into(), &[frame(1.), frame(0.)]);
+        let (line, beams) = (lit_rows(&preview, 0), lit_rows(&preview, 1));
+        let [a, b, c] = beams[..] else {
+            panic!("three beams, no line: {beams:?}");
+        };
+        // The line runs from the first beam to the second, not on to the
+        // third: that is another layer's.
+        assert_eq!(line, (a..=b).chain([c]).collect::<Vec<_>>());
     }
 }
