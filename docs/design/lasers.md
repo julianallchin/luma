@@ -75,6 +75,15 @@ frame, and nothing hides that.
   thin triangle from the projector whose brightness is time spent over angle
   swept. A dwell collapses to a bright line, a sweep spreads to a dim sheet.
   The result is added into the HDR target before glare.
+- The galvo model is a damped spring per mirror, exact over each point
+  period (`laser.rs`, `Galvo`): 4 kHz natural frequency, damping 0.7. A
+  30 kpps scanner settles a 0.1° step in 100–130 µs with a small mirror
+  (Cambridge Technology 6210H/6215H datasheets); a show scanner's larger
+  mirror at ILDA's 8° test angle is slower, a rise of about three points.
+  So a fast shape's corners round, the mirrors slow through them and the
+  light dwells there, brighter than the edges, and a jump overshoots about
+  5% before it settles. It is linear: a real scanner's large steps are also
+  slew-limited, which this does not model.
 - A scan shorter than the persistence window counts as one whole scan, so it
   does not flicker as the window slides; a longer one's window fades at its
   ends. Beams widen with distance (1.5 mrad) and fade across their width.
