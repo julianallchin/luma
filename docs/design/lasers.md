@@ -83,3 +83,39 @@ frame, and nothing hides that.
 - What the beams scatter lights the room and the haze round them, through
   the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
   glow").
+
+## v2 (agreed 2026-10-25)
+
+The first round's laser node fixed a beam's place by its `shape`, faked
+sheets with many joined beams, and coloured beams through 32 colour samples
+per projector that Color clips over the projector filled and beams blended
+between. v2 follows how Beyond, ILDA and FB4 work: the drawing owns its
+points and its colours.
+
+- **Elements are the laser node's heads.** `kind` is `beams`, `line`,
+  `ring`, `polygon` or `grid`, with `count`. A 16-beam fan is 16 elements,
+  four rings are 4, a sheet is 1. Space, Random, Shuffle and Mirror work
+  over them as over a mover's heads, and the clip owns them, so their
+  identity is stable.
+- **`along`** is a source node like Time and Space: 0 to 1 within an
+  element, from a line's start to its end or once round a ring. An input
+  that reads it varies within the element (a gradient, a bend, dashes),
+  and the solver samples it as finely as it draws.
+- **Per-element inputs** on the laser node: `x`, `y`, `size`, `rotation`,
+  `color`. Wired only from Space, Random, Time and the like they give one
+  value per element; wired from `along` they vary along it.
+- **Laser clips combine by Add (draw both) or Replace (morph). There are no
+  clips on top:** Color clips no longer reach projectors, and
+  `COLOR_SAMPLES` and the blending between them go. A beam is never a blend
+  of two colours.
+- The old fan, circle and grid looks become presets.
+- **Random** replaces Noise: `every`, `glide` (0 jumps on the turn and
+  holds, 1 drifts the whole turn) and `scale`. Saved graphs and presets
+  move by a one-shot migration; nothing converts at runtime. Shuffle stays
+  for orderings and composes with Mirror. Random gives a value, Shuffle
+  gives an order.
+- A venue with no zone draws into a sensible window ahead of the house.
+
+Rendering: fine haze detail along beams (small eddies a thin beam samples
+and a wide cone averages away), a second-order galvo model, stronger
+forward scatter, and occlusion for the haze glow.
