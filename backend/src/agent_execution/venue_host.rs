@@ -186,6 +186,7 @@ impl VenueHost {
             scene.render.show_floor = false;
         }
         let booth = geometry.booth();
+        let lasers = geometry.lasers.clone();
         let meshes_root = stage_render::meshes_root(Some(&self.resource_root));
 
         // The GPU render is a blocking submit-and-map. Running it on a blocking
@@ -200,6 +201,7 @@ impl VenueHost {
                     state,
                     time,
                     size: (width, height),
+                    lasers,
                 },
                 meshes_root,
             )
@@ -521,6 +523,44 @@ impl VenueHost {
             .map_err(|error| HostCallError::new("invalid_group", error))?;
         groups::invalidate_venue_fixture_cache();
         self.groups().await
+    }
+
+    async fn laser_zones(&self) -> Result<Value, HostCallError> {
+        let mut access = self.read_access().await?;
+        let zones = crate::database::local::lasers::list_zones(&mut access)
+            .await
+            .map_err(|error| HostCallError::new("invalid_venue", error))?;
+        Ok(json!({ "zones": zones }))
+    }
+
+    /// Create the zone named `name`, or change the one already called that.
+    async fn laser_zone(&self, request: LaserZoneRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_laser_zone", error);
+        let name =
+            crate::models::lasers::LaserZone::check(&request.name, request.turn, request.tilt)
+                .map_err(invalid)?;
+        let mut access = self.write_access().await.map_err(invalid)?;
+        let existing = crate::database::local::lasers::list_zones(&mut access)
+            .await
+            .map_err(invalid)?
+            .into_iter()
+            .find(|zone| zone.name == name)
+            .map(|zone| zone.id);
+        let zone = crate::database::local::lasers::save_zone(
+            &mut access,
+            existing.as_deref(),
+            name,
+            request.turn,
+            request.tilt,
+        )
+        .await
+        .map_err(invalid)?
+        .ok_or_else(|| invalid("the zone vanished while it was saved".into()))?;
+        access
+            .commit()
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        Ok(json!({ "zone": zone }))
     }
 
     async fn reach(&self, request: ReachRequest) -> Result<Value, HostCallError> {
@@ -919,6 +959,7 @@ impl VenueHost {
             environment: luma_render::scene_desc::VenueEnvironment::default(),
             // Likewise: a shape is read off a clear picture of it.
             haze: luma_render::scene_desc::VenueHaze::default(),
+            lasers: Default::default(),
         };
         self.shoot(
             geometry,
@@ -1053,6 +1094,8 @@ impl HostCallHandler for VenueHost {
                     "venue.groups" => self.groups().await,
                     "venue.group" => self.group(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
+                    "venue.laser_zones" => self.laser_zones().await,
+                    "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
                     "venue.reach" => self.reach(decode(payload)?).await,
                     "venue.place" => self.place(decode(payload)?).await,
                     "venue.attach" => self.attach(decode(payload)?).await,
@@ -1239,6 +1282,14 @@ fn described_haze(haze: VenueHaze) -> Value {
         "no haze".to_string()
     });
     value
+}
+
+/// A laser zone by name: its window, in degrees.
+#[derive(Deserialize)]
+struct LaserZoneRequest {
+    name: String,
+    turn: [f64; 2],
+    tilt: [f64; 2],
 }
 
 /// Create a named collection, or explicitly replace its fixture membership.

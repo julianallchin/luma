@@ -15,10 +15,12 @@ mod scan;
 pub use scan::{LaserFrame, LaserPoint};
 
 use crate::database::local::venue_access::AuthorizedVenue;
+use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::lasers::LaserZone;
 use crate::models::universe::UniverseState;
 use fixture_kinematics::Mount;
 use glam::DVec3;
+use luma_scene::venue::ResolvedVenue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -195,16 +197,8 @@ impl LaserRig {
     ) -> Result<Self, String> {
         let patch = crate::database::local::fixtures::get_patched_fixtures(access).await?;
         let mut definitions = HashMap::new();
-        let mut projectors = Vec::new();
-        let mut venue = None;
-        let limits: HashMap<String, Vec<[f64; 2]>> =
-            crate::database::local::lasers::list_limits(access)
-                .await?
-                .into_iter()
-                .map(|limit| (limit.fixture_id, limit.points))
-                .collect();
         for fixture in &patch {
-            let definition = definitions
+            definitions
                 .entry(fixture.fixture_path.clone())
                 .or_insert_with(|| {
                     crate::fixtures::parser::parse_definition(
@@ -212,24 +206,59 @@ impl LaserRig {
                     )
                     .ok()
                 });
-            let Some(definition) = definition.as_ref().filter(|d| d.is_laser_projector()) else {
-                continue;
-            };
-            if venue.is_none() {
-                venue = Some(crate::venue_graph::resolved(access, fixtures_root).await?);
-            }
-            let Some(pose) = venue.as_ref().and_then(|venue| venue.pose(&fixture.id)) else {
-                continue;
-            };
-            let [across, up] = definition.focus_range();
-            projectors.push(Projector {
-                id: fixture.id.clone(),
-                basis: Basis::of(&crate::fixtures::layout::fixture_mount(pose)),
-                field: [f64::from(across), f64::from(up)],
-                rate: POINT_RATE,
-                limit: limits.get(&fixture.id).cloned(),
-            });
         }
+        let any = definitions
+            .values()
+            .flatten()
+            .any(FixtureDefinition::is_laser_projector);
+        let venue = if any {
+            crate::venue_graph::resolved(access, fixtures_root).await?
+        } else {
+            ResolvedVenue::default()
+        };
+        Self::read(
+            access,
+            &patch,
+            |path| definitions.get(path)?.as_ref(),
+            &venue,
+        )
+        .await
+    }
+
+    /// [`Self::load`] for a caller that already holds the patch, its
+    /// definitions by path and the solved venue: reads only the limits and
+    /// zones.
+    ///
+    /// # Errors
+    /// Fails when the limits or zones cannot be read.
+    pub async fn read<'d>(
+        access: &mut impl AuthorizedVenue,
+        patch: &[PatchedFixture],
+        definition: impl Fn(&str) -> Option<&'d FixtureDefinition>,
+        venue: &ResolvedVenue,
+    ) -> Result<Self, String> {
+        let limits: HashMap<String, Vec<[f64; 2]>> =
+            crate::database::local::lasers::list_limits(access)
+                .await?
+                .into_iter()
+                .map(|limit| (limit.fixture_id, limit.points))
+                .collect();
+        let projectors = patch
+            .iter()
+            .filter_map(|fixture| {
+                let definition = definition(&fixture.fixture_path)
+                    .filter(|definition| definition.is_laser_projector())?;
+                let pose = venue.pose(&fixture.id)?;
+                let [across, up] = definition.focus_range();
+                Some(Projector {
+                    id: fixture.id.clone(),
+                    basis: Basis::of(&crate::fixtures::layout::fixture_mount(pose)),
+                    field: [f64::from(across), f64::from(up)],
+                    rate: POINT_RATE,
+                    limit: limits.get(&fixture.id).cloned(),
+                })
+            })
+            .collect();
         let zones = crate::database::local::lasers::list_zones(access)
             .await?
             .iter()

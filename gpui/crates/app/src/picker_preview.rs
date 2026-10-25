@@ -45,6 +45,7 @@ pub(crate) fn install(
     Sequence::install(
         scene,
         definitions,
+        rig.lasers.clone(),
         stage_render::meshes_root(None),
         luma_scene::View::Front,
         None,

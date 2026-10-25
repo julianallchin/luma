@@ -29,9 +29,8 @@ pub async fn list_laser_zones(
     Ok(db::list_zones(&mut access).await?)
 }
 
-/// Create a zone (no `zone_id`) or change one. The name is trimmed and may
-/// not be empty; each range is in degrees, min below max, turn within a
-/// half turn either way and tilt within a quarter.
+/// Create a zone (no `zone_id`) or change one, as [`LaserZone::check`]
+/// allows.
 pub async fn save_laser_zone(
     services: &AppServices,
     venue_id: String,
@@ -40,18 +39,7 @@ pub async fn save_laser_zone(
     turn: [f64; 2],
     tilt: [f64; 2],
 ) -> Result<LaserZone, CommandError> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(CommandError::Invalid("A zone name cannot be empty".into()));
-    }
-    let span = |[min, max]: [f64; 2], reach: f64| {
-        min.is_finite() && max.is_finite() && -reach <= min && min < max && max <= reach
-    };
-    if !span(turn, 180.) || !span(tilt, 90.) {
-        return Err(CommandError::Invalid(format!(
-            "A zone turns between -180° and 180° and tilts between -90° and 90°, each min below max; got turn {turn:?} and tilt {tilt:?}"
-        )));
-    }
+    let name = LaserZone::check(&name, turn, tilt).map_err(CommandError::Invalid)?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     let zone = db::save_zone(&mut access, zone_id.as_deref(), name, turn, tilt)

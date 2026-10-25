@@ -188,6 +188,23 @@ class VenueGroupTests(unittest.TestCase):
         self.assertEqual(venue.generate_groups().names(), ("back_movers",))
         self.assertEqual(calls[-1], ("venue.generate_groups", {}))
 
+    def test_laser_zones_read_and_write_by_name(self) -> None:
+        calls = []
+        row = {"id": "z1", "venueId": "v", "name": "Crowd", "turn": [-40, 40], "tilt": [10, 25]}
+
+        def host_call(method, payload):
+            calls.append((method, payload))
+            return {"zones": [row]} if method == "venue.laser_zones" else {"zone": row}
+
+        venue = Venue({}, host_call=host_call, workspace=Path(tempfile.mkdtemp()))
+        [zone] = venue.laser_zones()
+        self.assertEqual((zone.id, zone.turn, zone.tilt), ("z1", (-40.0, 40.0), (10.0, 25.0)))
+        self.assertEqual(venue.laser_zone("Crowd", turn=(-40, 40), tilt=(10, 25)).id, "z1")
+        self.assertEqual(
+            calls[-1],
+            ("venue.laser_zone", {"name": "Crowd", "turn": [-40.0, 40.0], "tilt": [10.0, 25.0]}),
+        )
+
 
 class VenueRenderTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -1,6 +1,6 @@
 ---
 name: node-cards
-description: The clip graph node reference. The grammar in ten lines, every one of the 14 nodes (math and value included) with its inputs, units, ranges, empty values and settings, the wire types, the curve presets, and the checker's error format. Read this before you build a clip graph.
+description: The clip graph node reference. The grammar in ten lines, every one of the 15 nodes (math and value included) with its inputs, units, ranges, empty values and settings, the wire types, the curve presets, and the checker's error format. Read this before you build a clip graph.
 ---
 
 # Clip graph nodes
@@ -11,7 +11,7 @@ functions. The Rust checker reads the same graph that the inspector shows.
 ## Grammar in 10 lines
 
 1. A clip has a name, a selection, a time range, a blend mode, a seed and one graph.
-2. A graph has nodes. Exactly one node is an output: `color`, `aim` or `strobe`.
+2. A graph has nodes. Exactly one node is an output: `color`, `aim`, `strobe` or `laser`.
 3. Every node has one output wire. A wire goes into an input of another node.
 4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
@@ -50,7 +50,7 @@ math with a numbered id that one input reads in place:
 `space(shift=curve(t, 'Ramp up'))`, `color(brightness=cut * fade)`. An id is
 a Python name of at most 32 characters that is not a builder name (`time`,
 `space`, `noise`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
-`split`, `color`, `aim`, `strobe`, `preset`, `max`, `min`) or a keyword.
+`split`, `color`, `aim`, `strobe`, `laser`, `preset`, `max`, `min`) or a keyword.
 
 ## Values and units
 
@@ -158,6 +158,41 @@ once a bar. Never drive `rate` from `audio`. A real fixture strobes on its own
 clock and restarts it whenever the rate changes, so a rate that moves every
 frame barely flashes on the rig even though the stage view strobes. Let the
 music decide *where* strobe clips go, not how fast they flash.
+
+**laser** `laser(heads=None, beams=None, x=None, y=None, size=None, rotation=None, join=None, alpha=None, shape="fan", zone="")`
+
+| Input | Type | Unit | Range | Empty |
+|---|---|---|---|---|
+| heads | heads | | | all clip beams |
+| beams | number | heads | 1–64, whole, fixed | 8 |
+| x | number | canvas | -1–1 | 0 |
+| y | number | canvas | -1–1 | 0 |
+| size | number | share | 0–1 | 0.5 |
+| rotation | number | degrees | -180–180 | 0 |
+| join | number | share | 0–1 | 0 |
+| alpha | number | share | 0–1 | 1 |
+
+Beam shows from laser projectors. Select projectors, as any fixture; a laser
+clip skips other fixtures. Each projector draws `beams` beams, its heads
+for the shapers, laid out as `shape` (`fan` a row, `circle` a ring, `grid`
+rows) on the zone's canvas: -1 to 1 across and up the zone's window, the
+same directions from every projector, so six projectors give six parallel
+fans. `size` scales the shape (a fan of size 1 spans the canvas), `x` and
+`y` move it, `rotation` turns it. Anchor a growing fan with `size` and `x`
+together. `join` lights the moves between beams: 0 beams, 1 lines, so a fan
+at join 1 is a sheet. `beams` is a plain number for the whole clip, never
+wired. `zone` is a zone id from `luma.venue.laser_zones()`; empty is the
+venue's first zone. A `mirror` reflects the canvas.
+
+A laser draws no colour. A **color** clip over the projectors lights the
+beams: a beam takes the colour at its place along its clip's order (0 to 1),
+so a gradient never depends on the beam count, and one color clip can cover
+lights and lasers. With no colour, beams are white. Blend modes: `replace`
+morphs the beams under it into its own by alpha, matched by place; `add`
+draws both. A laser and a light cannot share one graph.
+
+Brightness is time: a projector shares each scan between its beams, so 16
+beams are each dimmer than 4. Fewer beams read brighter.
 
 ## Coordinate nodes
 
@@ -417,7 +452,7 @@ Sunset, B/W. Bands: sub, low, mid, high, the same bands as `luma.music`. Read th
 
 `luma.track.definition("space")` gives one node's definition record: inputs
 with type, unit, range and default (`None` is empty), and settings with
-their options. `luma.track.nodes()` lists the 13 kinds.
+their options. `luma.track.nodes()` lists the 15 kinds.
 
 ## Errors
 

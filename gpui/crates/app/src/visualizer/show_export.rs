@@ -264,7 +264,7 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
         if let Some(state) = &universe {
-            frame.lasers = super::lasers::scans(&shot.lasers, state, tick.clock);
+            frame.lasers = stage_render::laser_scans(&shot.lasers, state, tick.clock);
         }
         in_flight.push_back(tick.kept);
         if let Some(pixels) = recorder
