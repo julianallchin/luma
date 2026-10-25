@@ -130,7 +130,7 @@ them at m..M, so `shift' = m + shift·(M − m)` and `scale' = scale·(M − m)`
 along a mirror assumes a head on the plane: `m = at`, `M − m = max(at,
 1 − at)`.
 
-Kinds (14): `time`, `space`, `noise`, `audio`, `curve`, `math`, `value`, `mirror`,
+Kinds (14): `time`, `space`, `random`, `audio`, `curve`, `math`, `value`, `mirror`,
 `shuffle`, `group`, `split`, `color`, `aim`, `strobe`. `clock` is gone.
 
 | Change | v3 |
@@ -227,7 +227,7 @@ it (Circle and Pinwheel: the swing; Ballyhoo: speed, scale and swing).
 3. Every node has one output wire. A wire goes into an input of another node.
 4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
-6. Coordinate nodes give a raw 0–1 coordinate: `clock`+`time`, `space`, `noise`, `audio`.
+6. Coordinate nodes give a raw 0–1 coordinate: `clock`+`time`, `space`, `random`, `audio`.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no clock = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
@@ -282,7 +282,7 @@ Wire types (one per node kind):
 |---|---|---|
 | clock | `clock` | `time.clock`, `shuffle.clock` |
 | heads | `mirror`, `shuffle`, `group`, `split` | any `heads` input |
-| coordinate | `time`, `space`, `noise`, `audio` | `curve.x` |
+| coordinate | `time`, `space`, `random`, `audio` | `curve.x` |
 | number | `curve` (kind number) | any number input |
 | vector | `curve` (kind vector) | any vector input |
 | color | `curve` (kind color) | `color.color` |
@@ -294,7 +294,7 @@ Axes. A wire carries a set of axes: `T` (time), `H` (heads), `E(k)` (the
 events of clock `k`). A value carries none. Some inputs refuse an axis; see
 each node. `E` is internal: users never see it, the output node resolves it
 (section 5.3). An input that sets a clock's period (`time.every`,
-`time.duration`, `noise.period`) resolves it too: it takes the newest begun
+`time.duration`, `random.every`) resolves it too: it takes the newest begun
 event's value, so `period=curve(time(every=1), …)` sets a speed that repeats
 each beat while the clock keeps counting up.
 
@@ -463,21 +463,30 @@ audio on `shift` (the shape moves, form 2), or a curve over the space on a
 that grows: `length=curve(time(), "Ramp up")`); `1/length` is not a curve.
 A length of 0 is a jump at the shift, as for `time.length`.
 
-**noise** → coordinate
+**random** → coordinate
+
+Random gives a value, Shuffle gives an order.
 
 | Input | Type | Unit | Range | Promotable | Empty |
 |---|---|---|---|---|---|
 | heads | heads | | | wire only | all clip heads |
-| period | number | beats | > 0 | yes | 4 |
+| every | number | beats | > 0 | yes | 4 |
+| glide | number | share | 0–1 | yes | 0 |
 | scale | number | share | > 0 | yes | uniform (one value for all heads) |
 | contrast | number | share | 0–1 | yes | 0 |
 
-One mode. Output 0–1 = coherent value noise sampled at
-`(u/scale, v/scale, z/scale, beats/period)`, where `u, v, z` are the head's
-unit position scaled so the span's largest extent is 1. Contrast:
-`((raw − 0.5) × (1 + 3·contrast) + 0.5)` clamped. Each noise node has its own
-stream: salt = clip seed ⊕ FNV(node id). A tiny scale (0.02) gives each head
-its own wander; that replaces `independent`.
+Each turn of `every` draws a new value per head. `glide` 0 jumps to it on
+the turn and holds it the whole turn; `glide` 1 drifts the whole turn;
+between, it holds for the first 1 − glide of the turn and eases to the next
+value over the rest. Output 0–1 = coherent value noise sampled at
+`(u/scale, v/scale, z/scale, t)`, where `u, v, z` are the head's unit
+position after any mirror, scaled so the span's largest extent is 1, so a
+mirror's pairs read one value; `t` is the turn, plus the glide's share of
+the way to the next (eased by the field's own fade). Contrast:
+`((raw − 0.5) × (1 + 3·contrast) + 0.5)` clamped; values that glide crowd
+the middle, and contrast spreads them out again. Each random node has its
+own stream: salt = clip seed ⊕ FNV(node id). A tiny scale (0.02) gives each
+head its own value.
 
 **audio** → coordinate
 
@@ -530,8 +539,8 @@ of mirror directions that folded it.
 The plane sits at `at` of the span's extent along the direction, measured
 before any fold (version 2: `normal`, and `offset` in metres from the
 middle). Heads on the low side take their reflected position, as a
-shader's reflect, so `order` reads them at the slot they fold onto; a
-shuffled rank is not changed. Aim yaw and pitch are mirrored for those heads. Mirrors stack:
+shader's reflect, so `order` reads them at the slot they fold onto, and a
+shuffled order gives them the rank of the unit they fold onto. Aim yaw and pitch are mirrored for those heads. Mirrors stack:
 two mirrors give four-fold symmetry (Kaleidoscope).
 
 **shuffle**
@@ -545,7 +554,10 @@ A random order of the units within each span, from the clip seed and the
 event index (`epoch_seed(seed, index)` ranking, as `SourceOp::Random` today).
 With a clock, a new order per event; the output carries `E(k)`. Positions are
 not changed. `space(kind=order)` reads the shuffled rank in place of its
-sort along the direction.
+sort along the direction. Only the units no mirror moved are ranked; a
+folded unit takes the rank of the one nearest where it folded, so a
+mirror's pairs keep one slot whether the mirror comes before or after the
+shuffle.
 
 **group**
 
@@ -647,7 +659,7 @@ as "Curve 2"). Examples, verbatim:
 - `curve5: expected low and high not opposite for space1.direction; got (1,0,0) and (-1,0,0). Example: rotate with kind="angle" instead`
 - `graph: expected one output node; got color1 and strobe1. Example: one clip per output`
 - `clip: expected a name; got none. Example: name="Kick chase"`
-- `noise2.heads: expected a heads wire; got a coordinate wire from space1. Example: heads=group()`
+- `random2.heads: expected a heads wire; got a coordinate wire from space1. Example: heads=group()`
 
 The Rust type is `Error(String)`; the score layer prefixes `clip <name> (<id>): `.
 
@@ -757,7 +769,7 @@ Prepare time (cells known):
 3. `time`: `ClipProgress`, or the clock's `progress`, then
    `Shift(delay, length, phase)`.
 4. `space`: constant `a` field (or `Axis`).
-5. `noise`: `ClockTable(period)` → `Clock` turns → `Noise4(u,v,z, turns, scale, contrast, salt)`.
+5. `random`: `ClockTable(every)` → `Clock` turns → `Random(u,v,z, turns, glide, scale, contrast, salt)`.
 6. `audio`: `band_energy` → `clip_range` → `Normalize` → 0–1.
 7. `curve`: `Curve(x, low, high; shape, gradient, kind)` → 3 components.
    A list input: its items chained through `Product`.
@@ -769,7 +781,7 @@ Prepare time (cells known):
 
 Kernel list (`clip_graph::kernels`, replacing `forms::source_ops` and
 `forms::ops`): `ClockTable`, `Clock`, `Events`, `ClipProgress`, `Shift`,
-`Axis`, `Fold`, `Noise4`, `Normalize`, `Curve`, `Rank`, `Pick`,
+`Axis`, `Fold`, `Random`, `Normalize`, `Curve`, `Rank`, `Pick`,
 `Gather`, `Product`, `ColorOut`, `StrobeOut`, `AimOut`. Plus the kept `BandEnergy`,
 `ClipRange`, `Output`.
 
@@ -828,7 +840,7 @@ queries for the UI).
 ## 6. Python API
 
 Module `luma_exec/clip.py`, exposed as `luma.clip`. The exec namespace binds
-these names bare before every cell: `clock, time, space, noise, audio, curve,
+these names bare before every cell: `clock, time, space, random, audio, curve,
 mirror, shuffle, group, split, color, aim, strobe, preset`.
 
 ### 6.1 Builders
@@ -837,7 +849,7 @@ mirror, shuffle, group, split, color, aim, strobe, preset`.
 clock(every, duration=None) -> Clock
 time(clock=None, delay=0, length=1, phase=0) -> Coordinate
 space(heads=None, direction=None, centre=None, at=None, shift=0, scale=1, kind="line", wrap=None) -> Coordinate
-noise(heads=None, period=None, scale=None, contrast=None) -> Coordinate
+random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate
 audio(low_hz=None, high_hz=None) -> Coordinate
 curve(x, shape=None, low=None, high=None, gradient=None) -> Value
 mirror(heads=None, direction=None, at=None) -> Heads
@@ -1021,7 +1033,7 @@ and for `direction` the existing `Control::Direction([Turn, Tilt])`; color →
 with `with_presets(curve presets)`, `with_scale([low, high], unit)`,
 `over_time(Clock)` when `x` comes from a `time`, `across_space(HeadSource)`
 when from a `space`; gradient → `CurveStrip` (`StripValue::Gradient`) with
-the gradient presets; a noise node shows `NoisePreview` under its rows.
+the gradient presets; a random node shows `RandomPreview` under its rows.
 
 ### 7.2 Add flow and promotion
 
@@ -1033,9 +1045,9 @@ timeline.
 Each value input row has a source chip in its header (`float::picker_chip`),
 reading "Value" when it holds a value. Its menu:
 
-- number, vector, color inputs: `Value`, `Over time`, `Over space`, `Noise`,
+- number, vector, color inputs: `Value`, `Over time`, `Over space`, `Random`,
   `Audio`, `Link…`. Picking `Over time` inserts `time` (no clock) + `curve`
-  wired into the input; `Over space` inserts `space` + `curve`; `Noise`,
+  wired into the input; `Over space` inserts `space` + `curve`; `Random`,
   `Audio` likewise. The curve's kind follows the input. `Link…` lists
   compatible nodes already in the graph ("Curve 1 · Ramp up").
 - heads inputs: `All`, `Mirror`, `Shuffle`, `Group`, `Split`, `Link…`.
@@ -1095,7 +1107,7 @@ today (`preview_clip` on a stand-in rig).
 
 `ClipGraph::summary()` → one short string, parts joined by " · ":
 for each clock `every {E}` (or `every varies`); for each space its kind word
-(`line`, `order`, `radial`, `angle`); `noise` when present; `audio {lo}–{hi} Hz`
+(`line`, `order`, `radial`, `angle`); `random` when present; `audio {lo}–{hi} Hz`
 when present; `still` when none apply. Example: `line · every 2`.
 
 ---
@@ -1235,7 +1247,7 @@ Sunset, B/W. Bands: sub 20–60, low 60–300, mid 300–4000, high
 | Sparkle | `k = clock(every=0.125, duration=0.5); order = shuffle(clock=k); rank = space(order, kind="order"); pick = curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]); t = time(k); spike = curve(t, "Spike"); color(brightness=[pick, spike])` | one clock; a random 30% × a spike over time |
 | Build | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp up"), kind="order"); color(brightness=curve(rank, "Step down"))` | shuffle → space(order) shifted by progress over the clip → step; stretches with the clip |
 | Dissolve | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp down"), kind="order"); color(brightness=curve(rank, "Step down"))` | as Build, heads go off in a random order |
-| Clouds | `cloud = noise(period=8, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)` | one noise → two curves |
+| Clouds | `cloud = random(every=8, glide=1, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)` | one random → two curves |
 | Sparkle rain | `k = clock(every=0.25, duration=1); bars = group(); order = shuffle(bars, clock=k); columns = split(); t = time(k); fall = curve(t, "Ramp up", low=-0.3, high=1); drop = space(columns, direction=(0, 0, -1), shift=fall, length=0.3); streak = curve(drop, "Comet"); rank = space(order, kind="order"); pick = curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]); color(brightness=streak, alpha=pick)` | needs vertical bars; each event's fall is a shift down each bar; the pick is a random 20% per bar |
 
 ### Movement
@@ -1282,7 +1294,7 @@ Sunset, B/W. Bands: sub 20–60, low 60–300, mid 300–4000, high
 | Pinwheel | `k = clock(every=4); turn = space(kind="angle"); lag = curve(turn, "Ramp up", high=360); t = time(k, phase=lag); across = curve(t, "Cosine", low=-20, high=20); up = curve(t, "Sine", low=-20, high=20); aim(direction=D, yaw=across, pitch=up)` | Circle with phase by angle |
 | Scissor | `k = clock(every=4); halves = mirror(); t = time(k); swing = curve(t, "Sine", low=-30, high=30); aim(heads=halves, direction=D, yaw=swing)` | mirrored heads yaw the other way |
 | Up/down flip | `k = clock(every=2); t = time(k); flip = curve(t, "Square", low=-30, high=30); aim(direction=D, pitch=flip)` | held pitch |
-| Ballyhoo | `drift = noise(period=4, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = noise(period=4, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two noise nodes, two streams |
+| Ballyhoo | `drift = random(every=4, glide=1, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = random(every=4, glide=1, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two random nodes, two streams |
 
 Motion presets ship with blend `offset` and a Position underneath is the
 usual pairing.
@@ -1350,7 +1362,7 @@ different set in the next; curve outside gives low, color outside gives
 black; overlap: two events, the brighter wins, equal brightness → the newer;
 two clocks on color and brightness are independent; mirror flips yaw sign
 for folded heads and Kaleidoscope's four quadrants match; Turning line lights
-two opposite arms; Speed-up chase's event count grows; noise: two nodes with
+two opposite arms; Speed-up chase's event count grows; random: two nodes with
 the same settings differ, one linked node is equal.
 
 B: migrations, `rows.rs`, `schema.rs`, `graph_scores.rs`, `compile_clip`,
@@ -1437,8 +1449,8 @@ One line each; the alternative after "alt:".
 11. Overlap effect per clock: color = peak(color) × brightness × alpha; strobe = rate × alpha; aim = alpha × (|yaw| + |pitch|); ties newest. alt: brightness only, as today.
 12. Aim `base` gains `away` (aim from the point through the head) so Bloom is one animated point. alt: only direction|point and approximate Bloom with pitch over radial.
 13. The heads wire carries mirror directions; `aim.heads` uses them to mirror yaw and pitch for folded heads. alt: mirror only folds positions and aim has no heads input.
-14. Noise is one 4-D field over normalized (u, v, z) and time; no scale = uniform; salt = clip seed ⊕ FNV(node id). alt: keep the three old modes and `key`.
-15. Noise `scale` is a share of the span's largest extent, not metres. alt: metres.
+14. Random is one 4-D field over normalized (u, v, z) and time, read on a glided clock; no scale = uniform; salt = clip seed ⊕ FNV(node id). alt: keep the three old modes and `key`.
+15. Random `scale` is a share of the span's largest extent, not metres. alt: metres.
 16. `shuffle` permutes order only, within each span, new per event; no clock = once per clip. alt: also shuffle positions.
 17. `split` has a setting `by` = fixture|group. alt: fixture only.
 18. `group.size`, `mirror.at`, `mirror.direction`, `space.direction`, `space.centre` and `audio.*_hz` are promotable over time only (no heads axis). alt: values only.
