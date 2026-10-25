@@ -436,6 +436,8 @@ impl Lowering<'_> {
             Kernel::Rank,
             vec![
                 ("index", index),
+                ("positions", heads.positions.clone()),
+                ("base", heads.unfolded.clone()),
                 ("unit", self.index_field(&heads.units.unit)?),
                 ("span", self.index_field(&heads.units.span)?),
                 ("first", self.index_field(&heads.units.first)?),

@@ -28,7 +28,8 @@ pub enum Kernel {
     Group,
     /// Positions folded across a mirror plane.
     Fold,
-    /// Each unit's rank in its span, shuffled per event.
+    /// Each unit's rank in its span, shuffled per event; a folded unit
+    /// shares its image's rank.
     Rank,
     /// The raw axis coordinate of each head within its span.
     Axis,
@@ -154,7 +155,11 @@ impl Kernel {
                 &["has_normal"],
                 &["positions", "folded", "normal"],
             ),
-            Kernel::Rank => (names(&["index", "unit", "span", "first"]), &[], &["value"]),
+            Kernel::Rank => (
+                names(&["index", "positions", "base", "unit", "span", "first"]),
+                &[],
+                &["value"],
+            ),
             Kernel::Axis => (
                 names(&[
                     "positions",
@@ -561,28 +566,57 @@ pub(crate) fn run(
         }
         Kernel::Rank => {
             let index = s("index");
+            let positions = s("positions");
+            let base = s("base");
             let unit = s("unit");
             let span = s("span");
             let first = s("first");
             let groups = spans(span, heads);
             // A random key per unit and event; ties (never in practice)
-            // fall back to cell order.
-            let ranking = |event: i64| {
+            // fall back to cell order. Only the units no mirror moved draw
+            // a key; a folded unit takes the rank of the one nearest the
+            // place it folded onto, so mirrored pairs stay paired.
+            let ranking = |event: i64, t: usize| {
                 let mut rank = vec![0.; heads];
+                let seed = crate::spatial::epoch_seed(batch.frame.seed, event);
                 for members in groups.values() {
-                    let mut units: Vec<(f64, usize)> = unit_heads(unit, members)
-                        .into_iter()
+                    let firsts = unit_heads(unit, members);
+                    let moved = |n: usize| {
+                        let (p, b) = (vector_at(positions, n, t), vector_at(base, n, t));
+                        (0..3).any(|a| (p[a] - b[a]).abs() > 1e-9)
+                    };
+                    let mut keepers: Vec<usize> =
+                        firsts.iter().copied().filter(|n| !moved(*n)).collect();
+                    if keepers.is_empty() {
+                        keepers = firsts.clone();
+                    }
+                    let mut keys: Vec<(f64, usize)> = keepers
+                        .iter()
                         .map(|n| {
-                            let id = &batch.fixtures[first.at(n, 0, 0) as usize];
-                            let seed = crate::spatial::epoch_seed(batch.frame.seed, event);
-                            (crate::spatial::threshold(id, seed), n)
+                            let id = &batch.fixtures[first.at(*n, 0, 0) as usize];
+                            (crate::spatial::threshold(id, seed), *n)
                         })
                         .collect();
-                    units.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-                    let place: HashMap<i64, f64> = units
+                    keys.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                    let kept: HashMap<usize, f64> = keys
                         .iter()
                         .enumerate()
-                        .map(|(r, (_, n))| (unit.at(*n, 0, 0) as i64, r as f64))
+                        .map(|(r, (_, n))| (*n, r as f64))
+                        .collect();
+                    let place: HashMap<i64, f64> = firsts
+                        .iter()
+                        .map(|n| {
+                            let p = vector_at(positions, *n, t);
+                            let distance = |k: &usize| {
+                                let q = vector_at(positions, *k, t);
+                                (0..3).map(|a| (p[a] - q[a]).powi(2)).sum::<f64>()
+                            };
+                            let nearest = keepers
+                                .iter()
+                                .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+                                .expect("a span has a unit");
+                            (unit.at(*n, 0, 0) as i64, kept[nearest])
+                        })
                         .collect();
                     for n in members {
                         rank[*n] = place[&(unit.at(*n, 0, 0) as i64)];
@@ -590,13 +624,16 @@ pub(crate) fn run(
                 }
                 rank
             };
-            let (_, times, width) = index.values().dim();
-            let mut cache: HashMap<i64, Vec<f64>> = HashMap::new();
+            let (_, index_times, width) = index.values().dim();
+            let place_times = positions.values().dim().1.max(base.values().dim().1);
+            let times = index_times.max(place_times);
+            let mut cache: HashMap<(i64, usize), Vec<f64>> = HashMap::new();
             let mut values = Array3::zeros((heads, times, width));
             for t in 0..times {
+                let at = if place_times == 1 { 0 } else { t };
                 for e in 0..width {
                     let k = index.at(0, t, e) as i64;
-                    let rank = cache.entry(k).or_insert_with(|| ranking(k));
+                    let rank = cache.entry((k, at)).or_insert_with(|| ranking(k, at));
                     for n in 0..heads {
                         values[[n, t, e]] = rank[n];
                     }
@@ -618,14 +655,16 @@ pub(crate) fn run(
             let shuffled = f("shuffled")? != 0.;
             let groups = spans(span, heads);
             if kind == 1 && shuffled {
-                // Shuffled, each unit is its own slot in a random order.
+                // Shuffled, each unit no mirror moved is its own slot in a
+                // random order; a folded unit shares its image's slot.
                 let (_, times, width) = rank.values().dim();
                 let mut values = Array3::zeros((heads, times, width));
                 for members in groups.values() {
-                    let count = unit_heads(unit, members).len().max(1) as f64;
-                    for n in members {
-                        for t in 0..times {
-                            for e in 0..width {
+                    for t in 0..times {
+                        for e in 0..width {
+                            let count =
+                                members.iter().map(|n| rank.at(*n, t, e)).fold(0., f64::max) + 1.;
+                            for n in members {
                                 values[[*n, t, e]] = (rank.at(*n, t, e) + 0.5) / count;
                             }
                         }
