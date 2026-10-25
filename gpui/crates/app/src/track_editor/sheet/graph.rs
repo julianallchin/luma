@@ -784,9 +784,9 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                 ));
             }
             options.extend(
-                edit::SOURCES
-                    .iter()
-                    .map(|kind| (edit::source_label(*kind).into(), Pick::Promote(*kind))),
+                edit::sources(graph, id, input)
+                    .into_iter()
+                    .map(|kind| (edit::source_label(kind).into(), Pick::Promote(kind))),
             );
             if edit::can_multiply(graph, id, input) {
                 options.push((Kind::Math.label().into(), Pick::Multiply));
@@ -799,9 +799,9 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
         }
         Ty::Coordinate => {
             options.extend(
-                edit::SOURCES
-                    .iter()
-                    .map(|kind| (edit::source_label(*kind).into(), Pick::Coordinate(*kind))),
+                edit::sources(graph, id, input)
+                    .into_iter()
+                    .map(|kind| (edit::source_label(kind).into(), Pick::Coordinate(kind))),
             );
             wired.map_or("None".into(), |(to, _)| from_name(&to))
         }
