@@ -3080,7 +3080,7 @@
           "rust": "u64"
         },
         {
-          "name": "beams",
+          "name": "elements",
           "rust": "Option<usize>"
         }
       ],
