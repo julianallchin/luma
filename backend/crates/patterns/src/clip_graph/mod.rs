@@ -1,6 +1,6 @@
 //! One small graph per clip (spec: `docs/specs/clip-graphs.md`).
 //!
-//! A clip graph has nodes of 15 kinds. Exactly one node is an output
+//! A clip graph has nodes of 16 kinds. Exactly one node is an output
 //! (`color`, `aim`, `strobe` or `laser`). Every node has one output wire. An input
 //! holds a value, a wire (`{"node": id}`), or nothing; nothing is the only
 //! default. A choice is a setting and is never wired.
@@ -27,7 +27,7 @@ pub use random::sample_random;
 pub const OUTPUT: &str = "lighting";
 pub use definitions::{
     definition, definitions, Definition, Geometry, InputDef, InputType, Produces, SettingDef, Unit,
-    MAX_BEAMS,
+    MAX_ELEMENTS,
 };
 
 use crate::{Curve, Error, Gradient, Result};
@@ -47,6 +47,7 @@ pub const MAX_NODES: usize = 64;
 pub enum Kind {
     Time,
     Space,
+    Along,
     Random,
     Audio,
     Curve,
@@ -64,9 +65,10 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in menu order.
-    pub const ALL: [Kind; 15] = [
+    pub const ALL: [Kind; 16] = [
         Kind::Time,
         Kind::Space,
+        Kind::Along,
         Kind::Random,
         Kind::Audio,
         Kind::Curve,
@@ -87,6 +89,7 @@ impl Kind {
         match self {
             Kind::Time => "time",
             Kind::Space => "space",
+            Kind::Along => "along",
             Kind::Random => "random",
             Kind::Audio => "audio",
             Kind::Curve => "curve",
@@ -108,6 +111,7 @@ impl Kind {
         match self {
             Kind::Time => "Time",
             Kind::Space => "Space",
+            Kind::Along => "Along",
             Kind::Random => "Random",
             Kind::Audio => "Audio",
             Kind::Curve => "Curve",
@@ -135,15 +139,22 @@ impl Kind {
     }
 }
 
-/// How many beams a laser clip without `beams` draws on each projector.
-pub const DEFAULT_BEAMS: usize = 8;
-
-/// What a laser clip draws on: `beams` beams on each projector it selects,
-/// in the zone with id `zone` (empty: each projector's first zone).
+/// What a laser clip draws on: `count` elements of `kind` on each projector
+/// it selects, in the zone with id `zone` (empty: the venue's first zone).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LaserHeads {
-    pub beams: usize,
+    pub kind: crate::laser::Kind,
+    pub count: usize,
+    /// A polygon's sides.
+    pub sides: usize,
     pub zone: String,
+}
+
+impl LaserHeads {
+    /// What each element draws.
+    pub fn figure(&self) -> crate::laser::Figure {
+        self.kind.figure(self.sides)
+    }
 }
 
 /// A clip's graph: nodes keyed by id (`curve2`).
@@ -433,17 +444,21 @@ impl ClipGraph {
         self.output().map(|(_, node)| node.kind)
     }
 
-    /// A laser graph's beams per projector and zone id, which a host needs
-    /// to lay out the clip's heads before it prepares the graph. `None` for
-    /// any other output.
+    /// A laser graph's elements per projector, their kind and the zone id,
+    /// which a host needs to lay out the clip's heads before it prepares the
+    /// graph. `None` for any other output.
     pub fn laser(&self) -> Option<LaserHeads> {
         let (_, node) = self.output().filter(|(_, node)| node.kind == Kind::Laser)?;
-        let beams = match node.inputs.get("beams").map(|input| self.resolve(input)) {
-            Some(Input::Number(beams)) => (*beams as usize).clamp(1, MAX_BEAMS),
-            _ => DEFAULT_BEAMS,
+        let kind = crate::laser::Kind::from_setting(node.setting("kind"));
+        let whole = |name: &str| match node.inputs.get(name).map(|input| self.resolve(input)) {
+            Some(Input::Number(value)) => Some(*value as usize),
+            _ => None,
         };
         Some(LaserHeads {
-            beams,
+            kind,
+            count: whole("count")
+                .map_or(kind.default_count(), |count| count.clamp(1, MAX_ELEMENTS)),
+            sides: whole("sides").unwrap_or(crate::laser::MIN_SIDES),
             zone: node.setting("zone").unwrap_or_default().to_string(),
         })
     }

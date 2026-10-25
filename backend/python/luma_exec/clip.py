@@ -22,8 +22,8 @@ list of `(t, color)` pairs, or `{"stops": ...}`. `None` is the empty input.
 Math is Python operators on values (curve results and math results):
 `cut * bloom * fade`, `a + b`, `1 - a`, `0.5 * a`, `max(a, b)`, `min(a, b)`.
 Each is a `math` node; a chain of one operator is one node with all its
-items. Coordinates (time, space, random, audio) are not values: wrap them in
-curve(...) first.
+items. Coordinates (time, space, along, random, audio) are not values: wrap
+them in curve(...) first.
 
 A value used in more than one place is a value node: `d = value((0.57, 0,
 0.82))`, then `direction=d` wherever that direction is meant. Plain numbers
@@ -53,8 +53,8 @@ from types import MappingProxyType
 from .color import from_srgb
 
 
-BUILDERS = ("time", "space", "random", "audio", "curve", "value", "mirror", "shuffle", "group",
-            "split", "color", "aim", "strobe", "laser", "preset", "max", "min")
+BUILDERS = ("time", "space", "along", "random", "audio", "curve", "value", "mirror", "shuffle",
+            "group", "split", "color", "aim", "strobe", "laser", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
 RESERVED = frozenset(BUILDERS) | {"math"}
@@ -65,6 +65,7 @@ VERSION = 3  # clip_graph::VERSION
 _INPUTS = {
     "time": ("every", "duration", "delay", "phase"),
     "space": ("heads", "direction", "centre", "at", "shift", "scale"),
+    "along": (),
     "random": ("heads", "every", "glide", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
@@ -77,14 +78,14 @@ _INPUTS = {
     "color": ("color", "brightness", "alpha"),
     "aim": ("heads", "direction", "point", "yaw", "pitch", "alpha"),
     "strobe": ("rate", "alpha"),
-    "laser": ("heads", "beams", "x", "y", "size", "rotation", "join", "alpha"),
+    "laser": ("heads", "count", "sides", "x", "y", "size", "rotation", "color", "alpha"),
 }
 # Inputs that take one number 0-1. A list there was the version 2 product.
 _SCALARS = {("color", "brightness"), ("color", "alpha"), ("aim", "alpha"),
             ("strobe", "rate"), ("strobe", "alpha"), ("random", "glide"),
             ("random", "contrast"),
-            ("laser", "beams"), ("laser", "x"), ("laser", "y"), ("laser", "size"),
-            ("laser", "rotation"), ("laser", "join"), ("laser", "alpha")}
+            ("laser", "count"), ("laser", "sides"), ("laser", "x"), ("laser", "y"),
+            ("laser", "size"), ("laser", "rotation"), ("laser", "alpha")}
 # Math operators that chain: `a * b * c` is one node.
 _CHAINS = ("*", "+", "max", "min")
 _SEQUENCE = itertools.count(1)
@@ -266,7 +267,8 @@ class _Output(Node):
     """The output node of a graph."""
 
 
-_CLASSES = {"time": Coordinate, "space": Coordinate, "random": Coordinate, "audio": Coordinate,
+_CLASSES = {"time": Coordinate, "space": Coordinate, "along": Coordinate, "random": Coordinate,
+            "audio": Coordinate,
             "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
             "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output, "laser": _Output}
 
@@ -469,6 +471,18 @@ def space(heads=None, direction=None, centre=None, at=None, shift=None, scale=No
                  scale=scale)
 
 
+def along() -> Coordinate:
+    """Place within a laser element, 0-1: from a line's start to its end, or
+    once round a ring or polygon; a beam is a single point, at 0.
+
+    Only a laser's x, y, size, rotation and color read it, through curves
+    and math: `y=curve(along(), "Sine", low=-0.2, high=0.2)` bends a line,
+    `color=curve(along(), gradient="Fire")` runs a gradient along it, and a
+    shape with jumps to 0 makes dashes (black is the light off).
+    """
+    return _make("along")
+
+
 def random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate:
     """A random value, 0-1 at each head, drawn anew each turn of `every`.
 
@@ -593,25 +607,34 @@ def strobe(rate=None, alpha=None) -> "Graph":
     return Graph(_make("strobe", rate=rate, alpha=alpha))
 
 
-def laser(heads=None, beams=None, x=None, y=None, size=None, rotation=None, join=None, alpha=None,
-          shape="fan", zone="") -> "Graph":
-    """Laser output: `beams` beams (a whole number, 1-64, default 8) on each
-    projector in the clip's selection, laid out as `shape` ("fan" in a row,
-    "circle" round a ring, "grid" in rows) on the zone's canvas, which runs
-    -1 to 1 across and up the zone. `size` (0-1, default 0.5) scales the
-    shape: a fan of size 1 spans the canvas. `rotation` turns it, in degrees
-    clockwise. `x` and `y` (-1 to 1) move it. `join` (0-1) lights the moves
-    between beams: 0 separate beams, 1 a line, so a fan at join 1 is a sheet.
-    `alpha` is the clip's fade. Heads from a mirror draw the mirror image.
-    `zone` is a zone id from luma.venue (empty: the venue's first zone).
+def laser(heads=None, count=None, sides=None, x=None, y=None, size=None, rotation=None,
+          color=None, alpha=None, kind="beams", zone="") -> "Graph":
+    """Laser output: `count` elements (a whole number, 1-64, fixed for the
+    clip; default 8 beams or a grid's 8 points, else 1) on each projector in
+    the clip's selection, on the zone's canvas, which runs -1 to 1 across
+    and up the zone.
 
-    A laser draws no colour: Color clips over the projectors light its beams,
-    by each beam's place along its order (white at full when none does). A
-    laser clip blends "replace" (morphs the beams under it into its own) or
-    "add" (draws both).
+    `kind`: "beams" (points), "line", "ring", "polygon" (`sides`, 3-12,
+    default 3) or "grid" (points in rows). Each element is a head: space,
+    shuffle, mirror and noise read them as they read a mover's heads, so
+    `x=curve(space(split(), kind="order"), low=-1, high=1)` fans each
+    projector's beams across the canvas. Per element: `x` and `y` (-1 to 1)
+    place its centre; `size` (0-1, default 0.5) is a line's half length or a
+    ring's radius; `rotation` (degrees clockwise) turns it; `color` (default
+    white) is its colour. An empty x or y is the element's home place:
+    beams in a row and a grid in rows, `size` wide and turned by `rotation`;
+    anything else in the middle. Wire along() into x, y, size, rotation or
+    color to vary them within each element. `alpha` is the clip's fade.
+    Heads from a mirror draw the mirror image. `zone` is a zone id from
+    luma.venue (empty: the venue's first zone).
+
+    A laser's colour is its own: Color clips do not reach projectors. A
+    laser clip blends "replace" (morphs the elements under it into its
+    own) or "add" (draws both).
     """
-    return Graph(_make("laser", {"shape": shape, "zone": zone}, heads=heads, beams=beams, x=x, y=y,
-                       size=size, rotation=rotation, join=join, alpha=alpha))
+    return Graph(_make("laser", {"kind": kind, "zone": zone}, heads=heads, count=count,
+                       sides=sides, x=x, y=y, size=size, rotation=rotation, color=color,
+                       alpha=alpha))
 
 
 def preset(name) -> "Graph":
@@ -1012,7 +1035,7 @@ def _gradient_literal(value):
 
 
 _DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
-                     "laser": {"shape": "fan", "zone": ""}}
+                     "laser": {"kind": "beams", "zone": ""}}
 # Python precedence: an atom (a name, a number, a call) binds tightest.
 _ATOM = 3
 _PRECEDENCE = {"*": 2, "+": 1, "-": 1}

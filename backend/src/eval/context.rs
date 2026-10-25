@@ -136,17 +136,16 @@ pub async fn resolve_primitive_ids_with_access(
 /// Resolve an explicit selection into physical heads, preserving errors for
 /// callers that must explain a failed preview rather than return an empty rig.
 ///
-/// A laser projector has no heads of its own. For a laser clip (`beams`
-/// set) it gives that many, one per beam, and every other fixture gives
-/// none; for any other clip it gives [`crate::laser::COLOR_SAMPLES`], the
-/// colour along a laser clip's order. Either way they spread a little across
-/// its scan ([`crate::laser::Basis::head`]).
+/// A laser projector has no heads of its own. For a laser clip (`elements`
+/// set) it gives that many, one per element, spread a little across its scan
+/// ([`crate::laser::Basis::head`]), and every other fixture gives none; for
+/// any other clip it gives none.
 pub(crate) async fn resolve_selection_primitives_with_access(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     resource_root: &Path,
     selection: &Selection,
     seed: u64,
-    beams: Option<usize>,
+    elements: Option<usize>,
 ) -> Result<Vec<(String, [f32; 3])>, String> {
     // One solve for the whole pre-pass: a primitive's position is where its
     // fixture hangs, and every selected fixture is a node of the same venue.
@@ -170,14 +169,14 @@ pub(crate) async fn resolve_selection_primitives_with_access(
         let geom = match head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name)? {
             Heads::Projector => {
                 let basis = crate::laser::Basis::of(&mount);
-                let count = beams.unwrap_or(crate::laser::COLOR_SAMPLES);
+                let count = elements.unwrap_or(0);
                 for i in 0..count {
                     let pos = basis.head(i, count).as_vec3().to_array();
                     out.push((format!("{}:{}", fixture.id, i), pos));
                 }
                 continue;
             }
-            Heads::Cells(_) if beams.is_some() => continue,
+            Heads::Cells(_) if elements.is_some() => continue,
             Heads::Cells(geom) => geom,
         };
         let mut push = |i: usize| {

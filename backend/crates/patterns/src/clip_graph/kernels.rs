@@ -54,9 +54,10 @@ pub enum Kernel {
     ColorOut,
     StrobeOut,
     AimOut,
-    /// Each beam's canvas place, join and alpha: its shape's place for its
-    /// index, scaled, turned and moved, then reflected by every mirror that
-    /// folded it.
+    /// Each laser element's alpha and, at each place along it, its centre,
+    /// frame and colour: an empty x or y is the kind's home place for its
+    /// index, scaled and turned; then every mirror that folded it reflects
+    /// it.
     LaserOut,
 }
 
@@ -118,7 +119,8 @@ impl Kernel {
         )
     }
 
-    /// (numeric ports, fixed number ports, outputs).
+    /// (numeric ports, fixed number ports, outputs). A port of
+    /// [`Kernel::optional`] may be left unbound.
     fn ports(
         self,
     ) -> (
@@ -217,16 +219,25 @@ impl Kernel {
                 (ports, &["base", "mirrors"], &["aim", "turn"])
             }
             Kernel::LaserOut => {
-                let mut ports = names(&[
-                    "x", "y", "size", "rotation", "join", "alpha", "index", "count",
-                ]);
+                let mut ports = names(&["alpha", "index", "count"]);
                 for m in 0..AIM_MIRRORS {
                     ports.push(format!("fold{m}"));
                     ports.push(format!("normal{m}"));
                 }
-                (ports, &["shape", "mirrors"], &["beam"])
+                ports.extend(laser_sample_ports());
+                (
+                    ports,
+                    &["kind", "samples", "has_x", "has_y", "mirrors"],
+                    &["element"],
+                )
             }
         }
+    }
+
+    /// Whether port `name` may be left unbound: a laser's samples past the
+    /// ones its graph reads.
+    fn optional(self, name: &str) -> bool {
+        self == Kernel::LaserOut && laser_sample_ports().any(|port| port == name)
     }
 
     pub(crate) fn definition(self) -> Definition {
@@ -236,7 +247,10 @@ impl Kernel {
             .map(|name| {
                 (
                     name.clone(),
-                    crate::graph::port(name, ValueType::Signal(SignalType::ANY), None),
+                    Input {
+                        optional: self.optional(name),
+                        ..crate::graph::port(name, ValueType::Signal(SignalType::ANY), None)
+                    },
                 )
             })
             .collect();
@@ -285,6 +299,16 @@ impl Kernel {
             body: Body::Primitive(Primitive::Kernel(self)),
         }
     }
+}
+
+/// A laser kernel's per-sample ports: x, y, size, rotation, r, g and b at
+/// each place along an element, `x0` to `b{n - 1}`.
+fn laser_sample_ports() -> impl Iterator<Item = String> {
+    (0..crate::laser::ALONG_SAMPLES).flat_map(|k| {
+        ["x", "y", "size", "rotation", "r", "g", "b"]
+            .into_iter()
+            .map(move |name| format!("{name}{k}"))
+    })
 }
 
 /// The broadcast shape of `signals`.
@@ -1103,54 +1127,83 @@ pub(crate) fn run(
         }
 
         Kernel::LaserOut => {
-            let layout = match f("shape")? as u8 {
-                1 => crate::laser::Shape::Circle,
-                2 => crate::laser::Shape::Grid,
-                _ => crate::laser::Shape::Fan,
-            };
+            let kind = crate::laser::Kind::from_code(f("kind")?);
+            let samples = f("samples")? as usize;
+            let given = [f("has_x")? != 0., f("has_y")? != 0.];
             let mirrors = f("mirrors")? as usize;
-            let names = [
-                "x", "y", "size", "rotation", "join", "alpha", "index", "count",
-            ];
-            let all: Vec<&Signal> = names.iter().map(|k| s(k)).collect();
+            let (alpha, index, count) = (s("alpha"), s("index"), s("count"));
+            let parts: Vec<[&Signal; 7]> = (0..samples)
+                .map(|k| {
+                    std::array::from_fn(|p| {
+                        s(&format!(
+                            "{}{k}",
+                            ["x", "y", "size", "rotation", "r", "g", "b"][p]
+                        ))
+                    })
+                })
+                .collect();
             let folds: Vec<(&Signal, &Signal)> = (0..mirrors)
                 .map(|m| (s(&format!("fold{m}")), s(&format!("normal{m}"))))
                 .collect();
-            let mut every = all.clone();
+            let mut every = vec![alpha, index, count];
+            every.extend(parts.iter().flatten());
             for (fold, normal) in &folds {
                 every.push(fold);
                 every.push(normal);
             }
             let times = shape(&every)?.1;
-            let mut beams = Array3::zeros((heads, times, crate::laser::BEAM_CHANNELS));
+            let width = 1 + samples * crate::laser::SAMPLE_CHANNELS;
+            let mut elements = Array3::zeros((heads, times, width));
             for n in 0..heads {
                 for t in 0..times {
-                    let v = |i: usize| all[i].at(n, t, 0);
-                    let (index, count) = (v(6) as usize, v(7) as usize);
-                    let mut at =
-                        crate::laser::place(layout, index, count, v(2).max(0.), v(3), [v(0), v(1)]);
+                    let (i, of) = (index.at(n, t, 0) as usize, count.at(n, t, 0) as usize);
                     // The canvas runs across (U) and up (Z): a mirror
                     // reflects it as it would the stage.
-                    for (fold, normal) in &folds {
-                        if fold.at(n, t, 0) > 0.5 {
-                            let reflected =
-                                crate::aim::reflect([at[0], 0., at[1]], vector_at(normal, n, t));
-                            at = [reflected[0], reflected[2]];
+                    let reflect = |p: [f64; 2]| {
+                        folds
+                            .iter()
+                            .filter(|(fold, _)| fold.at(n, t, 0) > 0.5)
+                            .fold(p, |p, (_, normal)| {
+                                let r =
+                                    crate::aim::reflect([p[0], 0., p[1]], vector_at(normal, n, t));
+                                [r[0], r[2]]
+                            })
+                    };
+                    elements[[n, t, 0]] = alpha.at(n, t, 0).clamp(0., 1.);
+                    for (k, part) in parts.iter().enumerate() {
+                        let v = |p: usize| part[p].at(n, t, 0);
+                        let turn = crate::laser::frame(v(2).max(0.), v(3));
+                        let home = crate::laser::apply(turn, kind.home(i, of));
+                        let at = reflect([
+                            if given[0] { v(0) } else { home[0] },
+                            if given[1] { v(1) } else { home[1] },
+                        ]);
+                        // A point's size and turn lay out its home places;
+                        // it has no figure of its own to scale.
+                        let frame = if kind.is_point() { [[0.; 2]; 2] } else { turn };
+                        let [a, c] = reflect([frame[0][0], frame[1][0]]);
+                        let [b, d] = reflect([frame[0][1], frame[1][1]]);
+                        let channels = [
+                            at[0],
+                            at[1],
+                            a,
+                            b,
+                            c,
+                            d,
+                            v(4).clamp(0., 1.),
+                            v(5).clamp(0., 1.),
+                            v(6).clamp(0., 1.),
+                        ];
+                        let base = 1 + k * crate::laser::SAMPLE_CHANNELS;
+                        for (ch, value) in channels.into_iter().enumerate() {
+                            elements[[n, t, base + ch]] = value;
                         }
-                    }
-                    let out = [at[0], at[1], v(4).clamp(0., 1.), v(5).clamp(0., 1.)];
-                    for (ch, value) in out.into_iter().enumerate() {
-                        beams[[n, t, ch]] = value;
                     }
                 }
             }
             single(
-                "beam",
-                signal(
-                    beams,
-                    Channels::components(crate::laser::BEAM_CHANNELS)?,
-                    &batch,
-                )?,
+                "element",
+                signal(elements, Channels::components(width)?, &batch)?,
             )
         }
     }

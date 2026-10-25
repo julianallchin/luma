@@ -9,7 +9,7 @@
     edit.apply()
 
 A clip has a name, a time range, a selection, a blend mode, a seed and one
-graph. Build the graph with the bare builders (time, space, random, audio,
+graph. Build the graph with the bare builders (time, space, along, random, audio,
 curve, mirror, shuffle, group, split, then color, aim, strobe or laser) and math on
 curves (cut * fade, max(a, b)), or start from preset("Chase"). add_clip and update_clip run the Rust checker on
 that clip at once and raise ClipError with its text.

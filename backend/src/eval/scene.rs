@@ -15,7 +15,7 @@
 
 use crate::eval::aim::{Aiming, Rig};
 use crate::eval::composite::{blank_frame, composite_frame, offset_frame};
-use crate::eval::{try_beams, try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
+use crate::eval::{try_elements, try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
 use std::sync::Arc;
 
@@ -156,14 +156,17 @@ pub(crate) fn composite(
                 .into()
         };
         let slots = times.iter().enumerate().filter(|(_, t)| active(t));
-        // A laser clip's beams layer on the beams: Add draws both, Replace
-        // morphs the beams under it into its own.
+        // A laser clip's elements layer on the elements: Add draws both,
+        // Replace morphs the elements under it into its own. The checker
+        // gives a laser clip no other mode.
         if ann.plan.outputs.laser {
-            let beams = try_beams(ann.plan.as_ref(), &sample_times, layer as u32, scratch)?;
-            for ((k, _), beams) in slots.zip(beams) {
-                match ann.blend_mode {
-                    BlendMode::Add => luma_patterns::laser::add_beams(&mut frames[k].beams, beams),
-                    _ => luma_patterns::laser::replace_beams(&mut frames[k].beams, beams),
+            let elements = try_elements(ann.plan.as_ref(), &sample_times, layer as u32, scratch)?;
+            for ((k, _), elements) in slots.zip(elements) {
+                let under = &mut frames[k].lasers;
+                if ann.blend_mode == BlendMode::Add {
+                    luma_patterns::laser::add(under, elements);
+                } else {
+                    luma_patterns::laser::replace(under, elements);
                 }
             }
             continue;

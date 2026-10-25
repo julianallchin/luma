@@ -15,7 +15,7 @@ functions. The Rust checker reads the same graph that the inspector shows.
 3. Every node has one output wire. A wire goes into an input of another node.
 4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
-6. Coordinate nodes give a raw coordinate per head: `time`, `space`, `random`, `audio`.
+6. Coordinate nodes give a raw coordinate per head: `time`, `space`, `random`, `audio`, and `along` within a laser element.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color. `math` combines values.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no `every` = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
@@ -49,7 +49,7 @@ back as variables, so a round trip keeps the names. It writes a curve or a
 math with a numbered id that one input reads in place:
 `space(shift=curve(t, 'Ramp up'))`, `color(brightness=cut * fade)`. An id is
 a Python name of at most 32 characters that is not a builder name (`time`,
-`space`, `random`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
+`space`, `along`, `random`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
 `split`, `color`, `aim`, `strobe`, `laser`, `preset`, `max`, `min`) or a keyword.
 
 ## Values and units
@@ -89,10 +89,10 @@ of curves is an error: to multiply, write `brightness=cut * fade`.
 |---|---|---|
 | time | `time` | `shuffle.time` (and `curve.x`) |
 | heads | `mirror`, `shuffle`, `group`, `split` | any `heads` input |
-| coordinate | `time`, `space`, `random`, `audio` | `curve.x` |
+| coordinate | `time`, `space`, `along`, `random`, `audio` | `curve.x` |
 | number | `curve` (number), `math` | any number input, a curve's `low`/`high` |
 | vector | `curve` (vector), `math` | any vector input, a curve's `low`/`high` |
-| color | `curve` (color), `math` | `color.color` |
+| color | `curve` (color), `math` | `color.color`, `laser.color` |
 
 A number, vector or color input takes a value or a wire of its own type. A
 coordinate never goes straight into a number input:
@@ -159,40 +159,47 @@ clock and restarts it whenever the rate changes, so a rate that moves every
 frame barely flashes on the rig even though the stage view strobes. Let the
 music decide *where* strobe clips go, not how fast they flash.
 
-**laser** `laser(heads=None, beams=None, x=None, y=None, size=None, rotation=None, join=None, alpha=None, shape="fan", zone="")`
+**laser** `laser(heads=None, count=None, sides=None, x=None, y=None, size=None, rotation=None, color=None, alpha=None, kind="beams", zone="")`
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
-| heads | heads | | | all clip beams |
-| beams | number | heads | 1–64, whole, fixed | 8 |
-| x | number | canvas | -1–1 | 0 |
-| y | number | canvas | -1–1 | 0 |
+| heads | heads | | | all clip elements |
+| count | number | heads | 1–64, whole, fixed | 8 beams or grid points, else 1 |
+| sides | number | | 3–12, whole, fixed | 3 |
+| x | number | canvas | -1–1 | home place |
+| y | number | canvas | -1–1 | home place |
 | size | number | share | 0–1 | 0.5 |
 | rotation | number | degrees | -180–180 | 0 |
-| join | number | share | 0–1 | 0 |
+| color | color | rgb | 0–1 | white `(1, 1, 1)` |
 | alpha | number | share | 0–1 | 1 |
 
-Beam shows from laser projectors. Select projectors, as any fixture; a laser
-clip skips other fixtures. Each projector draws `beams` beams, its heads
-for the shapers, laid out as `shape` (`fan` a row, `circle` a ring, `grid`
-rows) on the zone's canvas: -1 to 1 across and up the zone's window, the
-same directions from every projector, so six projectors give six parallel
-fans. `size` scales the shape (a fan of size 1 spans the canvas), `x` and
-`y` move it, `rotation` turns it. Anchor a growing fan with `size` and `x`
-together. `join` lights the moves between beams: 0 beams, 1 lines, so a fan
-at join 1 is a sheet. `beams` is a plain number for the whole clip, never
-wired. `zone` is a zone id from `luma.venue.laser_zones()`; empty is the
-venue's first zone. A `mirror` reflects the canvas.
+Laser shows from projectors. Select projectors, as any fixture; a laser
+clip skips other fixtures. Each projector draws `count` elements of `kind`:
+`beams` (points), `line`, `ring`, `polygon` (`sides` corners) or `grid`
+(points in rows), on the zone's canvas: -1 to 1 across and up the zone's
+window, the same directions from every projector, so six projectors draw
+six parallel shows. Each element is a head: `space`, `shuffle`, `mirror`
+and `random` read the elements as they read a mover's heads, so
+`x=curve(space(split(), kind="order"), low=-1, high=1)` fans each
+projector's beams across the canvas. Per element, `x` and `y` place its
+centre, `size` is a line's half length or a ring's radius, `rotation`
+turns it clockwise and `color` is its colour. An empty `x` or `y` is the
+home place: beams in a row and a grid in rows, `size` wide and turned by
+`rotation`; any other kind in the middle. `count` and `sides` are plain
+numbers for the whole clip, never wired. `zone` is a zone id from
+`luma.venue.laser_zones()`; empty is the venue's first zone. A `mirror`
+reflects each element.
 
-A laser draws no colour. A **color** clip over the projectors lights the
-beams: a beam takes the colour at its place along its clip's order (0 to 1),
-so a gradient never depends on the beam count, and one color clip can cover
-lights and lasers. With no colour, beams are white. Blend modes: `replace`
-morphs the beams under it into its own by alpha, matched by place; `add`
-draws both. A laser and a light cannot share one graph.
+Wire `along()` through curves and math into x, y, size, rotation or color
+to vary them within each line, ring or polygon: a wave, a gradient, dashes.
 
-Brightness is time: a projector shares each scan between its beams, so 16
-beams are each dimmer than 4. Fewer beams read brighter.
+A laser's colour is its own: a **color** clip never reaches projectors.
+Blend modes: `replace` morphs the elements under it into its own by alpha,
+matched by place along their order (colours cut, never blend); `add` draws
+both. A laser and a light cannot share one graph.
+
+Brightness is time: a projector shares each scan between its elements, so
+16 beams are each dimmer than 4, and a long figure dimmer than a short one.
 
 ## Coordinate nodes
 
@@ -326,6 +333,16 @@ value over the whole track: every clip reads the same level at the same
 moment. `audio("low")` takes a band: sub, low, mid or high. `luma.music`
 splits the mix by the same bands. Put a threshold or a
 floor in the curve's shape and low/high. It needs track analysis.
+
+**along** `along()` → coordinate
+
+Place within a laser element, 0–1: from a line's start to its end, or once
+round a ring or polygon; a beam is a single point, at 0. Only a laser's
+x, y, size, rotation and color read it, through curves and math:
+`y=curve(along(), "Sine", low=-0.2, high=0.2)` bends a line,
+`color=curve(along(), gradient="Fire")` runs a gradient along it, and a
+curve with jumps to 0 on `color` makes dashes (black is the light off).
+Anywhere else it is an error.
 
 ## curve
 

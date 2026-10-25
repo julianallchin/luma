@@ -84,7 +84,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `preview_composable_pattern` | `request: Value` | `Value` |
-| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64`<br>`beams: Option<usize>` | `Vec<luma_patterns::Cell>` |
+| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64`<br>`elements: Option<usize>` | `Vec<luma_patterns::Cell>` |
 
 ### `compositor`
 

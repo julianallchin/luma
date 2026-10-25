@@ -3,7 +3,7 @@ use super::{ClipGraph, Input, Kind};
 
 impl ClipGraph {
     /// Parts joined by " · ": each space's kind word, each time node's
-    /// `every {E}` (or `every varies`), `random` when present, `audio
+    /// `every {E}` (or `every varies`), `along` and `random` when present, `audio
     /// {lo}–{hi} Hz` when present; `still` when none apply. A part that
     /// repeats is written once.
     pub fn summary(&self) -> String {
@@ -25,6 +25,9 @@ impl ClipGraph {
                     _ => "every varies".into(),
                 },
             );
+        }
+        if nodes(Kind::Along).next().is_some() {
+            parts.push("along".into());
         }
         if nodes(Kind::Random).next().is_some() {
             parts.push("random".into());
