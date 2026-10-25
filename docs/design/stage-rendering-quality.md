@@ -529,12 +529,32 @@ scatter, not from the emitters' sum.
   source narrower than a cell is spread over a cell's width keeping its power,
   so no beam falls between cells; laser sheets are merged into fans of at most
   0.06 rad first.
-- **Spread.** The grid's mips. The fluence from scattering haze falls as
-  `e^(−σr)/4πr²`; over a shell r..2r that is `S̄ r e^(−σr)`, so each level's
-  average stands for the shell it is as wide as (`haze_glow_sample.wgsl`).
-- **Use.** Surfaces take a quarter of the fluence as irradiance; the
-  composite marches 12 steps of the camera ray through the grid and adds the
-  haze's second scattering of it, `σ · density · φ`.
+- **Spread.** The grid's mips, gathered (`haze_glow_gather.wgsl`). The
+  fluence from scattering haze falls as `e^(−σr)/4πr²`; over a shell r..2r
+  that is `S̄ r e^(−σr)`. Each cell steps six cones, one each way along each
+  axis, out through shells r..2r, each read from the level as wide as the
+  shell is deep, out to 16 cells. One fluence grid comes out, and every
+  reader takes it in one place.
+- **Occlusion** (`glow_occupancy.rs`). Every opaque surface but the
+  fixtures' marks 4³ sub-cells per glow cell, rasterised down the axis each
+  triangle faces most, on the CPU and only when the geometry or the grid
+  changes (about 10 ms for the laser test room). Each cell stores the share
+  of its lines along x, y and z that a marked sub-cell stops; a coarser
+  level joins two cells along the axis (stopped by either) and averages the
+  pairs beside each other, so a thin wall blocks all of a coarse cell's
+  lines across it and a deck lying flat blocks none along it. A cone takes
+  the blocking along its own axis from the cells between its cell and the
+  shell, a level finer than the shell and never its own cell, so a surface
+  does not shade its open side. A laser beam's injection stops at the first
+  marked sub-cell on its line, once it has been clear of whatever the
+  projector stands in; a merged sheet stops where its middle does.
+- **Use.** Surfaces take a quarter of the fluence as irradiance, read as a
+  cubic B-spline in eight filtered taps, so the cells do not show as
+  creases where the glow fades; the composite marches 12 steps of the
+  camera ray, one trilinear read each, and adds the haze's second
+  scattering of it, `σ · density · φ`. The gather takes each cell's own
+  haze over its neighbours, weighted 1 2 1, so a narrow beam's cells read as
+  a line rather than a string of cell-sized lumps.
 
 The glow seen grows about with σ² while the room is thinner than one mean
 free path: three times the haze lit the floor of the laser test room 40 times
@@ -547,13 +567,28 @@ picture, outweighed the beams and sent every hazy room to the top clamp. It
 now ignores light more than six stops under the top of its band
 (`SHOWN_STOPS` in `post_exposure.wgsl`).
 
-Limits: nothing but a cone's own shadow map occludes the glow, so it reaches
-round truss and through thin walls; indoors the haze ends at the room. The
-grid is coarse, and its trilinear cells show as a faint blocky edge a level or
-two of 255 deep where the glow fades out. Laser beams are not occluded at all.
+Limits: six cones see in six directions, so geometry at 45° blocks less
+cleanly than a wall along an axis, and an object narrower than a cone (a
+speaker, a truss leg) blocks it only on the cone's axis. A truss marks the
+sub-cells its tubes pass through, so it blocks more than its open lattice
+would. The visible laser beam itself is depth-tested, not stopped: seen from
+beyond a wall, it still shows past it. Indoors the haze ends at the room.
 
-Cost, RTX 5090 / Vulkan, `profile-volumetrics --cones=450`, two alternating
-runs of 300 frames: GPU total p50 +0.5 ms (17.23 → 17.76 ms on transport-32),
-of which the scene pass +0.25 ms (inject and surface sampling) and the
+Under a 6 m deck below a fan of laser beams the haze glows a third as much
+as with no deck (`laser::a_deck_shades_the_glow_under_it`; 0.96 before).
+The glow reaches further than the mips did (16 cells against 8), so open
+haze round a beam is a little brighter: the contract goldens' mean
+brightness rose 1 to 7%.
+
+Cost of the occlusion pass, RTX 5090 / Vulkan, `profile-volumetrics
+--cones=450 --warmup-frames=60 --measured-frames=300`, best p50 of two
+alternating runs each: composite −0.07 ms (0.28 → 0.21 ms, one read a step
+instead of five), scene pass with the gather −0.04 to +0.01 ms, GPU total
+−0.03 to −0.15 ms across the eleven cases. The budgets failed before and
+still do.
+
+Cost of the first build, RTX 5090 / Vulkan, `profile-volumetrics
+--cones=450`, two alternating runs of 300 frames: GPU total p50 +0.5 ms
+(17.23 → 17.76 ms on transport-32), of which the scene pass +0.25 ms (inject and surface sampling) and the
 composite +0.26 ms (the glow march). The contract and volumetric-stress
 goldens were regenerated for the glow and inspected.
