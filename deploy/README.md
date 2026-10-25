@@ -25,6 +25,8 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
 - `20260929000000_clip_graphs.sql`
 - `20261001000000_folders.sql` — then redeploy `powersync/sync-config.yaml`, which
   names `folders` and `folder_tracks`
+- `20261024120000_lasers.sql` — then redeploy `powersync/sync-config.yaml`, which
+  names `laser_zones` and `laser_limits`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

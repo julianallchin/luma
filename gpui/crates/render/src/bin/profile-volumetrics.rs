@@ -1442,6 +1442,7 @@ fn frame_with_lights(
         overlays: Vec::new(),
         floor: None,
         fixture_cones: Vec::with_capacity(count),
+        lasers: Vec::new(),
         fixture_shadow_capacity_hint: 0,
         fixture_surface_lighting: true,
         beam_proxy: false,

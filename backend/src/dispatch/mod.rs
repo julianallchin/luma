@@ -143,6 +143,7 @@ commands! {
         venue_id: String,
         selection: Selection,
         seed: u64,
+        beams: Option<usize>,
     ) -> Vec<luma_patterns::Cell>;
 
     agent_threads::agent_thread_list(
@@ -200,6 +201,12 @@ commands! {
     folders::rename_folder(folder_id: String, name: String) -> ();
     folders::delete_folder(folder_id: String) -> ();
     folders::set_folder_track(folder_id: String, track_id: String, linked: bool) -> ();
+    lasers::list_laser_zones(venue_id: String) -> Vec<crate::models::lasers::LaserZone>;
+    lasers::save_laser_zone(venue_id: String, zone_id: Option<String>, name: String, turn: [f64; 2], tilt: [f64; 2]) -> crate::models::lasers::LaserZone;
+    lasers::delete_laser_zone(venue_id: String, zone_id: String) -> ();
+    lasers::list_laser_limits(venue_id: String) -> Vec<crate::models::lasers::LaserLimit>;
+    lasers::set_laser_limit(venue_id: String, fixture_id: String, points: Option<Vec<[f64; 2]>>) -> ();
+    lasers::get_laser_rig(venue_id: String) -> crate::laser::LaserRig;
 
     groups::generate_venue_groups(venue_id: String) -> ();
     groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();

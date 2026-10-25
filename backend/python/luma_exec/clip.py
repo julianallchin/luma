@@ -7,8 +7,8 @@
 
 Every builder is a bare function. It returns one node. A node goes into an
 input of another node: that is a wire. The same Python object wired twice is
-one node (a link). `color()`, `aim()` and `strobe()` make the output node and
-return a Graph.
+one node (a link). `color()`, `aim()`, `strobe()` and `laser()` make the
+output node and return a Graph.
 
 Values are plain: numbers, `(u, v, z)` tuples, `(r, g, b)` triples in linear
 Rec. 2020, or "#RRGGBB" (sRGB, converted). A shape is a curve preset name
@@ -54,11 +54,11 @@ from .color import from_srgb
 
 
 BUILDERS = ("time", "space", "noise", "audio", "curve", "value", "mirror", "shuffle", "group",
-            "split", "color", "aim", "strobe", "preset", "max", "min")
+            "split", "color", "aim", "strobe", "laser", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
 RESERVED = frozenset(BUILDERS) | {"math"}
-OUTPUTS = ("color", "aim", "strobe")
+OUTPUTS = ("color", "aim", "strobe", "laser")
 VERSION = 3  # clip_graph::VERSION
 
 # Input order per kind: the builder signature order, used by source().
@@ -77,10 +77,13 @@ _INPUTS = {
     "color": ("color", "brightness", "alpha"),
     "aim": ("heads", "direction", "point", "yaw", "pitch", "alpha"),
     "strobe": ("rate", "alpha"),
+    "laser": ("heads", "beams", "x", "y", "size", "rotation", "join", "alpha"),
 }
 # Inputs that take one number 0-1. A list there was the version 2 product.
 _SCALARS = {("color", "brightness"), ("color", "alpha"), ("aim", "alpha"),
-            ("strobe", "rate"), ("strobe", "alpha"), ("noise", "contrast")}
+            ("strobe", "rate"), ("strobe", "alpha"), ("noise", "contrast"),
+            ("laser", "beams"), ("laser", "x"), ("laser", "y"), ("laser", "size"),
+            ("laser", "rotation"), ("laser", "join"), ("laser", "alpha")}
 # Math operators that chain: `a * b * c` is one node.
 _CHAINS = ("*", "+", "max", "min")
 _SEQUENCE = itertools.count(1)
@@ -264,7 +267,7 @@ class _Output(Node):
 
 _CLASSES = {"time": Coordinate, "space": Coordinate, "noise": Coordinate, "audio": Coordinate,
             "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
-            "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output}
+            "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output, "laser": _Output}
 
 
 def _number(value, where):
@@ -581,6 +584,27 @@ def strobe(rate=None, alpha=None) -> "Graph":
     return Graph(_make("strobe", rate=rate, alpha=alpha))
 
 
+def laser(heads=None, beams=None, x=None, y=None, size=None, rotation=None, join=None, alpha=None,
+          shape="fan", zone="") -> "Graph":
+    """Laser output: `beams` beams (a whole number, 1-64, default 8) on each
+    projector in the clip's selection, laid out as `shape` ("fan" in a row,
+    "circle" round a ring, "grid" in rows) on the zone's canvas, which runs
+    -1 to 1 across and up the zone. `size` (0-1, default 0.5) scales the
+    shape: a fan of size 1 spans the canvas. `rotation` turns it, in degrees
+    clockwise. `x` and `y` (-1 to 1) move it. `join` (0-1) lights the moves
+    between beams: 0 separate beams, 1 a line, so a fan at join 1 is a sheet.
+    `alpha` is the clip's fade. Heads from a mirror draw the mirror image.
+    `zone` is a zone id from luma.venue (empty: the venue's first zone).
+
+    A laser draws no colour: Color clips over the projectors light its beams,
+    by each beam's place along its order (white at full when none does). A
+    laser clip blends "replace" (morphs the beams under it into its own) or
+    "add" (draws both).
+    """
+    return Graph(_make("laser", {"shape": shape, "zone": zone}, heads=heads, beams=beams, x=x, y=y,
+                       size=size, rotation=rotation, join=join, alpha=alpha))
+
+
 def preset(name) -> "Graph":
     """A copy of a shipped clip preset, with its name and blend mode.
     luma.presets.clips lists them."""
@@ -730,7 +754,7 @@ class Graph:
     """One clip's graph: nodes wired into exactly one output node.
 
     graph.nodes    id -> NodeRecord(kind, settings, inputs)
-    graph.output   the output NodeRecord (color, aim or strobe)
+    graph.output   the output NodeRecord (color, aim, strobe or laser)
     graph.name     the preset name, when it came from a preset
     graph.blend    the preset blend mode, when it came from a preset
     graph.json()   the stored JSON
@@ -978,7 +1002,8 @@ def _gradient_literal(value):
     return _json_literal(value)
 
 
-_DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"}}
+_DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
+                     "laser": {"shape": "fan", "zone": ""}}
 # Python precedence: an atom (a name, a number, a call) binds tightest.
 _ATOM = 3
 _PRECEDENCE = {"*": 2, "+": 1, "-": 1}

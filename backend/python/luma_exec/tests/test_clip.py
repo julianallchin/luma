@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec import clip as clip_module  # noqa: E402
 from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, curve, group,  # noqa: E402
-                            mirror, noise, preset, shuffle, space, split, strobe, time, value)
+                            laser, mirror, noise, preset, shuffle, space, split, strobe, time, value)
 from luma_exec.clip import max as clip_max, min as clip_min  # noqa: E402
 from luma_exec.score import GraphTrack  # noqa: E402
 
@@ -184,6 +184,14 @@ CATALOG = {
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
     'Strobe steps up': "t = time(); strobe(rate=curve(t, 'Steps 4', low=0.4, high=0.9))",
+    # Laser (no laser presets ship).
+    "Laser fan": "laser(beams=8, size=1)",
+    "Laser sheet": "laser(beams=16, size=1, join=1)",
+    "Laser fan sweep": "t = time(every=4); laser(beams=6, x=curve(t, 'Sine', low=-0.6, high=0.6))",
+    "Laser fan opens from the left": "t = time(every=2); laser(beams=8, size=curve(t, 'Ramp up'), x=curve(t, 'Ramp up', low=-1, high=0))",
+    "Laser beam wave": "t = time(every=2, phase=curve(space(), 'Ramp up', high=360)); laser(beams=8, size=1, y=curve(t, 'Sine', low=-0.5, high=0.5))",
+    "Laser spinning ring": "t = time(every=4); laser(beams=12, shape='circle', rotation=curve(t, 'Ramp up', low=-180, high=180))",
+    "Laser mirrored fans": "laser(heads=mirror(direction=(1, 0, 0)), beams=8, size=0.5, x=-0.5)",
     # Not shipped presets.
     "Slash": EXAMPLE_SLASH,
     "Slash with values": EXAMPLE_SLASH_VALUES,
@@ -240,6 +248,21 @@ class ClipBuilderTests(unittest.TestCase):
         self.assertEqual(nodes["math1"], {"kind": "math", "settings": {"op": "*"},
                                           "inputs": {"values": [{"node": "curve1"}, {"node": "curve2"}]}})
         self.assertEqual(run(graph.source()).json(), graph.json())
+
+    def test_a_laser_writes_its_shape_zone_and_inputs_and_round_trips(self):
+        slide = curve(time(), [[0, 0], [0.25, 1], [1, 1]], low=-1, high=0.3)
+        graph = laser(mirror(direction=(1, 0, 0)), beams=6, x=slide, size=0.4, join=1,
+                      shape="circle", zone="z1")
+        node = graph.json()["nodes"]["laser1"]
+        self.assertEqual(node["settings"], {"shape": "circle", "zone": "z1"})
+        self.assertEqual(node["inputs"]["beams"], 6)
+        self.assertEqual(node["inputs"]["x"], {"node": "slide"})
+        self.assertEqual(graph.output.kind, "laser")
+        self.assertEqual(run(graph.source()).json(), graph.json())
+        # Defaults stay out of the source.
+        self.assertEqual(laser().source().strip().splitlines()[-1], "laser()")
+        with self.assertRaises(ClipError):
+            laser(beams=[1, 2])
 
     def test_variable_names_are_node_ids_and_round_trip(self):
         t = time(every=2)

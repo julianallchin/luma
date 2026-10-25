@@ -74,3 +74,5 @@ streams:
       - SELECT * FROM midi_bindings WHERE venue_id IN accessible_venues
       - SELECT * FROM folders WHERE venue_id IN accessible_venues
       - SELECT * FROM folder_tracks WHERE venue_id IN accessible_venues
+      - SELECT * FROM laser_zones WHERE venue_id IN accessible_venues
+      - SELECT * FROM laser_limits WHERE venue_id IN accessible_venues

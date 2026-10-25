@@ -742,6 +742,24 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "zoneId",
+          "rust": "String"
+        }
+      ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "delete_laser_zone",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "id",
           "rust": "String"
         }
@@ -1146,6 +1164,20 @@
         "returns": "Vec<FixtureFacing>"
       },
       "returns": "Vec<FixtureFacing>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "get_laser_rig",
+      "returns": "crate::laser::LaserRig"
     },
     {
       "args": [
@@ -1698,6 +1730,34 @@
         ]
       },
       "returns": "Vec<FixtureGroup>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "list_laser_limits",
+      "returns": "Vec<crate::models::lasers::LaserLimit>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "list_laser_zones",
+      "returns": "Vec<crate::models::lasers::LaserZone>"
     },
     {
       "args": [],
@@ -2920,6 +2980,36 @@
           "rust": "String"
         },
         {
+          "name": "zoneId",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        },
+        {
+          "name": "turn",
+          "rust": "[f64; 2]"
+        },
+        {
+          "name": "tilt",
+          "rust": "[f64; 2]"
+        }
+      ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "save_laser_zone",
+      "returns": "crate::models::lasers::LaserZone"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
           "name": "groupId",
           "rust": "Option<String>"
         },
@@ -2988,6 +3078,10 @@
         {
           "name": "seed",
           "rust": "u64"
+        },
+        {
+          "name": "beams",
+          "rust": "Option<usize>"
         }
       ],
       "domain": "composable_patterns",
@@ -3117,6 +3211,28 @@
         "file": "backend/src/dispatch/handlers/folders.rs"
       },
       "name": "set_folder_track",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "fixtureId",
+          "rust": "String"
+        },
+        {
+          "name": "points",
+          "rust": "Option<Vec<[f64; 2]>>"
+        }
+      ],
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
+      "name": "set_laser_limit",
       "returns": "()"
     },
     {
@@ -3487,6 +3603,11 @@
       "handlers": "backend/src/dispatch/handlers/host_audio.rs"
     },
     {
+      "commandCount": 6,
+      "domain": "lasers",
+      "handlers": "backend/src/dispatch/handlers/lasers.rs"
+    },
+    {
       "commandCount": 8,
       "domain": "midi",
       "handlers": "backend/src/dispatch/handlers/midi.rs"
@@ -3672,8 +3793,8 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 151,
-    "domainCount": 27,
+    "commandCount": 157,
+    "domainCount": 28,
     "eventCount": 13
   },
   "version": 2

@@ -736,6 +736,7 @@ impl Session {
         let sequence = Sequence::install(
             scene,
             definitions,
+            self.geometry.lasers.clone(),
             self.meshes_root.clone(),
             self.view,
             booth,

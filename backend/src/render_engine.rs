@@ -181,7 +181,10 @@ impl RenderEngine {
                         }
                     }
                 }
-                return Some(UniverseState { primitives });
+                return Some(UniverseState {
+                    primitives,
+                    beams: Vec::new(),
+                });
             }
             guard.identify = None;
         }
@@ -371,6 +374,7 @@ fn score_mix(
     if frames.is_empty() {
         return UniverseState {
             primitives: HashMap::new(),
+            beams: Vec::new(),
         };
     }
 
@@ -382,6 +386,7 @@ fn score_mix(
     if total_volume <= 0.0 {
         return UniverseState {
             primitives: HashMap::new(),
+            beams: Vec::new(),
         };
     }
 
@@ -432,8 +437,26 @@ fn score_mix(
         );
     }
 
+    // Each deck's beams show at its share of the volume, on paths of their
+    // own so one deck's line never joins another's.
+    let beams = frames
+        .iter()
+        .enumerate()
+        .flat_map(|(deck, (state, vol))| {
+            let w = f64::from(vol / total_volume);
+            state
+                .beams
+                .iter()
+                .map(move |beam| luma_patterns::laser::Beam {
+                    path: beam.path | ((deck as u32) << 24),
+                    intensity: beam.intensity * w,
+                    ..beam.clone()
+                })
+        })
+        .collect();
     UniverseState {
         primitives: blended,
+        beams,
     }
 }
 

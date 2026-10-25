@@ -88,6 +88,7 @@ mod tests {
                 },
             )]
             .into(),
+            beams: Vec::new(),
         })
     }
 

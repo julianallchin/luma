@@ -44,4 +44,9 @@ impl HeadAim {
 pub struct UniverseState {
     // Key: "fixture-uuid" OR "fixture-uuid:head-index"
     pub primitives: HashMap<String, PrimitiveState>,
+    /// Every laser beam the clips draw, after their layers. A projector's
+    /// colour is in `primitives`, on its heads; its beams are here, and the
+    /// laser solver turns them into point streams.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beams: Vec<luma_patterns::laser::Beam>,
 }

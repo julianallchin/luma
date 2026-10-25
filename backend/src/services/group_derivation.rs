@@ -200,7 +200,7 @@ impl FixtureRole {
         let type_ = definition.type_.to_ascii_lowercase();
         if matches!(
             type_.as_str(),
-            "smoke" | "hazer" | "fan" | "laser" | "flower" | "effect"
+            "smoke" | "hazer" | "fan" | "laser" | "laser projector" | "flower" | "effect"
         ) {
             return FixtureRole::Fx;
         }

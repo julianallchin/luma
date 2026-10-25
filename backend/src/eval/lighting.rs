@@ -12,6 +12,8 @@ pub struct Program {
     clock: p::BeatTimeline,
     ids: Vec<String>,
     output: String,
+    /// The zone a laser clip draws in; `None` for any other clip.
+    zone: Option<String>,
 }
 fn plan(
     prepared: p::PreparedGraph,
@@ -19,12 +21,15 @@ fn plan(
     ids: Vec<String>,
     output: &str,
     span: (f32, f32),
+    zone: Option<String>,
 ) -> Result<Plan, String> {
+    let laser = zone.is_some();
     let program = Program {
         prepared,
         clock,
         ids: ids.clone(),
         output: output.into(),
+        zone,
     };
     let initial = program.sample(&[span.0])?;
     let writes = initial
@@ -42,6 +47,7 @@ fn plan(
             strobe: writes[3],
             speed: writes[4],
             aim: writes[5],
+            laser,
         },
         span,
     })
@@ -64,7 +70,8 @@ pub(crate) fn compile_clip(
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
     let ids = cells.iter().map(|c| c.id.clone()).collect();
-    plan(prepared, clock, ids, p::clip_graph::OUTPUT, span)
+    let zone = clip.graph.laser().map(|laser| laser.zone);
+    plan(prepared, clock, ids, p::clip_graph::OUTPUT, span, zone)
 }
 impl Program {
     pub(crate) fn sample(
@@ -98,6 +105,58 @@ impl Program {
         Ok(turns
             .into_iter()
             .map(|row| self.ids.iter().cloned().zip(row).collect())
+            .collect())
+    }
+
+    /// A laser clip's beams at `times`, one list per time, drawn on path
+    /// `path`. A head `projector:i` is beam `i` of as many as its projector
+    /// has heads; its alpha is the beam's intensity.
+    pub(crate) fn beams(
+        &self,
+        times: &[f32],
+        path: u32,
+        scratch: &mut Arena,
+    ) -> Result<Vec<Vec<p::laser::Beam>>, String> {
+        let zone = self.zone.as_deref().ok_or("not a laser clip")?;
+        if times.is_empty() {
+            return Ok(vec![]);
+        }
+        scratch.values = self.sample(times)?;
+        let value = scratch
+            .values
+            .get(p::laser::BEAM_OUTPUT)
+            .ok_or("a laser clip gives beams")?;
+        let rows =
+            p::laser::Beam::read(value, &self.ids, times.len()).map_err(|e| e.to_string())?;
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        let places: Vec<(&str, usize)> = self
+            .ids
+            .iter()
+            .map(|id| {
+                let (projector, index) = id
+                    .rsplit_once(':')
+                    .map_or((id.as_str(), "0"), |(projector, index)| (projector, index));
+                *counts.entry(projector).or_default() += 1;
+                (projector, index.parse().unwrap_or(0))
+            })
+            .collect();
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .zip(&places)
+                    .map(|([x, y, join, alpha], (projector, index))| p::laser::Beam {
+                        projector: (*projector).to_string(),
+                        zone: zone.to_string(),
+                        path,
+                        s: p::laser::along(*index, counts[projector]),
+                        x,
+                        y,
+                        join,
+                        intensity: alpha,
+                    })
+                    .collect()
+            })
             .collect())
     }
 
@@ -178,7 +237,10 @@ impl Program {
                     })
                     .collect();
                 Layer {
-                    frame: UniverseState { primitives },
+                    frame: UniverseState {
+                        primitives,
+                        beams: Vec::new(),
+                    },
                     alpha,
                 }
             })

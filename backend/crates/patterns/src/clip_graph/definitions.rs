@@ -5,6 +5,9 @@ use super::{Input, Kind};
 use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::Serialize;
 
+/// The most beams one laser clip draws on each projector.
+pub const MAX_BEAMS: usize = 64;
+
 /// The type of an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -149,6 +152,9 @@ pub struct InputDef {
     /// The input sets a clock's period. A wire that follows events gives
     /// it the newest event's value, so the clock's events stay its own.
     pub clock: bool,
+    /// The input takes a whole number and no wire: it shapes the clip's
+    /// heads, which are fixed for the whole clip.
+    pub fixed: bool,
     /// A Python example value for error messages, such as `0.2`.
     pub example: &'static str,
 }
@@ -164,6 +170,7 @@ impl InputDef {
             geometry: None,
             time_only: false,
             clock: false,
+            fixed: false,
             example,
         }
     }
@@ -213,6 +220,10 @@ impl InputDef {
         self.clock = true;
         self
     }
+    fn fixed(mut self) -> Self {
+        self.fixed = true;
+        self
+    }
 
     /// Whether `value` is inside the range.
     pub fn in_range(&self, value: f64) -> bool {
@@ -248,11 +259,14 @@ impl Serialize for InputDef {
         if self.time_only {
             map.serialize_field("axes", &["T"])?;
         }
+        if self.fixed {
+            map.serialize_field("fixed", &true)?;
+        }
         map.end()
     }
 }
 
-/// A setting: one of `options`.
+/// A setting: one of `options`, or any text when `options` is empty.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SettingDef {
     pub options: &'static [&'static str],
@@ -361,6 +375,38 @@ fn build(kind: Kind) -> Definition {
             Produces::Output,
             vec![("rate", share("0.5")), ("alpha", share("1"))],
             vec![],
+        ),
+        Kind::Laser => (
+            Produces::Output,
+            vec![
+                heads(),
+                (
+                    "beams",
+                    number(Unit::Heads, "8").range(1., MAX_BEAMS as f64).fixed(),
+                ),
+                ("x", number(Unit::Share, "0").range(-1., 1.)),
+                ("y", number(Unit::Share, "0").range(-1., 1.)),
+                ("size", share("0.5")),
+                ("rotation", number(Unit::Degrees, "0").range(-180., 180.)),
+                ("join", share("0")),
+                ("alpha", share("1")),
+            ],
+            vec![
+                (
+                    "shape",
+                    SettingDef {
+                        options: &["fan", "circle", "grid"],
+                        default: "fan",
+                    },
+                ),
+                (
+                    "zone",
+                    SettingDef {
+                        options: &[],
+                        default: "",
+                    },
+                ),
+            ],
         ),
         Kind::Time => (
             Produces::Coordinate,
