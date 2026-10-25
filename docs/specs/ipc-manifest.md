@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**151 commands** across **27 domains** · **13 events**
+**156 commands** across **28 domains** · **13 events**
 
 ## Domains
 
@@ -26,6 +26,7 @@ name.
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
+| `lasers` | 5 | `backend/src/dispatch/handlers/lasers.rs` |
 | `midi` | 8 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
@@ -40,7 +41,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **151** | |
+| **total** | **156** | |
 
 ## Commands
 
@@ -83,7 +84,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `preview_composable_pattern` | `request: Value` | `Value` |
-| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64` | `Vec<luma_patterns::Cell>` |
+| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64`<br>`beams: Option<usize>` | `Vec<luma_patterns::Cell>` |
 
 ### `compositor`
 
@@ -184,6 +185,16 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `host_set_loop_region` | `session: u64`<br>`startSeconds: Option<f32>`<br>`endSeconds: Option<f32>` | `()` |
 | `host_set_playback_rate` | `session: u64`<br>`rate: f32` | `()` |
 | `host_snapshot` | — | `HostAudioSnapshot` |
+
+### `lasers`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `list_laser_zones` | `venueId: String` | `Vec<crate::models::lasers::LaserZone>` |
+| `save_laser_zone` | `venueId: String`<br>`zoneId: Option<String>`<br>`name: String`<br>`turn: [f64; 2]`<br>`tilt: [f64; 2]` | `crate::models::lasers::LaserZone` |
+| `delete_laser_zone` | `venueId: String`<br>`zoneId: String` | `()` |
+| `list_laser_limits` | `venueId: String` | `Vec<crate::models::lasers::LaserLimit>` |
+| `set_laser_limit` | `venueId: String`<br>`fixtureId: String`<br>`points: Option<Vec<[f64; 2]>>` | `()` |
 
 ### `midi`
 

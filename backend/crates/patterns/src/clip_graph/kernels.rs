@@ -53,13 +53,17 @@ pub enum Kernel {
     ColorOut,
     StrobeOut,
     AimOut,
+    /// Each beam's canvas place, join and alpha: its shape's place for its
+    /// index, scaled, turned and moved, then reflected by every mirror that
+    /// folded it.
+    LaserOut,
 }
 
 /// How many stacked mirrors an aim reads.
 pub(crate) const AIM_MIRRORS: usize = 4;
 
 impl Kernel {
-    pub const ALL: [Kernel; 18] = [
+    pub const ALL: [Kernel; 19] = [
         Kernel::ClockTable,
         Kernel::Clock,
         Kernel::Events,
@@ -78,6 +82,7 @@ impl Kernel {
         Kernel::ColorOut,
         Kernel::StrobeOut,
         Kernel::AimOut,
+        Kernel::LaserOut,
     ];
 
     /// The kernel's id in the library.
@@ -101,6 +106,7 @@ impl Kernel {
             Kernel::ColorOut => "kernel/color_out",
             Kernel::StrobeOut => "kernel/strobe_out",
             Kernel::AimOut => "kernel/aim_out",
+            Kernel::LaserOut => "kernel/laser_out",
         }
     }
 
@@ -204,6 +210,16 @@ impl Kernel {
                     ports.push(format!("normal{m}"));
                 }
                 (ports, &["base", "mirrors"], &["aim", "turn"])
+            }
+            Kernel::LaserOut => {
+                let mut ports = names(&[
+                    "x", "y", "size", "rotation", "join", "alpha", "index", "count",
+                ]);
+                for m in 0..AIM_MIRRORS {
+                    ports.push(format!("fold{m}"));
+                    ports.push(format!("normal{m}"));
+                }
+                (ports, &["shape", "mirrors"], &["beam"])
             }
         }
     }
@@ -1044,6 +1060,58 @@ pub(crate) fn run(
                     )?,
                 ),
             ]))
+        }
+
+        Kernel::LaserOut => {
+            let layout = match f("shape")? as u8 {
+                1 => crate::laser::Shape::Circle,
+                2 => crate::laser::Shape::Grid,
+                _ => crate::laser::Shape::Fan,
+            };
+            let mirrors = f("mirrors")? as usize;
+            let names = [
+                "x", "y", "size", "rotation", "join", "alpha", "index", "count",
+            ];
+            let all: Vec<&Signal> = names.iter().map(|k| s(k)).collect();
+            let folds: Vec<(&Signal, &Signal)> = (0..mirrors)
+                .map(|m| (s(&format!("fold{m}")), s(&format!("normal{m}"))))
+                .collect();
+            let mut every = all.clone();
+            for (fold, normal) in &folds {
+                every.push(fold);
+                every.push(normal);
+            }
+            let times = shape(&every)?.1;
+            let mut beams = Array3::zeros((heads, times, crate::laser::BEAM_CHANNELS));
+            for n in 0..heads {
+                for t in 0..times {
+                    let v = |i: usize| all[i].at(n, t, 0);
+                    let (index, count) = (v(6) as usize, v(7) as usize);
+                    let mut at =
+                        crate::laser::place(layout, index, count, v(2).max(0.), v(3), [v(0), v(1)]);
+                    // The canvas runs across (U) and up (Z): a mirror
+                    // reflects it as it would the stage.
+                    for (fold, normal) in &folds {
+                        if fold.at(n, t, 0) > 0.5 {
+                            let reflected =
+                                crate::aim::reflect([at[0], 0., at[1]], vector_at(normal, n, t));
+                            at = [reflected[0], reflected[2]];
+                        }
+                    }
+                    let out = [at[0], at[1], v(4).clamp(0., 1.), v(5).clamp(0., 1.)];
+                    for (ch, value) in out.into_iter().enumerate() {
+                        beams[[n, t, ch]] = value;
+                    }
+                }
+            }
+            single(
+                "beam",
+                signal(
+                    beams,
+                    Channels::components(crate::laser::BEAM_CHANNELS)?,
+                    &batch,
+                )?,
+            )
         }
     }
 }

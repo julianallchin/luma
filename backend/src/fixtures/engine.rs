@@ -1005,7 +1005,10 @@ mod tests {
         // Head-level: dimmer off but red on (should apply to red channel).
         primitives.insert("fx:0".into(), prim(0.0, 1.0, 0.0, 0.0, 0.0));
 
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
 
         let buffers = generate_dmx(&state, &fixtures, &definitions, None, 1.0, 0.0);
         let buf = buffers.get(&1).expect("universe buffer");
@@ -1069,7 +1072,10 @@ mod tests {
         // Only head primitive exists (this matches how the current "select" node emits IDs)
         let mut primitives = HashMap::new();
         primitives.insert("fx:0".into(), prim(1.0, 0.0, 0.0, 0.0, 0.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
 
         let buffers = generate_dmx(&state, &fixtures, &definitions, None, 1.0, 0.0);
         let buf = buffers.get(&1).expect("universe buffer");
@@ -1221,7 +1227,10 @@ mod tests {
 
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 1.0, 0.0, 0.0, 0.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
 
         let buffers1 = generate_dmx(&state, &fixtures, &definitions, None, 1.0, 0.0);
         let prev = buffers1.get(&1).copied().unwrap();
@@ -1230,7 +1239,10 @@ mod tests {
         // Second frame sends black -> hold previous wheel value
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 0.0));
-        let state2 = UniverseState { primitives };
+        let state2 = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
 
         let mut prev_map = HashMap::new();
         prev_map.insert(1i64, prev);
@@ -1312,7 +1324,10 @@ mod tests {
         let mut p = prim(1.0, 0.0, 0.0, 0.0, 0.0);
         p.position = [f32::NAN, 0.0];
         primitives.insert("fx".into(), p);
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
 
         let buffers = generate_dmx(&state, &fixtures, &definitions, Some(&prev_map), 1.0, 0.0);
         let buf = buffers.get(&1).unwrap();
@@ -1463,7 +1478,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 0.5));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         let buffers = generate_dmx(&state, &fixtures, &defs, None, 1.0, 0.0);
@@ -1545,7 +1563,10 @@ mod tests {
         let mut primitives = HashMap::new();
         primitives.insert("fx:0".into(), prim(1.0, 1.0, 0.0, 0.0, 1.0));
         primitives.insert("fx:1".into(), prim(1.0, 1.0, 0.0, 0.0, 0.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         // At t=0: gate ON (head 0 not gated yet).
@@ -1612,7 +1633,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 1.0, 0.0, 0.0, 1.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         // t=0 → ON: dimmer at 255.
@@ -1662,7 +1686,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 1.0, 1.0, 1.0, 1.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         let on = generate_dmx(&state, &fixtures, &defs, None, 1.0, 0.0)
@@ -1699,7 +1726,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(0.0, 0.0, 0.0, 0.0, 0.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         let buf = generate_dmx(&state, &fixtures, &defs, None, 1.0, 0.0)
@@ -1733,7 +1763,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(0.0, 0.0, 0.0, 0.0, 0.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         // Prev buffer carries shutter at 200 — should hold.
@@ -1795,7 +1828,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 1.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         // OFF phase: dimmer should gate, pan/tilt stay at 128 (0 deg with default range).
@@ -1845,7 +1881,10 @@ mod tests {
         defs.insert("T/T.qxf".into(), def);
         let mut primitives = HashMap::new();
         primitives.insert("fx".into(), prim(1.0, 1.0, 1.0, 1.0, 0.0));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         for t in [0.0_f64, 0.026, 0.05, 0.1] {
@@ -1928,7 +1967,10 @@ mod tests {
         let mut primitives = HashMap::new();
         primitives.insert("fx:0".into(), prim(1.0, 1.0, 0.0, 0.0, 0.5));
         primitives.insert("fx:1".into(), prim(1.0, 1.0, 0.0, 0.0, 0.5));
-        let state = UniverseState { primitives };
+        let state = UniverseState {
+            primitives,
+            beams: Vec::new(),
+        };
         let fixtures = vec![fixture_at("fx", 1)];
 
         // Across multiple times, the master shutter should carry the strobe and
@@ -2020,6 +2062,7 @@ mod tests {
         let peak = head.dimmer.unwrap() as f32;
         let state = UniverseState {
             primitives: HashMap::from([("fx".into(), prim(peak * dimmer, r, g, b, 0.0))]),
+            beams: Vec::new(),
         };
         let buffer = generate_dmx(&state, &[fixture_at("fx", 1)], &defs, None, 1.0, 0.0)
             .remove(&1)

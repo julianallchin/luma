@@ -540,6 +540,7 @@ fn emit_controller_state(
         use std::collections::HashMap;
         let dark = crate::models::universe::UniverseState {
             primitives: HashMap::new(),
+            beams: Vec::new(),
         };
         events.emit("universe-state-update", &dark);
         if let Some(output) = output {

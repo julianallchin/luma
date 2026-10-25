@@ -22,6 +22,9 @@ pub struct OutputBinding {
     pub strobe: bool,
     pub speed: bool,
     pub aim: bool,
+    /// The plan draws laser beams ([`luma_patterns::laser::BEAM_OUTPUT`])
+    /// rather than light: they layer into [`UniverseState::beams`].
+    pub laser: bool,
 }
 /// One prepared canonical graph and its host selection.
 #[derive(Clone, Debug)]
@@ -43,12 +46,22 @@ pub fn eval(plan: &Plan, times: &[f32], scratch: &mut Arena) -> Vec<UniverseStat
         times.iter().map(|_| composite::blank_frame()).collect()
     })
 }
-/// One clip alone over no light: its light and strobe at its opacity.
+/// One clip alone over no light: its light and strobe at its opacity, or
+/// its beams at their alpha.
 pub fn try_eval(
     plan: &Plan,
     times: &[f32],
     scratch: &mut Arena,
 ) -> Result<Vec<UniverseState>, String> {
+    if plan.outputs.laser {
+        return Ok(try_beams(plan, times, 0, scratch)?
+            .into_iter()
+            .map(|beams| UniverseState {
+                beams,
+                ..composite::blank_frame()
+            })
+            .collect());
+    }
     Ok(try_layers(plan, times, scratch)?
         .into_iter()
         .map(lighting::Layer::over_nothing)
@@ -70,6 +83,19 @@ pub(crate) fn try_layers(
                 alpha: Default::default(),
             })
             .collect()),
+    }
+}
+
+/// A laser plan's beams at `times`, drawn on path `path`.
+pub(crate) fn try_beams(
+    plan: &Plan,
+    times: &[f32],
+    path: u32,
+    scratch: &mut Arena,
+) -> Result<Vec<Vec<luma_patterns::laser::Beam>>, String> {
+    match &plan.program {
+        Some(program) => program.beams(times, path, scratch),
+        None => Ok(times.iter().map(|_| Vec::new()).collect()),
     }
 }
 

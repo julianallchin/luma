@@ -47,7 +47,16 @@ pub struct FixtureDefinition {
     pub physical: Option<Physical>,
 }
 
+/// The QXF `<Type>` of an ILDA laser projector: a fixture Luma draws beams
+/// with from laser clips, through a point stream rather than DMX.
+pub const LASER_PROJECTOR: &str = "Laser Projector";
+
 impl FixtureDefinition {
+    /// Whether this is an ILDA laser projector ([`LASER_PROJECTOR`]).
+    pub fn is_laser_projector(&self) -> bool {
+        self.type_ == LASER_PROJECTOR
+    }
+
     /// The full pan and tilt travel in degrees, from the profile's focus
     /// block: 540 and 270 when it says nothing. Centred on home, so a head
     /// reaches half of each either way.

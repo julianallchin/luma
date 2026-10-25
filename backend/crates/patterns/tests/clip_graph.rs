@@ -584,7 +584,7 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
     let color = |from: &str| Node::new(Kind::Color).with_input("brightness", Input::wire(from));
     let curve_of = |x: &str| Node::new(Kind::Curve).with_input("x", Input::wire(x));
     match kind {
-        Kind::Color | Kind::Aim | Kind::Strobe => {}
+        Kind::Color | Kind::Aim | Kind::Strobe | Kind::Laser => {}
         Kind::Time | Kind::Space | Kind::Noise | Kind::Audio => {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push(("color9".into(), color("curve9")));
