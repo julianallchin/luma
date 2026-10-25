@@ -620,6 +620,8 @@ pub struct Renderer {
     environment: EnvironmentCache,
     atmosphere: AtmosphereCache,
     sun_shafts: crate::sun_shafts::Cache,
+    /// The light the haze scatters (`haze_glow.rs`).
+    haze_glow: crate::haze_glow::Glow,
     /// The local reflection probes over this renderer's stage.
     probes: crate::probes::Probes,
     sky_visibility: crate::sky_visibility::SkyVisibility,
@@ -1131,6 +1133,7 @@ pub struct Gpu {
     atmosphere: AtmospherePipelines,
     sun_shafts: crate::sun_shafts::Pipelines,
     laser: crate::laser::Pipelines,
+    haze_glow: crate::haze_glow::Pipelines,
     /// The local reflection probes' capture, relight and prefilter.
     probes: crate::probes::Pipelines,
     scene_layout: wgpu::BindGroupLayout,
@@ -1428,6 +1431,11 @@ impl Gpu {
                 count: None,
             },
         ];
+        // The haze's glow (`haze_glow.rs`): 17 to 19.
+        cluster_entries.extend(crate::haze_glow::layout_entries(
+            17,
+            wgpu::ShaderStages::FRAGMENT,
+        ));
         for entry in &mut cluster_entries {
             entry.visibility |= wgpu::ShaderStages::COMPUTE;
         }
@@ -1556,6 +1564,7 @@ impl Gpu {
         // the haze pipeline binds as group 1.
         let light_index_pipelines = LightIndexPipelines::new(&device);
 
+        let glow_entries = crate::haze_glow::layout_entries(8, wgpu::ShaderStages::FRAGMENT);
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite"),
             entries: &[
@@ -1596,6 +1605,10 @@ impl Gpu {
                 },
                 // The sun-shaft fraction (`sun_shafts.rs`).
                 texture_entry(7),
+                // The haze's glow (`haze_glow.rs`).
+                glow_entries[0],
+                glow_entries[1],
+                glow_entries[2],
             ],
         });
 
@@ -1608,6 +1621,7 @@ impl Gpu {
             &format!("{bindings}{}", include_str!("shaders/sun_shafts.wgsl")),
         );
         let laser = crate::laser::Pipelines::new(&device, crate::post::SCENE_FORMAT);
+        let haze_glow = crate::haze_glow::Pipelines::new(&device);
         let fixture_light = include_str!("shaders/fixture_light.wgsl");
         let visibility = include_str!("shaders/visibility.wgsl");
         let haze_visibility = visibility.replace("@group(3) @binding(11)", "@group(0) @binding(8)");
@@ -2463,6 +2477,7 @@ impl Gpu {
             atmosphere,
             sun_shafts,
             laser,
+            haze_glow,
             probes,
             scene_layout,
             material_layout,
@@ -2632,12 +2647,14 @@ impl Renderer {
         );
         let compaction = crate::haze_compact::Compaction::new(&gpu.device);
         let probes = crate::probes::Probes::new(&gpu.device);
+        let haze_glow = crate::haze_glow::Glow::new(&gpu.device);
         Self {
             gpu,
             fog_blocks_valid: false,
             environment: EnvironmentCache::default(),
             atmosphere: AtmosphereCache::default(),
             sun_shafts: crate::sun_shafts::Cache::default(),
+            haze_glow,
             probes,
             sky_visibility: crate::sky_visibility::SkyVisibility::default(),
             post,
@@ -4139,6 +4156,11 @@ impl Renderer {
             .set_lights(&self.gpu.device, &self.gpu.queue, &cores, &rests);
         let probe_work = self.probes.prepare(&self.gpu.queue, frame, opaque);
         let probe_debug_balls = self.probes.debug_balls();
+        // Where the haze's glow is this frame, before the surfaces and the
+        // composite bind it; it is filled after the shadow maps.
+        self.haze_glow
+            .prepare(&self.gpu.device, &self.gpu.queue, &medium, frame.quality);
+        let glow_bindings = self.haze_glow.bindings(17);
         let cluster_group = |label: &str, core: &wgpu::Buffer, rest: &wgpu::Buffer| {
             self.gpu
                 .device
@@ -4146,6 +4168,9 @@ impl Renderer {
                     label: Some(label),
                     layout: &self.gpu.cluster_layout,
                     entries: &[
+                        glow_bindings[0].clone(),
+                        glow_bindings[1].clone(),
+                        glow_bindings[2].clone(),
                         binding(0, core.as_entire_binding()),
                         binding(1, rest.as_entire_binding()),
                         binding(4, cluster_uniform.as_entire_binding()),
@@ -4644,6 +4669,24 @@ impl Renderer {
             // surface transmittance comes from the fog grid; then it is
             // encoded after `fog-transmittance` instead of here, still ahead
             // of the haze pass, so the legacy timestamp slots keep their order.
+            // The haze's glow, from every cone's light past its shadow map
+            // and the lasers', before the surfaces read it.
+            self.haze_glow.encode(
+                &self.gpu.haze_glow,
+                &self.gpu.device,
+                &mut encoder,
+                &crate::haze_glow::FrameInput {
+                    cores: &cores,
+                    rests: &rests,
+                    shadow_matrices: &fixture_shadow_matrix_buf,
+                    shadow_map: &self.fixture_shadow_map,
+                    shadow_map_extra: &self.fixture_shadow_map_extra,
+                    medium,
+                    haze_field: &self.gpu.haze_field,
+                    lasers: &frame.lasers,
+                    beam_gain: Transport::BEAM_GAIN,
+                },
+            );
             let samples = budget.msaa;
             let encode_scene = scene_encoder(|encoder, pass_queries, gpu, queries| {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -5453,6 +5496,7 @@ impl Renderer {
                 wgpu::BufferUsages::UNIFORM,
                 "composite",
             );
+            let composite_glow = self.haze_glow.bindings(8);
             let bind_group = self
                 .gpu
                 .device
@@ -5474,6 +5518,9 @@ impl Renderer {
                         binding(3, wgpu::BindingResource::Sampler(&self.gpu.linear_sampler)),
                         binding(4, wgpu::BindingResource::TextureView(&depth_view)),
                         binding(7, wgpu::BindingResource::TextureView(&shaft_view)),
+                        composite_glow[0].clone(),
+                        composite_glow[1].clone(),
+                        composite_glow[2].clone(),
                     ],
                 });
             {
@@ -8655,10 +8702,11 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
 /// see `scene_bindings.wgsl`.
 fn scene_bindings_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("shaders/medium.wgsl"),
         include_str!("shaders/scene_bindings.wgsl"),
+        include_str!("shaders/haze_glow_sample.wgsl"),
         crate::atmosphere::surface_prelude(),
         include_str!("shaders/horizon.wgsl"),
         include_str!("shaders/haze_daylight.wgsl"),
@@ -8681,13 +8729,14 @@ fn beam_transport_wgsl() -> String {
 /// The composite module's source.
 fn composite_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("shaders/medium.wgsl"),
         crate::atmosphere::composite_prelude(),
         include_str!("shaders/haze_daylight.wgsl"),
         include_str!("shaders/shaft_upsample.wgsl"),
         include_str!("shaders/tone.wgsl"),
+        include_str!("shaders/haze_glow_sample.wgsl"),
         include_str!("shaders/composite.wgsl")
     )
 }

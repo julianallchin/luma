@@ -100,6 +100,21 @@ pub struct Sheet {
     pub density: Vec3,
 }
 
+impl Sheet {
+    /// The angle between its edges, radians.
+    pub fn angle(&self) -> f32 {
+        angle(self.from, self.to)
+    }
+}
+
+/// The angle between unit vectors, radians, as exact for the hundredth of a
+/// degree between two points of a scan as for a right angle. `acos` of their
+/// dot product, near 1, keeps only a few bits of so small an angle, and a
+/// sheet's light per radian would carry that error as stripes.
+pub(crate) fn angle(a: Vec3, b: Vec3) -> f32 {
+    a.cross(b).length().atan2(a.dot(b))
+}
+
 /// The beams and sheets a projector's light makes over the window.
 pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
     let n = scan.points.len();
@@ -159,11 +174,11 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
         if light.max_element() <= 0.0 {
             flush(&mut gathering, &mut beams);
         } else {
-            let angle = from.angle_between(to);
-            if angle < BEAM_ANGLE {
+            let step = angle(from, to);
+            if step < BEAM_ANGLE {
                 // A beam holds the light that stays near its own direction;
                 // a slow sweep drifts off it and starts the next beam.
-                if gathering.is_some_and(|(anchor, _)| anchor.angle_between(to) >= BEAM_ANGLE) {
+                if gathering.is_some_and(|(anchor, _)| angle(anchor, to) >= BEAM_ANGLE) {
                     flush(&mut gathering, &mut beams);
                 }
                 let (_, power) = gathering.get_or_insert((to, Vec3::ZERO));
@@ -174,7 +189,7 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
                     origin: scan.origin,
                     from,
                     to,
-                    density: light / angle,
+                    density: light / step,
                 });
             }
         }
@@ -464,7 +479,7 @@ const BEAM_PIECES: u32 = 16;
 
 /// Radiance per unit of a projector's light: puts a full-white beam on the
 /// same scale as a stage beam in the same haze.
-const GAIN: f32 = 40.0;
+pub(crate) const GAIN: f32 = 40.0;
 
 #[cfg(test)]
 mod tests {
@@ -531,11 +546,29 @@ mod tests {
         let (beams, sheets) = light(&scan(points));
         assert!(sheets.len() > 50, "{}", sheets.len());
         let beam_power: f32 = beams.iter().map(|b| b.power.x).sum();
-        let sheet_power: f32 = sheets
-            .iter()
-            .map(|s| s.density.x * s.from.angle_between(s.to))
-            .sum();
+        let sheet_power: f32 = sheets.iter().map(|s| s.density.x * s.angle()).sum();
         assert!(sheet_power > beam_power, "{sheet_power} {beam_power}");
+    }
+
+    /// An even sweep is an even sheet: each piece holds the light per
+    /// radian of the pieces beside it, so the fan shows no stripes.
+    #[test]
+    fn an_even_sweep_is_an_even_sheet() {
+        // 0.02 of the field a point, the planner's pace for a lit line; back
+        // in black, held still at either end, as the planner plays it.
+        let mut points = vec![dot(-0.6, false); 10];
+        points.extend((0..60).map(|i| dot(i as f32 * 0.02 - 0.6, true)));
+        points.extend(vec![dot(0.6, false); 10]);
+        points.extend((0..30).map(|i| dot(0.56 - i as f32 * 0.04, false)));
+        let (_, sheets) = light(&scan(points));
+        // A stripe is a piece brighter or dimmer than the pieces beside it.
+        // The mirrors still speeding up out of the turn change the light
+        // gradually, which is no stripe.
+        let middle = &sheets[sheets.len() / 4..sheets.len() * 3 / 4];
+        for pair in middle.windows(2) {
+            let ratio = pair[1].density.x / pair[0].density.x;
+            assert!((ratio - 1.0).abs() < 0.005, "{ratio}");
+        }
     }
 
     /// The light over the window adds to the scan's lit share: a scan lit half

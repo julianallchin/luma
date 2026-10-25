@@ -463,10 +463,11 @@ pub(crate) struct PipelineSources<'a> {
 /// instance array, then the probe prelude and the capture.
 pub(crate) fn capture_wgsl() -> String {
     format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("shaders/medium.wgsl"),
         include_str!("shaders/scene_bindings.wgsl"),
+        include_str!("shaders/haze_glow_sample.wgsl"),
         prelude(),
         include_str!("shaders/probe_capture.wgsl")
     )
