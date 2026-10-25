@@ -10,7 +10,7 @@
 
 A clip has a name, a time range, a selection, a blend mode, a seed and one
 graph. Build the graph with the bare builders (time, space, noise, audio,
-curve, mirror, shuffle, group, split, then color, aim or strobe) and math on
+curve, mirror, shuffle, group, split, then color, aim, strobe or laser) and math on
 curves (cut * fade, max(a, b)), or start from preset("Chase"). add_clip and update_clip run the Rust checker on
 that clip at once and raise ClipError with its text.
 
@@ -59,7 +59,7 @@ def _graph(value):
         return value
     if isinstance(value, str):
         return preset(value)
-    raise TrackError("graph must be a Graph from color(), aim() or strobe(), preset(\"Chase\"), "
+    raise TrackError("graph must be a Graph from color(), aim(), strobe() or laser(), preset(\"Chase\"), "
                      "or a preset name")
 
 
@@ -376,7 +376,7 @@ class Edit:
                  selection="all", z=None, blend=None, seed=None, id=None):
         """Stage a clip and return it. The checker runs on it at once.
 
-        graph is a Graph from color(), aim() or strobe(), preset("Chase"),
+        graph is a Graph from color(), aim(), strobe() or laser(), preset("Chase"),
         or a preset name. name is required unless the graph is a preset;
         a preset also gives its blend mode (motion presets are offset).
         With no blend and no preset, the blend is replace.
@@ -667,7 +667,7 @@ def _graph_changes(old, new):
     before, after = old.get("nodes") or {}, new.get("nodes") or {}
     readers = {}
     for node_id, node in after.items():
-        if node.get("kind") in ("color", "aim", "strobe"):
+        if node.get("kind") in ("color", "aim", "strobe", "laser"):
             for name, value in (node.get("inputs") or {}).items():
                 for wire in _wires(value):
                     readers.setdefault(wire, name)

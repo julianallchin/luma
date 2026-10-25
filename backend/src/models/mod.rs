@@ -6,6 +6,7 @@ pub mod distribute;
 pub mod fixtures;
 pub mod folders;
 pub mod groups;
+pub mod lasers;
 pub mod midi;
 pub mod mixer;
 pub mod node_graph;

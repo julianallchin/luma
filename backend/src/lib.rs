@@ -17,6 +17,7 @@ mod engine_dj;
 pub mod eval;
 mod ffmpeg_env;
 pub mod fixtures;
+pub mod laser;
 mod genre_worker;
 /// Where a test that fakes the analysis workers puts a stand-in genre model,
 /// so the genre stage does not download the real one.

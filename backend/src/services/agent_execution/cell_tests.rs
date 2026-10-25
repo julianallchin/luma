@@ -1131,6 +1131,111 @@ line = [l for l in tree.splitlines() if row.fixtures[0].id in l][0]
     f.service.shutdown_all();
 }
 
+/// The agent's whole laser path, from Python: a projector hung facing the
+/// crowd, a laser clip over it, and the stage picture through haze. The
+/// draft with the clip is brighter than the saved score without it, and its
+/// strip shows the fan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_laser_clip_draws_beams_on_the_stage() {
+    let Some(f) = Fixture::new("a python laser clip").await else {
+        return;
+    };
+    // The rig is built in the venue's own thread, the clip previewed from
+    // the track's: nothing is applied.
+    crate::database::local::auth::arm_write_admission(&f.pool, None)
+        .await
+        .unwrap();
+    let rig = crate::database::local::agent_threads::create_thread(
+        &f.pool,
+        CreateAgentThreadInput {
+            agent_kind: "venue_rig".to_string(),
+            subject_kind: Some("venue".into()),
+            subject_id: Some(f.venue_id.clone()),
+            venue_id: Some(f.venue_id.clone()),
+            ..Default::default()
+        },
+        None,
+    )
+    .await
+    .expect("create venue thread")
+    .id;
+    let built = f
+        .run_in_venue(
+            &rig,
+            &f.venue_id,
+            r#"
+v = luma.venue
+v.haze(enabled=True, density=0.4)
+projector = v.fixture_library("ILDA laser projector")[0]
+tower = v.place("truss", at=(0.0, -2.0), length=2.0, direction=(0, 0, 1))
+row = v.distribute(projector, 1, on=tower, face=(0, 1, 0), mode=projector.mode(1))
+v.group("lasers", row.fixtures)
+projector.path
+"#,
+        )
+        .await;
+    expect_ok(&built, "laser rig");
+    assert_eq!(
+        built.repr.as_deref(),
+        Some("'Generic/Generic-ILDA-Laser-Projector.qxf'")
+    );
+    // The score is the owner's, written through a session turn.
+    let track = f.editable_thread().await;
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &track,
+        AppendAgentThreadMessagesInput {
+            operation_id: "laser-session".into(),
+            expected_head_message_id: None,
+            messages: vec![NewAgentThreadMessage {
+                id: Some("laser-session".into()),
+                role: "session".into(),
+                parts: json!([{ "type": "text", "text": "Session opened." }]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    let mut scope = f.scope();
+    scope.score_id = Some(SCORE_ID.into());
+    let out = run_python_cell_inner(
+        &f.pool,
+        &f.storage,
+        &f.resource_root,
+        &f.service,
+        track,
+        r#"
+import io
+import matplotlib.image as image
+edit = luma.track.edit()
+edit.add_clip(laser(beams=5, size=1), name="Fan", seconds=(0, 4), selection="lasers")
+def light(shot):
+    return float(image.imread(io.BytesIO(shot.read_bytes()))[..., :3].sum())
+v = luma.venue
+lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
+(lit > dark * 1.01, lit, dark)
+"#
+        .into(),
+        scope,
+        Some("laser-session".into()),
+        Some("owner".into()),
+        None,
+        None,
+    )
+    .await
+    .expect("run_python_cell");
+    expect_ok(&out, "laser clip");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert!(
+        repr.starts_with("(True"),
+        "the laser clip did not light the stage: {repr}\n{}",
+        out.stdout
+    );
+
+    f.service.shutdown_all();
+}
+
 /// The second of the design's two hard errors, from Python: an extend longer
 /// than the gap the ray measured is refused, changes nothing, and says by how
 /// much. Asking for exactly the gap bridges it and closes both ends.

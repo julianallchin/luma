@@ -75,12 +75,13 @@ pub fn check_clip(clip: &Clip) -> Result<()> {
 }
 
 /// The blend modes an output kind takes: aim blends by `replace` or
-/// `offset`; color and strobe by the light set.
+/// `offset`; laser by `replace`, which morphs the beams under it into its
+/// own, or `add`, which draws both; color and strobe by the light set.
 pub fn blend_modes(kind: Kind) -> &'static [BlendMode] {
-    if kind == Kind::Aim {
-        &[BlendMode::Replace, BlendMode::Offset]
-    } else {
-        &BlendMode::LIGHT
+    match kind {
+        Kind::Aim => &[BlendMode::Replace, BlendMode::Offset],
+        Kind::Laser => &[BlendMode::Replace, BlendMode::Add],
+        _ => &BlendMode::LIGHT,
     }
 }
 
@@ -171,8 +172,8 @@ const MAX_ID: usize = 32;
 /// variable of its id.
 const RESERVED: &[&str] = &[
     "time", "space", "noise", "audio", "curve", "math", "value", "max", "min", "mirror", "shuffle",
-    "group", "split", "color", "aim", "strobe", "preset", "False", "None", "True", "and", "as",
-    "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else",
+    "group", "split", "color", "aim", "strobe", "laser", "preset", "False", "None", "True", "and",
+    "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else",
     "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
     "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
 ];
@@ -259,7 +260,8 @@ fn node_shape(id: &str, node: &Node) -> Result<()> {
                 definition.settings[0].1.default
             ));
         };
-        if !setting.options.contains(&value.as_str()) {
+        // A setting with no options takes any text, such as a zone id.
+        if !setting.options.is_empty() && !setting.options.contains(&value.as_str()) {
             return fail(format!(
                 "{id}.{name}: expected {}; got \"{value}\". Example: {name}=\"{}\"",
                 either(setting.options),
@@ -493,6 +495,12 @@ fn value_input(
         }
         (ty, _) if ty.is_wire_only() => return wrong_type(),
         (InputType::Number, Input::Number(value)) => {
+            if def.fixed && value.fract() != 0. {
+                return fail(format!(
+                    "{id}.{name}: expected a whole number; got {value}. Example: {}",
+                    example(node.kind, name)
+                ));
+            }
             if !value.is_finite() || !def.in_range(*value) {
                 return fail(format!(
                     "{id}.{name}: expected {}; got {value}. Example: {}",
@@ -619,6 +627,13 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
         let Some(given) = node.inputs.get(*name) else {
             continue;
         };
+        if def.fixed && !matches!(graph.resolve(given), Input::Number(_)) {
+            return fail(format!(
+                "{id}.{name}: expected a whole number that stays for the whole clip; got {}. Example: {}",
+                describe(graph, Some(given)),
+                example(node.kind, name)
+            ));
+        }
         for source in given.sources() {
             let input = &Input::Wire(source.to_string());
             let source_node = &graph.nodes[source];

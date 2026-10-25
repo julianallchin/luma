@@ -42,6 +42,7 @@ mod haze_field;
 pub mod house;
 pub mod image_out;
 pub mod interval_cache;
+pub mod laser;
 pub mod light_index;
 pub mod luminaire;
 pub mod materials;

@@ -22,6 +22,7 @@ use luma_patterns::{blend_aim, blend_light_alpha, blend_value_alpha, offset_aim,
 pub fn blank_frame() -> UniverseState {
     UniverseState {
         primitives: std::collections::HashMap::new(),
+        beams: Vec::new(),
     }
 }
 
@@ -530,5 +531,86 @@ mod tests {
                 last = Some(got);
             }
         }
+    }
+
+    /// A laser clip over one projector: `beams` heads, a fan at `x`.
+    fn laser(beams: usize, x: f64, alpha: f64, mode: p::BlendMode, z: i64) -> CompiledAnnotation {
+        let nodes = json!({"laser1": {"kind": "laser", "inputs": {
+            "beams": beams, "x": x, "size": 0.25, "alpha": alpha}}});
+        let cells = (0..beams)
+            .map(|i| p::Cell {
+                id: format!("proj:{i}"),
+                group: "lasers".into(),
+                world: [0.0; 3],
+                uvz: [0.0; 3],
+            })
+            .collect();
+        compile_on(test_clip(nodes, 0.0, 4.0), mode, z, cells)
+    }
+
+    fn beams(layers: Vec<CompiledAnnotation>) -> Vec<p::laser::Beam> {
+        Scene::new(layers).render(&[1.0], Scope::Composite, &mut Arena::default())[0]
+            .beams
+            .clone()
+    }
+
+    #[test]
+    fn laser_clips_draw_beams_and_no_light() {
+        let frame = Scene::new(vec![laser(3, 0.0, 1.0, p::BlendMode::Replace, 0)]).render(
+            &[1.0],
+            Scope::Composite,
+            &mut Arena::default(),
+        );
+        assert!(frame[0].primitives.is_empty());
+        let s: Vec<f64> = frame[0].beams.iter().map(|b| b.s).collect();
+        assert_eq!(s, [0.0, 0.5, 1.0]);
+        assert!(frame[0]
+            .beams
+            .iter()
+            .all(|b| b.projector == "proj" && b.intensity == 1.0));
+    }
+
+    #[test]
+    fn an_add_laser_clip_draws_beside_the_one_under_it() {
+        let out = beams(vec![
+            laser(2, -0.5, 1.0, p::BlendMode::Replace, 0),
+            laser(3, 0.5, 1.0, p::BlendMode::Add, 1),
+        ]);
+        assert_eq!(out.len(), 5);
+        assert_eq!(
+            out.iter()
+                .map(|b| b.path)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            2,
+            "each clip is its own path"
+        );
+    }
+
+    /// A Replace clip halfway in morphs the fan under it: both sets sit
+    /// halfway between their places, at half intensity each.
+    #[test]
+    fn a_replace_laser_clip_morphs_the_beams_under_it() {
+        let out = beams(vec![
+            laser(3, -0.5, 1.0, p::BlendMode::Replace, 0),
+            laser(3, 0.5, 0.5, p::BlendMode::Replace, 1),
+        ]);
+        assert_eq!(out.len(), 6);
+        for beam in &out {
+            assert!((beam.intensity - 0.5).abs() < 1e-9, "{beam:?}");
+        }
+        let mut xs: Vec<f64> = out.iter().map(|b| (b.x * 1e9).round() / 1e9).collect();
+        xs.sort_by(f64::total_cmp);
+        xs.dedup();
+        assert_eq!(xs, [-0.25, 0.0, 0.25]);
+    }
+
+    #[test]
+    fn a_color_clip_over_a_laser_leaves_its_beams() {
+        let out = beams(vec![
+            laser(2, 0.0, 1.0, p::BlendMode::Replace, 0),
+            wash(RED, 1.0, 1.0, p::BlendMode::Replace, 1),
+        ]);
+        assert_eq!(out.len(), 2);
     }
 }

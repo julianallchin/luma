@@ -91,6 +91,7 @@ async fn main() -> Result<(), String> {
         state,
         time: 0.,
         size: (width, height),
+        lasers: geometry.lasers.clone(),
     };
     let meshes = luma_lib::stage_render::meshes_root(Some(&fixtures_root));
     let png = tokio::task::spawn_blocking(move || {

@@ -1,6 +1,6 @@
 ---
 name: effect-catalog
-description: Every lighting effect Luma knows, as the Python that builds its clip graph, the node chain, and the shipped clip preset name. Color, movement, aim and strobe effects, and the effects that are not one clip (several clips, a transition, or the agent's own analysis). Read this to find how to build a look.
+description: Every lighting effect Luma knows, as the Python that builds its clip graph, the node chain, and the shipped clip preset name. Color, movement, aim, strobe and laser effects, and the effects that are not one clip (several clips, a transition, or the agent's own analysis). Read this to find how to build a look.
 ---
 
 # Effect catalog
@@ -114,6 +114,24 @@ under them.
 | Strobe | `strobe(rate=0.9)` | strobe |
 | Ramp | `t = time(); strobe(rate=curve(t, "Ramp up"))` | time → curve → rate |
 | Strobe steps up | `t = time(); strobe(rate=curve(t, "Steps 4", low=0.4, high=0.9))` | time → curve → rate |
+
+## Laser
+
+Select the projectors. No laser presets ship: build them from the Python.
+A laser clip places beams; a color clip over the same projectors colours
+them by place along the order (see `node-cards`, laser).
+
+| Name | Python | Chain |
+|---|---|---|
+| Fan | `laser(beams=8, size=1)` | laser |
+| Sheet | `laser(beams=16, size=1, join=1)` | laser, beams joined |
+| Fan sweep | `t = time(every=4); laser(beams=6, x=curve(t, "Sine", low=-0.6, high=0.6))` | time → curve → x |
+| Fan opens from the left | `t = time(every=2); laser(beams=8, size=curve(t, "Ramp up"), x=curve(t, "Ramp up", low=-1, high=0))` | one curve on size and x: the left edge stays at -1 |
+| Beam wave | `t = time(every=2, phase=curve(space(), "Ramp up", high=360)); laser(beams=8, size=1, y=curve(t, "Sine", low=-0.5, high=0.5))` | space → phase → time → curve → y |
+| Spinning ring | `t = time(every=4); laser(beams=12, shape="circle", rotation=curve(t, "Ramp up", low=-180, high=180))` | time → curve → rotation |
+| Mirrored fans | `laser(heads=mirror(direction=(1, 0, 0)), beams=8, size=0.5, x=-0.5)` | the two sides of the rig draw mirror images: projectors stage left and stage right fan to opposite sides |
+| Gradient beams (color clip) | `color(color=curve(space(), "Ramp up", gradient="Rainbow"))` | over the projectors: each beam its place in the gradient |
+| White flecks over green | `k = time(every=0.5); order = shuffle(time=k); rank = space(heads=order, kind="order"); color(color=(1, 1, 1), brightness=curve(rank, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]]))` | a color clip over a green Wash on the projectors |
 
 ## Not one clip
 

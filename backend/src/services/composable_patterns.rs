@@ -41,7 +41,15 @@ pub(crate) async fn preview(
             .to_string()
     })?;
     let clock = beat_grid.timeline().map_err(|error| error.to_string())?;
-    let cells = resolve_cells(&mut access, fixtures_root, &request.targets, request.seed).await?;
+    let beams = request.graph.laser().map(|laser| laser.beams);
+    let cells = resolve_cells(
+        &mut access,
+        fixtures_root,
+        &request.targets,
+        request.seed,
+        beams,
+    )
+    .await?;
     if cells.is_empty() {
         return Err("the targets contain no placed, controllable cells".into());
     }
@@ -116,12 +124,14 @@ pub(crate) async fn preview(
     })
 }
 /// Resolve the authored head domain once, shared by saved-score playback and
-/// previews.
+/// previews. `beams` is a laser clip's beams per projector: it draws only
+/// on projectors, with that many heads each.
 pub async fn resolve_cells(
     access: &mut impl AuthorizedVenue,
     fixtures_root: &Path,
     targets: &[Selection],
     seed: u64,
+    beams: Option<usize>,
 ) -> Result<Vec<Cell>, String> {
     let mut cells = Vec::new();
     let mut seen = BTreeSet::new();
@@ -132,6 +142,7 @@ pub async fn resolve_cells(
             fixtures_root,
             target,
             seed,
+            beams,
         )
         .await?;
         for (id, position) in primitives {
@@ -169,6 +180,7 @@ fn universe(lighting: BTreeMap<String, luma_patterns::FixtureOutput>) -> Univers
                 )
             })
             .collect(),
+        beams: Vec::new(),
     }
 }
 #[cfg(test)]
