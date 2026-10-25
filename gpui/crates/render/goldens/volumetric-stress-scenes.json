@@ -36,17 +36,17 @@
     {
       "cones": 32,
       "image": "volumetric-stress-32.png",
-      "expected_fnv64": "0x447e0e51f10c37ee"
+      "expected_fnv64": "0xa6d04a0168c90bc2"
     },
     {
       "cones": 128,
       "image": "volumetric-stress-128.png",
-      "expected_fnv64": "0x612604258028c0b3"
+      "expected_fnv64": "0x1888a5b1f72517fa"
     },
     {
       "cones": 512,
       "image": "volumetric-stress-512.png",
-      "expected_fnv64": "0xcb2daa9447bfe051"
+      "expected_fnv64": "0x3ae4752be3c1a833"
     }
   ]
 }

@@ -207,3 +207,170 @@ fn a_projector_with_no_light_draws_nothing() {
     f.lasers = vec![projector(vec![point(0.0, 0.0, false); 100])];
     assert_eq!(render(&mut renderer, &f, "unlit"), dark);
 }
+
+/// A small stage: two decks and a speaker either side, over the floor,
+/// seen from the house.
+fn room(haze: f32, lasers: Vec<LaserScan>) -> Frame {
+    use luma_render::scene_desc::Geometry;
+    let mut library = Library::new(crate::common::meshes());
+    let mut render = RenderSettings::dark_stage(40.0, 1.0);
+    render.environment = Environment::DARK;
+    render.sun = None;
+    render.show_grid = false;
+    render.show_gizmos = false;
+    render.haze.steps = 8;
+    render.haze.density = haze;
+    render.haze.enabled = haze > 0.0;
+    render.debug_view = DebugView::Pbr;
+    render.look = Look::STAGE;
+    let piece = |id: &str, mesh: &str, pos: [f32; 3], scale: f32| Piece {
+        id: id.into(),
+        geometry: Geometry::mesh(mesh),
+        kind: "stage".into(),
+        pos,
+        rot: [0.0, 0.0, 0.0],
+        scale,
+    };
+    let scene = Scene {
+        id: "laser-room".into(),
+        times: vec![0.0],
+        // From the side of the house, so the fan and the floor under it
+        // both show.
+        camera: CameraPose {
+            position: [9.0, 1.8, 4.0],
+            target: [0.0, 2.5, -1.0],
+        },
+        editing: false,
+        aim_arrows: false,
+        render,
+        selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
+        fixtures: Vec::new(),
+        pieces: vec![
+            piece(
+                "deck-l",
+                "stage_lab/stage_praticavel_1x1.glb",
+                [-1.0, 3.0, 0.0],
+                2.0,
+            ),
+            piece(
+                "deck-r",
+                "stage_lab/stage_praticavel_1x1.glb",
+                [1.0, 3.0, 0.0],
+                2.0,
+            ),
+            piece(
+                "sub-l",
+                "stage_lab/speaker_dual18sub.glb",
+                [-4.0, 2.0, 0.0],
+                1.0,
+            ),
+            piece(
+                "sub-r",
+                "stage_lab/speaker_dual18sub.glb",
+                [4.0, 2.0, 0.0],
+                1.0,
+            ),
+        ],
+        state: BTreeMap::new(),
+    };
+    let mut frame =
+        build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library).unwrap();
+    frame.lasers = lasers;
+    frame
+}
+
+/// A projector at the back of the stage, 3 m up, aimed out over the house
+/// and a little up.
+fn upstage(points: Vec<LaserPoint>) -> LaserScan {
+    let forward = Vec3::new(0.0, -1.0, 0.12).normalize();
+    let right = Vec3::X;
+    LaserScan {
+        origin: Vec3::new(0.0, 5.0, 3.0),
+        forward,
+        right,
+        up: right.cross(forward).normalize(),
+        half_field: [30.0, 30.0],
+        rate: 30_000.0,
+        points,
+        phase: 0.0,
+    }
+}
+
+fn blue(x: f32, y: f32) -> LaserPoint {
+    LaserPoint {
+        x,
+        y,
+        rgb: [0.15, 0.25, 1.0],
+    }
+}
+
+/// A sweep across the field and back, lit both ways: a sheet.
+fn sheet() -> Vec<LaserPoint> {
+    let there = (0..300).map(|i| blue(i as f32 / 300.0 * 1.6 - 0.8, 0.0));
+    let back = (0..300).map(|i| blue(0.8 - i as f32 / 300.0 * 1.6, 0.0));
+    there.chain(back).collect()
+}
+
+/// Nine beams across the field, jumps in black.
+fn beams() -> Vec<LaserPoint> {
+    let mut points = Vec::new();
+    for i in 0..9 {
+        let x = i as f32 / 8.0 * 1.6 - 0.8;
+        points.extend(std::iter::repeat_n(
+            LaserPoint {
+                rgb: [0.0; 3],
+                ..blue(x, 0.0)
+            },
+            24,
+        ));
+        points.extend(std::iter::repeat_n(blue(x, 0.0), 80));
+    }
+    points
+}
+
+/// The mean brightness of the bottom rows: the stage and the floor below
+/// the fan, which no beam crosses.
+fn floor_light(pixels: &[u8]) -> f64 {
+    let rows = HEIGHT * 4 / 5..HEIGHT;
+    let row_bytes = (WIDTH * 4) as usize;
+    let floor = &pixels[rows.start as usize * row_bytes..rows.end as usize * row_bytes];
+    brightness(floor) as f64 / (floor.len() / 4) as f64
+}
+
+/// The light a hazy room's lasers scatter lights the room below the beams,
+/// where no beam goes. The haze scatters more of the beams' light the
+/// thicker it is, and scatters that light again on its way to the camera,
+/// so three times the haze lights it well over three times as much.
+#[test]
+fn haze_lit_by_lasers_lights_the_room() {
+    let mut renderer = Renderer::new().unwrap();
+    let mut floor = Vec::new();
+    for (haze, name) in [(0.4, "thin"), (1.2, "thick")] {
+        let dark = render(
+            &mut renderer,
+            &room(haze, vec![]),
+            &format!("room-{name}-dark"),
+        );
+        let lit = render(
+            &mut renderer,
+            &room(haze, vec![upstage(sheet())]),
+            &format!("room-{name}-sheet"),
+        );
+        render(
+            &mut renderer,
+            &room(haze, vec![upstage(beams())]),
+            &format!("room-{name}-beams"),
+        );
+        floor.push(floor_light(&lit) - floor_light(&dark));
+    }
+    assert!(
+        floor[0] > 0.0,
+        "the haze's light reaches the room: {floor:?}"
+    );
+    assert!(floor[1] > 5.0, "thick haze lights it plainly: {floor:?}");
+    assert!(
+        floor[1] > 4.0 * floor[0],
+        "faster than the haze thickens: {floor:?}"
+    );
+}
