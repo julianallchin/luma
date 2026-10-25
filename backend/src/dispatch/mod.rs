@@ -206,6 +206,7 @@ commands! {
     lasers::delete_laser_zone(venue_id: String, zone_id: String) -> ();
     lasers::list_laser_limits(venue_id: String) -> Vec<crate::models::lasers::LaserLimit>;
     lasers::set_laser_limit(venue_id: String, fixture_id: String, points: Option<Vec<[f64; 2]>>) -> ();
+    lasers::get_laser_rig(venue_id: String) -> crate::laser::LaserRig;
 
     groups::generate_venue_groups(venue_id: String) -> ();
     groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();

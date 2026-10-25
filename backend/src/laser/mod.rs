@@ -19,6 +19,7 @@ use crate::models::lasers::LaserZone;
 use crate::models::universe::UniverseState;
 use fixture_kinematics::Mount;
 use glam::DVec3;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -48,12 +49,31 @@ pub const DEFAULT_ZONE: Zone = Zone {
 /// where its light leaves, the direction its middle points, and the two axes
 /// its mirrors move along. The mirrors are taken to sit level: `right` is
 /// horizontal, `up` above it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "[[f64; 3]; 4]", into = "[[f64; 3]; 4]")]
 pub struct Basis {
     pub origin: DVec3,
     pub forward: DVec3,
     pub right: DVec3,
     pub up: DVec3,
+}
+
+/// Origin, forward, right and up: glam's vectors carry no serde here.
+impl From<[[f64; 3]; 4]> for Basis {
+    fn from([origin, forward, right, up]: [[f64; 3]; 4]) -> Self {
+        Basis {
+            origin: origin.into(),
+            forward: forward.into(),
+            right: right.into(),
+            up: up.into(),
+        }
+    }
+}
+
+impl From<Basis> for [[f64; 3]; 4] {
+    fn from(basis: Basis) -> Self {
+        [basis.origin, basis.forward, basis.right, basis.up].map(Into::into)
+    }
 }
 
 impl Basis {
@@ -85,7 +105,7 @@ impl Basis {
 }
 
 /// A projector as the solver sees it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Projector {
     pub id: String,
     pub basis: Basis,
@@ -122,7 +142,7 @@ impl Projector {
 }
 
 /// A zone's window of directions, in degrees.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Zone {
     /// Round the vertical: 0 toward the house, positive toward stage right.
     pub turn: [f64; 2],
@@ -154,7 +174,7 @@ impl From<&LaserZone> for Zone {
 
 /// Every projector in a venue and its zones: what the solver needs to turn
 /// beams into point streams.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LaserRig {
     pub projectors: Vec<Projector>,
     /// By id, in the venue's order; the first is where a clip with no zone

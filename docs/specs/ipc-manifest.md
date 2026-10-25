@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**156 commands** across **28 domains** · **13 events**
+**157 commands** across **28 domains** · **13 events**
 
 ## Domains
 
@@ -26,7 +26,7 @@ name.
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
-| `lasers` | 5 | `backend/src/dispatch/handlers/lasers.rs` |
+| `lasers` | 6 | `backend/src/dispatch/handlers/lasers.rs` |
 | `midi` | 8 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
@@ -41,7 +41,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **156** | |
+| **total** | **157** | |
 
 ## Commands
 
@@ -195,6 +195,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `delete_laser_zone` | `venueId: String`<br>`zoneId: String` | `()` |
 | `list_laser_limits` | `venueId: String` | `Vec<crate::models::lasers::LaserLimit>` |
 | `set_laser_limit` | `venueId: String`<br>`fixtureId: String`<br>`points: Option<Vec<[f64; 2]>>` | `()` |
+| `get_laser_rig` | `venueId: String` | `crate::laser::LaserRig` |
 
 ### `midi`
 

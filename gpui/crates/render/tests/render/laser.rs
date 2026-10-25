@@ -16,7 +16,7 @@ use luma_render::laser::{LaserPoint, LaserScan};
 use luma_render::scene_desc::{
     CameraPose, DebugView, Environment, Look, Piece, RenderSettings, Scene,
 };
-use luma_render::{Frame, Renderer, build_frame_with};
+use luma_render::{build_frame_with, Frame, Renderer};
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 160;
