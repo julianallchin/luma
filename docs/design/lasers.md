@@ -89,6 +89,13 @@ frame, and nothing hides that.
   ends. Beams widen with distance (1.5 mrad) and fade across their width.
   Beams and sheets scatter by the haze's own density field, so they show its
   clouds and wind.
+- Lasers scatter by their own phase, a mix of two Henyey-Greenstein lobes:
+  half at g 0.9, half at g 0.3 (`laser.wgsl`, `phase`). Depence uses g ≈ 0.9
+  with a floor. Down a beam it blazes, about 75 times the isotropic light a
+  few degrees off the axis where one g 0.6 lobe gave 10; from the side it
+  shows as before (0.44 against 0.40). Each lobe is normalised, so the mix
+  scatters only what the haze takes out of the beam. Fixture beams keep
+  `Transport::PHASE_G`.
 - A beam a few millimetres wide samples one line through the haze's eddies,
   which a metre-wide cone averages away, so a laser shows them even where
   the clouds are even: one more tap of the haze noise at 15 cm, turned off

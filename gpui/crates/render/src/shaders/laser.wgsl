@@ -27,7 +27,7 @@
 struct Uniform {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    // x: extinction σ (1/m); y: phase g; z: gain; w: range (m).
+    // x: extinction σ (1/m); y unused; z: gain; w: range (m).
     haze: vec4<f32>,
     // Pixels across and down.
     viewport: vec4<f32>,
@@ -80,11 +80,24 @@ const EDDY_TURN: mat3x3<f32> = mat3x3<f32>(
 // beam seen end-on stays finite.
 const GRAZE: f32 = 0.05;
 
+// Haze droplets scatter a laser's light mostly straight on: looking down a
+// beam it blazes. A share goes into a broad lobe, so the beam still shows
+// from the side and from behind. Depence uses g ≈ 0.9 with such a floor.
+const FORWARD_G: f32 = 0.9;
+const BROAD_G: f32 = 0.3;
+// The forward lobe's share of the light; each lobe scatters all it takes,
+// so the mix scatters what the haze takes out of the beam, no more.
+const FORWARD_SHARE: f32 = 0.5;
+
 // Henyey-Greenstein, normalised so g = 0 gives 1 (as `beam_transport.wgsl`).
-fn phase(cos_t: f32, g: f32) -> f32 {
+fn henyey_greenstein(cos_t: f32, g: f32) -> f32 {
     let g2 = g * g;
     let denom = max(1.0 + g2 - 2.0 * g * cos_t, 1e-4);
     return (1.0 - g2) / (denom * sqrt(denom));
+}
+
+fn phase(cos_t: f32) -> f32 {
+    return mix(henyey_greenstein(cos_t, BROAD_G), henyey_greenstein(cos_t, FORWARD_G), FORWARD_SHARE);
 }
 
 // The eddies' share of the haze's density at `world`, mean 1: a symmetric
@@ -111,7 +124,7 @@ fn scattered(world: vec3<f32>, origin: vec3<f32>, along: vec3<f32>, footprint: f
     let toward = normalize(to_camera);
     let travelled = distance(world, origin) + length(to_camera);
     let density = medium_density(medium, world) * eddies(world, footprint);
-    return sigma * density * u.haze.z * phase(dot(along, toward), u.haze.y) * exp(-sigma * travelled);
+    return sigma * density * u.haze.z * phase(dot(along, toward)) * exp(-sigma * travelled);
 }
 
 struct BeamOut {
