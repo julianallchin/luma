@@ -22,8 +22,16 @@ use glam::Vec3;
 
 /// How long an eye adds a scanned laser's light up for, seconds.
 pub const PERSISTENCE_S: f32 = 0.05;
-/// How quickly the mirrors follow a step, seconds: a first-order lag.
-const GALVO_TAU_S: f32 = 0.000_12;
+/// The mirrors' natural frequency, radians a second: a damped spring each.
+/// A 30 kpps scanner settles a 0.1° step in 100–130 µs with a small mirror
+/// (Cambridge Technology 6210H, 6215H datasheets); a show scanner's larger
+/// mirror at ILDA's 8° test angle is slower, and at 30 kpps it still just
+/// draws the test pattern's corners: a rise of about three points, 85 µs,
+/// which 4 kHz gives.
+const GALVO_OMEGA: f32 = std::f32::consts::TAU * 4_000.0;
+/// The mirrors' damping ratio: a servo tuned a little under critical, as
+/// shipped, overshoots a step by about 5% and settles within 0.3 ms.
+const GALVO_ZETA: f32 = 0.7;
 /// Below this angle between two points, radians, the light is one beam.
 const BEAM_ANGLE: f32 = 0.002;
 /// How far a beam or sheet reaches, metres, when nothing stops it first.
@@ -115,6 +123,54 @@ pub(crate) fn angle(a: Vec3, b: Vec3) -> f32 {
     a.cross(b).length().atan2(a.dot(b))
 }
 
+/// The two mirrors: each a damped spring pulled toward the point it was last
+/// sent, with the point held until the next. So it rounds a corner, slowing
+/// into it and speeding out, and overshoots a jump a little before settling.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Galvo {
+    position: [f32; 2],
+    velocity: [f32; 2],
+    /// How a step of the point period carries (offset from the target,
+    /// velocity) on: the spring's exact solution over one period, rows
+    /// `[offset, velocity]`.
+    step: [[f32; 2]; 2],
+}
+
+impl Galvo {
+    /// Mirrors at rest at `(x, y)`, sent a point `rate` times a second.
+    pub(crate) fn new(x: f32, y: f32, rate: f32) -> Self {
+        let t = 1.0 / rate;
+        let decay = GALVO_ZETA * GALVO_OMEGA;
+        let ringing = GALVO_OMEGA * (1.0 - GALVO_ZETA * GALVO_ZETA).sqrt();
+        let fade = (-decay * t).exp();
+        let (sin, cos) = (ringing * t).sin_cos();
+        Self {
+            position: [x, y],
+            velocity: [0.0; 2],
+            step: [
+                [fade * (cos + decay / ringing * sin), fade * sin / ringing],
+                [
+                    -fade * GALVO_OMEGA * GALVO_OMEGA / ringing * sin,
+                    fade * (cos - decay / ringing * sin),
+                ],
+            ],
+        }
+    }
+
+    /// Send the mirrors `point` and let one point period pass; where they
+    /// are then.
+    pub(crate) fn follow(&mut self, point: LaserPoint) -> [f32; 2] {
+        let [[a, b], [c, d]] = self.step;
+        for (axis, target) in [point.x, point.y].into_iter().enumerate() {
+            let offset = self.position[axis] - target;
+            let velocity = self.velocity[axis];
+            self.position[axis] = target + a * offset + b * velocity;
+            self.velocity[axis] = c * offset + d * velocity;
+        }
+        self.position
+    }
+}
+
 /// The beams and sheets a projector's light makes over the window.
 pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
     let n = scan.points.len();
@@ -132,12 +188,10 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
     let at = |k: usize| scan.points[k % n];
     // The mirrors lag the stream; run them over the scan before the window
     // so they arrive where a projector's would.
-    let follow = 1.0 - (-1.0 / (GALVO_TAU_S * scan.rate)).exp();
-    let mut mirror = [at(start + n - 1).x, at(start + n - 1).y];
+    let last = at(start + n - 1);
+    let mut galvo = Galvo::new(last.x, last.y, scan.rate);
     for k in start..start + n {
-        let p = at(k);
-        mirror[0] += (p.x - mirror[0]) * follow;
-        mirror[1] += (p.y - mirror[1]) * follow;
+        galvo.follow(at(k));
     }
     // A scan longer than the window is seen a stretch at a time. The eye
     // forgets gradually, not all at once, so the stretch fades in and out
@@ -164,12 +218,12 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
             });
         }
     };
-    let mut from = scan.direction(mirror[0], mirror[1]);
+    let [x, y] = galvo.position;
+    let mut from = scan.direction(x, y);
     for k in start..start + window {
         let p = at(k);
-        mirror[0] += (p.x - mirror[0]) * follow;
-        mirror[1] += (p.y - mirror[1]) * follow;
-        let to = scan.direction(mirror[0], mirror[1]);
+        let [x, y] = galvo.follow(p);
+        let to = scan.direction(x, y);
         let light = Vec3::from(p.rgb) * (weight(k - start) / total);
         if light.max_element() <= 0.0 {
             flush(&mut gathering, &mut beams);
@@ -637,6 +691,78 @@ mod tests {
             );
             previous = now;
         }
+    }
+
+    /// Sent a jump and held there, the mirrors overshoot a little and
+    /// settle on it, at any point rate: the spring never runs away.
+    #[test]
+    fn a_step_settles() {
+        for rate in [1_000.0, 30_000.0, 100_000.0] {
+            let mut galvo = Galvo::new(-0.5, 0.0, rate);
+            let path: Vec<f32> = (0..(rate * 0.01) as usize)
+                .map(|_| galvo.follow(dot(0.5, true))[0])
+                .collect();
+            let most = path.iter().copied().fold(f32::MIN, f32::max);
+            assert!(most < 0.5 + 0.1, "{rate}: overshoots to {most}");
+            let end = path.last().copied().unwrap_or(0.0);
+            assert!((end - 0.5).abs() < 1e-4, "{rate}: ends at {end}");
+        }
+    }
+
+    /// Galvo coordinates of a direction from the test projector.
+    fn galvo_of(direction: Vec3) -> [f32; 2] {
+        let angle = |c: f32| c.atan2(direction.y).to_degrees() / 30.0;
+        [angle(direction.x), angle(direction.z)]
+    }
+
+    /// A lit square, `side` points along each edge, corner to corner.
+    fn square(side: usize) -> Vec<LaserPoint> {
+        let corners = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+        (0..4)
+            .flat_map(|edge| {
+                let [a, b] = [corners[edge], corners[(edge + 1) % 4]];
+                (0..side).map(move |i| {
+                    let t = i as f32 / side as f32;
+                    LaserPoint {
+                        x: a[0] + (b[0] - a[0]) * t,
+                        y: a[1] + (b[1] - a[1]) * t,
+                        rgb: [1.0; 3],
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// How far a piece of a sheet ends from galvo point `at`.
+    fn off(sheet: &Sheet, at: [f32; 2]) -> f32 {
+        let [x, y] = galvo_of(sheet.to);
+        ((x - at[0]).powi(2) + (y - at[1]).powi(2)).sqrt()
+    }
+
+    /// Scanned fast, a square's corners round off, and the mirrors slow
+    /// through them, so the light dwells there: the corners are brighter
+    /// than the middles of the edges. Scanned slowly, it keeps its corners.
+    #[test]
+    fn a_fast_square_has_round_bright_corners() {
+        let corner = [0.5, 0.5];
+        let miss = |sheets: &[Sheet]| {
+            sheets
+                .iter()
+                .map(|s| off(s, corner))
+                .fold(f32::MAX, f32::min)
+        };
+        let (_, fast) = light(&scan(square(10)));
+        let (_, slow) = light(&scan(square(200)));
+        let (fast_miss, slow_miss) = (miss(&fast), miss(&slow));
+        assert!(fast_miss > 10.0 * slow_miss, "{fast_miss} vs {slow_miss}");
+        let brightest = |at: [f32; 2]| {
+            fast.iter()
+                .filter(|s| off(s, at) < 0.15)
+                .map(|s| s.density.x)
+                .fold(0.0, f32::max)
+        };
+        let (round, middle) = (brightest(corner), brightest([0.0, 0.5]));
+        assert!(round > 1.2 * middle, "{round} vs {middle}");
     }
 
     #[test]
