@@ -589,6 +589,16 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push(("color9".into(), color("curve9")));
         }
+        // `along` varies within a laser element, so only a laser reads it.
+        Kind::Along => {
+            nodes.push(("curve9".into(), curve_of(&id)));
+            nodes.push((
+                "laser9".into(),
+                Node::new(Kind::Laser)
+                    .with_setting("kind", "line")
+                    .with_input("y", Input::wire("curve9")),
+            ));
+        }
         Kind::Curve => {
             node.inputs.insert("x".into(), Input::wire("time9"));
             nodes.push(("time9".into(), Node::new(Kind::Time)));
