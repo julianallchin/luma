@@ -504,8 +504,11 @@ fn laser_light(scans: &[crate::laser::LaserScan]) -> (Vec<Beam>, Vec<Sheet>) {
             if let Some((from, to, held)) = &mut run {
                 let joins = to.abs_diff_eq(sheet.from, 1e-5);
                 // Merged pieces must stay one flat fan: the next piece
-                // turns the same way about the same normal.
-                let flat = from
+                // turns the same way about the same normal. A piece that
+                // turns back, as the mirrors do overshooting a jump, starts
+                // the next fan.
+                let flat = sheet
+                    .from
                     .cross(sheet.to)
                     .normalize_or_zero()
                     .dot(from.cross(*to).normalize_or_zero())
