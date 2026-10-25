@@ -19,7 +19,9 @@
 // Haze has eddies down to centimetres. A cone metres wide averages them
 // away; a beam millimetres wide samples one line through them, so it shows
 // them even in haze whose clouds are even. `eddies` is that detail: the
-// same noise at a fixed small scale, as strong as the haze's turbulence.
+// same noise at a fixed small scale, swaying the density at most
+// `EDDY_DEPTH` either way at full turbulence: a ripple through the light,
+// never holes in it.
 //
 // A beam widens as it goes, and fades to nothing across its width, so its
 // edges blend into the pixels they cross instead of stepping.
@@ -64,6 +66,8 @@ const MIN_PIXELS: f32 = 2.5;
 // from `laser.rs`.
 // The size of the eddies a beam shows, metres: the noise's broadest octave.
 const EDDY_M: f32 = 0.15;
+// The share of the density the eddies sway at full turbulence.
+const EDDY_DEPTH: f32 = 0.25;
 // How fast they drift through the beam on top of the wind, metres a
 // second, and which way: small eddies turn over far sooner than the
 // clouds they sit in.
@@ -112,7 +116,7 @@ fn eddies(world: vec3<f32>, footprint: f32) -> f32 {
     let layered = textureSampleLevel(haze_noise_field, haze_noise_sampler, q * FIELD_INV_CELLS, 0.0).x;
     let contrast = 2.0 * smoothstep(-0.22, 0.22, layered) - 1.0;
     let resolved = 1.0 - smoothstep(0.25 * EDDY_M, EDDY_M, footprint);
-    return 1.0 + medium.shape.z * resolved * contrast;
+    return 1.0 + EDDY_DEPTH * medium.shape.z * resolved * contrast;
 }
 
 // The haze's light at `world`, for light travelling along `along` that
