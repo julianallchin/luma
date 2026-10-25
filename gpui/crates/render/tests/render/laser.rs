@@ -14,7 +14,7 @@ use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::laser::{LaserPoint, LaserScan};
 use luma_render::scene_desc::{
-    CameraPose, DebugView, Environment, Look, Piece, RenderSettings, Scene,
+    CameraPose, DebugView, Environment, HazeAppearance, Look, Piece, RenderSettings, Scene,
 };
 use luma_render::{build_frame_with, Frame, Renderer};
 
@@ -197,6 +197,80 @@ fn a_dwell_is_brighter_than_a_sweep() {
     let (beam, sheet) = (column_peak(&beam, column), column_peak(&sheet, column));
     assert!(beam > sheet, "{beam} vs {sheet}");
     assert!(sheet > 0, "a sheet shows");
+}
+
+/// The green across the beam in each column it crosses: its light there,
+/// wherever within the column's pixels its middle falls.
+fn beam_profile(pixels: &[u8]) -> Vec<f64> {
+    let green =
+        |row: u32, column: u32| f64::from(pixels[((row * WIDTH + column) * 4 + 1) as usize]);
+    (WIDTH / 8..WIDTH * 7 / 8)
+        .map(|column| {
+            let middle = (0..HEIGHT)
+                .max_by(|&a, &b| green(a, column).total_cmp(&green(b, column)))
+                .unwrap_or(0);
+            (middle.saturating_sub(3)..(middle + 4).min(HEIGHT))
+                .map(|row| green(row, column))
+                .sum()
+        })
+        .collect()
+}
+
+/// How much a profile wanders column to column: its mean step.
+fn roughness(profile: &[f64]) -> f64 {
+    profile.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f64>() / (profile.len() - 1) as f64
+}
+
+/// Haze with no clouds still has small eddies, and a beam a few millimetres
+/// wide shows them: its light varies along its length where a calm haze's
+/// does not. They only move the light along the beam; there is as much of
+/// it in all.
+#[test]
+fn a_beam_shows_the_hazes_small_eddies() {
+    let mut renderer = Renderer::new().unwrap();
+    // Dim enough that no part of it clips white, and level at the eye's
+    // height, so it lies along one row of pixels.
+    let dim = LaserPoint {
+        rgb: [0.01, 0.1, 0.02],
+        ..point(0.0, 0.0, true)
+    };
+    let mut points = vec![point(0.0, 0.0, false); 24];
+    points.extend(vec![dim; 400]);
+    let level = LaserScan {
+        origin: Vec3::new(-6.0, 0.0, EYE.z),
+        ..projector(points)
+    };
+    let mut beam = |turbulence: f32, time: f32, name: &str| {
+        let mut f = frame_with(0.6, |render| {
+            render.haze.appearance = HazeAppearance {
+                cloudiness: 0.0,
+                turbulence,
+                ..HazeAppearance::DEFAULT
+            };
+        });
+        f.time = time;
+        let dark = render(&mut renderer, &f, &format!("{name}-dark"));
+        f.lasers = vec![level.clone()];
+        let lit = render(&mut renderer, &f, name);
+        let light = brightness(&lit) - brightness(&dark);
+        (lit, light)
+    };
+    let mut calm = (0.0, 0);
+    let mut eddying = (0.0, 0);
+    for (i, time) in [0.0, 7.0, 19.0, 31.0, 43.0, 59.0].into_iter().enumerate() {
+        let (pixels, light) = beam(0.0, time, &format!("calm-{i}"));
+        calm.0 += roughness(&beam_profile(&pixels));
+        calm.1 += light;
+        let (pixels, light) = beam(0.6, time, &format!("eddies-{i}"));
+        eddying.0 += roughness(&beam_profile(&pixels));
+        eddying.1 += light;
+    }
+    assert!(eddying.0 > 3.0 * calm.0, "{eddying:?} vs {calm:?}");
+    let share = eddying.1 as f64 / calm.1 as f64;
+    assert!(
+        (share - 1.0).abs() < 0.04,
+        "{share}: {eddying:?} vs {calm:?}"
+    );
 }
 
 #[test]
