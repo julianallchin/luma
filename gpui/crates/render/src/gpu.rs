@@ -2647,7 +2647,7 @@ impl Renderer {
         );
         let compaction = crate::haze_compact::Compaction::new(&gpu.device);
         let probes = crate::probes::Probes::new(&gpu.device);
-        let haze_glow = crate::haze_glow::Glow::new(&gpu.device);
+        let haze_glow = crate::haze_glow::Glow::new(&gpu.device, &gpu.queue);
         Self {
             gpu,
             fog_blocks_valid: false,
@@ -4158,8 +4158,7 @@ impl Renderer {
         let probe_debug_balls = self.probes.debug_balls();
         // Where the haze's glow is this frame, before the surfaces and the
         // composite bind it; it is filled after the shadow maps.
-        self.haze_glow
-            .prepare(&self.gpu.device, &self.gpu.queue, &medium, frame.quality);
+        self.haze_glow.prepare(&self.gpu.device, &self.gpu.queue, &medium, frame);
         let glow_bindings = self.haze_glow.bindings(17);
         let cluster_group = |label: &str, core: &wgpu::Buffer, rest: &wgpu::Buffer| {
             self.gpu

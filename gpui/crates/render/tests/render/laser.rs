@@ -330,10 +330,20 @@ fn a_projector_with_no_light_draws_nothing() {
     assert_eq!(render(&mut renderer, &f, "unlit"), dark);
 }
 
-/// A small stage: two decks and a speaker either side, over the floor,
-/// seen from the house.
-fn room(haze: f32, lasers: Vec<LaserScan>) -> Frame {
-    use luma_render::scene_desc::Geometry;
+/// A stage piece of `mesh`, its corner at `pos`.
+fn piece(id: &str, mesh: &str, pos: [f32; 3], scale: f32) -> Piece {
+    Piece {
+        id: id.into(),
+        geometry: luma_render::scene_desc::Geometry::mesh(mesh),
+        kind: "stage".into(),
+        pos,
+        rot: [0.0, 0.0, 0.0],
+        scale,
+    }
+}
+
+/// A dark stage with `pieces` on it, seen from `camera`.
+fn staged(haze: f32, camera: CameraPose, pieces: Vec<Piece>, lasers: Vec<LaserScan>) -> Frame {
     let mut library = Library::new(crate::common::meshes());
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
@@ -345,61 +355,46 @@ fn room(haze: f32, lasers: Vec<LaserScan>) -> Frame {
     render.haze.enabled = haze > 0.0;
     render.debug_view = DebugView::Pbr;
     render.look = Look::STAGE;
-    let piece = |id: &str, mesh: &str, pos: [f32; 3], scale: f32| Piece {
-        id: id.into(),
-        geometry: Geometry::mesh(mesh),
-        kind: "stage".into(),
-        pos,
-        rot: [0.0, 0.0, 0.0],
-        scale,
-    };
     let scene = Scene {
         id: "laser-room".into(),
         times: vec![0.0],
-        // From the side of the house, so the fan and the floor under it
-        // both show.
-        camera: CameraPose {
-            position: [9.0, 1.8, 4.0],
-            target: [0.0, 2.5, -1.0],
-        },
+        camera,
         editing: false,
         aim_arrows: false,
         render,
         selected_fixture_ids: Vec::new(),
         editor: Default::default(),
         fixtures: Vec::new(),
-        pieces: vec![
-            piece(
-                "deck-l",
-                "stage_lab/stage_praticavel_1x1.glb",
-                [-1.0, 3.0, 0.0],
-                2.0,
-            ),
-            piece(
-                "deck-r",
-                "stage_lab/stage_praticavel_1x1.glb",
-                [1.0, 3.0, 0.0],
-                2.0,
-            ),
-            piece(
-                "sub-l",
-                "stage_lab/speaker_dual18sub.glb",
-                [-4.0, 2.0, 0.0],
-                1.0,
-            ),
-            piece(
-                "sub-r",
-                "stage_lab/speaker_dual18sub.glb",
-                [4.0, 2.0, 0.0],
-                1.0,
-            ),
-        ],
+        pieces,
         state: BTreeMap::new(),
     };
     let mut frame =
         build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library).unwrap();
     frame.lasers = lasers;
     frame
+}
+
+/// A small stage: two decks and a speaker either side, over the floor,
+/// seen from the house.
+fn room(haze: f32, lasers: Vec<LaserScan>) -> Frame {
+    let deck = "stage_lab/stage_praticavel_1x1.glb";
+    let sub = "stage_lab/speaker_dual18sub.glb";
+    staged(
+        haze,
+        // From the side of the house, so the fan and the floor under it
+        // both show.
+        CameraPose {
+            position: [9.0, 1.8, 4.0],
+            target: [0.0, 2.5, -1.0],
+        },
+        vec![
+            piece("deck-l", deck, [-1.0, 3.0, 0.0], 2.0),
+            piece("deck-r", deck, [1.0, 3.0, 0.0], 2.0),
+            piece("sub-l", sub, [-4.0, 2.0, 0.0], 1.0),
+            piece("sub-r", sub, [4.0, 2.0, 0.0], 1.0),
+        ],
+        lasers,
+    )
 }
 
 /// A projector at the back of the stage, 3 m up, aimed out over the house
@@ -495,4 +490,74 @@ fn haze_lit_by_lasers_lights_the_room() {
         floor[1] > 4.0 * floor[0],
         "faster than the haze thickens: {floor:?}"
     );
+}
+
+/// A deck blocks the haze's glow: the haze under a wide deck, below a fan
+/// of beams, is lit far less by the beams' haze than the same haze with no
+/// deck over it.
+#[test]
+fn a_deck_shades_the_glow_under_it() {
+    let mut renderer = Renderer::new().unwrap();
+    let mut points = Vec::new();
+    for i in 0..5 {
+        let x = -0.4 + 0.2 * i as f32;
+        points.extend(std::iter::repeat_n(
+            LaserPoint {
+                rgb: [0.0; 3],
+                ..blue(x, 0.0)
+            },
+            24,
+        ));
+        points.extend(std::iter::repeat_n(blue(x, 0.0), 400));
+    }
+    // 5 m up at the back, straight out over the house.
+    let fan = LaserScan {
+        origin: Vec3::new(0.0, 8.0, 5.0),
+        forward: Vec3::NEG_Y,
+        right: Vec3::NEG_X,
+        up: Vec3::Z,
+        ..upstage(points)
+    };
+    // Low, a metre in front of the deck, looking in under it.
+    let camera = CameraPose {
+        position: [4.5, 0.6, 4.0],
+        target: [4.5, 0.4, -3.0],
+    };
+    // A deck six metres square and 1.8 m high, its left edge under the
+    // middle of the fan.
+    let deck = || {
+        vec![piece(
+            "deck",
+            "stage_lab/stage_praticavel_1x1.glb",
+            [0.0, 3.0, 0.0],
+            6.0,
+        )]
+    };
+    let mut glow = |pieces: Vec<Piece>, name: &str| {
+        let dark = render(
+            &mut renderer,
+            &staged(1.2, camera.clone(), pieces.clone(), vec![]),
+            &format!("{name}-dark"),
+        );
+        let lit = render(
+            &mut renderer,
+            &staged(1.2, camera.clone(), pieces, vec![fan.clone()]),
+            name,
+        );
+        // The beams' light in the middle of the picture, under the deck.
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for row in HEIGHT / 3..HEIGHT * 2 / 3 {
+            for column in WIDTH / 4..WIDTH * 3 / 4 {
+                let i = ((row * WIDTH + column) * 4) as usize;
+                sum += brightness(&lit[i..i + 4]) as f64 - brightness(&dark[i..i + 4]) as f64;
+                count += 1.0;
+            }
+        }
+        sum / count
+    };
+    let open = glow(vec![], "glow-open");
+    let shaded = glow(deck(), "glow-under-deck");
+    assert!(shaded > 0.0, "some light still reaches round the deck");
+    assert!(shaded < 0.6 * open, "{shaded} vs {open}");
 }

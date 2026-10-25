@@ -106,7 +106,8 @@ frame, and nothing hides that.
   glow do not take it.
 - What the beams scatter lights the room and the haze round them, through
   the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
-  glow").
+  glow"). In the glow a beam stops at the first surface on its line, and
+  walls and decks shade the glow from their far side.
 
 ## v2 (agreed 2026-10-25)
 
