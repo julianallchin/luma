@@ -265,6 +265,9 @@ pub struct Frame {
     pub gizmo_pivot: Option<Vec3>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
     pub fixture_cones: Vec<FixtureCone>,
+    /// Each laser projector's scan this frame (`crate::laser`). Drawn only
+    /// through the camera's post chain, into the HDR scene.
+    pub lasers: Vec<crate::laser::LaserScan>,
     /// Supported fixture and house-light cones the venue can produce, capped
     /// at [`MAX_FIXTURE_CONES`] and independent of the current cue's output.
     /// The renderer uses this only to reserve shadow storage; dark emitters do
@@ -1259,6 +1262,7 @@ pub fn build_at(
         transparent,
         gizmo_pivot,
         fixture_cones,
+        lasers: Vec::new(),
         fixture_shadow_capacity_hint,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
         beam_proxy: false,
