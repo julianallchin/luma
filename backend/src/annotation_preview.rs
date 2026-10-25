@@ -419,7 +419,10 @@ mod tests {
                 .unwrap()
                 .dimmer = 1.0;
         }
-        UniverseState { primitives }
+        UniverseState {
+            primitives,
+            beams: Vec::new(),
+        }
     }
 
     #[test]

@@ -34,8 +34,16 @@ const AUDIO_CACHE_MAX: usize = 8;
 /// Process-wide cache of per-fixture cell geometry, keyed by
 /// definition path and mode, so fixture definitions are parsed from disk once
 /// per venue rather than once per (fixture × annotation).
-static OFFSETS_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), FixtureGeometry>>> =
+static OFFSETS_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), Heads>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// A fixture definition's heads: its cells, or a laser projector's, whose
+/// heads are laid out by the clip ([`crate::laser`]).
+#[derive(Clone, Debug)]
+enum Heads {
+    Cells(FixtureGeometry),
+    Projector,
+}
 
 /// Per-head offsets for a fixture definition. Missing or invalid definitions
 /// are errors: inventing a single head would hide missing pixel geometry.
@@ -47,7 +55,7 @@ fn head_offsets(
     resource_root: &Path,
     fixture_path: &str,
     mode_name: &str,
-) -> Result<FixtureGeometry, String> {
+) -> Result<Heads, String> {
     let def_path = resource_root.join(fixture_path);
     let key = (def_path.clone(), mode_name.to_owned());
     if let Ok(cache) = OFFSETS_CACHE.lock() {
@@ -62,7 +70,11 @@ fn head_offsets(
             "Fixture definition {fixture_path} has no mode {mode_name}"
         ));
     }
-    let offsets = head_geometry(&definition, mode_name);
+    let offsets = if definition.is_laser_projector() {
+        Heads::Projector
+    } else {
+        Heads::Cells(head_geometry(&definition, mode_name))
+    };
     if let Ok(mut cache) = OFFSETS_CACHE.lock() {
         cache.insert(key, offsets.clone());
     }
@@ -104,8 +116,14 @@ pub async fn resolve_primitive_ids_with_access(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     resource_root: &Path,
 ) -> Vec<(String, [f32; 3])> {
-    match resolve_selection_primitives_with_access(access, resource_root, &Selection::all(), 0)
-        .await
+    match resolve_selection_primitives_with_access(
+        access,
+        resource_root,
+        &Selection::all(),
+        0,
+        None,
+    )
+    .await
     {
         Ok(primitives) => primitives,
         Err(error) => {
@@ -117,11 +135,18 @@ pub async fn resolve_primitive_ids_with_access(
 
 /// Resolve an explicit selection into physical heads, preserving errors for
 /// callers that must explain a failed preview rather than return an empty rig.
+///
+/// A laser projector has no heads of its own. For a laser clip (`beams`
+/// set) it gives that many, one per beam, and every other fixture gives
+/// none; for any other clip it gives [`crate::laser::COLOR_SAMPLES`], the
+/// colour along a laser clip's order. Either way they spread a little across
+/// its scan ([`crate::laser::Basis::head`]).
 pub(crate) async fn resolve_selection_primitives_with_access(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     resource_root: &Path,
     selection: &Selection,
     seed: u64,
+    beams: Option<usize>,
 ) -> Result<Vec<(String, [f32; 3])>, String> {
     // One solve for the whole pre-pass: a primitive's position is where its
     // fixture hangs, and every selected fixture is a node of the same venue.
@@ -141,8 +166,20 @@ pub(crate) async fn resolve_selection_primitives_with_access(
         let Some(pose) = venue.pose(&fixture.id) else {
             continue;
         };
-        let geom = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name)?;
         let mount = fixture_mount(pose);
+        let geom = match head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name)? {
+            Heads::Projector => {
+                let basis = crate::laser::Basis::of(&mount);
+                let count = beams.unwrap_or(crate::laser::COLOR_SAMPLES);
+                for i in 0..count {
+                    let pos = basis.head(i, count).as_vec3().to_array();
+                    out.push((format!("{}:{}", fixture.id, i), pos));
+                }
+                continue;
+            }
+            Heads::Cells(_) if beams.is_some() => continue,
+            Heads::Cells(geom) => geom,
+        };
         let mut push = |i: usize| {
             let pos = rig_position(&geom, &mount, i).to_array();
             out.push((format!("{}:{}", fixture.id, i), pos));

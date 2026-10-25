@@ -26,7 +26,13 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
             ("venue_constraints", "target_node"),
         ],
     ),
-    ("fixtures", &[("fixture_group_members", "fixture_id")]),
+    (
+        "fixtures",
+        &[
+            ("fixture_group_members", "fixture_id"),
+            ("laser_limits", "id"),
+        ],
+    ),
     ("fixture_groups", &[("fixture_group_members", "group_id")]),
     ("folders", &[("folder_tracks", "folder_id")]),
     // No foreign key carries this one locally; see the folders migration.

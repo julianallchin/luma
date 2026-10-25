@@ -87,9 +87,11 @@ async fn prepare_scene_data(
     let mut requests = Vec::new();
     let mut domains = std::collections::BTreeMap::new();
     for (id, clip) in &score.clips {
+        let beams = clip.graph.laser().map(|laser| laser.beams);
         let key = (
             serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
             clip.selection_seed.unwrap_or(clip.seed),
+            beams,
         );
         let cells = if let Some(cells) = domains.get(&key) {
             Vec::<luma_patterns::Cell>::clone(cells)
@@ -99,6 +101,7 @@ async fn prepare_scene_data(
                 fixtures_root,
                 std::slice::from_ref(&clip.selection),
                 clip.selection_seed.unwrap_or(clip.seed),
+                beams,
             )
             .await?;
             domains.insert(key, cells.clone());

@@ -414,7 +414,10 @@ pub fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
             }
         }
     }
-    UniverseState { primitives }
+    UniverseState {
+        primitives,
+        beams: Vec::new(),
+    }
 }
 
 /// Everything one offscreen frame needs that the scene itself does not carry.
@@ -1084,6 +1087,7 @@ mod tests {
                     },
                 )]
                 .into(),
+                beams: Vec::new(),
             };
             primitive_state(Some(&state), "par", 0).unwrap()
         };

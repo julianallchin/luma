@@ -1,7 +1,7 @@
 //! One small graph per clip (spec: `docs/specs/clip-graphs.md`).
 //!
-//! A clip graph has nodes of 14 kinds. Exactly one node is an output
-//! (`color`, `aim` or `strobe`). Every node has one output wire. An input
+//! A clip graph has nodes of 15 kinds. Exactly one node is an output
+//! (`color`, `aim`, `strobe` or `laser`). Every node has one output wire. An input
 //! holds a value, a wire (`{"node": id}`), or nothing; nothing is the only
 //! default. A choice is a setting and is never wired.
 //!
@@ -27,6 +27,7 @@ pub use noise::sample_noise;
 pub const OUTPUT: &str = "lighting";
 pub use definitions::{
     definition, definitions, Definition, Geometry, InputDef, InputType, Produces, SettingDef, Unit,
+    MAX_BEAMS,
 };
 
 use crate::{Curve, Error, Gradient, Result};
@@ -58,11 +59,12 @@ pub enum Kind {
     Color,
     Aim,
     Strobe,
+    Laser,
 }
 
 impl Kind {
     /// Every kind, in menu order.
-    pub const ALL: [Kind; 14] = [
+    pub const ALL: [Kind; 15] = [
         Kind::Time,
         Kind::Space,
         Kind::Noise,
@@ -77,6 +79,7 @@ impl Kind {
         Kind::Color,
         Kind::Aim,
         Kind::Strobe,
+        Kind::Laser,
     ];
 
     /// The stored spelling, which is also the node id prefix.
@@ -96,6 +99,7 @@ impl Kind {
             Kind::Color => "color",
             Kind::Aim => "aim",
             Kind::Strobe => "strobe",
+            Kind::Laser => "laser",
         }
     }
 
@@ -116,17 +120,30 @@ impl Kind {
             Kind::Color => "Color",
             Kind::Aim => "Aim",
             Kind::Strobe => "Strobe",
+            Kind::Laser => "Laser",
         }
     }
 
-    /// Whether this kind is an output node: `color`, `aim` or `strobe`.
+    /// Whether this kind is an output node: `color`, `aim`, `strobe` or
+    /// `laser`.
     pub fn is_output(self) -> bool {
-        matches!(self, Kind::Color | Kind::Aim | Kind::Strobe)
+        matches!(self, Kind::Color | Kind::Aim | Kind::Strobe | Kind::Laser)
     }
 
     pub fn from_name(name: &str) -> Option<Kind> {
         Kind::ALL.into_iter().find(|kind| kind.name() == name)
     }
+}
+
+/// How many beams a laser clip without `beams` draws on each projector.
+pub const DEFAULT_BEAMS: usize = 8;
+
+/// What a laser clip draws on: `beams` beams on each projector it selects,
+/// in the zone with id `zone` (empty: each projector's first zone).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LaserHeads {
+    pub beams: usize,
+    pub zone: String,
 }
 
 /// A clip's graph: nodes keyed by id (`curve2`).
@@ -414,6 +431,21 @@ impl ClipGraph {
     /// The output node's kind.
     pub fn output_kind(&self) -> Option<Kind> {
         self.output().map(|(_, node)| node.kind)
+    }
+
+    /// A laser graph's beams per projector and zone id, which a host needs
+    /// to lay out the clip's heads before it prepares the graph. `None` for
+    /// any other output.
+    pub fn laser(&self) -> Option<LaserHeads> {
+        let (_, node) = self.output().filter(|(_, node)| node.kind == Kind::Laser)?;
+        let beams = match node.inputs.get("beams").map(|input| self.resolve(input)) {
+            Some(Input::Number(beams)) => (*beams as usize).clamp(1, MAX_BEAMS),
+            _ => DEFAULT_BEAMS,
+        };
+        Some(LaserHeads {
+            beams,
+            zone: node.setting("zone").unwrap_or_default().to_string(),
+        })
     }
 
     /// A free id for a new node of `kind`: `<kind><n>` with the lowest

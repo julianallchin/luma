@@ -11,6 +11,7 @@ mod curve;
 mod envelope;
 mod features;
 mod graph;
+pub mod laser;
 mod mapping;
 mod output;
 mod prepared;

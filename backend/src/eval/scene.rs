@@ -15,7 +15,7 @@
 
 use crate::eval::aim::{Aiming, Rig};
 use crate::eval::composite::{blank_frame, composite_frame, offset_frame};
-use crate::eval::{try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
+use crate::eval::{try_beams, try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
 use std::sync::Arc;
 
@@ -140,7 +140,7 @@ pub(crate) fn composite(
             .map_or(luma_patterns::aim::DOWN, crate::eval::aim::Head::home)
     };
     let mut frames: Vec<UniverseState> = times.iter().map(|_| blank_frame()).collect();
-    for ann in annotations {
+    for (layer, ann) in annotations.iter().enumerate() {
         let active = |t: &f32| *t >= ann.span.0 && *t < ann.span.1;
         if !times.iter().any(active) {
             continue;
@@ -156,6 +156,18 @@ pub(crate) fn composite(
                 .into()
         };
         let slots = times.iter().enumerate().filter(|(_, t)| active(t));
+        // A laser clip's beams layer on the beams: Add draws both, Replace
+        // morphs the beams under it into its own.
+        if ann.plan.outputs.laser {
+            let beams = try_beams(ann.plan.as_ref(), &sample_times, layer as u32, scratch)?;
+            for ((k, _), beams) in slots.zip(beams) {
+                match ann.blend_mode {
+                    BlendMode::Add => luma_patterns::laser::add_beams(&mut frames[k].beams, beams),
+                    _ => luma_patterns::laser::replace_beams(&mut frames[k].beams, beams),
+                }
+            }
+            continue;
+        }
         if ann.blend_mode == BlendMode::Offset {
             let turns = try_turns(ann.plan.as_ref(), &sample_times, scratch)?;
             for ((k, _), turns) in slots.zip(turns) {

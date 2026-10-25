@@ -8,6 +8,7 @@
 use super::heads::{SplitBy, Units};
 use super::kernels::{Kernel, AIM_MIRRORS};
 use super::{ClipGraph, Input, Kind, Node as ClipNode};
+use crate::mapping::{fixture_of, head_of};
 use crate::{
     Binding, Body, Cell, Channels, Curve, Definition, Error, Frame, Gradient, Graph, Node, Output,
     Rate, Result, Signal, SignalType, Unit, Value, ValueType,
@@ -887,6 +888,23 @@ pub(crate) fn lower_coordinate(
     })
 }
 
+/// Each cell's beam index and its projector's beam count, for a laser: a
+/// cell `projector:i` is beam `i` of as many as its projector has cells.
+fn beam_indices(cells: &[Cell]) -> (Vec<usize>, Vec<usize>) {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for cell in cells {
+        *counts.entry(fixture_of(&cell.id)).or_default() += 1;
+    }
+    cells
+        .iter()
+        .map(|cell| {
+            let count = counts[fixture_of(&cell.id)];
+            let index = head_of(&cell.id).map_or(0, |i| i as usize).min(count - 1);
+            (index, count)
+        })
+        .unzip()
+}
+
 pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
     let mut lowering = Lowering::new(graph, frame);
     let (id, out) = graph
@@ -923,7 +941,7 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                 ],
             );
             alpha_port = Some(alpha);
-            ("color", output(&out, "color"))
+            Some(("color", output(&out, "color")))
         }
         Kind::Strobe => {
             let rate = lowering.number(&id, "rate", 0.5)?;
@@ -934,7 +952,7 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                 vec![("rate", parts[0].clone()), ("alpha", alpha.clone())],
             );
             alpha_port = Some(alpha);
-            ("strobe", output(&out, "strobe"))
+            Some(("strobe", output(&out, "strobe")))
         }
         Kind::Aim => {
             let heads = lowering.heads_input(&id)?;
@@ -1001,7 +1019,69 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                     rate: Rate::Frame,
                 },
             );
-            ("aim", output(&out, "aim"))
+            Some(("aim", output(&out, "aim")))
+        }
+        // A laser writes no light of its own: its beams leave by their own
+        // output, and colour comes from the Color clips over the projector.
+        Kind::Laser => {
+            let heads = lowering.heads_input(&id)?;
+            if heads.mirrors.len() > AIM_MIRRORS {
+                return Err(Error(format!(
+                    "{id}.heads: a laser reads at most {AIM_MIRRORS} stacked mirrors; got {}",
+                    heads.mirrors.len()
+                )));
+            }
+            let shape = match out.setting("shape") {
+                Some("circle") => 1.,
+                Some("grid") => 2.,
+                _ => 0.,
+            };
+            let x = lowering.number(&id, "x", 0.)?;
+            let y = lowering.number(&id, "y", 0.)?;
+            let size = lowering.number(&id, "size", 0.5)?;
+            let rotation = lowering.number(&id, "rotation", 0.)?;
+            let join = lowering.number(&id, "join", 0.)?;
+            let alpha = lowering.number(&id, "alpha", 1.)?;
+            let parts = vec![vec![x], vec![y], vec![size], vec![rotation], vec![join]];
+            let (parts, alpha) = lowering.layer(parts, alpha, true)?;
+            let (index, count) = beam_indices(&lowering.cells);
+            let mut ports = vec![
+                ("x", parts[0].clone()),
+                ("y", parts[1].clone()),
+                ("size", parts[2].clone()),
+                ("rotation", parts[3].clone()),
+                ("join", parts[4].clone()),
+                ("alpha", alpha),
+                ("index", lowering.index_field(&index)?),
+                ("count", lowering.index_field(&count)?),
+                ("shape", number(shape)),
+                ("mirrors", number(heads.mirrors.len() as f64)),
+            ];
+            let names: Vec<(String, String)> = (0..AIM_MIRRORS)
+                .map(|m| (format!("fold{m}"), format!("normal{m}")))
+                .collect();
+            for (m, (fold, normal)) in names.iter().enumerate() {
+                let (folded, plane) = heads
+                    .mirrors
+                    .get(m)
+                    .map(|mirror| (mirror.folded.clone(), mirror.direction.clone()))
+                    .unwrap_or_else(|| (number(0.), number(0.)));
+                ports.push((fold.as_str(), folded));
+                ports.push((normal.as_str(), plane));
+            }
+            let out = lowering.kernel(Kernel::LaserOut, ports);
+            outputs.insert(crate::laser::BEAM_OUTPUT.to_string(), output(&out, "beam"));
+            types.insert(
+                crate::laser::BEAM_OUTPUT.to_string(),
+                Output {
+                    value_type: ValueType::Signal(SignalType::new(
+                        Unit::Number,
+                        Channels::components(crate::laser::BEAM_CHANNELS)?,
+                    )),
+                    rate: Rate::Frame,
+                },
+            );
+            None
         }
         kind => {
             return Err(Error(format!(
@@ -1010,7 +1090,7 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
             )))
         }
     };
-    let mut ports = vec![(terminal.0, terminal.1)];
+    let mut ports: Vec<(&str, Binding)> = terminal.into_iter().collect();
     if let Some(alpha) = alpha_port {
         ports.push(("alpha", alpha));
     }

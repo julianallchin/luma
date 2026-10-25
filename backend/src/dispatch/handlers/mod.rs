@@ -23,6 +23,7 @@ pub mod fixtures;
 pub mod folders;
 pub mod groups;
 pub mod host_audio;
+pub mod lasers;
 pub mod midi;
 pub mod mixer;
 pub mod output;
