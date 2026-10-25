@@ -258,7 +258,7 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
 struct Uniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
-    /// x: extinction σ (1/m); y: phase g; z: gain; w: range (m).
+    /// x: extinction σ (1/m); y unused; z: gain; w: range (m).
     haze: [f32; 4],
     /// Pixels across and down; zw unused.
     viewport: [f32; 4],
@@ -446,7 +446,7 @@ impl Pipelines {
             camera_pos: input.eye.extend(1.0).to_array(),
             haze: [
                 input.haze_density * crate::gpu::Transport::EXTINCTION,
-                crate::gpu::Transport::PHASE_G,
+                0.0,
                 GAIN,
                 RANGE_M,
             ],

@@ -273,6 +273,54 @@ fn a_beam_shows_the_hazes_small_eddies() {
     );
 }
 
+/// Haze scatters a laser's light mostly on along the beam: looking down a
+/// beam it blazes, many times brighter than the same beam seen from the
+/// side, which still shows. Its brightest pixel down its length, at a
+/// three-hundredth of the power, still outshines its brightest from the side.
+#[test]
+fn a_beam_blazes_seen_down_its_length() {
+    let mut renderer = Renderer::new().unwrap();
+    let beam = |power: f32| -> Vec<LaserPoint> {
+        let mut points = vec![point(0.0, 0.0, false); 24];
+        let lit = point(0.0, 0.0, true);
+        points.extend(vec![
+            LaserPoint {
+                rgb: lit.rgb.map(|c| c * power),
+                ..lit
+            };
+            400
+        ]);
+        points
+    };
+    let mut light = |scan: LaserScan, name: &str| {
+        let mut f = frame(0.6);
+        let dark = render(&mut renderer, &f, &format!("{name}-dark"));
+        f.lasers = vec![scan];
+        let lit = render(&mut renderer, &f, name);
+        // Green over the dark stage: the beam's own light.
+        lit.chunks_exact(4)
+            .zip(dark.chunks_exact(4))
+            .map(|(a, b)| a[1].saturating_sub(b[1]))
+            .max()
+            .unwrap_or(0)
+    };
+    // From far up the stage, toward the camera, passing a metre beside it.
+    let origin = Vec3::new(1.0, 14.0, 2.4);
+    let forward = (EYE + Vec3::X - origin).normalize();
+    let right = forward.cross(Vec3::Z).normalize();
+    let toward = LaserScan {
+        origin,
+        forward,
+        right,
+        up: right.cross(forward),
+        ..projector(beam(0.000_01))
+    };
+    let down = light(toward, "down-the-beam");
+    let side = light(projector(beam(0.003)), "side-of-the-beam");
+    assert!(side > 0, "seen from the side, a beam still shows");
+    assert!(down > side, "{down} vs {side}");
+}
+
 #[test]
 fn a_projector_with_no_light_draws_nothing() {
     let mut renderer = Renderer::new().unwrap();
