@@ -106,12 +106,13 @@ sixteenth of the frame, and nothing hides that.
   `Transport::PHASE_G`.
 - A beam a few millimetres wide samples one line through the haze's eddies,
   which a metre-wide cone averages away, so a laser shows them even where
-  the clouds are even: one more tap of the haze noise at 15 cm, turned off
-  the axes so it never repeats along a beam, drifting faster than the
-  clouds, swaying the density up to 25% either way at full Turbulence (0 is calm haze) and fading
-  out where a pixel spans an eddy. It is a symmetric contrast about 1, so a
-  beam's light in all is unchanged (`laser.wgsl`, `eddies`). Cones and the
-  glow do not take it.
+  the clouds are even. A noise texture slid through the beam reads as a
+  texture, so the eddies are wisps (the level lines of a fine field) drawn
+  out by a slower, broader swirl, evolving in place by cross-fading two
+  copies half a cycle apart, and strong only in patches of churning air.
+  Turbulence sets how strong (0 is calm haze); they fade out where a pixel
+  spans a wisp, and keep a beam's light in all unchanged (`laser.wgsl`,
+  `eddies`). Cones and the glow do not take them.
 - What the beams scatter lights the room and the haze round them, through
   the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
   glow"). In the glow a beam stops at the first surface on its line, and
