@@ -108,7 +108,7 @@ sixteenth of the frame, and nothing hides that.
   which a metre-wide cone averages away, so a laser shows them even where
   the clouds are even: one more tap of the haze noise at 15 cm, turned off
   the axes so it never repeats along a beam, drifting faster than the
-  clouds, as strong as the haze's turbulence (0 is calm haze) and fading
+  clouds, swaying the density up to 25% either way at full Turbulence (0 is calm haze) and fading
   out where a pixel spans an eddy. It is a symmetric contrast about 1, so a
   beam's light in all is unchanged (`laser.wgsl`, `eddies`). Cones and the
   glow do not take it.
