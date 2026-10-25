@@ -155,8 +155,10 @@ pub struct Editor {
     ///
     /// Every gesture and every command edits this list and nothing else;
     /// [`Luma::commit_clips`] is the only thing that writes, and it writes the
-    /// whole list at once.
+    /// whole list's changes at once.
     clips: Rc<[Clip]>,
+    /// The document as last read or saved: what a save's changes are taken
+    /// against.
     graph_score: Option<luma_patterns::Score>,
     /// Previews by clip id, shared with the frame — each entry's `published`
     /// flag is written at paint time, which is why the map
@@ -221,11 +223,13 @@ pub struct Editor {
     /// written down there without notifying from inside a draw.
     canvas: Rc<Cell<Bounds<Pixels>>>,
     /// The working copy has moved away from the saved document and owes a
-    /// write. A flag rather than a queue of edits: the unit of writing is the
-    /// whole score, so there is only ever one thing outstanding.
+    /// write. A flag rather than a queue of edits: a write sends everything
+    /// that differs from the saved base, so there is only ever one thing
+    /// outstanding.
     dirty: bool,
-    /// A write is in flight. Serialized rather than concurrent: two whole-score
-    /// writes in the air at once would land in an order nobody chose.
+    /// A write is in flight. Serialized rather than concurrent: two writes
+    /// against one base in the air at once would land in an order nobody
+    /// chose.
     saving: bool,
     /// Writes that have come back. A reload read that saw this change under
     /// it may hold the document from before our own write.
@@ -2826,7 +2830,7 @@ impl Luma {
         .detach();
     }
 
-    /// Publish the working copy: one whole-score save, whatever the gesture
+    /// Publish the working copy: one save of its changes, whatever the gesture
     /// or the command changed.
     ///
     /// **The only write this screen makes.** A gesture that moves five clips,
@@ -3531,11 +3535,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
         .frame
         .as_ref()
         .and_then(|frame| frame.camera)
-        .filter(|(view, _)| {
-            state.follow
-                && state.transport.playing
-                && view.zoom == state.view.zoom
-        })
+        .filter(|(view, _)| state.follow && state.transport.playing && view.zoom == state.view.zoom)
         .map(|(view, position)| {
             // At either scroll limit the waveform is stationary and reusable;
             // its original capture time must not freeze the moving playhead.

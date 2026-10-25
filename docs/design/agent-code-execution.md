@@ -183,9 +183,12 @@ A score is `scores` and `clips` rows.
 `luma_patterns::Score` is the in-memory type. There is no revision history, no
 document head, no compare-and-swap and no server RPC.
 
-- Saving compares the candidate with the current rows and writes only the rows
-  that changed.
-- There is no revision token. A stale candidate overwrites the rows it touches.
+- A writer sends its changes against the score it read
+  (`luma_patterns::ScoreEdit`: the clips it added or changed, and the ids it
+  removed). Saving applies them over the current rows and writes only the
+  rows that changed.
+- There is no revision token. A clip the writer did not touch keeps its
+  stored value; a clip it touched is its version, whole.
 - Concurrent edits to one row on two devices merge per column. The last write
   wins.
 - Postgres row-level security decides who may write. The server does not run

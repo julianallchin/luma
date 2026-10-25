@@ -276,7 +276,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `delete_score` | `id: String` | `()` |
 | `rename_score` | `scoreId: String`<br>`name: String` | `()` |
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
-| `apply_score_document` | `scoreId: String`<br>`score: luma_patterns::Score` | `()` |
+| `edit_score_document` | `scoreId: String`<br>`edit: luma_patterns::ScoreEdit` | `()` |
 | `preview_score_clip` | `scoreId: String`<br>`clipId: String`<br>`score: Option<luma_patterns::Score>` | `AnnotationPreview` |
 | `clip_graph_definitions` | — | `Value` |
 | `clip_presets` | — | `Value` |

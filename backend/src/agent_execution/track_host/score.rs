@@ -1,13 +1,14 @@
 //! The Python score builder edits a whole [`luma_patterns::Score`] and hands it
-//! back. This adapter owns authority: which score, whose, and whether the write
-//! lands on the live rows or on the thread's draft.
+//! back with the score it read. This adapter owns authority: which score,
+//! whose, and whether the write lands on the live rows or on the thread's
+//! draft.
 use super::*;
 use crate::database::local::scores::rows;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
 use crate::services::{drafts, graph_scores};
-use luma_patterns::Score;
+use luma_patterns::{Score, ScoreEdit};
 
 impl TrackHost {
     /// The document this thread is working on: its draft's state when it has
@@ -79,9 +80,10 @@ impl TrackHost {
     }
 
     /// Write the candidate where this thread is allowed to: a subagent's draft,
-    /// or the live rows. There is nothing to compare against first — the row
-    /// diff only touches what actually differs.
-    async fn apply_score(&self, candidate: &Score) -> Result<(), HostCallError> {
+    /// whole, or the live rows, as its changes against `base` — the score the
+    /// edit read — so a clip the user wrote meanwhile survives. Returns the
+    /// document as it now stands.
+    async fn apply_score(&self, base: &Score, candidate: &Score) -> Result<Score, HostCallError> {
         let scope = self
             .edit_scope
             .as_ref()
@@ -93,25 +95,34 @@ impl TrackHost {
         )
         .await
         .map_err(|error| HostCallError::new("forbidden", error))?;
-        match self.draft_id.as_deref() {
-            Some(draft) => drafts::apply(access.connection(), draft, candidate)
-                .await
-                .map_err(|error| HostCallError::new("internal", error))?,
+        let saved = match self.draft_id.as_deref() {
+            Some(draft) => {
+                drafts::apply(access.connection(), draft, candidate)
+                    .await
+                    .map_err(|error| HostCallError::new("internal", error))?;
+                candidate.clone()
+            }
             None => {
+                let stored = rows::load_score(access.connection(), &self.scope.score_id)
+                    .await
+                    .map_err(|error| HostCallError::new("internal", error))?;
+                let saved = ScoreEdit::between(base, candidate).applied_to(&stored);
                 rows::save_score(
                     access.connection(),
                     &self.scope.score_id,
                     &scope.user_id,
-                    candidate,
+                    &saved,
                 )
                 .await
                 .map_err(|error| HostCallError::new("internal", error))?;
+                saved
             }
-        }
+        };
         access
             .commit()
             .await
-            .map_err(|error| HostCallError::new("internal", error))
+            .map_err(|error| HostCallError::new("internal", error))?;
+        Ok(saved)
     }
 
     pub(super) async fn score_call(
@@ -122,7 +133,7 @@ impl TrackHost {
     ) -> Result<Value, HostCallError> {
         let limit = call_limit(context)?;
         if method == "track.score_apply" {
-            let plan: Candidate = decode(payload)?;
+            let plan: Apply = decode(payload)?;
             supervise(
                 async {
                     self.validate_candidate(&plan.candidate).await?;
@@ -133,8 +144,8 @@ impl TrackHost {
             )
             .await?;
             context.begin_irreversible()?;
-            self.apply_score(&plan.candidate).await?;
-            return Ok(json!(plan.candidate));
+            let saved = self.apply_score(&plan.base, &plan.candidate).await?;
+            return Ok(json!(saved));
         }
         if method == "track.clip_check" {
             let request: ClipCheck = decode(payload)?;
@@ -192,6 +203,14 @@ fn clip_check(request: ClipCheck) -> Value {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Candidate {
+    candidate: Score,
+}
+
+/// `base` is the score the edit read; only what differs from it is written.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Apply {
+    base: Score,
     candidate: Score,
 }
 
