@@ -13,8 +13,11 @@
 //!   light crossing it. A source narrower than a cell is spread over a
 //!   cell's width, keeping its power, so no beam falls between cells.
 //! - **Spread**: the grid's mips. The fluence a point gets from scattering
-//!   haze falls as `e^(−σr) / r²`, and each level's average stands for the
-//!   shell round the point it is as wide as.
+//!   haze falls as `e^(−σr) / r²`. Each cell gathers it along six cones,
+//!   shell by shell out to the room, each shell read from the level as wide
+//!   as it is deep, and each cone stopped by the geometry it passes
+//!   (`glow_occupancy.rs`), so a wall or a deck shades the glow from the far
+//!   side of it.
 //! - **Use**: a surface takes a quarter of the fluence as irradiance (the
 //!   haze's light comes from every side); the composite adds the haze's
 //!   own second scattering of it along each camera ray.
@@ -23,9 +26,8 @@
 //! with; the glow the camera sees rises with its square, until the haze is
 //! thick enough to hide the room from itself. Haze off is no glow at all.
 //!
-//! Walls do not shadow the glow: indoors the haze stops at the room, and a
-//! cone's own shadow map stops its light at what it hits. Anything between
-//! a glowing cell and a surface does not.
+//! A fixture cone's light stops at what it hits by its own shadow map; a
+//! laser beam's at the first surface the occupancy finds on its line.
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -105,6 +107,8 @@ pub(crate) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     inject: wgpu::ComputePipeline,
     downsample: wgpu::ComputePipeline,
+    gather_layout: wgpu::BindGroupLayout,
+    gather: wgpu::ComputePipeline,
 }
 
 impl Pipelines {
@@ -195,10 +199,55 @@ impl Pipelines {
                 cache: None,
             })
         };
+        let gather_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("haze-glow-gather"),
+            entries: &[
+                crate::gpu::uniform_entry(0, compute),
+                texture(1, wgpu::TextureSampleType::Float { filterable: true }),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: compute,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                texture(3, wgpu::TextureSampleType::Float { filterable: true }),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: compute,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: FORMAT,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let gather_module = crate::gpu::shader(
+            device,
+            "haze-glow-gather",
+            include_str!("shaders/haze_glow_gather.wgsl"),
+        );
+        let gather = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("gather"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("haze-glow-gather"),
+                    bind_group_layouts: &[Some(&gather_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            module: &gather_module,
+            entry_point: Some("gather"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
         Self {
             inject: pipeline("inject"),
             downsample: pipeline("downsample"),
             layout,
+            gather_layout,
+            gather,
         }
     }
 }
@@ -238,33 +287,40 @@ pub(crate) struct Glow {
     /// One view per level, for the passes that write and read them.
     levels: Vec<wgpu::TextureView>,
     sampler: wgpu::Sampler,
+    /// The gathered fluence, the one level the samplers read.
+    fluence: wgpu::TextureView,
     /// What the samplers read this frame: `HazeGlow`.
     sample: wgpu::Buffer,
+    /// What blocks the glow.
+    occupancy: crate::glow_occupancy::Occupancy,
     on: bool,
 }
 
 impl Glow {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
-        Self::with_size(device, HIGH)
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::with_size(device, queue, HIGH)
     }
 
-    fn with_size(device: &wgpu::Device, size: [u32; 3]) -> Self {
+    fn with_size(device: &wgpu::Device, queue: &wgpu::Queue, size: [u32; 3]) -> Self {
         use wgpu::util::DeviceExt;
         let count = levels(size);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("haze-glow"),
-            size: wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: size[2],
-            },
-            mip_level_count: count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D3,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+        let grid = |label, mip_level_count| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: size[2],
+                },
+                mip_level_count,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let texture = grid("haze-glow", count);
         let levels = (0..count)
             .map(|level| {
                 texture.create_view(&wgpu::TextureViewDescriptor {
@@ -274,10 +330,13 @@ impl Glow {
                 })
             })
             .collect();
+        let fluence = grid("haze-glow-fluence", 1);
         Self {
             size,
             view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
             levels,
+            fluence: fluence.create_view(&wgpu::TextureViewDescriptor::default()),
+            occupancy: crate::glow_occupancy::Occupancy::new(device, queue),
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("haze-glow"),
                 mag_filter: wgpu::FilterMode::Linear,
@@ -298,36 +357,46 @@ impl Glow {
     pub(crate) fn bindings(&self, first: u32) -> [wgpu::BindGroupEntry<'_>; 3] {
         use crate::gpu::binding;
         [
-            binding(first, wgpu::BindingResource::TextureView(&self.view)),
+            binding(first, wgpu::BindingResource::TextureView(&self.fluence)),
             binding(first + 1, wgpu::BindingResource::Sampler(&self.sampler)),
             binding(first + 2, self.sample.as_entire_binding()),
         ]
     }
 
-    /// Size the grid for `quality` and tell the samplers where it is this
-    /// frame, before anything binds it; off when there is no haze.
+    /// Size the grid for `quality`, find what blocks it in `frame`, and tell
+    /// the samplers where it is this frame, before anything binds it; off
+    /// when there is no haze.
     pub(crate) fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         medium: &crate::medium::Uniform,
-        quality: Quality,
+        frame: &crate::frame::Frame,
     ) {
+        let quality = frame.quality;
         let size = match quality {
             Quality::High => HIGH,
             Quality::Low => LOW,
         };
         if size != self.size {
-            *self = Self::with_size(device, size);
+            *self = Self::with_size(device, queue, size);
         }
         let sigma = medium.min[3];
         let min = Vec3::from_slice(&medium.min[..3]);
         let max = Vec3::from_slice(&medium.max[..3]);
         self.on = sigma > 0.0 && (max - min).min_element() > 0.0;
         let sample = if self.on {
+            self.occupancy.update(
+                device,
+                queue,
+                frame,
+                (min, max),
+                size,
+                self.levels.len() as u32,
+            );
             Sample {
                 min: medium.min,
-                max: max.extend(self.levels.len() as f32).to_array(),
+                max: max.extend(1.0).to_array(),
             }
         } else {
             Sample::OFF
@@ -351,7 +420,7 @@ impl Glow {
         let sigma = input.medium.min[3];
         let min = Vec3::from_slice(&input.medium.min[..3]);
         let max = Vec3::from_slice(&input.medium.max[..3]);
-        let (beams, sheets) = laser_light(input.lasers);
+        let (beams, sheets) = laser_light(input.lasers, &self.occupancy.solid);
         let params = Params {
             min: min.extend(sigma).to_array(),
             max: max.extend(input.beam_gain).to_array(),
@@ -455,6 +524,32 @@ impl Glow {
             pass.set_bind_group(0, &group(level, level - 1), &[]);
             dispatch(&mut pass, level);
         }
+        // `Params` in `haze_glow_gather.wgsl`: the grid, σ and its levels.
+        let gather_params = buffer(
+            "haze-glow-gather",
+            bytemuck::bytes_of(&Sample {
+                min: min.extend(sigma).to_array(),
+                max: max.extend(self.levels.len() as f32).to_array(),
+            }),
+            wgpu::BufferUsages::UNIFORM,
+        );
+        let gather = {
+            use crate::gpu::binding;
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("haze-glow-gather"),
+                layout: &pipelines.gather_layout,
+                entries: &[
+                    binding(0, gather_params.as_entire_binding()),
+                    binding(1, wgpu::BindingResource::TextureView(&self.view)),
+                    binding(2, wgpu::BindingResource::Sampler(&self.sampler)),
+                    binding(3, wgpu::BindingResource::TextureView(&self.occupancy.view)),
+                    binding(4, wgpu::BindingResource::TextureView(&self.fluence)),
+                ],
+            })
+        };
+        pass.set_pipeline(&pipelines.gather);
+        pass.set_bind_group(0, &gather, &[]);
+        dispatch(&mut pass, 0);
     }
 }
 
@@ -471,15 +566,24 @@ fn level_size(size: [u32; 3], level: u32) -> [u32; 3] {
 /// The projectors' beams and sheets as the glow takes them: each sheet run
 /// merged into fans no wider than [`SHEET_MERGE`], since the grid is far too
 /// coarse to tell their pieces apart.
-fn laser_light(scans: &[crate::laser::LaserScan]) -> (Vec<Beam>, Vec<Sheet>) {
+fn laser_light(
+    scans: &[crate::laser::LaserScan],
+    solid: &crate::glow_occupancy::Solid,
+) -> (Vec<Beam>, Vec<Sheet>) {
+    let reach = |origin, direction| solid.reach(origin, direction, crate::laser::RANGE_M);
     let mut beams = Vec::new();
     let mut sheets = Vec::new();
     for scan in scans {
         let (b, s) = crate::laser::light(scan);
-        beams.extend(b.into_iter().map(|beam| Beam {
-            origin: beam.origin.extend(0.0).to_array(),
-            direction: beam.direction.extend(crate::laser::RANGE_M).to_array(),
-            power: beam.power.extend(0.0).to_array(),
+        beams.extend(b.into_iter().map(|beam| {
+            Beam {
+                origin: beam.origin.extend(0.0).to_array(),
+                direction: beam
+                    .direction
+                    .extend(reach(beam.origin, beam.direction))
+                    .to_array(),
+                power: beam.power.extend(0.0).to_array(),
+            }
         }));
         // A run of pieces, each starting where the last ended: its first
         // edge, its last edge so far, and the power it holds.
@@ -491,10 +595,12 @@ fn laser_light(scans: &[crate::laser::LaserScan]) -> (Vec<Beam>, Vec<Sheet>) {
                 if angle <= 0.0 || normal == Vec3::ZERO {
                     return;
                 }
+                // A fan this narrow stops where its middle does.
+                let middle = (from + to).normalize();
                 sheets.push(Sheet {
                     origin: origin.extend(0.0).to_array(),
-                    middle: (from + to).normalize().extend(0.5 * angle).to_array(),
-                    normal: normal.extend(crate::laser::RANGE_M).to_array(),
+                    middle: middle.extend(0.5 * angle).to_array(),
+                    normal: normal.extend(reach(origin, middle)).to_array(),
                     density: (power / angle).extend(0.0).to_array(),
                 });
             }
@@ -504,8 +610,11 @@ fn laser_light(scans: &[crate::laser::LaserScan]) -> (Vec<Beam>, Vec<Sheet>) {
             if let Some((from, to, held)) = &mut run {
                 let joins = to.abs_diff_eq(sheet.from, 1e-5);
                 // Merged pieces must stay one flat fan: the next piece
-                // turns the same way about the same normal.
-                let flat = from
+                // turns the same way about the same normal. A piece that
+                // turns back, as the mirrors do overshooting a jump, starts
+                // the next fan.
+                let flat = sheet
+                    .from
                     .cross(sheet.to)
                     .normalize_or_zero()
                     .dot(from.cross(*to).normalize_or_zero())
@@ -561,7 +670,7 @@ mod tests {
     fn merged_sheets_keep_the_sweeps_light() {
         let scan = sweep(400);
         let (_, pieces) = crate::laser::light(&scan);
-        let (_, merged) = laser_light(&[scan]);
+        let (_, merged) = laser_light(&[scan], &crate::glow_occupancy::Solid::empty());
         assert!(
             merged.len() * 10 < pieces.len(),
             "{} of {}",
@@ -582,7 +691,7 @@ mod tests {
         let mut scan = sweep(200);
         let back: Vec<LaserPoint> = scan.points.iter().rev().copied().collect();
         scan.points.extend(back);
-        let (_, merged) = laser_light(&[scan]);
+        let (_, merged) = laser_light(&[scan], &crate::glow_occupancy::Solid::empty());
         for sheet in &merged {
             assert!(2.0 * sheet.middle[3] <= SHEET_MERGE + 1e-4);
         }

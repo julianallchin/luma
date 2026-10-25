@@ -83,14 +83,39 @@ sixteenth of the frame, and nothing hides that.
   thin triangle from the projector whose brightness is time spent over angle
   swept. A dwell collapses to a bright line, a sweep spreads to a dim sheet.
   The result is added into the HDR target before glare.
+- The galvo model is a damped spring per mirror, exact over each point
+  period (`laser.rs`, `Galvo`): 4 kHz natural frequency, damping 0.7. A
+  30 kpps scanner settles a 0.1° step in 100–130 µs with a small mirror
+  (Cambridge Technology 6210H/6215H datasheets); a show scanner's larger
+  mirror at ILDA's 8° test angle is slower, a rise of about three points.
+  So a fast shape's corners round, the mirrors slow through them and the
+  light dwells there, brighter than the edges, and a jump overshoots about
+  5% before it settles. It is linear: a real scanner's large steps are also
+  slew-limited, which this does not model.
 - A scan shorter than the persistence window counts as one whole scan, so it
   does not flicker as the window slides; a longer one's window fades at its
   ends. Beams widen with distance (1.5 mrad) and fade across their width.
   Beams and sheets scatter by the haze's own density field, so they show its
   clouds and wind.
+- Lasers scatter by their own phase, a mix of two Henyey-Greenstein lobes:
+  half at g 0.9, half at g 0.3 (`laser.wgsl`, `phase`). Depence uses g ≈ 0.9
+  with a floor. Down a beam it blazes, about 75 times the isotropic light a
+  few degrees off the axis where one g 0.6 lobe gave 10; from the side it
+  shows as before (0.44 against 0.40). Each lobe is normalised, so the mix
+  scatters only what the haze takes out of the beam. Fixture beams keep
+  `Transport::PHASE_G`.
+- A beam a few millimetres wide samples one line through the haze's eddies,
+  which a metre-wide cone averages away, so a laser shows them even where
+  the clouds are even: one more tap of the haze noise at 15 cm, turned off
+  the axes so it never repeats along a beam, drifting faster than the
+  clouds, as strong as the haze's turbulence (0 is calm haze) and fading
+  out where a pixel spans an eddy. It is a symmetric contrast about 1, so a
+  beam's light in all is unchanged (`laser.wgsl`, `eddies`). Cones and the
+  glow do not take it.
 - What the beams scatter lights the room and the haze round them, through
   the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
-  glow").
+  glow"). In the glow a beam stops at the first surface on its line, and
+  walls and decks shade the glow from their far side.
 
 ## v2 (agreed 2026-10-25)
 
