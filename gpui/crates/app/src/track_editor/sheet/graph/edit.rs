@@ -183,8 +183,8 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
         (Kind::Space, "centre") => Input::Vector([0.5; 3]),
         (Kind::Space, "scale") => Input::Number(1.),
         (Kind::Mirror, "at") => Input::Number(0.5),
-        (Kind::Noise, "period") => Input::Number(4.),
-        (Kind::Noise, "contrast") => Input::Number(0.),
+        (Kind::Random, "every") => Input::Number(4.),
+        (Kind::Random, "glide" | "contrast") => Input::Number(0.),
         (Kind::Audio, "low_hz") => Input::Number(p::empty_band().0),
         (Kind::Audio, "high_hz") => Input::Number(p::empty_band().1),
         (Kind::Curve, "shape") => Input::Points(preset_curve("Ramp up")),
@@ -198,7 +198,7 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
 pub(crate) fn empty_note(node: &Node, input: &str) -> &'static str {
     match (node.kind, input) {
         (_, "direction") => "Best fit",
-        (Kind::Noise, "scale") => "Uniform",
+        (Kind::Random, "scale") => "Uniform",
         (Kind::Group, "size") => "One fixture",
         (Kind::Time, "every") => "Once",
         (Kind::Time, "duration") if node.inputs.contains_key("every") => "Same as every",
@@ -220,7 +220,7 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
                 Some(Input::Number(every)) => *every,
                 _ => 1.,
             },
-            (Kind::Noise, "scale") => 0.5,
+            (Kind::Random, "scale") => 0.5,
             _ => 1.,
         }),
         Ty::Vector if spec.unit == Some(Unit::Metres) => Input::Vector([0., 0., 0.]),
@@ -373,15 +373,41 @@ fn signature(graph: &ClipGraph, values: bool) -> String {
 // -- edits --------------------------------------------------------------------
 
 /// Where a promoted input's values come from: the coordinate node kinds.
-pub(crate) const SOURCES: [Kind; 4] = [Kind::Time, Kind::Space, Kind::Noise, Kind::Audio];
+pub(crate) const SOURCES: [Kind; 4] = [Kind::Time, Kind::Space, Kind::Random, Kind::Audio];
 
 /// A coordinate kind's menu entry.
 pub(crate) fn source_label(kind: Kind) -> &'static str {
     match kind {
         Kind::Time => "Over time",
         Kind::Space => "Over space",
+        Kind::Along => "Along each element",
         other => other.label(),
     }
+}
+
+/// The coordinate kinds `input` offers: along too where a laser reads it
+/// per element.
+pub(crate) fn sources(graph: &ClipGraph, id: &str, input: &str) -> Vec<Kind> {
+    let mut out = SOURCES.to_vec();
+    if reads_along(graph, id, input) {
+        out.push(Kind::Along);
+    }
+    out
+}
+
+/// Whether a new along node can feed `input`: the graph still checks with
+/// one wired there.
+fn reads_along(graph: &ClipGraph, id: &str, input: &str) -> bool {
+    let Some(spec) = spec(graph, id, input) else {
+        return false;
+    };
+    let mut trial = graph.clone();
+    if spec.ty == Ty::Coordinate {
+        recoordinate(&mut trial, id, Kind::Along);
+    } else {
+        promote(&mut trial, id, input, Kind::Along);
+    }
+    trial.check().is_ok()
 }
 
 /// The shapers a heads input takes.
@@ -918,6 +944,7 @@ pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> b
     match spec.ty {
         Ty::Number | Ty::Vector | Ty::Color | Ty::Values if kind == Kind::Value => true,
         Ty::Number | Ty::Vector | Ty::Color if kind == Kind::Math => can_multiply(graph, id, input),
+        _ if kind == Kind::Along => reads_along(graph, id, input),
         Ty::Number | Ty::Vector | Ty::Color | Ty::Values => {
             SOURCES.contains(&kind) || kind == Kind::Curve
         }
@@ -1199,6 +1226,17 @@ mod tests {
     }
 
     #[test]
+    fn along_is_offered_only_where_a_laser_reads_it() {
+        let mut graph = ClipGraph::new([("laser1".to_owned(), Node::new(Kind::Laser))]);
+        assert!(sources(&graph, "laser1", "x").contains(&Kind::Along));
+        assert!(!sources(&graph, "laser1", "alpha").contains(&Kind::Along));
+        assert!(attach(&mut graph, "laser1", "x", Kind::Along).is_some());
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        assert!(!sources(&wash(), "color1", "brightness").contains(&Kind::Along));
+        assert!(attach(&mut wash(), "color1", "brightness", Kind::Along).is_none());
+    }
+
+    #[test]
     fn a_linked_node_survives_one_unwire() {
         let mut graph = wash();
         promote(&mut graph, "color1", "brightness", Kind::Time);
@@ -1216,10 +1254,10 @@ mod tests {
     #[test]
     fn a_link_never_makes_a_cycle() {
         let mut graph = wash();
-        promote(&mut graph, "color1", "brightness", Kind::Noise);
+        promote(&mut graph, "color1", "brightness", Kind::Random);
         let above = wired(&graph, "color1", "brightness");
-        let noise = wired(&graph, &above, "x");
-        assert!(!link_candidates(&graph, &noise, "contrast").contains(&above));
+        let random = wired(&graph, &above, "x");
+        assert!(!link_candidates(&graph, &random, "contrast").contains(&above));
     }
 
     fn chase() -> ClipGraph {
@@ -1281,7 +1319,7 @@ mod tests {
     fn attach_puts_a_curve_between_a_new_source_and_a_value() {
         let mut graph = wash();
         assert!(attach(&mut graph, "color1", "brightness", Kind::Shuffle).is_none());
-        assert!(attach(&mut graph, "color1", "brightness", Kind::Noise).is_some());
+        assert!(attach(&mut graph, "color1", "brightness", Kind::Random).is_some());
         assert!(graph.check().is_ok(), "{:?}", graph.check());
         let curve = wired(&graph, "color1", "brightness");
         let time = {
@@ -1291,7 +1329,7 @@ mod tests {
             graph.nodes[&wired(&graph, &curve, "x")].kind
         };
         assert_eq!(time, Kind::Time);
-        assert_eq!(graph.nodes[&wired(&graph, &curve, "x")].kind, Kind::Noise);
+        assert_eq!(graph.nodes[&wired(&graph, &curve, "x")].kind, Kind::Random);
     }
 
     #[test]
@@ -1367,7 +1405,7 @@ mod tests {
         insert(&mut graph, &space, "heads", Kind::Shuffle);
         let shuffle = wired(&graph, &space, "heads");
         assert!(accepts(&graph, &shuffle, "time", Kind::Time));
-        assert!(!accepts(&graph, &shuffle, "time", Kind::Noise));
+        assert!(!accepts(&graph, &shuffle, "time", Kind::Random));
         insert(&mut graph, &shuffle, "time", Kind::Time);
         let time = wired(&graph, &shuffle, "time");
         assert_eq!(

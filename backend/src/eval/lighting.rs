@@ -12,8 +12,8 @@ pub struct Program {
     clock: p::BeatTimeline,
     ids: Vec<String>,
     output: String,
-    /// The zone a laser clip draws in; `None` for any other clip.
-    zone: Option<String>,
+    /// What a laser clip draws, and where; `None` for any other clip.
+    laser: Option<p::clip_graph::LaserHeads>,
 }
 fn plan(
     prepared: p::PreparedGraph,
@@ -21,15 +21,15 @@ fn plan(
     ids: Vec<String>,
     output: &str,
     span: (f32, f32),
-    zone: Option<String>,
+    laser: Option<p::clip_graph::LaserHeads>,
 ) -> Result<Plan, String> {
-    let laser = zone.is_some();
+    let draws = laser.is_some();
     let program = Program {
         prepared,
         clock,
         ids: ids.clone(),
         output: output.into(),
-        zone,
+        laser,
     };
     let initial = program.sample(&[span.0])?;
     let writes = initial
@@ -47,7 +47,7 @@ fn plan(
             strobe: writes[3],
             speed: writes[4],
             aim: writes[5],
-            laser,
+            laser: draws,
         },
         span,
     })
@@ -70,8 +70,14 @@ pub(crate) fn compile_clip(
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
     let ids = cells.iter().map(|c| c.id.clone()).collect();
-    let zone = clip.graph.laser().map(|laser| laser.zone);
-    plan(prepared, clock, ids, p::clip_graph::OUTPUT, span, zone)
+    plan(
+        prepared,
+        clock,
+        ids,
+        p::clip_graph::OUTPUT,
+        span,
+        clip.graph.laser(),
+    )
 }
 impl Program {
     pub(crate) fn sample(
@@ -108,26 +114,26 @@ impl Program {
             .collect())
     }
 
-    /// A laser clip's beams at `times`, one list per time, drawn on path
-    /// `path`. A head `projector:i` is beam `i` of as many as its projector
-    /// has heads; its alpha is the beam's intensity.
-    pub(crate) fn beams(
+    /// A laser clip's elements at `times`, one list per time, drawn on
+    /// layer `layer`. A head `projector:i` is element `i` of as many as its
+    /// projector has heads; its alpha is the element's intensity.
+    pub(crate) fn elements(
         &self,
         times: &[f32],
-        path: u32,
+        layer: u32,
         scratch: &mut Arena,
-    ) -> Result<Vec<Vec<p::laser::Beam>>, String> {
-        let zone = self.zone.as_deref().ok_or("not a laser clip")?;
+    ) -> Result<Vec<Vec<p::laser::Element>>, String> {
+        let laser = self.laser.as_ref().ok_or("not a laser clip")?;
         if times.is_empty() {
             return Ok(vec![]);
         }
         scratch.values = self.sample(times)?;
         let value = scratch
             .values
-            .get(p::laser::BEAM_OUTPUT)
-            .ok_or("a laser clip gives beams")?;
+            .get(p::laser::ELEMENT_OUTPUT)
+            .ok_or("a laser clip gives elements")?;
         let rows =
-            p::laser::Beam::read(value, &self.ids, times.len()).map_err(|e| e.to_string())?;
+            p::laser::Element::read(value, &self.ids, times.len()).map_err(|e| e.to_string())?;
         let mut counts: HashMap<&str, usize> = HashMap::new();
         let places: Vec<(&str, usize)> = self
             .ids
@@ -140,19 +146,19 @@ impl Program {
                 (projector, index.parse().unwrap_or(0))
             })
             .collect();
+        let figure = laser.figure();
         Ok(rows
             .into_iter()
             .map(|row| {
                 row.into_iter()
                     .zip(&places)
-                    .map(|([x, y, join, alpha], (projector, index))| p::laser::Beam {
+                    .map(|((alpha, samples), (projector, index))| p::laser::Element {
                         projector: (*projector).to_string(),
-                        zone: zone.to_string(),
-                        path,
-                        s: p::laser::along(*index, counts[projector]),
-                        x,
-                        y,
-                        join,
+                        zone: laser.zone.clone(),
+                        layer,
+                        figure,
+                        s: p::laser::order(*index, counts[projector]),
+                        samples,
                         intensity: alpha,
                     })
                     .collect()
@@ -239,7 +245,7 @@ impl Program {
                 Layer {
                     frame: UniverseState {
                         primitives,
-                        beams: Vec::new(),
+                        lasers: Vec::new(),
                     },
                     alpha,
                 }
@@ -309,8 +315,8 @@ mod tests {
 
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
-        // Noise whose speed drops to almost nothing past the clip's middle:
-        // its turns then leave the range the noise accepts.
+        // A random whose every drops to almost nothing past the clip's
+        // middle: its turns then leave the range the random accepts.
         let clip = test_clip(
             json!({
                 "time1": {"kind": "time"},
@@ -318,9 +324,9 @@ mod tests {
                            "inputs": {"x": {"node": "time1"},
                                       "shape": {"points": [[0, 0, "hold"], [0.5, 1], [1, 1]]},
                                       "low": 4, "high": 1e-13}},
-                "noise1": {"kind": "noise", "inputs": {"speed": {"node": "curve1"}}},
+                "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},
-                           "inputs": {"x": {"node": "noise1"}, "low": 1, "high": 1}},
+                           "inputs": {"x": {"node": "random1"}, "low": 1, "high": 1}},
                 "color1": {"kind": "color",
                            "inputs": {"brightness": 0.5, "alpha": {"node": "curve2"}}},
             }),

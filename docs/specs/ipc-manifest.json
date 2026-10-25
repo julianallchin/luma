@@ -214,27 +214,6 @@
     {
       "args": [
         {
-          "name": "scoreId",
-          "rust": "String"
-        },
-        {
-          "name": "score",
-          "rust": "luma_patterns::Score"
-        }
-      ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "apply_score_document",
-      "prose": {
-        "returns": "crate::models::authored_state::AppliedAuthoredState"
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "venueId",
           "rust": "String"
         },
@@ -878,6 +857,24 @@
         "returns": "PlacementReport"
       },
       "returns": "PlacementReport"
+    },
+    {
+      "args": [
+        {
+          "name": "scoreId",
+          "rust": "String"
+        },
+        {
+          "name": "edit",
+          "rust": "luma_patterns::ScoreEdit"
+        }
+      ],
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "name": "edit_score_document",
+      "returns": "()"
     },
     {
       "args": [],
@@ -3080,7 +3077,7 @@
           "rust": "u64"
         },
         {
-          "name": "beams",
+          "name": "elements",
           "rust": "Option<usize>"
         }
       ],

@@ -1,6 +1,6 @@
 //! Laser projectors (`docs/design/lasers.md`): where a projector sits and
 //! which way it scans, a zone's window of directions, and the solver that
-//! turns the composited beams into each projector's point stream.
+//! turns the composited elements into each projector's point stream.
 //!
 //! ```text
 //! UniverseState → LaserRig::solve (zone, scan plan, limit) → LaserFrame
@@ -25,26 +25,28 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// How many colour heads a projector gives a Color, Strobe or Aim clip: the
-/// colour along a laser clip's order, sampled. A beam takes the colour at
-/// its own place `s`, so a gradient never depends on the beam count.
-pub const COLOR_SAMPLES: usize = 32;
-
-/// How far apart a projector's first and last head sit, in metres, across
-/// its scan. A Space or Mirror node reads heads by where they are, so a
-/// projector's heads spread a little either side of it: enough for a
-/// gradient to run through its beams, little enough that the projector still
+/// How far apart a projector's first and last element sit, in metres,
+/// across its scan. A Space or Mirror node reads heads by where they are, so
+/// a projector's elements spread a little either side of it: enough for a
+/// gradient to run through them, little enough that the projector still
 /// sits where it hangs.
 pub const HEAD_SPREAD_M: f64 = 0.5;
 
 /// How many points a second a projector draws: its scan rate.
 pub const POINT_RATE: u32 = 30_000;
 
-/// The window a laser clip draws in when the venue has no zone: ahead into
-/// the house, a little above level.
-pub const DEFAULT_ZONE: Zone = Zone {
-    turn: [-30., 30.],
-    tilt: [5., 25.],
+/// The lowest edge of the window a laser clip draws in when the venue has
+/// no zone, in degrees above level: over the crowd's heads.
+const DEFAULT_TILT: f64 = 5.;
+/// How much of the narrowest projector's half field the window with no zone
+/// spans either side of the house: the canvas's edges stay well inside every
+/// scan, so a fan of size 1 neither fires out sideways nor loses its outer
+/// beams at the scan's edge.
+const DEFAULT_REACH: f64 = 2. / 3.;
+/// The window with no zone and no projector to fit it to: a 60° scan's.
+const FALLBACK_ZONE: Zone = Zone {
+    turn: [-20., 20.],
+    tilt: [DEFAULT_TILT, DEFAULT_TILT + 20.],
 };
 
 /// A projector's scan frame in data space (X stage right, Y upstage, Z up):
@@ -98,10 +100,10 @@ impl Basis {
         }
     }
 
-    /// Where head `index` of `count` sits: spread across the scan around the
-    /// projector ([`HEAD_SPREAD_M`]).
+    /// Where element `index` of `count` sits: spread across the scan around
+    /// the projector ([`HEAD_SPREAD_M`]).
     pub fn head(&self, index: usize, count: usize) -> DVec3 {
-        let s = luma_patterns::laser::along(index, count);
+        let s = luma_patterns::laser::order(index, count);
         self.origin + self.right * ((s - 0.5) * HEAD_SPREAD_M)
     }
 }
@@ -129,7 +131,10 @@ impl Projector {
         }
         let across = d.dot(self.basis.right).atan2(ahead).to_degrees() / (self.field[0] / 2.);
         let up = d.dot(self.basis.up).atan2(ahead).to_degrees() / (self.field[1] / 2.);
-        (across.abs() <= 1. && up.abs() <= 1.).then_some([across, up])
+        // A direction on the field's edge is in it, rounding either way.
+        let reach = 1. + 1e-9;
+        (across.abs() <= reach && up.abs() <= reach)
+            .then_some([across.clamp(-1., 1.), up.clamp(-1., 1.)])
     }
 
     /// The unit direction in data space of galvo coordinates `g`: the
@@ -175,7 +180,7 @@ impl From<&LaserZone> for Zone {
 }
 
 /// Every projector in a venue and its zones: what the solver needs to turn
-/// beams into point streams.
+/// laser elements into point streams.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LaserRig {
     pub projectors: Vec<Projector>,
@@ -276,18 +281,41 @@ impl LaserRig {
     }
 
     /// The zone with id `id`; an empty or unknown id is the venue's first
-    /// zone, or [`DEFAULT_ZONE`] when it has none.
+    /// zone, or [`LaserRig::default_zone`] when it has none.
     pub fn zone(&self, id: &str) -> Zone {
         self.zones
             .iter()
             .find(|(known, _)| known == id)
             .or_else(|| self.zones.first())
-            .map_or(DEFAULT_ZONE, |(_, zone)| *zone)
+            .map_or_else(|| self.default_zone(), |(_, zone)| *zone)
     }
 
-    /// Each projector's point stream for `state`: one scan of its beams, to
-    /// play on repeat until the next frame. A projector with no beams gives
-    /// no frame.
+    /// The window a venue with no zone draws in: fixed in the room, ahead
+    /// into the house from just above level, and [`DEFAULT_REACH`] of the
+    /// narrowest projector's half field either side and up, so it sits well
+    /// inside a level projector's scan.
+    pub fn default_zone(&self) -> Zone {
+        let narrowest = |axis: usize| {
+            self.projectors
+                .iter()
+                .map(|p| p.field[axis] / 2.)
+                .reduce(f64::min)
+        };
+        match (narrowest(0), narrowest(1)) {
+            (Some(across), Some(up)) => {
+                let (across, up) = (across * DEFAULT_REACH, up * DEFAULT_REACH);
+                Zone {
+                    turn: [-across, across],
+                    tilt: [DEFAULT_TILT, DEFAULT_TILT + up],
+                }
+            }
+            _ => FALLBACK_ZONE,
+        }
+    }
+
+    /// Each projector's point stream for `state`: one scan of its elements,
+    /// to play on repeat until the next frame. A projector with nothing to
+    /// draw gives no frame.
     pub fn solve(&self, state: &UniverseState) -> Vec<LaserFrame> {
         self.projectors
             .iter()
@@ -355,9 +383,39 @@ mod tests {
     #[test]
     fn a_projectors_heads_spread_across_its_scan() {
         let p = facing_house("p", 2.);
-        let first = p.basis.head(0, COLOR_SAMPLES);
-        let last = p.basis.head(COLOR_SAMPLES - 1, COLOR_SAMPLES);
+        let first = p.basis.head(0, 16);
+        let last = p.basis.head(15, 16);
         assert!((last.x - first.x - HEAD_SPREAD_M).abs() < 1e-6);
         assert!((p.basis.head(0, 1) - p.basis.origin).length() < 1e-9);
+    }
+
+    /// With no zone, the canvas's corners are ahead into the house and
+    /// inside a level projector's scan, so a fan of size 1 keeps its outer
+    /// beams; the canvas middle is ahead of the house from every projector.
+    #[test]
+    fn a_venue_with_no_zone_draws_ahead_of_the_house_inside_every_scan() {
+        let rig = LaserRig {
+            projectors: vec![facing_house("a", -2.), facing_house("b", 2.)],
+            zones: Vec::new(),
+        };
+        let zone = rig.zone("");
+        for p in &rig.projectors {
+            for corner in [[-1., -1.], [-1., 1.], [1., -1.], [1., 1.]] {
+                let d = zone.direction(corner[0], corner[1]);
+                let g = p.galvo(d).expect("the canvas corner is in the scan");
+                assert!(g[0].abs() < 0.9 && g[1].abs() < 0.9, "{g:?}");
+                assert!(d.y < 0. && d.z > 0., "toward the house and up: {d}");
+            }
+        }
+        let middle = zone.direction(0., 0.);
+        assert!(middle.x.abs() < 1e-12 && middle.y < 0. && middle.z > 0.);
+    }
+
+    /// A direction exactly on the scan's edge is in the scan, either side.
+    #[test]
+    fn the_scans_edge_is_in_the_scan() {
+        let p = facing_house("p", 0.);
+        assert!(p.galvo(p.direction([-1., 0.])).is_some());
+        assert!(p.galvo(p.direction([1., 1.])).is_some());
     }
 }

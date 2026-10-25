@@ -20,29 +20,30 @@ pub async fn get_score_document(
     ))
 }
 
-/// Write the candidate onto the score's rows. Only what differs moves, so two
-/// people editing different clips of one score do not overwrite each other —
-/// and there is no revision to compare, because a row diff needs none.
-pub async fn apply_score_document(
+/// Write an editor's changes over the score's rows as they stand. A clip the
+/// edit does not name keeps its stored value, so an agent's write that landed
+/// after the editor read the score survives the editor's next save.
+pub async fn edit_score_document(
     services: &AppServices,
     score_id: String,
-    score: luma_patterns::Score,
+    edit: luma_patterns::ScoreEdit,
 ) -> Result<(), CommandError> {
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
     let metadata = db::get_score(&mut access, &score_id).await?;
+    let stored = rows::load_score(access.connection(), &score_id).await?;
+    let edited = edit.applied_to(&stored);
     // Check each clip this write changes. A stored clip that no longer
     // passes, such as one from before a form changed, does not block edits
     // to the rest of the score.
-    let stored = rows::load_score(access.connection(), &score_id).await?;
-    score
+    edited
         .validate_changes(&luma_patterns::standard_library(), &stored)
         .map_err(|error| CommandError::Invalid(error.to_string()))?;
     rows::save_score(
         access.connection(),
         &score_id,
         metadata.uid.as_deref().unwrap_or_default(),
-        &score,
+        &edited,
     )
     .await?;
     access.commit().await?;
@@ -207,8 +208,8 @@ mod tests {
 
     const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
-    #[tokio::test]
-    async fn rename_score_trims_refuses_empty_and_writes_the_name() {
+    /// A signed-in library with one venue, one track and one empty score.
+    async fn library() -> (tempfile::TempDir, AppServices, String) {
         let directory = tempfile::tempdir().unwrap();
         let db = database::init_app_db_at(directory.path()).await.unwrap();
         let state_db = state::init_state_db_at(directory.path()).await.unwrap();
@@ -264,6 +265,12 @@ mod tests {
             .unwrap()
             .to_string();
 
+        (directory, services, score)
+    }
+
+    #[tokio::test]
+    async fn rename_score_trims_refuses_empty_and_writes_the_name() {
+        let (_directory, services, score) = library().await;
         let name = |services: &AppServices| {
             let pool = services.db.0.clone();
             let score = score.clone();
@@ -301,5 +308,85 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    fn clip(name: &str, start: f64) -> luma_patterns::Clip {
+        let mut clip = luma_patterns::presets()
+            .clip("Wash")
+            .expect("the Wash preset")
+            .clip(start, 4.);
+        clip.name = name.into();
+        clip
+    }
+
+    fn score(clips: &[(&str, &luma_patterns::Clip)]) -> luma_patterns::Score {
+        luma_patterns::Score {
+            clips: clips
+                .iter()
+                .map(|(id, clip)| ((*id).to_owned(), (*clip).clone()))
+                .collect(),
+        }
+    }
+
+    async fn edit(
+        services: &AppServices,
+        id: &str,
+        base: &luma_patterns::Score,
+        candidate: &luma_patterns::Score,
+    ) {
+        let edit = luma_patterns::ScoreEdit::between(base, candidate);
+        dispatch(
+            services,
+            "edit_score_document",
+            &json!({ "scoreId": id, "edit": edit }),
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn stored(services: &AppServices, id: &str) -> luma_patterns::Score {
+        serde_json::from_value(
+            dispatch(services, "get_score_document", &json!({ "scoreId": id }))
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// The editor read {A}; an agent then added B. The editor's save of A′
+    /// over its stale copy keeps B.
+    #[tokio::test]
+    async fn an_edit_keeps_a_clip_another_writer_added_since_its_read() {
+        let (_directory, services, id) = library().await;
+        let (a, edited_a, b) = (clip("A", 0.), clip("A", 8.), clip("B", 16.));
+        let read = score(&[("a", &a)]);
+        edit(&services, &id, &luma_patterns::Score::default(), &read).await;
+        edit(&services, &id, &read, &score(&[("a", &a), ("b", &b)])).await;
+
+        edit(&services, &id, &read, &score(&[("a", &edited_a)])).await;
+        assert_eq!(
+            stored(&services, &id).await,
+            score(&[("a", &edited_a), ("b", &b)])
+        );
+    }
+
+    /// The editor read {A, C}; an agent then deleted C. The editor's save of
+    /// an edit to A does not bring C back.
+    #[tokio::test]
+    async fn an_edit_does_not_restore_a_clip_another_writer_deleted() {
+        let (_directory, services, id) = library().await;
+        let (a, edited_a, c) = (clip("A", 0.), clip("A", 8.), clip("C", 16.));
+        let read = score(&[("a", &a), ("c", &c)]);
+        edit(&services, &id, &luma_patterns::Score::default(), &read).await;
+        edit(&services, &id, &read, &score(&[("a", &a)])).await;
+
+        edit(
+            &services,
+            &id,
+            &read,
+            &score(&[("a", &edited_a), ("c", &c)]),
+        )
+        .await;
+        assert_eq!(stored(&services, &id).await, score(&[("a", &edited_a)]));
     }
 }

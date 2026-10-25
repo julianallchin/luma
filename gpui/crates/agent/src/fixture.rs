@@ -19,8 +19,8 @@
 //!
 //! # Why the score goes through the seam
 //!
-//! The editor only ever writes a score as one whole `luma_patterns::Score`, so
-//! the fixture seeds it the same way, through `apply_score_document`.
+//! The editor writes a score as its changes through `edit_score_document`, so
+//! the fixture seeds it the same way: every clip, added to the empty score.
 
 mod agent;
 pub mod session;
@@ -159,6 +159,10 @@ pub struct Fixture {
     extra_scores: usize,
     seeded_threads: bool,
     graph_score: Option<Value>,
+    /// Clips another writer adds while the editor's first score save is in
+    /// flight, announced as a download — see
+    /// `luma_app::NavigationFixture::outside_score_edit`.
+    outside_clips: Vec<Clip>,
     /// Statements run on the seeded library after its rows and before the
     /// score: what no option models (a second venue, a clashing patch, an
     /// output binding). Owned rows need `uid` = [`session::PRINCIPAL`] or
@@ -205,6 +209,7 @@ impl Default for Fixture {
             extra_scores: 0,
             seeded_threads: false,
             graph_score: None,
+            outside_clips: Vec::new(),
             sql: Vec::new(),
             files: HashMap::new(),
             model: None,
@@ -349,6 +354,10 @@ impl Fixture {
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
+        let outside_score_edit = (!self.outside_clips.is_empty()).then(|| {
+            serde_json::from_value::<luma_patterns::ScoreEdit>(Self::timeline(&self.outside_clips))
+                .expect("a score edit")
+        });
         let storage = StorageRoot::from_path(config_dir.clone());
         let root: crate::RootFactory =
             Arc::new(move |window: &mut Window, cx: &mut App| -> AnyView {
@@ -377,6 +386,12 @@ impl Fixture {
                     // Checked in `from_json`, so this cannot fail here.
                     library
                         .set_agent_tools(agent::registry(tools, &storage).expect("fixture tools"));
+                }
+                if let Some(edit) = outside_score_edit.clone() {
+                    library.set_navigation_fixture(luma_app::NavigationFixture {
+                        outside_score_edit: Some(edit),
+                        ..Default::default()
+                    });
                 }
                 let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
@@ -638,14 +653,14 @@ impl Fixture {
         let document = match &self.graph_score {
             Some(document) => Some(document.clone()),
             None if self.clips.is_empty() => None,
-            None => Some(self.timeline()),
+            None => Some(Self::timeline(&self.clips)),
         };
         if let Some(document) = document {
             let score_id = score_id.as_ref().expect("a score fixture has a score");
             call(
                 &services,
-                "apply_score_document",
-                json!({ "scoreId": score_id, "score": document }),
+                "edit_score_document",
+                json!({ "scoreId": score_id, "edit": document }),
             )
             .await;
         }
@@ -653,9 +668,9 @@ impl Fixture {
 
     /// One clip per entry, keyed by its pattern. Times are beats: the
     /// seeded grid is 120 bpm, so a beat is half a second.
-    fn timeline(&self) -> Value {
-        let mut clips = serde_json::Map::new();
-        for clip in &self.clips {
+    fn timeline(clips: &[Clip]) -> Value {
+        let mut document = serde_json::Map::new();
+        for clip in clips {
             let preset = clip.preset.as_deref().unwrap_or("Wash");
             let mut placed = luma_patterns::presets()
                 .clip(preset)
@@ -674,9 +689,9 @@ impl Fixture {
             if let Some(graph) = &clip.graph {
                 placed["graph"] = graph.clone();
             }
-            clips.insert(clip.pattern.clone(), placed);
+            document.insert(clip.pattern.clone(), placed);
         }
-        json!({ "clips": clips })
+        json!({ "clips": document })
     }
 
     /// One track-agent conversation about `score`, written through the seam

@@ -28,9 +28,9 @@
 pub mod color;
 pub mod expression;
 pub mod gradient;
-pub mod noise;
 pub mod number;
 pub mod preset_picker;
+pub mod random;
 pub mod select;
 pub mod signal;
 pub mod strip;

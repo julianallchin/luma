@@ -269,7 +269,7 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
 /// kind it has (`value`).
 fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
-        Kind::Time | Kind::Space | Kind::Noise | Kind::Audio => Signal::Coordinate,
+        Kind::Time | Kind::Space | Kind::Along | Kind::Random | Kind::Audio => Signal::Coordinate,
         Kind::Curve | Kind::Math | Kind::Value => match value {
             Some("vector") => Signal::Vector,
             Some("color") => Signal::Color,
@@ -305,10 +305,11 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
-const ADDABLE: [Kind; 11] = [
+const ADDABLE: [Kind; 12] = [
     Kind::Time,
     Kind::Space,
-    Kind::Noise,
+    Kind::Along,
+    Kind::Random,
     Kind::Audio,
     Kind::Curve,
     Kind::Math,
@@ -539,7 +540,7 @@ pub(super) fn port_slot(port: AnyElement) -> Div {
         .child(port)
 }
 
-/// One node's card: title, its body ([`super::body`]), and a noise node's
+/// One node's card: title, its body ([`super::body`]), and a random node's
 /// preview.
 fn node_card(cx: &Ctx, id: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
@@ -603,7 +604,7 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         ))
         .children(refused)
         .children(rows)
-        .children(cx.controls.noise.get(id).cloned())
+        .children(cx.controls.random.get(id).cloned())
         .agent_node(Role::Card, label)
         .into_any_element()
 }

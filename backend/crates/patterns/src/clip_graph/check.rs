@@ -171,11 +171,11 @@ const MAX_ID: usize = 32;
 /// cell binds, and Python's keywords. `source()` assigns each node to a
 /// variable of its id.
 const RESERVED: &[&str] = &[
-    "time", "space", "noise", "audio", "curve", "math", "value", "max", "min", "mirror", "shuffle",
-    "group", "split", "color", "aim", "strobe", "laser", "preset", "False", "None", "True", "and",
-    "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else",
-    "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
-    "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+    "time", "space", "along", "random", "audio", "curve", "math", "value", "max", "min", "mirror",
+    "shuffle", "group", "split", "color", "aim", "strobe", "laser", "preset", "False", "None",
+    "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
+    "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
 ];
 
 /// An ASCII Python identifier of at most [`MAX_ID`] characters: `cut`,
@@ -882,11 +882,25 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
 // ---- rule 5: axes ----
 
 /// The axes a node's output wire carries: whether it varies over heads,
-/// and the clocks whose events it carries.
+/// whether it varies along a laser element, and the clocks whose events it
+/// carries.
 #[derive(Clone, Default)]
 struct Axes {
     heads: bool,
+    along: bool,
     clocks: BTreeSet<String>,
+}
+
+/// Whether input `name` of a `kind` node may vary along a laser element:
+/// a curve's and a math node's carry it on, and a laser's per-element
+/// inputs read it.
+fn takes_along(kind: Kind, name: &str) -> bool {
+    match kind {
+        Kind::Curve => matches!(name, "x" | "low" | "high"),
+        Kind::Math => name == "values",
+        Kind::Laser => matches!(name, "x" | "y" | "size" | "rotation" | "color"),
+        _ => false,
+    }
 }
 
 fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result<Axes> {
@@ -916,7 +930,13 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
                 example(node.kind, name)
             ));
             }
+            if carried.along && !takes_along(node.kind, name) {
+                return fail(format!(
+                    "{id}.{name}: expected a value that is the same all along each laser element; got a wire that varies along it from {source}. Example: wire along only into a laser's x, y, size, rotation or color, through curves and math"
+                ));
+            }
             out.heads |= carried.heads;
+            out.along |= carried.along;
             // A period takes its newest event's value: the events stop here.
             if def.clock {
                 continue;
@@ -948,9 +968,12 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
             out.clocks.extend(carried.clocks);
         }
     }
+    if node.kind == Kind::Along {
+        out.along = true;
+    }
     match definition.output {
         Produces::Heads => out.heads = false,
-        _ if matches!(node.kind, Kind::Space | Kind::Noise) => out.heads = true,
+        _ if matches!(node.kind, Kind::Space | Kind::Random) => out.heads = true,
         _ => {}
     }
     memo.insert(id.to_string(), out.clone());
