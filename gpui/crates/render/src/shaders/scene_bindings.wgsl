@@ -156,3 +156,7 @@ struct FixtureShadowMatrix {
 // sunlight the sun reaches past the stage and the clouds, g the view depth
 // it stands for. One texel of full sun when the pass does not run.
 @group(3) @binding(16) var sun_shaft_fraction: texture_2d<f32>;
+// The haze's glow (`haze_glow.rs`, `haze_glow_sample.wgsl`).
+@group(3) @binding(17) var haze_glow_volume: texture_3d<f32>;
+@group(3) @binding(18) var haze_glow_sampler: sampler;
+@group(3) @binding(19) var<uniform> haze_glow: HazeGlow;

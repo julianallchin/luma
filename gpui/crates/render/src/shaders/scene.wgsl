@@ -550,6 +550,11 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     let visibility = textureLoad(ambient_visibility, vec2<i32>(in.clip.xy), 0);
     let occlusion = ao * visibility.r;
     out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
+    // The light the haze scatters (`haze_glow_sample.wgsl`) comes from every
+    // side: a quarter of its fluence lands on a surface. Read a little off
+    // the surface, in the air that lights it.
+    let haze_light = 0.25 * haze_glow_fluence(in.world + n * 0.3);
+    out += haze_light * diffuse_color * RECIPROCAL_PI * occlusion;
     // Environment light: the sky probe, and over the stage what the local
     // reflection probes (`probe_sample.wgsl`) say the stage changes of it:
     // the stage's own light, less the sky it hides. On open ground they

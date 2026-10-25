@@ -100,13 +100,33 @@ pub struct Sheet {
     pub density: Vec3,
 }
 
+impl Sheet {
+    /// The angle between its edges, radians.
+    pub fn angle(&self) -> f32 {
+        angle(self.from, self.to)
+    }
+}
+
+/// The angle between unit vectors, radians, as exact for the hundredth of a
+/// degree between two points of a scan as for a right angle. `acos` of their
+/// dot product, near 1, keeps only a few bits of so small an angle, and a
+/// sheet's light per radian would carry that error as stripes.
+pub(crate) fn angle(a: Vec3, b: Vec3) -> f32 {
+    a.cross(b).length().atan2(a.dot(b))
+}
+
 /// The beams and sheets a projector's light makes over the window.
 pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
     let n = scan.points.len();
     if n == 0 || scan.rate <= 0.0 {
         return (vec![], vec![]);
     }
-    let window = ((PERSISTENCE_S * scan.rate).round() as usize).max(2);
+    // A scan that repeats inside the window shows the eye its average, one
+    // whole scan's worth whatever the phase. A window cut mid-scan would
+    // count part of it once more than the rest, and that part would flicker
+    // as the phase moved.
+    let persistence = ((PERSISTENCE_S * scan.rate).round() as usize).max(2);
+    let window = if n <= persistence { n } else { persistence };
     let end = scan.phase.rem_euclid(n as f32) as usize;
     let start = end + n * window.div_ceil(n) - window;
     let at = |k: usize| scan.points[k % n];
@@ -119,7 +139,18 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
         mirror[0] += (p.x - mirror[0]) * follow;
         mirror[1] += (p.y - mirror[1]) * follow;
     }
-    let share = 1.0 / window as f32;
+    // A scan longer than the window is seen a stretch at a time. The eye
+    // forgets gradually, not all at once, so the stretch fades in and out
+    // and a point does not pop as the window passes it.
+    let weight = |i: usize| {
+        if window == n {
+            1.0
+        } else {
+            let t = (i as f32 + 0.5) / window as f32;
+            (std::f32::consts::PI * t).sin().powi(2)
+        }
+    };
+    let total: f32 = (0..window).map(weight).sum();
     let mut beams = Vec::new();
     let mut sheets = Vec::new();
     // The beam being gathered: its direction, and the light so far.
@@ -139,15 +170,15 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
         mirror[0] += (p.x - mirror[0]) * follow;
         mirror[1] += (p.y - mirror[1]) * follow;
         let to = scan.direction(mirror[0], mirror[1]);
-        let light = Vec3::from(p.rgb) * share;
+        let light = Vec3::from(p.rgb) * (weight(k - start) / total);
         if light.max_element() <= 0.0 {
             flush(&mut gathering, &mut beams);
         } else {
-            let angle = from.angle_between(to);
-            if angle < BEAM_ANGLE {
+            let step = angle(from, to);
+            if step < BEAM_ANGLE {
                 // A beam holds the light that stays near its own direction;
                 // a slow sweep drifts off it and starts the next beam.
-                if gathering.is_some_and(|(anchor, _)| anchor.angle_between(to) >= BEAM_ANGLE) {
+                if gathering.is_some_and(|(anchor, _)| angle(anchor, to) >= BEAM_ANGLE) {
                     flush(&mut gathering, &mut beams);
                 }
                 let (_, power) = gathering.get_or_insert((to, Vec3::ZERO));
@@ -158,7 +189,7 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
                     origin: scan.origin,
                     from,
                     to,
-                    density: light / angle,
+                    density: light / step,
                 });
             }
         }
@@ -205,6 +236,9 @@ pub(crate) struct FrameInput<'a> {
     pub view_proj: glam::Mat4,
     pub eye: Vec3,
     pub haze_density: f32,
+    /// The haze's density field, as the beams and the fog read it.
+    pub medium: crate::medium::Uniform,
+    pub haze_field: &'a crate::haze_field::HazeField,
     pub width: u32,
     pub height: u32,
 }
@@ -218,6 +252,7 @@ pub(crate) struct Pipelines {
 impl Pipelines {
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let both = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
+        let fragment = wgpu::ShaderStages::FRAGMENT;
         let storage = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: both,
@@ -230,14 +265,41 @@ impl Pipelines {
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("laser"),
-            entries: &[crate::gpu::uniform_entry(0, both), storage(1), storage(2)],
+            entries: &[
+                crate::gpu::uniform_entry(0, both),
+                storage(1),
+                storage(2),
+                crate::gpu::uniform_entry(3, fragment),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: fragment,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: fragment,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("laser"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let module = crate::gpu::shader(device, "laser", include_str!("shaders/laser.wgsl"));
+        let source = format!(
+            "const PIECES: u32 = {BEAM_PIECES}u;\n{}{}{}",
+            crate::haze_field::prelude(),
+            include_str!("shaders/medium.wgsl"),
+            include_str!("shaders/laser.wgsl"),
+        );
+        let module = crate::gpu::shader(device, "laser", &source);
         let pipeline = |label: &str, vs: &str, fs: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -358,6 +420,11 @@ impl Pipelines {
         );
         let beam_buffer = buffer("laser-beams", &bytes(&beams), wgpu::BufferUsages::STORAGE);
         let sheet_buffer = buffer("laser-sheets", &bytes(&sheets), wgpu::BufferUsages::STORAGE);
+        let medium = buffer(
+            "laser-medium",
+            bytemuck::bytes_of(&input.medium),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("laser"),
             layout: &self.layout,
@@ -365,6 +432,12 @@ impl Pipelines {
                 crate::gpu::binding(0, uniform.as_entire_binding()),
                 crate::gpu::binding(1, beam_buffer.as_entire_binding()),
                 crate::gpu::binding(2, sheet_buffer.as_entire_binding()),
+                crate::gpu::binding(3, medium.as_entire_binding()),
+                crate::gpu::binding(
+                    4,
+                    wgpu::BindingResource::TextureView(&input.haze_field.view),
+                ),
+                crate::gpu::binding(5, wgpu::BindingResource::Sampler(&input.haze_field.sampler)),
             ],
         });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -395,14 +468,18 @@ impl Pipelines {
         }
         if !beams.is_empty() {
             pass.set_pipeline(&self.beams);
-            pass.draw(0..6, 0..beams.len() as u32);
+            pass.draw(0..6 * BEAM_PIECES, 0..beams.len() as u32);
         }
     }
 }
 
+/// Pieces `vs_beam` cuts a beam's strip into along its length, so its width
+/// follows its distance from the camera and from the projector.
+const BEAM_PIECES: u32 = 16;
+
 /// Radiance per unit of a projector's light: puts a full-white beam on the
 /// same scale as a stage beam in the same haze.
-const GAIN: f32 = 40.0;
+pub(crate) const GAIN: f32 = 40.0;
 
 #[cfg(test)]
 mod tests {
@@ -469,11 +546,29 @@ mod tests {
         let (beams, sheets) = light(&scan(points));
         assert!(sheets.len() > 50, "{}", sheets.len());
         let beam_power: f32 = beams.iter().map(|b| b.power.x).sum();
-        let sheet_power: f32 = sheets
-            .iter()
-            .map(|s| s.density.x * s.from.angle_between(s.to))
-            .sum();
+        let sheet_power: f32 = sheets.iter().map(|s| s.density.x * s.angle()).sum();
         assert!(sheet_power > beam_power, "{sheet_power} {beam_power}");
+    }
+
+    /// An even sweep is an even sheet: each piece holds the light per
+    /// radian of the pieces beside it, so the fan shows no stripes.
+    #[test]
+    fn an_even_sweep_is_an_even_sheet() {
+        // 0.02 of the field a point, the planner's pace for a lit line; back
+        // in black, held still at either end, as the planner plays it.
+        let mut points = vec![dot(-0.6, false); 10];
+        points.extend((0..60).map(|i| dot(i as f32 * 0.02 - 0.6, true)));
+        points.extend(vec![dot(0.6, false); 10]);
+        points.extend((0..30).map(|i| dot(0.56 - i as f32 * 0.04, false)));
+        let (_, sheets) = light(&scan(points));
+        // A stripe is a piece brighter or dimmer than the pieces beside it.
+        // The mirrors still speeding up out of the turn change the light
+        // gradually, which is no stripe.
+        let middle = &sheets[sheets.len() / 4..sheets.len() * 3 / 4];
+        for pair in middle.windows(2) {
+            let ratio = pair[1].density.x / pair[0].density.x;
+            assert!((ratio - 1.0).abs() < 0.005, "{ratio}");
+        }
     }
 
     /// The light over the window adds to the scan's lit share: a scan lit half
@@ -485,6 +580,63 @@ mod tests {
         let (beams, _) = light(&scan(points));
         let total: f32 = beams.iter().map(|b| b.power.x).sum();
         assert!((total - 0.5).abs() < 0.05, "{total}");
+    }
+
+    /// A scan shorter than the window shows the same light at every phase:
+    /// no beam takes more of the window one frame than the next.
+    #[test]
+    fn a_short_scan_holds_steady_across_phases() {
+        let mut points = Vec::new();
+        for x in [-0.5, 0.0, 0.5] {
+            points.extend(std::iter::repeat_n(dot(x, false), 24));
+            points.extend(std::iter::repeat_n(dot(x, true), 100));
+        }
+        let n = points.len();
+        let mut s = scan(points);
+        let powers = |s: &LaserScan| -> Vec<i32> {
+            let mut by_x = [0.0f32; 3];
+            for beam in light(s).0 {
+                let i = ((beam.direction.x * 4.0).round() as i32 + 1) as usize;
+                by_x[i] += beam.power.x;
+            }
+            by_x.iter().map(|p| (p * 1000.0).round() as i32).collect()
+        };
+        s.phase = 0.0;
+        let first = powers(&s);
+        for phase in (0..n).step_by(37) {
+            s.phase = phase as f32;
+            assert_eq!(powers(&s), first, "phase {phase}");
+        }
+    }
+
+    /// A scan longer than the window: moving the window a point changes the
+    /// light by little, since its ends fade.
+    #[test]
+    fn a_long_scan_changes_smoothly_with_phase() {
+        let mut points = Vec::new();
+        for x in [-0.5, 0.5] {
+            points.extend(std::iter::repeat_n(dot(x, false), 24));
+            points.extend(std::iter::repeat_n(dot(x, true), 1500));
+        }
+        let mut s = scan(points);
+        let left = |s: &LaserScan| -> f32 {
+            light(s)
+                .0
+                .iter()
+                .filter(|b| b.direction.x < 0.0)
+                .map(|b| b.power.x)
+                .sum()
+        };
+        let mut previous = left(&s);
+        for phase in 1..3048 {
+            s.phase = phase as f32;
+            let now = left(&s);
+            assert!(
+                (now - previous).abs() < 0.01,
+                "phase {phase}: {previous} to {now}"
+            );
+            previous = now;
+        }
     }
 
     #[test]
