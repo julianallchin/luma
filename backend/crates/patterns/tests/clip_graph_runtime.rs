@@ -2196,6 +2196,29 @@ fn a_shuffled_order_ignores_the_direction_and_gives_every_unit_a_slot() {
     assert!(!close(&u, &want), "not in cell order");
 }
 
+#[test]
+fn a_shuffle_keeps_mirrored_pairs_paired_either_way_round() {
+    // line() mirrored at its middle: head n folds onto head 11 − n, so
+    // the pair shares a slot, and the six pairs fill six slots.
+    let mirror = json!({"kind": "mirror", "inputs": {"direction": [1, 0, 0]}});
+    let shuffle = json!({"kind": "shuffle"});
+    let mut shuffled_mirror = json!({"mirror1": mirror.clone(), "shuffle1": shuffle.clone()});
+    shuffled_mirror["shuffle1"]["inputs"] = json!({"heads": {"node": "mirror1"}});
+    let mut mirrored_shuffle = json!({"mirror1": mirror, "shuffle1": shuffle});
+    mirrored_shuffle["mirror1"]["inputs"]["heads"] = json!({"node": "shuffle1"});
+    let cells = line();
+    for (nodes, heads) in [(shuffled_mirror, "shuffle1"), (mirrored_shuffle, "mirror1")] {
+        let a = order(nodes, Some(heads), json!({}), &cells);
+        for n in 0..6 {
+            assert!((a[n] - a[11 - n]).abs() < 1e-9, "{heads}: {a:?}");
+        }
+        let mut slots = a[6..].to_vec();
+        slots.sort_by(f64::total_cmp);
+        let want: Vec<f64> = (0..6).map(|r| (r as f64 + 0.5) / 6.).collect();
+        assert!(close(&slots, &want), "{heads}: {slots:?}");
+    }
+}
+
 /// A noise whose period follows a curve over `time1` (every 1 beat),
 /// read by brightness.
 fn noise_over_beats(points: Value, low: f64, high: f64) -> ClipGraph {
