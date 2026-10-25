@@ -1007,7 +1007,7 @@ mod tests {
 
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
 
         let buffers = generate_dmx(&state, &fixtures, &definitions, None, 1.0, 0.0);
@@ -1074,7 +1074,7 @@ mod tests {
         primitives.insert("fx:0".into(), prim(1.0, 0.0, 0.0, 0.0, 0.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
 
         let buffers = generate_dmx(&state, &fixtures, &definitions, None, 1.0, 0.0);
@@ -1229,7 +1229,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 1.0, 0.0, 0.0, 0.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
 
         let buffers1 = generate_dmx(&state, &fixtures, &definitions, None, 1.0, 0.0);
@@ -1241,7 +1241,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 0.0));
         let state2 = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
 
         let mut prev_map = HashMap::new();
@@ -1326,7 +1326,7 @@ mod tests {
         primitives.insert("fx".into(), p);
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
 
         let buffers = generate_dmx(&state, &fixtures, &definitions, Some(&prev_map), 1.0, 0.0);
@@ -1480,7 +1480,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 0.5));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1565,7 +1565,7 @@ mod tests {
         primitives.insert("fx:1".into(), prim(1.0, 1.0, 0.0, 0.0, 0.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1635,7 +1635,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 1.0, 0.0, 0.0, 1.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1688,7 +1688,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 1.0, 1.0, 1.0, 1.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1728,7 +1728,7 @@ mod tests {
         primitives.insert("fx".into(), prim(0.0, 0.0, 0.0, 0.0, 0.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1765,7 +1765,7 @@ mod tests {
         primitives.insert("fx".into(), prim(0.0, 0.0, 0.0, 0.0, 0.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1830,7 +1830,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 0.0, 0.0, 0.0, 1.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1883,7 +1883,7 @@ mod tests {
         primitives.insert("fx".into(), prim(1.0, 1.0, 1.0, 1.0, 0.0));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -1969,7 +1969,7 @@ mod tests {
         primitives.insert("fx:1".into(), prim(1.0, 1.0, 0.0, 0.0, 0.5));
         let state = UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let fixtures = vec![fixture_at("fx", 1)];
 
@@ -2062,7 +2062,7 @@ mod tests {
         let peak = head.dimmer.unwrap() as f32;
         let state = UniverseState {
             primitives: HashMap::from([("fx".into(), prim(peak * dimmer, r, g, b, 0.0))]),
-            beams: Vec::new(),
+            lasers: Vec::new(),
         };
         let buffer = generate_dmx(&state, &[fixture_at("fx", 1)], &defs, None, 1.0, 0.0)
             .remove(&1)

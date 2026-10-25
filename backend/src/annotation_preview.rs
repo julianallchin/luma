@@ -313,12 +313,14 @@ pub(crate) fn render_aim_preview(
 /// Rows of a laser clip's strip: the canvas across, −1 at the top.
 const LASER_ROWS: u32 = 32;
 
-/// A laser clip's picture: where its beams sit across the canvas over its
-/// span. Rows are the canvas from −1 (top) to 1, columns are `frames` in
-/// order, and each beam lights its row by its intensity; a lit join lights
-/// the rows between it and the next beam on its path. Every projector draws
-/// the same canvas, so they share the strip. A laser clip has no colour of
-/// its own, so the picture is white.
+/// Points a laser element's strip reads along a figure.
+const LASER_STEPS: usize = 64;
+
+/// A laser clip's picture: where its elements sit across the canvas over
+/// its span, in their colours. Rows are the canvas from −1 (top) to 1,
+/// columns are `frames` in order, and each element lights the rows it
+/// crosses by its colour at its intensity. Every projector draws the same
+/// canvas, so they share the strip.
 pub(crate) fn render_laser_preview(
     annotation_id: String,
     frames: &[UniverseState],
@@ -328,40 +330,35 @@ pub(crate) fn render_laser_preview(
         return empty_preview(annotation_id);
     }
     let row = |x: f64| ((x + 1.) / 2. * f64::from(height - 1)).round();
-    let mut level = vec![0f64; (width * height) as usize];
+    let mut light = vec![[0f64; 3]; (width * height) as usize];
     for (col, frame) in frames.iter().enumerate() {
-        let mut light = |from: f64, to: f64, value: f64| {
-            let (low, high) = (
-                row(from.min(to)).max(0.),
-                row(from.max(to)).min(f64::from(height - 1)),
-            );
-            let mut r = low;
-            while r <= high {
-                let at = (r as u32 * width + col as u32) as usize;
-                level[at] = level[at].max(value);
-                r += 1.;
-            }
-        };
-        for (i, beam) in frame.beams.iter().enumerate() {
-            light(beam.x, beam.x, beam.intensity);
-            let next = frame.beams.get(i + 1).filter(|next| {
-                (&next.projector, &next.zone, next.path) == (&beam.projector, &beam.zone, beam.path)
-            });
-            if let Some(next) = next {
-                light(
-                    beam.x,
-                    next.x,
-                    beam.join.min(1.) * beam.intensity.min(next.intensity),
-                );
+        for element in &frame.lasers {
+            let steps = if element.figure == luma_patterns::laser::Figure::Point {
+                0
+            } else {
+                LASER_STEPS
+            };
+            for k in 0..=steps {
+                let ([x, _], rgb) = element.point(k as f64 / steps.max(1) as f64);
+                let r = row(x);
+                if !(0. ..f64::from(height)).contains(&r) {
+                    continue;
+                }
+                let at = &mut light[(r as u32 * width + col as u32) as usize];
+                *at = std::array::from_fn(|c| at[c].max(rgb[c]));
             }
         }
     }
-    let mean = (level.iter().sum::<f64>() / level.len() as f64) as f32;
-    let pixels = level
+    let mean = light
         .iter()
-        .flat_map(|value| {
-            let v = (value.clamp(0., 1.) * 255.).round() as u8;
-            [v, v, v, 255]
+        .map(|rgb| rgb.iter().sum::<f64>() / 3.)
+        .sum::<f64>()
+        / light.len() as f64;
+    let pixels = light
+        .iter()
+        .flat_map(|rgb| {
+            let [r, g, b] = rgb.map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
+            [r, g, b, 255]
         })
         .collect();
     AnnotationPreview {
@@ -369,7 +366,7 @@ pub(crate) fn render_laser_preview(
         width,
         height,
         pixels,
-        dominant_color: [mean; 3],
+        dominant_color: [mean as f32; 3],
         aim: None,
     }
 }
@@ -485,7 +482,7 @@ mod tests {
         }
         UniverseState {
             primitives,
-            beams: Vec::new(),
+            lasers: Vec::new(),
         }
     }
 
@@ -541,22 +538,32 @@ mod tests {
         assert_eq!(still, vec![vec![0.5; 16]]);
     }
 
-    fn beam(path: u32, x: f64, join: f64) -> luma_patterns::laser::Beam {
-        luma_patterns::laser::Beam {
+    fn element(
+        figure: luma_patterns::laser::Figure,
+        x: f64,
+        rgb: [f64; 3],
+    ) -> luma_patterns::laser::Element {
+        luma_patterns::laser::Element {
             projector: "p".into(),
             zone: String::new(),
-            path,
+            layer: 0,
+            figure,
             s: 0.,
-            x,
-            y: 0.,
-            join,
+            samples: vec![luma_patterns::laser::Sample {
+                at: [x, 0.],
+                frame: luma_patterns::laser::frame(0.5, 0.),
+                rgb,
+            }],
             intensity: 1.,
         }
     }
 
     fn lit_rows(preview: &AnnotationPreview, col: u32) -> Vec<u32> {
         (0..preview.height)
-            .filter(|row| preview.pixels[((row * preview.width + col) * 4) as usize] > 0)
+            .filter(|row| {
+                let at = ((row * preview.width + col) * 4) as usize;
+                preview.pixels[at..at + 3].iter().any(|c| *c > 0)
+            })
             .collect()
     }
 
@@ -565,7 +572,7 @@ mod tests {
         let frames: Vec<UniverseState> = [-1., 0., 1.]
             .into_iter()
             .map(|x| UniverseState {
-                beams: vec![beam(0, x, 0.)],
+                lasers: vec![element(luma_patterns::laser::Figure::Point, x, [1.; 3])],
                 ..Default::default()
             })
             .collect();
@@ -575,19 +582,21 @@ mod tests {
         assert_eq!(lit_rows(&preview, 2), [preview.height - 1]);
     }
 
+    /// A line lights the rows it spans, in its colour; a beam one row.
     #[test]
-    fn a_lit_join_fills_between_beams_and_a_dark_one_does_not() {
-        let frame = |join| UniverseState {
-            beams: vec![beam(0, -0.5, join), beam(0, 0.5, join), beam(1, 0.9, 1.)],
+    fn a_line_fills_its_rows_in_its_colour() {
+        let frame = UniverseState {
+            lasers: vec![
+                element(luma_patterns::laser::Figure::Line, 0., [1., 0., 0.]),
+                element(luma_patterns::laser::Figure::Point, 0.9, [0., 0., 1.]),
+            ],
             ..Default::default()
         };
-        let preview = render_laser_preview("clip".into(), &[frame(1.), frame(0.)]);
-        let (line, beams) = (lit_rows(&preview, 0), lit_rows(&preview, 1));
-        let [a, b, c] = beams[..] else {
-            panic!("three beams, no line: {beams:?}");
-        };
-        // The line runs from the first beam to the second, not on to the
-        // third: that is another layer's.
-        assert_eq!(line, (a..=b).chain([c]).collect::<Vec<_>>());
+        let preview = render_laser_preview("clip".into(), &[frame]);
+        let rows = lit_rows(&preview, 0);
+        assert!(rows.len() > 10, "{rows:?}");
+        let pixel = |row: u32| &preview.pixels[(row * 4) as usize..(row * 4 + 3) as usize];
+        assert_eq!(pixel(preview.height / 2), [255, 0, 0]);
+        assert_eq!(pixel(*rows.last().unwrap()), [0, 0, 255]);
     }
 }

@@ -1704,16 +1704,23 @@ impl Library {
         self.call("list_groups", json!({ "venueId": venue_id }))
     }
 
-    /// The heads `selection` resolves to in the venue, with their places.
+    /// The heads `selection` resolves to in the venue, with their places;
+    /// `elements` is a laser clip's elements per projector.
     pub(crate) fn selection_cells(
         &self,
         venue_id: &str,
         selection: &Selection,
         seed: u64,
+        elements: Option<usize>,
     ) -> impl Future<Output = Result<Vec<luma_patterns::Cell>, LibraryError>> + use<> {
         self.call(
             "selection_cells",
-            json!({ "venueId": venue_id, "selection": selection.to_value(), "seed": seed }),
+            json!({
+                "venueId": venue_id,
+                "selection": selection.to_value(),
+                "seed": seed,
+                "elements": elements,
+            }),
         )
     }
 

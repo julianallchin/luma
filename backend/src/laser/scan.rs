@@ -1,18 +1,19 @@
-//! The scan plan: one projector's beams become one point stream.
+//! The scan plan: one projector's elements become one point stream.
 //!
-//! A beam is the scanner dwelling on one direction; a line is the scanner
-//! moving with the light on. Between beams the light is off while the
-//! mirrors jump. The frame aims for [`FRAME_RATE`] scans a second: the points
-//! a jump and a line need come first, and what is left of the budget is
+//! A beam is the scanner dwelling on one direction; a line, ring or polygon
+//! is the scanner moving with the light on. Between them, and over an
+//! element's dark stretches, the light is off while the mirrors jump. The
+//! frame aims for [`FRAME_RATE`] scans a second: the points the jumps and
+//! the lit strokes need come first, and what is left of the budget is
 //! shared out as dwell on the beams. A frame with more to draw than the
 //! budget runs long, and so refreshes slower, as a real projector would.
 //!
 //! Brightness is power times time: a projector that splits a frame over
 //! sixteen beams gives each a sixteenth of the time, and so a sixteenth of
 //! the light. Nothing here hides that.
-use super::{LaserRig, Projector, COLOR_SAMPLES};
+use super::{LaserRig, Projector};
 use crate::models::universe::UniverseState;
-use luma_patterns::laser::Beam;
+use luma_patterns::laser::{Element, Figure};
 use serde::{Deserialize, Serialize};
 
 /// Scans a second a frame aims for.
@@ -24,9 +25,13 @@ const BLANK_STEP: f64 = 0.08;
 /// the light turns on and do not trail it when it turns off: about two of
 /// the mirrors' time constants at 30k points a second.
 const SETTLE: usize = 8;
-/// The longest move between two points of a lit line: short enough that the
-/// mirrors follow the line rather than cut its corners.
+/// The longest move between two points of a lit stroke: short enough that
+/// the mirrors follow it rather than cut its corners.
 const LINE_STEP: f64 = 0.02;
+/// How many pieces a stretch of an element is cut into to measure how long
+/// it is in the projector's view, before it is drawn in steps of
+/// [`LINE_STEP`].
+const MEASURE: usize = 16;
 /// The fewest and most points a beam dwells for.
 const DWELL: [usize; 2] = [4, 80];
 /// How far inside a limit's edge lit points must stay, in galvo units: the
@@ -58,13 +63,36 @@ pub struct LaserFrame {
     pub points: Vec<LaserPoint>,
 }
 
-/// A beam on its way to the stream: galvo place, colour, and how lit the
-/// move to the next vertex of its path is.
-#[derive(Clone, Copy, Debug)]
-struct Vertex {
-    at: [f64; 2],
-    rgb: [f64; 3],
-    join: f64,
+/// A galvo place and its light.
+type Point = ([f64; 2], [f64; 3]);
+
+/// What the scanner draws with the light on, between jumps in black.
+#[derive(Clone, Debug)]
+enum Stroke {
+    /// A beam: one direction, dwelt on.
+    Dot(Point),
+    /// A lit run of an element, each point at most about [`LINE_STEP`] from
+    /// the last.
+    Line(Vec<Point>),
+}
+
+impl Stroke {
+    fn first(&self) -> [f64; 2] {
+        match self {
+            Stroke::Dot((at, _)) => *at,
+            Stroke::Line(points) => points[0].0,
+        }
+    }
+    fn last(&self) -> [f64; 2] {
+        match self {
+            Stroke::Dot((at, _)) => *at,
+            Stroke::Line(points) => points[points.len() - 1].0,
+        }
+    }
+}
+
+fn lit(rgb: [f64; 3]) -> bool {
+    rgb.iter().any(|c| *c > 0.)
 }
 
 pub(super) fn frame(
@@ -72,38 +100,20 @@ pub(super) fn frame(
     projector: &Projector,
     state: &UniverseState,
 ) -> Option<LaserFrame> {
-    let mut beams: Vec<&Beam> = state
-        .beams
+    let mut elements: Vec<&Element> = state
+        .lasers
         .iter()
-        .filter(|beam| beam.projector == projector.id && beam.intensity > 0.)
+        .filter(|element| element.projector == projector.id && element.intensity > 0.)
         .collect();
-    beams.sort_by(|a, b| a.path.cmp(&b.path).then(a.s.total_cmp(&b.s)));
-    // Each path's beams in order; a beam the scanner cannot reach breaks
-    // the path there.
-    let mut paths: Vec<Vec<Vertex>> = Vec::new();
-    let mut last_path = None;
-    for beam in beams {
-        let direction = rig.zone(&beam.zone).direction(beam.x, beam.y);
-        let Some(at) = projector.galvo(direction) else {
-            last_path = None;
-            continue;
-        };
-        let rgb = color(state, &projector.id, beam.s).map(|c| c * beam.intensity.clamp(0., 1.));
-        let vertex = Vertex {
-            at,
-            rgb,
-            join: beam.join.clamp(0., 1.),
-        };
-        match paths.last_mut() {
-            Some(path) if last_path == Some(beam.path) => path.push(vertex),
-            _ => paths.push(vec![vertex]),
-        }
-        last_path = Some(beam.path);
-    }
-    if paths.is_empty() {
+    elements.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.s.total_cmp(&b.s)));
+    let strokes: Vec<Stroke> = elements
+        .into_iter()
+        .flat_map(|element| strokes(rig, projector, element))
+        .collect();
+    if strokes.is_empty() {
         return None;
     }
-    let points = plan(&paths, projector.rate);
+    let points = plan(&strokes, projector.rate);
     let points = points
         .into_iter()
         .map(|(at, rgb)| {
@@ -129,26 +139,54 @@ pub(super) fn frame(
     })
 }
 
-/// The colour at place `s` along a laser clip's order: the projector's
-/// colour heads as the Color clips over it left them, read at `s`. With no
-/// colour on the projector, white at full.
-fn color(state: &UniverseState, projector: &str, s: f64) -> [f64; 3] {
-    let head = |i: usize| {
-        state
-            .primitives
-            .get(&format!("{projector}:{i}"))
-            .map(|head| head.color.map(|c| f64::from(c * head.dimmer)))
+/// What `element` draws on `projector`: a beam it can reach and that is
+/// lit, or the lit runs along a figure. A stretch the scanner cannot reach
+/// or that is black is left out, and the scan jumps over it in black.
+fn strokes(rig: &LaserRig, projector: &Projector, element: &Element) -> Vec<Stroke> {
+    let zone = rig.zone(&element.zone);
+    let view = |along: f64| -> Option<Point> {
+        let ([x, y], rgb) = element.point(along);
+        Some((projector.galvo(zone.direction(x, y))?, rgb))
     };
-    let at = s.clamp(0., 1.) * (COLOR_SAMPLES - 1) as f64;
-    let (below, t) = (at.floor() as usize, at.fract());
-    let above = (below + 1).min(COLOR_SAMPLES - 1);
-    match (head(below), head(above)) {
-        (None, None) => [1.; 3],
-        (a, b) => {
-            let (a, b) = (a.unwrap_or([0.; 3]), b.unwrap_or([0.; 3]));
-            std::array::from_fn(|c| a[c] + (b[c] - a[c]) * t)
+    if element.figure == Figure::Point {
+        return view(0.)
+            .filter(|(_, rgb)| lit(*rgb))
+            .map(Stroke::Dot)
+            .into_iter()
+            .collect();
+    }
+    // Every break along it, and between two breaks as many steps as keep
+    // each move within a line step.
+    let breaks = element.breaks();
+    let mut places = vec![breaks[0]];
+    for pair in breaks.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let at = |k: usize| from + (to - from) * k as f64 / MEASURE as f64;
+        let length: f64 = (0..MEASURE)
+            .filter_map(|k| Some(distance(view(at(k))?.0, view(at(k + 1))?.0)))
+            .sum();
+        let n = ((length / LINE_STEP).ceil() as usize).max(1);
+        places.extend((1..=n).map(|k| from + (to - from) * k as f64 / n as f64));
+    }
+    let mut runs: Vec<Vec<Point>> = Vec::new();
+    let mut open = false;
+    for along in places {
+        match view(along).filter(|(_, rgb)| lit(*rgb)) {
+            Some(point) if open => runs.last_mut().expect("an open run").push(point),
+            Some(point) => {
+                runs.push(vec![point]);
+                open = true;
+            }
+            None => open = false,
         }
     }
+    // A closed figure lit across its seam is one run.
+    let closed = matches!(element.figure, Figure::Ring | Figure::Polygon(_));
+    if closed && open && runs.len() > 1 && view(0.).is_some_and(|(_, rgb)| lit(rgb)) {
+        let last = runs.pop().expect("runs");
+        runs[0].splice(0..0, last);
+    }
+    runs.into_iter().map(Stroke::Line).collect()
 }
 
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -166,90 +204,43 @@ fn steps(from: [f64; 2], to: [f64; 2], step: f64) -> impl Iterator<Item = [f64; 
     (1..=n).map(move |i| lerp2(from, to, i as f64 / n as f64))
 }
 
-/// The stream for `paths`: jumps in black between paths, each vertex dwelt
-/// on by how much of it is a beam, each lit move drawn as a line, and a
-/// jump back to the start so the scan repeats seamlessly.
-fn plan(paths: &[Vec<Vertex>], rate: u32) -> Vec<([f64; 2], [f64; 3])> {
+/// The stream for `strokes`: a jump in black to each, settled at both
+/// ends, each beam dwelt on, each line drawn point by point, and a jump
+/// back to the start so the scan repeats seamlessly.
+fn plan(strokes: &[Stroke], rate: u32) -> Vec<Point> {
     let black = [0.; 3];
-    let start = paths[0][0].at;
-    // A vertex is a beam by `1 − join` of the move out of it; the last of
-    // a path has no move out and is all beam.
-    let beamness = |path: &[Vertex], i: usize| {
-        if i + 1 < path.len() {
-            1. - path[i].join
-        } else {
-            1.
-        }
-    };
-    // What the moves cost, so the rest of the budget can go to dwell.
+    let start = strokes[0].first();
+    // What the jumps and lines cost, so the rest of the budget can go to
+    // dwell.
     let mut fixed = 0;
     let mut at = start;
-    for path in paths {
-        fixed += steps(at, path[0].at, BLANK_STEP).count() + 2 * SETTLE;
-        for pair in path.windows(2) {
-            let step = if pair[0].join > 0. {
-                LINE_STEP
-            } else {
-                BLANK_STEP
-            };
-            fixed += steps(pair[0].at, pair[1].at, step).count();
+    for stroke in strokes {
+        fixed += steps(at, stroke.first(), BLANK_STEP).count() + 2 * SETTLE;
+        if let Stroke::Line(points) = stroke {
+            fixed += points.len();
         }
-        at = path[path.len() - 1].at;
+        at = stroke.last();
     }
     fixed += steps(at, start, BLANK_STEP).count();
-    let weight: f64 = paths
+    let dots = strokes
         .iter()
-        .flat_map(|path| (0..path.len()).map(move |i| beamness(path, i)))
-        .sum();
+        .filter(|stroke| matches!(stroke, Stroke::Dot(_)))
+        .count();
     let budget = (rate / FRAME_RATE) as usize;
-    let per = budget.saturating_sub(fixed) as f64 / weight.max(1e-9);
-    let dwell = |beam: f64| {
-        if beam <= 0. {
-            1
-        } else {
-            ((per * beam).round() as usize).clamp(DWELL[0], DWELL[1])
-        }
-    };
+    let dwell = ((budget.saturating_sub(fixed) as f64 / dots.max(1) as f64).round() as usize)
+        .clamp(DWELL[0], DWELL[1]);
 
     let mut out = Vec::new();
     let mut at = start;
-    for path in paths {
+    for stroke in strokes {
         // Jump in black and settle.
-        out.extend(steps(at, path[0].at, BLANK_STEP).map(|p| (p, black)));
-        out.extend(std::iter::repeat_n((path[0].at, black), SETTLE));
-        for (i, vertex) in path.iter().enumerate() {
-            // A lit move ends on its vertex, and that point is the first of
-            // the dwell. Another on top would hold the mirrors there while
-            // the line goes on, and a sheet would show a bright ray at every
-            // vertex.
-            let arrived = usize::from(i > 0 && path[i - 1].join > 0.);
-            out.extend(std::iter::repeat_n(
-                (vertex.at, vertex.rgb),
-                dwell(beamness(path, i)).saturating_sub(arrived),
-            ));
-            let Some(next) = path.get(i + 1) else {
-                break;
-            };
-            if vertex.join > 0. {
-                let n = steps(vertex.at, next.at, LINE_STEP).count() as f64;
-                out.extend(
-                    steps(vertex.at, next.at, LINE_STEP)
-                        .enumerate()
-                        .map(|(k, p)| {
-                            let t = (k + 1) as f64 / n;
-                            let rgb = std::array::from_fn(|c| {
-                                (vertex.rgb[c] + (next.rgb[c] - vertex.rgb[c]) * t) * vertex.join
-                            });
-                            (p, rgb)
-                        }),
-                );
-            } else {
-                out.extend(std::iter::repeat_n((vertex.at, black), SETTLE));
-                out.extend(steps(vertex.at, next.at, BLANK_STEP).map(|p| (p, black)));
-                out.extend(std::iter::repeat_n((next.at, black), SETTLE));
-            }
+        out.extend(steps(at, stroke.first(), BLANK_STEP).map(|p| (p, black)));
+        out.extend(std::iter::repeat_n((stroke.first(), black), SETTLE));
+        match stroke {
+            Stroke::Dot(point) => out.extend(std::iter::repeat_n(*point, dwell)),
+            Stroke::Line(points) => out.extend(points.iter().copied()),
         }
-        at = path[path.len() - 1].at;
+        at = stroke.last();
         out.extend(std::iter::repeat_n((at, black), SETTLE));
     }
     out.extend(steps(at, start, BLANK_STEP).map(|p| (p, black)));
@@ -285,19 +276,26 @@ mod tests {
     use super::super::tests::facing_house;
     use super::super::{LaserRig, Zone};
     use super::*;
-    use crate::models::universe::PrimitiveState;
+    use luma_patterns::laser::{frame as turn, Sample};
 
-    fn beam(projector: &str, path: u32, s: f64, x: f64, join: f64) -> Beam {
-        Beam {
-            projector: projector.into(),
+    fn element(figure: Figure, layer: u32, s: f64, x: f64) -> Element {
+        Element {
+            projector: "p".into(),
             zone: String::new(),
-            path,
+            layer,
+            figure,
             s,
-            x,
-            y: 0.,
-            join,
+            samples: vec![Sample {
+                at: [x, 0.],
+                frame: turn(0.5, 0.),
+                rgb: [1.; 3],
+            }],
             intensity: 1.,
         }
+    }
+
+    fn beam(layer: u32, s: f64, x: f64) -> Element {
+        element(Figure::Point, layer, s, x)
     }
 
     fn rig() -> LaserRig {
@@ -313,9 +311,9 @@ mod tests {
         }
     }
 
-    fn solve(beams: Vec<Beam>) -> LaserFrame {
+    fn solve(lasers: Vec<Element>) -> LaserFrame {
         let state = UniverseState {
-            beams,
+            lasers,
             ..UniverseState::default()
         };
         rig().solve(&state).pop().expect("a frame")
@@ -330,25 +328,27 @@ mod tests {
             .collect()
     }
 
+    fn spots(points: &[LaserPoint]) -> std::collections::BTreeSet<(i32, i32)> {
+        points
+            .iter()
+            .map(|p| ((p.x * 1e4) as i32, (p.y * 1e4) as i32))
+            .collect()
+    }
+
     #[test]
-    fn no_beams_no_frame() {
+    fn nothing_to_draw_no_frame() {
         assert!(rig().solve(&UniverseState::default()).is_empty());
     }
 
-    /// Beams with no join light only their own spots; every move between
-    /// them is dark.
+    /// Beams light only their own spots; every move between them is dark.
     #[test]
     fn beams_dwell_and_jump_in_black() {
         let frame = solve(
             (0..4)
-                .map(|i| beam("p", 0, i as f64 / 3., i as f64 / 3., 0.))
+                .map(|i| beam(0, i as f64 / 3., i as f64 / 3.))
                 .collect(),
         );
-        let spots: std::collections::BTreeSet<(i32, i32)> = lit(&frame)
-            .iter()
-            .map(|p| ((p.x * 1e4) as i32, (p.y * 1e4) as i32))
-            .collect();
-        assert_eq!(spots.len(), 4, "{spots:?}");
+        assert_eq!(spots(&lit(&frame)).len(), 4);
         for pair in frame.points.windows(2) {
             if pair[0].is_lit() && pair[1].is_lit() {
                 assert_eq!((pair[0].x, pair[0].y), (pair[1].x, pair[1].y));
@@ -356,31 +356,69 @@ mod tests {
         }
     }
 
-    /// A joined path is a lit line: many lit places, each move short.
+    /// A line is a sweep at an even pace: many lit places, each move short,
+    /// and the mirrors never stop on the way.
     #[test]
-    fn a_joined_path_draws_a_line() {
-        let frame = solve(vec![beam("p", 0, 0., -1., 1.), beam("p", 0, 1., 1., 1.)]);
-        let places: std::collections::BTreeSet<i32> =
-            lit(&frame).iter().map(|p| (p.x * 1e4) as i32).collect();
-        assert!(places.len() > 20, "{}", places.len());
+    fn a_line_sweeps_without_stopping() {
+        let frame = solve(vec![element(Figure::Line, 0, 0.5, 0.)]);
+        let points = lit(&frame);
+        assert!(spots(&points).len() > 20, "{}", points.len());
+        for pair in points.windows(2) {
+            assert_ne!((pair[0].x, pair[0].y), (pair[1].x, pair[1].y));
+            let step = (pair[0].x - pair[1].x).hypot(pair[0].y - pair[1].y);
+            assert!(f64::from(step) < LINE_STEP * 1.5, "{step}");
+        }
     }
 
-    /// A fan joined all the way is a sweep at an even pace: the mirrors
-    /// never stop on a vertex on the way, only at the end.
+    /// A ring lit all round is one closed stroke: it ends where it began,
+    /// with no jump in black across its seam.
     #[test]
-    fn a_joined_fan_sweeps_without_stopping() {
-        let frame = solve(
-            (0..9)
-                .map(|i| beam("p", 0, i as f64 / 8., i as f64 / 8. - 0.5, 1.))
-                .collect(),
-        );
-        let points = lit(&frame);
-        let end = points.last().expect("lit").x;
-        let sweep: Vec<f32> = points.iter().map(|p| p.x).filter(|&x| x != end).collect();
-        assert!(sweep.len() > 20, "{}", sweep.len());
-        for pair in sweep.windows(2) {
-            assert_ne!(pair[0], pair[1], "the mirrors stop mid-sweep");
-        }
+    fn a_ring_is_drawn_round_once() {
+        let frame = solve(vec![element(Figure::Ring, 0, 0.5, 0.)]);
+        let first = frame.points.iter().position(LaserPoint::is_lit).unwrap();
+        let last = frame.points.iter().rposition(LaserPoint::is_lit).unwrap();
+        assert!(frame.points[first..=last].iter().all(LaserPoint::is_lit));
+        let (a, b) = (frame.points[first], frame.points[last]);
+        assert!((a.x - b.x).hypot(a.y - b.y) < 0.03, "{a:?} {b:?}");
+    }
+
+    /// Colour dark along part of a line is blanked: the scan jumps over the
+    /// dark stretch in black rather than drawing it, so it takes fewer
+    /// points than the same line lit all the way.
+    #[test]
+    fn a_dark_stretch_is_jumped_in_black() {
+        let mut dashed = element(Figure::Line, 0, 0.5, 0.);
+        dashed.samples = [1., 1., 0., 0., 1., 1.]
+            .into_iter()
+            .map(|level| Sample {
+                rgb: [level; 3],
+                ..dashed.samples[0]
+            })
+            .collect();
+        let whole = solve(vec![element(Figure::Line, 0, 0.5, 0.)]);
+        let dashes = solve(vec![dashed]);
+        assert!(lit(&dashes).len() < lit(&whole).len());
+        // Two dashes: the light goes off and on again once in the middle.
+        let switches = dashes
+            .points
+            .windows(2)
+            .filter(|pair| pair[0].is_lit() != pair[1].is_lit())
+            .count();
+        assert_eq!(switches, 4, "{dashes:?}");
+    }
+
+    /// Each element's colour is its own: a red beam beside a blue one.
+    #[test]
+    fn each_element_has_its_own_colour() {
+        let mut red = beam(0, 0., -0.5);
+        red.samples[0].rgb = [1., 0., 0.];
+        let mut blue = beam(0, 1., 0.5);
+        blue.samples[0].rgb = [0., 0., 1.];
+        let colours: std::collections::BTreeSet<[u32; 3]> = lit(&solve(vec![red, blue]))
+            .iter()
+            .map(|p| p.rgb.map(|c| c as u32))
+            .collect();
+        assert_eq!(colours.len(), 2, "{colours:?}");
     }
 
     /// Splitting the frame over more beams gives each less time: the
@@ -390,7 +428,7 @@ mod tests {
         let dwell = |n: usize| {
             let frame = solve(
                 (0..n)
-                    .map(|i| beam("p", 0, i as f64 / n as f64, i as f64 / n as f64 - 0.5, 0.))
+                    .map(|i| beam(0, i as f64 / n as f64, i as f64 / n as f64 - 0.5))
                     .collect(),
             );
             lit(&frame).len() as f64 / frame.points.len() as f64 / n as f64
@@ -400,7 +438,7 @@ mod tests {
 
     #[test]
     fn the_scan_returns_to_its_start() {
-        let frame = solve(vec![beam("p", 0, 0., -0.5, 0.), beam("p", 0, 1., 0.5, 0.)]);
+        let frame = solve(vec![beam(0, 0., -0.5), beam(0, 1., 0.5)]);
         let (first, last) = (frame.points[0], frame.points[frame.points.len() - 1]);
         assert!(!last.is_lit());
         assert!((first.x - last.x).abs() < 0.1, "{first:?} {last:?}");
@@ -412,7 +450,7 @@ mod tests {
         let mut rig = rig();
         rig.projectors[0].limit = Some(vec![[-1., -1.], [0., -1.], [0., 1.], [-1., 1.]]);
         let state = UniverseState {
-            beams: vec![beam("p", 0, 0., -0.5, 0.), beam("p", 1, 0., 0.5, 0.)],
+            lasers: vec![beam(0, 0., -0.5), beam(1, 0., 0.5)],
             ..UniverseState::default()
         };
         let frame = rig.solve(&state).pop().unwrap();
@@ -421,30 +459,11 @@ mod tests {
     }
 
     #[test]
-    fn a_beam_takes_the_colour_at_its_place() {
-        let mut state = UniverseState::default();
-        for i in 0..COLOR_SAMPLES {
-            let red = i as f32 / (COLOR_SAMPLES - 1) as f32;
-            state.primitives.insert(
-                format!("p:{i}"),
-                PrimitiveState {
-                    color: [red, 0., 1. - red],
-                    dimmer: 1.,
-                    ..crate::eval::composite::nothing()
-                },
-            );
-        }
-        assert_eq!(color(&state, "p", 0.), [0., 0., 1.]);
-        assert_eq!(color(&state, "p", 1.), [1., 0., 0.]);
-        assert_eq!(color(&UniverseState::default(), "p", 0.3), [1.; 3]);
-    }
-
-    #[test]
     fn a_beam_outside_the_field_is_dropped() {
         let mut rig = rig();
         rig.zones[0].1.turn = [-80., 80.];
         let state = UniverseState {
-            beams: vec![beam("p", 0, 0., 1., 0.), beam("p", 0, 0.5, 0., 0.)],
+            lasers: vec![beam(0, 0., 1.), beam(0, 0.5, 0.)],
             ..UniverseState::default()
         };
         let frame = rig.solve(&state).pop().unwrap();
