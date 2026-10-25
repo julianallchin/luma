@@ -16,6 +16,11 @@
 // light is (`medium.wgsl`), so a beam or sheet shows the clouds and wisps
 // the fixtures' beams do, moving with the same wind.
 //
+// Haze has eddies down to centimetres. A cone metres wide averages them
+// away; a beam millimetres wide samples one line through them, so it shows
+// them even in haze whose clouds are even. `eddies` is that detail: the
+// same noise at a fixed small scale, as strong as the haze's turbulence.
+//
 // A beam widens as it goes, and fades to nothing across its width, so its
 // edges blend into the pixels they cross instead of stepping.
 
@@ -57,6 +62,20 @@ const HALF_DIVERGENCE: f32 = 0.00075;
 const MIN_PIXELS: f32 = 2.5;
 // `PIECES`, the pieces a beam's strip is cut into along its length, comes
 // from `laser.rs`.
+// The size of the eddies a beam shows, metres: the noise's broadest octave.
+const EDDY_M: f32 = 0.15;
+// How fast they drift through the beam on top of the wind, metres a
+// second, and which way: small eddies turn over far sooner than the
+// clouds they sit in.
+const EDDY_DRIFT: vec3<f32> = vec3<f32>(0.05, -0.03, 0.08);
+// At this scale the noise repeats every 1.2 m along each axis, and a beam
+// along an axis would show the same few eddies over and over. Turned off
+// the axes, a line through the field never retraces itself.
+const EDDY_TURN: mat3x3<f32> = mat3x3<f32>(
+    0.6849, -0.1424, 0.7146,
+    0.5182, 0.7846, -0.3403,
+    -0.5122, 0.6034, 0.6111,
+);
 // The most a grazing ray multiplies the light, so an edge-on sheet or a
 // beam seen end-on stays finite.
 const GRAZE: f32 = 0.05;
@@ -68,14 +87,30 @@ fn phase(cos_t: f32, g: f32) -> f32 {
     return (1.0 - g2) / (denom * sqrt(denom));
 }
 
+// The eddies' share of the haze's density at `world`, mean 1: a symmetric
+// contrast about 1, so a beam's light along its length is the same. Where
+// a pixel spans `footprint` metres, as wide as an eddy, the pixel averages
+// them away rather than shimmering between them.
+fn eddies(world: vec3<f32>, footprint: f32) -> f32 {
+    let time = medium.wind.w;
+    let drift = vec3<f32>(medium.wind.xy, 0.0) * time + EDDY_DRIFT * time;
+    // The baked field's broadest octave is four base units across.
+    let q = EDDY_TURN * (world - drift) * (4.0 / EDDY_M);
+    let layered = textureSampleLevel(haze_noise_field, haze_noise_sampler, q * FIELD_INV_CELLS, 0.0).x;
+    let contrast = 2.0 * smoothstep(-0.22, 0.22, layered) - 1.0;
+    let resolved = 1.0 - smoothstep(0.25 * EDDY_M, EDDY_M, footprint);
+    return 1.0 + medium.shape.z * resolved * contrast;
+}
+
 // The haze's light at `world`, for light travelling along `along` that
-// left `origin`, scattered toward the camera.
-fn scattered(world: vec3<f32>, origin: vec3<f32>, along: vec3<f32>) -> f32 {
+// left `origin`, scattered toward the camera; `footprint` is the metres of
+// it one pixel spans.
+fn scattered(world: vec3<f32>, origin: vec3<f32>, along: vec3<f32>, footprint: f32) -> f32 {
     let sigma = u.haze.x;
     let to_camera = u.camera_pos.xyz - world;
     let toward = normalize(to_camera);
     let travelled = distance(world, origin) + length(to_camera);
-    let density = medium_density(medium, world);
+    let density = medium_density(medium, world) * eddies(world, footprint);
     return sigma * density * u.haze.z * phase(dot(along, toward), u.haze.y) * exp(-sigma * travelled);
 }
 
@@ -128,7 +163,10 @@ fn fs_beam(in: BeamOut) -> @location(0) vec4<f32> {
     // is the same however wide it is drawn.
     let edge = 1.0 - in.across * in.across;
     let profile = 1.875 * edge * edge;
-    let light = beam.power.xyz * profile * scattered(in.world, beam.origin.xyz, direction) / (sideways * in.width);
+    // `world` is the beam's middle all across the strip, so it changes
+    // only along the beam.
+    let footprint = length(fwidth(in.world));
+    let light = beam.power.xyz * profile * scattered(in.world, beam.origin.xyz, direction, footprint) / (sideways * in.width);
     return vec4<f32>(light, 0.0);
 }
 
@@ -158,6 +196,7 @@ fn fs_sheet(in: SheetOut) -> @location(0) vec4<f32> {
     let r = max(length(out_from), 0.05);
     let view = normalize(in.world - u.camera_pos.xyz);
     let crossing = max(abs(dot(in.normal, view)), GRAZE);
-    let light = in.density * scattered(in.world, in.origin, out_from / r) / (r * crossing);
+    let footprint = length(fwidth(in.world));
+    let light = in.density * scattered(in.world, in.origin, out_from / r, footprint) / (r * crossing);
     return vec4<f32>(light, 0.0);
 }

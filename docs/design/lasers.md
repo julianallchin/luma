@@ -80,6 +80,14 @@ frame, and nothing hides that.
   ends. Beams widen with distance (1.5 mrad) and fade across their width.
   Beams and sheets scatter by the haze's own density field, so they show its
   clouds and wind.
+- A beam a few millimetres wide samples one line through the haze's eddies,
+  which a metre-wide cone averages away, so a laser shows them even where
+  the clouds are even: one more tap of the haze noise at 15 cm, turned off
+  the axes so it never repeats along a beam, drifting faster than the
+  clouds, as strong as the haze's turbulence (0 is calm haze) and fading
+  out where a pixel spans an eddy. It is a symmetric contrast about 1, so a
+  beam's light in all is unchanged (`laser.wgsl`, `eddies`). Cones and the
+  glow do not take it.
 - What the beams scatter lights the room and the haze round them, through
   the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
   glow").
