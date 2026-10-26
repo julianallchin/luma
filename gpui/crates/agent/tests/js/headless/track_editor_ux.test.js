@@ -24,9 +24,9 @@ fixture({
     { pattern: "pattern-strobe", name: "Strobe", start: 14, end: 18, lane: 0, preset: "Strobe" },
     { pattern: "pattern-wash", name: "Wash", start: 14, end: 18, lane: 1, preset: "Random heads" },
   ],
-  // The pixel premises below were authored against a 1200-wide canvas; in
-  // takeover the shell and the inspector spend the rest.
-  window: [1800, 818],
+  // The pixel premises below were authored against a timeline about 1000
+  // wide; in takeover the shell and the inspector spend the rest.
+  window: [2500, 818],
 });
 const HAZE_SECONDS = 4;
 
