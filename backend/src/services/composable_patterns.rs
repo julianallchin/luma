@@ -41,7 +41,7 @@ pub(crate) async fn preview(
             .to_string()
     })?;
     let clock = beat_grid.timeline().map_err(|error| error.to_string())?;
-    let elements = request.graph.laser().map(|laser| laser.count);
+    let elements = request.graph.laser().map(|laser| laser.count());
     let cells = resolve_cells(
         &mut access,
         fixtures_root,

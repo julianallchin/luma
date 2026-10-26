@@ -1192,7 +1192,7 @@ projector.path
 import io
 import matplotlib.image as image
 edit = luma.track.edit()
-edit.add_clip(laser(count=5, size=1), name="Fan", seconds=(0, 4), selection="lasers")
+edit.add_clip(laser(figure(count=5, size=1)), name="Fan", seconds=(0, 4), selection="lasers")
 def light(shot):
     return float(image.imread(io.BytesIO(shot.read_bytes()))[..., :3].sum())
 v = luma.venue

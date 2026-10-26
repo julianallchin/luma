@@ -5,7 +5,8 @@ use super::{Input, Kind};
 use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::Serialize;
 
-/// The most elements one laser clip draws on each projector.
+/// The most elements one laser clip draws on each projector, all its
+/// figures together.
 pub const MAX_ELEMENTS: usize = 64;
 
 /// The type of an input.
@@ -30,6 +31,8 @@ pub enum InputType {
     Coordinate,
     /// A math node's items: two or more numbers and value wires.
     Values,
+    /// `laser.figures`: wires from `figure` nodes, one or more.
+    Figures,
     /// `curve.low` and `curve.high`: a number or a vector by the curve's
     /// kind, in the unit and range of the input the curve feeds.
     Bound,
@@ -43,7 +46,7 @@ impl InputType {
     pub fn is_wire_only(self) -> bool {
         matches!(
             self,
-            InputType::Heads | InputType::Time | InputType::Coordinate
+            InputType::Heads | InputType::Time | InputType::Coordinate | InputType::Figures
         )
     }
     /// Whether the input takes a value only.
@@ -128,6 +131,8 @@ pub enum Produces {
     /// A number, vector or color: by a curve's `kind` setting, the widest
     /// of a math node's values, or what a value node's inputs ask of it.
     Value,
+    /// A laser figure, for `laser.figures`.
+    Figure,
     /// An output node: no wire.
     Output,
 }
@@ -376,8 +381,8 @@ fn build(kind: Kind) -> Definition {
             vec![("rate", share("0.5")), ("alpha", share("1"))],
             vec![],
         ),
-        Kind::Laser => (
-            Produces::Output,
+        Kind::Figure => (
+            Produces::Figure,
             vec![
                 heads(),
                 (
@@ -403,24 +408,28 @@ fn build(kind: Kind) -> Definition {
                     "color",
                     InputDef::new(T::Color, Some(Unit::Rgb), "(1, 1, 1)").range(0., 1.),
                 ),
+            ],
+            vec![(
+                "kind",
+                SettingDef {
+                    options: &["beams", "line", "ring", "polygon", "grid"],
+                    default: "beams",
+                },
+            )],
+        ),
+        Kind::Laser => (
+            Produces::Output,
+            vec![
+                ("figures", wire(T::Figures, "[figure1, figure2]")),
                 ("alpha", share("1")),
             ],
-            vec![
-                (
-                    "kind",
-                    SettingDef {
-                        options: &["beams", "line", "ring", "polygon", "grid"],
-                        default: "beams",
-                    },
-                ),
-                (
-                    "zone",
-                    SettingDef {
-                        options: &[],
-                        default: "",
-                    },
-                ),
-            ],
+            vec![(
+                "zone",
+                SettingDef {
+                    options: &[],
+                    default: "",
+                },
+            )],
         ),
         Kind::Along => (Produces::Coordinate, vec![], vec![]),
         Kind::Time => (

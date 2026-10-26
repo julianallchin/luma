@@ -318,7 +318,7 @@ fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
     }
     let seed = core.selection_seed.unwrap_or(core.seed);
     let selection = core.selection.clone();
-    let elements = core.graph.laser().map(|laser| laser.count);
+    let elements = core.graph.laser().map(|laser| laser.count());
     let key = (
         editor.venue_id.clone(),
         selection.to_value().to_string(),

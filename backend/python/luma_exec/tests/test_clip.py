@@ -12,7 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec import clip as clip_module  # noqa: E402
 from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, curve, group,  # noqa: E402
-                            along, laser, mirror, preset, random, shuffle, space, split, strobe, time, value)
+                            along, figure, laser, mirror, preset, random, shuffle, space, split, strobe, time,
+                            value)
 from luma_exec.clip import max as clip_max, min as clip_min  # noqa: E402
 from luma_exec.score import GraphTrack  # noqa: E402
 
@@ -185,22 +186,26 @@ CATALOG = {
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
     'Strobe steps up': "t = time(); strobe(rate=curve(t, 'Steps 4', low=0.4, high=0.9))",
     # Laser.
-    "Beam fan": "order = space(split(), kind='order'); laser(count=8, x=curve(order, 'Ramp up', low=-1, high=1))",
-    "Beam circle": "order = space(split(), kind='order'); laser(count=12, x=curve(order, 'Sine', low=-0.5, high=0.5), y=curve(order, 'Cosine', low=-0.5, high=0.5))",
-    "Beam grid": "laser(kind='grid', count=16, size=0.8)",
-    "Sheet": "laser(kind='line', size=1)",
-    "Ring": "laser(kind='ring')",
-    "Liquid sky": "t = time(every=4); laser(kind='line', size=1, y=curve(along(), 'Sine', low=curve(t, 'Sine', low=-0.3, high=0.3), high=curve(t, 'Sine', low=0.3, high=-0.3)))",
+    "Beam fan": "order = space(split(), kind='order'); figure1 = figure(count=8, x=curve(order, 'Ramp up', low=-1, high=1)); laser([figure1])",
+    "Beam circle": "order = space(split(), kind='order'); figure1 = figure(count=12, x=curve(order, 'Sine', low=-0.5, high=0.5), y=curve(order, 'Cosine', low=-0.5, high=0.5)); laser([figure1])",
+    "Beam grid": "figure1 = figure('grid', count=16, size=0.8); laser([figure1])",
+    "Sheet": "figure1 = figure('line', size=1); laser([figure1])",
+    "Ring": "figure1 = figure('ring'); laser([figure1])",
+    "Liquid sky": "t = time(every=4); figure1 = figure('line', size=1, y=curve(along(), 'Sine', low=curve(t, 'Sine', low=-0.3, high=0.3), high=curve(t, 'Sine', low=0.3, high=-0.3))); laser([figure1])",
+    "Settle": "order = space(split(), kind='order'); home = curve(order, 'Ramp up', low=-0.8, high=0.8); t = time(); fade = curve(t, [[0, 1, 'sine-out'], [0.6, 0], [1, 0]]); slowing = curve(t, [[0, 0, 'sine-out'], [1, 1]], low=0, high=2160); swing = time(phase=slowing); wiggle = curve(swing, 'Sine', low=-0.15, high=0.15); figure1 = figure(count=4, x=home + wiggle * fade); laser([figure1])",
+    "Soft sheet": "soft = curve(along(), gradient=[(0, (0, 0, 0)), (0.25, (1, 1, 1)), (0.75, (1, 1, 1)), (1, (0, 0, 0))]); figure1 = figure('line', size=1, color=soft); laser([figure1])",
+    "Sheet and beams": "sheet = figure('line', size=0.8); rails = figure(count=2, size=0.8); spot = curve(random(every=4, scale=0.02), 'Ramp up', low=-0.7, high=0.7); dots = figure(count=4, x=spot); laser([sheet, rails, dots])",
     # Not shipped presets.
-    "Beam fan sweep": "t = time(every=4); laser(count=6, x=curve(t, 'Sine', low=-0.6, high=0.6))",
-    "Spinning polygon": "t = time(every=4); laser(kind='polygon', sides=5, rotation=curve(t, 'Ramp up', low=-180, high=180), color=curve(along(), gradient='Rainbow'))",
-    "Mirrored beams": "laser(heads=mirror(direction=(1, 0, 0)), count=8, size=0.5)",
-    "Fan opens from the left": "t = time(every=2); laser(count=8, size=curve(t, 'Ramp up'), x=curve(t, 'Ramp up', low=-1, high=0))",
-    "Beam wave": "t = time(every=2, phase=curve(space(), 'Ramp up', high=360)); laser(count=8, size=1, y=curve(t, 'Sine', low=-0.5, high=0.5))",
-    "Gradient line": "laser(kind='line', size=1, color=curve(along(), 'Ramp up', gradient='Rainbow'))",
-    "Dashed ring": "laser(kind='ring', color=curve(along(), [[0, 1], [0.125, 1], [0.125, 0], [0.25, 0], [0.25, 1], [0.375, 1], [0.375, 0], [0.5, 0], [0.5, 1], [0.625, 1], [0.625, 0], [0.75, 0], [0.75, 1], [0.875, 1], [0.875, 0], [1, 0]], gradient=[(0, '#000000'), (1, '#ffffff')]))",
-    "Gradient beams": "order = space(split(), kind='order'); laser(count=8, size=1, color=curve(order, 'Ramp up', gradient='Rainbow'))",
-    "White flecks over green": "k = time(every=0.5); rank = space(shuffle(time=k), kind='order'); laser(count=16, size=1, color=curve(rank, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]], gradient=[(0, '#00ff00'), (1, '#ffffff')]))",
+    "Beam fan sweep": "t = time(every=4); laser([figure(count=6, x=curve(t, 'Sine', low=-0.6, high=0.6))])",
+    "Spinning polygon": "t = time(every=4); laser([figure('polygon', sides=5, rotation=curve(t, 'Ramp up', low=-180, high=180), color=curve(along(), gradient='Rainbow'))])",
+    "Mirrored beams": "laser([figure(heads=mirror(direction=(1, 0, 0)), count=8, size=0.5)])",
+    "Fan opens from the left": "t = time(every=2); laser([figure(count=8, size=curve(t, 'Ramp up'), x=curve(t, 'Ramp up', low=-1, high=0))])",
+    "Beam wave": "t = time(every=2, phase=curve(space(), 'Ramp up', high=360)); laser([figure(count=8, size=1, y=curve(t, 'Sine', low=-0.5, high=0.5))])",
+    "Gradient line": "laser([figure('line', size=1, color=curve(along(), 'Ramp up', gradient='Rainbow'))])",
+    "Dashed ring": "laser([figure('ring', color=curve(along(), [[0, 1], [0.125, 1], [0.125, 0], [0.25, 0], [0.25, 1], [0.375, 1], [0.375, 0], [0.5, 0], [0.5, 1], [0.625, 1], [0.625, 0], [0.75, 0], [0.75, 1], [0.875, 1], [0.875, 0], [1, 0]], gradient=[(0, '#000000'), (1, '#ffffff')]))])",
+    "Gradient beams": "order = space(split(), kind='order'); laser([figure(count=8, size=1, color=curve(order, 'Ramp up', gradient='Rainbow'))])",
+    "White flecks over green": "k = time(every=0.5); rank = space(shuffle(time=k), kind='order'); laser([figure(count=16, size=1, color=curve(rank, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]], gradient=[(0, '#00ff00'), (1, '#ffffff')]))])",
+    "Wiggle that settles": "t = time(); laser([figure(count=4, x=curve(space(split(), kind='order'), 'Ramp up', low=-0.8, high=0.8) + curve(time(phase=curve(t, [[0, 0, 'sine-out'], [1, 1]], high=2160)), 'Sine', low=-0.15, high=0.15) * curve(t, [[0, 1, 'sine-out'], [0.6, 0], [1, 0]]))])",
     "Slash": EXAMPLE_SLASH,
     "Slash with values": EXAMPLE_SLASH_VALUES,
     "Shifted chase": EXAMPLE_SHIFT,
@@ -257,24 +262,33 @@ class ClipBuilderTests(unittest.TestCase):
                                           "inputs": {"values": [{"node": "curve1"}, {"node": "curve2"}]}})
         self.assertEqual(run(graph.source()).json(), graph.json())
 
-    def test_a_laser_writes_its_kind_zone_and_inputs_and_round_trips(self):
+    def test_a_laser_draws_its_figures_and_round_trips(self):
         slide = curve(time(), [[0, 0], [0.25, 1], [1, 1]], low=-1, high=0.3)
         bend = curve(along(), "Sine", low=-0.2, high=0.2)
-        graph = laser(mirror(direction=(1, 0, 0)), count=6, x=slide, y=bend, size=0.4,
-                      color=(1, 0, 0), kind="ring", zone="z1")
+        ring = figure("ring", heads=mirror(direction=(1, 0, 0)), count=6, x=slide, y=bend, size=0.4,
+                      color=(1, 0, 0))
+        dots = figure(count=4)
+        graph = laser([ring, dots], alpha=0.5, zone="z1")
         nodes = graph.json()["nodes"]
-        node = nodes["laser1"]
-        self.assertEqual(node["settings"], {"kind": "ring", "zone": "z1"})
+        self.assertEqual(nodes["laser1"], {"kind": "laser", "settings": {"zone": "z1"},
+                                           "inputs": {"figures": [{"node": "ring"}, {"node": "dots"}],
+                                                      "alpha": 0.5}})
+        node = nodes["ring"]
+        self.assertEqual(node["settings"], {"kind": "ring"})
         self.assertEqual(node["inputs"]["count"], 6)
         self.assertEqual(node["inputs"]["x"], {"node": "slide"})
         self.assertEqual(node["inputs"]["color"], [1, 0, 0])
         self.assertEqual(nodes["along1"]["kind"], "along")
         self.assertEqual(graph.output.kind, "laser")
         self.assertEqual(run(graph.source()).json(), graph.json())
-        # Defaults stay out of the source.
-        self.assertEqual(laser().source().strip().splitlines()[-1], "laser()")
+        self.assertIn("ring = figure('ring', heads=", graph.source())
+        # Defaults stay out of the source, and one figure needs no list.
+        self.assertEqual(laser(figure()).source().strip().splitlines()[-1], "laser([figure1])")
         with self.assertRaises(ClipError):
-            laser(count=[1, 2])
+            figure(count=[1, 2])
+        for wrong in ([], [time()], None):
+            with self.assertRaisesRegex(ClipError, "laser.figures: expected"):
+                laser(wrong)
 
     def test_variable_names_are_node_ids_and_round_trip(self):
         t = time(every=2)
@@ -517,8 +531,8 @@ class ClipBuilderTests(unittest.TestCase):
 
     def test_definition_defaults_build(self):
         for kind, inputs in clip_module._INPUTS.items():
-            if kind in ("math", "value"):
-                continue  # operators, not a builder; a value needs its value
+            if kind in ("math", "value", "laser"):
+                continue  # operators, not a builder; a value needs its value, a laser its figures
             with self.subTest(kind):
                 node = getattr(clip_module, kind)(**{name: None for name in inputs})
                 graph = node if isinstance(node, Graph) else color(brightness=node) if kind == "curve" else None

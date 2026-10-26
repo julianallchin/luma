@@ -172,10 +172,11 @@ const MAX_ID: usize = 32;
 /// variable of its id.
 const RESERVED: &[&str] = &[
     "time", "space", "along", "random", "audio", "curve", "math", "value", "max", "min", "mirror",
-    "shuffle", "group", "split", "color", "aim", "strobe", "laser", "preset", "False", "None",
-    "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
-    "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is",
-    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+    "shuffle", "group", "split", "figure", "color", "aim", "strobe", "laser", "preset", "False",
+    "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
+    "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
+    "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with",
+    "yield",
 ];
 
 /// An ASCII Python identifier of at most [`MAX_ID`] characters: `cut`,
@@ -379,7 +380,10 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
         let input = node.inputs.get(*name);
         let required = matches!(
             (node.kind, *name),
-            (Kind::Curve, "x") | (Kind::Math, "values") | (Kind::Value, "value")
+            (Kind::Curve, "x")
+                | (Kind::Math, "values")
+                | (Kind::Value, "value")
+                | (Kind::Laser, "figures")
         );
         let Some(input) = input else {
             if required {
@@ -475,6 +479,8 @@ fn value_input(
     match (def.ty, input) {
         (InputType::Values, Input::List(items)) => math_values(id, node, items)?,
         (InputType::Values, _) => return wrong_type(),
+        (InputType::Figures, Input::List(items)) => figure_list(id, items)?,
+        (InputType::Figures, _) => return wrong_type(),
         (InputType::Constant, Input::Number(value)) if value.is_finite() => {}
         (InputType::Constant, Input::Vector(value) | Input::Color(value))
             if value.iter().all(|v| v.is_finite()) => {}
@@ -616,6 +622,29 @@ fn math_values(id: &str, node: &Node, items: &[Input]) -> Result<()> {
     Ok(())
 }
 
+/// A laser's figures: one or more wires, each figure once.
+fn figure_list(id: &str, items: &[Input]) -> Result<()> {
+    if items.is_empty() {
+        return fail(format!(
+            "{id}.figures: expected one or more figure wires; got none. Example: figures=[figure1]"
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for item in items {
+        let Input::Wire(source) = item else {
+            return fail(format!(
+                "{id}.figures: expected figure wires only; got a list holding another shape. Example: figures=[figure1, figure2]"
+            ));
+        };
+        if !seen.insert(source) {
+            return fail(format!(
+                "{id}.figures: expected each figure once; got {source} twice. Example: figures=[figure1, figure2]"
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---- rule 4: wires ----
 
 fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
@@ -648,6 +677,7 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                 InputType::Heads => produces == Produces::Heads,
                 InputType::Time => source_node.kind == Kind::Time,
                 InputType::Coordinate => produces == Produces::Coordinate,
+                InputType::Figures => produces == Produces::Figure,
                 InputType::Points | InputType::Gradient | InputType::Constant => false,
             };
             if fits {
@@ -674,6 +704,15 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
             return fail(format!(
                 "{id}.{name}: expected {expected}; got {}. Example: {example}",
                 describe(graph, Some(input))
+            ));
+        }
+    }
+    if node.kind == Kind::Laser {
+        let total: usize = graph.laser().map_or(0, |laser| laser.count());
+        if total > super::MAX_ELEMENTS {
+            return fail(format!(
+                "{id}.figures: expected at most {} elements on each projector, every figure's count together; got {total}. Example: fewer figures, or a smaller count",
+                super::MAX_ELEMENTS
             ));
         }
     }
@@ -892,13 +931,13 @@ struct Axes {
 }
 
 /// Whether input `name` of a `kind` node may vary along a laser element:
-/// a curve's and a math node's carry it on, and a laser's per-element
+/// a curve's and a math node's carry it on, and a figure's per-element
 /// inputs read it.
 fn takes_along(kind: Kind, name: &str) -> bool {
     match kind {
         Kind::Curve => matches!(name, "x" | "low" | "high"),
         Kind::Math => name == "values",
-        Kind::Laser => matches!(name, "x" | "y" | "size" | "rotation" | "color"),
+        Kind::Figure => matches!(name, "x" | "y" | "size" | "rotation" | "color"),
         _ => false,
     }
 }
@@ -932,7 +971,7 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
             }
             if carried.along && !takes_along(node.kind, name) {
                 return fail(format!(
-                    "{id}.{name}: expected a value that is the same all along each laser element; got a wire that varies along it from {source}. Example: wire along only into a laser's x, y, size, rotation or color, through curves and math"
+                    "{id}.{name}: expected a value that is the same all along each laser element; got a wire that varies along it from {source}. Example: wire along only into a figure's x, y, size, rotation or color, through curves and math"
                 ));
             }
             out.heads |= carried.heads;
@@ -941,7 +980,9 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
             if def.clock {
                 continue;
             }
-            if !node.kind.is_output() {
+            // An output, and a figure, which the laser's layer lowers
+            // input by input, combine each input's events on their own.
+            if !node.kind.is_output() && node.kind != Kind::Figure {
                 for clock in &carried.clocks {
                     match &first {
                         None => first = Some((clock.clone(), Some(name))),
@@ -973,6 +1014,8 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
     }
     match definition.output {
         Produces::Heads => out.heads = false,
+        // A figure's inputs end along its elements.
+        Produces::Figure => out.along = false,
         _ if matches!(node.kind, Kind::Space | Kind::Random) => out.heads = true,
         _ => {}
     }
@@ -1035,6 +1078,7 @@ fn describe(graph: &ClipGraph, input: Option<&Input>) -> String {
             Some(node) => match definition(node.kind).output {
                 Produces::Heads => format!("a heads wire from {source}"),
                 Produces::Coordinate => format!("a coordinate wire from {source}"),
+                Produces::Figure => format!("a figure wire from {source}"),
                 Produces::Value => format!(
                     "a {} wire from {source}",
                     graph.value_kind(source).unwrap_or("number")
@@ -1072,6 +1116,7 @@ fn accepts(def: &InputDef) -> String {
         InputType::Time => "a time wire".into(),
         InputType::Values => "a list of two or more numbers and value wires".into(),
         InputType::Coordinate => "a coordinate wire".into(),
+        InputType::Figures => "a list of one or more figure wires".into(),
         InputType::Bound => "a number or a vector".into(),
         InputType::Constant => "a finite number, or three, such as 0.5 or (0.57, 0, 0.82)".into(),
     }

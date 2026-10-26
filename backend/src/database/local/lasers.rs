@@ -154,7 +154,8 @@ pub async fn set_limit(
 }
 
 /// `20261025130000_laser_elements.sql` against the old laser nodes and the
-/// Color clips that coloured them, as a real score held them.
+/// Color clips that coloured them, as a real score held them, and
+/// `20261026120000_laser_figures.sql` against the laser nodes it left.
 #[cfg(test)]
 mod migration_tests {
     use luma_patterns::clip_graph::ClipGraph;
@@ -164,9 +165,11 @@ mod migration_tests {
     use std::borrow::Cow;
 
     const LASER_ELEMENTS: i64 = 20_261_025_130_000;
+    const LASER_FIGURES: i64 = 20_261_026_120_000;
     const PROJECTOR: &str = "Generic/Generic-ILDA-Laser-Projector.qxf";
 
-    async fn database(directory: &tempfile::TempDir) -> SqlitePool {
+    /// A venue of two projectors and a par, migrated up to `until`.
+    async fn database(directory: &tempfile::TempDir, until: i64) -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(
@@ -182,7 +185,7 @@ mod migration_tests {
             before
                 .migrations
                 .iter()
-                .filter(|migration| migration.version < LASER_ELEMENTS)
+                .filter(|migration| migration.version < until)
                 .cloned()
                 .collect(),
         );
@@ -256,8 +259,11 @@ mod migration_tests {
         })
     }
 
+    /// The laser's first figure.
     fn laser(graph: &ClipGraph) -> &luma_patterns::clip_graph::Node {
-        graph.output().expect("an output").1
+        let laser = graph.output().expect("an output").1;
+        let figure = laser.inputs["figures"].sources().next().expect("a figure");
+        &graph.nodes[figure]
     }
 
     /// Each element's x on one projector of `count` elements.
@@ -284,7 +290,7 @@ mod migration_tests {
         let out = prepared.evaluate_batch(&[1.]).unwrap();
         let mut ids: Vec<String> = cells.iter().map(|c| c.id.clone()).collect();
         ids.sort_by_key(|id| id[3..].parse::<usize>().unwrap());
-        luma_patterns::laser::Element::read(&out[luma_patterns::laser::ELEMENT_OUTPUT], &ids, 1)
+        luma_patterns::laser::Element::read(&out[&luma_patterns::laser::element_output(0)], &ids, 1)
             .unwrap()[0]
             .iter()
             .map(|(_, samples)| samples[0].at[0])
@@ -294,7 +300,7 @@ mod migration_tests {
     #[tokio::test]
     async fn old_laser_nodes_and_their_color_clips_move_to_elements() {
         let directory = tempfile::tempdir().unwrap();
-        let pool = database(&directory).await;
+        let pool = database(&directory, LASER_ELEMENTS).await;
         let old = |inputs: Value, shape: &str| json!({"laser1": {"kind": "laser", "settings": {"zone": "", "shape": shape}, "inputs": inputs}});
         clip(
             &pool,
@@ -484,11 +490,16 @@ mod migration_tests {
             assert!(!node.inputs.contains_key("join") && !node.inputs.contains_key("beams"));
         }
         assert_eq!(
-            graph(&pool, "grid").await.unwrap().laser().unwrap().count,
+            graph(&pool, "grid").await.unwrap().laser().unwrap().count(),
             16
         );
         assert_eq!(
-            graph(&pool, "sheet").await.unwrap().laser().unwrap().count,
+            graph(&pool, "sheet")
+                .await
+                .unwrap()
+                .laser()
+                .unwrap()
+                .count(),
             1
         );
         // A circle of beams goes round the circle.
@@ -530,5 +541,117 @@ mod migration_tests {
             .await
             .unwrap();
         assert_eq!(drafts, 0);
+    }
+
+    /// A laser node splits into a figure, which takes what it draws, and a
+    /// laser that draws it, in clips and in drafts.
+    #[tokio::test]
+    async fn laser_nodes_split_into_a_figure_and_the_laser_that_draws_it() {
+        use luma_patterns::clip_graph::{Input, Kind};
+        let directory = tempfile::tempdir().unwrap();
+        let pool = database(&directory, LASER_FIGURES).await;
+        let fan = json!({
+            "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
+            "time1": {"kind": "time"},
+            "fade": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {"x": {"node": "time1"}}},
+            "laser1": {"kind": "laser", "settings": {"kind": "beams", "zone": "z1"},
+                       "inputs": {"heads": {"node": "mirror1"}, "count": 6, "size": 0.7,
+                                  "color": [1, 0, 0], "alpha": {"node": "fade"}}},
+        });
+        clip(&pool, "fan", 0., "lasers", fan.clone()).await;
+        // A node already named figure1 keeps its name.
+        clip(
+            &pool,
+            "taken",
+            10.,
+            "lasers",
+            json!({
+                "figure1": {"kind": "time"},
+                "spin": {"kind": "curve", "settings": {"kind": "number"},
+                         "inputs": {"x": {"node": "figure1"}, "low": -90, "high": 90}},
+                "laser1": {"kind": "laser", "settings": {"kind": "ring", "zone": ""},
+                           "inputs": {"rotation": {"node": "spin"}, "alpha": 0.5}},
+            }),
+        )
+        .await;
+        clip(
+            &pool,
+            "wash",
+            20.,
+            "lasers",
+            json!({"color1": {"kind": "color"}}),
+        )
+        .await;
+        let draft = json!({"clips": {
+            "c-1": {"seed": 13369261119795889533_u64, "graph": {"version": 3, "nodes": fan}},
+            "c-2": {"graph": {"version": 3, "nodes": {"laser1": {"kind": "laser"}}}},
+        }})
+        .to_string();
+        sqlx::query(
+            "INSERT INTO drafts (id, uid, score_id, base_json, state_json) VALUES ('d', 'u', 's', ?, ?)",
+        )
+        .bind(&draft)
+        .bind(&draft)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let wash_before: String =
+            sqlx::query_scalar("SELECT graph_json FROM clips WHERE id = 'wash'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let fan = graph(&pool, "fan").await.unwrap();
+        let laser1 = &fan.nodes["laser1"];
+        assert_eq!(laser1.setting("zone"), Some("z1"));
+        assert_eq!(
+            laser1.inputs["figures"],
+            Input::List(vec![Input::wire("figure1")])
+        );
+        assert_eq!(laser1.inputs["alpha"], Input::wire("fade"));
+        assert_eq!(laser1.inputs.len(), 2);
+        let figure = &fan.nodes["figure1"];
+        assert_eq!(figure.kind, Kind::Figure);
+        assert_eq!(figure.setting("kind"), Some("beams"));
+        assert_eq!(figure.inputs["heads"], Input::wire("mirror1"));
+        assert_eq!(figure.inputs["count"], 6.0.into());
+        assert_eq!(figure.inputs["size"], 0.7.into());
+        assert_eq!(figure.inputs["color"], Input::Color([1., 0., 0.]));
+        assert!(!figure.inputs.contains_key("alpha"));
+        assert_eq!(fan.laser().unwrap().count(), 6);
+
+        let taken = graph(&pool, "taken").await.unwrap();
+        assert_eq!(taken.nodes["figure1"].kind, Kind::Time);
+        let figure = &taken.nodes["laser1_figure"];
+        assert_eq!(figure.setting("kind"), Some("ring"));
+        assert_eq!(figure.inputs["rotation"], Input::wire("spin"));
+        assert_eq!(taken.nodes["laser1"].inputs["alpha"], 0.5.into());
+
+        let wash_after: String =
+            sqlx::query_scalar("SELECT graph_json FROM clips WHERE id = 'wash'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            wash_after, wash_before,
+            "a graph with no laser is untouched"
+        );
+
+        let (base, state): (String, String) =
+            sqlx::query_as("SELECT base_json, state_json FROM drafts WHERE id = 'd'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        for text in [base, state] {
+            assert!(text.contains("13369261119795889533"), "{text}");
+            let clips: Value = serde_json::from_str::<Value>(&text).unwrap()["clips"].clone();
+            for id in ["c-1", "c-2"] {
+                let graph: ClipGraph = serde_json::from_value(clips[id]["graph"].clone()).unwrap();
+                graph.check().unwrap_or_else(|e| panic!("{id}: {}", e.0));
+                assert_eq!(graph.nodes["figure1"].kind, Kind::Figure, "{id}");
+            }
+        }
     }
 }

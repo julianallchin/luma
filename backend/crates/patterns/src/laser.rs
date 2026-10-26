@@ -1,8 +1,9 @@
 //! Laser elements on a zone's canvas: what a clip's elements draw, and how a
 //! layer of elements combines with the elements under it.
 //!
-//! A laser clip draws `count` elements on each projector it selects, as heads
-//! `projector:0` to `projector:{count - 1}`: beams, lines, rings or polygons.
+//! A laser clip draws figures, each `count` elements of one kind: beams,
+//! lines, rings or polygons. On each projector it selects the figures'
+//! elements are heads `projector:0` up, figure after figure.
 //! An element's place along its clip's order is `s`, 0 to 1, which never
 //! depends on how many elements exist, so a morph can follow elements of any
 //! count. Within an element, `along` runs 0 to 1 from a line's start to its
@@ -14,16 +15,19 @@ use crate::runtime::EvaluatedValue;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-/// The graph output with each element's alpha and samples.
-pub const ELEMENT_OUTPUT: &str = "element";
-/// Channels of one sample of [`ELEMENT_OUTPUT`]: x, y, the four of the
+/// The graph output with the alpha and samples of each element of figure
+/// `figure`, the figure's place in the laser's `figures`.
+pub fn element_output(figure: usize) -> String {
+    format!("element{figure}")
+}
+/// Channels of one sample of [`element_output`]: x, y, the four of the
 /// element's frame, r, g, b.
 pub const SAMPLE_CHANNELS: usize = 9;
 /// How many places along an element an input that reads `along` is sampled
 /// at, ends included.
 pub const ALONG_SAMPLES: usize = 32;
 
-/// What a laser node's elements are: its `kind` setting.
+/// What a figure's elements are: its `kind` setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// Points, in a row across the canvas by default.
@@ -75,7 +79,7 @@ impl Kind {
         matches!(self, Kind::Beams | Kind::Grid)
     }
 
-    /// How many elements a clip with no `count` draws on each projector.
+    /// How many elements a figure with no `count` draws on each projector.
     pub fn default_count(self) -> usize {
         if self.is_point() {
             8
@@ -112,12 +116,12 @@ impl Kind {
     }
 
     /// What an element of this kind draws.
-    pub fn figure(self, sides: usize) -> Figure {
+    pub fn outline(self, sides: usize) -> Outline {
         match self {
-            Kind::Beams | Kind::Grid => Figure::Point,
-            Kind::Line => Figure::Line,
-            Kind::Ring => Figure::Ring,
-            Kind::Polygon => Figure::Polygon(sides.clamp(MIN_SIDES, MAX_SIDES) as u32),
+            Kind::Beams | Kind::Grid => Outline::Point,
+            Kind::Line => Outline::Line,
+            Kind::Ring => Outline::Ring,
+            Kind::Polygon => Outline::Polygon(sides.clamp(MIN_SIDES, MAX_SIDES) as u32),
         }
     }
 }
@@ -126,7 +130,7 @@ impl Kind {
 pub const MIN_SIDES: usize = 3;
 pub const MAX_SIDES: usize = 12;
 
-/// `size` and `rotation` as a frame: the figure's unit shape scaled by
+/// `size` and `rotation` as a frame: the outline scaled by
 /// `size` and turned `rotation` degrees clockwise, as `[[a, b], [c, d]]`
 /// taking `(u, v)` to `(a u + b v, c u + d v)`.
 pub fn frame(size: f64, rotation: f64) -> [[f64; 2]; 2] {
@@ -145,7 +149,7 @@ pub fn apply(frame: [[f64; 2]; 2], [u, v]: [f64; 2]) -> [f64; 2] {
 /// What one element draws, in its own unit frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Figure {
+pub enum Outline {
     /// One point: the scanner dwells on it.
     Point,
     /// From (−1, 0) to (1, 0).
@@ -156,7 +160,7 @@ pub enum Figure {
     Polygon(u32),
 }
 
-impl Figure {
+impl Outline {
     /// The point at `along`, 0 to 1.
     pub fn unit(self, along: f64) -> [f64; 2] {
         let round = |a: f64| {
@@ -164,10 +168,10 @@ impl Figure {
             [turn.sin(), turn.cos()]
         };
         match self {
-            Figure::Point => [0., 0.],
-            Figure::Line => [2. * along - 1., 0.],
-            Figure::Ring => round(along),
-            Figure::Polygon(sides) => {
+            Outline::Point => [0., 0.],
+            Outline::Line => [2. * along - 1., 0.],
+            Outline::Ring => round(along),
+            Outline::Polygon(sides) => {
                 let sides = f64::from(sides.max(1));
                 let at = along.clamp(0., 1.) * sides;
                 let corner = at.floor().min(sides - 1.);
@@ -178,12 +182,12 @@ impl Figure {
         }
     }
 
-    /// The places along the figure where it turns a corner, ends included.
+    /// The places along the outline where it turns a corner, ends included.
     pub fn corners(self) -> Vec<f64> {
         match self {
-            Figure::Point => vec![0.],
-            Figure::Line | Figure::Ring => vec![0., 1.],
-            Figure::Polygon(sides) => (0..=sides)
+            Outline::Point => vec![0.],
+            Outline::Line | Outline::Ring => vec![0., 1.],
+            Outline::Polygon(sides) => (0..=sides)
                 .map(|k| f64::from(k) / f64::from(sides))
                 .collect(),
         }
@@ -194,9 +198,9 @@ impl Figure {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
-    /// The figure's centre on the canvas.
+    /// The element's centre on the canvas.
     pub at: [f64; 2],
-    /// The figure's size and turn ([`frame`]), and any mirror's reflection.
+    /// Its size and turn ([`frame`]), and any mirror's reflection.
     pub frame: [[f64; 2]; 2],
     /// Its colour, each 0 to 1. Black is the light off.
     pub rgb: [f64; 3],
@@ -225,7 +229,7 @@ pub struct Element {
     pub zone: String,
     /// The layer that drew it.
     pub layer: u32,
-    pub figure: Figure,
+    pub outline: Outline,
     /// Its place along its clip's order, 0 to 1.
     pub s: f64,
     /// Its samples along it, evenly from 0 to 1; one when nothing reads
@@ -238,7 +242,7 @@ pub struct Element {
 
 impl Element {
     /// Each head's alpha and samples at each sample of `times`, read from
-    /// [`ELEMENT_OUTPUT`]: one row per time, one entry per head of `ids`.
+    /// [`element_output`]: one row per time, one entry per head of `ids`.
     pub fn read(
         value: &EvaluatedValue,
         ids: &[String],
@@ -298,7 +302,7 @@ impl Element {
     /// Its canvas point and colour at `along`, colour at its intensity.
     pub fn point(&self, along: f64) -> ([f64; 2], [f64; 3]) {
         let sample = self.sample(along);
-        let [u, v] = apply(sample.frame, self.figure.unit(along));
+        let [u, v] = apply(sample.frame, self.outline.unit(along));
         let shown = self.intensity.clamp(0., 1.);
         (
             [sample.at[0] + u, sample.at[1] + v],
@@ -309,12 +313,12 @@ impl Element {
     /// The places along it a drawing must pass through: its corners and
     /// the places its inputs were sampled at, in order.
     pub fn breaks(&self) -> Vec<f64> {
-        if self.figure == Figure::Point {
+        if self.outline == Outline::Point {
             return vec![0.];
         }
         let last = self.samples.len().saturating_sub(1).max(1);
         let mut breaks: Vec<f64> = self
-            .figure
+            .outline
             .corners()
             .into_iter()
             .chain((0..=last).map(|k| k as f64 / last as f64))
@@ -394,7 +398,7 @@ pub fn add(under: &mut Vec<Element>, top: Vec<Element>) {
 /// each other by the top's alpha, matched by their place along their order
 /// and along each element. Under elements move toward the top's and fade by
 /// `1 − alpha`; top elements start on the ones under them and show at
-/// `alpha`. Each keeps its own figure and colour: an element is never a
+/// `alpha`. Each keeps its own outline and colour: an element is never a
 /// blend of two colours. At alpha 1 only the top's elements show.
 /// Elements on a projector or zone the top layer does not draw stay as they
 /// are.
@@ -454,7 +458,7 @@ mod tests {
             projector: "p".into(),
             zone: String::new(),
             layer,
-            figure: Figure::Point,
+            outline: Outline::Point,
             s,
             samples: vec![Sample {
                 at: [x, 0.],
@@ -485,10 +489,10 @@ mod tests {
     #[test]
     fn a_ring_and_a_polygon_stay_on_the_unit_circle_at_their_corners() {
         for k in 0..=12 {
-            let [u, v] = Figure::Ring.unit(k as f64 / 12.);
+            let [u, v] = Outline::Ring.unit(k as f64 / 12.);
             assert!((u.hypot(v) - 1.).abs() < 1e-12);
         }
-        let square = Figure::Polygon(4);
+        let square = Outline::Polygon(4);
         for corner in square.corners() {
             let [u, v] = square.unit(corner);
             assert!((u.hypot(v) - 1.).abs() < 1e-12, "{corner}");
@@ -500,7 +504,7 @@ mod tests {
 
     #[test]
     fn rotation_turns_a_line_upright() {
-        let [x, y] = apply(frame(1., 90.), Figure::Line.unit(1.));
+        let [x, y] = apply(frame(1., 90.), Outline::Line.unit(1.));
         assert!(x.abs() < 1e-12 && (y + 1.).abs() < 1e-12, "{x} {y}");
     }
 
@@ -509,7 +513,7 @@ mod tests {
     #[test]
     fn an_element_reads_between_its_samples() {
         let mut line = element(0, 0.5, 0., 1.);
-        line.figure = Figure::Line;
+        line.outline = Outline::Line;
         line.samples = [0., 0.5, 0.]
             .into_iter()
             .map(|y| Sample {
