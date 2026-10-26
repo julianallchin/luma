@@ -854,11 +854,11 @@ fn seam(color: gpui::Rgba) -> Div {
 /// How the thread and the workspace panel divide the room they share, and the
 /// floors neither may be dragged below.
 ///
-/// The workspace gets 78% of the shared room by default. Chat keeps its
-/// minimum readable width, and dragging or resetting the seam uses this same
+/// Chat gets 30% of the shared room by default and the workspace the rest.
+/// Chat keeps its minimum readable width, and dragging or resetting the seam uses this same
 /// proportion at every window size.
 pub(crate) fn workspace_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.22, CENTER_MIN, WORKSPACE_MIN)
+    luma_ui::split::SplitFraction::new(0.30, CENTER_MIN, WORKSPACE_MIN)
 }
 
 /// The room the thread and the panel share this frame: the window, less the
@@ -1208,16 +1208,15 @@ fn program_view(
         .into_any_element()
 }
 
-/// Program's column split: the timeline takes about two thirds of the
+/// Program's column split: the timeline takes a little under half of the
 /// workspace, and neither side may be dragged narrower than stays usable.
 pub(crate) fn program_columns() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.65, 360.0, 280.0)
+    luma_ui::split::SplitFraction::new(0.45, 360.0, 280.0)
 }
 
-/// Program's row split: the stage over the inspector, with the inspector
-/// taking the larger share.
+/// Program's row split: the stage over the inspector, each taking half.
 pub(crate) fn program_rows() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.45, 140.0, 160.0)
+    luma_ui::split::SplitFraction::new(0.5, 140.0, 160.0)
 }
 
 /// The grip on Program's column seam, at `at` from the workspace's leading
@@ -1257,7 +1256,7 @@ fn empty_panel() -> AnyElement {
         .into_any_element()
 }
 
-/// The stage's resting share of the workspace column, and the floors that keep
+/// The stage's resting share of the workspace column (half), and the floors that keep
 /// either half from being dragged away entirely.
 ///
 /// A stage needs enough height to read as a room rather than a letterbox; an
@@ -1265,7 +1264,7 @@ fn empty_panel() -> AnyElement {
 /// than in `Luma::new` so the two floors sit beside the column that enforces
 /// them.
 pub(crate) fn visualizer_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.4, 140.0, 200.0)
+    luma_ui::split::SplitFraction::new(0.5, 140.0, 200.0)
 }
 
 /// The rule between the stage and the editor below it: the same hint-toned
