@@ -104,15 +104,24 @@ sixteenth of the frame, and nothing hides that.
   shows as before (0.44 against 0.40). Each lobe is normalised, so the mix
   scatters only what the haze takes out of the beam. Fixture beams keep
   `Transport::PHASE_G`.
-- A beam a few millimetres wide samples one line through the haze's eddies,
-  which a metre-wide cone averages away, so a laser shows them even where
-  the clouds are even. A noise texture slid through the beam reads as a
-  texture, so the eddies are wisps (the level lines of a fine field) drawn
-  out by a slower, broader swirl, evolving in place by cross-fading two
-  copies half a cycle apart, and strong only in patches of churning air.
-  Turbulence sets how strong (0 is calm haze); they fade out where a pixel
-  spans a wisp, and keep a beam's light in all unchanged (`laser.wgsl`,
-  `eddies`). Cones and the glow do not take them.
+- The haze is stirred air, one field for every light (`medium.wgsl`). The
+  cloud size is its largest eddy L, and Turbulence how hard it is stirred,
+  ε = 0.1·turbulence³ m²/s³ (still air to a fan on the haze). By
+  Kolmogorov's law an eddy r across moves at (ε·r)^⅓ and turns over in r
+  over that, and the haze's contrast at r is the clouds' times (r/L)^⅓.
+  Every size, speed and strength follows from those three settings, so no
+  setting gives haze air can't make. Eddies turn over in place: two copies
+  of the baked field half a turn apart, each fading out before it jumps,
+  their weights' squares summing to one so contrast holds mid-turn. Clouds
+  no longer loop.
+- A beam a few millimetres wide samples one line through the haze, so it
+  shows the field's fine end, 0.5 m wisps a metre-wide cone averages away
+  (`medium_wisps`): the level lines of a fine field, drawn out by the
+  largest eddies at their speed, in patches where those churn, as strong as
+  the law says for their size. Even haze (cloudiness 0) has none. They fade
+  out where a pixel spans a wisp and only move the haze about. Still drawn
+  by eye: the strand shaping and the patches' edges. Cones and the glow do
+  not take the wisps.
 - What the beams scatter lights the room and the haze round them, through
   the same haze glow as the fixtures (`stage-rendering-quality.md`, "Haze
   glow"). In the glow a beam stops at the first surface on its line, and

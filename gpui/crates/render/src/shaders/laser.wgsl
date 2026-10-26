@@ -18,10 +18,7 @@
 //
 // Haze has eddies down to centimetres. A cone metres wide averages them
 // away; a beam millimetres wide samples one line through them, so it shows
-// them even in haze whose clouds are even. `eddies` is that detail: the
-// same noise at a fixed small scale, swaying the density at most
-// `EDDY_DEPTH` either way at full turbulence: a ripple through the light,
-// never holes in it.
+// them: `medium_wisps`, the fine end of the haze's own field.
 //
 // A beam widens as it goes, and fades to nothing across its width, so its
 // edges blend into the pixels they cross instead of stepping.
@@ -64,34 +61,6 @@ const HALF_DIVERGENCE: f32 = 0.00075;
 const MIN_PIXELS: f32 = 2.5;
 // `PIECES`, the pieces a beam's strip is cut into along its length, comes
 // from `laser.rs`.
-// The size of the wisps a beam shows, metres.
-const EDDY_M: f32 = 0.5;
-// The share of the density they sway at full turbulence.
-const EDDY_DEPTH: f32 = 0.6;
-// How long one wisp lasts before it has turned into another, seconds, and
-// how it drifts meanwhile, metres a second: small eddies turn over in
-// about the time they take to cross themselves.
-const EDDY_LIFE_S: f32 = 2.5;
-const EDDY_DRIFT: vec3<f32> = vec3<f32>(0.04, -0.02, 0.05);
-// The swirls that draw wisps out: their size, how far they push, metres,
-// and how fast they change, metres of field a second.
-const SWIRL_M: f32 = 2.5;
-const SWIRL_REACH_M: f32 = 0.6;
-const SWIRL_RATE: f32 = 0.08;
-// Patches of churning air, metres across.
-const PATCH_M: f32 = 4.0;
-// A strand is where the fine field is within this of zero; the share of
-// the air a strand fills on average, so the contrast keeps mean 1.
-const STRAND_WIDTH: f32 = 0.15;
-const STRAND_MEAN: f32 = 0.55;
-// At this scale the noise repeats every 1.2 m along each axis, and a beam
-// along an axis would show the same few eddies over and over. Turned off
-// the axes, a line through the field never retraces itself.
-const EDDY_TURN: mat3x3<f32> = mat3x3<f32>(
-    0.6849, -0.1424, 0.7146,
-    0.5182, 0.7846, -0.3403,
-    -0.5122, 0.6034, 0.6111,
-);
 // The most a grazing ray multiplies the light, so an edge-on sheet or a
 // beam seen end-on stays finite.
 const GRAZE: f32 = 0.05;
@@ -116,55 +85,6 @@ fn phase(cos_t: f32) -> f32 {
     return mix(henyey_greenstein(cos_t, BROAD_G), henyey_greenstein(cos_t, FORWARD_G), FORWARD_SHARE);
 }
 
-// One tap of the baked field at `p`, in metres, for features `size` wide:
-// about −0.5 to 0.5, mean 0. Turned off the axes, so a beam along one
-// never retraces the field's repeats.
-fn eddy_field(p: vec3<f32>, size: f32) -> f32 {
-    // The baked field's broadest octave is four base units across.
-    let q = EDDY_TURN * p * (4.0 / size);
-    return textureSampleLevel(haze_noise_field, haze_noise_sampler, q * FIELD_INV_CELLS, 0.0).x;
-}
-
-// The eddies' share of the haze's density at `world`, mean 1.
-//
-// A texture slid through the beam reads as a texture: real eddies turn over
-// where they are, get drawn out into wisps by the larger swirls carrying
-// them, and come in patches. So the fine field is warped by a slower,
-// broader one, evolves by cross-fading two copies that drift half a cycle
-// apart (each fades out before it has moved far enough to read as
-// sliding), is shaped into strands rather than blobs, and is strong only
-// where a broad, slow field says the air is churning. Where a pixel spans
-// `footprint` metres, as wide as a wisp, the pixel averages them away.
-fn eddies(world: vec3<f32>, footprint: f32) -> f32 {
-    let time = medium.wind.w;
-    let carried = world - vec3<f32>(medium.wind.xy, 0.0) * time;
-    // The swirls that carry the wisps: slow, and a few times their size.
-    let swirl = vec3<f32>(
-        eddy_field(carried + vec3<f32>(0.0, 0.0, time * SWIRL_RATE), SWIRL_M),
-        eddy_field(carried + vec3<f32>(17.3, 0.0, -time * SWIRL_RATE), SWIRL_M),
-        eddy_field(carried + vec3<f32>(0.0, 31.7, time * SWIRL_RATE), SWIRL_M),
-    );
-    let warped = carried + swirl * (2.0 * SWIRL_REACH_M);
-    // Two copies drifting through, each fading in and out over a cycle, half
-    // a cycle apart: the pattern changes in place.
-    let cycle = time / EDDY_LIFE_S;
-    let a = fract(cycle);
-    let b = fract(cycle + 0.5);
-    let wa = eddy_field(warped - EDDY_DRIFT * (a * EDDY_LIFE_S) + vec3<f32>(5.1, 2.3, 0.0), EDDY_M);
-    let wb = eddy_field(warped - EDDY_DRIFT * (b * EDDY_LIFE_S) + vec3<f32>(-3.7, 8.9, 0.0), EDDY_M);
-    // Strands: bright where the field crosses zero, so the shapes are the
-    // field's level lines drawn out by the swirl, not its blobs. Fading the
-    // strands rather than the fields keeps them as fine mid-fade.
-    let strand_a = 1.0 - smoothstep(0.0, STRAND_WIDTH, abs(wa));
-    let strand_b = 1.0 - smoothstep(0.0, STRAND_WIDTH, abs(wb));
-    let strand = mix(strand_a, strand_b, abs(1.0 - 2.0 * a));
-    // Patches: churning air here, calm air there.
-    let churning = smoothstep(-0.25, 0.15, eddy_field(carried + vec3<f32>(0.0, 0.0, time * 0.02), PATCH_M));
-    let resolved = 1.0 - smoothstep(0.25 * EDDY_M, EDDY_M, footprint);
-    let contrast = (strand - STRAND_MEAN) / STRAND_MEAN;
-    return 1.0 + EDDY_DEPTH * medium.shape.z * resolved * churning * contrast;
-}
-
 // The haze's light at `world`, for light travelling along `along` that
 // left `origin`, scattered toward the camera; `footprint` is the metres of
 // it one pixel spans.
@@ -173,7 +93,7 @@ fn scattered(world: vec3<f32>, origin: vec3<f32>, along: vec3<f32>, footprint: f
     let to_camera = u.camera_pos.xyz - world;
     let toward = normalize(to_camera);
     let travelled = distance(world, origin) + length(to_camera);
-    let density = medium_density(medium, world) * eddies(world, footprint);
+    let density = medium_density(medium, world) * medium_wisps(medium, world, footprint);
     return sigma * density * u.haze.z * phase(dot(along, toward)) * exp(-sigma * travelled);
 }
 

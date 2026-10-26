@@ -2,7 +2,7 @@
 //!
 //! Broad clouds and fine wisps share one wrapping 3D texture. Combining the
 //! octaves at startup avoids four trilinear reads at every camera/light-path
-//! sample. Cloudiness, cloud size, wind and deformation still apply at runtime.
+//! sample. Cloudiness, cloud size, wind and turnover still apply at runtime.
 //! The bake shader owns the field; the CPU mirror exists only for verification.
 
 /// Texels per edge; the R16Float field occupies 32 MiB.
