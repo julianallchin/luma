@@ -39,7 +39,7 @@ test.skip("bug: the Fullscreen button covers the Frame stats toggle", { timeoutM
   nav.trackEditor("Test Venue", "Aurora");
   // A clip is labelled by its name; the fixture's clip is a Wash.
   until("the clip", (s) => s.find({ role: "card", label: "Wash" }) !== undefined, { timeoutMs: 15000 });
-  nav.expand();
+  nav.program();
   app.frames(10, { waitMs: 60 });
   nav.step("the frame-stats panel", "toggle", "Frame stats");
   nav.step("the Play button", "button", "Play");
@@ -100,7 +100,7 @@ test.skip("bug: the Fullscreen button covers the Frame stats toggle", { timeoutM
 // switch is.
 test("a paused stage rests again after the sidebar slides", { fixture: { rig: 20, clips: [], window: null }, timeoutMs: 120000 }, () => {
   nav.patch("Test Venue");
-  nav.expand();
+  nav.program();
   app.frames(10, { waitMs: 60 });
   nav.step("the haze switch", "toggle", "Haze", { restale: "match" });
   const idle = () => app.snapshot().find((n) => n.role === "text" && n.label === "FPS IDLE") !== undefined;

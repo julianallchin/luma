@@ -34,7 +34,7 @@ function points(value) {
 function open() {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   until("the waveform", (s) => s.find({ role: "card", label: "Waveform" }));
   settle();

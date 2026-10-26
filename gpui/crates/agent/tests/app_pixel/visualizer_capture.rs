@@ -86,7 +86,7 @@ fn capture() {
             {NAV}
             nav.trackEditor({VENUE_NAME:?}, {TRACK_NAME:?});
             until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
-            nav.expand();
+            nav.program();
             app.frames(12, {{ waitMs: 60 }});
         "#
         ),
@@ -169,7 +169,7 @@ fn capture() {
             app.frames(2);
             app.action("luma::ToggleVisualizer");
             until("the stage", (s) => s.find({{ role: "card", label: "Stage" }}) !== undefined);
-            nav.expand();
+            nav.program();
             app.frames(12, {{ waitMs: 60 }});
             nav.step("the Play button", "button", "Play");
             app.frames(30, {{ waitMs: 55 }});

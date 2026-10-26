@@ -16,7 +16,7 @@ fixture({ seconds: 20, rig: 4 });
 function openViewport() {
   nav.patch("Test Venue");
   app.frames(4, { waitMs: 60 });
-  nav.expand();
+  nav.program();
   app.frames(8, { waitMs: 60 });
 }
 

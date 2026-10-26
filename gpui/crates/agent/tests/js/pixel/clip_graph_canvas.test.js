@@ -17,10 +17,10 @@ const node = (role, label) => until(label, (s) => s.find({ role, label })).find(
 
 function open(preset = "Pulse") {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(node("card", preset));
-  nav.widenGraph();
+  nav.graphPage();
   app.frames(6, { waitMs: 30 });
 }
 

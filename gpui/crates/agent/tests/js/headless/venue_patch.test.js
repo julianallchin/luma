@@ -44,7 +44,7 @@ function openPatch() {
   nav.patch("Test Venue");
   nav.step("patch details", "button", "Patch details");
   // Takeover, and the stage off: the table is nine columns beside a rail.
-  nav.expand();
+  nav.program();
   nav.stageOff();
   until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
   app.frames(4);
@@ -290,7 +290,7 @@ test("fixture table edits and scene controls share selection", () => {
   nav.step("include the fixture", "checkbox", "Include wash 1");
   nav.step("save the membership", "button", "Save group");
   nav.step("patch details", "button", "Patch details");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   until("the same address in the patch", (s) => s.find({ role: "text", label: "wash 1 address = 65" }));
   nav.step("close the patch", "button", "Close patch details");

@@ -100,9 +100,9 @@ fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
             offline: gate.find({ role: "button", label: "Work offline" }) !== undefined,
             venues: gate.find({ role: "card", label: "Venue dialog" }) !== undefined,
             // A state, not a plane: the shell is not behind it, so neither
-            // pane toggle is there to be pressed through it.
+            // corner control is there to be pressed through it.
             shell: gate.find({ role: "button", label: "sidebar-toggle" }) !== undefined
-                || gate.find({ role: "button", label: "panel-toggle" }) !== undefined,
+                || gate.find({ role: "card", label: "View mode" }) !== undefined,
             // …and the window still moves and closes.
             lights: gate.find({ role: "button", label: "close" }) !== undefined,
             // Nothing failed. A launch that could not verify a session is a
