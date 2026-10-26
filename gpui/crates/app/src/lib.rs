@@ -66,7 +66,7 @@ mod visualizer;
 mod welcome;
 mod workspace;
 
-pub use chrome::hide_native_window_buttons;
+pub use chrome::traffic_light_position;
 #[cfg(feature = "agent")]
 pub use library::NavigationFixture;
 pub use library::{

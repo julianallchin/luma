@@ -592,6 +592,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     app.tick_sidebar_push(window);
     let sidebar_w = app.sidebar_width.eval(window);
     let viewport = f32::from(window.viewport_size().width);
+    let lights = chrome::corner_lit(window);
     // What the chat and the editor share, and how they divide it. Stored as a
     // proportion (see [`luma_ui::split`]), so the sidebar taking 256px from the
     // pair takes it from *both* in the ratio they were already at — the split
@@ -628,6 +629,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         x: main_x,
         width: viewport - main_x,
         viewport,
+        lights,
     };
     let strip_width = chrome::band_room(main_span, chrome::HISTORY_SLOT, 0.0, 0);
     // The account menu hangs off the sidebar's foot, so a sidebar that is
@@ -657,6 +659,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             x: 0.0,
             width: SIDEBAR_WIDTH,
             viewport,
+            lights,
         };
         let body = column(chrome::band(span))
             // The one region that raises itself off the ground, because it
@@ -781,6 +784,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             &entity,
             show_sidebar,
             app.sidebar.is_some(),
+            lights,
         ))
         .child(chrome::mode_switch(&entity, app.view_mode));
 
@@ -834,7 +838,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
     // Last, so nothing — least of all an overlay — can cover the only controls
     // that move and close the window. See [`crate::chrome`].
-    row.child(chrome::window_controls())
+    row.children(chrome::window_controls(window))
 }
 
 /// One region: its head band, then whatever it shows, floor to ceiling.
@@ -1552,6 +1556,7 @@ mod tests {
             x: 1280.0 - width,
             width,
             viewport: 1280.0,
+            lights: true,
         }
     }
 
@@ -1565,21 +1570,31 @@ mod tests {
                 x: 0.0,
                 width: 1280.0,
                 viewport: 1280.0,
+                lights: true,
+            },
+            chrome::BandSpan {
+                x: 0.0,
+                width: 1280.0,
+                viewport: 1280.0,
+                lights: false,
             },
             chrome::BandSpan {
                 x: 0.0,
                 width: 256.0,
                 viewport: 1280.0,
+                lights: true,
             },
             chrome::BandSpan {
                 x: 257.0,
                 width: 1023.0,
                 viewport: 1280.0,
+                lights: true,
             },
             chrome::BandSpan {
                 x: 257.0,
                 width: 503.0,
                 viewport: 1280.0,
+                lights: true,
             },
             panel(520.0),
         ] {
@@ -1608,12 +1623,13 @@ mod tests {
                 x: sidebar + seam,
                 width: 1280.0 - sidebar - seam,
                 viewport: 1280.0,
+                lights: true,
             };
             chrome::tab_strip_origin(span)
         };
         let mut previous = cluster_x(0.0);
         // Closed, the thread's cluster clears the lights and the toggle.
-        assert_eq!(previous, 108.0);
+        assert_eq!(previous, chrome::left_anchor_end(true));
         for step in 1..=64 {
             let x = cluster_x(SIDEBAR_WIDTH * step as f32 / 64.0);
             assert!(
@@ -1625,5 +1641,23 @@ mod tests {
         }
         // Open, it sits just past the sidebar's seam.
         assert_eq!(previous, SIDEBAR_WIDTH + SEAM_WIDTH + 12.0);
+    }
+
+    /// A corner with no lights in it (a macOS fullscreen space) is given back:
+    /// the cluster at the window's edge moves into the room, and a cluster
+    /// already pushed past the anchors by an open sidebar does not move.
+    #[test]
+    fn a_corner_without_lights_gives_its_room_back() {
+        let origin = |x: f32, lights: bool| {
+            chrome::tab_strip_origin(chrome::BandSpan {
+                x,
+                width: 1280.0 - x,
+                viewport: 1280.0,
+                lights,
+            })
+        };
+        assert!(origin(0.0, false) < origin(0.0, true));
+        let open = SIDEBAR_WIDTH + SEAM_WIDTH;
+        assert_eq!(origin(open, false), origin(open, true));
     }
 }

@@ -24,7 +24,9 @@ test("a dialog is clamped below live window controls and changes the shell", () 
   image.keep(cardShot, "dialog-host/settings-card");
 
   const box = card.bounds;
-  const lights = ["close", "minimize", "maximize"].map((label) => shot.find({ role: "button", label }));
+  // The lights' corner, not the lights: on macOS they are AppKit's buttons,
+  // which no capture contains.
+  const corner = shot.find({ role: "card", label: "Window controls" });
   // Inside the window, with a gutter on every side.
   expect(box.x).toBeGreaterThan(0);
   expect(box.x + box.width).toBeLessThan(640);
@@ -32,11 +34,9 @@ test("a dialog is clamped below live window controls and changes the shell", () 
   // Clamped, not collapsed: the route keeps most of a small window.
   expect(box.width).toBeGreaterThan(640 / 2);
   expect(box.height).toBeGreaterThan(480 / 2);
-  for (const light of lights) {
-    // The window's controls are still there, above the card, not under it.
-    expect(light.bounds.width * light.bounds.height).toBeGreaterThan(0);
-    expect(light.bounds.y + light.bounds.height).toBeLessThan(box.y + 0.5);
-  }
+  // The window's controls are still there, above the card, not under it.
+  expect(corner.bounds.width * corner.bounds.height).toBeGreaterThan(0);
+  expect(corner.bounds.y + corner.bounds.height).toBeLessThan(box.y + 0.5);
 
   // The modal plane visibly transforms the shell…
   expect(image.diff(base, overlay)).toBeGreaterThan(0.2);

@@ -233,8 +233,9 @@ impl IntoElement for Frosted {
 ///
 /// The card supplies route content and its desired size; its maximum
 /// dimensions are clamped to the usable viewport, so the same primitive stays
-/// operable in compact windows. The shell paints native traffic-light controls
-/// after this plane, keeping those controls reachable.
+/// operable in compact windows. The window's traffic lights stay above this
+/// plane — AppKit's own on macOS, painted after it elsewhere — so they remain
+/// reachable.
 ///
 /// A struct rather than a parameter list because none of these are the
 /// *content* — they are the frame around it, and a caller reading
