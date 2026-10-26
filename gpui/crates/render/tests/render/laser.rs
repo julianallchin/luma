@@ -221,10 +221,10 @@ fn roughness(profile: &[f64]) -> f64 {
     profile.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f64>() / (profile.len() - 1) as f64
 }
 
-/// Haze with no clouds still has small eddies, and a beam a few millimetres
-/// wide shows them: its light varies along its length where a calm haze's
-/// does not. They only move the light along the beam; there is as much of
-/// it in all.
+/// Cloudy haze has eddies down to centimetres, and a beam a few millimetres
+/// wide shows them: its light wanders column to column along its length,
+/// where in even haze it does not. (That they only move the haze about,
+/// and how faint they are, `medium`'s tests hold.)
 #[test]
 fn a_beam_shows_the_hazes_small_eddies() {
     let mut renderer = Renderer::new().unwrap();
@@ -240,37 +240,29 @@ fn a_beam_shows_the_hazes_small_eddies() {
         origin: Vec3::new(-6.0, 0.0, EYE.z),
         ..projector(points)
     };
-    let mut beam = |turbulence: f32, time: f32, name: &str| {
+    let mut beam = |cloudiness: f32, time: f32, name: &str| {
         let mut f = frame_with(0.6, |render| {
             render.haze.appearance = HazeAppearance {
-                cloudiness: 0.0,
-                turbulence,
+                cloudiness,
+                turbulence: 0.6,
                 ..HazeAppearance::DEFAULT
             };
         });
         f.time = time;
-        let dark = render(&mut renderer, &f, &format!("{name}-dark"));
         f.lasers = vec![level.clone()];
-        let lit = render(&mut renderer, &f, name);
-        let light = brightness(&lit) - brightness(&dark);
-        (lit, light)
+        roughness(&beam_profile(&render(&mut renderer, &f, name)))
     };
-    let mut calm = (0.0, 0);
-    let mut eddying = (0.0, 0);
+    let mut even = 0.0;
+    let mut cloudy = 0.0;
     for (i, time) in [0.0, 7.0, 19.0, 31.0, 43.0, 59.0].into_iter().enumerate() {
-        let (pixels, light) = beam(0.0, time, &format!("calm-{i}"));
-        calm.0 += roughness(&beam_profile(&pixels));
-        calm.1 += light;
-        let (pixels, light) = beam(0.6, time, &format!("eddies-{i}"));
-        eddying.0 += roughness(&beam_profile(&pixels));
-        eddying.1 += light;
+        even += beam(0.0, time, &format!("even-{i}"));
+        cloudy += beam(
+            HazeAppearance::DEFAULT.cloudiness,
+            time,
+            &format!("eddies-{i}"),
+        );
     }
-    assert!(eddying.0 > 3.0 * calm.0, "{eddying:?} vs {calm:?}");
-    let share = eddying.1 as f64 / calm.1 as f64;
-    assert!(
-        (share - 1.0).abs() < 0.04,
-        "{share}: {eddying:?} vs {calm:?}"
-    );
+    assert!(cloudy > 3.0 * even, "{cloudy} vs {even}");
 }
 
 /// Haze scatters a laser's light mostly on along the beam: looking down a

@@ -31,15 +31,61 @@ fn medium_interior(m: ProceduralMedium, p: vec3<f32>) -> bool {
     return all(p >= m.min.xyz + width) && all(p <= m.max.xyz - width);
 }
 
+// The haze is stirred air: the cloud size is its largest eddy L, and
+// turbulence how hard it is stirred, ε = STIRRING · turbulence³ (m²/s³), so
+// eddy speeds are linear in the slider. By Kolmogorov's law an eddy r
+// across moves at (ε·r)^⅓ and turns over in r over that, and the haze's
+// contrast at r is the clouds' times (r/L)^⅓. Every size, speed and
+// strength in the field follows from those, so no setting gives haze that
+// air can't make.
+//
+// At full turbulence, a fan on the haze.
+const STIRRING: f32 = 0.1;
+
+// Speed of eddies `size` metres across, metres a second.
+fn medium_eddy_speed(m: ProceduralMedium, size: f32) -> f32 {
+    return m.shape.z * pow(STIRRING * size, 1.0 / 3.0);
+}
+
+// Turns an eddy `size` metres across has made by now.
+fn medium_turns(m: ProceduralMedium, size: f32) -> f32 {
+    return m.wind.w * medium_eddy_speed(m, size) / size;
+}
+
+// The haze's contrast at `size`, as a share of the clouds'.
+fn medium_contrast_at(m: ProceduralMedium, size: f32) -> f32 {
+    return pow(min(size / m.shape.y, 1.0), 1.0 / 3.0);
+}
+
+// Eddies turn into new eddies where they are rather than slide by: the
+// field is two copies half a turn apart, each fading out before it jumps to
+// a fresh place in the baked field. `a`, `b`: the copies' jumps, in base
+// units; `share`: a's share, sin²(π·turn), so the shares sum to one and
+// their square roots keep the contrast steady mid-turn.
+struct Turning {
+    a: vec3<f32>,
+    b: vec3<f32>,
+    share: f32,
+};
+
+fn medium_jump(index: f32) -> vec3<f32> {
+    return fract(index * vec3<f32>(0.618034, 0.414214, 0.732051)) * FIELD_CELLS;
+}
+
+fn medium_turning(turns: f32) -> Turning {
+    let s = sin(3.14159265 * fract(turns));
+    return Turning(medium_jump(floor(turns)), medium_jump(floor(turns + 0.5)) + vec3<f32>(7.3, 3.1, 5.9), s * s);
+}
+
 fn medium_cloud(m: ProceduralMedium, p: vec3<f32>) -> f32 {
-    var q = (p - vec3<f32>(m.wind.xy, 0.0) * m.wind.w) / m.shape.y;
-    // Smooth deformation, not random per-frame flicker or a fluid solver.
-    let phase = q.yzx * 1.7 + m.wind.w * 0.23;
-    q += m.shape.z * vec3<f32>(sin(phase.x), sin(phase.y + 2.1), sin(phase.z + 4.2));
-    // Four octaves are already baked into this field. Wind and deformation
+    let q = (p - vec3<f32>(m.wind.xy, 0.0) * m.wind.w) / m.shape.y * 2.0;
+    // Four octaves are already baked into this field. Wind and turnover
     // move the shared field without rebuilding it or fetching each octave.
-    let layered = textureSampleLevel(haze_noise_field, haze_noise_sampler,
-        q * 2.0 * FIELD_INV_CELLS, 0.0).x;
+    let turning = medium_turning(medium_turns(m, m.shape.y));
+    let layered = sqrt(turning.share) * textureSampleLevel(haze_noise_field, haze_noise_sampler,
+            (q + turning.a) * FIELD_INV_CELLS, 0.0).x
+        + sqrt(1.0 - turning.share) * textureSampleLevel(haze_noise_field, haze_noise_sampler,
+            (q + turning.b) * FIELD_INV_CELLS, 0.0).x;
     // Symmetric remapping preserves statistical mean density in the interior.
     let contrast = 2.0 * smoothstep(-0.22, 0.22, layered) - 1.0;
     return 1.0 + m.shape.x * contrast;
@@ -49,6 +95,79 @@ fn medium_density(m: ProceduralMedium, p: vec3<f32>) -> f32 {
     let envelope = medium_envelope(m, p);
     if envelope <= 0.0 || m.shape.x <= 0.0 { return envelope; }
     return envelope * medium_cloud(m, p);
+}
+
+// The fine end of the field, the wisps a laser beam is thin enough to
+// show, metres across. How strong they are, how fast they turn over and
+// what carries them all follow from their size and the stirring.
+const WISP_M: f32 = 0.5;
+// How far the largest eddies carry a wisp, as a share of their size: an
+// eddy moves air about its own size a turn.
+const SWIRL_REACH: f32 = 0.25;
+// A strand is where the fine field is within this of zero; the share of
+// the air a strand fills on average, measured over the baked field, so the
+// contrast keeps mean 1.
+const STRAND_WIDTH: f32 = 0.15;
+const STRAND_MEAN: f32 = 0.55;
+// At this scale the noise repeats every 1.2 m along each axis, and a beam
+// along an axis would show the same few eddies over and over. Turned off
+// the axes, a line through the field never retraces itself.
+const WISP_TURN: mat3x3<f32> = mat3x3<f32>(
+    0.6849, -0.1424, 0.7146,
+    0.5182, 0.7846, -0.3403,
+    -0.5122, 0.6034, 0.6111,
+);
+
+// One tap of the baked field at `p`, in metres, for features `size` wide,
+// moved `jump` base units: about −0.5 to 0.5, mean 0. Turned off the axes,
+// so a beam along one never retraces the field's repeats.
+fn medium_turned_field(p: vec3<f32>, size: f32, jump: vec3<f32>) -> f32 {
+    // The baked field's broadest octave is four base units across.
+    let q = WISP_TURN * p * (4.0 / size) + jump;
+    return textureSampleLevel(haze_noise_field, haze_noise_sampler, q * FIELD_INV_CELLS, 0.0).x;
+}
+
+// Bright where the fine field crosses zero: the shapes are its level lines
+// drawn out by the swirl, not its blobs.
+fn medium_strand(w: f32) -> f32 {
+    return 1.0 - smoothstep(0.0, STRAND_WIDTH, abs(w));
+}
+
+// The wisps' share of the haze's density at `world`, mean 1: the fine end
+// of the field, which a laser beam is thin enough to show.
+//
+// Real eddies turn over where they are, get drawn out into wisps by the
+// largest eddies carrying them, and come in patches. So the fine field is
+// warped by the largest eddies, moving at their speed; turns over as the
+// clouds do, at its own size's rate; is shaped into strands rather than
+// blobs; and is strong only where the largest eddies are churning. Its
+// strength is the clouds' at its size. Where a pixel spans `footprint`
+// metres, as wide as a wisp, the pixel averages them away.
+fn medium_wisps(m: ProceduralMedium, world: vec3<f32>, footprint: f32) -> f32 {
+    let largest = m.shape.y;
+    let carried = world - vec3<f32>(m.wind.xy, 0.0) * m.wind.w;
+    // The largest eddies, carrying the wisps: their field moves at their
+    // speed, which reads as churning, not sliding, through the warp.
+    let travel = vec3<f32>(0.0, 0.0, m.wind.w * medium_eddy_speed(m, largest));
+    let swirl = vec3<f32>(
+        medium_turned_field(carried + travel, largest, vec3<f32>(0.0)),
+        medium_turned_field(carried - travel, largest, vec3<f32>(17.3, 0.0, 0.0)),
+        medium_turned_field(carried + travel, largest, vec3<f32>(0.0, 31.7, 0.0)),
+    );
+    let warped = carried + swirl * (2.0 * SWIRL_REACH * largest);
+    // Fading the strands rather than the fields keeps them as fine mid-turn.
+    let turning = medium_turning(medium_turns(m, WISP_M));
+    let strands = mix(
+        medium_strand(medium_turned_field(warped, WISP_M, turning.b)),
+        medium_strand(medium_turned_field(warped, WISP_M, turning.a)),
+        turning.share,
+    );
+    // Patches: churning air here, calm air there, as the largest eddies go.
+    let churning = smoothstep(-0.25, 0.15, medium_turned_field(carried - travel, largest, vec3<f32>(0.0, 0.0, 43.1)));
+    let resolved = 1.0 - smoothstep(0.25 * WISP_M, WISP_M, footprint);
+    let contrast = (strands - STRAND_MEAN) / STRAND_MEAN;
+    let strength = m.shape.x * medium_contrast_at(m, WISP_M);
+    return 1.0 + strength * resolved * churning * contrast;
 }
 
 // Finite support for expensive fixture lighting, never an outdoor density edge.
