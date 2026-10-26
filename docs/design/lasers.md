@@ -110,10 +110,14 @@ sixteenth of the frame, and nothing hides that.
   Kolmogorov's law an eddy r across moves at (ε·r)^⅓ and turns over in r
   over that, and the haze's contrast at r is the clouds' times (r/L)^⅓.
   Every size, speed and strength follows from those three settings, so no
-  setting gives haze air can't make. Eddies turn over in place: two copies
-  of the baked field half a turn apart, each fading out before it jumps,
-  their weights' squares summing to one so contrast holds mid-turn. Clouds
-  no longer loop.
+  setting gives haze air can't make. Eddies turn over in place: each half
+  turn the haze fades from one place in the baked field to the next, a
+  whole number of texels on, the weights' squares summing to one so
+  contrast holds. The noise texture holds each texel and the one a step on
+  (Rg16Float, 64 MiB), so that is one read, and the hand-over shows
+  nowhere. It comes back after 128 turns (38 minutes of default clouds);
+  the old wobble looped every 27 s. Cloudy haze costs about 3% more than
+  before.
 - A beam a few millimetres wide samples one line through the haze, so it
   shows the field's fine end, 0.5 m wisps a metre-wide cone averages away
   (`medium_wisps`): the level lines of a fine field, drawn out by the

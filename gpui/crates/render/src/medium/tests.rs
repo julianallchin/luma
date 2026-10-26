@@ -293,7 +293,8 @@ fn spread(v: &[f32]) -> (f64, f64) {
 /// An eddy r across, in air stirred at ε = 0.1·turbulence³ m²/s³, turns over
 /// in r / (ε·r)^⅓ seconds (Kolmogorov). The clouds, the largest eddies, are
 /// much as they were a tenth of a turn later and nothing like it a turn
-/// later, whatever their size and stirring; in still air they never change.
+/// later, whatever their size and stirring, and never jump between; in
+/// still air they never change.
 #[test]
 fn clouds_turn_over_as_fast_as_their_size_and_stirring_say() {
     let points = scattered(4096, 0.0);
@@ -321,6 +322,19 @@ fn clouds_turn_over_as_fast_as_their_size_and_stirring_say() {
             later.abs() < 0.15,
             "{largest} m at {turbulence}: {later} a turn on"
         );
+    }
+    // Each half turn the clouds step on through the field; the step itself
+    // shows nowhere.
+    let turn = 4.0 / (0.1 * 0.3_f32.powi(3) * 4.0).cbrt();
+    for step in [0.5, 1.0, 7.5] {
+        let before = clouds(stirred(0.35, 4.0, 0.3, (step - 1e-4) * turn));
+        let after = clouds(stirred(0.35, 4.0, 0.3, (step + 1e-4) * turn));
+        let jump = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(jump < 0.01, "clouds jumped {jump} at {step} turns");
     }
     assert_eq!(
         clouds(stirred(0.35, 4.0, 0.0, 0.0)),

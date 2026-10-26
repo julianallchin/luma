@@ -6,8 +6,11 @@
 // `FIELD_CELLS` are injected at pipeline creation, the way `light_index.rs`
 // injects `NARROW_PHASE`.
 //
+// Each texel holds the field and the field one `FIELD_TURN` on, which haze
+// turning over reads together (`medium.wgsl`, `medium_turning`).
+//
 // Output is a storage buffer of packed f16 pairs rather than a storage texture
-// because `r16float` is not a WebGPU storage-capable format; the buffer is
+// because `rg16float` is not a WebGPU storage-capable format; the buffer is
 // copied into the texture and dropped.
 
 @group(0) @binding(0) var<storage, read_write> packed: array<u32>;
@@ -84,19 +87,20 @@ fn texel_of(index: u32) -> vec3<u32> {
     );
 }
 
-// One invocation per *pair* of texels along x, because two f16 share a u32.
+// One invocation per texel: its field and the field a turn on, two f16 in
+// one u32.
 //
-// Dispatched 2D — x over one slice's pairs, y over slices — because a 256³
-// field is 8.4 M pairs and a 1D dispatch would need 131072 workgroups against
-// a 65535-per-dimension limit.
+// Dispatched 2D — x over one slice's texels, y over slices — because a 256³
+// field is 16.8 M texels and a 1D dispatch would need 262144 workgroups
+// against a 65535-per-dimension limit.
 @compute @workgroup_size(64)
 fn bake_field(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pairs_per_slice = FIELD_SIZE * FIELD_SIZE / 2u;
-    if gid.x >= pairs_per_slice || gid.y >= FIELD_SIZE {
+    let per_slice = FIELD_SIZE * FIELD_SIZE;
+    if gid.x >= per_slice || gid.y >= FIELD_SIZE {
         return;
     }
-    let pair = gid.y * pairs_per_slice + gid.x;
-    let lo = layered_noise(texel_centre(texel_of(pair * 2u)));
-    let hi = layered_noise(texel_centre(texel_of(pair * 2u + 1u)));
-    packed[pair] = pack2x16float(vec2<f32>(lo, hi));
+    let index = gid.y * per_slice + gid.x;
+    let texel = texel_of(index);
+    let turned = texel_centre((texel + FIELD_TURN) % FIELD_SIZE);
+    packed[index] = pack2x16float(vec2<f32>(layered_noise(texel_centre(texel)), layered_noise(turned)));
 }
