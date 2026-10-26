@@ -261,6 +261,7 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
         Ty::Heads => Signal::Heads,
         // A shuffle's time is a time node's wire, the one it gives a curve.
         Ty::Coordinate | Ty::Time => Signal::Coordinate,
+        Ty::Figures => Signal::Figure,
         Ty::Points | Ty::Gradient => return None,
     })
 }
@@ -275,6 +276,7 @@ fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
             Some("color") => Signal::Color,
             _ => Signal::Number,
         },
+        Kind::Figure => Signal::Figure,
         _ => Signal::Heads,
     }
 }
@@ -305,7 +307,7 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
-const ADDABLE: [Kind; 12] = [
+const ADDABLE: [Kind; 13] = [
     Kind::Time,
     Kind::Space,
     Kind::Along,
@@ -318,6 +320,7 @@ const ADDABLE: [Kind; 12] = [
     Kind::Shuffle,
     Kind::Group,
     Kind::Split,
+    Kind::Figure,
 ];
 
 /// Whether a wire from `from` may drop on an input.

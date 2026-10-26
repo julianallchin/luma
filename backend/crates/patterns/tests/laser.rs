@@ -1,12 +1,18 @@
-//! Laser clips: the checker's rules for `count`, `along` and the zone, and
-//! the elements a laser graph draws over two projectors.
+//! Laser clips: the checker's rules for figures, `count`, `along` and the
+//! zone, and the elements a laser graph draws over two projectors.
 use luma_patterns::clip_graph::ClipGraph;
-use luma_patterns::laser::{Sample, ALONG_SAMPLES, ELEMENT_OUTPUT};
+use luma_patterns::laser::{element_output, Sample, ALONG_SAMPLES};
 use luma_patterns::{standard_library, Cell, Frame, PreparedGraph};
 use serde_json::{json, Value};
 
 fn graph(nodes: Value) -> ClipGraph {
     serde_json::from_value(json!({"version": 3, "nodes": nodes})).expect("graph JSON")
+}
+
+/// `nodes` and a laser that draws the one figure `figure1`.
+fn one_figure(mut nodes: Value) -> ClipGraph {
+    nodes["laser1"] = json!({"kind": "laser", "inputs": {"figures": [{"node": "figure1"}]}});
+    graph(nodes)
 }
 
 /// `count` element cells on each of two projectors, left at U −2 and right
@@ -30,8 +36,13 @@ fn projectors(count: usize) -> Vec<Cell> {
 }
 
 /// Each element's alpha and samples at `beat` of a clip over beats 0–4,
-/// elements in id order.
+/// elements in id order, from the laser's first figure.
 fn elements(graph: &ClipGraph, cells: &[Cell], beat: f64) -> Vec<(f64, Vec<Sample>)> {
+    figure(graph, cells, beat, 0)
+}
+
+/// [`elements`] of the laser's figure `f`, over every cell.
+fn figure(graph: &ClipGraph, cells: &[Cell], beat: f64, f: usize) -> Vec<(f64, Vec<Sample>)> {
     graph.check().expect("a valid graph");
     let frame = Frame {
         cells,
@@ -45,7 +56,8 @@ fn elements(graph: &ClipGraph, cells: &[Cell], beat: f64) -> Vec<(f64, Vec<Sampl
     let out = prepared.evaluate_batch(&[beat]).expect("evaluates");
     let mut ids: Vec<String> = cells.iter().map(|c| c.id.clone()).collect();
     ids.sort();
-    luma_patterns::laser::Element::read(&out[ELEMENT_OUTPUT], &ids, 1).expect("elements")[0].clone()
+    luma_patterns::laser::Element::read(&out[&element_output(f)], &ids, 1).expect("elements")[0]
+        .clone()
 }
 
 fn xs(out: &[(f64, Vec<Sample>)]) -> Vec<f64> {
@@ -56,7 +68,8 @@ fn xs(out: &[(f64, Vec<Sample>)]) -> Vec<f64> {
 /// wide as `size`, the same on every projector.
 #[test]
 fn beams_with_no_x_spread_across_the_canvas_on_every_projector() {
-    let graph = graph(json!({"laser1": {"kind": "laser", "inputs": {"size": 1}}}));
+    let graph =
+        one_figure(json!({"figure1": {"kind": "figure", "inputs": {"count": 5, "size": 1}}}));
     let out = elements(&graph, &projectors(5), 1.);
     assert_eq!(xs(&out), [-1., -0.5, 0., 0.5, 1., -1., -0.5, 0., 0.5, 1.]);
     assert!(out
@@ -71,11 +84,11 @@ fn beams_with_no_x_spread_across_the_canvas_on_every_projector() {
 /// The old fan is x over the elements' order on each projector.
 #[test]
 fn x_over_space_spreads_each_projectors_elements() {
-    let graph = graph(json!({
+    let graph = one_figure(json!({
         "split1": {"kind": "split"},
         "order": {"kind": "space", "inputs": {"heads": {"node": "split1"}}, "settings": {"kind": "order"}},
         "spread": {"kind": "curve", "inputs": {"x": {"node": "order"}, "low": -1, "high": 1}},
-        "laser1": {"kind": "laser", "inputs": {"count": 4, "x": {"node": "spread"}}},
+        "figure1": {"kind": "figure", "inputs": {"count": 4, "x": {"node": "spread"}}},
     }));
     let out = xs(&elements(&graph, &projectors(4), 1.));
     let (left, right) = out.split_at(4);
@@ -86,7 +99,7 @@ fn x_over_space_spreads_each_projectors_elements() {
 
 #[test]
 fn a_laser_writes_no_light_of_its_own() {
-    let graph = graph(json!({"laser1": {"kind": "laser"}}));
+    let graph = one_figure(json!({"figure1": {"kind": "figure"}}));
     let cells = projectors(2);
     let frame = Frame {
         cells: &cells,
@@ -109,9 +122,9 @@ fn a_laser_writes_no_light_of_its_own() {
 /// line's frame turns with them.
 #[test]
 fn a_mirror_flips_the_canvas_of_the_folded_projectors() {
-    let graph = graph(json!({
+    let graph = one_figure(json!({
         "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
-        "laser1": {"kind": "laser", "settings": {"kind": "line"},
+        "figure1": {"kind": "figure", "settings": {"kind": "line"},
                    "inputs": {"heads": {"node": "mirror1"}, "x": -0.5, "rotation": 30}},
     }));
     let out = elements(&graph, &projectors(1), 1.);
@@ -129,11 +142,11 @@ fn a_mirror_flips_the_canvas_of_the_folded_projectors() {
 /// The x place follows a curve over time: the slide-in effect.
 #[test]
 fn a_single_beam_slides_in_and_holds() {
-    let graph = graph(json!({
+    let graph = one_figure(json!({
         "time1": {"kind": "time"},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"},
                    "shape": {"points": [[0, 0], [0.25, 1], [1, 1]]}, "low": -1, "high": 0.3}},
-        "laser1": {"kind": "laser", "inputs": {"count": 1, "x": {"node": "curve1"}}},
+        "figure1": {"kind": "figure", "inputs": {"count": 1, "x": {"node": "curve1"}}},
     }));
     let cells = projectors(1);
     let at = |beat| xs(&elements(&graph, &cells, beat))[0];
@@ -145,11 +158,11 @@ fn a_single_beam_slides_in_and_holds() {
 /// every sample, and the bend peaks in the middle.
 #[test]
 fn along_bends_a_line() {
-    let graph = graph(json!({
+    let graph = one_figure(json!({
         "along1": {"kind": "along"},
         "bend": {"kind": "curve", "inputs": {"x": {"node": "along1"},
                  "shape": {"points": [[0, 0], [0.5, 1], [1, 0]]}, "low": 0, "high": 0.5}},
-        "laser1": {"kind": "laser", "settings": {"kind": "line"}, "inputs": {"y": {"node": "bend"}}},
+        "figure1": {"kind": "figure", "settings": {"kind": "line"}, "inputs": {"y": {"node": "bend"}}},
     }));
     let out = elements(&graph, &projectors(1), 1.);
     let samples = &out[0].1;
@@ -167,11 +180,11 @@ fn along_bends_a_line() {
 #[test]
 fn colour_from_along_is_a_gradient_and_a_beam_has_one_sample() {
     let nodes = |kind: &str| {
-        graph(json!({
+        one_figure(json!({
             "along1": {"kind": "along"},
             "fade": {"kind": "curve", "settings": {"kind": "color"}, "inputs": {"x": {"node": "along1"},
                      "gradient": {"stops": [{"t": 0, "color": [1, 0, 0]}, {"t": 1, "color": [0, 0, 1]}]}}},
-            "laser1": {"kind": "laser", "settings": {"kind": kind}, "inputs": {"color": {"node": "fade"}}},
+            "figure1": {"kind": "figure", "settings": {"kind": kind}, "inputs": {"color": {"node": "fade"}}},
         }))
     };
     let ring = elements(&nodes("ring"), &projectors(1), 1.);
@@ -185,7 +198,7 @@ fn colour_from_along_is_a_gradient_and_a_beam_has_one_sample() {
 
 /// `along` is only for laser elements: anywhere else it is a clear error.
 #[test]
-fn along_reaches_only_a_lasers_element_inputs() {
+fn along_reaches_only_a_figures_element_inputs() {
     let error = |nodes: Value| graph(nodes).check().unwrap_err().0;
     let message = error(json!({
         "along1": {"kind": "along"},
@@ -199,7 +212,8 @@ fn along_reaches_only_a_lasers_element_inputs() {
     let message = error(json!({
         "along1": {"kind": "along"},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "along1"}}},
-        "laser1": {"kind": "laser", "inputs": {"alpha": {"node": "curve1"}}},
+        "figure1": {"kind": "figure"},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "figure1"}], "alpha": {"node": "curve1"}}},
     }));
     assert!(message.starts_with("laser1.alpha: expected"), "{message}");
     let message = error(json!({
@@ -207,7 +221,8 @@ fn along_reaches_only_a_lasers_element_inputs() {
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "along1"}}},
         "space1": {"kind": "space", "inputs": {"at": {"node": "curve1"}}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
-        "laser1": {"kind": "laser", "inputs": {"x": {"node": "curve2"}}},
+        "figure1": {"kind": "figure", "inputs": {"x": {"node": "curve2"}}},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "figure1"}]}},
     }));
     assert!(message.starts_with("space1.at: expected"), "{message}");
 }
@@ -222,7 +237,8 @@ fn a_shuffled_stab_lights_only_its_own_elements() {
         "space1": {"kind": "space", "inputs": {"heads": {"node": "shuffle1"}}, "settings": {"kind": "order"}},
         "stab": {"kind": "curve", "inputs": {"x": {"node": "space1"},
                  "shape": {"points": [[0, 1], [0.125, 1], [0.125, 0], [1, 0]]}}},
-        "laser1": {"kind": "laser", "inputs": {"count": 16, "alpha": {"node": "stab"}}},
+        "figure1": {"kind": "figure", "inputs": {"count": 16}},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "figure1"}], "alpha": {"node": "stab"}}},
     }));
     let cells: Vec<Cell> = projectors(16).into_iter().take(16).collect();
     let mut lit_sets = std::collections::BTreeSet::new();
@@ -241,26 +257,126 @@ fn a_shuffled_stab_lights_only_its_own_elements() {
 
 #[test]
 fn count_and_sides_take_a_whole_number_and_no_wire() {
-    let error = |nodes: Value| graph(nodes).check().unwrap_err().0;
+    let error = |nodes: Value| one_figure(nodes).check().unwrap_err().0;
     assert_eq!(
-        error(json!({"laser1": {"kind": "laser", "inputs": {"count": 2.5}}})),
-        "laser1.count: expected a whole number; got 2.5. Example: count=8"
+        error(json!({"figure1": {"kind": "figure", "inputs": {"count": 2.5}}})),
+        "figure1.count: expected a whole number; got 2.5. Example: count=8"
     );
     assert!(error(json!({
         "time1": {"kind": "time"},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": 1, "high": 8}},
-        "laser1": {"kind": "laser", "inputs": {"count": {"node": "curve1"}}},
+        "figure1": {"kind": "figure", "inputs": {"count": {"node": "curve1"}}},
     }))
-    .starts_with("laser1.count: expected a whole number that stays for the whole clip"));
+    .starts_with("figure1.count: expected a whole number that stays for the whole clip"));
     assert!(
-        error(json!({"laser1": {"kind": "laser", "inputs": {"sides": 2}}}))
-            .starts_with("laser1.sides: expected")
+        error(json!({"figure1": {"kind": "figure", "inputs": {"sides": 2}}}))
+            .starts_with("figure1.sides: expected")
     );
 }
 
 #[test]
 fn a_zone_is_any_text() {
-    graph(json!({"laser1": {"kind": "laser", "settings": {"zone": "a1b2", "kind": "polygon"}}}))
-        .check()
-        .unwrap();
+    graph(json!({
+        "figure1": {"kind": "figure", "settings": {"kind": "polygon"}},
+        "laser1": {"kind": "laser", "settings": {"zone": "a1b2"},
+                   "inputs": {"figures": [{"node": "figure1"}]}},
+    }))
+    .check()
+    .unwrap();
+}
+
+/// A sheet with rails and beams: three figures, one clip. Each figure's
+/// elements are its own heads, so the rails' home row spans the canvas
+/// whatever the other figures draw, and the sheet keeps its one element.
+#[test]
+fn figures_of_several_kinds_draw_in_one_clip() {
+    let graph = graph(json!({
+        "sheet": {"kind": "figure", "settings": {"kind": "line"}, "inputs": {"size": 0.8}},
+        "rails": {"kind": "figure", "inputs": {"count": 2, "size": 0.8}},
+        "dots": {"kind": "figure", "inputs": {"count": 4, "color": [0, 0, 1]}},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "sheet"}, {"node": "rails"}, {"node": "dots"}]}},
+    }));
+    let laser = graph.laser().unwrap();
+    assert_eq!(laser.count(), 7);
+    assert_eq!(laser.place(0), Some((0, 0)));
+    assert_eq!(laser.place(2), Some((1, 1)));
+    assert_eq!(laser.place(6), Some((2, 3)));
+    assert_eq!(laser.place(7), None);
+    // One projector: heads 0 the sheet, 1–2 the rails, 3–6 the dots.
+    let cells: Vec<Cell> = projectors(7).into_iter().take(7).collect();
+    let rails: Vec<f64> = xs(&figure(&graph, &cells, 1., 1))[1..3].to_vec();
+    assert_eq!(rails, [-0.8, 0.8]);
+    let dots = figure(&graph, &cells, 1., 2);
+    let row = xs(&dots[3..7]);
+    for (x, home) in row.iter().zip([-0.5, -1. / 6., 1. / 6., 0.5]) {
+        assert!((x - home).abs() < 1e-12, "{row:?}");
+    }
+    assert!(dots[3..7].iter().all(|(_, s)| s[0].rgb == [0., 0., 1.]));
+    let sheet = &figure(&graph, &cells, 1., 0)[0].1[0];
+    assert_eq!(sheet.frame, [[0.8, 0.], [0., 0.8]]);
+}
+
+/// One space wired into two figures reads each figure's elements as their
+/// own row: both fans run end to end.
+#[test]
+fn a_space_reads_each_figures_elements_apart() {
+    let graph = graph(json!({
+        "order": {"kind": "space", "settings": {"kind": "order"}},
+        "spread": {"kind": "curve", "inputs": {"x": {"node": "order"}, "low": -1, "high": 1}},
+        "wide": {"kind": "figure", "inputs": {"count": 4, "x": {"node": "spread"}}},
+        "narrow": {"kind": "figure", "inputs": {"count": 2, "x": {"node": "spread"}}},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "wide"}, {"node": "narrow"}]}},
+    }));
+    let cells: Vec<Cell> = projectors(6).into_iter().take(6).collect();
+    assert_eq!(
+        xs(&figure(&graph, &cells, 1., 0)[0..4]),
+        [-0.75, -0.25, 0.25, 0.75]
+    );
+    assert_eq!(xs(&figure(&graph, &cells, 1., 1)[4..6]), [-0.5, 0.5]);
+}
+
+#[test]
+fn a_laser_takes_each_figure_once_and_a_figure_only_feeds_a_laser() {
+    let error = |nodes: Value| graph(nodes).check().unwrap_err().0;
+    assert_eq!(
+        error(json!({"laser1": {"kind": "laser", "inputs": {"figures": []}}})),
+        "laser1.figures: expected one or more figure wires; got none. Example: figures=[figure1]"
+    );
+    assert_eq!(
+        error(json!({"laser1": {"kind": "laser"}})),
+        "laser1.figures: expected a list of one or more figure wires; got nothing. Example: figures=[figure1, figure2]"
+    );
+    assert_eq!(
+        error(json!({
+            "figure1": {"kind": "figure"},
+            "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "figure1"}, {"node": "figure1"}]}},
+        })),
+        "laser1.figures: expected each figure once; got figure1 twice. Example: figures=[figure1, figure2]"
+    );
+    assert!(error(json!({
+        "time1": {"kind": "time"},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "time1"}]}},
+    }))
+    .starts_with("laser1.figures: expected a list of one or more figure wires; got a coordinate wire from time1"));
+    assert!(error(json!({
+        "figure1": {"kind": "figure"},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "figure1"}}},
+    }))
+    .starts_with("color1.brightness: expected"));
+}
+
+#[test]
+fn a_lasers_figures_draw_at_most_64_elements_together() {
+    let message = graph(json!({
+        "a": {"kind": "figure", "inputs": {"count": 40}},
+        "b": {"kind": "figure", "inputs": {"count": 30}},
+        "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "a"}, {"node": "b"}]}},
+    }))
+    .check()
+    .unwrap_err()
+    .0;
+    assert!(
+        message.starts_with("laser1.figures: expected at most 64 elements on each projector, every figure's count together; got 70"),
+        "{message}"
+    );
 }

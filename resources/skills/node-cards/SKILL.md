@@ -50,7 +50,7 @@ math with a numbered id that one input reads in place:
 `space(shift=curve(t, 'Ramp up'))`, `color(brightness=cut * fade)`. An id is
 a Python name of at most 32 characters that is not a builder name (`time`,
 `space`, `along`, `random`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
-`split`, `color`, `aim`, `strobe`, `laser`, `preset`, `max`, `min`) or a keyword.
+`split`, `figure`, `color`, `aim`, `strobe`, `laser`, `preset`, `max`, `min`) or a keyword.
 
 ## Values and units
 
@@ -92,7 +92,8 @@ of curves is an error: to multiply, write `brightness=cut * fade`.
 | coordinate | `time`, `space`, `along`, `random`, `audio` | `curve.x` |
 | number | `curve` (number), `math` | any number input, a curve's `low`/`high` |
 | vector | `curve` (vector), `math` | any vector input, a curve's `low`/`high` |
-| color | `curve` (color), `math` | `color.color`, `laser.color` |
+| color | `curve` (color), `math` | `color.color`, `figure.color` |
+| figure | `figure` | `laser.figures` |
 
 A number, vector or color input takes a value or a wire of its own type. A
 coordinate never goes straight into a number input:
@@ -159,11 +160,11 @@ clock and restarts it whenever the rate changes, so a rate that moves every
 frame barely flashes on the rig even though the stage view strobes. Let the
 music decide *where* strobe clips go, not how fast they flash.
 
-**laser** `laser(heads=None, count=None, sides=None, x=None, y=None, size=None, rotation=None, color=None, alpha=None, kind="beams", zone="")`
+**figure** `figure(kind="beams", count=None, sides=None, x=None, y=None, size=None, rotation=None, color=None, heads=None)` → figure
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
-| heads | heads | | | all clip elements |
+| heads | heads | | | the figure's elements |
 | count | number | heads | 1–64, whole, fixed | 8 beams or grid points, else 1 |
 | sides | number | | 3–12, whole, fixed | 3 |
 | x | number | canvas | -1–1 | home place |
@@ -171,35 +172,48 @@ music decide *where* strobe clips go, not how fast they flash.
 | size | number | share | 0–1 | 0.5 |
 | rotation | number | degrees | -180–180 | 0 |
 | color | color | rgb | 0–1 | white `(1, 1, 1)` |
-| alpha | number | share | 0–1 | 1 |
 
-Laser shows from projectors. Select projectors, as any fixture; a laser
-clip skips other fixtures. Each projector draws `count` elements of `kind`:
+What a laser draws. Each projector draws `count` elements of `kind`:
 `beams` (points), `line`, `ring`, `polygon` (`sides` corners) or `grid`
 (points in rows), on the zone's canvas: -1 to 1 across and up the zone's
 window, the same directions from every projector, so six projectors draw
-six parallel shows. Each element is a head: `space`, `shuffle`, `mirror`
-and `random` read the elements as they read a mover's heads, so
+six parallel shows. Each element is a head of its figure: `space`,
+`shuffle`, `mirror` and `random` read a figure's elements as they read a
+mover's heads, apart from any other figure's, so one `space` wired into
+two figures spreads each across its own row, and
 `x=curve(space(split(), kind="order"), low=-1, high=1)` fans each
 projector's beams across the canvas. Per element, `x` and `y` place its
 centre, `size` is a line's half length or a ring's radius, `rotation`
-turns it clockwise and `color` is its colour. An empty `x` or `y` is the
-home place: beams in a row and a grid in rows, `size` wide and turned by
-`rotation`; any other kind in the middle. `count` and `sides` are plain
-numbers for the whole clip, never wired. `zone` is a zone id from
-`luma.venue.laser_zones()`; empty is the venue's first zone. A `mirror`
-reflects each element.
+turns it clockwise and `color` is its colour, which is its power: black is
+the light off. An empty `x` or `y` is the home place: beams in a row and a
+grid in rows, `size` wide and turned by `rotation`; any other kind in the
+middle. `count` and `sides` are plain numbers for the whole clip, never
+wired. A `mirror` on `heads` reflects each element.
 
 Wire `along()` through curves and math into x, y, size, rotation or color
 to vary them within each line, ring or polygon: a wave, a gradient, dashes.
 
-A laser's colour is its own: a **color** clip never reaches projectors.
-Blend modes: `replace` morphs the elements under it into its own by alpha,
-matched by place along their order (colours cut, never blend); `add` draws
-both. A laser and a light cannot share one graph.
+**laser** `laser(figures, alpha=None, zone="")`
+
+| Input | Type | Unit | Range | Empty |
+|---|---|---|---|---|
+| figures | figures | | one or more `figure` nodes, each once | required |
+| alpha | number | share | 0–1 | 1 |
+
+Laser shows from projectors. Select projectors, as any fixture; a laser
+clip skips other fixtures. It draws its figures in order on each
+projector: `laser([sheet, rails, dots])` is a sheet, its rails and four
+beams in one clip. A projector's elements are every figure's together, at
+most 64. `zone` is a zone id from `luma.venue.laser_zones()`; empty is the
+venue's first zone.
+
+A laser's colour is its figures': a **color** clip never reaches
+projectors. Blend modes: `replace` morphs the elements under it into its
+own by alpha, matched by place along their order (colours cut, never
+blend); `add` draws both. A laser and a light cannot share one graph.
 
 Brightness is time: a projector shares each scan between its elements, so
-16 beams are each dimmer than 4, and a long figure dimmer than a short one.
+16 beams are each dimmer than 4, and a sheet added dims the beams beside it.
 
 ## Coordinate nodes
 
@@ -337,7 +351,7 @@ floor in the curve's shape and low/high. It needs track analysis.
 **along** `along()` → coordinate
 
 Place within a laser element, 0–1: from a line's start to its end, or once
-round a ring or polygon; a beam is a single point, at 0. Only a laser's
+round a ring or polygon; a beam is a single point, at 0. Only a figure's
 x, y, size, rotation and color read it, through curves and math:
 `y=curve(along(), "Sine", low=-0.2, high=0.2)` bends a line,
 `color=curve(along(), gradient="Fire")` runs a gradient along it, and a

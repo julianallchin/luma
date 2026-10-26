@@ -313,7 +313,7 @@ pub(crate) fn render_aim_preview(
 /// Rows of a laser clip's strip: the canvas across, −1 at the top.
 const LASER_ROWS: u32 = 32;
 
-/// Points a laser element's strip reads along a figure.
+/// Points a laser element's strip reads along its outline.
 const LASER_STEPS: usize = 64;
 
 /// A laser clip's picture: where its elements sit across the canvas over
@@ -333,7 +333,7 @@ pub(crate) fn render_laser_preview(
     let mut light = vec![[0f64; 3]; (width * height) as usize];
     for (col, frame) in frames.iter().enumerate() {
         for element in &frame.lasers {
-            let steps = if element.figure == luma_patterns::laser::Figure::Point {
+            let steps = if element.outline == luma_patterns::laser::Outline::Point {
                 0
             } else {
                 LASER_STEPS
@@ -539,7 +539,7 @@ mod tests {
     }
 
     fn element(
-        figure: luma_patterns::laser::Figure,
+        outline: luma_patterns::laser::Outline,
         x: f64,
         rgb: [f64; 3],
     ) -> luma_patterns::laser::Element {
@@ -547,7 +547,7 @@ mod tests {
             projector: "p".into(),
             zone: String::new(),
             layer: 0,
-            figure,
+            outline,
             s: 0.,
             samples: vec![luma_patterns::laser::Sample {
                 at: [x, 0.],
@@ -572,7 +572,7 @@ mod tests {
         let frames: Vec<UniverseState> = [-1., 0., 1.]
             .into_iter()
             .map(|x| UniverseState {
-                lasers: vec![element(luma_patterns::laser::Figure::Point, x, [1.; 3])],
+                lasers: vec![element(luma_patterns::laser::Outline::Point, x, [1.; 3])],
                 ..Default::default()
             })
             .collect();
@@ -587,8 +587,8 @@ mod tests {
     fn a_line_fills_its_rows_in_its_colour() {
         let frame = UniverseState {
             lasers: vec![
-                element(luma_patterns::laser::Figure::Line, 0., [1., 0., 0.]),
-                element(luma_patterns::laser::Figure::Point, 0.9, [0., 0., 1.]),
+                element(luma_patterns::laser::Outline::Line, 0., [1., 0., 0.]),
+                element(luma_patterns::laser::Outline::Point, 0.9, [0., 0., 1.]),
             ],
             ..Default::default()
         };

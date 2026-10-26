@@ -922,7 +922,7 @@ mod tests {
     use crate::laser::{Basis, LaserRig, Projector};
     use crate::models::universe::PrimitiveState;
     use glam::DVec3;
-    use luma_patterns::laser::{Element, Figure, Sample};
+    use luma_patterns::laser::{Element, Outline, Sample};
     use luma_scene::venue::NodeKind as VenueNodeKind;
 
     fn patched(id: &str) -> PatchedFixture {
@@ -1217,7 +1217,7 @@ mod tests {
                 projector: "p".into(),
                 zone: String::new(),
                 layer: 0,
-                figure: Figure::Point,
+                outline: Outline::Point,
                 s: 0.,
                 samples: vec![Sample {
                     at: [0., 0.],

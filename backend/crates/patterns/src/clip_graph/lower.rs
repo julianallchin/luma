@@ -8,7 +8,7 @@
 use super::heads::{SplitBy, Units};
 use super::kernels::{Kernel, AIM_MIRRORS};
 use super::{ClipGraph, Input, Kind, Node as ClipNode};
-use crate::mapping::{fixture_of, head_of};
+use crate::mapping::head_of;
 use crate::{
     Binding, Body, Cell, Channels, Curve, Definition, Error, Frame, Gradient, Graph, Node, Output,
     Rate, Result, Signal, SignalType, Unit, Value, ValueType,
@@ -63,6 +63,9 @@ struct Lowering<'a> {
     /// neither `every` nor `duration`.
     clip_duration: f64,
     cells: Vec<Cell>,
+    /// Per cell, its element's figure and its index and count in that
+    /// figure; `None` outside a laser clip.
+    places: Option<Places>,
     fixtures: Arc<[String]>,
     nodes: BTreeMap<String, Node>,
     clocks: HashMap<String, Events>,
@@ -630,10 +633,17 @@ impl Lowering<'_> {
 
     // ---- heads ----
 
+    /// Every cell its own unit. In a laser clip each figure is its own
+    /// span, so space, random and mirror read a figure's elements apart
+    /// from the others'.
     fn base_heads(&self) -> Result<Heads> {
         let positions = self.field(self.cells.iter().flat_map(|c| c.uvz).collect(), 3)?;
+        let mut units = Units::base(&self.cells);
+        if let Some(places) = &self.places {
+            units.span = places.figure.clone();
+        }
         Ok(Heads {
-            units: Units::base(&self.cells),
+            units,
             unfolded: positions.clone(),
             positions,
             mirrors: Vec::new(),
@@ -861,10 +871,12 @@ impl<'a> Lowering<'a> {
             .map(|c| c.id.clone())
             .collect::<Vec<_>>()
             .into();
+        let places = graph.laser().map(|laser| Places::of(&laser, &cells));
         Lowering {
             graph,
             clip_duration: frame.clip_duration,
             cells,
+            places,
             fixtures,
             nodes: BTreeMap::new(),
             clocks: HashMap::new(),
@@ -936,22 +948,36 @@ pub(crate) fn lower_coordinate(
     })
 }
 
-/// Each cell's element index and its projector's element count, for a
-/// laser: a cell `projector:i` is element `i` of as many as its projector
-/// has cells.
-fn element_indices(cells: &[Cell]) -> (Vec<usize>, Vec<usize>) {
-    let mut counts: HashMap<&str, usize> = HashMap::new();
-    for cell in cells {
-        *counts.entry(fixture_of(&cell.id)).or_default() += 1;
+/// Where each cell's element sits in a laser clip: a cell `projector:i` is
+/// element `i` of its projector's, figure after figure.
+struct Places {
+    /// Per cell: its figure's place in the laser's `figures`.
+    figure: Vec<usize>,
+    /// Per cell: its index in its figure.
+    index: Vec<usize>,
+    /// Per cell: its figure's element count.
+    count: Vec<usize>,
+}
+
+impl Places {
+    fn of(laser: &super::LaserHeads, cells: &[Cell]) -> Self {
+        let last = laser.count().saturating_sub(1);
+        let mut places = Places {
+            figure: Vec::with_capacity(cells.len()),
+            index: Vec::with_capacity(cells.len()),
+            count: Vec::with_capacity(cells.len()),
+        };
+        for cell in cells {
+            let element = head_of(&cell.id).map_or(0, |i| i as usize).min(last);
+            let (figure, index) = laser.place(element).unwrap_or((0, 0));
+            places.figure.push(figure);
+            places.index.push(index);
+            places
+                .count
+                .push(laser.figures.get(figure).map_or(1, |f| f.count));
+        }
+        places
     }
-    cells
-        .iter()
-        .map(|cell| {
-            let count = counts[fixture_of(&cell.id)];
-            let index = head_of(&cell.id).map_or(0, |i| i as usize).min(count - 1);
-            (index, count)
-        })
-        .unzip()
 }
 
 pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
@@ -1070,10 +1096,22 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
             );
             Some(("aim", output(&out, "aim")))
         }
-        // A laser writes no light of its own: its elements leave by their
-        // own output, colour and all.
+        // A laser writes no light of its own: each figure's elements leave
+        // by their own output, colour and all.
         Kind::Laser => {
-            laser(&mut lowering, &id, out, &mut outputs, &mut types)?;
+            let alpha = lowering.number(&id, "alpha", 1.)?;
+            let figures: Vec<String> = out
+                .inputs
+                .get("figures")
+                .into_iter()
+                .flat_map(Input::sources)
+                .map(str::to_string)
+                .collect();
+            for (f, figure) in figures.iter().enumerate() {
+                let elements = laser_figure(&mut lowering, figure, &alpha)?;
+                outputs.insert(crate::laser::element_output(f), elements.0);
+                types.insert(crate::laser::element_output(f), elements.1);
+            }
             None
         }
         kind => {
@@ -1103,32 +1141,30 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
     })
 }
 
-/// The per-element inputs of a laser node, in the order its kernel reads
-/// them per sample: x, y, size, rotation, then the colour's r, g and b.
+/// The per-element inputs of a figure, in the order its kernel reads them
+/// per sample: x, y, size, rotation, then the colour's r, g and b.
 const LASER_PARTS: [&str; 7] = ["x", "y", "size", "rotation", "r", "g", "b"];
 
-/// A laser node's kernel and its element output. An input that reads
+/// Figure node `id`'s kernel under its laser's `alpha`: its element output
+/// and that output's type. An input that reads
 /// `along` is lowered at [`crate::laser::ALONG_SAMPLES`] places along the
 /// element, ends included; every other input once, for every place.
-fn laser(
+fn laser_figure(
     lowering: &mut Lowering<'_>,
     id: &str,
-    out: &ClipNode,
-    outputs: &mut BTreeMap<String, Binding>,
-    types: &mut BTreeMap<String, Output>,
-) -> Result<()> {
+    alpha: &Lowered,
+) -> Result<(Binding, Output)> {
     let heads = lowering.heads_input(id)?;
     if heads.mirrors.len() > AIM_MIRRORS {
         return Err(Error(format!(
-            "{id}.heads: a laser reads at most {AIM_MIRRORS} stacked mirrors; got {}",
+            "{id}.heads: a figure reads at most {AIM_MIRRORS} stacked mirrors; got {}",
             heads.mirrors.len()
         )));
     }
-    let kind = crate::laser::Kind::from_setting(out.setting("kind"));
+    let node = lowering.node(id).clone();
+    let kind = crate::laser::Kind::from_setting(node.setting("kind"));
     let sampled = |lowering: &Lowering<'_>, input: &str| {
-        lowering
-            .node(id)
-            .inputs
+        node.inputs
             .get(input)
             .and_then(Input::source)
             .is_some_and(|source| lowering.reads_along(source))
@@ -1187,12 +1223,15 @@ fn laser(
         per_sample.push(slots);
     }
     lowering.along = None;
-    let alpha = lowering.number(id, "alpha", 1.)?;
     let parts = unique.into_iter().map(|part| vec![part]).collect();
-    let (parts, alpha) = lowering.layer(parts, alpha, true)?;
-    let (index, count) = element_indices(&lowering.cells);
+    let (parts, alpha) = lowering.layer(parts, alpha.clone(), true)?;
+    let places = lowering
+        .places
+        .as_ref()
+        .expect("a laser clip places its elements");
+    let (index, count) = (places.index.clone(), places.count.clone());
     let given = |name: &str| {
-        number(if out.inputs.contains_key(name) {
+        number(if node.inputs.contains_key(name) {
             1.
         } else {
             0.
@@ -1223,12 +1262,8 @@ fn laser(
         ports.push((format!("normal{m}"), plane));
     }
     let kernel = lowering.kernel_named(Kernel::LaserOut, ports);
-    outputs.insert(
-        crate::laser::ELEMENT_OUTPUT.to_string(),
+    Ok((
         output(&kernel, "element"),
-    );
-    types.insert(
-        crate::laser::ELEMENT_OUTPUT.to_string(),
         Output {
             value_type: ValueType::Signal(SignalType::new(
                 Unit::Number,
@@ -1236,6 +1271,5 @@ fn laser(
             )),
             rate: Rate::Frame,
         },
-    );
-    Ok(())
+    ))
 }
