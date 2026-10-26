@@ -13,7 +13,7 @@
 //! the light. Nothing here hides that.
 use super::{LaserRig, Projector};
 use crate::models::universe::UniverseState;
-use luma_patterns::laser::{Element, Figure};
+use luma_patterns::laser::{Element, Outline};
 use serde::{Deserialize, Serialize};
 
 /// Scans a second a frame aims for.
@@ -140,7 +140,7 @@ pub(super) fn frame(
 }
 
 /// What `element` draws on `projector`: a beam it can reach and that is
-/// lit, or the lit runs along a figure. A stretch the scanner cannot reach
+/// lit, or the lit runs along an outline. A stretch the scanner cannot reach
 /// or that is black is left out, and the scan jumps over it in black.
 fn strokes(rig: &LaserRig, projector: &Projector, element: &Element) -> Vec<Stroke> {
     let zone = rig.zone(&element.zone);
@@ -148,7 +148,7 @@ fn strokes(rig: &LaserRig, projector: &Projector, element: &Element) -> Vec<Stro
         let ([x, y], rgb) = element.point(along);
         Some((projector.galvo(zone.direction(x, y))?, rgb))
     };
-    if element.figure == Figure::Point {
+    if element.outline == Outline::Point {
         return view(0.)
             .filter(|(_, rgb)| lit(*rgb))
             .map(Stroke::Dot)
@@ -180,8 +180,8 @@ fn strokes(rig: &LaserRig, projector: &Projector, element: &Element) -> Vec<Stro
             None => open = false,
         }
     }
-    // A closed figure lit across its seam is one run.
-    let closed = matches!(element.figure, Figure::Ring | Figure::Polygon(_));
+    // A closed outline lit across its seam is one run.
+    let closed = matches!(element.outline, Outline::Ring | Outline::Polygon(_));
     if closed && open && runs.len() > 1 && view(0.).is_some_and(|(_, rgb)| lit(rgb)) {
         let last = runs.pop().expect("runs");
         runs[0].splice(0..0, last);
@@ -278,12 +278,12 @@ mod tests {
     use super::*;
     use luma_patterns::laser::{frame as turn, Sample};
 
-    fn element(figure: Figure, layer: u32, s: f64, x: f64) -> Element {
+    fn element(outline: Outline, layer: u32, s: f64, x: f64) -> Element {
         Element {
             projector: "p".into(),
             zone: String::new(),
             layer,
-            figure,
+            outline,
             s,
             samples: vec![Sample {
                 at: [x, 0.],
@@ -295,7 +295,7 @@ mod tests {
     }
 
     fn beam(layer: u32, s: f64, x: f64) -> Element {
-        element(Figure::Point, layer, s, x)
+        element(Outline::Point, layer, s, x)
     }
 
     fn rig() -> LaserRig {
@@ -360,7 +360,7 @@ mod tests {
     /// and the mirrors never stop on the way.
     #[test]
     fn a_line_sweeps_without_stopping() {
-        let frame = solve(vec![element(Figure::Line, 0, 0.5, 0.)]);
+        let frame = solve(vec![element(Outline::Line, 0, 0.5, 0.)]);
         let points = lit(&frame);
         assert!(spots(&points).len() > 20, "{}", points.len());
         for pair in points.windows(2) {
@@ -374,7 +374,7 @@ mod tests {
     /// with no jump in black across its seam.
     #[test]
     fn a_ring_is_drawn_round_once() {
-        let frame = solve(vec![element(Figure::Ring, 0, 0.5, 0.)]);
+        let frame = solve(vec![element(Outline::Ring, 0, 0.5, 0.)]);
         let first = frame.points.iter().position(LaserPoint::is_lit).unwrap();
         let last = frame.points.iter().rposition(LaserPoint::is_lit).unwrap();
         assert!(frame.points[first..=last].iter().all(LaserPoint::is_lit));
@@ -387,7 +387,7 @@ mod tests {
     /// points than the same line lit all the way.
     #[test]
     fn a_dark_stretch_is_jumped_in_black() {
-        let mut dashed = element(Figure::Line, 0, 0.5, 0.);
+        let mut dashed = element(Outline::Line, 0, 0.5, 0.);
         dashed.samples = [1., 1., 0., 0., 1., 1.]
             .into_iter()
             .map(|level| Sample {
@@ -395,7 +395,7 @@ mod tests {
                 ..dashed.samples[0]
             })
             .collect();
-        let whole = solve(vec![element(Figure::Line, 0, 0.5, 0.)]);
+        let whole = solve(vec![element(Outline::Line, 0, 0.5, 0.)]);
         let dashes = solve(vec![dashed]);
         assert!(lit(&dashes).len() < lit(&whole).len());
         // Two dashes: the light goes off and on again once in the middle.

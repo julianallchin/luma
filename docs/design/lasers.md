@@ -33,22 +33,30 @@ that into a point stream, the way aim becomes pan and tilt.
 
 ## Clips
 
-- **Laser** output node: `kind` (`beams`, `line`, `ring`, `polygon` with
-  `sides`, `grid`) and `count` (whole numbers fixed for the clip), the
-  per-element inputs `x`, `y`, `size`, `rotation` and `color`, `alpha`,
-  and the `zone` setting. A clip's heads are its elements,
-  `projector:0` to `projector:{count − 1}`, spread a little across each
-  projector's scan so Space and Mirror read them; a mirror reflects each
-  element. An empty `x` or `y` is the element's home place: beams in a row
-  and a grid in rows, `size` wide and turned by `rotation`; one line, ring
-  or polygon in the middle.
-- **Along** (`along()`) is 0 to 1 within an element. Only the laser's
+- **Figure** node: `kind` (`beams`, `line`, `ring`, `polygon` with
+  `sides`, `grid`) and `count` (whole numbers fixed for the clip), and the
+  per-element inputs `x`, `y`, `size`, `rotation` and `color`, and
+  `heads`. A figure's elements are its heads, apart from any other
+  figure's: Space, Random, Shuffle and Mirror read them as their own span,
+  so one Space wired into two figures spreads each across its own row. An
+  empty `x` or `y` is the element's home place: beams in a row and a grid
+  in rows, `size` wide and turned by `rotation`; one line, ring or polygon
+  in the middle.
+- **Laser** output node: `figures` (one or more figure wires, in order),
+  `alpha` and the `zone` setting. On each projector the clip's heads are
+  every figure's elements, figure after figure, `projector:0` to
+  `projector:{n − 1}` with n at most 64, spread a little across its scan;
+  a mirror reflects each element. A sheet with rails and four beams is one
+  clip: `laser([sheet, rails, dots])`.
+- **Along** (`along()`) is 0 to 1 within an element. Only a figure's
   per-element inputs read it, through curves and math; the lowering
   evaluates those inputs at 32 places along each line, ring or polygon
   (`luma_patterns::laser::ALONG_SAMPLES`) and the solver interpolates
   between them. Black along an element is the light off: dashes.
 - Each element is a place, a frame (2×2: size and rotation, a mirror's
-  reflection), a figure and its samples (`luma_patterns::laser::Element`).
+  reflection), an outline and its samples (`luma_patterns::laser::Element`).
+  Each figure lowers to its own output, so a figure of beams carries one
+  sample per element however finely a line beside it is sampled.
 - Layers (`luma_patterns::laser`): Add draws both. Replace morphs: on each
   projector and zone the elements under the top and its own meet by their
   place along their order, place and frame by the top's alpha. Colours
@@ -166,3 +174,15 @@ points and its colours.
 Rendering: fine haze detail along beams (small eddies a thin beam samples
 and a wide cone averages away), a second-order galvo model, stronger
 forward scatter, and occlusion for the haze glow.
+
+## Figures (agreed 2026-10-26)
+
+v2's laser node had one `kind`, so beams and a sheet took two clips. The
+laser node's drawing moved to `figure` nodes, and a laser draws a list of
+them. A figure owns its kind, count, place, size, turn, colour and heads;
+the laser keeps the zone and the clip's alpha. Saved graphs moved by a
+one-shot migration (`20261026120000_laser_figures.sql`): each laser node
+became a figure, `figure1`, and a laser that draws it. The shipped
+presets gained Settle (four beams that wiggle and stop), Soft sheet (no
+hard edges) and Sheet and beams (a sheet, its rails and four random
+beams).

@@ -1,6 +1,6 @@
 //! One small graph per clip (spec: `docs/specs/clip-graphs.md`).
 //!
-//! A clip graph has nodes of 16 kinds. Exactly one node is an output
+//! A clip graph has nodes of 17 kinds. Exactly one node is an output
 //! (`color`, `aim`, `strobe` or `laser`). Every node has one output wire. An input
 //! holds a value, a wire (`{"node": id}`), or nothing; nothing is the only
 //! default. A choice is a setting and is never wired.
@@ -57,6 +57,7 @@ pub enum Kind {
     Shuffle,
     Group,
     Split,
+    Figure,
     Color,
     Aim,
     Strobe,
@@ -65,7 +66,7 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in menu order.
-    pub const ALL: [Kind; 16] = [
+    pub const ALL: [Kind; 17] = [
         Kind::Time,
         Kind::Space,
         Kind::Along,
@@ -78,6 +79,7 @@ impl Kind {
         Kind::Shuffle,
         Kind::Group,
         Kind::Split,
+        Kind::Figure,
         Kind::Color,
         Kind::Aim,
         Kind::Strobe,
@@ -99,6 +101,7 @@ impl Kind {
             Kind::Shuffle => "shuffle",
             Kind::Group => "group",
             Kind::Split => "split",
+            Kind::Figure => "figure",
             Kind::Color => "color",
             Kind::Aim => "aim",
             Kind::Strobe => "strobe",
@@ -121,6 +124,7 @@ impl Kind {
             Kind::Shuffle => "Shuffle",
             Kind::Group => "Group",
             Kind::Split => "Split",
+            Kind::Figure => "Figure",
             Kind::Color => "Color",
             Kind::Aim => "Aim",
             Kind::Strobe => "Strobe",
@@ -139,21 +143,48 @@ impl Kind {
     }
 }
 
-/// What a laser clip draws on: `count` elements of `kind` on each projector
-/// it selects, in the zone with id `zone` (empty: the venue's first zone).
+/// What a laser clip draws on each projector it selects: its figures, in
+/// the order of the laser's `figures`, in the zone with id `zone` (empty:
+/// the venue's first zone).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LaserHeads {
+    pub figures: Vec<FigureHeads>,
+    pub zone: String,
+}
+
+/// One figure of a laser clip: `count` elements of `kind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FigureHeads {
     pub kind: crate::laser::Kind,
     pub count: usize,
     /// A polygon's sides.
     pub sides: usize,
-    pub zone: String,
+}
+
+impl FigureHeads {
+    /// What each element draws.
+    pub fn outline(&self) -> crate::laser::Outline {
+        self.kind.outline(self.sides)
+    }
 }
 
 impl LaserHeads {
-    /// What each element draws.
-    pub fn figure(&self) -> crate::laser::Figure {
-        self.kind.figure(self.sides)
+    /// Elements on each projector: every figure's, figure after figure.
+    pub fn count(&self) -> usize {
+        self.figures.iter().map(|figure| figure.count).sum()
+    }
+
+    /// Element `index` of a projector's as (figure, its index in the
+    /// figure), or `None` past the last.
+    pub fn place(&self, index: usize) -> Option<(usize, usize)> {
+        let mut first = 0;
+        for (f, figure) in self.figures.iter().enumerate() {
+            if index < first + figure.count {
+                return Some((f, index - first));
+            }
+            first += figure.count;
+        }
+        None
     }
 }
 
@@ -444,21 +475,33 @@ impl ClipGraph {
         self.output().map(|(_, node)| node.kind)
     }
 
-    /// A laser graph's elements per projector, their kind and the zone id,
-    /// which a host needs to lay out the clip's heads before it prepares the
-    /// graph. `None` for any other output.
+    /// A laser graph's figures and zone id, which a host needs to lay out
+    /// the clip's heads before it prepares the graph. `None` for any other
+    /// output.
     pub fn laser(&self) -> Option<LaserHeads> {
         let (_, node) = self.output().filter(|(_, node)| node.kind == Kind::Laser)?;
-        let kind = crate::laser::Kind::from_setting(node.setting("kind"));
-        let whole = |name: &str| match node.inputs.get(name).map(|input| self.resolve(input)) {
-            Some(Input::Number(value)) => Some(*value as usize),
-            _ => None,
-        };
+        let figures = node
+            .inputs
+            .get("figures")
+            .into_iter()
+            .flat_map(Input::sources)
+            .filter_map(|id| self.nodes.get(id))
+            .map(|figure| {
+                let kind = crate::laser::Kind::from_setting(figure.setting("kind"));
+                let whole = |name: &str| match figure.inputs.get(name).map(|i| self.resolve(i)) {
+                    Some(Input::Number(value)) => Some(*value as usize),
+                    _ => None,
+                };
+                FigureHeads {
+                    kind,
+                    count: whole("count")
+                        .map_or(kind.default_count(), |count| count.clamp(1, MAX_ELEMENTS)),
+                    sides: whole("sides").unwrap_or(crate::laser::MIN_SIDES),
+                }
+            })
+            .collect();
         Some(LaserHeads {
-            kind,
-            count: whole("count")
-                .map_or(kind.default_count(), |count| count.clamp(1, MAX_ELEMENTS)),
-            sides: whole("sides").unwrap_or(crate::laser::MIN_SIDES),
+            figures,
             zone: node.setting("zone").unwrap_or_default().to_string(),
         })
     }

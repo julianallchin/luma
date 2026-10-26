@@ -87,7 +87,7 @@ async fn prepare_scene_data(
     let mut requests = Vec::new();
     let mut domains = std::collections::BTreeMap::new();
     for (id, clip) in &score.clips {
-        let elements = clip.graph.laser().map(|laser| laser.count);
+        let elements = clip.graph.laser().map(|laser| laser.count());
         let key = (
             serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
             clip.selection_seed.unwrap_or(clip.seed),
@@ -347,7 +347,7 @@ pub fn stand_in_strip(
     let mut cells = line_cells(STAND_IN_HEADS);
     // A laser clip's heads are one projector's elements.
     if let Some(heads) = graph.laser() {
-        cells = line_cells(heads.count);
+        cells = line_cells(heads.count());
         for (i, cell) in cells.iter_mut().enumerate() {
             cell.id = format!("projector:{i}");
         }
@@ -505,7 +505,10 @@ mod tests {
     fn a_laser_clip_strip_is_its_beams_across_the_canvas() {
         let graph: luma_patterns::ClipGraph = serde_json::from_value(serde_json::json!({
             "version": 3,
-            "nodes": {"laser1": {"kind": "laser", "inputs": {"count": 5, "size": 1}}},
+            "nodes": {
+                "figure1": {"kind": "figure", "inputs": {"count": 5, "size": 1}},
+                "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "figure1"}]}},
+            },
         }))
         .unwrap();
         let strip = stand_in_strip(&graph, 4.0).unwrap();

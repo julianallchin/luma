@@ -337,19 +337,22 @@ pub enum Signal {
     Color,
     Heads,
     Coordinate,
+    /// A laser figure, into a laser's figures.
+    Figure,
 }
 
 impl Signal {
-    pub const ALL: [Signal; 5] = [
+    pub const ALL: [Signal; 6] = [
         Signal::Number,
         Signal::Vector,
         Signal::Color,
         Signal::Heads,
         Signal::Coordinate,
+        Signal::Figure,
     ];
 }
 
-/// A signal's hue: one lightness and chroma for all five, so none shouts
+/// A signal's hue: one lightness and chroma for all six, so none shouts
 /// over the others, and hues far enough apart to tell at a wire's width.
 pub fn signal(kind: Signal) -> Hsla {
     let hue = match kind {
@@ -358,6 +361,7 @@ pub fn signal(kind: Signal) -> Hsla {
         Signal::Color => 335.,
         Signal::Heads => 290.,
         Signal::Coordinate => 245.,
+        Signal::Figure => 145.,
     };
     crate::glass::oklch(0.76, 0.12, hue)
 }

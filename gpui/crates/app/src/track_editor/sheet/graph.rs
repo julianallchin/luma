@@ -822,7 +822,7 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
             options.push((Kind::Time.label().into(), Pick::Insert(Kind::Time)));
             wired.map_or("Once".into(), |(to, _)| from_name(&to))
         }
-        Ty::Points | Ty::Gradient | Ty::Values => return None,
+        Ty::Points | Ty::Gradient | Ty::Values | Ty::Figures => return None,
     };
     if links {
         options.push(("Link…".into(), Pick::Links));
@@ -1087,13 +1087,18 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
 }
 
 /// A card's body under its title: its settings, then one row per input; a
-/// curve's and a math node's are their own ([`curve_rows`], [`math_rows`]),
-/// and a value's is its one field.
+/// curve's and a math node's are their own ([`curve_rows`], [`list_rows`]),
+/// a laser's figures are a list, and a value's is its one field.
 pub(super) fn body(cx: &Ctx, id: &str) -> Vec<AnyElement> {
     let node = &cx.graph.nodes[id];
     match node.kind {
         Kind::Curve => curve_rows(cx, id),
-        Kind::Math => math_rows(cx, id),
+        Kind::Math => list_rows(cx, id, "values"),
+        Kind::Laser => settings(cx, id, node)
+            .into_iter()
+            .chain(list_rows(cx, id, "figures"))
+            .chain([row(cx, id, "alpha")])
+            .collect(),
         Kind::Value => cx
             .controls
             .fields
@@ -1345,13 +1350,13 @@ fn op_button(cx: &Ctx, id: &str, node: &Node) -> AnyElement {
     .into_any_element()
 }
 
-/// A math node's rows: one per item, the name of the node wired there or a
-/// number, each with its own port and a button that takes it out; then a
-/// "+" that adds one, whose port takes a new wire as one more item. A
-/// subtraction has exactly two items and no "+".
-fn math_rows(cx: &Ctx, id: &str) -> Vec<AnyElement> {
+/// A list's rows, a math node's values or a laser's figures: one per item,
+/// the name of the node wired there or a number, each with its own port and
+/// a button that takes it out; then a "+" that adds one, whose port takes a
+/// new wire as one more item. A subtraction has exactly two items and no
+/// "+".
+fn list_rows(cx: &Ctx, id: &str, input: &'static str) -> Vec<AnyElement> {
     let node = &cx.graph.nodes[id];
-    let input = "values";
     let items: &[Input] = match node.inputs.get(input) {
         Some(Input::List(items)) => items,
         _ => &[],
@@ -1449,7 +1454,7 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
             match cx.controls.fields.get(&(id.to_owned(), input.to_owned())) {
                 Some(field) => field_element(field),
                 None => match spec.map(|spec| spec.ty) {
-                    Some(Ty::Heads | Ty::Time | Ty::Coordinate | Ty::Values) => {
+                    Some(Ty::Heads | Ty::Time | Ty::Coordinate | Ty::Values | Ty::Figures) => {
                         return header_row(&label, accessories)
                     }
                     _ => {
@@ -1468,7 +1473,8 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
     }
 }
 
-/// The button that adds an item, a 1, to a math node's values.
+/// The button that adds an item to a list: a 1 to a math node's values, a
+/// figure to a laser's.
 fn add_item_button(id: &str, input: &str, cx: &Ctx) -> AnyElement {
     let app = cx.app.clone();
     let (at, name) = (id.to_owned(), input.to_owned());

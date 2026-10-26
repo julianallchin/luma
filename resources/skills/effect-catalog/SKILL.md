@@ -117,27 +117,32 @@ under them.
 
 ## Laser
 
-Select the projectors. A laser clip's colour is its own; color clips never
-reach projectors (see `node-cards`, laser and along). Beam fan, Beam circle,
-Beam grid, Sheet, Ring and Liquid sky ship as presets.
+Select the projectors. A laser clip draws figures (`figure`), as many as
+the look needs: beams, a sheet and rings in one clip. A figure's colour is
+its own; color clips never reach projectors (see `node-cards`, figure,
+laser and along). Beam fan, Beam circle, Beam grid, Sheet, Ring, Liquid
+sky, Settle, Soft sheet and Sheet and beams ship as presets.
 
 | Name | Python | Chain |
 |---|---|---|
-| Beam fan | `order = space(split(), kind="order"); laser(count=8, x=curve(order, "Ramp up", low=-1, high=1))` | split → space (order) → curve → x |
-| Beam circle | `order = space(split(), kind="order"); laser(count=12, x=curve(order, "Sine", low=-0.5, high=0.5), y=curve(order, "Cosine", low=-0.5, high=0.5))` | one order, a sine on x and a cosine on y |
-| Beam grid | `laser(kind="grid", count=16, size=0.8)` | laser |
-| Sheet | `laser(kind="line", size=1)` | laser |
-| Ring | `laser(kind="ring")` | laser |
-| Liquid sky | `t = time(every=4); laser(kind="line", size=1, y=curve(along(), "Sine", low=curve(t, "Sine", low=-0.3, high=0.3), high=curve(t, "Sine", low=0.3, high=-0.3)))` | along → curve → y; time → curves → its swing |
-| Beam fan sweep | `t = time(every=4); laser(count=6, x=curve(t, "Sine", low=-0.6, high=0.6))` | time → curve → x: the home row moves |
-| Fan opens from the left | `t = time(every=2); laser(count=8, size=curve(t, "Ramp up"), x=curve(t, "Ramp up", low=-1, high=0))` | one curve on size and x: the left edge stays at -1 |
-| Beam wave | `t = time(every=2, phase=curve(space(), "Ramp up", high=360)); laser(count=8, size=1, y=curve(t, "Sine", low=-0.5, high=0.5))` | space → phase → time → curve → y |
-| Spinning polygon | `t = time(every=4); laser(kind="polygon", sides=5, rotation=curve(t, "Ramp up", low=-180, high=180), color=curve(along(), gradient="Rainbow"))` | time → curve → rotation; along → curve → color |
-| Gradient line | `laser(kind="line", size=1, color=curve(along(), "Ramp up", gradient="Rainbow"))` | along → curve → color |
-| Dashed ring | `laser(kind="ring", color=curve(along(), [[0, 1], [0.125, 1], [0.125, 0], [0.25, 0], [0.25, 1], [0.375, 1], [0.375, 0], [0.5, 0], [0.5, 1], [0.625, 1], [0.625, 0], [0.75, 0], [0.75, 1], [0.875, 1], [0.875, 0], [1, 0]], gradient=[(0, "#000000"), (1, "#ffffff")]))` | along → curve with jumps → color: black is the light off |
-| Gradient beams | `order = space(split(), kind="order"); laser(count=8, size=1, color=curve(order, "Ramp up", gradient="Rainbow"))` | each beam its place in the gradient |
-| Mirrored beams | `laser(heads=mirror(direction=(1, 0, 0)), count=8, size=0.5)` | the two sides of the rig draw mirror images |
-| White flecks over green | `k = time(every=0.5); rank = space(shuffle(time=k), kind="order"); laser(count=16, size=1, color=curve(rank, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]], gradient=[(0, "#00ff00"), (1, "#ffffff")]))` | a quarter of the beams white, reshuffled every half beat |
+| Beam fan | `order = space(split(), kind="order"); figure1 = figure(count=8, x=curve(order, "Ramp up", low=-1, high=1)); laser([figure1])` | split → space (order) → curve → x |
+| Beam circle | `order = space(split(), kind="order"); figure1 = figure(count=12, x=curve(order, "Sine", low=-0.5, high=0.5), y=curve(order, "Cosine", low=-0.5, high=0.5)); laser([figure1])` | one order, a sine on x and a cosine on y |
+| Beam grid | `figure1 = figure("grid", count=16, size=0.8); laser([figure1])` | figure → laser |
+| Sheet | `figure1 = figure("line", size=1); laser([figure1])` | figure → laser |
+| Ring | `figure1 = figure("ring"); laser([figure1])` | figure → laser |
+| Liquid sky | `t = time(every=4); figure1 = figure("line", size=1, y=curve(along(), "Sine", low=curve(t, "Sine", low=-0.3, high=0.3), high=curve(t, "Sine", low=0.3, high=-0.3))); laser([figure1])` | along → curve → y; time → curves → its swing |
+| Settle | `order = space(split(), kind="order"); home = curve(order, "Ramp up", low=-0.8, high=0.8); t = time(); fade = curve(t, [[0, 1, "sine-out"], [0.6, 0], [1, 0]]); slowing = curve(t, [[0, 0, "sine-out"], [1, 1]], low=0, high=2160); swing = time(phase=slowing); wiggle = curve(swing, "Sine", low=-0.15, high=0.15); figure1 = figure(count=4, x=home + wiggle * fade); laser([figure1])` | four beams wiggle across x, each swing slower and smaller, and stop: an eased phase slows the swing, a falling curve shrinks it |
+| Soft sheet | `soft = curve(along(), gradient=[(0, (0, 0, 0)), (0.25, (1, 1, 1)), (0.75, (1, 1, 1)), (1, (0, 0, 0))]); figure1 = figure("line", size=1, color=soft); laser([figure1])` | a sheet with no hard edges: its power fades to black at both ends |
+| Sheet and beams | `sheet = figure("line", size=0.8); rails = figure(count=2, size=0.8); spot = curve(random(every=4, scale=0.02), "Ramp up", low=-0.7, high=0.7); dots = figure(count=4, x=spot); laser([sheet, rails, dots])` | three figures: a sheet, a beam at each end of it, and four beams at random places; random reads the dots alone |
+| Beam fan sweep | `t = time(every=4); laser([figure(count=6, x=curve(t, "Sine", low=-0.6, high=0.6))])` | time → curve → x: the home row moves |
+| Fan opens from the left | `t = time(every=2); laser([figure(count=8, size=curve(t, "Ramp up"), x=curve(t, "Ramp up", low=-1, high=0))])` | one curve on size and x: the left edge stays at -1 |
+| Beam wave | `t = time(every=2, phase=curve(space(), "Ramp up", high=360)); laser([figure(count=8, size=1, y=curve(t, "Sine", low=-0.5, high=0.5))])` | space → phase → time → curve → y |
+| Spinning polygon | `t = time(every=4); laser([figure("polygon", sides=5, rotation=curve(t, "Ramp up", low=-180, high=180), color=curve(along(), gradient="Rainbow"))])` | time → curve → rotation; along → curve → color |
+| Gradient line | `laser([figure("line", size=1, color=curve(along(), "Ramp up", gradient="Rainbow"))])` | along → curve → color |
+| Dashed ring | `laser([figure("ring", color=curve(along(), [[0, 1], [0.125, 1], [0.125, 0], [0.25, 0], [0.25, 1], [0.375, 1], [0.375, 0], [0.5, 0], [0.5, 1], [0.625, 1], [0.625, 0], [0.75, 0], [0.75, 1], [0.875, 1], [0.875, 0], [1, 0]], gradient=[(0, "#000000"), (1, "#ffffff")]))])` | along → curve with jumps → color: black is the light off |
+| Gradient beams | `order = space(split(), kind="order"); laser([figure(count=8, size=1, color=curve(order, "Ramp up", gradient="Rainbow"))])` | each beam its place in the gradient |
+| Mirrored beams | `laser([figure(heads=mirror(direction=(1, 0, 0)), count=8, size=0.5)])` | the two sides of the rig draw mirror images |
+| White flecks over green | `k = time(every=0.5); rank = space(shuffle(time=k), kind="order"); laser([figure(count=16, size=1, color=curve(rank, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]], gradient=[(0, "#00ff00"), (1, "#ffffff")]))])` | a quarter of the beams white, reshuffled every half beat |
 
 ## Not one clip
 

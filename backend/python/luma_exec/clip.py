@@ -8,7 +8,7 @@
 Every builder is a bare function. It returns one node. A node goes into an
 input of another node: that is a wire. The same Python object wired twice is
 one node (a link). `color()`, `aim()`, `strobe()` and `laser()` make the
-output node and return a Graph.
+output node and return a Graph. A laser draws figures: `laser([sheet, dots])`.
 
 Values are plain: numbers, `(u, v, z)` tuples, `(r, g, b)` triples in linear
 Rec. 2020, or "#RRGGBB" (sRGB, converted). A shape is a curve preset name
@@ -54,7 +54,7 @@ from .color import from_srgb
 
 
 BUILDERS = ("time", "space", "along", "random", "audio", "curve", "value", "mirror", "shuffle",
-            "group", "split", "color", "aim", "strobe", "laser", "preset", "max", "min")
+            "group", "split", "figure", "color", "aim", "strobe", "laser", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
 RESERVED = frozenset(BUILDERS) | {"math"}
@@ -75,17 +75,18 @@ _INPUTS = {
     "shuffle": ("heads", "time"),
     "group": ("heads", "size"),
     "split": ("heads",),
+    "figure": ("heads", "count", "sides", "x", "y", "size", "rotation", "color"),
     "color": ("color", "brightness", "alpha"),
     "aim": ("heads", "direction", "point", "yaw", "pitch", "alpha"),
     "strobe": ("rate", "alpha"),
-    "laser": ("heads", "count", "sides", "x", "y", "size", "rotation", "color", "alpha"),
+    "laser": ("figures", "alpha"),
 }
 # Inputs that take one number 0-1. A list there was the version 2 product.
 _SCALARS = {("color", "brightness"), ("color", "alpha"), ("aim", "alpha"),
             ("strobe", "rate"), ("strobe", "alpha"), ("random", "glide"),
             ("random", "contrast"),
-            ("laser", "count"), ("laser", "sides"), ("laser", "x"), ("laser", "y"),
-            ("laser", "size"), ("laser", "rotation"), ("laser", "alpha")}
+            ("figure", "count"), ("figure", "sides"), ("figure", "x"), ("figure", "y"),
+            ("figure", "size"), ("figure", "rotation"), ("laser", "alpha")}
 # Math operators that chain: `a * b * c` is one node.
 _CHAINS = ("*", "+", "max", "min")
 _SEQUENCE = itertools.count(1)
@@ -263,6 +264,10 @@ class Heads(Node):
     """A heads wire from mirror, shuffle, group or split."""
 
 
+class Figure(Node):
+    """A laser figure: goes into laser(figures)."""
+
+
 class _Output(Node):
     """The output node of a graph."""
 
@@ -270,7 +275,8 @@ class _Output(Node):
 _CLASSES = {"time": Coordinate, "space": Coordinate, "along": Coordinate, "random": Coordinate,
             "audio": Coordinate,
             "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
-            "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output, "laser": _Output}
+            "split": Heads, "figure": Figure, "color": _Output, "aim": _Output, "strobe": _Output,
+            "laser": _Output}
 
 
 def _number(value, where):
@@ -475,7 +481,7 @@ def along() -> Coordinate:
     """Place within a laser element, 0-1: from a line's start to its end, or
     once round a ring or polygon; a beam is a single point, at 0.
 
-    Only a laser's x, y, size, rotation and color read it, through curves
+    Only a figure's x, y, size, rotation and color read it, through curves
     and math: `y=curve(along(), "Sine", low=-0.2, high=0.2)` bends a line,
     `color=curve(along(), gradient="Fire")` runs a gradient along it, and a
     shape with jumps to 0 makes dashes (black is the light off).
@@ -607,34 +613,55 @@ def strobe(rate=None, alpha=None) -> "Graph":
     return Graph(_make("strobe", rate=rate, alpha=alpha))
 
 
-def laser(heads=None, count=None, sides=None, x=None, y=None, size=None, rotation=None,
-          color=None, alpha=None, kind="beams", zone="") -> "Graph":
-    """Laser output: `count` elements (a whole number, 1-64, fixed for the
+def figure(kind="beams", count=None, sides=None, x=None, y=None, size=None, rotation=None,
+           color=None, heads=None) -> Figure:
+    """A laser figure: `count` elements (a whole number, 1-64, fixed for the
     clip; default 8 beams or a grid's 8 points, else 1) on each projector in
     the clip's selection, on the zone's canvas, which runs -1 to 1 across
-    and up the zone.
+    and up the zone. Wire it into laser(figures).
 
     `kind`: "beams" (points), "line", "ring", "polygon" (`sides`, 3-12,
-    default 3) or "grid" (points in rows). Each element is a head: space,
-    shuffle, mirror and noise read them as they read a mover's heads, so
+    default 3) or "grid" (points in rows). Each element is a head of its
+    figure: space, shuffle, mirror and random read a figure's elements as
+    they read a mover's heads, apart from any other figure's, so
     `x=curve(space(split(), kind="order"), low=-1, high=1)` fans each
     projector's beams across the canvas. Per element: `x` and `y` (-1 to 1)
     place its centre; `size` (0-1, default 0.5) is a line's half length or a
     ring's radius; `rotation` (degrees clockwise) turns it; `color` (default
-    white) is its colour. An empty x or y is the element's home place:
-    beams in a row and a grid in rows, `size` wide and turned by `rotation`;
-    anything else in the middle. Wire along() into x, y, size, rotation or
-    color to vary them within each element. `alpha` is the clip's fade.
-    Heads from a mirror draw the mirror image. `zone` is a zone id from
-    luma.venue (empty: the venue's first zone).
+    white) is its colour, which is its power: black is the light off. An
+    empty x or y is the element's home place: beams in a row and a grid in
+    rows, `size` wide and turned by `rotation`; anything else in the middle.
+    Wire along() into x, y, size, rotation or color to vary them within each
+    element. Heads from a mirror draw the mirror image.
+    """
+    return _make("figure", {"kind": kind}, heads=heads, count=count, sides=sides, x=x, y=y,
+                 size=size, rotation=rotation, color=color)
 
-    A laser's colour is its own: Color clips do not reach projectors. A
+
+def laser(figures, alpha=None, zone="") -> "Graph":
+    """Laser output: draws its figures, in order, on each projector in the
+    clip's selection: `laser([sheet, rails, dots])`. A projector's elements
+    are every figure's together, at most 64, and share its scan: a figure
+    added dims the others, as on a real projector.
+
+    `alpha` is the clip's fade. `zone` is a zone id from luma.venue (empty:
+    the venue's first zone).
+
+    A laser's colour is its figures': Color clips do not reach projectors. A
     laser clip blends "replace" (morphs the elements under it into its
     own) or "add" (draws both).
     """
-    return Graph(_make("laser", {"kind": kind, "zone": zone}, heads=heads, count=count,
-                       sides=sides, x=x, y=y, size=size, rotation=rotation, color=color,
-                       alpha=alpha))
+    if isinstance(figures, Node):
+        figures = [figures]
+    if not isinstance(figures, (list, tuple)) or not figures:
+        raise ClipError(f"laser.figures: expected a list of one or more figure() nodes; got {figures!r}. "
+                        "Example: laser([figure(\"line\"), figure(count=4)])")
+    for item in figures:
+        if not isinstance(item, Figure):
+            raise ClipError(f"laser.figures: expected figure() nodes; got {item!r}. "
+                            "Example: laser([figure(\"line\"), figure(count=4)])")
+    return Graph(_Output("laser", {"zone": zone}, {"figures": list(figures),
+                                                   "alpha": _input(alpha, "laser.alpha")}))
 
 
 def preset(name) -> "Graph":
@@ -1035,7 +1062,7 @@ def _gradient_literal(value):
 
 
 _DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
-                     "laser": {"kind": "beams", "zone": ""}}
+                     "figure": {"kind": "beams"}, "laser": {"zone": ""}}
 # Python precedence: an atom (a name, a number, a call) binds tightest.
 _ATOM = 3
 _PRECEDENCE = {"*": 2, "+": 1, "-": 1}
@@ -1088,8 +1115,10 @@ def _arguments(node, ids, inline, order):
     args = []
     names = list(_INPUTS.get(node.kind, ())) + sorted(set(node.inputs) - set(_INPUTS.get(node.kind, ())))
     names = [name for name in names if name in node.inputs]
-    # curve(x, shape, ...) and value(x): these go by position, as people write them.
-    positional = {"curve": ("x", "shape"), "value": ("value",)}.get(node.kind, ())
+    # curve(x, shape, ...), value(x) and laser(figures): these go by position,
+    # as people write them.
+    positional = {"curve": ("x", "shape"), "value": ("value",),
+                  "laser": ("figures",)}.get(node.kind, ())
     for name in names:
         text = _value_text(name, node.inputs[name], ids, inline, order)
         if positional and name == positional[0]:
@@ -1107,6 +1136,10 @@ def _arguments(node, ids, inline, order):
                 args.append(f"wrap={value == 'yes'}" if value in ("yes", "no") else f"wrap={value!r}")
             continue
         if _DEFAULT_SETTINGS.get(node.kind, {}).get(name) == value:
+            continue
+        # figure("line", ...): a figure's kind goes first, by position.
+        if node.kind == "figure" and name == "kind":
+            args.insert(0, repr(value))
             continue
         args.append(f"{name}={value!r}")
     return args
