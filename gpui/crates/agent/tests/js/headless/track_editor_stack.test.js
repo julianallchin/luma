@@ -23,6 +23,9 @@ const clip = (name, start, end, lane) =>
 fixture({
   seconds: 20,
   clips: [clip("alpha", 2, 6, 0), clip("bravo", 2, 6, 1), clip("charlie", 2, 6, 2), clip("cap", 10, 14, 2)],
+  // Wide enough that Program's timeline shows every clip, and that a lane's
+  // middle lies past them.
+  window: [1620, 800],
 });
 
 const node = (role, label) => app.snapshot().find({ role, label });

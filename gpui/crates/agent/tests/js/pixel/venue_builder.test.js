@@ -205,7 +205,10 @@ test("the selected object card follows a camera orbit", { timeoutMs: 120000 }, (
   const beforeCard = card().bounds;
   const room = app.snapshot().find({ role: "card", label: "Stage" }).bounds;
   const cameraBefore = camera();
-  app.drag({ x: room.x + room.width * 0.5, y: room.y + room.height * 0.25 }, { dx: 110, dy: 35 }, { steps: 10 });
+  // Grab open room below the card: a press on the card is the card's, not the
+  // camera's.
+  const below = beforeCard.y + beforeCard.height;
+  app.drag({ x: room.x + room.width * 0.5, y: (below + room.y + room.height) / 2 }, { dx: 110, dy: 35 }, { steps: 10 });
   app.frames(12, { waitMs: 60 });
   assert(camera() !== cameraBefore, "the drag did not orbit");
   assert(JSON.stringify(card().bounds) !== JSON.stringify(beforeCard), "the card stayed fixed while the camera orbited");
