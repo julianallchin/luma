@@ -468,8 +468,8 @@ pub(crate) fn piece_draws(
 ///
 /// A procedural bar is its dimension box, turned the quarter onto the mount
 /// normal the frame builder documents; a modelled kind is its bundled mesh at
-/// the definition's physical dimensions; a definition that is neither draws
-/// nothing, exactly as the room would.
+/// the definition's physical dimensions; a definition that is neither — a
+/// laser projector — draws its dimension box too.
 ///
 /// # Errors
 /// Fails if the model kind's bundled mesh is missing from the asset library.
@@ -1077,7 +1077,19 @@ pub fn build_at(
             continue;
         }
 
+        // No mesh for this type — a laser projector, say: its dimension box,
+        // as the placement ghost already shows it. Its light, if any, is
+        // drawn by its own pass.
         let Some(kind) = model_kind(def) else {
+            draws.extend(housing_draws(
+                def,
+                &fixture.fixture_path,
+                base,
+                [0.0, 0.0],
+                lib,
+                &mut bank,
+                Some(EditorObject::Fixture(fixture.id.clone())),
+            )?);
             continue;
         };
         let potential_cone = kind
@@ -1663,6 +1675,24 @@ mod tests {
         let frame = build(&scene, &definitions, 0.0, &mut library()).unwrap();
         assert!(frame.fixture_cones.is_empty());
         assert_eq!(frame.fixture_shadow_capacity_hint, 0);
+    }
+
+    /// A laser projector has no bundled mesh, and used to be skipped
+    /// outright: placed, it vanished from the room while its ghost showed a
+    /// box. It draws that box, and no cone.
+    #[test]
+    fn a_laser_projector_draws_its_box_and_no_cone() {
+        let definitions =
+            Definitions::from([("laser.qxf".into(), definition("Laser Projector", "One", 1))]);
+        let scene = scene(vec![fixture("laser", "laser.qxf", "One")]);
+        let frame = build(&scene, &definitions, 0.0, &mut library()).unwrap();
+        let bodies = frame
+            .draws
+            .iter()
+            .filter(|d| d.editor_object == Some(EditorObject::Fixture("laser".into())))
+            .count();
+        assert_eq!(bodies, 1);
+        assert!(frame.fixture_cones.is_empty());
     }
 
     #[test]
