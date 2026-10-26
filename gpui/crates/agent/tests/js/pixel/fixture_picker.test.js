@@ -17,7 +17,7 @@ const lit = (s) => s.find({ role: "card", label: "Selection preview" }) !== unde
 test("ticking a group changes the picture", { timeoutMs: 120000 }, () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.expand();
+  nav.program();
   nav.stageOff();
 
   // A clip is labelled by its name; the fixture's clip is a Wash.

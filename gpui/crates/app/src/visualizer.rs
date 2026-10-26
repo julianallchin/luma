@@ -3544,11 +3544,10 @@ impl Luma {
     /// tabs leaves the stage exactly where it was. Only the *lighting* asks the
     /// tab, because only a score tab has a score to composite.
     fn stage_subject(&self) -> Option<StageSubject> {
-        // A hidden pane and a hidden workspace are the same fact to the stage:
-        // there is no column to sit in. Both drop it rather than merely
-        // leaving it undrawn, so a collapsed panel does not keep a GPU and a
-        // loaded rig alive behind it.
-        if self.visualizer_hidden || self.workspace_hidden {
+        // A hidden pane drops the stage rather than merely leaving it undrawn,
+        // so a collapsed pane does not keep a GPU and a loaded rig alive
+        // behind it.
+        if self.visualizer_hidden {
             return None;
         }
         // Nothing open below it is nothing to be a view *of*. A venue picked in

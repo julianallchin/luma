@@ -81,7 +81,7 @@ pub fn main() {
             {NAV}
             nav.trackEditor({VENUE_NAME:?}, {TRACK_NAME:?});
             until("the clip", (s) => s.find({{ role: "card", label: "Constant color" }}) !== undefined);
-            nav.expand();
+            nav.program();
             app.frames(10, {{ waitMs: 60 }});
             const readout = (s) =>
                 s.find((n) => n.role === "text" && n.label.includes("FIXTURES"));

@@ -15,7 +15,7 @@ use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::Enabled;
 
-use luma_lib::settings::{agent_models, ApiKeyStatus, AppSettings, AGENT_PROVIDERS};
+use luma_lib::settings::{agent_models, ApiKeyStatus, AppSettings, ViewMode, AGENT_PROVIDERS};
 
 use crate::Luma;
 
@@ -386,11 +386,34 @@ impl Luma {
             self.hdr_output_allowed = values.hdr_output;
             cx.notify();
         }
-        if self.split_view != values.split_view {
-            self.split_view = values.split_view;
+        if self.view_mode != values.view_mode {
+            self.view_mode = values.view_mode;
             cx.notify();
         }
         self.set_auto_update(values.auto_update);
+    }
+
+    /// Lay the window out as `mode` now, and remember it for the next launch.
+    ///
+    /// Applied before the write lands, like the stage's view toggles: the
+    /// switch is the head band's, not the settings screen's, so there is no
+    /// screen to re-read into, and a layout that waited on the database would
+    /// lag the click. A failed write is only reported to the log — the window
+    /// is already in the mode the click asked for, and the next launch opens
+    /// in the last one that was stored.
+    pub(crate) fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        if self.view_mode == mode {
+            return;
+        }
+        self.view_mode = mode;
+        cx.notify();
+        let pending = self.library.set_setting("view_mode", mode.key());
+        cx.spawn(async move |_, _| {
+            if let Err(error) = pending.await {
+                eprintln!("[luma] the view mode was not saved: {error}");
+            }
+        })
+        .detach();
     }
 
     /// Open or dismiss the account menu that hangs off the sidebar's foot.
@@ -547,11 +570,6 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             None,
             checkbox(app, "hdr_output", "HDR output", values.hdr_output),
             Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
-        ),
-        field(
-            None,
-            checkbox(app, "split_view", "Split view", values.split_view),
-            Some("The score editor shows the timeline on the left, with the stage and the inspector on the right."),
         ),
     ]
 }

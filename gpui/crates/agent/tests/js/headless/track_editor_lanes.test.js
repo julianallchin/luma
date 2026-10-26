@@ -51,7 +51,7 @@ test("the lane stack sits on the floor and the wheel reaches the rest of it", ()
   app.frames(8);
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.expand();
+  nav.program();
   // The lane stack's own geometry: give the editor the whole column.
   nav.stageOff();
 

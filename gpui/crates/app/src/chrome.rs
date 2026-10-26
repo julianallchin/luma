@@ -29,22 +29,24 @@
 //! The strip itself is inert apart from the three dots, so forgetting is a
 //! visible overlap and never a corner that silently swallows presses.
 //!
-//! # The panel toggles are anchors, not controls a region carries
+//! # The corner controls are anchors, not controls a region carries
 //!
-//! [`sidebar_toggle`] and [`panel_toggle`] are painted in window space beside
-//! the lights, and the window's two corners are the only place they appear.
-//! A toggle rendered *by* a region rides that region's pane, and a pane whose
-//! width is animating clips its own band, so the toggle would vanish part-way
-//! through a close. A fixed point cannot live on a moving thing.
+//! [`sidebar_toggle`] beside the lights and [`mode_switch`] at the trailing
+//! edge are painted in window space, and the window's two corners are the
+//! only place they appear. A control rendered *by* a region rides that
+//! region's pane, and a pane whose width is animating clips its own band, so
+//! the control would vanish part-way through a close — or, for the mode
+//! switch, jump between regions as the mode it sets moves the chat. A fixed
+//! point cannot live on a moving thing.
 //!
 //! So the rule the whole band reads:
 //!
 //! ```text
-//! [lights][◧] left cluster …………………… right cluster [◨]
-//!  \___ fixed ___/                                  \_ fixed _/
+//! [lights][◧] left cluster ……………… right cluster [Direct|Program]
+//!  \___ fixed ___/                                \____ fixed ____/
 //! ```
 //!
-//! The toggles hold still and the *clusters* move: [`band_insets`] is the one
+//! The anchors hold still and the *clusters* move: [`band_insets`] is the one
 //! statement of the room each edge owes them, read by [`band`] when it pads
 //! itself and by [`band_room`] when it offers a band's flexible child what is
 //! left. A panel opening pushes its neighbour's cluster inward because the
@@ -56,6 +58,7 @@ use std::time::Instant;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::Icon;
+use luma_lib::settings::ViewMode;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::{glass, motion, radius};
@@ -68,7 +71,7 @@ use crate::Luma;
 pub const HEIGHT: f32 = 38.;
 /// A tab chip: comet's 24px rounded-6 chip.
 const CHIP_HEIGHT: f32 = 24.;
-/// One icon-button box in the band — the gear, a panel toggle, the `+`. The
+/// One icon-button box in the band — the gear, the sidebar toggle, the `+`. The
 /// shell budgets bands against it, so it is stated here once rather than
 /// restated as a second 24 beside the code that reads it.
 pub(crate) const CONTROL: f32 = 24.;
@@ -91,10 +94,10 @@ const LEFT_TOGGLE_X: f32 = LIGHTS_WIDTH + BAND_GAP;
 /// content may use.
 const LEFT_ANCHOR_END: f32 = LEFT_TOGGLE_X + CONTROL + BAND_GAP;
 /// Where the window's right anchor block begins, measured back from the
-/// trailing edge. The panel toggle itself is inset by [`BAND_PAD`], so this is
+/// trailing edge. The mode switch itself is inset by [`BAND_PAD`], so this is
 /// one gap further in.
 fn right_anchor_start(viewport: f32) -> f32 {
-    viewport - BAND_PAD - CONTROL - BAND_GAP
+    viewport - BAND_PAD - MODE_SWITCH_WIDTH - BAND_GAP
 }
 
 /// Where a band sits in window space: what it needs to know to stay clear of
@@ -226,59 +229,44 @@ pub(crate) fn sidebar_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> i
     )
 }
 
-/// The workspace panel's show/hide toggle: the window's fixed right anchor.
-pub(crate) fn panel_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> impl IntoElement {
-    panel_anchor(
-        anchor(px(0.0), Some(px(BAND_PAD))),
-        "panel-toggle",
-        IconName::PanelRight,
-        open,
-        enabled,
-        app,
-        |this| this.workspace_hidden = !this.workspace_hidden,
-    )
-}
+/// How wide [`mode_switch`] is. Fixed, because the right anchor is reserved
+/// by width before anything is laid out — see [`band_insets`] — and its two
+/// cells split it evenly, so the pill does not change shape with the mode.
+const MODE_SWITCH_WIDTH: f32 = 136.;
 
-/// The room the thread toggle takes at the head of the panel band, with the
-/// gap after it.
-pub(crate) const THREAD_TOGGLE_SLOT: f32 = CONTROL + BAND_GAP;
+/// The window's two layouts, Direct | Program: the fixed right anchor.
+///
+/// A segmented pill rather than a toggle because both answers are named
+/// places to be, not one thing on or off. Always live, with or without a
+/// tab: the mode is the window's, and a tab opened next opens into it.
+pub(crate) fn mode_switch(app: &Entity<Luma>, mode: ViewMode) -> impl IntoElement {
+    let track = luma_ui::float::pill_segmented()
+        .w(px(MODE_SWITCH_WIDTH))
+        .children(
+            [(ViewMode::Direct, "Direct"), (ViewMode::Program, "Program")].map(|(cell, label)| {
+                let app = app.clone();
+                luma_ui::float::pill_segment(label, cell == mode, label)
+                    .id(label)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| this.set_view_mode(cell, cx))
+                    })
+                    .agent_node(Role::Toggle, label)
+            }),
+        );
+    anchor(px(0.0), Some(px(BAND_PAD))).child(track.agent_node(Role::Card, "View mode"))
+}
 
 /// The room [`history_pair`] takes at the head of the band, with the gap
 /// after it.
 pub(crate) const HISTORY_SLOT: f32 = 2. * CONTROL + 2. * BAND_GAP;
 
-/// The thread's show/hide toggle, at the left end of the tab strip. It flips
-/// the same flag as `ToggleExpand`. It is lit while the thread is shown.
-pub(crate) fn thread_toggle(app: &Entity<Luma>, thread_shown: bool) -> impl IntoElement {
-    let label = if thread_shown {
-        "Hide chat"
-    } else {
-        "Show chat"
-    };
-    let toggled = app.clone();
-    div().flex_none().child(
-        luma_ui::icon_toggle(IconName::Bot, thread_shown)
-            .id("thread-toggle")
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(move |_, _, cx| {
-                toggled.update(cx, |this, cx| {
-                    this.expanded = !this.expanded;
-                    cx.notify();
-                });
-            })
-            .agent_node(Role::Button, label),
-    )
-}
-
-/// One toggle in its fixed slot. Both corners are the same control with a
-/// different icon and a different flag, so they are the same function: an
-/// anchor that behaved differently on one side would be two rules wearing one
-/// name.
+/// The sidebar toggle in its fixed slot.
 ///
-/// `enabled` is false when there is nothing to toggle — no venue on the left,
-/// no tabs on the right. Dimmed and inert then, the way [`history_pair`] is:
-/// the chrome's anatomy holds still, and a control that cannot act says so
-/// rather than vanishing and moving everything beside it.
+/// `enabled` is false when there is nothing to toggle — no venue. Dimmed and
+/// inert then, the way [`history_pair`] is: the chrome's anatomy holds still,
+/// and a control that cannot act says so rather than vanishing and moving
+/// everything beside it.
 fn panel_anchor(
     slot: Div,
     id: &'static str,

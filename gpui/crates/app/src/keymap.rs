@@ -112,12 +112,17 @@ actions!(
         /// editor. Nothing with neither up: the shell is persistent, so there
         /// is no screen to leave.
         DismissOverlay,
-        /// Show or hide the sidebar / the workspace panel.
+        /// Show or hide the sidebar.
         ToggleSidebar,
-        ToggleWorkspace,
-        /// Switch the workspace between taking over everything right of the
-        /// sidebar and sharing it with the thread column.
-        ToggleExpand,
+        /// Lay the window out for working through the agent: the chat beside
+        /// the stage over the timeline.
+        DirectMode,
+        /// Lay the window out for working by hand: no chat, the timeline
+        /// beside the stage over the inspector.
+        ProgramMode,
+        /// In Direct, put the selected clip's graph where the timeline is —
+        /// what a double-click on the clip does.
+        OpenClipGraph,
         /// Close the focused tab.
         CloseTab,
         /// Toggle the workspace's new-tab menu.
@@ -269,7 +274,6 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("escape", DismissOverlay, Some(&escape)),
         KeyBinding::new("escape", DismissOverlay, Some(&dialog)),
         KeyBinding::new("secondary-b", ToggleSidebar, Some(&shell)),
-        KeyBinding::new("secondary-shift-b", ToggleWorkspace, Some(&shell)),
         // Scoped to the panel, so the window's own ⌘W still closes the window
         // from anywhere else. gpui resolves by specificity — this is a
         // binding, not a branch, which is what keeps "which ⌘W did I get"

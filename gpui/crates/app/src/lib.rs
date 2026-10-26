@@ -98,6 +98,7 @@ pub fn init(cx: &mut App) {
     motion::init(cx);
 }
 use luma_chat::RunningTurns;
+use luma_lib::settings::ViewMode;
 use luma_ui::{fonts, ladder, motion, text_input};
 
 use shell::{Body, FocusSlot, Overlay};
@@ -137,28 +138,24 @@ pub struct Luma {
     pub(crate) tab_chrome: tab_chrome::TabChrome,
     /// The `+`'s combo box, while it is open or leaving — see [`new_tab`].
     pub(crate) new_tab: Option<new_tab::NewTab>,
-    pub(crate) workspace_hidden: bool,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
     pub(crate) session_refresh_error: Option<String>,
-    /// The workspace panel's live width — what the open/close toggle tweens.
-    /// Where it rests when open is *derived* from the split below rather than
-    /// stored, so the two can never disagree about how wide "open" is.
-    pub(crate) workspace_width: luma_ui::pane::PaneWidth,
-    /// The score inspector is widened for the clip graph.
-    pub(crate) inspector_wide: bool,
-    /// The inspector column's width, sliding between narrow and wide.
-    pub(crate) inspector_width: luma_ui::pane::PaneWidth,
     /// How the room left of the panel divides between the thread and the panel.
+    /// The panel's width is *derived* from it every frame rather than stored,
+    /// so the two can never disagree.
     ///
     /// A proportion, not a width, so the sidebar opening or the window resizing
     /// takes its space from both in the ratio they were already at.
     /// Session-lived: a split chosen for one window is not a preference about
     /// every future window.
     pub(crate) workspace_split: luma_ui::split::SplitFraction,
-    /// Whether the front tab's editor takes over everything right of the
-    /// sidebar or shares it with the tab's chat.
-    pub(crate) expanded: bool,
+    /// The `view_mode` setting, as last chosen: Direct shares the room right
+    /// of the sidebar between the front tab's chat and its editor, and lays a
+    /// score out as the stage over the timeline; Program gives the editor all
+    /// of it and lays a score out as [`shell::program_view`]. Written by the
+    /// head band's switch — see [`chrome::mode_switch`].
+    pub(crate) view_mode: ViewMode,
     /// Device pixels per logical pixel, as of the last render. Offscreen
     /// previews are drawn at the size they are shown.
     pub(crate) scale_factor: f32,
@@ -181,15 +178,11 @@ pub struct Luma {
     /// not a preference about every future window.
     pub(crate) score_editor_split: luma_ui::split::SplitFraction,
     pub(crate) visualizer_split: luma_ui::split::SplitFraction,
-    /// The `split_view` setting, as last read: the score editor lays the
-    /// timeline beside the stage and the inspector — see
-    /// [`shell::split_view`].
-    pub(crate) split_view: bool,
-    /// How split view divides the workspace between the timeline and the
+    /// How Program divides the workspace between the timeline and the
     /// column beside it, and that column between the stage and the
     /// inspector. Session-lived, like the splits above.
-    pub(crate) split_view_columns: luma_ui::split::SplitFraction,
-    pub(crate) split_view_rows: luma_ui::split::SplitFraction,
+    pub(crate) program_columns: luma_ui::split::SplitFraction,
+    pub(crate) program_rows: luma_ui::split::SplitFraction,
     /// The sign-in screen, or none. **Not an overlay**: while it is up it is
     /// the app's whole content and the shell is not rendered at all — see
     /// [`signin`]. Boxed because it carries a morph, two text fields and their
@@ -290,15 +283,11 @@ impl Luma {
             saved_cameras: saved_cameras::SavedCameras::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
             new_tab: None,
-            workspace_hidden: false,
             shell_presented: false,
             restoring_venue: false,
             session_refresh_error: None,
-            workspace_width: luma_ui::pane::PaneWidth::new(0.0),
-            inspector_wide: false,
-            inspector_width: luma_ui::pane::PaneWidth::new(luma_ui::sheet::WIDTH),
             workspace_split: shell::workspace_split(),
-            expanded: false,
+            view_mode: ViewMode::default(),
             scale_factor: 1.0,
             visualizer: None,
             fullscreen: None,
@@ -306,9 +295,8 @@ impl Luma {
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
-            split_view: false,
-            split_view_columns: shell::split_view_columns(),
-            split_view_rows: shell::split_view_rows(),
+            program_columns: shell::program_columns(),
+            program_rows: shell::program_rows(),
             sign_in: None,
             refreshing_session: false,
             sync_status: sync_status::SidebarSync::default(),
@@ -559,19 +547,18 @@ impl Render for Luma {
                 this.toggle_sidebar();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &keymap::ToggleWorkspace, _, cx| {
-                this.workspace_hidden = !this.workspace_hidden;
-                cx.notify();
+            .on_action(cx.listener(|this, _: &keymap::DirectMode, _, cx| {
+                this.set_view_mode(ViewMode::Direct, cx)
             }))
-            .on_action(cx.listener(|this, _: &keymap::ToggleExpand, _, cx| {
-                this.expanded = !this.expanded;
-                cx.notify();
+            .on_action(cx.listener(|this, _: &keymap::ProgramMode, _, cx| {
+                this.set_view_mode(ViewMode::Program, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &keymap::OpenClipGraph, _, cx| this.open_clip_graph(cx)),
+            )
             .on_action(cx.listener(|this, _: &keymap::CloseTab, _, cx| this.close_active_tab(cx)))
             .on_action(cx.listener(|this, _: &keymap::NewTab, window, cx| {
-                // ⌘T presses the `+`: it opens the combo box, and brings up
-                // the panel the picked tab will show in.
-                this.workspace_hidden = false;
+                // ⌘T presses the `+`: it opens the combo box.
                 this.toggle_new_tab(window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::SelectTab1, _, cx| this.select_tab(0, cx)))

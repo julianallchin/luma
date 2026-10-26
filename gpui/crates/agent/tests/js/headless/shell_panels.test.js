@@ -1,5 +1,5 @@
-// The shell's edge regions: what ⌘B and ⌘⇧B do, and what the workspace seam
-// does.
+// The shell's edge regions: what ⌘B and the view mode do, and what the
+// workspace seam does.
 //
 // A panel closes the first time and never comes back, because hiding it left
 // the keyboard with the tab it stopped rendering. A slide stalls part-way,
@@ -47,11 +47,15 @@ test("the edge regions toggle both ways and the seam resizes the panel", () => {
   // 1. Twice each, because a toggle that breaks the keyboard's home breaks on
   //    the second press.
   expect(toggle("luma::ToggleSidebar").sidebar).toBe(null);
-  expect(toggle("luma::ToggleSidebar").sidebar).toBeGreaterThan(0);
-  // 2. The workspace panel, likewise.
-  expect(toggle("luma::ToggleWorkspace").tab).toBe(null);
-  const workspaceReopened = toggle("luma::ToggleWorkspace");
-  expect(workspaceReopened.tab).toBeGreaterThan(0);
+  const workspaceReopened = toggle("luma::ToggleSidebar");
+  expect(workspaceReopened.sidebar).toBeGreaterThan(0);
+  // 2. Program takes the chat away, seam and all, and keeps the editor;
+  //    Direct puts the seam back where it was.
+  const program = toggle("luma::ProgramMode");
+  expect(program.seam).toBe(null);
+  expect(program.tab).toBeGreaterThan(0);
+  const direct = toggle("luma::DirectMode");
+  expect(direct.seam).toBe(workspaceReopened.seam);
 
   // 3. The seam, dragged left, widens the panel by what the pointer moved.
   //    Sidebar closed first, and read after it went: closing it hands its

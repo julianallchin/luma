@@ -30,7 +30,7 @@ test(
       return frames;
     };
     nav.trackEditor("Test Venue", "Aurora");
-    nav.expand();
+    nav.program();
     until("the clip", () => node("card", CARD));
     until("the presets", () => node("card", "Presets"));
     const empty = read();
@@ -55,22 +55,22 @@ test(
   },
 );
 
-test("the inspector stays above the timeline and pickers accept keyboard input", () => {
+test("the inspector stays beside the timeline and pickers accept keyboard input", () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   until("the clip", () => node("card", CARD));
   app.click(node("card", CARD));
   until("the clip's controls", () => node("button", "Pick fixtures"));
   const before = node("card", "Clip graph").bounds;
-  app.drag(node("slider", "Stage height"), { dx: 0, dy: 140 });
+  app.drag(node("slider", "Stage height"), { dx: 0, dy: -140 });
   app.frames(4);
   const inspector = node("card", "Clip graph").bounds;
   const wave = node("card", "Waveform").bounds;
-  // A shorter stage gives the inspector room, and it stays above the
+  // A shorter stage gives the inspector room, and it stays beside the
   // timeline with its controls on screen.
   expect(inspector.height >= before.height).toBe(true);
-  assert(inspector.y + inspector.height <= wave.y, `the inspector overlaps the timeline: ${JSON.stringify({ inspector, wave })}`);
+  assert(inspector.x >= wave.x + wave.width - 1, `the inspector overlaps the timeline: ${JSON.stringify({ inspector, wave })}`);
   expect(node("button", "Pick fixtures").bounds.height).toBeGreaterThan(0);
 
   app.click(node("button", "Pick fixtures"));

@@ -760,6 +760,24 @@ pub fn segment(
     row_state_paint(cell, state, fade_key)
 }
 
+/// A [`segmented`] track as a capsule, for a one-of-N switch that stands
+/// alone in a head band rather than in a row of fields: alone, its ends are
+/// its whole outline, and round ends say "switch" where a box says "field".
+/// Build its cells with [`pill_segment`] — a square cell in a round track
+/// leaves a notch of the track showing at each end.
+pub fn pill_segmented() -> Div {
+    segmented().rounded_full()
+}
+
+/// One cell of a [`pill_segmented`] track: [`segment`], rounded to match.
+pub fn pill_segment(
+    label_text: impl Into<SharedString>,
+    chosen: bool,
+    fade_key: impl Into<SharedString>,
+) -> Div {
+    segment(label_text, chosen, fade_key).rounded_full()
+}
+
 /// An on/off switch: a rounded track with a knob. `on` runs from 0 (off) to
 /// 1 (on), so a caller can pass a value that animates between the two.
 ///
