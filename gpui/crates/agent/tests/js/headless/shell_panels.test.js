@@ -125,18 +125,21 @@ test("the edge regions toggle both ways and the seam resizes the panel", () => {
 });
 
 // The dialog clamps rather than crops on a compact window and leaves the
-// titlebar strip, whose window controls keep their hit targets.
+// titlebar strip, whose window controls keep their corner. On macOS the
+// corner is AppKit's and holds no node of ours; elsewhere the painted lights
+// are in it and keep their hit targets.
 test("a compact window clamps the settings dialog below the titlebar", { fixture: { window: [640, 480] } }, () => {
   open();
   app.action("luma::OpenSettings");
   const shot = until("the compact dialog", dialog);
   const box = dialog(shot).bounds;
   assert(box.x >= 0 && box.x + box.width <= 640 && box.y + box.height <= 480, `the dialog does not fit: ${JSON.stringify(box)}`);
-  for (const control of ["close", "minimize", "maximize"]) {
-    const node = shot.find({ role: "button", label: control });
-    assert(node !== undefined && node.bounds.width > 0, `${control} lost its hit target above the compact modal`);
-    assert(box.y >= node.bounds.y + node.bounds.height, `the dialog covers the titlebar's ${control}`);
-  }
+  const corner = shot.find({ role: "card", label: "Window controls" });
+  assert(corner !== undefined && corner.bounds.width > 0, "the window controls lost their corner above the compact modal");
+  assert(box.y >= corner.bounds.y + corner.bounds.height, "the dialog covers the window controls' corner");
+  const lights = ["close", "minimize", "maximize"].map((label) => shot.find({ role: "button", label }));
+  assert(lights.every((node) => node === undefined) || lights.every((node) => node !== undefined && node.bounds.width > 0),
+    "some painted lights lost their hit target above the compact modal");
 });
 
 // ⌘B takes its width from the thread and the panel in the ratio they were

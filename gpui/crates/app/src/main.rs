@@ -44,19 +44,21 @@ fn main() {
         luma_app::init(cx);
 
         let options = WindowOptions {
-            // No visible native chrome: `chrome` draws the head bands. The
-            // titlebar is still requested, transparent and title-less, because
-            // that is the only branch of gpui's macOS window that honours
+            // No native titlebar: `chrome` draws the head bands. A titlebar is
+            // still requested, transparent and title-less, because that is
+            // the only branch of gpui's macOS window that honours
             // `is_resizable` — `titlebar: None` pins the style mask to
             // `Titled | FullSizeContentView`, and without `Resizable` AppKit
-            // gives no edge-resize and silently ignores `zoom:`. The system
-            // buttons that come with the mask are hidden right after the
-            // window opens; see `hide_native_window_buttons`.
+            // gives no edge-resize and silently ignores `zoom:`. Its close /
+            // minimise / zoom buttons are the window's traffic lights on
+            // macOS, moved into the head band — see `chrome`'s module docs.
             titlebar: Some(TitlebarOptions {
                 title: None,
                 appears_transparent: true,
-                traffic_light_position: None,
+                traffic_light_position: Some(luma_app::traffic_light_position()),
             }),
+            // Linux only: gpui's macOS window ignores it, and there the
+            // titlebar above is what decides the chrome.
             window_decorations: Some(WindowDecorations::Client),
             app_owns_titlebar_drag: true,
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -92,7 +94,6 @@ fn main() {
                     },
                 );
             }
-            luma_app::hide_native_window_buttons(window);
             // As early as there is a window, because compiling every render
             // pipeline is the longest thing between launch and a first frame
             // — and not before, because on a wgpu compositor the pipelines
