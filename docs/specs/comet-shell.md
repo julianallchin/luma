@@ -15,13 +15,13 @@ strip spans the chat and the editor:
 
 ```text
 ┌──────────┬───────────────────────────────────────────────────────┐
-│ venue ▾  │ [Strobe · #1 ●][Strobe · #2][Opus · #1][⌂ Venue]      │
+│ venue ▾  │ [Strobe · #1 ●][Strobe · #2][⌂ Venue]  [Direct|Program]│
 │          ├───────────────────┬───────────────────────────────────┤
 │ ⌂ Venue  │  chat (this tab)  │  editor (this tab)                │
 │ songs    │                   │  track editor, or the patch page  │
 │  scores  │  composer         │                                   │
 └──────────┴───────────────────┴───────────────────────────────────┘
-   sidebar (256)                        ⌘B / ⌘⇧B
+   sidebar (256), ⌘B          Direct shown; Program drops the chat
 ```
 
 The sidebar, the chat and the editor are persistent regions. Nothing is
@@ -71,9 +71,15 @@ mounted, and the first send creates the thread.
 
 ### 2.3 The tab strip and the editor
 
-A tab strip over the chat and the editor, and one visible tab. `⌘⇧B` toggles
-the editor. Expand / Show chat switches between the split and the takeover
-layout.
+A tab strip over the chat and the editor, and one visible tab. The pill at
+the band's trailing edge sets the window's view mode (the `view_mode`
+setting, which replaced the `split_view` checkbox):
+
+- **Direct** — the chat beside the editor. A score is the stage over the
+  timeline, with no inspector; a double-click on a clip puts its graph where
+  the timeline was, under a "Timeline" back button. Escape goes back too.
+- **Program** — no chat: the editor takes everything right of the sidebar.
+  A score is the timeline beside the stage over the inspector.
 
 A tab **is** its target (`gpui/crates/app/src/tabs.rs`):
 
@@ -106,7 +112,9 @@ Shift-F opens it fullscreen.
 
 Key contexts nest: `Luma > Workspace > TrackEditor`. The track-editor bindings
 are scoped to `TrackEditor && !TextInput`, so they need no change when the
-tab moves.
+tab moves. Direct's graph page declares `ClipGraph` in place of
+`TrackEditor`: the timeline's keys act on the selected clips, and over the
+page the selection is the clip being edited.
 
 Focus follows the last click. A region does not take focus when the selection
 changes.
@@ -114,7 +122,6 @@ changes.
 | Key | Action | Context |
 |---|---|---|
 | `⌘B` | `ToggleSidebar` | shell |
-| `⌘⇧B` | `ToggleWorkspace` | shell |
 | `⌘T` | `NewTab` | shell |
 | `⌘W` | `CloseTab` | `Workspace` (the window's `⌘W` still works elsewhere) |
 | `⌘1`…`⌘9` | select tab | shell |

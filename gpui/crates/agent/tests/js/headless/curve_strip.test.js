@@ -12,14 +12,15 @@ const settle = () => app.frames(16, { waitMs: 60 });
 const graphClip = () => library.score().clips["graph-clip"];
 const nodes = () => graphClip().graph.nodes;
 
-function open() {
+// `page: false` stays in Program, where the timeline is beside the graph.
+function open({ page = true } = {}) {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(node("card", "Wash"));
   until("the graph", (s) => s.find({ role: "row", label: "Brightness" }));
-  nav.widenGraph();
+  if (page) nav.graphPage();
 }
 
 // The control of `role` and `label` in the row `row` of the graph card
@@ -160,7 +161,7 @@ test("a Bézier handle leaves the box, and a point does not", () => {
 });
 
 test("a time strip draws the clip's beats and follows the playhead", () => {
-  open();
+  open({ page: false });
   promote();
   const beats = () => app.snapshot().find((n) => n.label.startsWith("Curve 1 beat grid = "));
   until("the beat grid", () => beats());
@@ -230,10 +231,10 @@ const GRADIENT = { pattern: "graph-clip", name: "Gradient", start: 1, end: 3, pr
 test("a strip across space marks where each head falls", { fixture: { clips: [GRADIENT] } }, () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(node("card", "Gradient"));
-  nav.widenGraph();
+  nav.graphPage();
   expand();
   strip();
   const marks = () => app.snapshot().findAll({ role: "text" }).filter((n) => /^Curve 1 head \d+$/.test(n.label));

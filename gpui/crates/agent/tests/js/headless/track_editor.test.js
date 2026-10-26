@@ -39,7 +39,7 @@ function read() {
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.expand();
+  nav.program();
   // The editor's own geometry: give it the whole column.
   nav.stageOff();
   return read();

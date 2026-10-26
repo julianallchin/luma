@@ -1,6 +1,7 @@
-//! Clip controls in the dedicated editing area, beside the visualizer.
-//! The inspector is always open and has its own scrolling viewport,
-//! independent of timeline height. With a clip selected it shows the clip's
+//! Clip controls: Program's inspector under the visualizer, and Direct's
+//! graph page in the timeline's place. In Program the inspector is always
+//! open and has its own scrolling viewport, independent of timeline height.
+//! With a clip selected it shows the clip's
 //! name, selection, blend and graph (see [`graph`]); with none it shows the
 //! preset browser. Selection retargets the existing controls; graph writes
 //! keep their debounced history and persistence path.
@@ -709,16 +710,12 @@ pub(super) fn blend_modes(output: &str) -> &'static [BlendMode] {
 
 // -- rendering ----------------------------------------------------------------
 
-/// The inspector: the selected clip's controls, or the preset browser. It
-/// is always open: a column beside the stage, as wide as the shell gives it
-/// (widened for the graph when `wide`), or, with `fill` (split view), the
-/// whole box it is given under the stage.
-pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool, wide: bool) -> AnyElement {
+/// The inspector: the selected clip's controls, or the preset browser,
+/// filling the whole box it is given — Program's under the stage, or Direct's
+/// graph page.
+pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
     let (label, body) = match state.sheet.built.as_ref() {
-        Some(built) => (
-            "Clip graph",
-            body(state, built, app, (!fill).then_some(wide)),
-        ),
+        Some(built) => ("Clip graph", body(state, built, app)),
         None => ("Presets", browser::body(state, app)),
     };
     div()
@@ -727,11 +724,6 @@ pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool, wide: bool) 
         .min_h_0()
         .overflow_hidden()
         .bg(ladder::background())
-        // Beside the stage its trailing edge is a rule; under it, the seam
-        // above is the only rule it needs.
-        .when(!fill, |content| {
-            content.border_r_1().border_color(ladder::trim())
-        })
         .child(body)
         .agent_node(Role::Card, label)
         .into_any_element()
@@ -739,7 +731,7 @@ pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool, wide: bool) 
 
 /// The sheet's content: the name, the selection and blend rows, then the
 /// graph canvas filling the rest.
-fn body(state: &Editor, built: &Built, app: &Entity<Luma>, wide: Option<bool>) -> AnyElement {
+fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
     let pad = px(luma_ui::sheet::PAD);
     let mut rows: Vec<AnyElement> = Vec::new();
     let mut graph = None;
@@ -757,7 +749,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>, wide: Option<bool>) -
             );
         }
         if let (Some(controls), Some(shown)) = (&built.controls, &built.graph) {
-            graph = Some(graph::editor(state, controls, shown, app, wide));
+            graph = Some(graph::editor(state, controls, shown, app));
         }
     }
     let header = div()

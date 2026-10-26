@@ -65,10 +65,10 @@ pub struct AppSettings {
     /// cost knob of this machine, like `render_scale`.
     #[serde(default)]
     pub stage_low_quality: bool,
-    /// Whether the score editor shows the timeline beside the stage and the
-    /// inspector, instead of under them. A view preference of this machine.
+    /// How the editing window is laid out — see [`ViewMode`]. A view
+    /// preference of this machine.
     #[serde(default)]
-    pub split_view: bool,
+    pub view_mode: ViewMode,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -87,6 +87,38 @@ pub struct AppSettings {
 
 fn enabled() -> bool {
     true
+}
+
+/// The editing window's two layouts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewMode {
+    /// The agent's chat beside the stage over the timeline.
+    #[default]
+    Direct,
+    /// No chat: the timeline beside the stage over the inspector.
+    Program,
+}
+
+impl ViewMode {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Program => "program",
+        }
+    }
+
+    /// The stored mode. Before there were modes there was a `split_view`
+    /// checkbox, and its layout is what Program is, so a library that only
+    /// has that row opens in the layout it was left in.
+    fn configured(map: &std::collections::HashMap<String, String>) -> Self {
+        match map.get("view_mode").map(String::as_str) {
+            Some("direct") => Self::Direct,
+            Some("program") => Self::Program,
+            _ if map.get("split_view").is_some_and(|v| v == "true") => Self::Program,
+            _ => Self::Direct,
+        }
+    }
 }
 
 /// What the settings screen may know about one service's API key.
@@ -149,7 +181,7 @@ impl Default for AppSettings {
             hdr_output: true,
             stage_look: String::new(),
             stage_low_quality: false,
-            split_view: false,
+            view_mode: ViewMode::default(),
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -205,7 +237,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
         hdr_output: map.get("hdr_output").map(|v| v == "true").unwrap_or(true),
         stage_look: map.get("stage_look").cloned().unwrap_or_default(),
         stage_low_quality: map.get("stage_low_quality").is_some_and(|v| v == "true"),
-        split_view: map.get("split_view").is_some_and(|v| v == "true"),
+        view_mode: ViewMode::configured(&map),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
@@ -261,6 +293,36 @@ mod tests {
 
         let cleared = [(provider.key_setting().to_string(), "  ".to_string())].into();
         assert!(api_key_statuses(&cleared).iter().all(|s| s.hint.is_none()));
+    }
+
+    /// A stored mode wins; without one, the retired split-view checkbox
+    /// decides, and its layout is Program.
+    #[test]
+    fn view_mode_falls_back_to_the_split_view_row() {
+        let map = |rows: &[(&str, &str)]| {
+            rows.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        assert_eq!(ViewMode::configured(&map(&[])), ViewMode::Direct);
+        assert_eq!(
+            ViewMode::configured(&map(&[("split_view", "true")])),
+            ViewMode::Program
+        );
+        assert_eq!(
+            ViewMode::configured(&map(&[("split_view", "false")])),
+            ViewMode::Direct
+        );
+        assert_eq!(
+            ViewMode::configured(&map(&[("split_view", "true"), ("view_mode", "direct")])),
+            ViewMode::Direct
+        );
+        for mode in [ViewMode::Direct, ViewMode::Program] {
+            assert_eq!(
+                ViewMode::configured(&map(&[("view_mode", mode.key())])),
+                mode
+            );
+        }
     }
 
     /// Same contract one axis over: the picker must not offer a service the

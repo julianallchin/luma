@@ -41,11 +41,11 @@ const file = (card) => `card_${card.toLowerCase().replace(" ", "_")}`;
 
 test("the Slash canvas and each node card, captured", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(until("the clip", (s) => s.find({ role: "card", label: "Pulse" }))
     .find({ role: "card", label: "Pulse" }));
-  nav.widenGraph();
+  nav.graphPage();
   app.frames(6, { waitMs: 30 });
   app.click(until("fit", (s) => s.find({ role: "button", label: "Fit graph" })).find({ role: "button", label: "Fit graph" }));
   app.frames(6, { waitMs: 30 });

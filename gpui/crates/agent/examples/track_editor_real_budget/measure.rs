@@ -107,7 +107,7 @@ pub fn main() {
             }}
             nav.track({track:?});
             until("the timeline", (s) => s.find({{ role: "card", label: "Waveform" }}) !== undefined);
-            nav.expand();
+            nav.program();
             if (!{stage}) nav.stageOff();
             else nav.step("the frame-stats panel", "toggle", "Frame stats");
             // Let the previews land before measuring.

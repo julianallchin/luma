@@ -9,7 +9,7 @@ fixture({
 
 test("the minimap pans, resizes and clamps the viewport", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   const node = (label) => app.snapshot().find({ role: "slider", label });
   const settle = () => app.frames(12, { waitMs: 60 });

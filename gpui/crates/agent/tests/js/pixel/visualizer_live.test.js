@@ -33,7 +33,7 @@ function chroma(shot) {
 function openLitStage() {
   nav.trackEditor("Test Venue", "Aurora");
   until("the clip", (s) => s.find({ role: "card", label: CLIP }) !== undefined);
-  nav.expand();
+  nav.program();
   app.frames(10, { waitMs: 60 });
   // The house lights tint the room on their own; take them to zero so what
   // colour is left came from the rig.

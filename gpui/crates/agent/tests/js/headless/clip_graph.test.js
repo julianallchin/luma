@@ -32,11 +32,11 @@ const nodeTitles = () => new Set(Object.keys(nodes()).map(titleOf));
 function open(clip) {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(node("card", clip));
   until("the graph", (s) => s.find({ role: "card", label: "Graph canvas" }) && s.find({ role: "input", label: "Name" }));
-  nav.widenGraph();
+  nav.graphPage();
 }
 
 const canvas = (snap = app.snapshot()) => snap.find({ role: "card", label: "Graph canvas" }).bounds;
@@ -601,13 +601,14 @@ test("renaming stores the name and the timeline shows it", () => {
   app.type(field(), "Kick chase");
   app.key("enter");
   until("name stored", () => stored().name === "Kick chase");
+  app.click(node("button", "Back to timeline"));
   node("card", "Kick chase");
 });
 
 test("the fade handle writes an alpha curve over the clip", { fixture: { clips: [clipOf("Wash")], window: [1400, 900] } }, () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   until("the waveform", (s) => s.find({ role: "card", label: "Waveform" }));
   settle();

@@ -299,7 +299,6 @@ impl Luma {
         };
         if self.workspace.body(&target).is_some() {
             self.workspace.select(&target);
-            self.workspace_hidden = false;
             cx.notify();
             return;
         }
