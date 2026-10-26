@@ -104,7 +104,7 @@ fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
             shell: gate.find({ role: "button", label: "sidebar-toggle" }) !== undefined
                 || gate.find({ role: "card", label: "View mode" }) !== undefined,
             // …and the window still moves and closes.
-            lights: gate.find({ role: "button", label: "close" }) !== undefined,
+            lights: gate.find({ role: "card", label: "Window controls" }) !== undefined,
             // Nothing failed. A launch that could not verify a session is a
             // signed-out launch, not an error to report.
             failure: gate.find((n) => n.role === "text"

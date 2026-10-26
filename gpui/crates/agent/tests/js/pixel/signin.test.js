@@ -21,7 +21,7 @@ test("the sign-in screen is one centred column on bare ground", () => {
   const title = gate.find({ role: "text", label: "Sign in to Luma" }).bounds;
   const field = gate.find({ role: "input", label: "Email" }).bounds;
   const primary = gate.find({ role: "button", label: "Continue" }).bounds;
-  const close = gate.find({ role: "button", label: "close" }).bounds;
+  const corner = gate.find({ role: "card", label: "Window controls" }).bounds;
 
   // One column, centred in the window.
   for (const box of [title, field, primary]) {
@@ -30,7 +30,7 @@ test("the sign-in screen is one centred column on bare ground", () => {
   // The field and the capsule under it are the column's one width.
   expect(Math.abs(field.width - primary.width)).toBeLessThan(1);
   // The column clears the window's own controls.
-  expect(title.y).toBeGreaterThan(close.y + close.height);
+  expect(title.y).toBeGreaterThan(corner.y + corner.height);
 
   // No card: the ground beside the column is unbroken all the way across,
   // above the title and in the gap between the field and the capsule.
