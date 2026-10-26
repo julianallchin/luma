@@ -535,8 +535,10 @@ mod tests {
 
     /// A laser clip over one projector: `count` beams, all at `x`.
     fn laser(count: usize, x: f64, alpha: f64, mode: p::BlendMode, z: i64) -> CompiledAnnotation {
-        let nodes = json!({"laser1": {"kind": "laser", "inputs": {
-            "count": count, "x": x, "alpha": alpha}}});
+        let nodes = json!({
+            "figure1": {"kind": "figure", "inputs": {"count": count, "x": x}},
+            "laser1": {"kind": "laser", "inputs": {"figures": [{"node": "figure1"}], "alpha": alpha}},
+        });
         let cells = (0..count)
             .map(|i| p::Cell {
                 id: format!("proj:{i}"),

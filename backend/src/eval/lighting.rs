@@ -116,7 +116,8 @@ impl Program {
 
     /// A laser clip's elements at `times`, one list per time, drawn on
     /// layer `layer`. A head `projector:i` is element `i` of as many as its
-    /// projector has heads; its alpha is the element's intensity.
+    /// projector has heads, figure after figure; its alpha is the element's
+    /// intensity.
     pub(crate) fn elements(
         &self,
         times: &[f32],
@@ -128,12 +129,6 @@ impl Program {
             return Ok(vec![]);
         }
         scratch.values = self.sample(times)?;
-        let value = scratch
-            .values
-            .get(p::laser::ELEMENT_OUTPUT)
-            .ok_or("a laser clip gives elements")?;
-        let rows =
-            p::laser::Element::read(value, &self.ids, times.len()).map_err(|e| e.to_string())?;
         let mut counts: HashMap<&str, usize> = HashMap::new();
         let places: Vec<(&str, usize)> = self
             .ids
@@ -146,23 +141,41 @@ impl Program {
                 (projector, index.parse().unwrap_or(0))
             })
             .collect();
-        let figure = laser.figure();
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .zip(&places)
-                    .map(|((alpha, samples), (projector, index))| p::laser::Element {
-                        projector: (*projector).to_string(),
+        // Each head's element at each time, read from its figure's output.
+        let mut slots: Vec<Vec<Option<p::laser::Element>>> =
+            vec![vec![None; self.ids.len()]; times.len()];
+        for (f, figure) in laser.figures.iter().enumerate() {
+            let heads: Vec<usize> = (0..self.ids.len())
+                .filter(|&n| laser.place(places[n].1).map(|(of, _)| of) == Some(f))
+                .collect();
+            if heads.is_empty() {
+                continue;
+            }
+            let ids: Vec<String> = heads.iter().map(|&n| self.ids[n].clone()).collect();
+            let value = scratch
+                .values
+                .get(&p::laser::element_output(f))
+                .ok_or("a laser clip gives elements")?;
+            let rows =
+                p::laser::Element::read(value, &ids, times.len()).map_err(|e| e.to_string())?;
+            for (row, slot) in rows.into_iter().zip(&mut slots) {
+                for ((alpha, samples), &n) in row.into_iter().zip(&heads) {
+                    let (projector, index) = places[n];
+                    slot[n] = Some(p::laser::Element {
+                        projector: projector.to_string(),
                         zone: laser.zone.clone(),
                         layer,
-                        figure,
-                        s: p::laser::order(*index, counts[projector]),
+                        outline: figure.outline(),
+                        s: p::laser::order(index, counts[projector]),
                         samples,
                         intensity: alpha,
-                    })
-                    .collect()
-            })
+                    });
+                }
+            }
+        }
+        Ok(slots
+            .into_iter()
+            .map(|slot| slot.into_iter().flatten().collect())
             .collect())
     }
 

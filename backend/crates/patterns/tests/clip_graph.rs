@@ -583,21 +583,30 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
     let mut nodes = vec![];
     let color = |from: &str| Node::new(Kind::Color).with_input("brightness", Input::wire(from));
     let curve_of = |x: &str| Node::new(Kind::Curve).with_input("x", Input::wire(x));
+    let laser_of = |figure: &str| {
+        Node::new(Kind::Laser).with_input("figures", Input::List(vec![Input::wire(figure)]))
+    };
     match kind {
-        Kind::Color | Kind::Aim | Kind::Strobe | Kind::Laser => {}
+        Kind::Color | Kind::Aim | Kind::Strobe => {}
+        Kind::Laser => {
+            node = laser_of("figure9");
+            nodes.push(("figure9".into(), Node::new(Kind::Figure)));
+        }
+        Kind::Figure => nodes.push(("laser9".into(), laser_of(&id))),
         Kind::Time | Kind::Space | Kind::Random | Kind::Audio => {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push(("color9".into(), color("curve9")));
         }
-        // `along` varies within a laser element, so only a laser reads it.
+        // `along` varies within a laser element, so only a figure reads it.
         Kind::Along => {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push((
-                "laser9".into(),
-                Node::new(Kind::Laser)
+                "figure9".into(),
+                Node::new(Kind::Figure)
                     .with_setting("kind", "line")
                     .with_input("y", Input::wire("curve9")),
             ));
+            nodes.push(("laser9".into(), laser_of("figure9")));
         }
         Kind::Curve => {
             node.inputs.insert("x".into(), Input::wire("time9"));

@@ -66,6 +66,8 @@ pub(crate) enum Ty {
     Coordinate,
     /// A math node's items: numbers and value wires.
     Values,
+    /// A laser's figures: figure wires.
+    Figures,
 }
 
 /// An input's resolved type, unit and range, for one node in one graph: a
@@ -111,6 +113,7 @@ pub(crate) fn spec(graph: &ClipGraph, id: &str, input: &str) -> Option<Spec> {
         InputType::Time => Ty::Time,
         InputType::Coordinate => Ty::Coordinate,
         InputType::Values => Ty::Values,
+        InputType::Figures => Ty::Figures,
         // A value node's own value: the type its wires ask of it, in the
         // unit and range of the input it lands in.
         InputType::Constant => {
@@ -229,7 +232,7 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
         Ty::Color => Input::Color([1., 1., 1.]),
         Ty::Points => Input::Points(preset_curve("Ramp up")),
         Ty::Gradient => Input::Gradient(gradient(&[([0., 0., 0.], 0.), ([1., 1., 1.], 1.)])),
-        Ty::Heads | Ty::Time | Ty::Coordinate | Ty::Values => return None,
+        Ty::Heads | Ty::Time | Ty::Coordinate | Ty::Values | Ty::Figures => return None,
     })
 }
 
@@ -609,10 +612,11 @@ pub(crate) fn insert(graph: &mut ClipGraph, id: &str, input: &str, kind: Kind) {
 }
 
 /// Wire an existing node into an input: the two places share it. A math
-/// node's values take the wire as one more item; any other input holds only
-/// the wire after.
+/// node's values and a laser's figures take the wire as one more item; any
+/// other input holds only the wire after.
 pub(crate) fn link(graph: &mut ClipGraph, id: &str, input: &str, target: &str) {
-    let listed = spec(graph, id, input).is_some_and(|spec| spec.ty == Ty::Values);
+    let listed =
+        spec(graph, id, input).is_some_and(|spec| matches!(spec.ty, Ty::Values | Ty::Figures));
     if let Some(node) = graph.nodes.get_mut(id) {
         match node.inputs.get_mut(input) {
             Some(Input::List(items)) if listed => items.push(Input::wire(target)),
@@ -731,8 +735,14 @@ pub(crate) fn multiply(graph: &mut ClipGraph, id: &str, input: &str) {
     }
 }
 
-/// Add an item, a 1, to a math node's values.
+/// Add an item to a list: a 1 to a math node's values, a new figure of
+/// beams to a laser's figures.
 pub(crate) fn add_item(graph: &mut ClipGraph, id: &str, input: &str) {
+    if spec(graph, id, input).is_some_and(|spec| spec.ty == Ty::Figures) {
+        let figure = add(graph, Node::new(Kind::Figure));
+        link(graph, id, input, &figure);
+        return;
+    }
     let Some(node) = graph.nodes.get_mut(id) else {
         return;
     };
@@ -758,14 +768,16 @@ pub(crate) fn set_item(graph: &mut ClipGraph, id: &str, input: &str, index: usiz
     }
 }
 
-/// Take item `index` out of a math node's values; see [`settle`].
+/// Take item `index` out of a list; see [`settle`]. A laser keeps its last
+/// figure, and a figure taken out goes with what only it read.
 pub(crate) fn remove_item(graph: &mut ClipGraph, id: &str, input: &str, index: usize) {
+    let figures = spec(graph, id, input).is_some_and(|spec| spec.ty == Ty::Figures);
     if let Some(Input::List(items)) = graph
         .nodes
         .get_mut(id)
         .and_then(|node| node.inputs.get_mut(input))
     {
-        if index < items.len() {
+        if index < items.len() && !(figures && items.len() == 1) {
             items.remove(index);
         }
     }
@@ -853,6 +865,7 @@ pub(crate) fn link_candidates(graph: &ClipGraph, id: &str, input: &str) -> Vec<S
                 Ty::Vector => value == Some("vector"),
                 Ty::Color => value == Some("color"),
                 Ty::Values => value.is_some(),
+                Ty::Figures => node.kind == Kind::Figure,
                 Ty::Heads => SHAPERS.contains(&node.kind),
                 Ty::Time => node.kind == Kind::Time,
                 Ty::Coordinate => SOURCES.contains(&node.kind),
@@ -877,7 +890,7 @@ pub(crate) fn delete(
     id: &str,
     restore: impl Fn(&ClipGraph, &str, &str) -> Option<Input>,
 ) {
-    if graph.nodes.get(id).is_none_or(|node| node.kind.is_output()) {
+    if graph.nodes.get(id).is_none_or(|node| node.kind.is_output()) || last_figure(graph, id) {
         return;
     }
     let mut doomed = vec![id.to_owned()];
@@ -934,6 +947,17 @@ pub(crate) fn delete(
     prune(graph);
 }
 
+/// Whether `id` is the only figure its laser draws, which stays as the
+/// output does.
+fn last_figure(graph: &ClipGraph, id: &str) -> bool {
+    references(graph, id).iter().any(|(to, input)| {
+        matches!(
+            graph.nodes.get(to).and_then(|node| node.inputs.get(input)),
+            Some(Input::List(items)) if items.len() == 1
+        ) && spec(graph, to, input).is_some_and(|spec| spec.ty == Ty::Figures)
+    })
+}
+
 /// Whether a new node of `kind` can feed an input: directly (a value node
 /// takes any number, vector or color), or through the curve a promotion
 /// puts between them.
@@ -951,6 +975,7 @@ pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> b
         Ty::Coordinate => SOURCES.contains(&kind),
         Ty::Heads => SHAPERS.contains(&kind),
         Ty::Time => kind == Kind::Time,
+        Ty::Figures => kind == Kind::Figure,
         Ty::Points | Ty::Gradient => false,
     }
 }
@@ -1009,6 +1034,10 @@ pub(crate) fn attach(
         }
         Ty::Coordinate => {
             recoordinate(graph, id, kind);
+            None
+        }
+        Ty::Figures => {
+            add_item(graph, id, input);
             None
         }
         _ => {
@@ -1225,15 +1254,54 @@ mod tests {
         }
     }
 
+    /// A laser drawing one figure of beams.
+    fn beams() -> ClipGraph {
+        ClipGraph::new([
+            ("figure1".to_owned(), Node::new(Kind::Figure)),
+            (
+                "laser1".to_owned(),
+                Node::new(Kind::Laser)
+                    .with_input("figures", Input::List(vec![Input::wire("figure1")])),
+            ),
+        ])
+    }
+
     #[test]
-    fn along_is_offered_only_where_a_laser_reads_it() {
-        let mut graph = ClipGraph::new([("laser1".to_owned(), Node::new(Kind::Laser))]);
-        assert!(sources(&graph, "laser1", "x").contains(&Kind::Along));
+    fn along_is_offered_only_where_a_figure_reads_it() {
+        let mut graph = beams();
+        assert!(sources(&graph, "figure1", "x").contains(&Kind::Along));
         assert!(!sources(&graph, "laser1", "alpha").contains(&Kind::Along));
-        assert!(attach(&mut graph, "laser1", "x", Kind::Along).is_some());
+        assert!(attach(&mut graph, "figure1", "x", Kind::Along).is_some());
         assert!(graph.check().is_ok(), "{:?}", graph.check());
         assert!(!sources(&wash(), "color1", "brightness").contains(&Kind::Along));
         assert!(attach(&mut wash(), "color1", "brightness", Kind::Along).is_none());
+    }
+
+    /// A laser's figures are a list: "+" adds a figure, a figure links in
+    /// as one more item, and the last one stays.
+    #[test]
+    fn a_laser_gains_and_loses_figures_but_keeps_one() {
+        let mut graph = beams();
+        add_item(&mut graph, "laser1", "figures");
+        assert_eq!(
+            graph.nodes["laser1"].inputs["figures"],
+            Input::List(vec![Input::wire("figure1"), Input::wire("figure2")])
+        );
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        assert!(accepts(&graph, "laser1", "figures", Kind::Figure));
+        assert!(!accepts(&graph, "laser1", "figures", Kind::Time));
+        remove_item(&mut graph, "laser1", "figures", 0);
+        assert!(
+            !graph.nodes.contains_key("figure1"),
+            "a figure taken out goes"
+        );
+        remove_item(&mut graph, "laser1", "figures", 0);
+        delete(&mut graph, "figure2", |_, _, _| None);
+        assert_eq!(
+            graph.nodes["laser1"].inputs["figures"],
+            Input::List(vec![Input::wire("figure2")])
+        );
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
     }
 
     #[test]
