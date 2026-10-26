@@ -518,9 +518,10 @@ fn ground(window: &Window, body: impl IntoElement) -> Div {
             x: 0.0,
             width: viewport,
             viewport,
+            lights: chrome::corner_lit(window),
         }))
         .child(body)
-        .child(chrome::window_controls())
+        .children(chrome::window_controls(window))
 }
 
 /// Mark, title, and the capsules — the only thing on the screen.

@@ -1,11 +1,12 @@
 //! The window's own edges: the head band each region wears, drawn by us.
 //!
-//! The window is `decorations: false` on every platform, so nothing draws
-//! chrome but this module. Everything here is **glass tier** (spec §9):
-//! traffic lights, the sidebar toggle, back/forward, the shell tab strip and
-//! the settings gear are painted from `luma_ui::glass` — never from the
-//! ladder, and never as `BUTTON_CLASS` slabs. Ladder language starts inside
-//! the regions' bodies.
+//! The window draws no titlebar of its own on any platform, so nothing draws
+//! chrome but this module — with one exception, the traffic lights on macOS,
+//! which are AppKit's (see below). Everything painted here is **glass tier**
+//! (spec §9): the sidebar toggle, back/forward, the shell tab strip, the
+//! settings gear and, off macOS, our own traffic lights are painted from
+//! `luma_ui::glass` — never from the ladder, and never as `BUTTON_CLASS`
+//! slabs. Ladder language starts inside the regions' bodies.
 //!
 //! # There is no titlebar
 //!
@@ -17,17 +18,39 @@
 //!
 //! # The traffic lights are the topmost layer
 //!
-//! [`window_controls`] is positioned by the shell at the window's top-left
-//! corner, above the regions *and* above any overlay. An overlay that covered
-//! them would be a modal that can neither be moved nor closed, which is how a
-//! first-run picker becomes a trapped window.
+//! An overlay that covered them would be a modal that can neither be moved nor
+//! closed, which is how a first-run picker becomes a trapped window. Who keeps
+//! them on top depends on who draws them:
+//!
+//! - **macOS: AppKit.** The window asks for a transparent titlebar (see
+//!   `main`), and the close / minimise / zoom buttons that come with it are the
+//!   real ones — hover glyphs, the zoom button's tiling menu, ⌥-click,
+//!   accessibility. gpui moves them to [`traffic_light_position`] and moves
+//!   them back after every resize, re-layout and fullscreen exit. They are
+//!   views in the titlebar, which sits over the content view, so nothing we
+//!   paint can cover them.
+//! - **Everywhere else: us.** [`window_controls`] paints three dots at the
+//!   window's top-left corner, and the shell paints it last — above the
+//!   regions *and* above any overlay.
+//!
+//! On both, [`window_controls`] is the corner's one statement in the tree: an
+//! inert slot the lights' width, empty on macOS because AppKit fills it. A
+//! capture has no AppKit views in it, so this slot is the only evidence a
+//! headless test gets that the corner was left for them.
 //!
 //! Room for them is reserved by [`band`], not by each surface: **anything that
 //! starts at `y = 0` wears a band**, and a band that reaches the window's
 //! corner leaves that corner free. A region does, and so does an overlay plane
 //! — one mechanism rather than an opt-in every future surface has to remember.
-//! The strip itself is inert apart from the three dots, so forgetting is a
+//! The slot itself is inert apart from the painted dots, so forgetting is a
 //! visible overlap and never a corner that silently swallows presses.
+//!
+//! **In a macOS fullscreen space the corner is given back.** AppKit hides the
+//! buttons until the menu bar drops over the top edge, taking them with it, so
+//! a reserved corner would be an empty gap at rest. [`corner_lit`] says so,
+//! [`BandSpan::lights`] carries it, and the left anchor slides into the corner.
+//! Painted lights stay where they are in fullscreen — nothing else would
+//! close the window there.
 //!
 //! # The corner controls are anchors, not controls a region carries
 //!
@@ -78,21 +101,56 @@ pub(crate) const CONTROL: f32 = 24.;
 /// A band's inset from its region's edge, and the gap between its controls.
 const BAND_PAD: f32 = 12.;
 const BAND_GAP: f32 = 10.;
-/// One traffic light, and the gap between them.
+/// One traffic light, and the gap between them. On macOS these are AppKit's
+/// own metrics as of macOS 26 (a 14px button every 23px); gpui keeps AppKit's
+/// spacing and only moves the strip, so they are what the buttons occupy, not
+/// a size we set. Earlier releases draw a narrower strip, which this room
+/// still holds.
+#[cfg(target_os = "macos")]
+const LIGHT: f32 = 14.;
+#[cfg(target_os = "macos")]
+const LIGHT_GAP: f32 = 9.;
+#[cfg(not(target_os = "macos"))]
 const LIGHT: f32 = 12.;
+#[cfg(not(target_os = "macos"))]
 const LIGHT_GAP: f32 = 8.;
 
-/// Room [`window_controls`] claims at the window's top-left corner, inset
+/// Room the traffic lights claim at the window's top-left corner, inset
 /// included. Derived rather than measured so the two cannot drift: the shell
 /// pads the leftmost band by exactly what the lights occupy.
-pub(crate) const LIGHTS_WIDTH: f32 = BAND_PAD + 3. * LIGHT + 2. * LIGHT_GAP;
+const LIGHTS_WIDTH: f32 = BAND_PAD + 3. * LIGHT + 2. * LIGHT_GAP;
+
+/// Where gpui places AppKit's close button: one [`BAND_PAD`] in, and centred
+/// in the band. gpui sizes the titlebar to the button plus this `y` above and
+/// below it, so a band-centred `y` makes the titlebar exactly [`HEIGHT`] —
+/// the buttons share a centre line with every control beside them.
+pub fn traffic_light_position() -> Point<Pixels> {
+    point(px(BAND_PAD), px((HEIGHT - LIGHT) / 2.))
+}
+
+/// Whether the window's top-left corner holds the traffic lights this frame.
+/// False only in a macOS fullscreen space, where AppKit hides them — see the
+/// module docs.
+pub(crate) fn corner_lit(window: &Window) -> bool {
+    !(cfg!(target_os = "macos") && window.is_fullscreen())
+}
+
 /// Where the sidebar toggle sits: one [`BAND_GAP`] past the lights, which is
-/// the spacing every other pair of controls in a band keeps. Flush against
-/// [`LIGHTS_WIDTH`] the toggle's hover wash touches the green dot.
-const LEFT_TOGGLE_X: f32 = LIGHTS_WIDTH + BAND_GAP;
+/// the spacing every other pair of controls in a band keeps — flush against
+/// [`LIGHTS_WIDTH`] the toggle's hover wash touches the green dot. With the
+/// corner given back it takes the band's own inset, like any first control.
+fn left_toggle_x(lights: bool) -> f32 {
+    if lights {
+        LIGHTS_WIDTH + BAND_GAP
+    } else {
+        BAND_PAD
+    }
+}
 /// Where the window's left anchor block ends — the first pixel a band's own
 /// content may use.
-const LEFT_ANCHOR_END: f32 = LEFT_TOGGLE_X + CONTROL + BAND_GAP;
+pub(crate) fn left_anchor_end(lights: bool) -> f32 {
+    left_toggle_x(lights) + CONTROL + BAND_GAP
+}
 /// Where the window's right anchor block begins, measured back from the
 /// trailing edge. The mode switch itself is inset by [`BAND_PAD`], so this is
 /// one gap further in.
@@ -101,12 +159,14 @@ fn right_anchor_start(viewport: f32) -> f32 {
 }
 
 /// Where a band sits in window space: what it needs to know to stay clear of
-/// the anchors. The shell already computes both for every region.
+/// the anchors. The shell already computes all of it for every region.
 #[derive(Clone, Copy)]
 pub(crate) struct BandSpan {
     pub x: f32,
     pub width: f32,
     pub viewport: f32,
+    /// Whether the window's corner holds traffic lights — [`corner_lit`].
+    pub lights: bool,
 }
 
 /// What a band owes each of its edges — the single statement of the anchors'
@@ -124,7 +184,7 @@ pub(crate) struct BandSpan {
 /// which is the whole behaviour, in one `max`.
 pub(crate) fn band_insets(span: BandSpan) -> (f32, f32) {
     (
-        (LEFT_ANCHOR_END - span.x).max(BAND_PAD),
+        (left_anchor_end(span.lights) - span.x).max(BAND_PAD),
         (span.x + span.width - right_anchor_start(span.viewport)).max(BAND_PAD),
     )
 }
@@ -148,48 +208,6 @@ pub(crate) fn band_room(
 pub(crate) fn tab_strip_origin(span: BandSpan) -> f32 {
     span.x + band_insets(span).0
 }
-
-/// Hide the close / minimise / zoom buttons AppKit puts in the content view.
-///
-/// The window asks for a titlebar solely to get `NSResizableWindowMask` (see
-/// `main`), and that mask brings the system buttons with it. They would land on
-/// top of the titlebar we draw, so we take them out; our own traffic lights
-/// are the only control strip. Everything they do is still reachable — `zoom:` and
-/// `miniaturize:` work on a hidden button — and no-op on other platforms, which
-/// never draw them in the first place.
-#[cfg(target_os = "macos")]
-pub fn hide_native_window_buttons(window: &Window) {
-    use objc2_app_kit::{NSView, NSWindowButton};
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    // Fully qualified: gpui's inherent `Window::window_handle` is a different
-    // thing entirely (an `AnyWindowHandle`) and shadows the trait method.
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-        return;
-    };
-    // SAFETY: gpui hands out the live `NSView` backing this window, and this
-    // runs on the main thread inside the window's own init callback, so the
-    // view (and the window owning it) outlive the borrow.
-    let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
-    let Some(native_window) = view.window() else {
-        return;
-    };
-    for button in [
-        NSWindowButton::CloseButton,
-        NSWindowButton::MiniaturizeButton,
-        NSWindowButton::ZoomButton,
-    ] {
-        if let Some(button) = native_window.standardWindowButton(button) {
-            button.setHidden(true);
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn hide_native_window_buttons(_window: &Window) {}
 
 /// One region's head band: the empty drag strip its controls sit in.
 ///
@@ -217,9 +235,14 @@ pub(crate) fn band(span: BandSpan) -> Div {
 /// The sidebar's show/hide toggle: the window's fixed left anchor, one gap
 /// right of the traffic lights. See the module docs for why it is painted here
 /// and not by whichever region happens to be leftmost.
-pub(crate) fn sidebar_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> impl IntoElement {
+pub(crate) fn sidebar_toggle(
+    app: &Entity<Luma>,
+    open: bool,
+    enabled: bool,
+    lights: bool,
+) -> impl IntoElement {
     panel_anchor(
-        anchor(px(LEFT_TOGGLE_X), None),
+        anchor(px(left_toggle_x(lights)), None),
         "sidebar-toggle",
         IconName::PanelLeft,
         open,
@@ -340,31 +363,41 @@ pub(crate) fn history_pair() -> Div {
         )
 }
 
-/// macOS traffic lights, ours: the native ones are hidden (see
-/// [`hide_native_window_buttons`]) so these three dots are the window's
-/// close / minimise / zoom. Hue is meaning here — the one place the shell
-/// keeps color.
+/// The window's traffic-light corner: AppKit's slot on macOS, our three dots
+/// everywhere else. `None` while the corner is given back ([`corner_lit`]).
+///
+/// The painted dots are the window's close / minimise / zoom off macOS. Hue is
+/// meaning here — the one place the shell keeps color. On macOS the slot is
+/// empty: AppKit's buttons sit over it, and it is here so the tree still says
+/// where they are.
 ///
 /// Absolutely placed at the window's corner and painted last, for the reason
 /// in the module docs.
 ///
-/// **Nothing here is interactive but the three dots.** The strip carries no
+/// **Nothing here is interactive but the painted dots.** The slot carries no
 /// handler of its own, so a press anywhere else in the corner reaches whatever
 /// this is painted over — which is what keeps a surface that forgot to reserve
 /// the corner a *visible* overlap rather than a silent dead zone that eats its
 /// buttons. Dragging the corner still moves the window, because the [`band`]
 /// underneath is the drag region and the press now gets there.
-pub(crate) fn window_controls() -> Div {
-    div()
+pub(crate) fn window_controls(window: &Window) -> Option<AnyElement> {
+    if !corner_lit(window) {
+        return None;
+    }
+    let slot = div()
         .absolute()
         .top_0()
         .left_0()
+        .w(px(LIGHTS_WIDTH))
         .h(px(HEIGHT))
         .pl(px(BAND_PAD))
         .flex()
         .items_center()
-        .gap(px(LIGHT_GAP))
-        .child(light("close", rgb(0xff5f57), |window| {
+        .gap(px(LIGHT_GAP));
+    let slot = if cfg!(target_os = "macos") {
+        slot
+    } else {
+        slot.child(light("close", rgb(0xff5f57), |window| {
             window.remove_window()
         }))
         .child(light("minimize", rgb(0xfebc2e), |window| {
@@ -373,6 +406,11 @@ pub(crate) fn window_controls() -> Div {
         .child(light("maximize", rgb(0x28c840), |window| {
             window.zoom_window()
         }))
+    };
+    Some(
+        slot.agent_node(Role::Card, "Window controls")
+            .into_any_element(),
+    )
 }
 
 fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoElement {
