@@ -5,7 +5,7 @@
 //! sample. Cloudiness, cloud size, wind and turnover still apply at runtime.
 //! The bake shader owns the field; the CPU mirror exists only for verification.
 
-/// Texels per edge; the R16Float field occupies 32 MiB.
+/// Texels per edge; the Rg16Float field occupies 64 MiB.
 pub(crate) const SIZE: u32 = 256;
 
 /// Texels per base coordinate unit. The finest octave uses 3.75 lattice cells
@@ -17,11 +17,24 @@ pub(crate) const TEXELS_PER_CELL: u32 = 8;
 /// world repeat distance is 16 * cloud_size metres.
 pub(crate) const CELLS: u32 = SIZE / TEXELS_PER_CELL;
 
-/// `R16Float` over `R8Snorm` deliberately: quantisation is a *uniform* error and
-/// can contour where the reconstruction error, being random, does not. The
-/// speed is identical, so this is the safe end of a decision that can be swept
-/// downward later if the 32 MiB matters.
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// Two channels: the field, and the field one [`TURN`] on. Haze turns over
+/// by fading from one place in the field to the next, a turn apart; with
+/// both in one texel that is one read, not two (`medium.wgsl`,
+/// `medium_turning`).
+///
+/// Half floats over `Rg8Snorm` deliberately: quantisation is a *uniform* error
+/// and can contour where the reconstruction error, being random, does not.
+/// The speed is identical, so this is the safe end of a decision that can be
+/// swept downward later if the 64 MiB matters.
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+
+/// How far haze moves through the field each half turn, texels per axis:
+/// far enough that each place is unlike the last, and whole texels, so the
+/// second channel is the first's very texels moved and the two filter
+/// alike, and a turn's hand-over shows nowhere. Odd, so it visits all 256
+/// places along each axis before it comes back: 128 turns, 38 minutes of
+/// the default clouds.
+pub(crate) const TURN: [u32; 3] = [97, 163, 59];
 
 /// Density field plus the sampler that reconstructs it. Owned together because
 /// the wrap mode is not a preference — a non-repeating sampler would clamp the
@@ -55,11 +68,11 @@ impl HazeField {
                 buffer: &packed,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    // Two bytes per texel against `COPY_BYTES_PER_ROW_ALIGNMENT`
-                    // of 256: this holds from 128 up and *fails validation* at
-                    // 64. A smaller field needs padded rows, not a smaller
+                    // Four bytes per texel against `COPY_BYTES_PER_ROW_ALIGNMENT`
+                    // of 256: this holds from 64 up and *fails validation* at
+                    // 32. A smaller field needs padded rows, not a smaller
                     // constant.
-                    bytes_per_row: Some(SIZE * 2),
+                    bytes_per_row: Some(SIZE * 4),
                     rows_per_image: Some(SIZE),
                 },
             },
@@ -100,8 +113,12 @@ pub(crate) fn prelude() -> String {
         "const FIELD_SIZE: u32 = {SIZE}u;\n\
          const FIELD_TEXELS: f32 = {TEXELS_PER_CELL}.0;\n\
          const FIELD_CELLS: f32 = {CELLS}.0;\n\
-         const FIELD_INV_CELLS: f32 = {:?};\n",
+         const FIELD_INV_CELLS: f32 = {:?};\n\
+         const FIELD_TURN: vec3<u32> = vec3<u32>({}u, {}u, {}u);\n",
         1.0 / CELLS as f32,
+        TURN[0],
+        TURN[1],
+        TURN[2],
     )
 }
 
@@ -119,7 +136,7 @@ fn bake_packed(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Buffer {
     let texels = u64::from(SIZE) * u64::from(SIZE) * u64::from(SIZE);
     let packed = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("haze-noise-bake"),
-        size: texels * 2,
+        size: texels * 4,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
@@ -160,9 +177,9 @@ fn bake_packed(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Buffer {
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        // 2D: x over one slice's texel pairs, y over slices. A 1D dispatch
-        // would exceed the 65535-workgroups-per-dimension limit at 256³.
-        pass.dispatch_workgroups((SIZE * SIZE / 2).div_ceil(64), SIZE, 1);
+        // 2D: x over one slice's texels, y over slices. A 1D dispatch would
+        // exceed the 65535-workgroups-per-dimension limit at 256³.
+        pass.dispatch_workgroups((SIZE * SIZE).div_ceil(64), SIZE, 1);
     }
     queue.submit([encoder.finish()]);
     packed
@@ -257,12 +274,12 @@ mod tests {
         let texels = (SIZE as usize).pow(3);
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("haze-noise-readback"),
-            size: (texels * 2) as u64,
+            size: (texels * 4) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        encoder.copy_buffer_to_buffer(&packed, 0, &readback, 0, (texels * 2) as u64);
+        encoder.copy_buffer_to_buffer(&packed, 0, &readback, 0, (texels * 4) as u64);
         queue.submit([encoder.finish()]);
         readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         device
@@ -286,8 +303,13 @@ mod tests {
                 (index as u32 / (SIZE * SIZE)) as f32,
             ];
             let centre = texel.map(|v| (v + 0.5) / TEXELS_PER_CELL as f32);
-            let expected = half::f16::from_f32(layered_noise(centre)).to_f32();
-            worst = worst.max((baked[index].to_f32() - expected).abs());
+            let turned: [f32; 3] =
+                std::array::from_fn(|i| ((texel[i] as u32 + TURN[i]) % SIZE) as f32 + 0.5)
+                    .map(|v| v / TEXELS_PER_CELL as f32);
+            for (channel, at) in [centre, turned].into_iter().enumerate() {
+                let expected = half::f16::from_f32(layered_noise(at)).to_f32();
+                worst = worst.max((baked[index * 2 + channel].to_f32() - expected).abs());
+            }
         }
         assert!(
             worst < 1.0e-3,
@@ -303,7 +325,7 @@ mod tests {
         );
         for (x, y, z) in [(0_usize, 5_usize, 9_usize), (3, 0, 17), (11, 23, 0)] {
             let at = |x: usize, y: usize, z: usize| {
-                baked[(z * SIZE as usize + y) * SIZE as usize + x].to_f32()
+                baked[((z * SIZE as usize + y) * SIZE as usize + x) * 2].to_f32()
             };
             let centre = |v: usize| (v as f32 + 0.5) / TEXELS_PER_CELL as f32;
             // The wrap is a property of the field, so compare the texel at the

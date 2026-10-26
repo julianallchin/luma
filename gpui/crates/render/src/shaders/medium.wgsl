@@ -57,24 +57,27 @@ fn medium_contrast_at(m: ProceduralMedium, size: f32) -> f32 {
     return pow(min(size / m.shape.y, 1.0), 1.0 / 3.0);
 }
 
-// Eddies turn into new eddies where they are rather than slide by: the
-// field is two copies half a turn apart, each fading out before it jumps to
-// a fresh place in the baked field. `a`, `b`: the copies' jumps, in base
-// units; `share`: a's share, sin²(π·turn), so the shares sum to one and
-// their square roots keep the contrast steady mid-turn.
+// Eddies turn into new eddies where they are rather than slide by. Each
+// half turn the haze moves on to the next place in the baked field, one
+// `FIELD_TURN` on, fading out the place it was at and in the next. A texel
+// holds both (`haze_field.rs`): x the place fading out, y the one fading in.
+// So one read at `at` gives both, and after each step the place fading in
+// reads as x exactly what it read as y before it: nothing jumps.
 struct Turning {
-    a: vec3<f32>,
-    b: vec3<f32>,
+    // Where in the field, base units.
+    at: vec3<f32>,
+    // The incoming place's share, sin²(π/2 · the way through the half
+    // turn): the shares sum to one, and their square roots keep the
+    // contrast steady between.
     share: f32,
 };
 
-fn medium_jump(index: f32) -> vec3<f32> {
-    return fract(index * vec3<f32>(0.618034, 0.414214, 0.732051)) * FIELD_CELLS;
-}
-
 fn medium_turning(turns: f32) -> Turning {
-    let s = sin(3.14159265 * fract(turns));
-    return Turning(medium_jump(floor(turns)), medium_jump(floor(turns + 0.5)) + vec3<f32>(7.3, 3.1, 5.9), s * s);
+    let half_turns = 2.0 * turns;
+    let s = sin(1.5707963 * fract(half_turns));
+    // Whole texels, wrapped: exact however long the show runs.
+    let steps = (u32(half_turns) % FIELD_SIZE) * FIELD_TURN % FIELD_SIZE;
+    return Turning(vec3<f32>(steps) / FIELD_TEXELS, s * s);
 }
 
 fn medium_cloud(m: ProceduralMedium, p: vec3<f32>) -> f32 {
@@ -82,10 +85,9 @@ fn medium_cloud(m: ProceduralMedium, p: vec3<f32>) -> f32 {
     // Four octaves are already baked into this field. Wind and turnover
     // move the shared field without rebuilding it or fetching each octave.
     let turning = medium_turning(medium_turns(m, m.shape.y));
-    let layered = sqrt(turning.share) * textureSampleLevel(haze_noise_field, haze_noise_sampler,
-            (q + turning.a) * FIELD_INV_CELLS, 0.0).x
-        + sqrt(1.0 - turning.share) * textureSampleLevel(haze_noise_field, haze_noise_sampler,
-            (q + turning.b) * FIELD_INV_CELLS, 0.0).x;
+    let both = textureSampleLevel(haze_noise_field, haze_noise_sampler,
+        (q + turning.at) * FIELD_INV_CELLS, 0.0).xy;
+    let layered = sqrt(1.0 - turning.share) * both.x + sqrt(turning.share) * both.y;
     // Symmetric remapping preserves statistical mean density in the interior.
     let contrast = 2.0 * smoothstep(-0.22, 0.22, layered) - 1.0;
     return 1.0 + m.shape.x * contrast;
@@ -118,13 +120,14 @@ const WISP_TURN: mat3x3<f32> = mat3x3<f32>(
     -0.5122, 0.6034, 0.6111,
 );
 
-// One tap of the baked field at `p`, in metres, for features `size` wide,
-// moved `jump` base units: about −0.5 to 0.5, mean 0. Turned off the axes,
-// so a beam along one never retraces the field's repeats.
-fn medium_turned_field(p: vec3<f32>, size: f32, jump: vec3<f32>) -> f32 {
+// One read of the baked field at `p`, in metres, for features `size` wide,
+// moved `jump` base units: two independent values (`Turning`), each about
+// −0.5 to 0.5, mean 0. Turned off the axes, so a beam along one never
+// retraces the field's repeats.
+fn medium_turned_field(p: vec3<f32>, size: f32, jump: vec3<f32>) -> vec2<f32> {
     // The baked field's broadest octave is four base units across.
     let q = WISP_TURN * p * (4.0 / size) + jump;
-    return textureSampleLevel(haze_noise_field, haze_noise_sampler, q * FIELD_INV_CELLS, 0.0).x;
+    return textureSampleLevel(haze_noise_field, haze_noise_sampler, q * FIELD_INV_CELLS, 0.0).xy;
 }
 
 // Bright where the fine field crosses zero: the shapes are its level lines
@@ -149,21 +152,16 @@ fn medium_wisps(m: ProceduralMedium, world: vec3<f32>, footprint: f32) -> f32 {
     // The largest eddies, carrying the wisps: their field moves at their
     // speed, which reads as churning, not sliding, through the warp.
     let travel = vec3<f32>(0.0, 0.0, m.wind.w * medium_eddy_speed(m, largest));
-    let swirl = vec3<f32>(
-        medium_turned_field(carried + travel, largest, vec3<f32>(0.0)),
-        medium_turned_field(carried - travel, largest, vec3<f32>(17.3, 0.0, 0.0)),
-        medium_turned_field(carried + travel, largest, vec3<f32>(0.0, 31.7, 0.0)),
-    );
+    let ahead = medium_turned_field(carried + travel, largest, vec3<f32>(0.0));
+    let behind = medium_turned_field(carried - travel, largest, vec3<f32>(17.3, 0.0, 0.0));
+    let swirl = vec3<f32>(ahead, behind.x);
     let warped = carried + swirl * (2.0 * SWIRL_REACH * largest);
     // Fading the strands rather than the fields keeps them as fine mid-turn.
     let turning = medium_turning(medium_turns(m, WISP_M));
-    let strands = mix(
-        medium_strand(medium_turned_field(warped, WISP_M, turning.b)),
-        medium_strand(medium_turned_field(warped, WISP_M, turning.a)),
-        turning.share,
-    );
+    let both = medium_turned_field(warped, WISP_M, turning.at);
+    let strands = mix(medium_strand(both.x), medium_strand(both.y), turning.share);
     // Patches: churning air here, calm air there, as the largest eddies go.
-    let churning = smoothstep(-0.25, 0.15, medium_turned_field(carried - travel, largest, vec3<f32>(0.0, 0.0, 43.1)));
+    let churning = smoothstep(-0.25, 0.15, behind.y);
     let resolved = 1.0 - smoothstep(0.25 * WISP_M, WISP_M, footprint);
     let contrast = (strands - STRAND_MEAN) / STRAND_MEAN;
     let strength = m.shape.x * medium_contrast_at(m, WISP_M);
