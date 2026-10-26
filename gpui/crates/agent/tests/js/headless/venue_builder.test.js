@@ -30,7 +30,7 @@ const hasText = (prefix, also = () => true) => (s) =>
 // Reach the builder, with the room's own tab open.
 function open() {
   nav.stage("Test Venue");
-  nav.expand();
+  nav.program();
   app.frames(6);
   until("the builder", (s) => s.findAll({ role: "button", label: "Add element" }).length > 0);
 }

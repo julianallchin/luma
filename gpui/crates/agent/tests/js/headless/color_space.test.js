@@ -14,11 +14,11 @@ const nodes = () => stored().graph.nodes;
 function open() {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(node("card", "Wash"));
   until("the graph", (s) => s.find({ role: "card", label: "Clip graph" }) && s.find({ role: "card", label: "Color 1" }));
-  nav.widenGraph();
+  nav.graphPage();
 }
 
 const inside = (outer, inner) =>

@@ -3,10 +3,10 @@
 fixture({seconds:20,rig:4,window:[1400,1000]});
 for (const preset of ["Chase","Position","Circle"]) {
   test(`source editor: ${preset}`, {fixture:{clips:[{pattern:"source",name:preset,start:1,end:5,preset}]}},()=>{
-    nav.trackEditor("Test Venue","Aurora");nav.expand();nav.stageOff();
+    nav.trackEditor("Test Venue","Aurora");nav.program();nav.stageOff();
     nav.step("clip","card",preset);
     until("inputs",s=>s.find({role:"card",label:"Clip graph"}));
-    nav.widenGraph();
+    nav.graphPage();
     if(preset==="Circle") {
       // The yaw's curve is a chip on the aim; open, its strip.
       app.click(nav.inCard("Aim 1","button","Expand Curve 1"));

@@ -98,6 +98,7 @@ use luma_lib::models::node_graph::{BeatGrid, BlendMode};
 use luma_lib::models::patterns::{AimCurves, AnnotationPreview};
 use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
 use luma_lib::models::waveforms::TrackWaveform;
+use luma_lib::settings::ViewMode;
 
 use crate::history::History;
 use crate::shell::Body;
@@ -193,6 +194,10 @@ pub struct Editor {
     /// one id because shift-click, marquee and group drag all act on
     /// a set, and "one selected clip" is only the common case of that.
     selected: Vec<SharedString>,
+    /// In Direct, the selected clip's graph is up where the timeline was —
+    /// see [`clip_graph_page`]. Meaningless with nothing selected, which
+    /// [`Editor::clip_graph_shown`] folds in.
+    graph_open: bool,
     /// Preserve the first hit while opening the inspector changes the canvas.
     pressed_clip: Option<(SharedString, Point<Pixels>)>,
     /// Where the next edit lands. Distinct from the selection: clicking a clip
@@ -1400,6 +1405,20 @@ impl Editor {
     fn deselect(&mut self) {
         self.selected.clear();
         self.cursor = None;
+        self.graph_open = false;
+    }
+
+    /// Whether Direct shows the selected clip's graph instead of the timeline.
+    ///
+    /// A selection the graph was opened on can also be emptied from elsewhere
+    /// — an undo, the agent deleting the clip — and then the timeline is what
+    /// is left to show. The page closes for good then, rather than waiting to
+    /// spring back on the next clip a click selects.
+    pub(crate) fn clip_graph_shown(&mut self) -> bool {
+        if self.selected.is_empty() {
+            self.graph_open = false;
+        }
+        self.graph_open
     }
 
     // -- the commands the keyboard asks for -----------------------------------
@@ -1874,7 +1893,6 @@ impl Luma {
         };
         if self.workspace.body(&target).is_some() {
             self.workspace.select(&target);
-            self.workspace_hidden = false;
             cx.notify();
             return;
         }
@@ -1936,6 +1954,7 @@ impl Luma {
             _menu_subscription: menu_subscription,
             menu_scroll: ScrollHandle::new(),
             selected: Vec::new(),
+            graph_open: false,
             pressed_clip: None,
             cursor: None,
             follow: false,
@@ -2275,7 +2294,9 @@ impl Luma {
         picker::open(self, cx);
     }
 
-    /// A double-click on a clip selects it, which brings up its inputs.
+    /// A double-click on a clip selects it, which brings up its inputs: in
+    /// Program the inspector beside the timeline shows them already, and in
+    /// Direct the clip's graph takes the timeline's place.
     ///
     /// The hit test is the whole lane row, not the header band: this is the
     /// one clip gesture that is not a drag, so there is nothing for the inert
@@ -2301,6 +2322,34 @@ impl Luma {
         };
         let id = clip.id.clone();
         self.with_track_editor(cx, |editor| editor.selected = vec![id]);
+        self.open_clip_graph(cx);
+    }
+
+    /// Put the selected clip's graph where the timeline is. Direct only:
+    /// Program's inspector already shows it beside the timeline, and a flag
+    /// set there would spring the page open on the next switch to Direct.
+    pub(crate) fn open_clip_graph(&mut self, cx: &mut Context<Self>) {
+        if self.view_mode != ViewMode::Direct {
+            return;
+        }
+        self.with_track_editor(cx, |editor| {
+            editor.graph_open = !editor.selected.is_empty();
+        });
+    }
+
+    /// Back from the graph page to the timeline, keeping the selection.
+    /// Reports whether there was a page to leave, for the Escape ladder.
+    pub(crate) fn close_clip_graph(&mut self, cx: &mut Context<Self>) -> bool {
+        let direct = self.view_mode == ViewMode::Direct;
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
+            return false;
+        };
+        if !direct || !editor.clip_graph_shown() {
+            return false;
+        }
+        editor.graph_open = false;
+        cx.notify();
+        true
     }
 
     /// `ArrowUp` / `ArrowDown` in the insertion menu. A no-op with no menu
@@ -3155,18 +3204,74 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
 }
 
 /// The inspector occupies the editing area, even with the rig hidden: the
-/// selected clip's controls, or the preset browser. `fill` is split view's
-/// placement and `wide` the widened column — see [`sheet::panel`].
+/// selected clip's controls, or the preset browser — see [`sheet::panel`].
 pub(crate) fn inspector(
     state: &mut Editor,
     app: &Entity<Luma>,
-    fill: bool,
-    wide: bool,
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> AnyElement {
     sheet::sync(state, window, cx);
-    sheet::panel(state, app, fill, wide)
+    sheet::panel(state, app)
+}
+
+/// Direct's graph page: the selected clip's inspector where the timeline was,
+/// under a way back to it.
+///
+/// Rendered inside the tab, in place of [`track_editor`], so the page keeps
+/// the tab's focus — ⌘Z still undoes, and Escape reaches the ladder that
+/// closes the page — under the clip graph's key context rather than the
+/// timeline's (see `shell::active_tab`). And it keeps the working score
+/// composited for the same reason [`fullscreen_transport`] does: the stage
+/// above is lit by edits made here.
+pub(crate) fn clip_graph_page(
+    state: &mut Editor,
+    app: &Entity<Luma>,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> AnyElement {
+    sync_composite(state, cx);
+    let back = app.clone();
+    let bar = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .px(px(16.))
+        .py(px(8.))
+        .border_b_1()
+        .border_color(ladder::trim())
+        .child(
+            luma_ui::button("", Enabled::Yes)
+                .id("clip-graph-back")
+                .pl(px(6.))
+                .pr(px(10.))
+                .gap(px(4.))
+                .child(
+                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(14.)),
+                )
+                .child("Timeline")
+                .on_click(move |_, _, cx| {
+                    back.update(cx, |this, cx| {
+                        this.close_clip_graph(cx);
+                    })
+                })
+                .agent_node(Role::Button, "Back to timeline"),
+        );
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .bg(ladder::background())
+        .text_color(ladder::foreground())
+        .child(bar)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(inspector(state, app, window, cx)),
+        )
+        .into_any_element()
 }
 
 /// Render the screen: a toolbar strip over the canvas.

@@ -415,12 +415,14 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> 
         .occlude()
         .when_some(source, |port, source| {
             port.cursor_pointer()
-                .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                     cx.stop_propagation();
                     let from = Source::Node(source.clone());
                     let at = event.position;
                     let detach = Some(key.clone());
-                    app.update(cx, |this, cx| this.canvas_wire_press(from, detach, at, cx));
+                    app.update(cx, |this, cx| {
+                        this.canvas_wire_press(from, detach, at, window, cx)
+                    });
                 })
         })
         .agent_node(Role::Button, label)
@@ -461,10 +463,12 @@ fn output_port(cx: &Ctx, from: Source, label: String) -> AnyElement {
     .id(SharedString::from(key))
     .occlude()
     .cursor_pointer()
-    .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
         cx.stop_propagation();
         let (from, at) = (from.clone(), event.position);
-        app.update(cx, |this, cx| this.canvas_wire_press(from, None, at, cx));
+        app.update(cx, |this, cx| {
+            this.canvas_wire_press(from, None, at, window, cx)
+        });
     })
     .agent_node(Role::Button, format!("{label} output port"))
     .into_any_element()
@@ -584,7 +588,7 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         // keyboard, so a press into a field keeps the field's focus.
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             let at = at.clone();
-            select.update(cx, |this, cx| this.canvas_select(Some(at), false, cx));
+            select.update(cx, |this, cx| this.canvas_select(Some(at), None, cx));
         })
         .on_mouse_down(MouseButton::Right, move |event, _, cx| {
             cx.stop_propagation();
@@ -597,9 +601,11 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         })
         .child(title(name(cx, id, &label), buttons, port).on_mouse_down(
             MouseButton::Left,
-            move |_, _, cx| {
+            move |_, window, cx| {
                 let at = grabbed.clone();
-                grab.update(cx, |this, cx| this.canvas_select(Some(at), true, cx));
+                grab.update(cx, |this, cx| {
+                    this.canvas_select(Some(at), Some(window), cx)
+                });
             },
         ))
         .children(refused)
@@ -685,9 +691,8 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
 
 // -- the canvas -----------------------------------------------------------------
 
-/// The canvas under the name, selection and blend rows. `wide` is whether
-/// the panel is widened, or `None` where it already fills its box.
-pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
+/// The canvas under the name, selection and blend rows.
+pub(super) fn view(cx: &Ctx) -> AnyElement {
     let state = &cx.state.sheet.canvas;
     let columns = edit::columns(cx.graph);
     let geometry = state.geometry.clone();
@@ -747,7 +752,7 @@ pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
             px(luma_ui::BASE_REM * state.zoom),
             world,
         ))
-        .child(toolbar(cx, wide))
+        .child(toolbar(cx))
         .children(add_menu(cx))
         .children(card_menu(cx));
     if let Some(focus) = &state.focus {
@@ -773,8 +778,8 @@ pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
 }
 
 /// The buttons over the canvas's top-right corner: add a node, the zoom
-/// steps and actual size, fit, and widening the panel.
-fn toolbar(cx: &Ctx, wide: Option<bool>) -> Div {
+/// steps and actual size, and fit.
+fn toolbar(cx: &Ctx) -> Div {
     let state = &cx.state.sheet.canvas;
     let add = cx.app.clone();
     let mut bar = div()
@@ -822,32 +827,6 @@ fn toolbar(cx: &Ctx, wide: Option<bool>) -> Div {
                     });
                 })
                 .agent_node(Role::Button, name),
-        );
-    }
-    if let Some(wide) = wide {
-        let app = cx.app.clone();
-        let name = if wide {
-            "Narrow graph panel"
-        } else {
-            "Widen graph panel"
-        };
-        bar = bar.child(
-            icon_button(
-                if wide {
-                    IconName::Minimize
-                } else {
-                    IconName::Expand
-                },
-                Enabled::Yes,
-            )
-            .id("graph-widen")
-            .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| {
-                    this.inspector_wide = !this.inspector_wide;
-                    cx.notify();
-                })
-            })
-            .agent_node(Role::Button, name),
         );
     }
     bar
@@ -1038,10 +1017,10 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, bounds: Bounds<Pixels>, window: &
         let at = event.position;
         match event.button {
             MouseButton::Middle if bounds.contains(&at) => {
-                pressed.update(cx, |this, cx| this.canvas_pan_press(at, false, cx));
+                pressed.update(cx, |this, cx| this.canvas_pan_press(at, false, window, cx));
             }
             MouseButton::Left if inside.is_hovered(window) => {
-                pressed.update(cx, |this, cx| this.canvas_pan_press(at, true, cx));
+                pressed.update(cx, |this, cx| this.canvas_pan_press(at, true, window, cx));
             }
             MouseButton::Right if inside.is_hovered(window) => pressed.update(cx, |this, cx| {
                 this.with_track_editor(cx, |editor| editor.sheet.canvas.menu = Some(at))
@@ -1202,7 +1181,13 @@ fn shown_graph(editor: &Editor) -> Option<ClipGraph> {
 }
 
 impl Luma {
-    fn canvas_pan_press(&mut self, at: Point<Pixels>, clear: bool, cx: &mut Context<Self>) {
+    fn canvas_pan_press(
+        &mut self,
+        at: Point<Pixels>,
+        clear: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.with_track_editor(cx, |editor| {
             let canvas = &mut editor.sheet.canvas;
             if clear {
@@ -1212,22 +1197,32 @@ impl Luma {
             }
             canvas.gesture = Some(Gesture::Pan { last: at });
         });
-        self.canvas_focus(cx);
+        self.canvas_focus(window, cx);
     }
 
     /// Give the canvas the keyboard.
-    fn canvas_focus(&mut self, cx: &mut Context<Self>) {
-        let focus = self
+    ///
+    /// Through the press's own window: every caller is a press handler, and
+    /// those run while their window is being updated, so reaching it again
+    /// through the app (`active_window().update`) is refused — that is how a
+    /// press on a card's title used to leave the keyboard where it was.
+    fn canvas_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(focus) = self
             .track_editor_ref()
-            .and_then(|editor| editor.sheet.canvas.focus.clone());
-        if let (Some(focus), Some(window)) = (focus, cx.active_window()) {
-            window
-                .update(cx, |_, window, cx| focus.focus(window, cx))
-                .ok();
+            .and_then(|editor| editor.sheet.canvas.focus.clone())
+        {
+            focus.focus(window, cx);
         }
     }
 
-    fn canvas_select(&mut self, node: Option<String>, focus: bool, cx: &mut Context<Self>) {
+    /// Select `node` on the canvas; with `focus`, the press's window, also
+    /// give the canvas the keyboard.
+    fn canvas_select(
+        &mut self,
+        node: Option<String>,
+        focus: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         let changed = self
             .track_editor_ref()
             .is_some_and(|editor| editor.sheet.canvas.selected != node);
@@ -1237,8 +1232,8 @@ impl Luma {
                 editor.sheet.canvas.wire = None;
             });
         }
-        if focus {
-            self.canvas_focus(cx);
+        if let Some(window) = focus {
+            self.canvas_focus(window, cx);
         }
     }
 
@@ -1247,6 +1242,7 @@ impl Luma {
         from: Source,
         detach: Option<Port>,
         at: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.with_track_editor(cx, |editor| {
@@ -1257,7 +1253,7 @@ impl Luma {
                 snap: None,
             });
         });
-        self.canvas_focus(cx);
+        self.canvas_focus(window, cx);
     }
 
     /// A pointer move anywhere in the window. A running gesture follows it;

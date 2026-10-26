@@ -166,22 +166,25 @@ globalThis.nav = {
 		app.frames(4);
 	},
 
-	// Put the workspace into takeover — the tab body gets everything right
-	// of the sidebar. Idempotent across one session: the flag survives tab
-	// closes, so a test calls this once after its first open and every later
-	// tab inherits the room.
-	expand() {
-		if (!globalThis.__expanded) {
-			app.action("luma::ToggleExpand");
-			globalThis.__expanded = true;
-			app.frames(2);
-		}
+	// Lay the window out as Program: no chat, so the tab body gets
+	// everything right of the sidebar, and a score is the timeline beside the
+	// stage over the inspector. The mode is the window's, so a test says this
+	// once and every later tab inherits it. Idempotent.
+	program() {
+		app.action("luma::ProgramMode");
+		app.frames(2);
+	},
+
+	// Direct, the app's default: the chat beside the stage over the timeline.
+	direct() {
+		app.action("luma::DirectMode");
+		app.frames(2);
 	},
 
 	// Give the editor the whole workspace column. The stage rides above every
 	// tab that names a room, so a test about an *editor's* own geometry says
 	// this once rather than budgeting around a viewport it does not care
-	// about. Idempotent across one session, like `expand`.
+	// about. Idempotent across one session.
 	stageOff() {
 		if (!globalThis.__stageOff) {
 			app.action("luma::ToggleVisualizer");
@@ -190,14 +193,17 @@ globalThis.nav = {
 		}
 	},
 
-	// Widen the inspector for the clip graph canvas, once it is up.
-	widenGraph() {
-		const shot = until("the graph canvas", (s) =>
-			s.find({ role: "button", label: "Widen graph panel" }) && s.find({ role: "card", label: "Clip graph" }));
-		const narrow = shot.find({ role: "card", label: "Clip graph" }).bounds.width;
-		app.click(shot.find({ role: "button", label: "Widen graph panel" }));
-		until("the graph panel widened", (s) =>
-			s.find({ role: "card", label: "Clip graph" }).bounds.width > narrow * 1.5);
+	// Give the selected clip's graph the most room the window has: Direct's
+	// graph page, which puts it where the timeline was. Once the inspector
+	// shows the clip.
+	graphPage() {
+		const shot = until("the graph canvas", (s) => s.find({ role: "card", label: "Clip graph" }));
+		const before = shot.find({ role: "card", label: "Clip graph" }).bounds.width;
+		nav.direct();
+		app.action("luma::OpenClipGraph");
+		until("the graph page", (s) =>
+			s.find({ role: "button", label: "Back to timeline" })
+				&& s.find({ role: "card", label: "Clip graph" })?.bounds.width > before);
 		app.frames(4);
 	},
 

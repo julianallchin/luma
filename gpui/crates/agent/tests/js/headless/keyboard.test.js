@@ -31,7 +31,7 @@ const transport = (label) => until(`the transport's ${label}`, (s) => s.find({ r
 function openEditor() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.expand();
+  nav.program();
   return read();
 }
 

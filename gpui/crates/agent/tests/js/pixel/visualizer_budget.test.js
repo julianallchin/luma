@@ -14,7 +14,7 @@ const drawSince = (from) => sorted(app.timings().frames.filter((f) => f.frame >=
 function openUnlit() {
   nav.patch("Test Venue");
   app.frames(4, { waitMs: 60 });
-  nav.expand();
+  nav.program();
   app.frames(8, { waitMs: 60 });
   const stage = app.snapshot().find({ role: "card", label: "Stage" });
   assert(stage, "the viewport is not on screen");
@@ -45,7 +45,7 @@ const busy = (seconds, clips, window) => ({
 function openPlaying(clip) {
   nav.trackEditor("Test Venue", "Aurora");
   until("the clip", (s) => s.find({ role: "card", label: clip }) !== undefined);
-  nav.expand();
+  nav.program();
   app.frames(10, { waitMs: 60 });
   // Proof the measurement is of the rig it claims: a fallback to a handful of
   // movers, or an unlit scene, would make every number here meaningless.

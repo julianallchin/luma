@@ -14,7 +14,7 @@ const node = (role, label) => app.snapshot().find({ role, label });
 
 test("edit focus keeps the controls usable and renders both picker previews", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   until("the clip", () => node("card", CLIP));
   app.click(node("card", CLIP));
   until("the clip controls", () => node("button", "Pick fixtures"));

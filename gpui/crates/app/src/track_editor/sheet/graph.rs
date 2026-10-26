@@ -1004,14 +1004,11 @@ fn visible(node: &Node, input: &str) -> bool {
 }
 
 /// The graph editor under the blend row: the clip's graph as a canvas.
-/// `wide` is whether the panel is widened, or `None` where it already fills
-/// its box.
 pub(super) fn editor(
     state: &Editor,
     controls: &Controls,
     graph: &ClipGraph,
     app: &Entity<Luma>,
-    wide: Option<bool>,
 ) -> AnyElement {
     let cx = Ctx {
         state,
@@ -1019,7 +1016,7 @@ pub(super) fn editor(
         graph,
         app,
     };
-    canvas::view(&cx, wide)
+    canvas::view(&cx)
 }
 
 /// A node's settings as segmented controls, and a space's wrap as a

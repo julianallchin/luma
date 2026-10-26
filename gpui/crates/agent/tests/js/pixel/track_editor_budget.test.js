@@ -44,7 +44,7 @@ const summarise = (values) => {
 test.skip("a sidebar slide costs the timeline no cliff over holding still", () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.expand();
+  nav.program();
   nav.stageOff();
   until("a decoded heatmap", (s) => s.findAll({ role: "card" }).some((n) => n.label.endsWith(" preview")));
 

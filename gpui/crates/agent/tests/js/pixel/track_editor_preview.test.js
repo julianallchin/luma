@@ -22,7 +22,7 @@ const MEASURED = "Rainbow";
 
 test("the clip body paints the heatmap rather than a flat fill", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
   for (const label of ["Rainbow preview", "Clouds preview", "Random heads preview"]) {

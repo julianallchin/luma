@@ -42,7 +42,7 @@ function stack() {
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.expand();
+  nav.program();
   nav.stageOff();
 }
 

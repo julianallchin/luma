@@ -9,7 +9,7 @@ fixture({ seconds: 20, clips: [chase("a", 0), chase("b", 1), chase("c", 2)], win
 
 test("overlapping clips have separate clickable rows and independent edits", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   const clips = () => app.snapshot().findAll({ role: "card", label: "Chase" }).sort((a, b) => a.bounds.y - b.bounds.y);
   until("three overlapping clips", (s) => s.findAll({ role: "card", label: "Chase" }).length === 3);

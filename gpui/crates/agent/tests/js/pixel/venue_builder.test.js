@@ -64,7 +64,7 @@ const scrub = (name) => Number(valueBox(name).label.slice(name.length + 3));
 
 function open() {
   nav.stage("Test Venue");
-  nav.expand();
+  nav.program();
   app.frames(10);
 }
 

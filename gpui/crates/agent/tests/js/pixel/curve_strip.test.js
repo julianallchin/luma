@@ -19,10 +19,10 @@ const settle = () => app.frames(6, { waitMs: 30 });
 
 function open() {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.expand();
+  nav.program();
   nav.stageOff();
   app.click(node("card", "Pulse"));
-  nav.widenGraph();
+  nav.graphPage();
   app.click(nav.inGraph((s) => s.find({ role: "button", label: "Expand Curve 1" }), "Expand Curve 1"));
   until("the strip", (s) => s.find({ role: "card", label: "Curve 1 strip" }));
   nav.inGraph((s) => s.find({ role: "card", label: "Curve 1 strip" }), "Curve 1 strip");

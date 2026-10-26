@@ -17,7 +17,7 @@ const onlyClip = () => {
 function open({ stageOff = true } = {}) {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.expand();
+  nav.program();
   if (stageOff) nav.stageOff();
   until("the waveform", (s) => s.find({ role: "card", label: "Waveform" }));
 }
