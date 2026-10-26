@@ -1372,9 +1372,10 @@ impl Environment {
 pub struct HazeAppearance {
     /// Density contrast: zero is uniform, one has pronounced clouds.
     pub cloudiness: f32,
-    /// Characteristic cloud size in metres.
+    /// The largest eddy, metres: the clouds' size.
     pub cloud_size: f32,
-    /// Strength of evolving deformation and fine wisps.
+    /// How hard the air is stirred: zero is still, one a fan on the haze.
+    /// Eddies of every size move and turn over in proportion.
     pub turbulence: f32,
     /// Horizontal drift in metres per second.
     pub wind_speed: f32,
