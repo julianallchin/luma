@@ -297,24 +297,32 @@ fn glow_along(uv: vec2<f32>, raw_depth: f32) -> vec3<f32> {
     let clip = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let middle = cfg.inv_view_proj * vec4<f32>(clip, 0.5, 1.0);
     let ray_dir = normalize(middle.xyz / middle.w - eye);
-    // Nothing drawn: the grid's bounds end the ray.
-    var distance = 1e5;
+    // The steps are laid along the whole ray through the grid, and a surface
+    // only cuts them short: laid between the eye and the surface, they moved
+    // with the surface's distance, row to row across a floor, and the haze
+    // over it showed the clouds as bands the haze over nothing did not.
+    let span = medium_lighting_span(cfg.medium, eye, ray_dir, 1e5);
+    var end = span.y;
     if raw_depth > 0.0 {
         let hit = cfg.inv_view_proj * vec4<f32>(clip, raw_depth, 1.0);
-        distance = length(hit.xyz / hit.w - eye);
+        end = min(end, length(hit.xyz / hit.w - eye));
     }
-    let span = medium_lighting_span(cfg.medium, eye, ray_dir, distance);
-    if span.y <= span.x {
+    if end <= span.x {
         return vec3<f32>(0.0);
     }
     let sigma = haze_glow.min.w;
     let step = (span.y - span.x) / f32(GLOW_STEPS);
     var light = vec3<f32>(0.0);
     for (var i = 0u; i < GLOW_STEPS; i += 1u) {
-        let t = span.x + (f32(i) + 0.5) * step;
+        let a = span.x + f32(i) * step;
+        if a >= end {
+            break;
+        }
+        let b = min(a + step, end);
+        let t = 0.5 * (a + b);
         let p = eye + ray_dir * t;
         let scattering = sigma * medium_density(cfg.medium, p);
-        light += scattering * haze_glow_fluence_coarse(p) * exp(-sigma * t) * step;
+        light += scattering * haze_glow_fluence_coarse(p) * exp(-sigma * t) * (b - a);
     }
     return light;
 }
