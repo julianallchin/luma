@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{Acquire, SqliteConnection, SqlitePool};
+use sqlx::{Acquire, ConnectOptions, SqliteConnection, SqlitePool};
 
 use crate::config::{SUPABASE_ANON_KEY, SUPABASE_URL};
 
@@ -1276,10 +1276,19 @@ async fn get_current_auth_with(
         return Err(AuthError::SessionRevoked);
     }
 
+    // The refresh holds its transaction across two round-trips to Supabase,
+    // or across their timeouts offline. On a connection of its own, so the
+    // pool's one connection keeps serving reads meanwhile — launch included.
+    drop(connection);
+    let mut connection = pool
+        .connect_options()
+        .connect()
+        .await
+        .map_err(|error| format!("Failed to open the session for refresh: {error}"))?;
     // `BEGIN IMMEDIATE` takes SQLite's write lock now, not at the first
     // write, so a second process refreshing the same session waits here and
     // then sees what the first one stored.
-    let mut transaction = sqlx::Connection::begin_with(&mut *connection, "BEGIN IMMEDIATE")
+    let mut transaction = sqlx::Connection::begin_with(&mut connection, "BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to lock the session for refresh: {error}"))?;
     let snapshot = load_verified_snapshot_for_connection(&mut transaction, now, true)
@@ -1890,18 +1899,14 @@ mod tests {
         }
     }
 
+    /// The production state database, on disk: a refresh opens a second
+    /// connection, and `:memory:` would hand it an empty database.
     async fn test_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(":memory:")
-                    .create_if_missing(true),
-            )
+        let directory = tempfile::tempdir().unwrap().keep();
+        super::super::state::init_state_db_at(&directory)
             .await
-            .unwrap();
-        initialize_auth_state_schema(&pool).await.unwrap();
-        pool
+            .unwrap()
+            .0
     }
 
     /// The real app database, admission triggers included — the only way to
@@ -2316,6 +2321,44 @@ mod tests {
                 .expires_at,
             NOW + 3_600
         );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_waiting_on_the_network_leaves_the_session_readable() {
+        /// Offline: the refresh never answers.
+        struct Unreachable;
+        #[async_trait]
+        impl AuthServer for Unreachable {
+            async fn authenticated_user_id(&self, _: &str) -> Result<String, String> {
+                std::future::pending().await
+            }
+            async fn refresh(&self, _: &str) -> Result<String, RefreshError> {
+                std::future::pending().await
+            }
+        }
+        let pool = test_pool().await;
+        let server = FakeAuthServer::new();
+        let token = jwt("real", NOW - 1);
+        server.accept(&token, "real");
+        let stored = validate_session_with(&session("real", &token, "refresh"), &server, NOW - 120)
+            .await
+            .unwrap();
+        replace_session_for_connection(&mut *pool.acquire().await.unwrap(), &stored)
+            .await
+            .unwrap();
+
+        let refresh = get_current_auth_with(&pool, &Unreachable, NOW);
+        let read = async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM auth_session")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        tokio::select! {
+            biased;
+            _ = refresh => panic!("an unreachable server never answers"),
+            sessions = read => assert_eq!(sessions, 1),
+        }
     }
 
     #[tokio::test]
