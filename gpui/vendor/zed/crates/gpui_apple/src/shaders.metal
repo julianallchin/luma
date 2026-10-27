@@ -715,8 +715,18 @@ fragment float4 polychrome_sprite_fragment(
   PolychromeSprite sprite = sprites[input.sprite_id];
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
-  float4 sample =
-      atlas_texture.sample(atlas_texture_sampler, input.tile_position);
+  float2 uv = input.tile_position;
+  if (sprite.nearest) {
+    // The centre of the texel under this pixel, kept inside the tile so a
+    // neighbour in the atlas never shows at the edge.
+    float2 atlas_size =
+        float2(atlas_texture.get_width(), atlas_texture.get_height());
+    float2 first = float2(sprite.tile.bounds.origin.x, sprite.tile.bounds.origin.y);
+    float2 last = first +
+        float2(sprite.tile.bounds.size.width, sprite.tile.bounds.size.height) - 1.;
+    uv = (clamp(floor(uv * atlas_size), first, last) + 0.5) / atlas_size;
+  }
+  float4 sample = atlas_texture.sample(atlas_texture_sampler, uv);
   float distance =
       quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
 

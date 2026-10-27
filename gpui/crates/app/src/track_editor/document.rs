@@ -42,9 +42,9 @@ pub(super) fn close(a: &serde_json::Value, b: &serde_json::Value) -> bool {
 pub(super) fn resolve_document(
     score: &p::Score,
     beats: Option<&BeatGrid>,
-) -> Result<Rc<[Clip]>, String> {
+) -> Result<Vec<Clip>, String> {
     if score.clips.is_empty() {
-        return Ok(Vec::new().into());
+        return Ok(Vec::new());
     }
     let clock = beats
         .ok_or("Waiting for the track's beat grid")?
@@ -76,21 +76,41 @@ pub(super) fn resolve_document(
         })
         .collect::<Result<Vec<_>, String>>()?;
     assign_rows(&mut clips);
-    Ok(clips.into())
+    Ok(clips)
 }
 
-impl Editor {
-    pub(super) fn install_contents(
-        &mut self,
-        contents: crate::library::ScoreContents,
-    ) -> Result<(), String> {
-        let crate::library::ScoreContents { score, beats } = contents;
+/// A stored score laid out for the timeline. Pure, and for a score of
+/// hundreds of clips not cheap, so it is made off the UI thread.
+pub(super) struct Resolved {
+    pub(super) contents: crate::library::ScoreContents,
+    clips: Result<Vec<Clip>, String>,
+    split: bool,
+}
+
+impl Resolved {
+    pub(super) fn of(contents: crate::library::ScoreContents) -> Self {
         // One row is one track. A stored score whose clips overlap in one
         // z_index is shown split into tracks, and the split is written back
         // once. The saved base stays the stored score, so the write sees it.
-        let mut tracks = score.clone();
+        let mut tracks = contents.score.clone();
         let split = tracks.separate_tracks();
-        self.clips = resolve_document(&tracks, beats.as_ref())?;
+        let clips = resolve_document(&tracks, contents.beats.as_ref());
+        Self {
+            contents,
+            clips,
+            split,
+        }
+    }
+}
+
+impl Editor {
+    pub(super) fn install_contents(&mut self, resolved: Resolved) -> Result<(), String> {
+        let Resolved {
+            contents: crate::library::ScoreContents { score, beats },
+            clips,
+            split,
+        } = resolved;
+        self.clips = clips?.into();
         self.beats = beats.map(Rc::new);
         self.graph_score = Some(score);
         self.dirty = split && self.writable();
@@ -156,7 +176,7 @@ impl Editor {
     pub(super) fn edit_graph_score(&mut self, score: p::Score) -> Result<(), String> {
         let clips = resolve_document(&score, self.beats.as_deref())?;
         self.graph_score.as_ref().ok_or("no score is open")?;
-        self.replace_clips(clips.to_vec());
+        self.replace_clips(clips);
         Ok(())
     }
 }
@@ -220,9 +240,7 @@ impl Luma {
                     }
                     again = editor.dirty;
                 });
-                for id in previews {
-                    this.refresh_clip_preview_for(target.clone(), id, cx);
-                }
+                this.refresh_clip_previews_for(target.clone(), previews, cx);
                 if again {
                     this.commit_graph_score_for(target, cx);
                 } else {
@@ -246,7 +264,12 @@ impl Luma {
         let writes = editor.writes;
         let pending = self.library.score_contents(score, track);
         cx.spawn(async move |this, cx| {
-            let result = pending.await;
+            let result = match pending.await {
+                Ok(contents) => Ok(cx
+                    .background_spawn(async move { Resolved::of(contents) })
+                    .await),
+                Err(error) => Err(error),
+            };
             this.update(cx, |this, cx| {
                 let mut previews = Vec::new();
                 let mut changed = false;
@@ -262,14 +285,14 @@ impl Luma {
                         return;
                     }
                     match result {
-                        Ok(contents) => {
+                        Ok(resolved) => {
                             // Agent commits invalidate several tabs. An unchanged
                             // document must not discard this song's local edits,
                             // selection, previews, or undo history.
                             if editor
                                 .graph_score
                                 .as_ref()
-                                .is_some_and(|base| same_document(base, &contents.score))
+                                .is_some_and(|base| same_document(base, &resolved.contents.score))
                             {
                                 return;
                             }
@@ -277,7 +300,7 @@ impl Luma {
                             // the actual installed baseline so the rig recompiles
                             // changed clips.
                             let composited = editor.composited.clone();
-                            if let Err(error) = editor.install_contents(contents) {
+                            if let Err(error) = editor.install_contents(resolved) {
                                 editor.error = Some(error);
                                 return;
                             }
@@ -299,9 +322,7 @@ impl Luma {
                         Err(error) => editor.error = Some(error.to_string()),
                     }
                 });
-                for id in previews {
-                    this.refresh_clip_preview_for(target.clone(), id, cx);
-                }
+                this.refresh_clip_previews_for(target.clone(), previews, cx);
                 if changed {
                     this.refresh_working_scene_for(&target, cx);
                 }

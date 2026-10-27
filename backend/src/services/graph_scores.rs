@@ -250,21 +250,168 @@ async fn prepare_single_clip(
     Ok((ClipPreview { scene, span }, cells))
 }
 
-pub(crate) async fn preview_clip(
+/// One clip's strip, or why it has none.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipStrip {
+    pub clip_id: String,
+    pub preview: Result<crate::models::patterns::AnnotationPreview, String>,
+}
+
+/// Each of `clip_ids`' strips, alone on the venue. Everything clips share is
+/// read once — the beat grid, each selection's cells, the track features,
+/// the aim rig — and the strips render in parallel. One clip failing fails
+/// only its own strip.
+pub(crate) async fn preview_clips(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     track_id: &str,
     score: &Score,
-    clip_id: &str,
-) -> Result<crate::models::patterns::AnnotationPreview, String> {
-    let clip = score
-        .clips
-        .get(clip_id)
-        .ok_or_else(|| format!("unknown clip {clip_id}"))?;
-    let (ClipPreview { scene, span, .. }, cells) =
-        prepare_single_clip(access, fixtures_root, storage, track_id, score, clip_id).await?;
-    strip(clip_id, clip, &scene, span, &cells)
+    clip_ids: &[String],
+) -> Result<Vec<ClipStrip>, String> {
+    use rayon::prelude::*;
+    let library = standard_library();
+    let grid =
+        crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
+            .await?
+            .ok_or("analyze the track before previewing its musical grid")?;
+    let clock = grid.timeline().map_err(|error| error.to_string())?;
+    let mut failed = Vec::new();
+    let mut domains = std::collections::BTreeMap::new();
+    let mut requests = Vec::new();
+    let mut prepared_clips = Vec::new();
+    for id in clip_ids {
+        let fail = |error: String| ClipStrip {
+            clip_id: id.clone(),
+            preview: Err(error),
+        };
+        let Some(clip) = score.clips.get(id) else {
+            failed.push(fail(format!("unknown clip {id}")));
+            continue;
+        };
+        if let Err(error) = Score::validate_clip(&library, id, clip) {
+            failed.push(fail(error.to_string()));
+            continue;
+        }
+        let elements = clip.graph.laser().map(|laser| laser.count());
+        let key = (
+            serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
+            clip.selection_seed.unwrap_or(clip.seed),
+            elements,
+        );
+        let cells = match domains.get(&key) {
+            Some(cells) => Vec::<luma_patterns::Cell>::clone(cells),
+            None => {
+                match super::composable_patterns::resolve_cells(
+                    access,
+                    fixtures_root,
+                    std::slice::from_ref(&clip.selection),
+                    clip.selection_seed.unwrap_or(clip.seed),
+                    elements,
+                )
+                .await
+                {
+                    Ok(cells) => {
+                        domains.insert(key, cells.clone());
+                        cells
+                    }
+                    Err(error) => {
+                        failed.push(fail(error));
+                        continue;
+                    }
+                }
+            }
+        };
+        let prepared = match luma_patterns::PreparedGraph::new(
+            &library,
+            &clip.graph,
+            luma_patterns::Frame {
+                cells: &cells,
+                features: None,
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                failed.push(fail(format!("clip {id}: {error}")));
+                continue;
+            }
+        };
+        for request in prepared.feature_requests() {
+            if !requests.contains(request) {
+                requests.push(request.clone());
+            }
+        }
+        prepared_clips.push((id, clip, cells, prepared));
+    }
+    let features = if requests.is_empty() {
+        None
+    } else {
+        Some(
+            crate::eval::track_features::prepare(access, storage, track_id, &grid, &requests)
+                .await?,
+        )
+    };
+    let mut compiled = Vec::new();
+    for (id, clip, cells, prepared) in prepared_clips {
+        let plan = match &features {
+            Some(features) => prepared.with_features(features.clone()),
+            None => Ok(prepared),
+        }
+        .map_err(|error| error.to_string())
+        .and_then(|prepared| {
+            crate::eval::lighting::compile_clip(clip, clock.clone(), cells.clone(), prepared)
+                .map_err(|error| error.to_string())
+        });
+        match plan {
+            Ok(plan) => compiled.push((id, clip, cells, plan)),
+            Err(error) => failed.push(ClipStrip {
+                clip_id: id.clone(),
+                preview: Err(format!("clip {id}: {error}")),
+            }),
+        }
+    }
+    let aimed: std::collections::BTreeSet<&str> = compiled
+        .iter()
+        .filter(|(.., plan)| plan.outputs.aim)
+        .flat_map(|(.., plan)| plan.primitive_ids.iter().map(String::as_str))
+        .collect();
+    let rig = if aimed.is_empty() {
+        crate::eval::aim::Rig::default()
+    } else {
+        crate::eval::aim::Rig::load(access, fixtures_root, aimed).await?
+    };
+    let strips = compiled
+        .into_par_iter()
+        .map(|(id, clip, cells, plan)| {
+            let span = plan.span;
+            if !span.0.is_finite() || !span.1.is_finite() || span.1 <= span.0 {
+                return ClipStrip {
+                    clip_id: id.clone(),
+                    preview: Err(
+                        "clip duration cannot be represented on the playback timeline".into(),
+                    ),
+                };
+            }
+            let preview = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
+                span,
+                plan: std::sync::Arc::new(plan),
+                z_index: clip.z_index,
+                blend_mode: clip.blend_mode,
+            }])
+            .with_rig(rig.clone())
+            .and_then(|scene| strip(id, clip, &scene, span, &cells));
+            ClipStrip {
+                clip_id: id.clone(),
+                preview,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(failed.into_iter().chain(strips).collect())
 }
 
 /// Sample a single-clip scene across its span into the timeline's strip.

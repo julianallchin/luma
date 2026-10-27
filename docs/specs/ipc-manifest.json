@@ -2355,7 +2355,7 @@
       "args": [
         {
           "name": "request",
-          "rust": "Value"
+          "rust": "ComposablePreviewRequest"
         }
       ],
       "domain": "composable_patterns",
@@ -2366,7 +2366,7 @@
       "prose": {
         "returns": "Value"
       },
-      "returns": "Value"
+      "returns": "ComposablePreview"
     },
     {
       "args": [
@@ -2375,8 +2375,8 @@
           "rust": "String"
         },
         {
-          "name": "clipId",
-          "rust": "String"
+          "name": "clipIds",
+          "rust": "Vec<String>"
         },
         {
           "name": "score",
@@ -2387,11 +2387,8 @@
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs"
       },
-      "name": "preview_score_clip",
-      "prose": {
-        "returns": "AnnotationPreview"
-      },
-      "returns": "AnnotationPreview"
+      "name": "preview_score_clips",
+      "returns": "Vec<crate::services::graph_scores::ClipStrip>"
     },
     {
       "args": [

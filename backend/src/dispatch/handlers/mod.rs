@@ -2,9 +2,9 @@
 //!
 //! One module per domain. A handler is a plain
 //! `async fn(&AppServices, args…) -> Result<T, CommandError>` with no elided
-//! lifetime. Every host reaches these same bodies
-//! through the generated layers in the parent module, so a command has exactly
-//! one implementation.
+//! lifetime. A native host calls them directly; a JSON host reaches these same
+//! bodies through the generated layers in the parent module, so a command has
+//! exactly one implementation.
 //!
 //! A handler whose body is a single delegating call is still a layer, not a
 //! pass-through: it is where service injection happens, and the uniform

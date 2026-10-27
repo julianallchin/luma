@@ -1,5 +1,5 @@
 //! The app's whole connection to Luma's data: a typed, awaitable client over
-//! the command dispatcher.
+//! the command handlers.
 //!
 //! # Interface
 //!
@@ -11,27 +11,27 @@
 //! ```
 //!
 //! Everything a screen knows about data access is those methods. It never
-//! sees a command name, a JSON frame, an `AppServices`, or a runtime — which
-//! is the point: [`luma_lib::dispatch`] is the *only* way this binary reaches
+//! sees a handler, an `AppServices`, or a runtime — which is the point:
+//! [`luma_lib::dispatch::handlers`] is the *only* way this binary reaches
 //! Luma's behavior, and re-implementing a query above it would fork the app
 //! the same way the headless harness once forked it.
 //!
 //! # Implementation
 //!
 //! Two runtimes coexist. GPUI owns the main thread and its own executors;
-//! `sqlx` needs a Tokio reactor. So the dispatcher runs on a Tokio runtime
+//! `sqlx` needs a Tokio reactor. So every command runs on a Tokio runtime
 //! this type owns, and [`Library::call`] hands back a future that a GPUI task
 //! can await — a Tokio `JoinHandle` is an ordinary future, so no bridging
 //! machinery is needed beyond keeping the runtime alive.
 //!
-//! Most commands cross that boundary as JSON and deserialize into shared models.
-//! The full-rate waveform uses a typed dispatch entry point: serializing tens
-//! of millions of samples would dominate its one-time upload cost.
+//! Commands are called as the typed handler functions themselves, with the
+//! backend's own models in and out. The JSON dispatcher beside them is for
+//! hosts that speak JSON; this one has no reason to encode anything.
 //!
 //! Failures keep the seam's structure, as [`LibraryError`]. Two designs lost.
-//! Returning [`CommandError`] itself is the smaller change, but the two ways a
-//! call fails *without* reaching a command — the reactor dropped the work, the
-//! result decoded into the wrong shape — are not command errors, and naming
+//! Returning [`CommandError`] itself is the smaller change, but the ways a
+//! call fails *without* reaching a command — the reactor dropped the work, a
+//! request or fixture was in the wrong shape — are not command errors, and naming
 //! them `Internal` with a `{command}: ` prefix would break that type's
 //! documented contract that `Display` is a verbatim passthrough. Reading
 //! `CommandError::kind()` is the other: it is the escape hatch for a host that
@@ -50,21 +50,25 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(feature = "agent")]
 use serde::{de::DeserializeOwned, Deserialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::agent::{AgentService, ThreadScope};
 use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_admission};
+use luma_lib::database::local::auth::{AuthAccount, SUPABASE_SESSION_KEY};
 use luma_lib::database::local::database::{init_app_db_at, open_app_db_at};
 use luma_lib::database::local::state::init_state_db_at;
-use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events, SharedServices};
-#[cfg(feature = "agent")]
 use luma_lib::dispatch::{
-    system_track_sources, ImportedEngineDjTrack, ImportedRekordboxTrack, TrackSources,
+    handlers, AppServices, CommandError, EngineDjPlaylist, EventSink, Events,
+    ImportedEngineDjTrack as EngineDjTrack, ImportedRekordboxTrack as RekordboxTrack,
+    RekordboxPlaylist, SharedServices,
 };
+#[cfg(feature = "agent")]
+use luma_lib::dispatch::{system_track_sources, RekordboxLibraryInfo, TrackSources};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
 use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
@@ -73,7 +77,6 @@ use luma_lib::models::folders::Folder;
 use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
 use luma_lib::models::node_graph::BeatGrid;
 use luma_lib::models::patch::{AutoPatchReport, DmxRoute, OutputDevice, OutputPort, UniverseCell};
-use luma_lib::models::patterns::AnnotationPreview;
 use luma_lib::models::scores::{Score, ScoreSummary};
 use luma_lib::models::selection::Selection;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
@@ -82,6 +85,7 @@ use luma_lib::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, Venue
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
 use luma_lib::services::fixtures as fixtures_service;
+use luma_lib::services::graph_scores::ClipStrip;
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
@@ -208,9 +212,9 @@ pub struct SourceTrack {
     pub duration_seconds: Option<f64>,
 }
 
-/// Raw adapter answers used only by the GPUI agent harness. Keeping the
-/// fixture at the JSON boundary proves the public Library methods perform the
-/// same source-specific decoding and normalization as production dispatch.
+/// Raw adapter answers used only by the GPUI agent harness, decoded into the
+/// adapters' own row types so the public Library methods normalize them
+/// exactly as they normalize a real source.
 #[cfg(feature = "agent")]
 #[derive(Clone, Debug)]
 pub struct SourceAdapterFixture {
@@ -242,7 +246,7 @@ impl TrackSources for FixtureTrackSources {
         &'a self,
         library_path: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn Future<Output = Result<(String, Vec<ImportedEngineDjTrack>), String>> + Send + 'a>,
+        Box<dyn Future<Output = Result<(String, Vec<EngineDjTrack>), String>> + Send + 'a>,
     > {
         let fixture = self.fixture.lock().unwrap().clone();
         let delay = *self.import_delay.lock().unwrap();
@@ -265,9 +269,8 @@ impl TrackSources for FixtureTrackSources {
 
     fn rekordbox_tracks(
         &self,
-    ) -> std::pin::Pin<
-        Box<dyn Future<Output = Result<Vec<ImportedRekordboxTrack>, String>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<RekordboxTrack>, String>> + Send + '_>>
+    {
         let fixture = self.fixture.lock().unwrap().clone();
         let delay = *self.import_delay.lock().unwrap();
         if fixture.is_none() {
@@ -285,6 +288,9 @@ impl TrackSources for FixtureTrackSources {
     }
 }
 
+/// A fixture's Engine DJ library: [`luma_lib::dispatch::EngineDjLibraryInfo`]
+/// without the path, which a fixture has no reason to name.
+#[cfg(feature = "agent")]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EngineDjLibraryWire {
@@ -292,43 +298,9 @@ struct EngineDjLibraryWire {
     track_count: i64,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EngineDjPlaylistWire {
-    id: i64,
-    title: String,
-    parent_id: Option<i64>,
-    track_count: i64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EngineDjTrackWire {
-    id: i64,
-    path: String,
-    filename: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-    bpm_analyzed: Option<f64>,
-    length: Option<f64>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RekordboxLibraryWire {
-    track_count: usize,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RekordboxPlaylistWire {
-    id: String,
-    name: String,
-    parent_id: Option<String>,
-    track_count: usize,
-}
-
+/// A fixture's Rekordbox row: [`RekordboxTrack`] without the content id,
+/// which the browser never reads.
+#[cfg(feature = "agent")]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RekordboxTrackWire {
@@ -342,8 +314,8 @@ struct RekordboxTrackWire {
     duration_seconds: Option<f64>,
 }
 
-impl From<EngineDjPlaylistWire> for SourcePlaylist {
-    fn from(row: EngineDjPlaylistWire) -> Self {
+impl From<EngineDjPlaylist> for SourcePlaylist {
+    fn from(row: EngineDjPlaylist) -> Self {
         Self {
             id: row.id.to_string(),
             name: row.title,
@@ -353,8 +325,8 @@ impl From<EngineDjPlaylistWire> for SourcePlaylist {
     }
 }
 
-impl From<RekordboxPlaylistWire> for SourcePlaylist {
-    fn from(row: RekordboxPlaylistWire) -> Self {
+impl From<RekordboxPlaylist> for SourcePlaylist {
+    fn from(row: RekordboxPlaylist) -> Self {
         Self {
             id: row.id,
             name: row.name,
@@ -364,8 +336,8 @@ impl From<RekordboxPlaylistWire> for SourcePlaylist {
     }
 }
 
-impl From<EngineDjTrackWire> for SourceTrack {
-    fn from(row: EngineDjTrackWire) -> Self {
+impl From<EngineDjTrack> for SourceTrack {
+    fn from(row: EngineDjTrack) -> Self {
         Self {
             id: row.id.to_string(),
             file_path: Some(row.path),
@@ -379,6 +351,22 @@ impl From<EngineDjTrackWire> for SourceTrack {
     }
 }
 
+impl From<RekordboxTrack> for SourceTrack {
+    fn from(row: RekordboxTrack) -> Self {
+        Self {
+            id: row.uuid,
+            file_path: row.file_path,
+            filename: row.filename,
+            title: row.title,
+            artist: row.artist,
+            album: row.album,
+            bpm: row.bpm,
+            duration_seconds: row.duration_seconds,
+        }
+    }
+}
+
+#[cfg(feature = "agent")]
 impl From<RekordboxTrackWire> for SourceTrack {
     fn from(row: RekordboxTrackWire) -> Self {
         Self {
@@ -409,7 +397,7 @@ fn normalize_source_library(
             })
         }
         TrackSource::Rekordbox => {
-            let opened: RekordboxLibraryWire =
+            let opened: RekordboxLibraryInfo =
                 decode_source_fixture("rekordbox_open_library", value)?;
             Ok(SourceLibrary {
                 identity: None,
@@ -426,12 +414,12 @@ fn normalize_source_playlists(
 ) -> Result<Vec<SourcePlaylist>, LibraryError> {
     match source {
         TrackSource::EngineDj { .. } => {
-            let rows: Vec<EngineDjPlaylistWire> =
+            let rows: Vec<EngineDjPlaylist> =
                 decode_source_fixture("engine_dj_list_playlists", value)?;
             Ok(rows.into_iter().map(SourcePlaylist::from).collect())
         }
         TrackSource::Rekordbox => {
-            let rows: Vec<RekordboxPlaylistWire> =
+            let rows: Vec<RekordboxPlaylist> =
                 decode_source_fixture("rekordbox_list_playlists", value)?;
             Ok(rows.into_iter().map(SourcePlaylist::from).collect())
         }
@@ -446,7 +434,7 @@ fn normalize_source_tracks(
 ) -> Result<Vec<SourceTrack>, LibraryError> {
     match source {
         TrackSource::EngineDj { .. } => {
-            let rows: Vec<EngineDjTrackWire> = decode_source_fixture(command, value)?;
+            let rows: Vec<EngineDjTrack> = decode_source_fixture(command, value)?;
             Ok(rows.into_iter().map(SourceTrack::from).collect())
         }
         TrackSource::Rekordbox => {
@@ -480,8 +468,8 @@ pub struct LibraryError {
 enum Cause {
     /// The command ran and refused, with the seam's own structure intact.
     Command(CommandError),
-    /// The command answered, but not in the shape the method promised — this
-    /// host's model and the seam's have drifted.
+    /// The request never reached a command because it, or the fixture
+    /// standing in for the command, was not in the shape the method needs.
     Shape(String),
     /// The reactor never delivered the answer: the `Library` was dropped
     /// mid-call, or the task panicked.
@@ -511,7 +499,7 @@ impl fmt::Display for LibraryError {
         let command = self.command;
         match &self.cause {
             Cause::Command(error) => write!(formatter, "{command}: {error}"),
-            Cause::Shape(error) => write!(formatter, "{command}: unexpected result shape: {error}"),
+            Cause::Shape(error) => write!(formatter, "{command}: unexpected shape: {error}"),
             Cause::Cancelled(error) => write!(formatter, "{command} did not complete: {error}"),
         }
     }
@@ -526,10 +514,19 @@ impl std::error::Error for LibraryError {}
 /// session was obtained with and exists only to put a name on screen. A
 /// session whose blob carries no address is still a perfectly good identity —
 /// hence [`Self::label`], which never shows the id.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Account {
     pub id: String,
     pub email: Option<String>,
+}
+
+impl From<AuthAccount> for Account {
+    fn from(account: AuthAccount) -> Self {
+        Self {
+            id: account.id,
+            email: account.email,
+        }
+    }
 }
 
 impl Account {
@@ -573,7 +570,7 @@ pub struct Library {
     /// see [`Library::lapsed`]. Fixed at open: it is a fact about how this
     /// process started, and signing in afterwards does not rewrite it.
     lapsed: Option<String>,
-    /// Owns the reactor every dispatched command runs on. Dropping it cancels
+    /// Owns the reactor every command runs on. Dropping it cancels
     /// in-flight work, so it lives exactly as long as the `Library`.
     ///
     /// An `Option` only so [`Drop`] can take it and shut it down with a time
@@ -618,8 +615,8 @@ pub struct Library {
 }
 
 struct SessionWrite {
-    command: &'static str,
-    args: Value,
+    /// The write itself, not yet polled: it runs when the actor reaches it.
+    write: std::pin::Pin<Box<dyn Future<Output = Result<(), LibraryError>> + Send>>,
     reply: tokio::sync::oneshot::Sender<Result<(), LibraryError>>,
 }
 
@@ -797,9 +794,7 @@ impl Library {
             //
             // A label that cannot be read is not a launch failure and not a
             // different identity: the id is already proven, so it stands alone.
-            let email = match command::<Option<Account>>(&services, "current_account", &Value::Null)
-                .await
-            {
+            let email = match handlers::auth::current_account(&services).await {
                 Ok(Some(account)) if Some(&account.id) == user_id.as_ref() => account.email,
                 _ => None,
             };
@@ -857,7 +852,6 @@ impl Library {
         drop(shutdown_rx);
         let (session_writes, mut session_write_rx) =
             tokio::sync::mpsc::unbounded_channel::<SessionWrite>();
-        let session_services = services.clone();
         #[cfg(feature = "agent")]
         let session_navigation_fixture = Arc::clone(&navigation_fixture);
         runtime.spawn(async move {
@@ -876,7 +870,7 @@ impl Library {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                let result = command(&session_services, write.command, &write.args).await;
+                let result = write.write.await;
                 let _ = write.reply.send(result);
             }
         });
@@ -914,7 +908,7 @@ impl Library {
     ///
     /// A turn outlives the call that starts it, so it cannot borrow this
     /// `Library`; [`AgentService`] owns a shared handle on the same services
-    /// every dispatched command runs on, which is what keeps the agent's
+    /// every command runs on, which is what keeps the agent's
     /// writes and the app's reads inside one transaction boundary.
     pub fn agent(&self) -> luma_chat::Agent {
         let mut service = AgentService::new(self.services.clone());
@@ -1006,7 +1000,10 @@ impl Library {
         &self,
         email: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("send_login_code", json!({ "email": email }))
+        let email = email.to_owned();
+        self.call("send_login_code", |services| async move {
+            handlers::auth::send_login_code(&services, email).await
+        })
     }
 
     /// Exchange an emailed code for a session and adopt the principal it
@@ -1021,8 +1018,10 @@ impl Library {
         email: &str,
         code: &str,
     ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
-        let pending =
-            self.call::<String>("verify_login_code", json!({ "email": email, "code": code }));
+        let (asked, code) = (email.to_owned(), code.to_owned());
+        let pending = self.call("verify_login_code", |services| async move {
+            handlers::auth::verify_login_code(&services, asked, code).await
+        });
         let cache = Arc::clone(&self.account);
         let email = email.trim().to_string();
         async move {
@@ -1060,7 +1059,9 @@ impl Library {
     {
         #[cfg(feature = "agent")]
         let fixture = self.sync_status_fixture.clone();
-        let pending = self.call("sync_status", json!({}));
+        let pending = self.call("sync_status", |services| async move {
+            handlers::sync::sync_status(&services).await
+        });
         async move {
             #[cfg(feature = "agent")]
             if let Some(fixture) = fixture {
@@ -1077,7 +1078,7 @@ impl Library {
     /// reading it is what refreshes an expiring token and re-arms admission
     /// for the identity it proves — followed by `current_account` for the
     /// label. Sequenced inside one spawned task for the same reason
-    /// [`Self::sign_out`] is: [`Self::call`] dispatches immediately, and the
+    /// [`Self::sign_out`] is: [`Self::call`] starts immediately, and the
     /// label must be read *after* the identity switch it describes.
     ///
     /// `Ok(None)` is a session Supabase would not renew; `Err` is a network
@@ -1086,21 +1087,18 @@ impl Library {
     pub fn refresh_session(
         &self,
     ) -> impl Future<Output = Result<Option<Account>, LibraryError>> + use<> {
-        let services = self.services.clone();
         let cache = Arc::clone(&self.account);
-        let task = self.runtime().spawn(async move {
-            command::<Option<String>>(
-                &services,
-                "get_session_item",
-                &json!({ "key": luma_lib::database::local::auth::SUPABASE_SESSION_KEY }),
-            )
-            .await?;
-            command::<Option<Account>>(&services, "current_account", &Value::Null).await
+        let task = self.task("refresh_session", |services| async move {
+            handlers::auth::get_session_item(&services, SUPABASE_SESSION_KEY.to_owned())
+                .await
+                .map_err(refused("get_session_item"))?;
+            let account = handlers::auth::current_account(&services)
+                .await
+                .map_err(refused("current_account"))?;
+            Ok(account.map(Account::from))
         });
         async move {
-            let account = task.await.map_err(|error| {
-                LibraryError::at("refresh_session", Cause::Cancelled(error.to_string()))
-            })??;
+            let account = task.await?;
             *cache.lock().unwrap() = account.clone();
             Ok(account)
         }
@@ -1115,29 +1113,24 @@ impl Library {
     /// reversed them would delete the
     /// credential it still needs to flush with.
     ///
-    /// Both run inside *one* spawned task, not two: [`Self::call`] dispatches
+    /// Both run inside *one* spawned task, not two: [`Self::call`] starts
     /// the moment it is called, so holding two of its futures and awaiting
     /// them in order sequences the awaits and nothing else — the commands
     /// themselves race for the sync lock, and a release that won would clear
     /// the credential the wipe is still flushing with. That is the reversal
     /// this comment says is unrecoverable, arrived at by accident.
     pub fn sign_out(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let services = self.services.clone();
         let cache = Arc::clone(&self.account);
-        let task = self.runtime().spawn(async move {
-            command::<Value>(&services, "wipe_database", &json!({})).await?;
-            command::<Value>(
-                &services,
-                "remove_session_item",
-                &json!({ "key": luma_lib::database::local::auth::SUPABASE_SESSION_KEY }),
-            )
-            .await?;
-            Ok::<_, LibraryError>(())
+        let task = self.task("sign_out", |services| async move {
+            handlers::auth::wipe_database(&services)
+                .await
+                .map_err(refused("wipe_database"))?;
+            handlers::auth::remove_session_item(&services, SUPABASE_SESSION_KEY.to_owned())
+                .await
+                .map_err(refused("remove_session_item"))
         });
         async move {
-            task.await.map_err(|error| {
-                LibraryError::at("sign_out", Cause::Cancelled(error.to_string()))
-            })??;
+            task.await?;
             *cache.lock().unwrap() = None;
             Ok(())
         }
@@ -1156,7 +1149,9 @@ impl Library {
         };
         #[cfg(not(feature = "agent"))]
         let (delay, error): (Duration, Option<String>) = (Duration::ZERO, None);
-        let pending = self.call_after("list_venues", json!({}), delay);
+        let pending = self.call_after("list_venues", delay, |services| async move {
+            handlers::venues::list_venues(&services).await
+        });
         async move {
             let result = pending.await;
             if let Some(error) = error {
@@ -1177,10 +1172,10 @@ impl Library {
         venue_id: &str,
         environment: VenueEnvironment,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "set_venue_environment",
-            json!({ "venueId": venue_id, "environment": environment }),
-        )
+        let venue_id = venue_id.to_owned();
+        self.call("set_venue_environment", move |services| async move {
+            handlers::venues::set_venue_environment(&services, venue_id, environment).await
+        })
     }
 
     /// Write one venue's atmosphere: whether the room has haze in it, how much,
@@ -1195,10 +1190,10 @@ impl Library {
         venue_id: &str,
         haze: VenueHaze,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "set_venue_haze",
-            json!({ "venueId": venue_id, "haze": haze }),
-        )
+        let venue_id = venue_id.to_owned();
+        self.call("set_venue_haze", move |services| async move {
+            handlers::venues::set_venue_haze(&services, venue_id, haze).await
+        })
     }
 
     /// Create a venue and return the durable row written by the catalog.
@@ -1207,10 +1202,10 @@ impl Library {
         name: &str,
         description: Option<&str>,
     ) -> impl Future<Output = Result<Venue, LibraryError>> + use<> {
-        self.call(
-            "create_venue",
-            json!({ "name": name, "description": description }),
-        )
+        let (name, description) = (name.to_owned(), description.map(str::to_owned));
+        self.call("create_venue", |services| async move {
+            handlers::venues::create_venue(&services, name, description).await
+        })
     }
 
     /// The track browser's rows for `venue_id`, carrying that venue's
@@ -1242,11 +1237,10 @@ impl Library {
         };
         #[cfg(not(feature = "agent"))]
         let (delay, first_title): (Duration, Option<String>) = (Duration::ZERO, None);
-        let pending = self.call_after(
-            "list_tracks_enriched",
-            json!({ "venueId": venue_id }),
-            delay,
-        );
+        let venue_id = Some(venue_id.to_owned());
+        let pending = self.call_after("list_tracks_enriched", delay, |services| async move {
+            handlers::tracks::list_tracks_enriched(&services, venue_id).await
+        });
         async move {
             let mut rows: Vec<TrackBrowserRow> = pending.await?;
             if let (Some(title), Some(first)) = (first_title, rows.first_mut()) {
@@ -1260,7 +1254,9 @@ impl Library {
     pub fn all_tracks(
         &self,
     ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, LibraryError>> + use<> {
-        self.call("list_tracks_enriched", json!({ "venueId": null }))
+        self.call("list_tracks_enriched", |services| async move {
+            handlers::tracks::list_tracks_enriched(&services, None).await
+        })
     }
 
     /// Import from disk or either DJ source through one typed request/result
@@ -1271,12 +1267,15 @@ impl Library {
         request: TrackImportRequest,
     ) -> impl Future<Output = Result<TrackImportResult, LibraryError>> + use<> {
         let files = match &request {
-            TrackImportRequest::Files(paths) => Some(self.call(
-                "import_tracks",
-                json!({
-                    "filePaths": paths.iter().map(|path| path.to_string_lossy()).collect::<Vec<_>>()
-                }),
-            )),
+            TrackImportRequest::Files(paths) => {
+                let file_paths = paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                Some(self.call("import_tracks", |services| async move {
+                    handlers::tracks::import_tracks(&services, file_paths).await
+                }))
+            }
             _ => None,
         };
         let mut request_error = None;
@@ -1290,10 +1289,17 @@ impl Library {
                     .map(|id| id.parse::<i64>())
                     .collect::<Result<Vec<_>, _>>()
                 {
-                    Ok(track_ids) => Some(self.call(
-                        "engine_dj_import_tracks",
-                        json!({ "libraryPath": library_path, "trackIds": track_ids }),
-                    )),
+                    Ok(track_ids) => {
+                        let library_path = library_path.clone();
+                        Some(self.call("engine_dj_import_tracks", |services| async move {
+                            handlers::engine_dj::engine_dj_import_tracks(
+                                &services,
+                                library_path,
+                                track_ids,
+                            )
+                            .await
+                        }))
+                    }
                     Err(error) => {
                         request_error = Some(LibraryError::at(
                             "engine_dj_import_tracks",
@@ -1309,10 +1315,12 @@ impl Library {
             TrackImportRequest::Source {
                 source: TrackSource::Rekordbox,
                 track_ids,
-            } => Some(self.call(
-                "rekordbox_import_tracks",
-                json!({ "trackUuids": track_ids }),
-            )),
+            } => {
+                let track_uuids = track_ids.clone();
+                Some(self.call("rekordbox_import_tracks", |services| async move {
+                    handlers::rekordbox::rekordbox_import_tracks(&services, track_uuids).await
+                }))
+            }
             _ => None,
         };
         async move {
@@ -1363,8 +1371,11 @@ impl Library {
         let fixture = self.source_adapter_fixture().is_some();
         #[cfg(not(feature = "agent"))]
         let fixture = false;
-        let path =
-            (!fixture).then(|| self.call::<String>("engine_dj_default_library_path", json!({})));
+        let path = (!fixture).then(|| {
+            self.call("engine_dj_default_library_path", |services| async move {
+                handlers::engine_dj::engine_dj_default_library_path(&services).await
+            })
+        });
         async move {
             let library_path = match path {
                 Some(path) => path.await?,
@@ -1395,16 +1406,18 @@ impl Library {
         let fixture: Option<Result<SourceLibrary, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
             (TrackSource::EngineDj { library_path }, true) => {
-                Some(self.call::<EngineDjLibraryWire>(
-                    "engine_dj_open_library",
-                    json!({ "libraryPath": library_path }),
-                ))
+                let library_path = library_path.clone();
+                Some(self.call("engine_dj_open_library", |services| async move {
+                    handlers::engine_dj::engine_dj_open_library(&services, library_path).await
+                }))
             }
             _ => None,
         };
         let rekordbox = match (&source, fixture.is_none()) {
             (TrackSource::Rekordbox, true) => {
-                Some(self.call::<RekordboxLibraryWire>("rekordbox_open_library", json!({})))
+                Some(self.call("rekordbox_open_library", |services| async move {
+                    handlers::rekordbox::rekordbox_open_library(&services).await
+                }))
             }
             _ => None,
         };
@@ -1449,17 +1462,21 @@ impl Library {
         let fixture: Option<Result<Vec<SourcePlaylist>, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
             (TrackSource::EngineDj { library_path }, true) => {
-                Some(self.call::<Vec<EngineDjPlaylistWire>>(
-                    "engine_dj_list_playlists",
-                    json!({ "libraryPath": library_path }),
-                ))
+                let library_path = library_path.clone();
+                Some(
+                    self.call("engine_dj_list_playlists", |services| async move {
+                        handlers::engine_dj::engine_dj_list_playlists(&services, library_path).await
+                    }),
+                )
             }
             _ => None,
         };
         let rekordbox = match (&source, fixture.is_none()) {
-            (TrackSource::Rekordbox, true) => {
-                Some(self.call::<Vec<RekordboxPlaylistWire>>("rekordbox_list_playlists", json!({})))
-            }
+            (TrackSource::Rekordbox, true) => Some(
+                self.call("rekordbox_list_playlists", |services| async move {
+                    handlers::rekordbox::rekordbox_list_playlists(&services).await
+                }),
+            ),
             _ => None,
         };
         async move {
@@ -1491,16 +1508,18 @@ impl Library {
         let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
             (TrackSource::EngineDj { library_path }, true) => {
-                Some(self.call::<Vec<EngineDjTrackWire>>(
-                    "engine_dj_list_tracks",
-                    json!({ "libraryPath": library_path }),
-                ))
+                let library_path = library_path.clone();
+                Some(self.call("engine_dj_list_tracks", |services| async move {
+                    handlers::engine_dj::engine_dj_list_tracks(&services, library_path).await
+                }))
             }
             _ => None,
         };
         let rekordbox = match (&source, fixture.is_none()) {
             (TrackSource::Rekordbox, true) => {
-                Some(self.call::<Vec<RekordboxTrackWire>>("rekordbox_list_tracks", json!({})))
+                Some(self.call("rekordbox_list_tracks", |services| async move {
+                    handlers::rekordbox::rekordbox_list_tracks(&services).await
+                }))
             }
             _ => None,
         };
@@ -1547,18 +1566,31 @@ impl Library {
             && engine_id.is_none();
         let engine = match (&source, engine_id, fixture.is_none()) {
             (TrackSource::EngineDj { library_path }, Some(playlist_id), true) => {
-                Some(self.call::<Vec<EngineDjTrackWire>>(
+                let library_path = library_path.clone();
+                Some(self.call(
                     "engine_dj_get_playlist_tracks",
-                    json!({ "libraryPath": library_path, "playlistId": playlist_id }),
+                    move |services| async move {
+                        handlers::engine_dj::engine_dj_get_playlist_tracks(
+                            &services,
+                            library_path,
+                            playlist_id,
+                        )
+                        .await
+                    },
                 ))
             }
             _ => None,
         };
         let rekordbox = match (&source, fixture.is_none()) {
-            (TrackSource::Rekordbox, true) => Some(self.call::<Vec<RekordboxTrackWire>>(
-                "rekordbox_get_playlist_tracks",
-                json!({ "playlistId": playlist_id }),
-            )),
+            (TrackSource::Rekordbox, true) => {
+                let playlist_id = playlist_id.to_owned();
+                Some(
+                    self.call("rekordbox_get_playlist_tracks", |services| async move {
+                        handlers::rekordbox::rekordbox_get_playlist_tracks(&services, playlist_id)
+                            .await
+                    }),
+                )
+            }
             _ => None,
         };
         async move {
@@ -1627,18 +1659,21 @@ impl Library {
         let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
             (TrackSource::EngineDj { library_path }, true) => {
-                Some(self.call::<Vec<EngineDjTrackWire>>(
-                    "engine_dj_search_tracks",
-                    json!({ "libraryPath": library_path, "query": query }),
-                ))
+                let (library_path, query) = (library_path.clone(), query.to_owned());
+                Some(self.call("engine_dj_search_tracks", |services| async move {
+                    handlers::engine_dj::engine_dj_search_tracks(&services, library_path, query)
+                        .await
+                }))
             }
             _ => None,
         };
         let rekordbox = match (&source, fixture.is_none()) {
-            (TrackSource::Rekordbox, true) => Some(self.call::<Vec<RekordboxTrackWire>>(
-                "rekordbox_search_tracks",
-                json!({ "query": query }),
-            )),
+            (TrackSource::Rekordbox, true) => {
+                let query = query.to_owned();
+                Some(self.call("rekordbox_search_tracks", |services| async move {
+                    handlers::rekordbox::rekordbox_search_tracks(&services, query).await
+                }))
+            }
             _ => None,
         };
         async move {
@@ -1663,7 +1698,10 @@ impl Library {
         venue: &str,
     ) -> impl Future<Output = Result<Vec<luma_lib::models::groups::MissingGroup>, LibraryError>> + use<>
     {
-        self.call("missing_venue_groups", json!({"venueId":venue}))
+        let venue_id = venue.to_owned();
+        self.call("missing_venue_groups", |services| async move {
+            handlers::group_references::missing_venue_groups(&services, venue_id).await
+        })
     }
     pub fn resolve_venue_group(
         &self,
@@ -1672,19 +1710,36 @@ impl Library {
         replacement: Option<&str>,
         fixtures: &[String],
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("resolve_venue_group", json!({"venueId":venue,"missing":missing,"replacement":replacement,"fixtures":fixtures}))
+        let (venue_id, missing) = (venue.to_owned(), missing.to_owned());
+        let (replacement, fixtures) = (replacement.map(str::to_owned), fixtures.to_vec());
+        self.call("resolve_venue_group", |services| async move {
+            handlers::group_references::resolve_venue_group(
+                &services,
+                venue_id,
+                missing,
+                replacement,
+                fixtures,
+            )
+            .await
+        })
     }
     pub fn delete_venue_group(
         &self,
         id: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("delete_group", json!({"id":id}))
+        let id = id.to_owned();
+        self.call("delete_group", |services| async move {
+            handlers::groups::delete_group(&services, id).await
+        })
     }
     pub fn generate_venue_groups(
         &self,
         venue: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("generate_venue_groups", json!({"venueId":venue}))
+        let venue_id = venue.to_owned();
+        self.call("generate_venue_groups", |services| async move {
+            handlers::groups::generate_venue_groups(&services, venue_id).await
+        })
     }
     /// Commit a venue group name and membership changes atomically.
     pub fn save_venue_group(
@@ -1695,10 +1750,13 @@ impl Library {
         added: &[String],
         removed: &[String],
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "save_venue_group",
-            json!({"venueId":venue,"groupId":id,"label":label,"added":added,"removed":removed}),
-        )
+        let (venue_id, group_id, label) =
+            (venue.to_owned(), id.map(str::to_owned), label.to_owned());
+        let (added, removed) = (added.to_vec(), removed.to_vec());
+        self.call("save_venue_group", |services| async move {
+            handlers::groups::save_venue_group(&services, venue_id, group_id, label, added, removed)
+                .await
+        })
     }
 
     /// A venue's fixture groups — the vocabulary a selection expression is
@@ -1707,7 +1765,10 @@ impl Library {
         &self,
         venue_id: &str,
     ) -> impl Future<Output = Result<Vec<FixtureGroup>, LibraryError>> + use<> {
-        self.call("list_groups", json!({ "venueId": venue_id }))
+        let venue_id = venue_id.to_owned();
+        self.call("list_groups", |services| async move {
+            handlers::groups::list_groups(&services, venue_id).await
+        })
     }
 
     /// The heads `selection` resolves to in the venue, with their places;
@@ -1719,15 +1780,13 @@ impl Library {
         seed: u64,
         elements: Option<usize>,
     ) -> impl Future<Output = Result<Vec<luma_patterns::Cell>, LibraryError>> + use<> {
-        self.call(
-            "selection_cells",
-            json!({
-                "venueId": venue_id,
-                "selection": selection.to_value(),
-                "seed": seed,
-                "elements": elements,
-            }),
-        )
+        let (venue_id, selection) = (venue_id.to_owned(), selection.clone());
+        self.call("selection_cells", move |services| async move {
+            handlers::composable_patterns::selection_cells(
+                &services, venue_id, selection, seed, elements,
+            )
+            .await
+        })
     }
 
     /// The frame that answers "which heads does this selection light?" — every
@@ -1741,10 +1800,10 @@ impl Library {
         venue_id: &str,
         selection: &Selection,
     ) -> impl Future<Output = Result<UniverseState, LibraryError>> + use<> {
-        self.call(
-            "highlight_selection",
-            json!({ "venueId": venue_id, "selection": selection.to_value() }),
-        )
+        let (venue_id, selection) = (venue_id.to_owned(), selection.clone());
+        self.call("highlight_selection", |services| async move {
+            handlers::groups::highlight_selection(&services, venue_id, selection).await
+        })
     }
 
     pub(crate) fn preview_definition_frames(
@@ -1753,7 +1812,9 @@ impl Library {
     ) -> impl Future<
         Output = Result<luma_lib::models::composable_patterns::ComposablePreview, LibraryError>,
     > + use<> {
-        self.call("preview_composable_pattern", json!({"request":request}))
+        self.call("preview_composable_pattern", |services| async move {
+            handlers::composable_patterns::preview_composable_pattern(&services, request).await
+        })
     }
 
     // -- folders --------------------------------------------------------------
@@ -1763,7 +1824,10 @@ impl Library {
         &self,
         venue_id: &str,
     ) -> impl Future<Output = Result<Vec<Folder>, LibraryError>> + use<> {
-        self.call("list_folders", json!({ "venueId": venue_id }))
+        let venue_id = venue_id.to_owned();
+        self.call("list_folders", |services| async move {
+            handlers::folders::list_folders(&services, venue_id).await
+        })
     }
 
     /// A new, empty folder. The backend trims the name and refuses an empty
@@ -1773,10 +1837,10 @@ impl Library {
         venue_id: &str,
         name: &str,
     ) -> impl Future<Output = Result<Folder, LibraryError>> + use<> {
-        self.call(
-            "create_folder",
-            json!({ "venueId": venue_id, "name": name }),
-        )
+        let (venue_id, name) = (venue_id.to_owned(), name.to_owned());
+        self.call("create_folder", |services| async move {
+            handlers::folders::create_folder(&services, venue_id, name).await
+        })
     }
 
     pub fn rename_folder(
@@ -1784,10 +1848,10 @@ impl Library {
         folder_id: &str,
         name: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "rename_folder",
-            json!({ "folderId": folder_id, "name": name }),
-        )
+        let (folder_id, name) = (folder_id.to_owned(), name.to_owned());
+        self.call("rename_folder", |services| async move {
+            handlers::folders::rename_folder(&services, folder_id, name).await
+        })
     }
 
     /// Delete a folder and its links. Its songs and their scores stay.
@@ -1795,7 +1859,10 @@ impl Library {
         &self,
         folder_id: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("delete_folder", json!({ "folderId": folder_id }))
+        let folder_id = folder_id.to_owned();
+        self.call("delete_folder", |services| async move {
+            handlers::folders::delete_folder(&services, folder_id).await
+        })
     }
 
     /// Put a song in a folder (`linked`), or take it out.
@@ -1805,10 +1872,10 @@ impl Library {
         track_id: &str,
         linked: bool,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "set_folder_track",
-            json!({ "folderId": folder_id, "trackId": track_id, "linked": linked }),
-        )
+        let (folder_id, track_id) = (folder_id.to_owned(), track_id.to_owned());
+        self.call("set_folder_track", move |services| async move {
+            handlers::folders::set_folder_track(&services, folder_id, track_id, linked).await
+        })
     }
 
     // -- the track editor -----------------------------------------------------
@@ -1820,7 +1887,10 @@ impl Library {
         &self,
         track_id: &str,
     ) -> impl Future<Output = Result<Vec<ScoreSummary>, LibraryError>> + use<> {
-        self.call("list_scores_across_venues", json!({ "trackId": track_id }))
+        let track_id = track_id.to_owned();
+        self.call("list_scores_across_venues", |services| async move {
+            handlers::scores::list_scores_across_venues(&services, track_id).await
+        })
     }
 
     /// Create another score for a track. Multiple scores per track/venue are
@@ -1833,20 +1903,19 @@ impl Library {
         venue_id: &str,
         name: Option<&str>,
     ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
-        self.call(
-            "create_score",
-            json!({
-                "requestId": request_id,
-                "trackId": track_id,
-                "venueId": venue_id,
-                "name": name,
-            }),
-        )
+        let (request_id, track_id) = (request_id.to_owned(), track_id.to_owned());
+        let (venue_id, name) = (venue_id.to_owned(), name.map(str::to_owned));
+        self.call("create_score", |services| async move {
+            handlers::scores::create_score(&services, request_id, track_id, venue_id, name).await
+        })
     }
 
     /// Delete a score, and with it every clip and definition row under it.
     pub fn delete_score(&self, id: &str) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("delete_score", json!({ "id": id }))
+        let id = id.to_owned();
+        self.call("delete_score", |services| async move {
+            handlers::scores::delete_score(&services, id).await
+        })
     }
 
     /// Rename a score. The backend trims the name and refuses an empty one.
@@ -1855,7 +1924,10 @@ impl Library {
         score_id: &str,
         name: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("rename_score", json!({ "scoreId": score_id, "name": name }))
+        let (score_id, name) = (score_id.to_owned(), name.to_owned());
+        self.call("rename_score", |services| async move {
+            handlers::scores::rename_score(&services, score_id, name).await
+        })
     }
 
     /// Atomically add a track to a venue. Repeated Add actions return the
@@ -1867,15 +1939,12 @@ impl Library {
         venue_id: &str,
         name: Option<&str>,
     ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
-        self.call(
-            "ensure_venue_score",
-            json!({
-                "requestId": request_id,
-                "trackId": track_id,
-                "venueId": venue_id,
-                "name": name,
-            }),
-        )
+        let (request_id, track_id) = (request_id.to_owned(), track_id.to_owned());
+        let (venue_id, name) = (venue_id.to_owned(), name.map(str::to_owned));
+        self.call("ensure_venue_score", |services| async move {
+            handlers::scores::ensure_venue_score(&services, request_id, track_id, venue_id, name)
+                .await
+        })
     }
 
     pub(crate) fn score_contents(
@@ -1889,30 +1958,19 @@ impl Library {
             .unwrap()
             .score_reads
             .notify_waiters();
-        let services = self.services.clone();
-        let score_id = score_id.to_owned();
-        let track_id = track_id.to_owned();
-        let task = self.runtime().spawn(async move {
-            let score: Option<luma_patterns::Score> = command(
-                &services,
-                "get_score_document",
-                &json!({"scoreId":score_id}),
-            )
-            .await?;
-            let score = score.ok_or_else(|| {
-                LibraryError::at(
-                    "get_score_document",
-                    Cause::Command(CommandError::NotFound("score does not exist".into())),
-                )
-            })?;
-            let beats = command(&services, "get_track_beats", &json!({"trackId":track_id})).await?;
+        let (score_id, track_id) = (score_id.to_owned(), track_id.to_owned());
+        self.task("get_score_document", |services| async move {
+            let score = handlers::scores::get_score_document(&services, score_id)
+                .await
+                .and_then(|score| {
+                    score.ok_or_else(|| CommandError::NotFound("score does not exist".into()))
+                })
+                .map_err(refused("get_score_document"))?;
+            let beats = handlers::tracks::get_track_beats(&services, track_id)
+                .await
+                .map_err(refused("get_track_beats"))?;
             Ok(ScoreContents { score, beats })
-        });
-        async move {
-            task.await.map_err(|error| {
-                LibraryError::at("get_score_document", Cause::Cancelled(error.to_string()))
-            })?
-        }
+        })
     }
 
     /// Save the editor's changes against the score it read. A clip the edit
@@ -1923,22 +1981,18 @@ impl Library {
         score_id: &str,
         edit: &luma_patterns::ScoreEdit,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let args = json!({"scoreId":score_id,"edit":edit});
+        let (score_id, edit) = (score_id.to_owned(), edit.clone());
         #[cfg(feature = "agent")]
-        let outside = self.outside_score_edit(score_id);
-        let services = self.services.clone();
-        let task = self.runtime().spawn(async move {
+        let outside = self.outside_score_edit(&score_id);
+        self.task("edit_score_document", |services| async move {
             #[cfg(feature = "agent")]
             if let Some(outside) = outside {
                 outside.await?;
             }
-            command(&services, "edit_score_document", &args).await
-        });
-        async move {
-            task.await.map_err(|error| {
-                LibraryError::at("edit_score_document", Cause::Cancelled(error.to_string()))
-            })?
-        }
+            handlers::scores::edit_score_document(&services, score_id, edit)
+                .await
+                .map_err(refused("edit_score_document"))
+        })
     }
 
     /// [`NavigationFixture::outside_score_edit`], once: write it, announce it
@@ -1957,9 +2011,11 @@ impl Library {
         };
         let services = self.services.clone();
         let replica_changed = self.replica_changed.clone();
-        let args = json!({"scoreId":score_id,"edit":edit});
+        let score_id = score_id.to_owned();
         Some(async move {
-            command::<()>(&services, "edit_score_document", &args).await?;
+            handlers::scores::edit_score_document(&services, score_id, edit)
+                .await
+                .map_err(refused("edit_score_document"))?;
             let read = reread.notified();
             tokio::pin!(read);
             read.as_mut().enable();
@@ -1969,16 +2025,17 @@ impl Library {
         })
     }
 
-    pub(crate) fn preview_score_clip(
+    /// Each clip's strip, alone on the venue.
+    pub(crate) fn preview_score_clips(
         &self,
         score_id: &str,
-        clip_id: &str,
-        score: &luma_patterns::Score,
-    ) -> impl Future<Output = Result<AnnotationPreview, LibraryError>> + use<> {
-        self.call(
-            "preview_score_clip",
-            json!({"scoreId":score_id,"clipId":clip_id,"score":score}),
-        )
+        clip_ids: Vec<String>,
+        score: luma_patterns::Score,
+    ) -> impl Future<Output = Result<Vec<ClipStrip>, LibraryError>> + use<> {
+        let score_id = score_id.to_owned();
+        self.call("preview_score_clips", |services| async move {
+            handlers::scores::preview_score_clips(&services, score_id, clip_ids, Some(score)).await
+        })
     }
 
     pub(crate) fn prepare_score_clip_preview(
@@ -1988,23 +2045,10 @@ impl Library {
         score: &luma_patterns::Score,
     ) -> impl Future<Output = Result<luma_lib::services::graph_scores::ClipPreview, LibraryError>> + use<>
     {
-        let services = self.services.clone();
         let (score_id, clip_id, score) = (score_id.to_owned(), clip_id.to_owned(), score.clone());
-        let task = self.runtime().spawn(async move {
-            luma_lib::dispatch::prepare_score_clip_preview(&services, score_id, clip_id, score)
-                .await
-                .map_err(|error| {
-                    LibraryError::at("prepare_score_clip_preview", Cause::Command(error))
-                })
-        });
-        async move {
-            task.await.map_err(|error| {
-                LibraryError::at(
-                    "prepare_score_clip_preview",
-                    Cause::Cancelled(error.to_string()),
-                )
-            })?
-        }
+        self.call("prepare_score_clip_preview", |services| async move {
+            handlers::scores::prepare_score_clip_preview(&services, score_id, clip_id, score).await
+        })
     }
 
     pub(crate) fn composite_score_document(
@@ -2012,10 +2056,10 @@ impl Library {
         score_id: &str,
         score: &luma_patterns::Score,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "composite_track",
-            json!({"scoreId":score_id,"graphScore":score}),
-        )
+        let (score_id, score) = (score_id.to_owned(), score.clone());
+        self.call("composite_track", |services| async move {
+            handlers::compositor::composite_track(&services, score_id, Some(score)).await
+        })
     }
 
     /// The rendered envelope of a track, at both resolutions. Large — a full
@@ -2024,31 +2068,22 @@ impl Library {
         &self,
         track_id: &str,
     ) -> impl Future<Output = Result<TrackWaveform, LibraryError>> + use<> {
-        self.call("get_track_waveform", json!({ "trackId": track_id }))
+        let track_id = track_id.to_owned();
+        self.call("get_track_waveform", |services| async move {
+            handlers::waveforms::get_track_waveform(&services, track_id).await
+        })
     }
 
-    /// Full filtered bands cross the native dispatch seam once, without JSON.
+    /// Full filtered bands, read once. Not a JSON command at all: tens of
+    /// millions of samples have no business being encoded.
     pub fn track_waveform_signal(
         &self,
         track_id: &str,
     ) -> impl Future<Output = Result<WaveformSignal, LibraryError>> + use<> {
-        let services = self.services.clone();
         let track_id = track_id.to_owned();
-        let task = self.runtime().spawn(async move {
-            luma_lib::dispatch::get_track_waveform_signal(&services, track_id)
-                .await
-                .map_err(|error| {
-                    LibraryError::at("get_track_waveform_signal", Cause::Command(error))
-                })
-        });
-        async move {
-            task.await.map_err(|error| {
-                LibraryError::at(
-                    "get_track_waveform_signal",
-                    Cause::Cancelled(error.to_string()),
-                )
-            })?
-        }
+        self.call("get_track_waveform_signal", |services| async move {
+            handlers::waveforms::get_track_waveform_signal(&services, track_id).await
+        })
     }
 
     /// A track's analyzed beats, or `None` when it has not been analyzed.
@@ -2056,7 +2091,10 @@ impl Library {
         &self,
         track_id: &str,
     ) -> impl Future<Output = Result<Option<BeatGrid>, LibraryError>> + use<> {
-        self.call("get_track_beats", json!({ "trackId": track_id }))
+        let track_id = track_id.to_owned();
+        self.call("get_track_beats", |services| async move {
+            handlers::tracks::get_track_beats(&services, track_id).await
+        })
     }
 
     pub fn track_beat_validation(
@@ -2064,7 +2102,10 @@ impl Library {
         track_id: &str,
     ) -> impl Future<Output = Result<Option<luma_lib::models::tracks::BeatValidation>, LibraryError>>
            + use<> {
-        self.call("get_track_beat_validation", json!({ "trackId": track_id }))
+        let track_id = track_id.to_owned();
+        self.call("get_track_beat_validation", |services| async move {
+            handlers::tracks::get_track_beat_validation(&services, track_id).await
+        })
     }
 
     pub fn set_track_beat_validation(
@@ -2074,12 +2115,11 @@ impl Library {
         verdict: luma_lib::models::tracks::BeatValidationVerdict,
         reason: Option<luma_lib::models::tracks::BeatValidationReason>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "set_track_beat_validation",
-            json!({
-                "trackId": track_id, "grid": grid, "verdict": verdict, "reason": reason,
-            }),
-        )
+        let (track_id, grid) = (track_id.to_owned(), grid.clone());
+        self.call("set_track_beat_validation", move |services| async move {
+            handlers::tracks::set_track_beat_validation(&services, track_id, grid, verdict, reason)
+                .await
+        })
     }
 
     /// Decode a track and hand it to the audio host, from 0.0. Slow — this is
@@ -2091,12 +2131,12 @@ impl Library {
         // Allocate before spawning: task scheduling must not reorder navigation.
         static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let session = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let track_id = track_id.to_owned();
         (
             session,
-            self.call(
-                "host_load_track",
-                json!({ "trackId": track_id, "session": session }),
-            ),
+            self.call("host_load_track", move |services| async move {
+                handlers::host_audio::host_load_track(&services, track_id, session).await
+            }),
         )
     }
 
@@ -2106,14 +2146,15 @@ impl Library {
         session: u64,
         seconds: f32,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "host_play",
-            json!({ "session": session, "seconds": seconds }),
-        )
+        self.call("host_play", move |services| async move {
+            handlers::host_audio::host_play(&services, session, seconds).await
+        })
     }
 
     pub fn pause(&self, session: u64) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("host_pause", json!({ "session": session }))
+        self.call("host_pause", move |services| async move {
+            handlers::host_audio::host_pause(&services, session).await
+        })
     }
 
     pub fn seek(
@@ -2121,10 +2162,9 @@ impl Library {
         session: u64,
         seconds: f32,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "host_seek",
-            json!({ "session": session, "seconds": seconds }),
-        )
+        self.call("host_seek", move |services| async move {
+            handlers::host_audio::host_seek(&services, session, seconds).await
+        })
     }
 
     pub fn set_loop_region(
@@ -2132,14 +2172,15 @@ impl Library {
         session: u64,
         region: Option<(f32, f32)>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "host_set_loop_region",
-            json!({
-                "session": session,
-                "startSeconds": region.map(|(start, _)| start),
-                "endSeconds": region.map(|(_, end)| end),
-            }),
-        )
+        self.call("host_set_loop_region", move |services| async move {
+            handlers::host_audio::host_set_loop_region(
+                &services,
+                session,
+                region.map(|(start, _)| start),
+                region.map(|(_, end)| end),
+            )
+            .await
+        })
     }
 
     /// Restore a song's transport before enabling its controls.
@@ -2149,30 +2190,19 @@ impl Library {
         seconds: f32,
         region: Option<(f32, f32)>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let services = self.services.clone();
-        let task = self.runtime().spawn(async move {
-            command::<()>(
+        self.task("host_seek", move |services| async move {
+            handlers::host_audio::host_seek(&services, session, seconds)
+                .await
+                .map_err(refused("host_seek"))?;
+            handlers::host_audio::host_set_loop_region(
                 &services,
-                "host_seek",
-                &json!({"session":session,"seconds":seconds}),
-            )
-            .await?;
-            command::<()>(
-                &services,
-                "host_set_loop_region",
-                &json!({
-                    "session": session,
-                    "startSeconds": region.map(|r| r.0),
-                    "endSeconds": region.map(|r| r.1),
-                }),
+                session,
+                region.map(|r| r.0),
+                region.map(|r| r.1),
             )
             .await
-        });
-        async move {
-            task.await.map_err(|error| {
-                LibraryError::at("host_seek", Cause::Cancelled(error.to_string()))
-            })?
-        }
+            .map_err(refused("host_set_loop_region"))
+        })
     }
 
     /// The transport, `after` a wait.
@@ -2185,7 +2215,9 @@ impl Library {
         &self,
         after: Duration,
     ) -> impl Future<Output = Result<HostAudioSnapshot, LibraryError>> + use<> {
-        self.call_after("host_snapshot", json!({}), after)
+        self.call_after("host_snapshot", after, |services| async move {
+            handlers::host_audio::host_snapshot(&services).await
+        })
     }
 
     /// A wall-clock delay, on the library's own runtime — what a UI debounce
@@ -2204,7 +2236,9 @@ impl Library {
 
     /// Every app setting, typed and defaulted.
     pub fn settings(&self) -> impl Future<Output = Result<AppSettings, LibraryError>> + use<> {
-        self.call("get_settings", json!({}))
+        self.call("get_settings", |services| async move {
+            handlers::settings::get_settings(&services).await
+        })
     }
 
     /// Read one host-session value. App navigation uses this for last-open
@@ -2213,7 +2247,10 @@ impl Library {
         &self,
         key: &str,
     ) -> impl Future<Output = Result<Option<String>, LibraryError>> + use<> {
-        self.call("get_session_item", json!({ "key": key }))
+        let key = key.to_owned();
+        self.call("get_session_item", |services| async move {
+            handlers::auth::get_session_item(&services, key).await
+        })
     }
 
     /// Persist one host-session value.
@@ -2222,7 +2259,10 @@ impl Library {
         key: &str,
         value: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.ordered_write("set_session_item", json!({ "key": key, "value": value }))
+        let (key, value) = (key.to_owned(), value.to_owned());
+        self.ordered_write("set_session_item", |services| async move {
+            handlers::auth::set_session_item(&services, key, value).await
+        })
     }
 
     /// Remove one host-session value.
@@ -2230,7 +2270,10 @@ impl Library {
         &self,
         key: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.ordered_write("remove_session_item", json!({ "key": key }))
+        let key = key.to_owned();
+        self.ordered_write("remove_session_item", |services| async move {
+            handlers::auth::remove_session_item(&services, key).await
+        })
     }
 
     /// Write one setting. The seam owns what a key means and what a write
@@ -2249,7 +2292,10 @@ impl Library {
         key: &str,
         value: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.ordered_write("set_setting", json!({ "key": key, "value": value }))
+        let (key, value) = (key.to_owned(), value.to_owned());
+        self.ordered_write("set_setting", |services| async move {
+            handlers::settings::set_setting(&services, key, value).await
+        })
     }
 
     /// One durable write, queued behind the last one.
@@ -2257,15 +2303,19 @@ impl Library {
     /// Named for the ordering it provides rather than for the session items it
     /// was first written for — settings share the queue, and a name that said
     /// "session" would make that read as a mistake.
-    fn ordered_write(
+    fn ordered_write<F, Fut>(
         &self,
         command: &'static str,
-        args: Value,
-    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        run: F,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<F, Fut>
+    where
+        F: FnOnce(SharedServices) -> Fut,
+        Fut: Future<Output = Result<(), CommandError>> + Send + 'static,
+    {
+        let pending = run(self.services.clone());
         let (reply, answer) = tokio::sync::oneshot::channel();
         let queued = self.session_writes.send(SessionWrite {
-            command,
-            args,
+            write: Box::pin(async move { pending.await.map_err(refused(command)) }),
             reply,
         });
         async move {
@@ -2288,14 +2338,20 @@ impl Library {
         scope: &ThreadScope,
     ) -> impl Future<Output = Result<Vec<AgentThread>, LibraryError>> + use<> {
         let scope = scope.clone();
-        let listed = self.call::<Vec<AgentThread>>(
-            "agent_thread_list",
-            json!({
-                "agentKind": scope.agent_kind.as_str(),
-                "subjectKind": scope.subject_kind.as_str(),
-                "subjectId": scope.subject_id,
-            }),
+        let (agent_kind, subject_kind, subject_id) = (
+            scope.agent_kind.as_str().to_owned(),
+            scope.subject_kind.as_str().to_owned(),
+            Some(scope.subject_id.clone()),
         );
+        let listed = self.call("agent_thread_list", |services| async move {
+            handlers::agent_threads::agent_thread_list(
+                &services,
+                Some(agent_kind),
+                Some(subject_kind),
+                subject_id,
+            )
+            .await
+        });
         async move {
             let threads = listed.await?;
             Ok(threads
@@ -2322,7 +2378,10 @@ impl Library {
         &self,
         score_id: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("composite_track", json!({ "scoreId": score_id }))
+        let score_id = score_id.to_owned();
+        self.call("composite_track", |services| async move {
+            handlers::compositor::composite_track(&services, score_id, None).await
+        })
     }
 
     /// Everything the 3D view needs to draw a venue: its patched fixtures, its
@@ -2335,37 +2394,44 @@ impl Library {
     /// for until the fixture list has landed. A screen that orchestrated that
     /// would be a screen that knew the second call depends on the first.
     pub fn venue_rig(&self, venue_id: &str) -> impl Future<Output = Result<Rig, LibraryError>> {
-        let services = self.services.clone();
         let venue_id = venue_id.to_string();
-        let venue = json!({ "venueId": venue_id });
-        let task = self.runtime().spawn(async move {
-            let fixtures: Vec<PatchedFixture> =
-                command(&services, "get_patched_fixtures", &venue).await?;
-            let venue_graph: ResolvedVenue =
-                command(&services, "get_resolved_venue", &venue).await?;
-            let rows: VenueGraphRows = command(&services, "get_venue_graph", &venue).await?;
+        self.task("get_patched_fixtures", |services| async move {
+            let fixtures = handlers::fixtures::get_patched_fixtures(&services, venue_id.clone())
+                .await
+                .map_err(refused("get_patched_fixtures"))?;
+            let venue_graph = handlers::stage::get_resolved_venue(&services, venue_id.clone())
+                .await
+                .map_err(refused("get_resolved_venue"))?;
+            let rows = handlers::stage::get_venue_graph(&services, venue_id.clone())
+                .await
+                .map_err(refused("get_venue_graph"))?;
             // The room's own lighting and atmosphere, fetched with its
             // geometry: a rig, the environment it stands in and the haze it
             // stands in are one picture, and a viewport that adopted the
             // pieces before the light would draw a frame of the wrong room.
             // Both off one read — they are two columns of the same row.
-            let room = command::<Venue>(&services, "get_venue", &json!({ "id": venue_id })).await?;
-            let lasers = command(&services, "get_laser_rig", &venue).await?;
+            let room = handlers::venues::get_venue(&services, venue_id.clone())
+                .await
+                .map_err(refused("get_venue"))?;
+            let lasers = handlers::lasers::get_laser_rig(&services, venue_id)
+                .await
+                .map_err(refused("get_laser_rig"))?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
                 .map(|f| f.fixture_path.clone())
                 .collect::<std::collections::BTreeSet<_>>()
             {
-                let args = json!({ "path": path });
                 // A venue can outlive a fixture bundle: a definition that no
                 // longer resolves leaves that fixture undrawn rather than
                 // taking the whole rig down with it.
-                if let Ok(def) = command(&services, "get_fixture_definition", &args).await {
+                if let Ok(def) =
+                    handlers::fixtures::get_fixture_definition(&services, path.clone()).await
+                {
                     definitions.insert(path, def);
                 }
             }
-            Ok::<_, LibraryError>(Rig {
+            Ok(Rig {
                 fixtures,
                 venue: venue_graph,
                 definitions,
@@ -2374,12 +2440,7 @@ impl Library {
                 haze: room.haze,
                 lasers,
             })
-        });
-        async move {
-            task.await.map_err(|e| {
-                LibraryError::at("get_patched_fixtures", Cause::Cancelled(e.to_string()))
-            })?
-        }
+        })
     }
 
     // -----------------------------------------------------------------
@@ -2387,8 +2448,8 @@ impl Library {
     // `venue_rig`, because a pose and the relation that produced it are one
     // answer.
     //
-    // Thin on purpose. Each is one dispatch command with the argument names
-    // `backend/src/dispatch/mod.rs` declares, and every mutating one hands
+    // Thin on purpose. Each is one handler in `dispatch::handlers::stage` (or
+    // `distribute`), called with its own arguments, and every mutating one hands
     // back the whole solved venue inside its `PlacementReport`: a graph edit
     // moves everything bolted to what it touched, so a caller that re-fetched
     // would be asking for a second solve of a graph it was just given.
@@ -2409,25 +2470,20 @@ impl Library {
         offset: usize,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<FixtureEntry>, LibraryError>> + use<> {
-        let services = self.services.clone();
         let indexed = Arc::clone(&self.fixtures_indexed);
-        let args = json!({ "query": query, "offset": offset, "limit": limit });
-        let task = self.runtime().spawn(async move {
+        let query = query.to_owned();
+        self.task("search_fixtures", move |services| async move {
             if !indexed.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                let built: Result<usize, LibraryError> =
-                    command(&services, "initialize_fixtures", &json!({})).await;
+                let built = handlers::fixtures::initialize_fixtures(&services).await;
                 if built.is_err() {
                     indexed.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
-                built?;
+                built.map_err(refused("initialize_fixtures"))?;
             }
-            command(&services, "search_fixtures", &args).await
-        });
-        async move {
-            task.await.map_err(|error| {
-                LibraryError::at("search_fixtures", Cause::Cancelled(error.to_string()))
-            })?
-        }
+            handlers::fixtures::search_fixtures(&services, query, offset, limit)
+                .await
+                .map_err(refused("search_fixtures"))
+        })
     }
 
     /// One QLC+ definition, for its mode list.
@@ -2435,7 +2491,10 @@ impl Library {
         &self,
         path: &str,
     ) -> impl Future<Output = Result<FixtureDefinition, LibraryError>> + use<> {
-        self.call("get_fixture_definition", json!({ "path": path }))
+        let path = path.to_owned();
+        self.call("get_fixture_definition", |services| async move {
+            handlers::fixtures::get_fixture_definition(&services, path).await
+        })
     }
 
     /// Place a new node by mating two sockets.
@@ -2452,20 +2511,25 @@ impl Library {
         yaw: f64,
         params: BTreeMap<String, f64>,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "attach",
-            json!({
-                "venueId": venue_id,
-                "kind": kind,
-                "catalogRef": catalog_ref,
-                "label": label,
-                "parentId": parent_id,
-                "mySocket": my_socket,
-                "theirSocket": their_socket,
-                "yaw": yaw,
-                "params": params,
-            }),
-        )
+        let (venue_id, kind, parent_id) =
+            (venue_id.to_owned(), kind.to_owned(), parent_id.to_owned());
+        let (catalog_ref, label) = (catalog_ref.map(str::to_owned), label.map(str::to_owned));
+        let (my_socket, their_socket) = (my_socket.to_owned(), their_socket.to_owned());
+        self.call("attach", move |services| async move {
+            handlers::stage::attach(
+                &services,
+                venue_id,
+                kind,
+                catalog_ref,
+                label,
+                parent_id,
+                Some(my_socket),
+                their_socket,
+                Some(yaw),
+                Some(params),
+            )
+            .await
+        })
     }
 
     /// Free placement: seat a new node on a surface at `(u, v, yaw, trim)`.
@@ -2482,31 +2546,35 @@ impl Library {
         params: BTreeMap<String, f64>,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
         let (surface_node_id, surface_socket) = match surface {
-            Some((node, socket)) => (Some(node), Some(socket)),
+            Some((node, socket)) => (Some(node.to_owned()), Some(socket.to_owned())),
             None => (None, None),
         };
-        self.call(
-            "place_free",
-            json!({
-                "venueId": venue_id,
-                "kind": kind,
-                "catalogRef": catalog_ref,
-                "label": label,
-                "surfaceNodeId": surface_node_id,
-                "surfaceSocket": surface_socket,
-                "mySocket": my_socket,
-                "u": seat.u,
-                "v": seat.v,
-                "yaw": seat.yaw,
-                "trim": seat.trim,
+        let (venue_id, kind, my_socket) =
+            (venue_id.to_owned(), kind.to_owned(), my_socket.to_owned());
+        let (catalog_ref, label) = (catalog_ref.map(str::to_owned), label.map(str::to_owned));
+        self.call("place_free", move |services| async move {
+            handlers::stage::place_free(
+                &services,
+                venue_id,
+                kind,
+                catalog_ref,
+                label,
+                surface_node_id,
+                surface_socket,
+                Some(my_socket),
+                seat.u,
+                seat.v,
+                Some(seat.yaw),
+                Some(seat.trim),
                 // The generator's own vocabulary — a scrubbed span, a hinge's
                 // angle — travels with the piece whichever way it is put down.
                 // Dropping it here made a free placement silently forget the
                 // length the operator had just set, which is the same params
                 // `attach` carries.
-                "params": params,
-            }),
-        )
+                Some(params),
+            )
+            .await
+        })
     }
 
     /// Write down a far end: this socket meets that one. A check, never an
@@ -2519,16 +2587,23 @@ impl Library {
         target_node: &str,
         target_socket: &str,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "constrain",
-            json!({
-                "venueId": venue_id,
-                "nodeId": node_id,
-                "mySocket": my_socket,
-                "targetNode": target_node,
-                "targetSocket": target_socket,
-            }),
-        )
+        let (venue_id, node_id, my_socket) = (
+            venue_id.to_owned(),
+            node_id.to_owned(),
+            my_socket.to_owned(),
+        );
+        let (target_node, target_socket) = (target_node.to_owned(), target_socket.to_owned());
+        self.call("constrain", |services| async move {
+            handlers::stage::constrain(
+                &services,
+                venue_id,
+                node_id,
+                my_socket,
+                target_node,
+                target_socket,
+            )
+            .await
+        })
     }
 
     /// Merge parameters into a node, and optionally rename it. `yaw` is
@@ -2540,15 +2615,14 @@ impl Library {
         params: BTreeMap<String, f64>,
         label: Option<&str>,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "set_params",
-            json!({
-                "venueId": venue_id,
-                "nodeId": node_id,
-                "params": params,
-                "label": label,
-            }),
-        )
+        let (venue_id, node_id, label) = (
+            venue_id.to_owned(),
+            node_id.to_owned(),
+            label.map(str::to_owned),
+        );
+        self.call("set_params", |services| async move {
+            handlers::stage::set_params(&services, venue_id, node_id, params, label).await
+        })
     }
 
     /// Run a stick out of an open socket, along the way it faces. `length_m`
@@ -2561,15 +2635,11 @@ impl Library {
         socket: &str,
         length_m: Option<f64>,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "extend",
-            json!({
-                "venueId": venue_id,
-                "nodeId": node_id,
-                "socket": socket,
-                "lengthM": length_m,
-            }),
-        )
+        let (venue_id, node_id, socket) =
+            (venue_id.to_owned(), node_id.to_owned(), socket.to_owned());
+        self.call("extend", move |services| async move {
+            handlers::stage::extend(&services, venue_id, node_id, socket, length_m).await
+        })
     }
 
     /// What a run out of this socket would meet, and the buildable gap to it.
@@ -2583,10 +2653,11 @@ impl Library {
         node_id: &str,
         socket: &str,
     ) -> impl Future<Output = Result<Option<Reach>, LibraryError>> + use<> {
-        self.call(
-            "extend_reach",
-            json!({ "venueId": venue_id, "nodeId": node_id, "socket": socket }),
-        )
+        let (venue_id, node_id, socket) =
+            (venue_id.to_owned(), node_id.to_owned(), socket.to_owned());
+        self.call("extend_reach", |services| async move {
+            handlers::stage::extend_reach(&services, venue_id, node_id, socket).await
+        })
     }
 
     /// Copy a subtree onto another socket, optionally mirrored.
@@ -2598,16 +2669,19 @@ impl Library {
         their_socket: &str,
         flip: bool,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "duplicate",
-            json!({
-                "venueId": venue_id,
-                "nodeId": node_id,
-                "parentId": parent_id,
-                "theirSocket": their_socket,
-                "flip": flip,
-            }),
-        )
+        let (venue_id, node_id) = (venue_id.to_owned(), node_id.to_owned());
+        let (parent_id, their_socket) = (parent_id.to_owned(), their_socket.to_owned());
+        self.call("duplicate", move |services| async move {
+            handlers::stage::duplicate(
+                &services,
+                venue_id,
+                node_id,
+                parent_id,
+                their_socket,
+                Some(flip),
+            )
+            .await
+        })
     }
 
     /// Delete a node and everything hanging off it.
@@ -2616,10 +2690,10 @@ impl Library {
         venue_id: &str,
         node_id: &str,
     ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
-        self.call(
-            "delete_subtree",
-            json!({ "venueId": venue_id, "nodeId": node_id }),
-        )
+        let (venue_id, node_id) = (venue_id.to_owned(), node_id.to_owned());
+        self.call("delete_subtree", |services| async move {
+            handlers::stage::delete_subtree(&services, venue_id, node_id).await
+        })
     }
 
     /// Replace the venue's graph and patch with a snapshot of themselves —
@@ -2631,10 +2705,10 @@ impl Library {
         rows: &VenueGraphRows,
         patch: &[PatchedFixture],
     ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
-        self.call(
-            "restore_graph",
-            json!({ "venueId": venue_id, "rows": rows, "patch": patch }),
-        )
+        let (venue_id, rows, patch) = (venue_id.to_owned(), rows.clone(), patch.to_vec());
+        self.call("restore_graph", |services| async move {
+            handlers::stage::restore_graph(&services, venue_id, rows, patch).await
+        })
     }
 
     /// One command, one transaction: place, name, group and patch a row of
@@ -2651,22 +2725,25 @@ impl Library {
         label_prefix: Option<&str>,
     ) -> impl Future<Output = Result<DistributeReport, LibraryError>> + use<> {
         let (host_node_id, host_socket) = match host {
-            Some((node, socket)) => (Some(node), Some(socket)),
+            Some((node, socket)) => (Some(node.to_owned()), Some(socket.to_owned())),
             None => (None, None),
         };
-        self.call(
-            "distribute",
-            json!({
-                "venueId": venue_id,
-                "hostNodeId": host_node_id,
-                "hostSocket": host_socket,
-                "fixturePath": fixture_path,
-                "modeName": mode_name,
-                "count": count,
-                "layout": layout,
-                "labelPrefix": label_prefix,
-            }),
-        )
+        let (venue_id, fixture_path) = (venue_id.to_owned(), fixture_path.to_owned());
+        let (mode_name, label_prefix) = (mode_name.to_owned(), label_prefix.map(str::to_owned));
+        self.call("distribute", move |services| async move {
+            handlers::distribute::distribute(
+                &services,
+                venue_id,
+                host_node_id,
+                host_socket,
+                fixture_path,
+                mode_name,
+                count,
+                layout,
+                label_prefix,
+            )
+            .await
+        })
     }
 
     /// Re-lay the row `member_node_id` belongs to at a new count or layout.
@@ -2679,15 +2756,11 @@ impl Library {
         count: usize,
         layout: DistributeLayout,
     ) -> impl Future<Output = Result<DistributeReport, LibraryError>> + use<> {
-        self.call(
-            "redistribute",
-            json!({
-                "venueId": venue_id,
-                "memberNodeId": member_node_id,
-                "count": count,
-                "layout": layout,
-            }),
-        )
+        let (venue_id, member_node_id) = (venue_id.to_owned(), member_node_id.to_owned());
+        self.call("redistribute", move |services| async move {
+            handlers::distribute::redistribute(&services, venue_id, member_node_id, count, layout)
+                .await
+        })
     }
 
     /// The installed scene evaluated at one absolute track time, or `None`
@@ -2716,10 +2789,12 @@ impl Library {
     /// frame took too long, and a report that made the next frame wait on a
     /// file write would be reporting on a hitch it had just widened. The
     /// command is spawned on the Tokio runtime before this returns (see
-    /// [`Self::call_after`]), so dropping the future still runs it — and a
+    /// [`Self::task`]), so dropping the future still runs it — and a
     /// telemetry write that fails is not a fact any screen should act on.
     pub fn record_telemetry(&self, entry: Value) {
-        drop(self.call::<()>("append_render_telemetry", json!({ "entry": entry })));
+        drop(self.call("append_render_telemetry", |services| async move {
+            handlers::telemetry::append_render_telemetry(&services, entry).await
+        }));
     }
 
     /// Where the transport is, right now, in track seconds. Synchronous for
@@ -2756,19 +2831,28 @@ impl Library {
     /// with a blank column — and a page that orchestrated six calls would
     /// be a page that knew which of them depend on each other.
     pub fn patch_data(&self, venue_id: &str) -> impl Future<Output = Result<Patch, LibraryError>> {
-        let services = self.services.clone();
-        let venue = json!({ "venueId": venue_id });
-        let task = self.runtime().spawn(async move {
-            let fixtures: Vec<PatchedFixture> =
-                command(&services, "get_patched_fixtures", &venue).await?;
-            let groups: Vec<GroupTreeNode> = command(&services, "list_group_tree", &venue).await?;
+        let venue_id = venue_id.to_owned();
+        self.task("get_patched_fixtures", |services| async move {
+            let fixtures = handlers::fixtures::get_patched_fixtures(&services, venue_id.clone())
+                .await
+                .map_err(refused("get_patched_fixtures"))?;
+            let groups = handlers::groups::list_group_tree(&services, venue_id.clone())
+                .await
+                .map_err(refused("list_group_tree"))?;
             let (missing, missing_error) =
-                match command(&services, "missing_venue_groups", &venue).await {
+                match handlers::group_references::missing_venue_groups(&services, venue_id.clone())
+                    .await
+                    .map_err(refused("missing_venue_groups"))
+                {
                     Ok(missing) => (missing, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 };
-            let universes: Vec<u16> = command(&services, "universes_in_use", &venue).await?;
-            let routes: Vec<DmxRoute> = command(&services, "list_routes", &json!({})).await?;
+            let universes = handlers::fixtures::universes_in_use(&services, venue_id)
+                .await
+                .map_err(refused("universes_in_use"))?;
+            let routes = handlers::output::list_routes(&services)
+                .await
+                .map_err(refused("list_routes"))?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -2778,17 +2862,13 @@ impl Library {
                 // A venue outliving its bundle leaves that fixture without a
                 // mode list rather than taking the page down — same contract
                 // as `venue_rig`.
-                if let Ok(def) = command(
-                    &services,
-                    "get_fixture_definition",
-                    &json!({ "path": path }),
-                )
-                .await
+                if let Ok(def) =
+                    handlers::fixtures::get_fixture_definition(&services, path.clone()).await
                 {
                     definitions.insert(path, def);
                 }
             }
-            Ok::<_, LibraryError>(Patch {
+            Ok(Patch {
                 fixtures,
                 definitions,
                 groups,
@@ -2797,12 +2877,7 @@ impl Library {
                 universes,
                 routes,
             })
-        });
-        async move {
-            task.await.map_err(|e| {
-                LibraryError::at("get_patched_fixtures", Cause::Cancelled(e.to_string()))
-            })?
-        }
+        })
     }
 
     /// One universe as 512 cells — what the footprint strip draws, collisions
@@ -2812,10 +2887,10 @@ impl Library {
         venue_id: &str,
         universe: u16,
     ) -> impl Future<Output = Result<Vec<UniverseCell>, LibraryError>> + use<> {
-        self.call(
-            "universe_occupancy",
-            json!({ "venueId": venue_id, "universe": universe }),
-        )
+        let venue_id = venue_id.to_owned();
+        self.call("universe_occupancy", move |services| async move {
+            handlers::fixtures::universe_occupancy(&services, venue_id, i64::from(universe)).await
+        })
     }
 
     /// Put one fixture at a hand-chosen address, and pin it there. A collision
@@ -2828,10 +2903,11 @@ impl Library {
         universe: i64,
         address: i64,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "set_fixture_address",
-            json!({ "venueId": venue_id, "id": id, "universe": universe, "address": address }),
-        )
+        let (venue_id, id) = (venue_id.to_owned(), id.to_owned());
+        self.call("set_fixture_address", move |services| async move {
+            handlers::fixtures::set_fixture_address(&services, venue_id, id, universe, address)
+                .await
+        })
     }
 
     /// Repatch one fixture into another of its definition's modes.
@@ -2846,13 +2922,11 @@ impl Library {
         mode_name: &str,
         allow_move: bool,
     ) -> impl Future<Output = Result<PatchedFixture, LibraryError>> + use<> {
-        self.call(
-            "set_fixture_mode",
-            json!({
-                "venueId": venue_id, "id": id,
-                "modeName": mode_name, "allowMove": allow_move,
-            }),
-        )
+        let (venue_id, id, mode_name) = (venue_id.to_owned(), id.to_owned(), mode_name.to_owned());
+        self.call("set_fixture_mode", move |services| async move {
+            handlers::fixtures::set_fixture_mode(&services, venue_id, id, mode_name, allow_move)
+                .await
+        })
     }
 
     /// Hold one address against auto-patch, or release it.
@@ -2862,10 +2936,10 @@ impl Library {
         id: &str,
         pinned: bool,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "set_address_pinned",
-            json!({ "venueId": venue_id, "id": id, "pinned": pinned }),
-        )
+        let (venue_id, id) = (venue_id.to_owned(), id.to_owned());
+        self.call("set_address_pinned", move |services| async move {
+            handlers::fixtures::set_address_pinned(&services, venue_id, id, pinned).await
+        })
     }
 
     pub fn rename_patched_fixture(
@@ -2874,10 +2948,10 @@ impl Library {
         id: &str,
         label: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "rename_patched_fixture",
-            json!({ "venueId": venue_id, "id": id, "label": label }),
-        )
+        let (venue_id, id, label) = (venue_id.to_owned(), id.to_owned(), label.to_owned());
+        self.call("rename_patched_fixture", |services| async move {
+            handlers::fixtures::rename_patched_fixture(&services, venue_id, id, label).await
+        })
     }
 
     /// Unpatch: the paperwork and the node in the room, together.
@@ -2886,10 +2960,10 @@ impl Library {
         venue_id: &str,
         id: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "remove_patched_fixture",
-            json!({ "venueId": venue_id, "id": id }),
-        )
+        let (venue_id, id) = (venue_id.to_owned(), id.to_owned());
+        self.call("remove_patched_fixture", |services| async move {
+            handlers::fixtures::remove_patched_fixture(&services, venue_id, id).await
+        })
     }
 
     /// Re-derive every address from where the fixtures hang, discarding the
@@ -2898,7 +2972,10 @@ impl Library {
         &self,
         venue_id: &str,
     ) -> impl Future<Output = Result<AutoPatchReport, LibraryError>> + use<> {
-        self.call("auto_patch", json!({ "venueId": venue_id }))
+        let venue_id = venue_id.to_owned();
+        self.call("auto_patch", |services| async move {
+            handlers::fixtures::auto_patch(&services, venue_id).await
+        })
     }
 
     // -- outputs --------------------------------------------------------------
@@ -2909,7 +2986,9 @@ impl Library {
     pub fn output_devices(
         &self,
     ) -> impl Future<Output = Result<Vec<OutputDevice>, LibraryError>> + use<> {
-        self.call("list_output_devices", json!({}))
+        self.call("list_output_devices", |services| async move {
+            handlers::output::list_output_devices(&services).await
+        })
     }
 
     /// Send one universe to one port of a device, alongside wherever it
@@ -2920,62 +2999,92 @@ impl Library {
         device: &OutputDevice,
         port: &OutputPort,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "bind_route",
-            json!({
-                "universe": universe,
-                "deviceKind": device.kind,
-                "deviceId": device.id,
-                "port": port.port,
-                "deviceName": device.name,
-                "address": device.address,
-            }),
-        )
+        let (device_kind, device_id, port) = (device.kind, device.id.clone(), port.port);
+        let (device_name, address) = (Some(device.name.clone()), Some(device.address.clone()));
+        self.call("bind_route", move |services| async move {
+            handlers::output::bind_route(
+                &services,
+                universe,
+                device_kind,
+                device_id,
+                port,
+                device_name,
+                address,
+            )
+            .await
+        })
     }
 
     pub fn unbind_route(
         &self,
         route: &DmxRoute,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "unbind_route",
-            json!({
-                "universe": route.universe,
-                "deviceKind": route.device_kind,
-                "deviceId": route.device_id,
-                "port": route.port,
-            }),
-        )
+        let (universe, device_kind, port) = (route.universe, route.device_kind, route.port);
+        let device_id = route.device_id.clone();
+        self.call("unbind_route", move |services| async move {
+            handlers::output::unbind_route(&services, universe, device_kind, device_id, port).await
+        })
     }
 
-    /// Run one command on the Tokio runtime and decode its result.
+    /// Run one command on the Tokio runtime: `run` calls its handler against
+    /// the services it is handed, and `command` is the wire name a failure
+    /// is reported under.
     ///
     /// The returned future is detached from `&self` so a caller can hold it
     /// across a GPUI task boundary without borrowing the `Library`.
-    fn call<T: DeserializeOwned + Send + 'static>(
+    fn call<T, F, Fut>(
         &self,
-        name: &'static str,
-        args: Value,
-    ) -> impl Future<Output = Result<T, LibraryError>> + use<T> {
-        self.call_after(name, args, Duration::ZERO)
+        command: &'static str,
+        run: F,
+    ) -> impl Future<Output = Result<T, LibraryError>> + use<T, F, Fut>
+    where
+        T: Send + 'static,
+        F: FnOnce(SharedServices) -> Fut,
+        Fut: Future<Output = Result<T, CommandError>> + Send + 'static,
+    {
+        self.call_after(command, Duration::ZERO, run)
     }
 
     /// [`Self::call`], `after` a wait on the Tokio runtime. The wait is here
     /// rather than at the call site because this runtime is the one this
     /// process has real timers on — see [`Self::transport_after`].
-    fn call_after<T: DeserializeOwned + Send + 'static>(
+    fn call_after<T, F, Fut>(
+        &self,
+        command: &'static str,
+        after: Duration,
+        run: F,
+    ) -> impl Future<Output = Result<T, LibraryError>> + use<T, F, Fut>
+    where
+        T: Send + 'static,
+        F: FnOnce(SharedServices) -> Fut,
+        Fut: Future<Output = Result<T, CommandError>> + Send + 'static,
+    {
+        self.task(command, move |services| {
+            let pending = run(services);
+            async move {
+                if !after.is_zero() {
+                    tokio::time::sleep(after).await;
+                }
+                pending.await.map_err(refused(command))
+            }
+        })
+    }
+
+    /// Work on the Tokio runtime, started before this returns. What
+    /// [`Self::call`] runs on, and what a method whose commands depend on
+    /// each other uses directly: every command inside names its own failure
+    /// with [`refused`], and `name` is what a cancelled task reports.
+    fn task<T, F, Fut>(
         &self,
         name: &'static str,
-        args: Value,
-        after: Duration,
-    ) -> impl Future<Output = Result<T, LibraryError>> + use<T> {
-        let services = self.services.clone();
-        let task = self.runtime().spawn(async move {
-            if !after.is_zero() {
-                tokio::time::sleep(after).await;
-            }
-            command(&services, name, &args).await
-        });
+        work: F,
+    ) -> impl Future<Output = Result<T, LibraryError>> + use<T, F, Fut>
+    where
+        T: Send + 'static,
+        F: FnOnce(SharedServices) -> Fut,
+        Fut: Future<Output = Result<T, LibraryError>> + Send + 'static,
+    {
+        let task = self.runtime().spawn(work(self.services.clone()));
         async move {
             task.await
                 .map_err(|error| LibraryError::at(name, Cause::Cancelled(error.to_string())))?
@@ -2983,19 +3092,9 @@ impl Library {
     }
 }
 
-/// One dispatched command, decoded. The step [`Library::call_after`] and
-/// [`Library::venue_rig`] share — the latter runs several of these in one task
-/// because each depends on the last.
-async fn command<T: DeserializeOwned>(
-    services: &AppServices,
-    name: &'static str,
-    args: &Value,
-) -> Result<T, LibraryError> {
-    let value: Value = dispatch(services, name, args)
-        .await
-        .map_err(|error| LibraryError::at(name, Cause::Command(error)))?;
-    serde_json::from_value(value)
-        .map_err(|error| LibraryError::at(name, Cause::Shape(error.to_string())))
+/// A command's refusal, as the [`LibraryError`] that names it.
+fn refused(command: &'static str) -> impl FnOnce(CommandError) -> LibraryError {
+    move |error| LibraryError::at(command, Cause::Command(error))
 }
 
 /// One venue's paperwork, as [`Library::patch_data`] resolves it.

@@ -4528,7 +4528,7 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                pad: 0,
+                nearest: false.into(),
                 grayscale: false.into(),
                 bounds,
                 corner_radii: Default::default(),
@@ -4700,7 +4700,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            pad: 0,
+            nearest: data.nearest.into(),
             grayscale: grayscale.into(),
             bounds: visible_bounds_snapped,
             content_mask,

@@ -148,7 +148,10 @@ pub(super) fn prepaint(
     if duration <= 0. {
         return;
     }
-    let margin = (editor.view.zoom * scale * 0.1).ceil().clamp(64., 2048.) as u32;
+    // A screen's width each side, so a fast scroll stays inside the strip
+    // while the next one renders. A margin in seconds was a few pixels when
+    // zoomed out, and the strip was rendered again nearly every frame.
+    let margin = width.min(gpu.max_width().saturating_sub(width) / 2);
     let color = |c: Rgba| [c.r, c.g, c.b, c.a];
     let camera = (!overview && editor.follow && editor.transport.playing)
         .then_some((editor.view, editor.transport.position));

@@ -632,6 +632,12 @@ pub(crate) struct Visualizer {
     stage: Rc<RefCell<Stage>>,
 }
 
+/// The renderer's first asset library, loading off the UI thread.
+enum Warming {
+    Loading,
+    Ready(assets::Library),
+}
+
 /// Everything that outlives a frame and must be reachable from a `'static`
 /// paint closure.
 #[derive(Default)]
@@ -646,6 +652,10 @@ struct Stage {
     /// Acquired lazily on the first frame that has something to draw — see
     /// [`Visualizer::gpu_ready`].
     gpu: Option<Gpu>,
+    /// The rig's meshes, floor and sky, read and decoded off the UI thread
+    /// for the renderer's first frame, which waits for them. `None` once the
+    /// renderer has them, or when it already had a library of its own.
+    assets: Option<Warming>,
     /// What the previous frame painted, released only once the next one is on
     /// screen: an atlas entry dropped early leaves the view blank for a frame,
     /// and a shared surface released early is memory the compositor is still
@@ -1400,6 +1410,20 @@ fn clamp_render_scale(percent: i64) -> u8 {
     ) as u8
 }
 
+/// The builder's catalog: the same supply the backend solves with, fixture
+/// bundle included. A builder that could not measure a housing would preview
+/// every light half-buried in the truss it is being dropped on.
+fn load_sockets() -> Option<luma_render::catalog::VenueSockets> {
+    let fixtures_root = crate::library::fixtures_root().ok();
+    luma_render::catalog::VenueSockets::load(
+        stage_render::meshes_root(fixtures_root.as_deref()),
+        std::sync::Arc::new(luma_lib::venue_graph::BundledFixtures(
+            fixtures_root.unwrap_or_default(),
+        )),
+    )
+    .ok()
+}
+
 impl Visualizer {
     /// Open the view on a venue and start its load.
     ///
@@ -1427,6 +1451,9 @@ impl Visualizer {
             .clone()
             .map(|lit| (library.composite_score(&lit.score), lit));
         let venue = venue_id.to_string();
+        // The builder's catalog reads every mesh it measures from disk, so it
+        // loads off the UI thread while the rig does.
+        let sockets = cx.background_spawn(async { load_sockets() });
         cx.spawn(async move |this, cx| {
             // The composite first: it is what makes the sample non-empty, and
             // a rig that appeared before its light would flash dark.
@@ -1437,30 +1464,51 @@ impl Visualizer {
                 }
             }
             let loaded = rig.await;
+            let sockets = sockets.await;
             // Defaulted rather than surfaced: a settings read that failed still
             // has to leave a drawable viewport, and `AppSettings::default` is
             // exactly the chrome this app has always opened with.
             let settings = settings.await.unwrap_or_default();
+            let warm = this
+                .update(cx, |this, cx| {
+                    // Addressed to the room, not merely to whatever stage is up: a
+                    // rig landing after the eye moved to another venue must not
+                    // paint into the stage that replaced it.
+                    let Some(state) = this.visualizer.as_mut().filter(|it| it.venue_id == venue)
+                    else {
+                        return None;
+                    };
+                    state.composite_landed(installed);
+                    state.rig_loaded(loaded, sockets);
+                    state.render_controls.grid_enabled = settings.stage_grid;
+                    state.render_controls.gizmos_enabled = settings.stage_gizmos;
+                    state.render_controls.render_scale_percent =
+                        clamp_render_scale(i64::from(settings.render_scale));
+                    state.render_controls.look = stored_look(&settings.stage_look);
+                    state.render_controls.quality = if settings.stage_low_quality {
+                        scene_desc::Quality::Low
+                    } else {
+                        scene_desc::Quality::High
+                    };
+                    cx.notify();
+                    state.warm_assets()
+                })
+                .ok()
+                .flatten();
+            let Some(warm) = warm else {
+                return;
+            };
+            let warmed = cx.background_spawn(warm).await;
             this.update(cx, |this, cx| {
-                // Addressed to the room, not merely to whatever stage is up: a
-                // rig landing after the eye moved to another venue must not
-                // paint into the stage that replaced it.
                 let Some(state) = this.visualizer.as_mut().filter(|it| it.venue_id == venue) else {
                     return;
                 };
-                state.composite_landed(installed);
-                state.rig_loaded(loaded);
-                state.render_controls.grid_enabled = settings.stage_grid;
-                state.render_controls.gizmos_enabled = settings.stage_gizmos;
-                state.render_controls.render_scale_percent =
-                    clamp_render_scale(i64::from(settings.render_scale));
-                state.render_controls.look = stored_look(&settings.stage_look);
-                state.render_controls.quality = if settings.stage_low_quality {
-                    scene_desc::Quality::Low
-                } else {
-                    scene_desc::Quality::High
-                };
-                cx.notify();
+                let mut stage = state.stage.borrow_mut();
+                if matches!(stage.assets, Some(Warming::Loading)) {
+                    stage.assets = Some(Warming::Ready(warmed));
+                    drop(stage);
+                    this.notify_stage(cx);
+                }
             })
             .ok();
         })
@@ -1592,13 +1640,35 @@ impl Visualizer {
         }
     }
 
+    /// Read and decode everything the rig's first frame draws — meshes,
+    /// floor, sky — on a worker, by building that frame there once. The
+    /// renderer waits for it; a renderer already running has its own library.
+    fn warm_assets(
+        &mut self,
+    ) -> Option<impl std::future::Future<Output = assets::Library> + use<>> {
+        let mut stage = self.stage.borrow_mut();
+        if !self.gpu_enabled || stage.gpu.is_some() || stage.assets.is_some() {
+            return None;
+        }
+        let scene = stage.scene.clone()?;
+        let definitions = stage.definitions.clone();
+        stage.assets = Some(Warming::Loading);
+        Some(async move {
+            let mut assets = assets::Library::new(stage_render::meshes_root(None));
+            // A frame that fails here fails the same way on the stage, which
+            // says so; this one only loads.
+            let _ = luma_render::build_frame(&scene, &definitions, 0.0, &mut assets);
+            assets
+        })
+    }
+
     /// A rig re-read after a graph edit. The camera stays where the operator
     /// left it — a builder that re-framed on every placement would throw the
     /// view away once per piece.
     pub(crate) fn rig_reloaded(&mut self, loaded: Result<Rig, LibraryError>) {
         let framing = self.framing.clone();
         let camera = self.camera;
-        self.rig_loaded(loaded);
+        self.rig_loaded(loaded, None);
         self.framing = framing;
         self.camera = camera;
         self.owes_opening_pose = false;
@@ -1624,7 +1694,13 @@ impl Visualizer {
         self.saved_pose = pose;
     }
 
-    fn rig_loaded(&mut self, loaded: Result<Rig, LibraryError>) {
+    /// `sockets` is the builder's catalog, when it was loaded ahead; without
+    /// it, a stage with no builder yet loads one here.
+    fn rig_loaded(
+        &mut self,
+        loaded: Result<Rig, LibraryError>,
+        sockets: Option<luma_render::catalog::VenueSockets>,
+    ) {
         let rig = match loaded {
             Ok(rig) => rig,
             Err(error) => {
@@ -1639,19 +1715,9 @@ impl Visualizer {
         match self.build.as_mut() {
             Some(build) => build.adopt(&rig),
             None => {
-                // The same supply the backend solves with, fixture bundle
-                // included: a builder that could not measure a housing would
-                // preview every light half-buried in the truss it is being
-                // dropped on.
-                let fixtures_root = crate::library::fixtures_root().ok();
-                self.build = luma_render::catalog::VenueSockets::load(
-                    stage_render::meshes_root(fixtures_root.as_deref()),
-                    std::sync::Arc::new(luma_lib::venue_graph::BundledFixtures(
-                        fixtures_root.unwrap_or_default(),
-                    )),
-                )
-                .ok()
-                .and_then(|sockets| crate::stage::Build::new(&self.venue_id, &rig, sockets));
+                self.build = sockets
+                    .or_else(load_sockets)
+                    .and_then(|sockets| crate::stage::Build::new(&self.venue_id, &rig, sockets));
             }
         }
         // No early return for an empty rig. A venue with nothing in it is
@@ -1716,11 +1782,16 @@ impl Visualizer {
         if self.stage.borrow().gpu.is_some() {
             return true;
         }
-        self.stage.borrow_mut().gpu = Some(Gpu {
+        let mut stage = self.stage.borrow_mut();
+        let assets = match stage.assets.take() {
+            Some(Warming::Ready(assets)) => assets,
+            _ => assets::Library::new(stage_render::meshes_root(None)),
+        };
+        stage.gpu = Some(Gpu {
             viewport: AsyncViewport::new(),
             work: StageWork::default(),
             submission: Submission::default(),
-            assets: assets::Library::new(stage_render::meshes_root(None)),
+            assets,
             picks: PickTimeline::default(),
             pick_cache: PickCache::default(),
             exported: None,
@@ -4893,11 +4964,13 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     }
     if matches!(state.status, Status::Empty(_))
         || state.stage.borrow().scene.is_none()
+        || matches!(state.stage.borrow().assets, Some(Warming::Loading))
         || !state.gpu_ready()
     {
         return plate(match &state.status {
             Status::Loading => "Loading the rig…".to_string(),
             Status::Empty(why) => why.clone(),
+            Status::Live if state.stage.borrow().assets.is_some() => "Loading the rig…".to_string(),
             Status::Live => "Nothing to draw".to_string(),
         });
     }

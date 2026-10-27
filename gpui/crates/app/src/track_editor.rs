@@ -41,12 +41,12 @@
 //!
 //! # Clip bodies are heatmap previews
 //!
-//! A clip's body carries its pattern's space-time heatmap, rendered one clip at a
-//! time through `preview_score_clip` after each committed edit, coalesced per
-//! clip so a burst of writes costs one trailing render. The seam hands back a tiny
-//! RGBA grid (a column per sixteenth-beat, a row per primitive); it is baked
-//! once into a block-per-cell image the GPU stretches over the body at any
-//! zoom — see [`bake`] and [`paint_preview`]. Previews are decoration: a track whose patterns
+//! A clip's body carries its pattern's space-time heatmap, rendered through
+//! `preview_score_clips` after each committed edit, coalesced per clip so a
+//! burst of writes costs one trailing render. The seam hands back a tiny
+//! RGBA grid (a column per sixteenth-beat, a row per primitive); the GPU
+//! stretches it over the body at any zoom, a cell a block — see [`bake`] and
+//! [`paint_preview`]. Previews are decoration: a track whose patterns
 //! have no graphs simply keeps the flat translucent fill, and so does any
 //! clip too narrow to read.
 //!
@@ -350,11 +350,11 @@ enum Preview {
 }
 
 impl Preview {
-    /// A seam row, baked under `identity` when one is given, else under a
-    /// fresh one. `None` for a heatmap that is not `width * height` of RGBA:
-    /// a seam drift this painter cannot draw, and skipping it leaves the flat
-    /// fill, which is already what a missing preview means.
-    fn decode(row: AnnotationPreview, identity: Option<ImageId>) -> Option<Self> {
+    /// A seam row, baked under a fresh identity. `None` for a heatmap that is
+    /// not `width * height` of RGBA: a seam drift this painter cannot draw,
+    /// and skipping it leaves the flat fill, which is already what a missing
+    /// preview means.
+    fn decode(row: AnnotationPreview) -> Option<Self> {
         if let Some(curves) = row.aim {
             return Some(Self::Aim(Arc::new(curves)));
         }
@@ -364,11 +364,11 @@ impl Preview {
         {
             return None;
         }
-        let mut image = bake(row.width, row.height, &row.pixels);
-        if let Some(id) = identity {
-            image.id = id;
-        }
-        Some(Self::Heatmap(Arc::new(image)))
+        Some(Self::Heatmap(Arc::new(bake(
+            row.width,
+            row.height,
+            &row.pixels,
+        ))))
     }
 
     /// Stretch the heatmap over `body`, or stroke the curves across it, as
@@ -379,9 +379,8 @@ impl Preview {
     /// when there is nothing to draw — a body too narrow to read (under 8px
     /// the heatmap is noise), or too short for the curves.
     ///
-    /// One `paint_image` of the whole body, whatever the zoom: the picture
-    /// was baked at [`CELL_TEXELS`] a cell when it arrived, and the GPU does
-    /// the stretching from there. A clip that runs off the canvas is masked
+    /// One `paint_image` of the whole body, whatever the zoom: the GPU
+    /// stretches the grid, a cell a block. A clip that runs off the canvas is masked
     /// by the lane band around this call, not trimmed here.
     fn paint(
         &self,
@@ -1379,9 +1378,8 @@ impl Editor {
     }
 
     /// Adopt one clip's re-rendered preview — `preview_annotation`'s answer.
-    fn install_preview(&mut self, row: AnnotationPreview) {
+    fn install_preview(&mut self, id: SharedString, preview: Option<Preview>) {
         let mut previews = self.previews.borrow_mut();
-        let id: SharedString = row.annotation_id.clone().into();
         let identity = match previews.remove(&id) {
             Some(Installed {
                 preview: Preview::Heatmap(image),
@@ -1389,7 +1387,12 @@ impl Editor {
             }) => Some(image.id),
             _ => None,
         };
-        if let Some(preview) = Preview::decode(row, identity) {
+        if let Some(mut preview) = preview {
+            // A re-render keeps the clip's atlas identity, so the atlas
+            // refreshes the tile in place.
+            if let (Preview::Heatmap(image), Some(identity)) = (&mut preview, identity) {
+                Arc::get_mut(image).expect("a fresh bake").id = identity;
+            }
             previews.insert(
                 id,
                 Installed {
@@ -1988,7 +1991,12 @@ impl Luma {
             let waveform = waveform.await;
             let beats = beats.await;
             let validation = validation.await;
-            let contents = contents.await;
+            let contents = match contents.await {
+                Ok(contents) => Ok(cx
+                    .background_spawn(async move { document::Resolved::of(contents) })
+                    .await),
+                Err(error) => Err(error),
+            };
 
             this.update(cx, |this, cx| {
                 // Addressed to the tab the load was started for, not to
@@ -2027,13 +2035,13 @@ impl Luma {
     fn install_score(
         &mut self,
         target: Target,
-        contents: Result<crate::library::ScoreContents, LibraryError>,
+        contents: Result<document::Resolved, LibraryError>,
         cx: &mut Context<Self>,
     ) {
         let mut previews = Vec::new();
         let mut split = false;
         self.edit_track_tab(&target, cx, |editor| match contents {
-            Ok(contents) => match editor.install_contents(contents) {
+            Ok(resolved) => match editor.install_contents(resolved) {
                 Ok(()) => {
                     previews = editor.clips.iter().map(|clip| clip.id.clone()).collect();
                     split = editor.dirty;
@@ -2042,9 +2050,7 @@ impl Luma {
             },
             Err(error) => editor.error = Some(error.to_string()),
         });
-        for id in previews {
-            self.refresh_clip_preview_for(target.clone(), id, cx);
-        }
+        self.refresh_clip_previews_for(target.clone(), previews, cx);
         self.refresh_working_scene_for(&target, cx);
         if split {
             self.commit_graph_score_for(target, cx);
@@ -2757,9 +2763,7 @@ impl Luma {
         if let Some(seconds) = flush {
             self.seek(seconds, cx);
         }
-        for id in touched {
-            self.refresh_clip_preview(id, cx);
-        }
+        self.refresh_clip_previews(touched, cx);
         if save {
             self.commit_clips(cx);
         }
@@ -2781,7 +2785,7 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         let reduced_motion = cx.reduce_motion();
-        self.with_track_editor(cx, |editor| {
+        self.with_timeline_view(cx, |editor| {
             let canvas = editor.canvas.get();
             let offset = f32::from(at.x - canvas.origin.x);
             let rate = match wheel {
@@ -2895,87 +2899,144 @@ impl Luma {
         self.commit_graph_score_for(target, cx);
     }
 
-    /// Run `edit` against the track editor, if that is still what is showing.
-    /// A load or a write that lands after the user navigated away is a no-op.
-    /// Re-render one clip's heatmap from the working copy's row.
+    /// Re-render clips' heatmaps from the working copy's rows.
     ///
     /// Coalesced per clip: an edit
     /// landing while this clip's render is in flight queues one trailing
     /// re-issue instead of a backlog, and because the render reads the clip's
     /// *current* state when it is issued, that one trailing render covers
     /// everything the burst did.
-    fn refresh_clip_preview(&mut self, id: SharedString, cx: &mut Context<Self>) {
+    fn refresh_clip_previews(
+        &mut self,
+        ids: impl IntoIterator<Item = SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(target) = self.workspace.active().cloned() else {
             return;
         };
-        self.refresh_clip_preview_for(target, id, cx);
+        self.refresh_clip_previews_for(target, ids, cx);
     }
 
-    fn refresh_clip_preview_for(
+    /// One call for the whole batch: the venue, the beat grid and each
+    /// selection's cells are read once however many clips ask.
+    fn refresh_clip_previews_for(
         &mut self,
         target: Target,
-        id: SharedString,
+        ids: impl IntoIterator<Item = SharedString>,
         cx: &mut Context<Self>,
     ) {
         let Some(Body::TrackEditor(state)) = self.workspace.body_mut(&target) else {
             return;
         };
-        if state.preview_inflight.contains(&id) {
-            state.preview_queued.insert(id);
-            return;
+        let mut wanted = Vec::new();
+        for id in ids {
+            if state.preview_inflight.contains(&id) {
+                state.preview_queued.insert(id);
+            } else if state.clips.iter().any(|clip| clip.id == id) {
+                // A clip deleted since the edit that asked has no body to preview.
+                wanted.push(id);
+            }
         }
-        // A clip deleted since the edit that asked has no body to preview.
-        if !state.clips.iter().any(|clip| clip.id == id) {
+        if wanted.is_empty() {
             return;
         }
         let score_id = state.score.id.clone();
         let candidate = match state.graph_candidate() {
             Ok(score) => score,
             Err(error) => {
-                state.preview_errors.insert(id, error);
+                for id in wanted {
+                    state.preview_errors.insert(id, error.clone());
+                }
                 return;
             }
         };
-        let pending = self.library.preview_score_clip(&score_id, &id, &candidate);
-        state.preview_inflight.insert(id.clone());
+        state.preview_inflight.extend(wanted.iter().cloned());
+        let pending = self.library.preview_score_clips(
+            &score_id,
+            wanted.iter().map(ToString::to_string).collect(),
+            candidate,
+        );
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                let mut again = false;
-                this.edit_track_tab(&target, cx, |editor| {
-                    if !editor.clips.iter().any(|clip| clip.id == id) {
+                let Some(Body::TrackEditor(editor)) =
+                    this.parked.body_mut(&mut this.workspace, &target)
+                else {
+                    return;
+                };
+                let shown = editor.preview_errors.is_empty();
+                let mut again = Vec::new();
+                let mut landed =
+                    |editor: &mut Editor,
+                     id: SharedString,
+                     preview: Result<AnnotationPreview, String>| {
                         editor.preview_inflight.remove(&id);
-                        editor.preview_queued.remove(&id);
-                        return;
-                    }
-                    editor.preview_inflight.remove(&id);
-                    again = editor.preview_queued.remove(&id);
-                    match result {
-                        Ok(row) => {
-                            editor.preview_errors.remove(&id);
-                            editor.install_preview(row);
+                        if editor.preview_queued.remove(&id) {
+                            again.push(id.clone());
                         }
-                        Err(error) => {
-                            editor.previews.borrow_mut().remove(&id);
-                            editor
-                                .preview_errors
-                                .insert(id.clone(), format!("Preview: {error}"));
+                        if !editor.clips.iter().any(|clip| clip.id == id) {
+                            return;
+                        }
+                        match preview {
+                            Ok(row) => {
+                                editor.preview_errors.remove(&id);
+                                editor.install_preview(id, Preview::decode(row));
+                            }
+                            Err(error) => {
+                                editor.previews.borrow_mut().remove(&id);
+                                editor
+                                    .preview_errors
+                                    .insert(id, format!("Preview: {error}"));
+                            }
+                        }
+                    };
+                match result {
+                    Ok(strips) => {
+                        for strip in strips {
+                            landed(editor, strip.clip_id.into(), strip.preview);
                         }
                     }
-                });
-                if again {
-                    this.refresh_clip_preview_for(target, id, cx);
+                    Err(error) => {
+                        for id in wanted {
+                            landed(editor, id, Err(error.to_string()));
+                        }
+                    }
                 }
+                // Pictures land on the timeline alone; an error reads out on
+                // the toolbar, which is the tab's too.
+                match editor.playback_surface.clone() {
+                    Some(surface) if shown && editor.preview_errors.is_empty() => {
+                        surface.update(cx, |_, cx| cx.notify())
+                    }
+                    _ => cx.notify(),
+                }
+                this.refresh_clip_previews_for(target, again, cx);
             })
             .ok();
         })
         .detach();
     }
 
+    /// Run `edit` against the track editor, if that is still what is showing.
+    /// A load or a write that lands after the user navigated away is a no-op.
     fn with_track_editor(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
         if let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() {
             edit(state);
             cx.notify();
+        }
+    }
+
+    /// Edit what only the timeline surface draws — where it looks, how far
+    /// in — and redraw that surface alone. A notify of the app rebuilds every
+    /// cached region in the window, once per wheel event.
+    fn with_timeline_view(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
+            return;
+        };
+        edit(state);
+        match state.playback_surface.clone() {
+            Some(surface) => surface.update(cx, |_, cx| cx.notify()),
+            None => cx.notify(),
         }
     }
 }
@@ -3752,11 +3813,6 @@ impl Scene {
         )
     }
 
-    /// One clip's box in window space.
-    fn clip_box(&self, canvas: Bounds<Pixels>, clip: &Clip) -> Bounds<Pixels> {
-        clip_bounds(self.view, self.layout(canvas), canvas, clip)
-    }
-
     fn playhead_box(&self, canvas: Bounds<Pixels>) -> Bounds<Pixels> {
         Bounds {
             origin: point(
@@ -3839,7 +3895,7 @@ fn register(scene: &Scene, canvas: Bounds<Pixels>, window: &mut Window, cx: &mut
                 );
             }
             for clip in scene.clips.iter() {
-                let box_ = scene.clip_box(canvas, clip);
+                let box_ = clip_bounds(scene.view, layout, canvas, clip);
                 // The *grabbable* extent, not the drawn one: only a clip's
                 // header bar answers the pointer, so a node covering its whole
                 // lane would send every scripted click into the inert body.
@@ -4102,7 +4158,7 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
                         continue;
                     }
                     paint_clip(
-                        scene.clip_box(bounds, clip),
+                        clip_bounds(view, layout, bounds, clip),
                         clip,
                         &scene.previews,
                         scene.selected.contains(&clip.id),
@@ -4575,7 +4631,7 @@ fn ghost_box(
     scene: &Scene,
     ghost: &sheet::DropGhost,
 ) -> Bounds<Pixels> {
-    let mut box_ = scene.clip_box(canvas, &ghost.clip);
+    let mut box_ = clip_bounds(scene.view, layout, canvas, &ghost.clip);
     if ghost.insert {
         box_.origin.y -= px(layout.lane / 2.);
     }
@@ -4752,16 +4808,6 @@ fn clip_body(box_: Bounds<Pixels>) -> Bounds<Pixels> {
     }
 }
 
-/// Texels per heatmap cell in the uploaded image, each way.
-///
-/// The sprite atlas samples linearly, so a cell drawn wider than its texels
-/// melts into its neighbours over one texel's width. Four texels a side keeps
-/// that seam under a quarter of a cell at any zoom the view allows, for
-/// sixteen times the bytes of the bare grid — a 512-column, 32-row preview
-/// (the seam's ceiling) is 1 MiB a frame, and a track's whole score is
-/// uploaded once and then only drawn.
-const CELL_TEXELS: u32 = 4;
-
 /// A clip's [`Preview`] over its body — see [`Preview::paint`] — after
 /// telling the atlas about a fresh bake under the clip's kept identity.
 fn paint_preview(
@@ -4848,45 +4894,27 @@ fn paint_aim(
     true
 }
 
-/// A seam heatmap as the two-frame [`RenderImage`] the painter draws: every
-/// cell a [`CELL_TEXELS`]-square block, frame 0 at [`BODY_ALPHA`], frame 1
-/// opaque, RGBA swapped to the BGRA the sprite atlas stores.
+/// A seam heatmap as the two-frame [`RenderImage`] the painter draws: a texel
+/// a cell, sampled nearest so every cell is a hard block at any zoom, frame 0
+/// at [`BODY_ALPHA`], frame 1 opaque, RGBA swapped to the BGRA the sprite
+/// atlas stores.
 fn bake(width: u32, height: u32, pixels: &[u8]) -> RenderImage {
-    let (texels_x, texels_y) = (width * CELL_TEXELS, height * CELL_TEXELS);
-    let row_bytes = (texels_x * 4) as usize;
-    let mut body = vec![0u8; row_bytes * texels_y as usize];
-    let mut opaque = vec![0u8; row_bytes * texels_y as usize];
-    for row in 0..height as usize {
-        // Build the block's first row, then copy it down the rest.
-        let target = row * CELL_TEXELS as usize * row_bytes;
-        for column in 0..width as usize {
-            let source = (row * width as usize + column) * 4;
-            let [r, g, b, a] = [
-                pixels[source],
-                pixels[source + 1],
-                pixels[source + 2],
-                pixels[source + 3],
-            ];
-            let faded = (f32::from(a) * BODY_ALPHA) as u8;
-            for texel in 0..CELL_TEXELS as usize {
-                let at = target + (column * CELL_TEXELS as usize + texel) * 4;
-                opaque[at..at + 4].copy_from_slice(&[b, g, r, a]);
-                body[at..at + 4].copy_from_slice(&[b, g, r, faded]);
-            }
-        }
-        for repeat in 1..CELL_TEXELS as usize {
-            let to = target + repeat * row_bytes;
-            body.copy_within(target..target + row_bytes, to);
-            opaque.copy_within(target..target + row_bytes, to);
-        }
+    let mut opaque = pixels.to_vec();
+    for pixel in opaque.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let mut body = opaque.clone();
+    for pixel in body.chunks_exact_mut(4) {
+        pixel[3] = (f32::from(pixel[3]) * BODY_ALPHA) as u8;
     }
     let frame = |bytes: Vec<u8>| {
         image::Frame::new(
-            image::RgbaImage::from_raw(texels_x, texels_y, bytes)
-                .expect("sized as texels_x * texels_y * 4 above"),
+            image::RgbaImage::from_raw(width, height, bytes).expect("sized as width * height * 4"),
         )
     };
-    RenderImage::new(vec![frame(body), frame(opaque)])
+    let mut image = RenderImage::new(vec![frame(body), frame(opaque)]);
+    image.nearest = true;
+    image
 }
 
 /// The drawn width of a selected clip's grab mark. Narrower than [`HANDLE`],

@@ -366,6 +366,11 @@ impl Waveform {
         u64::from(self.atlas.width()) * u64::from(self.atlas.height()) * 8
     }
 
+    /// The widest strip [`Waveform::render`] takes, in physical pixels.
+    pub fn max_width(&self) -> u32 {
+        self.context.device.limits().max_texture_dimension_2d
+    }
+
     /// True after device loss; the caller should reload the track on a new context.
     pub fn is_lost(&self) -> bool {
         self.context.is_lost()
