@@ -21,10 +21,11 @@ pub struct Db(pub SqlitePool);
 /// Create the directory and run every migration.
 ///
 /// Migrations run on their own connection with foreign keys off — several of
-/// them rebuild a table and would trip over their own child rows otherwise —
-/// and that connection is closed before anything else opens the file. Returns
-/// where the database is.
-async fn migrate_app_db_at(app_dir: &Path) -> Result<std::path::PathBuf, String> {
+/// them rebuild a table and would trip over their own child rows otherwise.
+/// Returns where the database is, and that connection for the caller to close
+/// once its own pool is open: the last connection to a file checkpoints it on
+/// close, which on a large library took ~100 ms of every launch.
+async fn migrate_app_db_at(app_dir: &Path) -> Result<(std::path::PathBuf, SqlitePool), String> {
     std::fs::create_dir_all(app_dir).map_err(|error| {
         format!(
             "Failed to create app config dir {}: {error}",
@@ -55,8 +56,7 @@ async fn migrate_app_db_at(app_dir: &Path) -> Result<std::path::PathBuf, String>
         .run(&migrate_pool)
         .await
         .map_err(|error| format!("Failed to run app migrations: {error}"))?;
-    migrate_pool.close().await;
-    Ok(db_path)
+    Ok((db_path, migrate_pool))
 }
 
 /// The last of the migrations `20261024000000_baseline` replaced.
@@ -140,7 +140,7 @@ async fn adopt_baseline(
 /// If the directory cannot be created, a migration fails, or the file cannot
 /// be opened.
 pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
-    let db_path = migrate_app_db_at(app_dir).await?;
+    let (db_path, migrate_pool) = migrate_app_db_at(app_dir).await?;
     let pool = SqlitePoolOptions::new()
         .max_connections(16)
         .connect_with(
@@ -157,6 +157,7 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
                 db_path.display()
             )
         })?;
+    migrate_pool.close().await;
     Ok(Db(pool))
 }
 
@@ -172,7 +173,7 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
 /// If the directory cannot be created, a migration fails, or the file cannot
 /// be opened.
 pub async fn open_app_db_at(app_dir: &Path) -> Result<(Db, Connections), String> {
-    let db_path = migrate_app_db_at(app_dir).await?;
+    let (db_path, migrate_pool) = migrate_app_db_at(app_dir).await?;
 
     // Now open the real pool WITH foreign_keys enabled.
     //
@@ -194,6 +195,7 @@ pub async fn open_app_db_at(app_dir: &Path) -> Result<(Db, Connections), String>
             db_path.display()
         )
     })?;
+    migrate_pool.close().await;
     reset_stale_projection(connections.sql()).await?;
 
     Ok((Db(connections.sql().clone()), connections))
