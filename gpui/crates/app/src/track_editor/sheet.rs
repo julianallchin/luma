@@ -605,9 +605,7 @@ impl Luma {
         if touched.is_empty() {
             return;
         }
-        for id in touched {
-            self.refresh_clip_preview(id, cx);
-        }
+        self.refresh_clip_previews(touched, cx);
         self.schedule_arg_flush(cx);
     }
 

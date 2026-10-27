@@ -45,6 +45,9 @@ pub struct RenderImage {
     pub id: ImageId,
     /// The scale factor of this image on render.
     pub(crate) scale_factor: f32,
+    /// Draw each pixel as a hard-edged block when scaled up, instead of
+    /// blending it into its neighbours.
+    pub nearest: bool,
     data: SmallVec<[Frame; 1]>,
 }
 
@@ -64,6 +67,7 @@ impl RenderImage {
         Self {
             id: ImageId(NEXT_ID.fetch_add(1, SeqCst)),
             scale_factor: 1.0,
+            nearest: false,
             data: data.into(),
         }
     }

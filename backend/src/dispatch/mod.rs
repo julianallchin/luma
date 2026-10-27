@@ -1,15 +1,19 @@
-//! Shared command dispatcher for GPUI, the in-app agent, and backend tools.
-//! Hosts construct AppServices, dispatch a command with JSON arguments, and
-//! handle CommandError. The command table owns wire types and metadata.
+//! The command surface. [`handlers`] holds every command as a typed function;
+//! GPUI calls those directly. The JSON adapter here — [`dispatch`] — serves
+//! the hosts that speak JSON by nature: the in-app agent, `luma-mcp`, the
+//! agent harness and its fixtures. The command table owns wire names and
+//! metadata.
 
 mod error;
-pub(crate) mod handlers;
+pub mod handlers;
 #[cfg(test)]
 mod manifest;
 mod services;
 
 pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
+pub use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist};
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
+pub use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist};
 pub use error::CommandError;
 pub use services::system_track_sources;
 pub use services::{AppServices, EventSink, Events, SharedServices, TrackSources};
@@ -96,13 +100,14 @@ macro_rules! commands {
 
 use std::collections::BTreeMap;
 
-use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
+use crate::engine_dj::types::EngineDjTrack;
 use crate::host_audio::HostAudioSnapshot;
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
     AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
     CreateAgentThreadInput,
 };
+use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::folders::Folder;
@@ -114,7 +119,6 @@ use crate::models::midi::{
 use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
-use crate::models::patterns::AnnotationPreview;
 use crate::models::perform::PerformTrackMatch;
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
@@ -128,17 +132,14 @@ use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGra
 use crate::models::venues::Venue;
 use crate::models::waveforms::TrackWaveform;
 
-use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
+use crate::rekordbox::types::RekordboxTrack;
 use crate::render_engine::PerformDeckInput;
 use crate::settings::AppSettings;
-pub use handlers::scores::prepare_score_clip_preview;
-/// Large native audio payload; retains the dispatcher's visibility checks.
-pub use handlers::waveforms::get_track_waveform_signal;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use prodjlink::DiscoveredDevice;
 
 commands! {
-    composable_patterns::preview_composable_pattern(request: Value) -> Value;
+    composable_patterns::preview_composable_pattern(request: ComposablePreviewRequest) -> ComposablePreview;
     composable_patterns::selection_cells(
         venue_id: String,
         selection: Selection,
@@ -272,7 +273,7 @@ commands! {
     scores::rename_score(score_id: String, name: String) -> ();
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
     scores::edit_score_document(score_id: String, edit: luma_patterns::ScoreEdit) -> ();
-    scores::preview_score_clip(score_id: String, clip_id: String, score: Option<luma_patterns::Score>) -> AnnotationPreview;
+    scores::preview_score_clips(score_id: String, clip_ids: Vec<String>, score: Option<luma_patterns::Score>) -> Vec<crate::services::graph_scores::ClipStrip>;
     scores::clip_graph_definitions() -> Value;
     scores::clip_presets() -> Value;
 

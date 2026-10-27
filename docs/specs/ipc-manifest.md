@@ -83,7 +83,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `preview_composable_pattern` | `request: Value` | `Value` |
+| `preview_composable_pattern` | `request: ComposablePreviewRequest` | `ComposablePreview` |
 | `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64`<br>`elements: Option<usize>` | `Vec<luma_patterns::Cell>` |
 
 ### `compositor`
@@ -277,7 +277,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `rename_score` | `scoreId: String`<br>`name: String` | `()` |
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `edit_score_document` | `scoreId: String`<br>`edit: luma_patterns::ScoreEdit` | `()` |
-| `preview_score_clip` | `scoreId: String`<br>`clipId: String`<br>`score: Option<luma_patterns::Score>` | `AnnotationPreview` |
+| `preview_score_clips` | `scoreId: String`<br>`clipIds: Vec<String>`<br>`score: Option<luma_patterns::Score>` | `Vec<crate::services::graph_scores::ClipStrip>` |
 | `clip_graph_definitions` | — | `Value` |
 | `clip_presets` | — | `Value` |
 

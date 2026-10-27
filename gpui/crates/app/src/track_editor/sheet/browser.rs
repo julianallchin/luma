@@ -155,7 +155,7 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
                             THUMB_BEATS,
                         )
                         .ok()?;
-                        Some((key(preset), Preview::decode(row, None)?))
+                        Some((key(preset), Preview::decode(row)?))
                     })
                     .collect::<HashMap<_, _>>()
             })
@@ -330,7 +330,8 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
     let target = editor.target();
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| {
-            this.library.preview_score_clip(&score_id, CLIP_ID, &score)
+            this.library
+                .preview_score_clips(&score_id, vec![CLIP_ID.to_string()], score)
         }) else {
             return;
         };
@@ -339,7 +340,11 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
             this.edit_track_tab(&target, cx, |editor| {
                 let browser = &mut editor.sheet.browser;
                 browser.thumbing = false;
-                let thumb = match result.ok().and_then(|row| Preview::decode(row, None)) {
+                let row = result
+                    .ok()
+                    .and_then(|strips| strips.into_iter().next())
+                    .and_then(|strip| strip.preview.ok());
+                let thumb = match row.and_then(Preview::decode) {
                     Some(preview) => Thumbnail::Ready(preview),
                     None => Thumbnail::Failed,
                 };
