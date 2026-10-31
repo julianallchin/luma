@@ -62,8 +62,9 @@ use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_ad
 use luma_lib::database::local::auth::{AuthAccount, SUPABASE_SESSION_KEY};
 use luma_lib::database::local::database::{init_app_db_at, open_app_db_at};
 use luma_lib::database::local::state::init_state_db_at;
+use luma_lib::dispatch::handlers::host_audio::FilePreview;
 use luma_lib::dispatch::{
-    handlers, AppServices, CommandError, EngineDjPlaylist, EventSink, Events,
+    handlers, AppServices, ArtworkRef, CommandError, EngineDjPlaylist, EventSink, Events,
     ImportedEngineDjTrack as EngineDjTrack, ImportedRekordboxTrack as RekordboxTrack,
     RekordboxPlaylist, SharedServices,
 };
@@ -203,6 +204,7 @@ pub struct SourcePlaylist {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceTrack {
     pub id: String,
+    /// Absolute: a source with relative paths has them resolved on the way in.
     pub file_path: Option<String>,
     pub filename: Option<String>,
     pub title: Option<String>,
@@ -210,6 +212,9 @@ pub struct SourceTrack {
     pub album: Option<String>,
     pub bpm: Option<f64>,
     pub duration_seconds: Option<f64>,
+    /// Where the source library keeps this row's cover, when it keeps one.
+    /// The file's own tags are the fallback — see [`Library::source_artwork`].
+    pub art: Option<ArtworkRef>,
 }
 
 /// Raw adapter answers used only by the GPUI agent harness, decoded into the
@@ -306,6 +311,8 @@ struct EngineDjLibraryWire {
 struct RekordboxTrackWire {
     uuid: String,
     file_path: Option<String>,
+    #[serde(default)]
+    artwork_path: Option<String>,
     filename: Option<String>,
     title: Option<String>,
     artist: Option<String>,
@@ -336,18 +343,34 @@ impl From<RekordboxPlaylist> for SourcePlaylist {
     }
 }
 
-impl From<EngineDjTrack> for SourceTrack {
-    fn from(row: EngineDjTrack) -> Self {
-        Self {
-            id: row.id.to_string(),
-            file_path: Some(row.path),
-            filename: Some(row.filename),
-            title: row.title,
-            artist: row.artist,
-            album: row.album,
-            bpm: row.bpm_analyzed,
-            duration_seconds: row.length,
-        }
+/// The library root an Engine DJ source resolves its rows' paths against;
+/// empty for a source whose rows carry absolute paths.
+fn engine_root(source: &TrackSource) -> String {
+    match source {
+        TrackSource::EngineDj { library_path } => library_path.clone(),
+        TrackSource::Rekordbox => String::new(),
+    }
+}
+
+/// An Engine DJ row as a source row. Engine stores paths relative to the
+/// library folder (`../../Music/x.mp3`), so they are resolved here, once,
+/// rather than by every consumer that wants to open the file — a preview,
+/// a cover read.
+fn engine_source_track(library_path: &str, row: EngineDjTrack) -> SourceTrack {
+    let file_path = luma_lib::dispatch::resolve_engine_track_path(library_path, &row.path);
+    SourceTrack {
+        id: row.id.to_string(),
+        file_path: Some(file_path.to_string_lossy().into_owned()),
+        filename: Some(row.filename),
+        title: row.title,
+        artist: row.artist,
+        album: row.album,
+        bpm: row.bpm_analyzed,
+        duration_seconds: row.length,
+        art: row.album_art_id.map(|album_art_id| ArtworkRef::EngineDj {
+            library_path: library_path.to_string(),
+            album_art_id,
+        }),
     }
 }
 
@@ -362,6 +385,7 @@ impl From<RekordboxTrack> for SourceTrack {
             album: row.album,
             bpm: row.bpm,
             duration_seconds: row.duration_seconds,
+            art: row.artwork_path.map(ArtworkRef::File),
         }
     }
 }
@@ -378,6 +402,7 @@ impl From<RekordboxTrackWire> for SourceTrack {
             album: row.album,
             bpm: row.bpm,
             duration_seconds: row.duration_seconds,
+            art: row.artwork_path.map(ArtworkRef::File),
         }
     }
 }
@@ -433,9 +458,12 @@ fn normalize_source_tracks(
     value: Value,
 ) -> Result<Vec<SourceTrack>, LibraryError> {
     match source {
-        TrackSource::EngineDj { .. } => {
+        TrackSource::EngineDj { library_path } => {
             let rows: Vec<EngineDjTrack> = decode_source_fixture(command, value)?;
-            Ok(rows.into_iter().map(SourceTrack::from).collect())
+            Ok(rows
+                .into_iter()
+                .map(|row| engine_source_track(library_path, row))
+                .collect())
         }
         TrackSource::Rekordbox => {
             let rows: Vec<RekordboxTrackWire> = decode_source_fixture(command, value)?;
@@ -654,7 +682,11 @@ impl Library {
         let storage = config_dir()?;
         let fixtures_root = fixtures_root()?;
 
-        let (progress_tx, _) = tokio::sync::broadcast::channel(256);
+        // An import's follower reads nothing until phase one hands back the
+        // songs, and every song reports each analysis stage twice; a lagged
+        // receiver drops the oldest events, and a row whose stage events were
+        // dropped can never settle. Sized for a few hundred songs in flight.
+        let (progress_tx, _) = tokio::sync::broadcast::channel(8192);
         let (session_revoked, _) = tokio::sync::broadcast::channel(4);
         let (replica_changed, _) = tokio::sync::broadcast::channel(64);
         let events = Events::new(LibraryEvents {
@@ -1523,12 +1555,17 @@ impl Library {
             }
             _ => None,
         };
+        let engine_root = engine_root(&source);
         async move {
             if let Some(fixture) = fixture {
                 return fixture;
             }
             match (engine, rekordbox) {
-                (Some(rows), None) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                (Some(rows), None) => Ok(rows
+                    .await?
+                    .into_iter()
+                    .map(|row| engine_source_track(&engine_root, row))
+                    .collect()),
                 (None, Some(rows)) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
                 _ => unreachable!("one source produces exactly one call"),
             }
@@ -1593,6 +1630,7 @@ impl Library {
             }
             _ => None,
         };
+        let engine_root = engine_root(&source);
         async move {
             if let Some(fixture) = fixture {
                 return fixture;
@@ -1604,7 +1642,11 @@ impl Library {
                 ));
             }
             match (engine, rekordbox) {
-                (Some(rows), None) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                (Some(rows), None) => Ok(rows
+                    .await?
+                    .into_iter()
+                    .map(|row| engine_source_track(&engine_root, row))
+                    .collect()),
                 (None, Some(rows)) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
                 _ => unreachable!("one source produces exactly one call"),
             }
@@ -1676,6 +1718,7 @@ impl Library {
             }
             _ => None,
         };
+        let engine_root = engine_root(&source);
         async move {
             #[cfg(feature = "agent")]
             if let Some((rows, delay)) = sequenced {
@@ -1686,7 +1729,11 @@ impl Library {
                 return fixture;
             }
             match (engine, rekordbox) {
-                (Some(rows), None) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                (Some(rows), None) => Ok(rows
+                    .await?
+                    .into_iter()
+                    .map(|row| engine_source_track(&engine_root, row))
+                    .collect()),
                 (None, Some(rows)) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
                 _ => unreachable!("one source produces exactly one call"),
             }
@@ -2128,9 +2175,7 @@ impl Library {
         &self,
         track_id: &str,
     ) -> (u64, impl Future<Output = Result<(), LibraryError>> + use<>) {
-        // Allocate before spawning: task scheduling must not reorder navigation.
-        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let session = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let session = next_audio_session();
         let track_id = track_id.to_owned();
         (
             session,
@@ -2138,6 +2183,51 @@ impl Library {
                 handlers::host_audio::host_load_track(&services, track_id, session).await
             }),
         )
+    }
+
+    /// Put an audio file that is not a library track on the player — a DJ
+    /// library row being auditioned — as a new session. The same player and
+    /// the same session order as [`Self::load_audio`]: whichever was asked
+    /// for last owns the speakers. `Ok(None)` when a newer session took the
+    /// player first.
+    pub fn load_file_audio(
+        &self,
+        path: &str,
+    ) -> (
+        u64,
+        impl Future<Output = Result<Option<FilePreview>, LibraryError>> + use<>,
+    ) {
+        let session = next_audio_session();
+        let path = path.to_owned();
+        (
+            session,
+            self.call("host_load_file", move |services| async move {
+                handlers::host_audio::host_load_file(&services, path, session).await
+            }),
+        )
+    }
+
+    /// Free `session`'s decoded audio, if it still owns the player.
+    pub fn release_audio(
+        &self,
+        session: u64,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("host_release", move |services| async move {
+            handlers::host_audio::host_release(&services, session).await
+        })
+    }
+
+    /// A source row's cover as encoded image bytes: its library's own image,
+    /// else the one embedded in the file. `Ok(None)` when it has neither.
+    pub fn source_artwork(
+        &self,
+        track: &SourceTrack,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, LibraryError>> + use<> {
+        let art = track.art.clone();
+        let audio = track.file_path.clone();
+        self.call("source_track_artwork", move |_| async move {
+            handlers::tracks::source_track_artwork(art, audio).await
+        })
     }
 
     /// Seeking and playing are atomic at the audio host.
@@ -3090,6 +3180,14 @@ impl Library {
                 .map_err(|error| LibraryError::at(name, Cause::Cancelled(error.to_string())))?
         }
     }
+}
+
+/// The next playback session. One counter for every kind of load, allocated
+/// before spawning: the host keeps whichever session is newest, so task
+/// scheduling must not be able to reorder what the person asked for.
+fn next_audio_session() -> u64 {
+    static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A command's refusal, as the [`LibraryError`] that names it.

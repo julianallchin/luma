@@ -15,6 +15,7 @@
 //! ([`groups::or_terms`]) rather than growing a second one.
 
 pub(crate) mod agent_execution;
+pub mod artwork;
 pub mod catalog;
 pub mod composable_patterns;
 pub mod distribute;

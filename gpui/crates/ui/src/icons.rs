@@ -25,6 +25,7 @@ pub enum IconName {
     Network,
     PanelLeft,
     PanelRight,
+    Pause,
     Play,
     Plus,
     SquareTerminal,
@@ -60,6 +61,7 @@ impl IconNamed for IconName {
             Self::Network => "nucleo/nodes.svg".into(),
             Self::PanelLeft => "nucleo/sidebar-left.svg".into(),
             Self::PanelRight => "nucleo/sidebar-right.svg".into(),
+            Self::Pause => "nucleo/media-pause.svg".into(),
             Self::Play => "nucleo/media-play.svg".into(),
             Self::Plus => "nucleo/plus.svg".into(),
             Self::SquareTerminal => "nucleo/square-terminal.svg".into(),
@@ -122,6 +124,7 @@ impl AssetSource for Assets {
             "nucleo/chevron-up.svg" | "icons/chevron-up.svg" => {
                 Some(include_bytes!("../assets/nucleo/chevron-up.svg"))
             }
+            "nucleo/media-pause.svg" => Some(include_bytes!("../assets/nucleo/media-pause.svg")),
             "nucleo/media-play.svg" | "icons/play.svg" => {
                 Some(include_bytes!("../assets/nucleo/media-play.svg"))
             }
@@ -179,6 +182,7 @@ impl AssetSource for Assets {
                 "nucleo/chevron-up.svg",
                 "nucleo/copy.svg",
                 "nucleo/expand.svg",
+                "nucleo/media-pause.svg",
                 "nucleo/media-play.svg",
                 "nucleo/microchip.svg",
                 "nucleo/minimize.svg",

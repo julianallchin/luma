@@ -38,7 +38,10 @@ test(
   },
   () => {
     const browser = openImportMenu("Engine DJ");
-    expect(browser.findAll({ role: "row" }).length).toBe(0);
+    // The dialog's own list: the sidebar behind it has rows of its own.
+    const card = browser.find({ role: "card", label: "Add tracks dialog" }).bounds;
+    const inCard = (n) => n.bounds.x >= card.x && n.bounds.x + n.bounds.width <= card.x + card.width;
+    expect(browser.findAll((n) => n.role === "row" && inCard(n)).length).toBe(0);
     // The held read shows its loading state first.
     expect(app.snapshot().find({ role: "text", label: "Loading source library…" }) !== undefined).toBe(true);
     const engine = until("the normalized Engine source", (s) =>

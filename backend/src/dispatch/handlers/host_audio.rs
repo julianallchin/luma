@@ -119,6 +119,70 @@ pub async fn host_load_track(
     .await
 }
 
+/// What a file preview put on the host: how long the file is, and a coarse
+/// loudness overview of it to draw a scrub bar from.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePreview {
+    pub duration_seconds: f32,
+    /// [`PREVIEW_OVERVIEW_BUCKETS`] peaks in `0..=1`, start to end.
+    pub overview: Vec<f32>,
+}
+
+/// Enough peaks for a scrub bar a text column wide to read as a waveform.
+pub const PREVIEW_OVERVIEW_BUCKETS: usize = 160;
+
+/// Load an audio file that is not a library track — a DJ library's row being
+/// auditioned — onto the one host player, as `session`.
+///
+/// The same player the track editor uses, so a preview and a song cannot play
+/// over each other: loading this unloads whatever was playing. `Ok(None)`
+/// means a newer session took the player before this one finished decoding.
+///
+/// The overview is computed from the samples just decoded for playback — the
+/// same peaks the library's waveforms are built from — rather than by a
+/// second pass over the file.
+pub async fn host_load_file(
+    services: &AppServices,
+    path: String,
+    session: u64,
+) -> Result<Option<FilePreview>, CommandError> {
+    if !services
+        .host_audio
+        .begin_load(session, format!("file:{path}"))
+    {
+        return Ok(None);
+    }
+    let audio =
+        tokio::task::spawn_blocking(move || crate::audio::decode_file_shared(Path::new(&path)))
+            .await
+            .map_err(|error| {
+                CommandError::Internal(format!("preview decode task failed: {error}"))
+            })?
+            .map_err(|error| CommandError::Internal(format!("Failed to decode file: {error}")))?;
+    if audio.is_empty() {
+        return Err(CommandError::Invalid("File has no audio data".into()));
+    }
+    let overview = crate::services::waveforms::compute_waveform(&audio, PREVIEW_OVERVIEW_BUCKETS)
+        .chunks_exact(2)
+        .map(|pair| pair[0].abs().max(pair[1].abs()).min(1.0))
+        .collect();
+    let duration_seconds = (audio.len() / 2) as f32 / SAMPLE_RATE as f32;
+    services
+        .host_audio
+        .finish_load(session, audio.to_vec(), 0.0)?;
+    Ok(Some(FilePreview {
+        duration_seconds,
+        overview,
+    }))
+}
+
+/// Release `session`'s audio if it still owns the player.
+pub async fn host_release(services: &AppServices, session: u64) -> Result<(), CommandError> {
+    services.host_audio.release(session);
+    Ok(())
+}
+
 /// Decode through the shared audio cache, so later analysis reuses this decode.
 fn decode(file_path: &str, track_hash: &str) -> Result<std::sync::Arc<Vec<f32>>, CommandError> {
     let audio = crate::audio::load_or_decode_audio_shared(Path::new(file_path), track_hash)

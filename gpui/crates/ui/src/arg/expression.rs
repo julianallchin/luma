@@ -174,6 +174,8 @@ pub struct GroupExpressionEditor {
     picker: Picker<SharedString>,
     focused: bool,
     committed: String,
+    /// The least the suggestion menu is wide. The field itself fills the
+    /// box its host gives it, so a narrow row can shrink it.
     width: f32,
     _subs: Vec<Subscription>,
 }
@@ -438,8 +440,8 @@ impl Render for GroupExpressionEditor {
             .key_context(DRAFT_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
             .relative()
-            .flex_shrink_0()
-            .w(px(self.width))
+            // The host sizes the field; `width` is only its menu's floor.
+            .w_full()
             .child(
                 float::field()
                     .w_full()

@@ -95,6 +95,7 @@ pub fn init(cx: &mut App) {
     // editing keys that exclusion leaves it. Registering one without the other
     // gives a field that either eats the app's shortcuts or cannot be typed in.
     text_input::init(cx);
+    keymap::init_field_overrides(cx);
     motion::init(cx);
 }
 use luma_chat::RunningTurns;
@@ -108,6 +109,14 @@ pub struct Luma {
     pub(crate) library: Library,
     pub(crate) track_import: Option<add_tracks::TrackImportActivity>,
     pub(crate) next_track_import: u64,
+    /// The add-track dialog's audio preview. Owned here rather than by the
+    /// dialog so that however the dialog goes away — closed, replaced, or
+    /// dropped outright under reduced motion — the shell still sees a
+    /// preview with no dialog and stops it (see `add_tracks::reap_preview`).
+    pub(crate) source_preview: Option<add_tracks::SourcePreview>,
+    /// Decoded covers for source-browser rows, kept across openings of the
+    /// dialog and bounded — see [`add_tracks::ArtCache`].
+    pub(crate) source_art: add_tracks::ArtCache,
     /// The selected venue's track browser — the sidebar's body. `None` while
     /// no venue is selected, which is also when the venue picker overlay
     /// keeps itself open: the two states are one fact read twice.
@@ -269,6 +278,8 @@ impl Luma {
         let mut app = Self {
             library,
             track_import: None,
+            source_preview: None,
+            source_art: add_tracks::ArtCache::default(),
             next_track_import: 0,
             sidebar: None,
             sidebar_hidden: false,

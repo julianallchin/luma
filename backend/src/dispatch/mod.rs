@@ -10,10 +10,12 @@ pub mod handlers;
 mod manifest;
 mod services;
 
+pub use crate::engine_dj::resolve_engine_path as resolve_engine_track_path;
 pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
 pub use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist};
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
 pub use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist};
+pub use crate::services::artwork::ArtworkRef;
 pub use error::CommandError;
 pub use services::system_track_sources;
 pub use services::{AppServices, EventSink, Events, SharedServices, TrackSources};

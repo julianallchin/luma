@@ -209,6 +209,15 @@ pub fn load_or_decode_audio_shared(
     })
 }
 
+/// A file that is not a library track — a DJ library's row being previewed —
+/// decoded through the same RAM cache, keyed by its path. No disk cache: that
+/// one is keyed by content hash, and nothing here has hashed the file.
+pub fn decode_file_shared(path: &Path) -> Result<Arc<Vec<f32>>, String> {
+    load_or_decode_audio_shared_by_key(format!("file:{}", path.display()), || {
+        super::decoder::decode_track_samples(path)
+    })
+}
+
 fn load_or_decode_audio_shared_by_key(
     key: String,
     decode: impl FnOnce() -> Result<Vec<f32>, String>,

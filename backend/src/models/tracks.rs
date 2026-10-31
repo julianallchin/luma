@@ -68,8 +68,44 @@ pub struct TrackImportProgress {
     pub total: usize,
     pub track_id: Option<String>,
     pub current_track: Option<String>,
-    pub step: Option<String>,
+    /// What this event says about `track_id`'s analysis. `None` on every
+    /// event that is not about one track's analysis — phase one's copy
+    /// events carry a `track_id` too, and must not read as analysis.
+    pub analysis: Option<TrackAnalysisEvent>,
     pub error: Option<String>,
+}
+
+/// One track's analysis, as stages that start and settle.
+///
+/// The contract a consumer can fold without guessing: `Queued` names every
+/// stage the track will report, and each of those stages then settles exactly
+/// once — unless the import is cancelled, in which case the terminal
+/// [`TrackImportPhase::Complete`] is the only word on the ones left. A track
+/// is analysed when every stage `Queued` named has settled, and not before.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TrackAnalysisEvent {
+    Queued {
+        stages: Vec<String>,
+    },
+    StageStarted {
+        stage: String,
+    },
+    StageSettled {
+        stage: String,
+        outcome: StageOutcome,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageOutcome {
+    /// The stage ran and wrote its artifact.
+    Done,
+    /// Nothing to do: the artifact was already current, an upstream stage
+    /// failed, or the track has no audio to work on.
+    Skipped,
+    Failed(String),
 }
 
 /// Beat analysis data for a track

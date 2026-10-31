@@ -1,5 +1,6 @@
 use rekordbox::rbox::MasterDb;
 use std::collections::HashMap;
+use std::path::Path;
 
 use super::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 
@@ -28,6 +29,7 @@ fn content_to_track(
     c: &rekordbox::rbox::masterdb::models::DjmdContent,
     artist_map: &HashMap<String, String>,
     album_map: &HashMap<String, String>,
+    share: Option<&Path>,
 ) -> RekordboxTrack {
     let filename = c
         .folder_path
@@ -55,7 +57,16 @@ fn content_to_track(
         duration_seconds: c.length.map(|s| s as f64),
         file_size: c.file_size,
         sample_rate: c.sample_rate,
+        artwork_path: artwork_path(share, c.image_path.as_deref()),
     }
+}
+
+/// `image_path` is rooted at Rekordbox's `share` directory
+/// (`/PIONEER/Artwork/00001/a1.jpg`), not the file system.
+fn artwork_path(share: Option<&Path>, image_path: Option<&str>) -> Option<String> {
+    let image_path = image_path.filter(|path| !path.is_empty())?;
+    let path = share?.join(image_path.trim_start_matches('/'));
+    Some(path.to_string_lossy().into_owned())
 }
 
 pub fn get_library_info() -> Result<RekordboxLibraryInfo, String> {
@@ -71,10 +82,11 @@ pub fn list_tracks() -> Result<Vec<RekordboxTrack>, String> {
     with_db(|db| {
         let artist_map = build_artist_map(db);
         let album_map = build_album_map(db);
+        let share = db.share_directory();
         let contents = db.get_contents().map_err(|e| e.to_string())?;
         Ok(contents
             .iter()
-            .map(|c| content_to_track(c, &artist_map, &album_map))
+            .map(|c| content_to_track(c, &artist_map, &album_map, share.as_deref()))
             .collect())
     })
 }
@@ -108,12 +120,13 @@ pub fn get_playlist_tracks(playlist_id: &str) -> Result<Vec<RekordboxTrack>, Str
     with_db(|db| {
         let artist_map = build_artist_map(db);
         let album_map = build_album_map(db);
+        let share = db.share_directory();
         let contents = db
             .get_playlist_contents(playlist_id)
             .map_err(|e| e.to_string())?;
         Ok(contents
             .iter()
-            .map(|c| content_to_track(c, &artist_map, &album_map))
+            .map(|c| content_to_track(c, &artist_map, &album_map, share.as_deref()))
             .collect())
     })
 }
@@ -122,6 +135,7 @@ pub fn search_tracks(query: &str) -> Result<Vec<RekordboxTrack>, String> {
     with_db(|db| {
         let artist_map = build_artist_map(db);
         let album_map = build_album_map(db);
+        let share = db.share_directory();
         let contents = db.get_contents().map_err(|e| e.to_string())?;
         let lq = query.to_lowercase();
         Ok(contents
@@ -146,7 +160,7 @@ pub fn search_tracks(query: &str) -> Result<Vec<RekordboxTrack>, String> {
                 title_match || artist_match || file_match
             })
             .take(200)
-            .map(|c| content_to_track(c, &artist_map, &album_map))
+            .map(|c| content_to_track(c, &artist_map, &album_map, share.as_deref()))
             .collect())
     })
 }
