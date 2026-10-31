@@ -30,7 +30,9 @@ use tokio::task::JoinSet;
 
 use crate::database::local::tracks as tracks_db;
 use crate::dispatch::Events;
-use crate::models::tracks::{TrackImportPhase, TrackImportProgress};
+use crate::models::tracks::{
+    StageOutcome, TrackAnalysisEvent, TrackImportPhase, TrackImportProgress,
+};
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::failures;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext, PreprocessorRef};
@@ -46,6 +48,108 @@ pub struct ImportEventContext {
     pub source: String,
     pub done: usize,
     pub total: usize,
+}
+
+impl ImportEventContext {
+    fn emit(&self, events: &Events, progress: TrackImportProgress) {
+        events.emit("track-import-state", progress);
+    }
+
+    fn progress(&self, phase: TrackImportPhase) -> TrackImportProgress {
+        TrackImportProgress {
+            import_id: self.import_id.clone(),
+            source: self.source.clone(),
+            phase,
+            done: self.done,
+            total: self.total,
+            track_id: None,
+            current_track: None,
+            analysis: None,
+            error: None,
+        }
+    }
+
+    /// The import's last word: every track's analysis has ended, both the
+    /// preprocessing DAG and the waveform branch beside it.
+    pub fn complete(mut self, events: &Events, summary: AnalysisSummary) {
+        self.done = summary.done;
+        let mut progress = self.progress(TrackImportPhase::Complete);
+        progress.error = (!summary.errors.is_empty()).then(|| summary.errors.join("\n"));
+        self.emit(events, progress);
+    }
+}
+
+/// What [`run_for_tracks`] leaves for the caller's terminal event.
+#[derive(Debug, Default)]
+pub struct AnalysisSummary {
+    /// The import's `done` once the batch has run: requested items whose
+    /// analysis attempt finished.
+    pub done: usize,
+    pub errors: Vec<String>,
+}
+
+/// One track's analysis stages under an import, as the events that announce
+/// them.
+///
+/// The owner of the [`TrackAnalysisEvent`] contract: a stage settles at most
+/// once whoever reports it, and [`Self::settle_rest`] settles whatever is left
+/// when a track's run ends, so "every queued stage settles" holds on every
+/// path out of the scheduler rather than on the ones that remembered to say so.
+#[derive(Clone)]
+pub struct StageReport {
+    import: ImportEventContext,
+    events: Events,
+    track_id: String,
+    settled: Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+impl StageReport {
+    pub fn new(import: ImportEventContext, events: Events, track_id: impl Into<String>) -> Self {
+        Self {
+            import,
+            events,
+            track_id: track_id.into(),
+            settled: Arc::default(),
+        }
+    }
+
+    fn emit(&self, analysis: TrackAnalysisEvent) {
+        let mut progress = self.import.progress(TrackImportPhase::Analyzing);
+        progress.track_id = Some(self.track_id.clone());
+        progress.analysis = Some(analysis);
+        self.import.emit(&self.events, progress);
+    }
+
+    /// Announce every stage this track will settle.
+    pub fn queued(&self, stages: Vec<String>) {
+        self.emit(TrackAnalysisEvent::Queued { stages });
+    }
+
+    pub fn started(&self, stage: &str) {
+        self.emit(TrackAnalysisEvent::StageStarted {
+            stage: stage.to_string(),
+        });
+    }
+
+    pub fn settle(&self, stage: &str, outcome: StageOutcome) {
+        let first = self
+            .settled
+            .lock()
+            .expect("stage report poisoned")
+            .insert(stage.to_string());
+        if first {
+            self.emit(TrackAnalysisEvent::StageSettled {
+                stage: stage.to_string(),
+                outcome,
+            });
+        }
+    }
+
+    fn settle_rest<'a>(&self, stages: impl IntoIterator<Item = &'a str>, outcome: StageOutcome) {
+        for stage in stages {
+            self.settle(stage, outcome.clone());
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -221,6 +325,11 @@ fn is_blocked(p: &dyn Preprocessor, failed_artifacts: &HashSet<Artifact>) -> boo
 /// Plan + execute for a single track. Layers run sequentially; within each
 /// layer, siblings run concurrently. A failed preprocessor records its error
 /// and skips its downstream preprocessors for this run.
+///
+/// Under an import, every preprocessor settles on `report` before this
+/// returns — the ones a path out of here never reached included — unless the
+/// run was cancelled, which publishes nothing.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_for_track(
     pool: &SqlitePool,
     storage: &StorageRoot,
@@ -229,7 +338,41 @@ pub async fn run_for_track(
     track_id: &str,
     preprocessors: &[PreprocessorRef],
     analysis: &AnalysisGuard,
-    import: Option<&ImportEventContext>,
+    report: Option<&StageReport>,
+) -> Result<(), String> {
+    let result = run_track_layers(
+        pool,
+        storage,
+        workers,
+        events,
+        track_id,
+        preprocessors,
+        analysis,
+        report,
+    )
+    .await;
+    if let Some(report) = report.filter(|_| !analysis.is_cancelled()) {
+        report.settle_rest(
+            preprocessors.iter().map(|p| p.name()),
+            match &result {
+                Ok(()) => StageOutcome::Skipped,
+                Err(error) => StageOutcome::Failed(error.clone()),
+            },
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_track_layers(
+    pool: &SqlitePool,
+    storage: &StorageRoot,
+    workers: &WorkerEnvironment,
+    events: &Events,
+    track_id: &str,
+    preprocessors: &[PreprocessorRef],
+    analysis: &AnalysisGuard,
+    report: Option<&StageReport>,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
     let Some(track) = tracks_db::get_track_by_id(pool, track_id).await? else {
@@ -266,9 +409,15 @@ pub async fn run_for_track(
                     p.name()
                 );
                 failed_artifacts.insert(p.output());
+                if let Some(report) = report {
+                    report.settle(p.name(), StageOutcome::Skipped);
+                }
                 continue;
             }
             if p.is_complete(&ctx, track_id).await? {
+                if let Some(report) = report {
+                    report.settle(p.name(), StageOutcome::Skipped);
+                }
                 continue;
             }
             to_run.push(p.clone());
@@ -291,12 +440,12 @@ pub async fn run_for_track(
             let stems_dir = stems_dir.clone();
             let track_id_owned = track_id.to_string();
             let analysis = analysis.clone();
-            let import = import.cloned();
+            let report = report.cloned();
             set.spawn(async move {
                 let ctx = PreprocessorContext::new(
                     &pool, &storage, &workers, &events, &track, stems_dir, analysis,
                 );
-                let res = run_one(&ctx, &track_id_owned, p.as_ref(), import.as_ref()).await;
+                let res = run_one(&ctx, &track_id_owned, p.as_ref(), report.as_ref()).await;
                 (p.name(), p.output(), res)
             });
         }
@@ -319,37 +468,32 @@ async fn run_one(
     ctx: &PreprocessorContext<'_>,
     track_id: &str,
     p: &dyn Preprocessor,
-    import: Option<&ImportEventContext>,
+    report: Option<&StageReport>,
 ) -> Result<(), String> {
     ctx.checkpoint()?;
+    let settle = |outcome: StageOutcome| {
+        if let Some(report) = report {
+            report.settle(p.name(), outcome);
+        }
+    };
     let Some(_claim) = inflight().claim(track_id, p.name()).await else {
         // Another task ran it; if it succeeded, we're done. If it failed
         // we'll see that on the next is_complete check below.
         return if p.is_complete(ctx, track_id).await? {
+            settle(StageOutcome::Done);
             Ok(())
         } else {
-            Err(format!(
+            let error = format!(
                 "Concurrent {} run for track {track_id} did not complete",
                 p.name()
-            ))
+            );
+            settle(StageOutcome::Failed(error.clone()));
+            Err(error)
         };
     };
 
-    if let Some(import) = import {
-        ctx.events().emit(
-            "track-import-state",
-            TrackImportProgress {
-                import_id: import.import_id.clone(),
-                source: import.source.clone(),
-                phase: TrackImportPhase::Analyzing,
-                done: import.done,
-                total: import.total,
-                track_id: Some(track_id.to_string()),
-                current_track: None,
-                step: Some(p.name().to_string()),
-                error: None,
-            },
-        );
+    if let Some(report) = report {
+        report.started(p.name());
     }
 
     let started = std::time::Instant::now();
@@ -373,6 +517,7 @@ async fn run_one(
         Ok(()) => {
             failures::clear(ctx.pool(), track_id, p.name()).await?;
             ctx.events().emit("track-status-changed", track_id);
+            settle(StageOutcome::Done);
             Ok(())
         }
         Err(err) => {
@@ -383,22 +528,7 @@ async fn run_one(
                     "{err}; additionally failed to record the preprocessing failure: {record_error}"
                 ));
             }
-            if let Some(import) = import {
-                ctx.events().emit(
-                    "track-import-state",
-                    TrackImportProgress {
-                        import_id: import.import_id.clone(),
-                        source: import.source.clone(),
-                        phase: TrackImportPhase::Analyzing,
-                        done: import.done,
-                        total: import.total,
-                        track_id: Some(track_id.to_string()),
-                        current_track: None,
-                        step: Some(p.name().to_string()),
-                        error: Some(err.clone()),
-                    },
-                );
-            }
+            settle(StageOutcome::Failed(err.clone()));
             Err(err)
         }
     }
@@ -406,6 +536,10 @@ async fn run_one(
 
 /// Multi-track entry point. Bounded parallelism via Semaphore; per-track
 /// scheduling delegates to [`run_for_track`].
+///
+/// Under an import each track reports its stages as it runs; the terminal
+/// event is the caller's, because the DAG is not the only branch an import
+/// waits on — see [`ImportEventContext::complete`].
 pub async fn run_for_tracks(
     pool: SqlitePool,
     storage: StorageRoot,
@@ -414,7 +548,7 @@ pub async fn run_for_tracks(
     track_ids: Vec<String>,
     analysis: AnalysisGuard,
     import: Option<ImportEventContext>,
-) {
+) -> AnalysisSummary {
     let analyzable_total = track_ids.len();
     let preprocessors = registry::registered_preprocessors();
     // Validate the DAG once up front — panics on cycle.
@@ -435,7 +569,7 @@ pub async fn run_for_tracks(
         let sem = semaphore.clone();
         let completed = completed.clone();
         let analysis = analysis.clone();
-        let mut import = import.clone();
+        let import = import.clone();
 
         let task_track_id = track_id.clone();
         let handle = tokio::spawn(async move {
@@ -443,24 +577,10 @@ pub async fn run_for_tracks(
                 .acquire()
                 .await
                 .map_err(|error| format!("analysis semaphore closed: {error}"))?;
-            let done = completed.load(std::sync::atomic::Ordering::Relaxed);
-            if let Some(import) = &mut import {
-                import.done = done;
-                events.emit(
-                    "track-import-state",
-                    TrackImportProgress {
-                        import_id: import.import_id.clone(),
-                        source: import.source.clone(),
-                        phase: TrackImportPhase::Analyzing,
-                        done,
-                        total: import.total,
-                        track_id: Some(track_id.clone()),
-                        current_track: None,
-                        step: None,
-                        error: None,
-                    },
-                );
-            }
+            let report = import.map(|mut import| {
+                import.done = completed.load(std::sync::atomic::Ordering::Relaxed);
+                StageReport::new(import, events.clone(), track_id.clone())
+            });
             let result = run_for_track(
                 &pool,
                 &storage,
@@ -469,7 +589,7 @@ pub async fn run_for_tracks(
                 &track_id,
                 &preprocessors,
                 &analysis,
-                import.as_ref(),
+                report.as_ref(),
             )
             .await;
             if let Err(e) = &result {
@@ -479,58 +599,27 @@ pub async fn run_for_tracks(
                     sentry::Level::Error,
                 );
             }
-            let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            if let Some(import) = &import {
-                events.emit(
-                    "track-import-state",
-                    TrackImportProgress {
-                        import_id: import.import_id.clone(),
-                        source: import.source.clone(),
-                        phase: TrackImportPhase::Analyzing,
-                        done,
-                        total: import.total,
-                        track_id: Some(track_id),
-                        current_track: None,
-                        step: None,
-                        error: result.as_ref().err().cloned(),
-                    },
-                );
-            }
+            completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             result
         });
         handles.push((task_track_id, handle));
     }
 
-    let mut terminal_errors = Vec::new();
+    let mut errors = Vec::new();
     for (track_id, handle) in handles {
         match handle.await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => terminal_errors.push(format!("{track_id}: {error}")),
-            Err(error) => {
-                terminal_errors.push(format!("{track_id}: analysis task failed: {error}"))
-            }
+            Ok(Err(error)) => errors.push(format!("{track_id}: {error}")),
+            Err(error) => errors.push(format!("{track_id}: analysis task failed: {error}")),
         }
-    }
-    if let Some(import) = import {
-        let done = completed.load(std::sync::atomic::Ordering::Relaxed);
-        events.emit(
-            "track-import-state",
-            TrackImportProgress {
-                import_id: import.import_id,
-                source: import.source,
-                phase: TrackImportPhase::Complete,
-                done,
-                total: import.total,
-                track_id: None,
-                current_track: None,
-                step: None,
-                error: (!terminal_errors.is_empty()).then(|| terminal_errors.join("\n")),
-            },
-        );
     }
     eprintln!(
         "[preprocessing] finished all {analyzable_total} tracks ({max_parallel} parallel workers)"
     );
+    AnalysisSummary {
+        done: completed.load(std::sync::atomic::Ordering::Relaxed),
+        errors,
+    }
 }
 
 /// Startup reconciliation: each preprocessor returns the IDs of tracks that

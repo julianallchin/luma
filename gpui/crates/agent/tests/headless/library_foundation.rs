@@ -328,8 +328,10 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
         let mut saw_complete = false;
         let mut saw_partial_failure = false;
         let mut terminal = None;
+        let mut stages = StageLedger::default();
         while let Ok(event) = progress.try_recv() {
             if event.import_id == result.import_id {
+                stages.record(&event);
                 assert_eq!(
                     event.total, 2,
                     "analysis progress lost the original requested denominator"
@@ -355,8 +357,11 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
                 );
                 saw_analysis |= event.phase == luma_app::TrackImportPhase::Analyzing;
                 if event.phase == luma_app::TrackImportPhase::Complete {
+                    stages.assert_all_settled();
                     saw_complete = true;
                     terminal = Some(event);
+                } else {
+                    stages.record(&event);
                 }
             }
         })
@@ -507,5 +512,52 @@ async fn assert_source_contract(
         assert_eq!(tracks[0].artist.as_deref(), Some("Artist"));
         assert_eq!(tracks[0].bpm, Some(128.0));
         assert_eq!(tracks[0].duration_seconds, Some(180.0));
+    }
+}
+
+/// Each analysed track's stages as its events announced them: what was
+/// queued, and what settled, so the analysis contract can be checked from
+/// the outside — every queued stage settles once, before the import ends.
+#[derive(Default)]
+struct StageLedger {
+    queued: std::collections::HashMap<String, Vec<String>>,
+    settled: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl StageLedger {
+    fn record(&mut self, event: &luma_app::TrackImportProgress) {
+        use luma_lib::models::tracks::TrackAnalysisEvent;
+        let (Some(track), Some(analysis)) = (&event.track_id, &event.analysis) else {
+            return;
+        };
+        match analysis {
+            TrackAnalysisEvent::Queued { stages } => {
+                self.queued.insert(track.clone(), stages.clone());
+            }
+            TrackAnalysisEvent::StageStarted { stage } => {
+                assert!(
+                    self.queued
+                        .get(track)
+                        .is_some_and(|queued| queued.contains(stage)),
+                    "{track} started {stage} before queueing it"
+                );
+            }
+            TrackAnalysisEvent::StageSettled { stage, .. } => {
+                let settled = self.settled.entry(track.clone()).or_default();
+                assert!(!settled.contains(stage), "{track} settled {stage} twice");
+                settled.push(stage.clone());
+            }
+        }
+    }
+
+    fn assert_all_settled(&self) {
+        assert!(!self.queued.is_empty(), "no track was queued for analysis");
+        for (track, queued) in &self.queued {
+            let mut queued = queued.clone();
+            let mut settled = self.settled.get(track).cloned().unwrap_or_default();
+            queued.sort();
+            settled.sort();
+            assert_eq!(settled, queued, "{track} ended with stages unsettled");
+        }
     }
 }

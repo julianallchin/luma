@@ -62,7 +62,11 @@ by dependency at startup. The registry is `registry.rs`.
 - A failure is stored in the local `preprocessing_failures` table. The retry
   uses exponential backoff, up to 24 hours. Preprocessors that depend on the
   failed output are skipped for that run.
-- The scheduler emits `track-import-state` events during an import.
+- The scheduler emits `track-import-state` events during an import. Each
+  analysed track is first `queued` with every stage it will report (each
+  preprocessor plus `waveform`); each stage then starts and settles exactly
+  once, as done, skipped or failed. The import's `complete` event follows only
+  after both the preprocessors and the waveform branch have drained.
 
 The bar classifier weights are bundled in the app. The genre model is
 downloaded on first use into the models directory and checked against a pinned

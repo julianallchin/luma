@@ -57,6 +57,30 @@ pub fn stub_genre_model(storage_root: &Path) {
     std::fs::write(models.join(luma_lib::GENRE_MODEL_FILE_NAME), b"").unwrap();
 }
 
+/// A fake Python at `cache` (what `LUMA_CACHE_DIR` points the worker
+/// environment at) that sleeps `seconds` per call, answers the beat worker
+/// with a 120 BPM grid, and fails every other worker.
+///
+/// What an import test wants from analysis: slow enough to watch, with one
+/// stage that succeeds and the rest that fail fast once their sleep is over.
+#[cfg(unix)]
+pub fn install_fake_analysis(cache: &Path, seconds: f32) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = cache.join("python-env/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let python = bin.join("python3");
+    std::fs::write(
+        &python,
+        format!(
+            "#!/bin/sh\nsleep {seconds}\ncase \"$1\" in\n  *beat_worker.py) printf '%s\\n' '{{\"beats\":[0.0,0.5],\"downbeats\":[0.0],\"bpm\":120.0,\"downbeat_offset\":0.0,\"beats_per_bar\":4}}' ;;\n  *) exit 1 ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&python).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(python, permissions).unwrap();
+}
+
 /// A runtime pointed at `config_dir` with motion snapped — what every harness
 /// in this suite wants that does not go through [`Fixture::open`].
 ///
