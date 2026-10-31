@@ -1583,6 +1583,21 @@ impl EntityInputHandler for TextInput {
             .map(|r| self.range_from_utf16(r))
             .or_else(|| self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
+        // One line is a property of the field, not of its callers: `enter` is
+        // left unbound in a search field so the picker can act on it, and the
+        // platform then delivers the unhandled key here as a line break. Kept,
+        // it scrolled the field's one row onto an empty second one. A pasted
+        // multi-line string flattens the same way.
+        let flattened;
+        let new_text = if self.mode == Mode::Search && new_text.contains(['\n', '\r']) {
+            flattened = new_text.replace("\r\n", " ").replace(['\n', '\r'], " ");
+            flattened.trim_end_matches(' ')
+        } else {
+            new_text
+        };
+        if new_text.is_empty() && range.is_empty() && self.marked_range.is_none() {
+            return;
+        }
         // An IME commit is the tail of a composition whose pre-composition
         // snapshot was already taken below; recording here would pin undo to
         // the half-composed text instead of to the text before it existed.
