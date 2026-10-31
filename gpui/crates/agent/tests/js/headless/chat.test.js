@@ -103,7 +103,6 @@ const turnEnd = () => until("the turn end", (s) => !busy(s));
 test("a turn streams markdown and shows its tool call", () => {
   openChat();
   const idle = app.snapshot();
-  expect(texts(idle)).toContain("Luma");
   expect(chips(idle)).toEqual([]);
 
   send();
@@ -138,7 +137,6 @@ test("a new chat has one identity across editors", () => {
     const send = s.find({ role: "button", label: "Send" });
     return send && send.bounds.width > 0 && s.find({ role: "button", label: "New chat" })?.enabled;
   });
-  expect(texts(attached)).toContain("Luma");
   const typed = texts(attached).filter((label) => label.endsWith(" agent"));
   expect(typed).toEqual([]);
 });

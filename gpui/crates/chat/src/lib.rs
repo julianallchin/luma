@@ -2071,7 +2071,10 @@ impl AgentChat {
                         .flex()
                         .flex_col()
                         .items_center()
+                        // One gutter on three sides: the pill sits as far
+                        // from the pane's bottom as from its edges.
                         .px(px(theme::CONTENT_GUTTER))
+                        .pb(px(theme::CONTENT_GUTTER))
                         .block_mouse_except_scroll()
                         .child(
                             div()
@@ -2133,21 +2136,17 @@ impl AgentChat {
         if self.read_only {
             return plate;
         }
-        plate.child(self.header(chat, theme))
+        plate.child(self.header(chat))
     }
 
-    fn header(&self, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
+    fn header(&self, chat: &Entity<AgentChat>) -> impl IntoElement {
         div()
             .h(px(theme::HEADER_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(theme::SPACE_SM))
+            .justify_end()
             .px(px(theme::SPACE_LG))
-            .text_size(px(12.0))
-            .text_color(theme.text_muted)
-            .child(div().child("Luma").agent_node(NodeRole::Text, "Luma"))
-            .child(div().flex_1())
             // The two ways out of the conversation you are in: back to an
             // older one, or on to a new one.
             .child({
@@ -2412,7 +2411,7 @@ fn resume_strip(show: bool, chat: &Entity<AgentChat>, theme: &Theme) -> Option<A
             .gap(px(theme::SPACE_MD))
             .w_full()
             .px(px(theme::SPACE_LG))
-            .mb(px(theme::SPACE_XS))
+            .mt(px(theme::SPACE_XS))
             .text_size(px(11.0))
             .text_color(theme.text_muted)
             .child("The last turn stopped before it finished.")
@@ -2437,7 +2436,7 @@ fn error_strip(error: Option<&str>, theme: &Theme) -> Option<AnyElement> {
             .items_center()
             .w_full()
             .px(px(theme::SPACE_LG))
-            .mb(px(theme::SPACE_XS))
+            .mt(px(theme::SPACE_XS))
             .text_size(px(11.0))
             .text_color(theme.danger)
             .child(SharedString::from(error.to_string()))

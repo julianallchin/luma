@@ -57,7 +57,7 @@ test("closing the last tab lands on the empty panel", () => {
   const shot = until("the empty panel", (s) => s.find({ role: "card", label: "Empty panel" }) ? s : undefined);
   expect(closeButtons(shot).length).toBe(0);
   expect(shot.find({ role: "slider", label: "Workspace width" })).toBe(undefined);
-  expect(shot.findAll({ role: "text" }).some((n) => n.label === "Luma")).toBe(false);
+  expect(shot.find({ role: "button", label: "Chat history" })).toBe(undefined);
 });
 
 test("new tab with no tabs opens the + box over the empty panel", () => {

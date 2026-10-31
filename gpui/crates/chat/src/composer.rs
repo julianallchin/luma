@@ -617,9 +617,11 @@ pub fn composer(
     };
 
     // The plate fills the reading column — it does not state one. The column
-    // is the footer's, drawn once around composer and strip together so that
-    // what hangs off the pair lands on the same rule they do; a plate that
-    // measured its own gutters would be a second column rule on one pane.
+    // and its gutters, the bottom one included, are the footer's, drawn once
+    // around composer and strip together so that what hangs off the pair
+    // lands on the same rule they do; a plate that measured its own gutters
+    // would be a second column rule on one pane. The top pad is the
+    // transcript's lead-in: the tail clears the pill by this much.
     // Frosted so the transcript blurs under it instead of stopping at a seam;
     // the radius matches the pill's, or the blur would square off at its
     // corners.
@@ -627,7 +629,6 @@ pub fn composer(
         .flex()
         .flex_col()
         .pt(px(theme::SPACE_MD))
-        .pb(px(theme::SPACE_LG + theme::SPACE_SM))
         .child(dialog::frosted(
             luma_ui::radius::PILL,
             theme::PILL_BLUR,

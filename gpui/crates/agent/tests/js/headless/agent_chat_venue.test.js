@@ -6,7 +6,7 @@
 
 fixture({ track: false, seconds: 1, rig: 4, window: [1400, 900] });
 
-const chat = (s) => s.findAll({ role: "text" }).some((n) => n.label === "Luma");
+const chat = (s) => s.find({ role: "button", label: "Chat history" }) !== undefined;
 
 test("the venue tab carries the venue's chat", () => {
   nav.venue("Test Venue");
