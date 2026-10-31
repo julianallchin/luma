@@ -1,4 +1,4 @@
-//! The venue chooser and first-run create flow.
+//! The venue chooser, first-run create flow, and venue invites.
 //!
 //! This is route content inside the shell's one shared dialog host. The host
 //! owns the full-window scrim, shell/sidebar backdrop samples, foreground
@@ -12,10 +12,18 @@
 //! object; the only difference is what the list holds and what the field
 //! filters.
 //!
-//! Both routes put their field in the header: on Browse it filters venues, on
-//! Create it *is* the new venue's name. A route whose header emptied out on
-//! the way to creating something would make the two feel like separate
-//! screens rather than one picker with a second mode.
+//! Every route puts its field in the header: on Browse it filters venues, on
+//! Create it *is* the new venue's name, on Join it is the invite code. A route
+//! whose header emptied out on the way to creating something would make the
+//! routes feel like separate screens rather than one picker with modes.
+//!
+//! # Invites
+//!
+//! Share is the owner's view of one venue: its invite code with copy, replace
+//! and revoke, and everyone who can open it. Join redeems a code. Both are
+//! routes of this one card rather than dialogs of their own, because "who can
+//! open this room" and "open a room someone gave me" are questions about the
+//! catalogue this card already is.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -23,38 +31,44 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use luma_lib::models::venues::Venue;
+use luma_lib::models::venues::{display_share_code, Venue, VenueMember, ROLE_OWNER};
 
 use crate::agent::TabStatus;
+use crate::library::LibraryError;
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
 use luma_ui::icons::IconName;
-use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
+use luma_ui::{glass, ladder, radius};
 
 use crate::{shell::Overlay, Luma};
 
 pub(crate) const LAST_VENUE: &str = "last-venue";
-/// The one size both routes take. Like the track palette, browse and create
-/// are the same object a step apart, so the card never resizes and the morph
-/// spends its whole span on the content instead of the frame.
+/// The one size every route takes. Like the track palette, the routes are the
+/// same object a step apart, so the card never resizes and the morph spends
+/// its whole span on the content instead of the frame.
 const PICKER_SIZE: MorphSize = MorphSize::new(680.0, 460.0);
 /// Venue rows are taller than a track row: a venue carries a name, a
 /// description and a date, and the row is the primary object on this screen
 /// rather than one of hundreds.
 const CARD_HEIGHT: f32 = 54.;
+/// The example in every place a code is described, so the placeholder and the
+/// prose cannot disagree about what a code looks like.
+const EXAMPLE_CODE: &str = "K7M4-Q9TX";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
     Browse,
     Create,
+    Join,
+    Share,
 }
 
 impl Route {
     fn descriptor(self) -> RouteDescriptor<Self> {
         RouteDescriptor::exact(self, PICKER_SIZE.width, PICKER_SIZE.height)
-            .with_transition(morph::direction(self == Self::Create))
+            .with_transition(morph::direction(self != Self::Browse))
     }
 }
 
@@ -62,6 +76,37 @@ impl Route {
 enum FocusTarget {
     Search,
     CreateName,
+    JoinCode,
+    SharePrimary,
+}
+
+/// The Share route's subject: one venue this account owns.
+struct Sharing {
+    venue: Venue,
+    /// `None` while the first read is in flight.
+    members: Option<Result<Vec<VenueMember>, String>>,
+    member_focuses: HashMap<String, FocusHandle>,
+    /// A code write in flight; the code's buttons are inert until it lands.
+    busy: bool,
+    error: Option<String>,
+    /// The code on screen was just copied. Cleared when the code changes.
+    copied: bool,
+    /// The member whose Remove was pressed once and now asks to be confirmed.
+    confirm_remove: Option<String>,
+}
+
+impl Sharing {
+    fn new(venue: Venue) -> Self {
+        Self {
+            venue,
+            members: None,
+            member_focuses: HashMap::new(),
+            busy: false,
+            error: None,
+            copied: false,
+            confirm_remove: None,
+        }
+    }
 }
 
 /// One picker instance. `loaded` is deliberately separate from `venues`: an
@@ -77,38 +122,55 @@ pub(crate) struct VenuePicker {
     create_name: String,
     create_error: Option<String>,
     creating: bool,
-    /// The header band's two fields — see the module docs on why both routes
-    /// put one there.
+    join_code: String,
+    join_error: Option<String>,
+    joining: bool,
+    sharing: Option<Sharing>,
+    /// The header band's fields — see the module docs on why every route
+    /// puts one there.
     search: Entity<TextInput>,
     name: Entity<TextInput>,
+    code: Entity<TextInput>,
     search_focus: FocusHandle,
     create_focus: FocusHandle,
+    code_focus: FocusHandle,
     /// One handle per header control. A `tab_index` alone makes an element a
     /// stop that cannot *hold* focus — gpui then settles focus on the nearest
     /// focusable ancestor, which is the dialog container, and the ring reads as
     /// broken. Every stop needs a handle of its own.
-    /// The create route's Back cap. Browse has nothing in that slot — patterns
-    /// are reached from the tab strip's + menu, not from the venue switcher:
-    /// picking a room and picking a light pattern are different questions, and
-    /// only one of them is what this dialog is for.
+    ///
+    /// The Back cap of every route but Browse. Browse has nothing in that slot
+    /// — patterns are reached from the tab strip's + menu, not from the venue
+    /// switcher: picking a room and picking a light pattern are different
+    /// questions, and only one of them is what this dialog is for.
     leading_focus: FocusHandle,
+    /// The header's committing chip: Create on Browse and Create, Join on Join.
     create_action_focus: FocusHandle,
+    join_entry_focus: FocusHandle,
     close_focus: FocusHandle,
+    /// Share's first control: Copy when there is a code, Create when not.
+    share_primary_focus: FocusHandle,
+    share_rotate_focus: FocusHandle,
+    share_revoke_focus: FocusHandle,
     venue_focuses: HashMap<String, FocusHandle>,
+    /// The Share chip on each owned venue's row.
+    share_focuses: HashMap<String, FocusHandle>,
     focus_pending: Option<FocusTarget>,
     /// Which venue the arrow keys are on. Not a selection: opening a venue is
     /// the only thing this list does, so there is no state to keep.
     active: usize,
     list_scroll: ScrollHandle,
-    _field_subscriptions: [Subscription; 2],
+    _field_subscriptions: [Subscription; 3],
 }
 
 impl VenuePicker {
     fn loading(generation: u64, cx: &mut Context<Luma>) -> Self {
         let search = cx.new(|cx| TextInput::search("Search venues…", cx));
         let name = cx.new(|cx| TextInput::search("Venue name", cx));
+        let code = cx.new(|cx| TextInput::search(format!("Invite code, like {EXAMPLE_CODE}"), cx));
         let search_focus = search.read(cx).focus_handle(cx);
         let create_focus = name.read(cx).focus_handle(cx);
+        let code_focus = code.read(cx).focus_handle(cx);
         let subscriptions = [
             cx.subscribe(&search, |luma, field, event, cx| {
                 if event == &text_input::Event::Edited {
@@ -126,6 +188,14 @@ impl VenuePicker {
                     cx.notify();
                 }
             }),
+            cx.subscribe(&code, |luma, field, event, cx| {
+                if event == &text_input::Event::Edited {
+                    let code = field.read(cx).text().to_string();
+                    luma.join_code_changed(code, cx);
+                } else {
+                    cx.notify();
+                }
+            }),
         ];
         Self {
             generation,
@@ -138,14 +208,25 @@ impl VenuePicker {
             create_name: String::new(),
             create_error: None,
             creating: false,
+            join_code: String::new(),
+            join_error: None,
+            joining: false,
+            sharing: None,
             search,
             name,
+            code,
             search_focus,
             create_focus,
+            code_focus,
             leading_focus: cx.focus_handle().tab_stop(true),
             create_action_focus: cx.focus_handle().tab_stop(true),
+            join_entry_focus: cx.focus_handle().tab_stop(true),
             close_focus: cx.focus_handle().tab_stop(true),
+            share_primary_focus: cx.focus_handle().tab_stop(true),
+            share_rotate_focus: cx.focus_handle().tab_stop(true),
+            share_revoke_focus: cx.focus_handle().tab_stop(true),
             venue_focuses: HashMap::new(),
+            share_focuses: HashMap::new(),
             focus_pending: None,
             active: 0,
             list_scroll: ScrollHandle::new(),
@@ -154,11 +235,7 @@ impl VenuePicker {
     }
 
     fn finish(&mut self, venues: Vec<Venue>, cx: &mut Context<Luma>) {
-        self.venue_focuses = venues
-            .iter()
-            .map(|venue| (venue.id.clone(), cx.focus_handle().tab_stop(true)))
-            .collect();
-        self.venues = venues.into();
+        self.adopt(venues, cx);
         self.loaded = true;
         self.error = None;
         if self.venues.is_empty() {
@@ -169,6 +246,49 @@ impl VenuePicker {
             self.focus_pending = Some(FocusTarget::Search);
         }
         self.refilter();
+    }
+
+    /// Take a fresh catalogue without moving: the route, the query and the
+    /// venue being shared all stay. Rows that arrive by download land here.
+    fn refresh(&mut self, venues: Vec<Venue>, cx: &mut Context<Luma>) {
+        let active = self.shown.get(self.active).map(|venue| venue.id.clone());
+        self.adopt(venues, cx);
+        self.refilter();
+        if let Some(index) =
+            active.and_then(|id| self.shown.iter().position(|venue| venue.id == id))
+        {
+            self.active = index;
+        }
+        if let Some(sharing) = self.sharing.as_mut() {
+            if let Some(venue) = self
+                .venues
+                .iter()
+                .find(|venue| venue.id == sharing.venue.id)
+            {
+                if venue.share_code != sharing.venue.share_code {
+                    sharing.copied = false;
+                }
+                sharing.venue = venue.clone();
+            }
+        }
+    }
+
+    fn adopt(&mut self, venues: Vec<Venue>, cx: &mut Context<Luma>) {
+        let mut old = std::mem::take(&mut self.venue_focuses);
+        let mut old_share = std::mem::take(&mut self.share_focuses);
+        for venue in &venues {
+            let focus = old
+                .remove(&venue.id)
+                .unwrap_or_else(|| cx.focus_handle().tab_stop(true));
+            self.venue_focuses.insert(venue.id.clone(), focus);
+            if shareable(venue) {
+                let focus = old_share
+                    .remove(&venue.id)
+                    .unwrap_or_else(|| cx.focus_handle().tab_stop(true));
+                self.share_focuses.insert(venue.id.clone(), focus);
+            }
+        }
+        self.venues = venues.into();
     }
 
     fn fail(&mut self, error: impl Into<String>) {
@@ -197,6 +317,16 @@ impl VenuePicker {
             .request(route.descriptor(), Instant::now(), reduced);
     }
 
+    /// Where Back goes from Join: the list, or — for someone with no venue
+    /// yet — the create route they came from.
+    fn join_return(&self) -> Route {
+        if self.venues.is_empty() {
+            Route::Create
+        } else {
+            Route::Browse
+        }
+    }
+
     fn refilter(&mut self) {
         self.active = 0;
         let query = self.query.trim().to_lowercase();
@@ -214,6 +344,31 @@ impl VenuePicker {
             .cloned()
             .collect::<Vec<_>>()
             .into();
+    }
+}
+
+/// Whether this account may invite people into `venue`: it owns it, and it
+/// is an account's venue rather than the signed-out guest's.
+fn shareable(venue: &Venue) -> bool {
+    venue.is_owner() && venue.uid.is_some()
+}
+
+/// What a command's refusal says to a person: the seam's own prose, without
+/// the wire name the `Display` of a [`LibraryError`] leads with.
+fn prose(error: &LibraryError) -> String {
+    error
+        .command()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| error.to_string())
+}
+
+/// A member as the owner sees them. The server keeps no profile another
+/// account may read, so a member is the start of their account id.
+fn member_name(member: &VenueMember) -> String {
+    if member.is_you {
+        "You".into()
+    } else {
+        format!("Account {}", member.uid.chars().take(8).collect::<String>())
     }
 }
 
@@ -332,6 +487,43 @@ impl Luma {
         .detach();
     }
 
+    /// Rows changed under an open picker — a download, or this device's own
+    /// sharing write coming back. Re-read the catalogue in place: rebuilding
+    /// the picker would throw away the route and whatever was typed, and a
+    /// sync arriving mid-join would bounce the person back to the list.
+    pub(crate) fn refresh_venues(&mut self, cx: &mut Context<Self>) {
+        let (generation, sharing) = match self.overlay.as_open() {
+            Some(Overlay::Venues(state)) if state.loaded && state.error.is_none() => (
+                state.generation,
+                state
+                    .sharing
+                    .as_ref()
+                    .filter(|_| state.route() == Route::Share)
+                    .map(|sharing| sharing.venue.id.clone()),
+            ),
+            Some(Overlay::Venues(_)) => return self.show_venues(cx),
+            _ => return,
+        };
+        let pending = self.library.venues();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let (Some(Overlay::Venues(state)), Ok(rows)) = (this.overlay.open_mut(), result)
+                {
+                    if state.generation == generation {
+                        state.refresh(rows, cx);
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+        if let Some(venue_id) = sharing {
+            self.load_share_members(venue_id, cx);
+        }
+    }
+
     /// Mirror an edit of the venue filter into the model.
     fn venue_query_changed(&mut self, query: String, cx: &mut Context<Self>) {
         self.with_venue_picker(cx, |state| {
@@ -349,6 +541,13 @@ impl Luma {
         });
     }
 
+    fn join_code_changed(&mut self, code: String, cx: &mut Context<Self>) {
+        self.with_venue_picker(cx, |state| {
+            state.join_code = code;
+            state.join_error = None;
+        });
+    }
+
     /// The picker's keyboard, in the same navigator shape as the track
     /// palette: arrows walk the list, Enter acts, ⌘⏎ commits, ⌫ on an empty
     /// field steps back.
@@ -360,6 +559,8 @@ impl Luma {
         let field_empty = match route {
             Route::Browse => state.query.is_empty(),
             Route::Create => state.create_name.is_empty(),
+            Route::Join => state.join_code.is_empty(),
+            Route::Share => true,
         };
         let key = event.keystroke.key.as_str();
         let modified = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
@@ -373,8 +574,15 @@ impl Luma {
             // On the create route Enter alone commits: there is no list under
             // the cursor for it to mean anything else.
             (Route::Create, "enter") => self.create_venue(cx),
+            (Route::Create | Route::Browse, "j") if modified => self.show_join_venue(cx),
+            // A code is edited, so ← only leaves an empty field.
+            (Route::Join, "left" | "backspace") if field_empty => self.cancel_join_venue(cx),
+            (Route::Join, "enter") => self.join_venue(cx),
+            (Route::Share, "left" | "backspace") => self.close_share_venue(cx),
+            (Route::Share, "c") if modified => self.copy_share_code(cx),
             (Route::Browse, "up") => self.step_venue(-1, cx),
             (Route::Browse, "down") => self.step_venue(1, cx),
+            (Route::Browse, "i") if modified => self.share_active_venue(cx),
             (Route::Browse, "enter") if modified => self.show_create_venue(cx),
             (Route::Browse, "enter" | "right") => self.open_active_venue(cx),
             _ => {}
@@ -464,6 +672,309 @@ impl Luma {
         .detach();
     }
 
+    // -----------------------------------------------------------------------
+    // Join
+    // -----------------------------------------------------------------------
+
+    fn show_join_venue(&mut self, cx: &mut Context<Self>) {
+        let reduced = luma_ui::motion::reduced_motion(cx);
+        self.with_venue_picker(cx, move |state| {
+            if !state.loaded || state.error.is_some() {
+                return;
+            }
+            state.go(Route::Join, reduced);
+            state.join_error = None;
+            state.focus_pending = Some(FocusTarget::JoinCode);
+        });
+    }
+
+    fn cancel_join_venue(&mut self, cx: &mut Context<Self>) {
+        let reduced = luma_ui::motion::reduced_motion(cx);
+        self.with_venue_picker(cx, move |state| {
+            if state.joining {
+                return;
+            }
+            let back = state.join_return();
+            state.go(back, reduced);
+            state.focus_pending = Some(if back == Route::Browse {
+                FocusTarget::Search
+            } else {
+                FocusTarget::CreateName
+            });
+        });
+    }
+
+    fn join_venue(&mut self, cx: &mut Context<Self>) {
+        let Some(Overlay::Venues(state)) = self.overlay.open_mut() else {
+            return;
+        };
+        let code = state.join_code.trim().to_string();
+        if code.is_empty() || state.joining {
+            return;
+        }
+        state.joining = true;
+        state.join_error = None;
+        let generation = state.generation;
+        let pending = self.library.join_venue(&code);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
+                    return;
+                };
+                if state.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(venue) => this.open_venue(venue, cx),
+                    Err(error) => {
+                        state.joining = false;
+                        state.join_error = Some(prose(&error));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    // -----------------------------------------------------------------------
+    // Share
+    // -----------------------------------------------------------------------
+
+    fn share_active_venue(&mut self, cx: &mut Context<Self>) {
+        let id = match self.overlay.as_open() {
+            Some(Overlay::Venues(state)) => state
+                .shown
+                .get(state.active)
+                .filter(|venue| shareable(venue))
+                .map(|venue| venue.id.clone()),
+            _ => None,
+        };
+        if let Some(id) = id {
+            self.show_share_venue(&id, cx);
+        }
+    }
+
+    fn show_share_venue(&mut self, venue_id: &str, cx: &mut Context<Self>) {
+        let reduced = luma_ui::motion::reduced_motion(cx);
+        let mut opened = false;
+        self.with_venue_picker(cx, |state| {
+            let Some(venue) = state
+                .venues
+                .iter()
+                .find(|venue| venue.id == venue_id && shareable(venue))
+                .cloned()
+            else {
+                return;
+            };
+            state.sharing = Some(Sharing::new(venue));
+            state.go(Route::Share, reduced);
+            state.focus_pending = Some(FocusTarget::SharePrimary);
+            opened = true;
+        });
+        if opened {
+            self.load_share_members(venue_id.to_owned(), cx);
+        }
+    }
+
+    fn close_share_venue(&mut self, cx: &mut Context<Self>) {
+        let reduced = luma_ui::motion::reduced_motion(cx);
+        self.with_venue_picker(cx, move |state| {
+            state.go(Route::Browse, reduced);
+            state.focus_pending = Some(FocusTarget::Search);
+        });
+    }
+
+    fn load_share_members(&mut self, venue_id: String, cx: &mut Context<Self>) {
+        let Some(Overlay::Venues(state)) = self.overlay.as_open() else {
+            return;
+        };
+        let generation = state.generation;
+        let pending = self.library.venue_members(&venue_id);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
+                    return;
+                };
+                if state.generation != generation {
+                    return;
+                }
+                let Some(sharing) = state
+                    .sharing
+                    .as_mut()
+                    .filter(|sharing| sharing.venue.id == venue_id)
+                else {
+                    return;
+                };
+                if let Ok(members) = &result {
+                    let mut old = std::mem::take(&mut sharing.member_focuses);
+                    for member in members.iter().filter(|member| !member.is_you) {
+                        let focus = old
+                            .remove(&member.uid)
+                            .unwrap_or_else(|| cx.focus_handle().tab_stop(true));
+                        sharing.member_focuses.insert(member.uid.clone(), focus);
+                    }
+                }
+                sharing.members = Some(result.map_err(|error| prose(&error)));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Mint a code, or replace the one there is.
+    fn rotate_share_code(&mut self, cx: &mut Context<Self>) {
+        let Some(venue_id) = self.begin_share_write() else {
+            return;
+        };
+        let pending = self.library.rotate_share_code(&venue_id);
+        self.finish_share_write(venue_id, async move { pending.await.map(Some) }, cx);
+    }
+
+    fn revoke_share_code(&mut self, cx: &mut Context<Self>) {
+        let Some(venue_id) = self.begin_share_write() else {
+            return;
+        };
+        let pending = self.library.revoke_share_code(&venue_id);
+        self.finish_share_write(venue_id, async move { pending.await.map(|()| None) }, cx);
+    }
+
+    /// Mark the code busy and name the venue, unless a write is in flight.
+    fn begin_share_write(&mut self) -> Option<String> {
+        let Some(Overlay::Venues(state)) = self.overlay.open_mut() else {
+            return None;
+        };
+        let sharing = state.sharing.as_mut().filter(|sharing| !sharing.busy)?;
+        sharing.busy = true;
+        sharing.error = None;
+        sharing.confirm_remove = None;
+        Some(sharing.venue.id.clone())
+    }
+
+    fn finish_share_write(
+        &mut self,
+        venue_id: String,
+        pending: impl std::future::Future<Output = Result<Option<String>, LibraryError>> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Overlay::Venues(state)) = self.overlay.as_open() else {
+            return;
+        };
+        let generation = state.generation;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
+                    return;
+                };
+                if state.generation != generation {
+                    return;
+                }
+                let Some(sharing) = state
+                    .sharing
+                    .as_mut()
+                    .filter(|sharing| sharing.venue.id == venue_id)
+                else {
+                    return;
+                };
+                sharing.busy = false;
+                match result {
+                    Ok(code) => {
+                        sharing.venue.share_code = code.clone();
+                        sharing.copied = false;
+                        // The list's copy of the venue too, so Back shows the
+                        // same code the next Share will.
+                        state.venues = state
+                            .venues
+                            .iter()
+                            .cloned()
+                            .map(|mut venue| {
+                                if venue.id == venue_id {
+                                    venue.share_code = code.clone();
+                                }
+                                venue
+                            })
+                            .collect::<Vec<_>>()
+                            .into();
+                    }
+                    Err(error) => sharing.error = Some(prose(&error)),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn copy_share_code(&mut self, cx: &mut Context<Self>) {
+        let code = match self.overlay.as_open() {
+            Some(Overlay::Venues(state)) => state
+                .sharing
+                .as_ref()
+                .and_then(|sharing| sharing.venue.share_code.as_deref())
+                .map(display_share_code),
+            _ => None,
+        };
+        let Some(code) = code else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(code));
+        self.with_venue_picker(cx, |state| {
+            if let Some(sharing) = state.sharing.as_mut() {
+                sharing.copied = true;
+            }
+        });
+    }
+
+    /// The first press asks; the second, on the same member, removes.
+    fn remove_venue_member(&mut self, uid: &str, cx: &mut Context<Self>) {
+        let Some(Overlay::Venues(state)) = self.overlay.open_mut() else {
+            return;
+        };
+        let generation = state.generation;
+        let Some(sharing) = state.sharing.as_mut() else {
+            return;
+        };
+        if sharing.confirm_remove.as_deref() != Some(uid) {
+            sharing.confirm_remove = Some(uid.to_owned());
+            cx.notify();
+            return;
+        }
+        sharing.confirm_remove = None;
+        sharing.error = None;
+        let venue_id = sharing.venue.id.clone();
+        let pending = self.library.remove_venue_member(&venue_id, uid);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                let current = matches!(
+                    this.overlay.as_open(),
+                    Some(Overlay::Venues(state)) if state.generation == generation
+                );
+                if !current {
+                    return;
+                }
+                if let Err(error) = result {
+                    if let Some(Overlay::Venues(state)) = this.overlay.open_mut() {
+                        if let Some(sharing) = state.sharing.as_mut() {
+                            sharing.error = Some(prose(&error));
+                        }
+                    }
+                }
+                this.load_share_members(venue_id, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn open_picker_venue(&mut self, id: &str, cx: &mut Context<Self>) {
         let venue = match self.overlay.as_open() {
             Some(Overlay::Venues(state)) => {
@@ -507,6 +1018,8 @@ pub(crate) fn tick(
         state.focus_pending = Some(match route {
             Route::Browse => FocusTarget::Search,
             Route::Create => FocusTarget::CreateName,
+            Route::Join => FocusTarget::JoinCode,
+            Route::Share => FocusTarget::SharePrimary,
         });
     }
     let Some(target) = state.focus_pending.take() else {
@@ -515,6 +1028,8 @@ pub(crate) fn tick(
     match target {
         FocusTarget::Search => window.focus(&state.search_focus, cx),
         FocusTarget::CreateName => window.focus(&state.create_focus, cx),
+        FocusTarget::JoinCode => window.focus(&state.code_focus, cx),
+        FocusTarget::SharePrimary => window.focus(&state.share_primary_focus, cx),
     }
 }
 
@@ -569,9 +1084,11 @@ fn route_body(
         .child(header(state, route, mode, app, window))
         .child(div().flex_1().min_h_0().flex().child(match route {
             Route::Browse => browser(state, statuses, mode, app, window, cx),
-            Route::Create => create(state),
+            Route::Create => create(state, mode, app),
+            Route::Join => join(state),
+            Route::Share => share(state, mode, app, window),
         }))
-        .child(footer(route))
+        .child(footer(state, route))
         .into_any_element()
 }
 
@@ -587,14 +1104,23 @@ fn header(
     window: &Window,
 ) -> Div {
     let interactive = mode == ContentMode::Interactive;
-    let creating = route == Route::Create;
     let mut band = float::header_band();
 
     // Back exists only where there is somewhere to go: the browse route is
-    // the root of this dialog.
-    if creating && !state.venues.is_empty() {
+    // the root of this dialog, and onboarding's create route has no list
+    // behind it.
+    let back: Option<(bool, fn(&mut Luma, &mut Context<Luma>))> = match route {
+        Route::Browse => None,
+        Route::Create => (!state.venues.is_empty()).then_some((
+            !state.creating,
+            Luma::cancel_create_venue as fn(&mut Luma, &mut Context<Luma>),
+        )),
+        Route::Join => Some((!state.joining, Luma::cancel_join_venue)),
+        Route::Share => Some((true, Luma::close_share_venue)),
+    };
+    if let Some((enabled, go_back)) = back {
         let cancel = app.clone();
-        let pressable = interactive && !state.creating;
+        let pressable = interactive && enabled;
         let cap = float::key_cap();
         let cap = if pressable {
             float::key_cap_pressable(cap)
@@ -602,25 +1128,37 @@ fn header(
             cap
         };
         band = band.child(
-            cap.id("cancel-create-venue")
+            cap.id("venue-dialog-back")
                 .when(interactive, |cap| {
                     cap.track_focus(&state.leading_focus).tab_index(0)
                 })
                 .when(pressable, |cap| {
-                    cap.on_click(move |_, _, cx| {
-                        cancel.update(cx, |this, cx| this.cancel_create_venue(cx))
-                    })
+                    cap.on_click(move |_, _, cx| cancel.update(cx, |this, cx| go_back(this, cx)))
                 })
                 .child(gpui_component::Icon::new(IconName::ArrowLeft).size(px(12.5)))
-                .agent_node(Role::Button, "Cancel")
-                .agent_disabled(!interactive || state.creating)
+                // Named for where it goes: the window's own Back is a button too.
+                .agent_node(
+                    Role::Button,
+                    match route {
+                        Route::Create => "Cancel",
+                        Route::Share => "Back to venues",
+                        _ => "Back",
+                    },
+                )
+                .agent_disabled(!pressable)
                 .agent_focused(interactive && state.leading_focus.is_focused(window)),
         );
     }
 
-    band = band.child(field(state, route, mode, window));
+    band = band.child(match route {
+        Route::Share => share_title(state),
+        _ => field(state, route, mode, window),
+    });
 
-    if let Some(chip) = create_chip(state, route, mode, app, window) {
+    if route == Route::Browse && state.loaded && state.error.is_none() {
+        band = band.child(join_entry(state, interactive, app, window));
+    }
+    if let Some(chip) = commit_chip(state, route, mode, app, window) {
         band = band.child(chip);
     }
 
@@ -645,8 +1183,9 @@ fn header(
 }
 
 /// The header's one field: the venue filter on browse, the new venue's name on
-/// create. Same slot, because it is the same question one step apart — "which
-/// room?" and "what is this room called?".
+/// create, the invite code on join. Same slot, because it is the same question
+/// one step apart — "which room?", "what is this room called?", "which room
+/// were you given?".
 fn field(state: &VenuePicker, route: Route, mode: ContentMode, window: &Window) -> AnyElement {
     let interactive = mode == ContentMode::Interactive;
     // The field is its own tab stop (see `TextInput`); this slot only sizes it.
@@ -654,6 +1193,7 @@ fn field(state: &VenuePicker, route: Route, mode: ContentMode, window: &Window) 
     // The semantic label is the VALUE once there is one, falling back to the
     // placeholder. A driver asserting on this field is asking what it says,
     // not what it would say if empty.
+    let placeholder;
     let (entity, focus, value, placeholder) = match route {
         Route::Browse => (
             &state.search,
@@ -667,6 +1207,15 @@ fn field(state: &VenuePicker, route: Route, mode: ContentMode, window: &Window) 
             state.create_name.as_str(),
             "Venue name",
         ),
+        Route::Join | Route::Share => {
+            placeholder = format!("Invite code, like {EXAMPLE_CODE}");
+            (
+                &state.code,
+                &state.code_focus,
+                state.join_code.as_str(),
+                placeholder.as_str(),
+            )
+        }
     };
     let label = if value.is_empty() { placeholder } else { value };
     if !interactive {
@@ -689,34 +1238,124 @@ fn field(state: &VenuePicker, route: Route, mode: ContentMode, window: &Window) 
         .into_any_element()
 }
 
+/// Share's header names the room, in the slot every other route puts its
+/// field: the question this route answers is "who can open *this*?".
+fn share_title(state: &VenuePicker) -> AnyElement {
+    let name = state
+        .sharing
+        .as_ref()
+        .map(|sharing| sharing.venue.name.clone())
+        .unwrap_or_default();
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_baseline()
+        .gap(px(6.0))
+        .text_size(px(14.0))
+        .child(
+            div()
+                .flex_none()
+                .text_color(ladder::muted_foreground())
+                .child("Share"),
+        )
+        .child(
+            div()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .child(name.clone()),
+        )
+        .agent_node(Role::Text, format!("Share {name}"))
+        .into_any_element()
+}
+
+/// Browse's way to Join: a quiet chip beside the lit Create chip, because
+/// joining is the less common of the two ways to get a venue.
+fn join_entry(
+    state: &VenuePicker,
+    interactive: bool,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> AnyElement {
+    let go = app.clone();
+    quiet_chip()
+        .id("show-join-venue")
+        .when(interactive, |chip| {
+            chip.track_focus(&state.join_entry_focus)
+                .tab_index(0)
+                .on_click(move |_, _, cx| go.update(cx, |this, cx| this.show_join_venue(cx)))
+        })
+        .child(
+            div()
+                .font_family(luma_ui::fonts::MONO)
+                .text_size(px(11.0))
+                .text_color(ladder::foreground_alpha(0.5))
+                .child("⌘J"),
+        )
+        .child("Join")
+        .agent_node(Role::Button, "Join a venue")
+        .agent_disabled(!interactive)
+        .agent_focused(interactive && state.join_entry_focus.is_focused(window))
+        .into_any_element()
+}
+
+/// The unlit sibling of [`float::btn_primary_chip`]: cap height, cap radius,
+/// a wash for a plate.
+fn quiet_chip() -> Div {
+    div()
+        .h(px(float::KEY_CAP_HEIGHT))
+        .px(px(8.0))
+        .rounded(px(radius::CAP))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .gap(px(5.0))
+        .text_size(px(12.0))
+        .text_color(ladder::foreground_alpha(0.85))
+        .bg(glass::ink(0.06))
+        .cursor_pointer()
+        .hover(|style| style.bg(glass::ink(0.10)))
+}
+
 /// The committing chip. On browse it opens the create route; on create it
-/// submits. One label, because from where the user sits it is one intent.
-fn create_chip(
+/// submits; on join it redeems the code. One label per intent, because from
+/// where the user sits it is one intent.
+fn commit_chip(
     state: &VenuePicker,
     route: Route,
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
 ) -> Option<AnyElement> {
-    if route == Route::Browse && (!state.loaded || state.error.is_some()) {
-        return None;
-    }
-    let creating = route == Route::Create;
     let interactive = mode == ContentMode::Interactive;
-    let label = if state.creating {
-        "Creating…"
-    } else {
-        "Create venue"
-    };
-    let enabled = if creating {
-        !state.create_name.trim().is_empty() && !state.creating
-    } else {
-        true
+    let (glyph, label, enabled, act): (_, _, _, fn(&mut Luma, &mut Context<Luma>)) = match route {
+        Route::Browse if !state.loaded || state.error.is_some() => return None,
+        Route::Browse => ("⌘↵", "Create venue", true, Luma::show_create_venue),
+        Route::Create => (
+            "↵",
+            if state.creating {
+                "Creating…"
+            } else {
+                "Create venue"
+            },
+            !state.create_name.trim().is_empty() && !state.creating,
+            Luma::create_venue,
+        ),
+        Route::Join => (
+            "↵",
+            if state.joining { "Joining…" } else { "Join" },
+            !state.join_code.trim().is_empty() && !state.joining,
+            Luma::join_venue,
+        ),
+        Route::Share => return None,
     };
     let go = app.clone();
     Some(
         float::btn_primary_chip()
-            .id("submit-create-venue")
+            .id("venue-dialog-commit")
             .when(enabled && interactive, |chip| {
                 chip.track_focus(&state.create_action_focus).tab_index(0)
             })
@@ -724,19 +1363,10 @@ fn create_chip(
                 chip.opacity(float::INERT_OPACITY)
             })
             .when(enabled && interactive, |chip| {
-                chip.on_click(move |_, _, cx| {
-                    go.update(cx, |this, cx| {
-                        if creating {
-                            this.create_venue(cx)
-                        } else {
-                            this.show_create_venue(cx)
-                        }
-                    })
-                })
+                chip.on_click(move |_, _, cx| go.update(cx, |this, cx| act(this, cx)))
             })
-            // The glyph must match the chord the footer legend promises: on
-            // browse ⌘↵ opens this route, on create ↵ alone commits it.
-            .child(if creating { "↵" } else { "⌘↵" })
+            // The glyph must match the chord the footer legend promises.
+            .child(glyph)
             .child(label)
             .agent_node(Role::Button, label)
             .agent_disabled(!enabled || !interactive)
@@ -745,22 +1375,40 @@ fn create_chip(
     )
 }
 
-fn footer(route: Route) -> Div {
+fn footer(state: &VenuePicker, route: Route) -> Div {
     let mut band = float::footer_band();
-    if route == Route::Browse {
-        band = band
+    band = match route {
+        Route::Browse => band
             .child(float::key_hint_pair(
                 IconName::ArrowUp,
                 IconName::ArrowDown,
                 "Navigate",
             ))
             .child(float::key_hint(IconName::ArrowRight, "Open"))
-            .child(float::key_hint_text("⌘↵", "Create"));
-    } else {
-        band = band
+            .child(float::key_hint_text("⌘↵", "Create"))
+            .child(float::key_hint_text("⌘J", "Join"))
+            .when(
+                state.shown.get(state.active).is_some_and(shareable),
+                |band| band.child(float::key_hint_text("⌘I", "Share")),
+            ),
+        Route::Create => band
+            .when(!state.venues.is_empty(), |band| {
+                band.child(float::key_hint(IconName::ArrowLeft, "Back"))
+            })
+            .child(float::key_hint_text("↵", "Create")),
+        Route::Join => band
             .child(float::key_hint(IconName::ArrowLeft, "Back"))
-            .child(float::key_hint_text("↵", "Create"));
-    }
+            .child(float::key_hint_text("↵", "Join")),
+        Route::Share => band
+            .child(float::key_hint(IconName::ArrowLeft, "Back"))
+            .when(
+                state
+                    .sharing
+                    .as_ref()
+                    .is_some_and(|sharing| sharing.venue.share_code.is_some()),
+                |band| band.child(float::key_hint_text("⌘C", "Copy code")),
+            ),
+    };
     band.child(div().flex_1().min_w_0())
 }
 
@@ -829,6 +1477,7 @@ fn venue_list(
                         status,
                         mode,
                         focus,
+                        state.share_focuses.get(&venue.id),
                         app,
                         window,
                     )
@@ -837,12 +1486,14 @@ fn venue_list(
         .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn venue_card(
     venue: &Venue,
     cursor: bool,
     status: Option<TabStatus>,
     mode: ContentMode,
     focus: &FocusHandle,
+    share_focus: Option<&FocusHandle>,
     app: &Entity<Luma>,
     window: &Window,
 ) -> impl IntoElement {
@@ -850,8 +1501,10 @@ fn venue_card(
     let id = venue.id.clone();
     let opened = app.clone();
     let key = format!("venue-{id}");
+    let group = SharedString::from(format!("venue-row-{id}"));
     float::menu_row(RowState::of(false, cursor), key)
         .id(ElementId::Name(SharedString::from(id.clone())))
+        .group(group.clone())
         .when(interactive, |row| row.track_focus(focus).tab_index(0))
         .w_full()
         .h(px(CARD_HEIGHT))
@@ -887,6 +1540,45 @@ fn venue_card(
                 }),
         )
         .children(status.map(|status| crate::agent::status_dot(status, &venue.name)))
+        // Whose room this is, said once: a venue someone shared carries the
+        // word; a venue this account owns carries the way to share it, shown
+        // where the pointer or the keyboard is so a list of rooms does not
+        // read as a list of buttons.
+        .when(venue.is_member(), |row| {
+            row.child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(ladder::muted_foreground())
+                    .child("Shared with you")
+                    .agent_node(Role::Text, format!("{} is shared with you", venue.name)),
+            )
+        })
+        .when_some(share_focus, |row, share_focus| {
+            let shared = app.clone();
+            let id = venue.id.clone();
+            let focused = interactive && share_focus.is_focused(window);
+            row.child(
+                quiet_chip()
+                    .id(ElementId::Name(SharedString::from(format!("share-{id}"))))
+                    .when(!(cursor || focused), |chip| {
+                        chip.opacity(0.0)
+                            .group_hover(group.clone(), |style| style.opacity(1.0))
+                    })
+                    .when(interactive, |chip| {
+                        chip.track_focus(share_focus)
+                            .tab_index(0)
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                shared.update(cx, |this, cx| this.show_share_venue(&id, cx))
+                            })
+                    })
+                    .child("Share")
+                    .agent_node(Role::Button, format!("Share {}", venue.name))
+                    .agent_disabled(!interactive)
+                    .agent_focused(focused),
+            )
+        })
         .child(
             div()
                 .flex_none()
@@ -943,14 +1635,9 @@ fn venue_error(error: &str, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// The create route's body: the prompt above, whatever went wrong below. The
-/// name itself is typed in the header band — see [`field`].
-fn create(state: &VenuePicker) -> AnyElement {
-    let heading = if state.venues.is_empty() {
-        "Create your first venue"
-    } else {
-        "A new room to light"
-    };
+/// A route's centred prompt: the heading, the line under it, then whatever
+/// went wrong. Create and Join are the same screen asking different things.
+fn prompt(heading: &str, line: &str, error: Option<String>) -> Div {
     div()
         .size_full()
         .flex()
@@ -963,25 +1650,379 @@ fn create(state: &VenuePicker) -> AnyElement {
             div()
                 .text_size(px(22.0))
                 .font_weight(FontWeight::LIGHT)
-                .child(heading)
-                .agent_node(Role::Text, heading),
+                .child(heading.to_string())
+                .agent_node(Role::Text, heading.to_string()),
         )
         .child(
             div()
                 .text_size(px(12.5))
                 .text_color(ladder::muted_foreground())
-                .child("Name it in the field above, then press ⌘↵."),
+                .child(line.to_string()),
         )
-        .when_some(state.create_error.clone(), |column, error| {
+        .when_some(error, |column, error| {
             column.child(
                 div()
-                    .max_w(px(520.0))
-                    .truncate()
+                    .max_w(px(560.0))
+                    .text_center()
+                    .text_size(px(12.5))
                     .text_color(ladder::danger())
                     .child(error.clone())
                     .agent_node(Role::Text, error),
             )
         })
+}
+
+/// The create route's body: the prompt above, whatever went wrong below. The
+/// name itself is typed in the header band — see [`field`].
+///
+/// Someone with no venue yet may have been sent a code rather than be here to
+/// build a room, so onboarding offers the way to Join beneath the prompt.
+fn create(state: &VenuePicker, mode: ContentMode, app: &Entity<Luma>) -> AnyElement {
+    let onboarding = state.venues.is_empty();
+    let heading = if onboarding {
+        "Create your first venue"
+    } else {
+        "A new room to light"
+    };
+    let interactive = mode == ContentMode::Interactive;
+    let go = app.clone();
+    prompt(
+        heading,
+        "Name it in the field above, then press ↵.",
+        state.create_error.clone(),
+    )
+    .when(onboarding && state.loaded, |column| {
+        column.child(
+            div().pt(px(6.0)).child(
+                float::btn("Have an invite code? Join a venue", "onboarding-join")
+                    .id("onboarding-join")
+                    .when(interactive, |button| {
+                        button.on_click(move |_, _, cx| {
+                            go.update(cx, |this, cx| this.show_join_venue(cx))
+                        })
+                    })
+                    .agent_node(Role::Button, "Join a venue")
+                    .agent_disabled(!interactive),
+            ),
+        )
+    })
+    .into_any_element()
+}
+
+/// The join route's body. The code is typed in the header band.
+fn join(state: &VenuePicker) -> AnyElement {
+    prompt(
+        "Join a venue",
+        "Enter the invite code its owner shared with you, then press ↵.",
+        state.join_error.clone(),
+    )
+    .into_any_element()
+}
+
+/// The share route's body: the code, then the people.
+fn share(
+    state: &VenuePicker,
+    mode: ContentMode,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> AnyElement {
+    let Some(sharing) = state.sharing.as_ref() else {
+        return div().into_any_element();
+    };
+    let interactive = mode == ContentMode::Interactive;
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .px(px(16.0))
+        .pt(px(16.0))
+        .gap(px(18.0))
+        .child(code_section(state, sharing, interactive, app, window))
+        .child(people_section(sharing, interactive, app, window))
+        .into_any_element()
+}
+
+fn code_section(
+    state: &VenuePicker,
+    sharing: &Sharing,
+    interactive: bool,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> Div {
+    let live = interactive && !sharing.busy;
+    let action = |label: &'static str,
+                  id: &'static str,
+                  node: &'static str,
+                  focus: &FocusHandle,
+                  act: fn(&mut Luma, &mut Context<Luma>)| {
+        let go = app.clone();
+        float::btn(label, id)
+            .id(id)
+            .when(interactive, |button| button.track_focus(focus).tab_index(0))
+            .when(live, |button| {
+                button.on_click(move |_, _, cx| go.update(cx, |this, cx| act(this, cx)))
+            })
+            .when(!live, |button| button.opacity(float::INERT_OPACITY))
+            .agent_node(Role::Button, node)
+            .agent_disabled(!live)
+            .agent_focused(interactive && focus.is_focused(window))
+    };
+
+    let plate = div()
+        .flex_1()
+        .min_w_0()
+        .h(px(44.0))
+        .px(px(14.0))
+        .rounded(px(radius::PANEL))
+        .bg(glass::ink(0.04))
+        .border_1()
+        .border_color(glass::hairline(0.06))
+        .flex()
+        .items_center();
+
+    let row = div().flex().flex_row().items_center().gap(px(6.0));
+    let row = match sharing.venue.share_code.as_deref() {
+        Some(code) => {
+            let shown = display_share_code(code);
+            row.child(
+                plate.child(
+                    div()
+                        .font_family(luma_ui::fonts::MONO)
+                        .text_size(px(20.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(shown.clone())
+                        .agent_node(Role::Text, shown),
+                ),
+            )
+            .child(action(
+                if sharing.copied { "Copied" } else { "Copy" },
+                "copy-share-code",
+                "Copy code",
+                &state.share_primary_focus,
+                Luma::copy_share_code,
+            ))
+            .child(action(
+                "New code",
+                "rotate-share-code",
+                "New code",
+                &state.share_rotate_focus,
+                Luma::rotate_share_code,
+            ))
+            .child(action(
+                "Revoke",
+                "revoke-share-code",
+                "Revoke code",
+                &state.share_revoke_focus,
+                Luma::revoke_share_code,
+            ))
+        }
+        None => {
+            let go = app.clone();
+            row.child(
+                plate.child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(ladder::muted_foreground())
+                        .child("No invite code")
+                        .agent_node(Role::Text, "No invite code"),
+                ),
+            )
+            .child(
+                float::btn_primary(if sharing.busy {
+                    "Creating…"
+                } else {
+                    "Create invite code"
+                })
+                .id("create-share-code")
+                .when(interactive, |button| {
+                    button.track_focus(&state.share_primary_focus).tab_index(0)
+                })
+                .when(live, |button| {
+                    button.on_click(move |_, _, cx| {
+                        go.update(cx, |this, cx| this.rotate_share_code(cx))
+                    })
+                })
+                .when(!live, |button| button.opacity(float::INERT_OPACITY))
+                .agent_node(Role::Button, "Create invite code")
+                .agent_disabled(!live)
+                .agent_focused(interactive && state.share_primary_focus.is_focused(window)),
+            )
+        }
+    };
+
+    let note = if sharing.venue.share_code.is_some() {
+        // Short enough for one line. What a new code or a revoke does to the
+        // people already in (nothing) is said by the list below not changing.
+        "Anyone with this code can open and edit this venue.".to_string()
+    } else {
+        "Create a code and send it to someone to let them open and edit this venue.".to_string()
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .child(float::label("Invite code").px(px(2.0)))
+        .child(row)
+        .child(
+            div()
+                .px(px(2.0))
+                .text_size(px(12.0))
+                .text_color(ladder::muted_foreground())
+                .child(note),
+        )
+        .when_some(sharing.error.clone(), |column, error| {
+            column.child(
+                div()
+                    .px(px(2.0))
+                    .text_size(px(12.0))
+                    .text_color(ladder::danger())
+                    .child(error.clone())
+                    .agent_node(Role::Text, error),
+            )
+        })
+}
+
+fn people_section(
+    sharing: &Sharing,
+    interactive: bool,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> Div {
+    let heading = match &sharing.members {
+        Some(Ok(members)) => format!("People with access · {}", members.len()),
+        _ => "People with access".to_string(),
+    };
+    let rows: Vec<AnyElement> = match &sharing.members {
+        None => vec![float::empty_row("Loading…").into_any_element()],
+        Some(Err(error)) => vec![float::empty_row(error.clone())
+            .text_color(ladder::danger())
+            .agent_node(Role::Text, error.clone())
+            .into_any_element()],
+        Some(Ok(members)) => {
+            let mut rows: Vec<AnyElement> = members
+                .iter()
+                .map(|member| {
+                    member_row(
+                        member,
+                        sharing.member_focuses.get(&member.uid),
+                        sharing.confirm_remove.as_deref() == Some(member.uid.as_str()),
+                        interactive,
+                        app,
+                        window,
+                    )
+                })
+                .collect();
+            if members.iter().all(|member| member.is_you) {
+                rows.push(
+                    float::empty_row("Nobody else has access yet.")
+                        .agent_node(Role::Text, "Nobody else has access yet.")
+                        .into_any_element(),
+                );
+            }
+            rows
+        }
+    };
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(float::label(heading).px(px(2.0)))
+        .child(
+            div()
+                .id("venue-members")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .pb(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .children(rows),
+        )
+}
+
+fn member_row(
+    member: &VenueMember,
+    focus: Option<&FocusHandle>,
+    confirming: bool,
+    interactive: bool,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> AnyElement {
+    let name = member_name(member);
+    let detail = if member.role == ROLE_OWNER {
+        "Owner".to_string()
+    } else {
+        match relative_age(&member.since).as_str() {
+            "now" => "Joined just now".to_string(),
+            age => format!("Joined {age} ago"),
+        }
+    };
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .h(px(40.0))
+        .px(px(float::ROW_INSET))
+        .rounded(px(radius::ROW))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(13.0))
+                .when(!member.is_you, |name| {
+                    name.font_family(luma_ui::fonts::MONO).text_size(px(12.0))
+                })
+                .child(name.clone()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(11.5))
+                .text_color(ladder::muted_foreground())
+                .child(detail),
+        )
+        .when_some(focus, |row, focus| {
+            let go = app.clone();
+            let uid = member.uid.clone();
+            let label = if confirming {
+                "Remove access?"
+            } else {
+                "Remove"
+            };
+            row.child(
+                float::btn(label, format!("remove-{uid}"))
+                    .id(ElementId::Name(SharedString::from(format!("remove-{uid}"))))
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .text_size(px(12.0))
+                    .when(confirming, |button| button.text_color(ladder::danger()))
+                    .when(interactive, |button| {
+                        button
+                            .track_focus(focus)
+                            .tab_index(0)
+                            .on_click(move |_, _, cx| {
+                                go.update(cx, |this, cx| this.remove_venue_member(&uid, cx))
+                            })
+                    })
+                    .agent_node(
+                        Role::Button,
+                        if confirming {
+                            format!("Confirm removing {name}")
+                        } else {
+                            format!("Remove {name}")
+                        },
+                    )
+                    .agent_disabled(!interactive)
+                    .agent_focused(interactive && focus.is_focused(window)),
+            )
+        })
+        .agent_node(Role::Row, name)
         .into_any_element()
 }
 

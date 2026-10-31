@@ -417,6 +417,15 @@ impl Library {
             };
             #[cfg(feature = "agent")]
             let services = services.with_track_sources(import_sources);
+            // The harness has no server, so a code is redeemed against this
+            // library's own rows, which the fixture seeds.
+            #[cfg(feature = "agent")]
+            let services = {
+                let pool = services.db().0.clone();
+                services.with_share_codes(Arc::new(
+                    luma_lib::services::venue_sharing::LocalShareCodes::new(pool),
+                ))
+            };
             // The audio host keeps its own copy of the settings it reads, and
             // is only ever told by a write. A host that skipped this would run
             // the whole session on the defaults and ignore what the user last

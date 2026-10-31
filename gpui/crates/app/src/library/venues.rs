@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use luma_lib::dispatch::handlers;
 use luma_lib::models::folders::Folder;
-use luma_lib::models::venues::Venue;
+use luma_lib::models::venues::{Venue, VenueMember};
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 
 use super::{Cause, Library, LibraryError};
@@ -82,6 +82,64 @@ impl Library {
         let (name, description) = (name.to_owned(), description.map(str::to_owned));
         self.call("create_venue", |services| async move {
             handlers::venues::create_venue(&services, name, description).await
+        })
+    }
+
+    // -- sharing --------------------------------------------------------------
+
+    /// Give the venue a new share code, retiring the old one. Owner only.
+    pub fn rotate_share_code(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("rotate_share_code", |services| async move {
+            handlers::venues::rotate_share_code(&services, venue_id).await
+        })
+    }
+
+    /// Clear the venue's share code. Owner only.
+    pub fn revoke_share_code(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("revoke_share_code", |services| async move {
+            handlers::venues::revoke_share_code(&services, venue_id).await
+        })
+    }
+
+    /// Who can open the venue, owner first. Owner only.
+    pub fn venue_members(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<VenueMember>, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("list_venue_members", |services| async move {
+            handlers::venues::list_venue_members(&services, venue_id).await
+        })
+    }
+
+    /// Take `uid`'s access to the venue away. Owner only.
+    pub fn remove_venue_member(
+        &self,
+        venue_id: &str,
+        uid: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (venue_id, uid) = (venue_id.to_owned(), uid.to_owned());
+        self.call("remove_venue_member", |services| async move {
+            handlers::venues::remove_venue_member(&services, venue_id, uid).await
+        })
+    }
+
+    /// Redeem a share code, answering with the venue once it has downloaded.
+    pub fn join_venue(
+        &self,
+        code: &str,
+    ) -> impl Future<Output = Result<Venue, LibraryError>> + use<> {
+        let code = code.to_owned();
+        self.call("join_venue", |services| async move {
+            handlers::venues::join_venue(&services, code).await
         })
     }
 

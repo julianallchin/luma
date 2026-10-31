@@ -273,9 +273,11 @@ impl Luma {
         self.reload_stage(cx);
         self.refresh_score_listing(cx);
         // The venue list, when it is the thing on screen: a venue shared with
-        // this account arrives as rows and nothing else would say so.
+        // this account arrives as rows and nothing else would say so. In
+        // place, so a download never throws away a half-typed code or the
+        // venue being shared.
         if matches!(self.overlay.get(), Some(crate::shell::Overlay::Venues(_))) {
-            self.show_venues(cx);
+            self.refresh_venues(cx);
         }
         // The chat list is a listing of rows, so it is stale the moment a
         // conversation arrives — but only while it is the thing on screen.

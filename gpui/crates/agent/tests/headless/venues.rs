@@ -239,12 +239,16 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             // Patterns left this dialog: picking a room and picking a light
             // pattern are different questions, and only one of them is what
             // the venue switcher is for.
+            "button:Join a venue",
             "button:Create venue",
             // The palette's header carries its own dismissal cap, so the ring
             // now passes through it on the way to the list.
             "button:Close",
+            // A venue this account owns carries its Share chip inside the row.
             "card:Alpha Hall",
+            "button:Share Alpha Hall",
             "card:Beta Room",
+            "button:Share Beta Room",
         ];
         const focusable = new Set(focusOrder);
         const dialogBounds = dialog.find({ role: "card", label: "Venue dialog" }).bounds;
@@ -349,15 +353,18 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         serde_json::json!([
             "input:Search venues…",
             // shift-tab from the first stop wraps to the last…
-            "card:Beta Room",
+            "button:Share Beta Room",
             "input:Search venues…",
             // Patterns left this dialog: picking a room and picking a light
             // pattern are different questions, and only one of them is what
             // the venue switcher is for.
+            "button:Join a venue",
             "button:Create venue",
             "button:Close",
             "card:Alpha Hall",
+            "button:Share Alpha Hall",
             "card:Beta Room",
+            "button:Share Beta Room",
             "input:Search venues…"
         ])
     );
