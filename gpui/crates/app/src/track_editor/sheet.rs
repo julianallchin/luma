@@ -32,7 +32,8 @@ const ROW_GAP: f32 = 14.;
 /// A full-bleed control's width inside the sheet.
 const FIELD_W: f32 = luma_ui::sheet::CONTENT_WIDTH;
 
-/// The expression field, which shares its row with the fixture-picker chip.
+/// The expression field at its widest, and the least its suggestion menu is
+/// wide; it shares its row with the fixture-picker chip.
 const EXPR_W: f32 = FIELD_W - 62.;
 
 /// The trailing edge a burst of live edits is committed on.
@@ -710,11 +711,21 @@ pub(super) fn blend_modes(output: &str) -> &'static [BlendMode] {
 
 /// The inspector: the selected clip's controls, or the preset browser,
 /// filling the whole box it is given — Program's under the stage, or Direct's
-/// graph page.
-pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
+/// graph page. `lead` opens the header strip: the graph page's way back.
+pub(super) fn panel(state: &Editor, app: &Entity<Luma>, lead: Option<AnyElement>) -> AnyElement {
     let (label, body) = match state.sheet.built.as_ref() {
-        Some(built) => ("Clip graph", body(state, built, app)),
-        None => ("Presets", browser::body(state, app)),
+        Some(built) => ("Clip graph", body(state, built, app, lead)),
+        None => (
+            "Presets",
+            div()
+                .size_full()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .children(lead.map(|lead| strip().child(lead)))
+                .child(div().flex_1().min_h_0().child(browser::body(state, app)))
+                .into_any_element(),
+        ),
     };
     div()
         .id("clip-inspector")
@@ -727,88 +738,116 @@ pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// The sheet's content: the name, the selection and blend rows, then the
-/// graph canvas filling the rest.
-fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
-    let pad = px(luma_ui::sheet::PAD);
-    let mut rows: Vec<AnyElement> = Vec::new();
-    let mut graph = None;
-    if built.shape.is_some() {
-        rows.push(named("Selection", selection_row(built, app)));
-        rows.push(named("Blend", blend_select(state, built, app)));
-        if let Some(error) = &state.sheet.error {
-            rows.push(
-                div()
-                    .text_size(px(12.))
-                    .text_color(ladder::danger())
-                    .child(error.clone())
-                    .agent_node(Role::Text, error.clone())
-                    .into_any_element(),
-            );
-        }
-        if let (Some(controls), Some(shown)) = (&built.controls, &built.graph) {
-            graph = Some(graph::editor(state, controls, shown, app));
-        }
-    }
-    let header = div()
+/// The clip name field's width in the header strip.
+const NAME_W: f32 = 140.;
+
+/// The selection group — label, expression and pick chip — from the least
+/// it takes before the strip wraps to the most it grows to.
+const SELECTION_MIN_W: f32 = 200.;
+const SELECTION_MAX_W: f32 = 120. + EXPR_W;
+
+/// The header strip every inspector body opens with: one row of compact
+/// controls over a hairline. It wraps rather than overlapping when the pane
+/// is too narrow for one row.
+fn strip() -> Div {
+    div()
         .flex_none()
+        .w_full()
         .flex()
-        .flex_col()
-        .gap(px(6.))
-        .px(pad)
-        .pt(pad)
-        .pb(px(12.))
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap_x(px(10.))
+        .gap_y(px(6.))
+        .px(px(12.))
+        .py(px(8.))
+        .border_b_1()
+        .border_color(ladder::trim())
+}
+
+/// The sheet's content: one header strip — the way back, the name, the
+/// selection and blend — then the graph canvas filling the rest.
+fn body(state: &Editor, built: &Built, app: &Entity<Luma>, lead: Option<AnyElement>) -> AnyElement {
+    let header = strip()
+        .children(lead)
         .when(built.count > 1, |header| {
             let count = format!("{} clips", built.count);
             header.child(
                 div()
-                    .text_size(px(13.))
-                    .text_color(ladder::foreground())
+                    .flex_none()
+                    .text_size(px(12.))
+                    .text_color(ladder::muted_foreground())
                     .child(count.clone())
                     .agent_node(Role::Text, count),
             )
         })
         .child(
             div()
-                .w(px(FIELD_W))
+                .flex_none()
+                .w(px(NAME_W))
                 .key_context(text_input::DRAFT_CONTEXT)
                 .child(built.name.clone())
                 .agent_node(Role::Input, "Name"),
-        );
+        )
+        .when(built.shape.is_some(), |header| {
+            header
+                .child(labelled("Selection", selection_row(built, app), |row| {
+                    row.flex_1()
+                        .min_w(px(SELECTION_MIN_W))
+                        .max_w(px(SELECTION_MAX_W))
+                }))
+                .child(labelled("Blend", blend_select(state, built, app), |row| {
+                    row.flex_none()
+                }))
+        });
+    let error = state
+        .sheet
+        .error
+        .as_ref()
+        .filter(|_| built.shape.is_some())
+        .map(|error| {
+            div()
+                .flex_none()
+                .px(px(12.))
+                .py(px(6.))
+                .text_size(px(12.))
+                .text_color(ladder::danger())
+                .child(error.clone())
+                .agent_node(Role::Text, error.clone())
+        });
+    let graph = match (&built.shape, &built.controls, &built.graph) {
+        (Some(_), Some(controls), Some(shown)) => Some(graph::editor(state, controls, shown, app)),
+        _ => None,
+    };
     div()
         .size_full()
         .min_h_0()
         .flex()
         .flex_col()
         .child(header)
-        .child(luma_ui::float::divider())
-        .child(
-            div()
-                .id("args-sheet-fields")
-                .flex_none()
-                .w(px(FIELD_W + 2. * luma_ui::sheet::PAD))
-                .px(pad)
-                .py(px(12.))
-                .flex()
-                .flex_col()
-                .gap(px(ROW_GAP))
-                .children(rows),
-        )
-        .children(graph.map(|graph| {
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .border_t_1()
-                .border_color(ladder::trim())
-                .child(graph)
-        }))
+        .children(error)
+        .children(graph.map(|graph| div().flex_1().min_h_0().flex().flex_col().child(graph)))
         .into_any_element()
 }
 
+/// A header control with its name beside it, muted, rather than over it.
+fn labelled(label: &str, control: Div, size: impl FnOnce(Div) -> Div) -> AnyElement {
+    size(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .child(luma_ui::caption(label.to_string()))
+            .child(control),
+    )
+    .agent_node(Role::Row, label.to_string())
+    .into_any_element()
+}
+
 /// The selection row: the expression field, and a chip that opens the
-/// fixture picker. Both write the same value through `selection_live`.
+/// fixture picker. Both write the same value through `selection_live`. The
+/// field takes what the row has to spare, and gives it up first.
 fn selection_row(built: &Built, app: &Entity<Luma>) -> Div {
     let opened = app.clone();
     let pick_chip = luma_ui::float::chip()
@@ -819,11 +858,13 @@ fn selection_row(built: &Built, app: &Entity<Luma>) -> Div {
         })
         .agent_node(Role::Button, "Pick fixtures");
     div()
+        .flex_1()
+        .min_w_0()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(6.))
-        .child(built.selection.clone())
+        .child(div().flex_1().min_w_0().child(built.selection.clone()))
         .child(pick_chip)
 }
 
@@ -861,11 +902,6 @@ fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
 
 /// Air between a row's header line and its control.
 const LABEL_GAP: f32 = 6.;
-
-/// One labelled row, named for the agent tree.
-fn named(label: &str, control: Div) -> AnyElement {
-    sheet_row(label, Vec::new(), control)
-}
 
 /// Every row of the sheet has one shape. A header line one control tall
 /// carries the label, sentence case, and on its right anything that changes

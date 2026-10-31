@@ -583,8 +583,8 @@ struct Anchor {
 /// How long a zoom gesture's anchor survives without another notch.
 ///
 /// Long enough to cover a momentum flick, which keeps delivering after the
-/// fingers lift. One number serves the modified wheel and the trackpad pinch
-/// that arrives as ctrl-wheel.
+/// fingers lift. One number serves the modified wheel and the trackpad pinch,
+/// whether it arrives as ctrl-wheel or as a [`PinchEvent`].
 const ANCHOR_IDLE: Duration = Duration::from_millis(120);
 
 /// How often a scrub is allowed to move the transport. `SEEK_THROTTLE_MS`.
@@ -902,9 +902,10 @@ impl View {
     /// `ZOOM_SENSITIVITY`: the exponential rate a modified wheel notch scales
     /// by.
     const ZOOM_PER_PIXEL: f32 = 0.002;
-    /// The rate a trackpad pinch scales by, which arrives as a ctrl-wheel.
-    /// Five times [`Self::ZOOM_PER_PIXEL`], because a pinch's deltas are a
-    /// fifth the size of a wheel's.
+    /// The rate a trackpad pinch scales by where it arrives as a ctrl-wheel
+    /// (macOS sends a [`PinchEvent`] instead). Five times
+    /// [`Self::ZOOM_PER_PIXEL`], because a pinch's deltas are a fifth the size
+    /// of a wheel's.
     const ZOOM_PER_PIXEL_PINCH: f32 = 0.01;
     /// `MIN_ZOOM_Y` / `MAX_ZOOM_Y`, and `ZOOM_Y_SENSITIVITY` for the alt-wheel
     /// that walks between them.
@@ -2784,11 +2785,9 @@ impl Luma {
         wheel: Wheel,
         cx: &mut Context<Self>,
     ) {
-        let reduced_motion = cx.reduce_motion();
         self.with_timeline_view(cx, |editor| {
             let canvas = editor.canvas.get();
-            let offset = f32::from(at.x - canvas.origin.x);
-            let rate = match wheel {
+            match wheel {
                 Wheel::Scroll => {
                     editor.anchor = None;
                     editor.zoom_motion = None;
@@ -2806,11 +2805,30 @@ impl Luma {
                     );
                     return;
                 }
-                Wheel::Zoom(rate) => rate,
-            };
-            if delta.y == 0. {
-                return;
+                Wheel::Zoom(_) => {}
             }
+        });
+        if let Wheel::Zoom(rate) = wheel {
+            // Exponential in the scroll distance, so a fast flick and a slow
+            // one over the same distance land in the same place.
+            self.timeline_zoom(at, delta.y * rate, cx);
+        }
+    }
+
+    /// Scale the horizontal zoom by `e^amount` about the pointer: positive
+    /// zooms in. The wheel and the pinch both end here, so they share the
+    /// latched anchor, the clamp and the eased motion.
+    ///
+    /// In log space because that is what the eased motion integrates, and
+    /// because it makes successive steps add: a pinch's `1 + delta` factors
+    /// and a wheel's exponential notches compose the same way.
+    fn timeline_zoom(&mut self, at: Point<Pixels>, amount: f32, cx: &mut Context<Self>) {
+        if amount == 0. || !amount.is_finite() {
+            return;
+        }
+        let reduced_motion = cx.reduce_motion();
+        self.with_timeline_view(cx, |editor| {
+            let offset = f32::from(at.x - editor.canvas.get().origin.x);
             let now = std::time::Instant::now();
             editor.tick_zoom(now);
             let anchor = match editor.anchor {
@@ -2821,19 +2839,17 @@ impl Luma {
                     at: now,
                 },
             };
-            // Exponential in the scroll distance, so a fast flick and a slow
-            // one over the same distance land in the same place.
             if reduced_motion {
                 editor.zoom_motion = None;
-                editor.view.zoom = (editor.view.zoom * (delta.y * rate).exp())
-                    .clamp(editor.min_zoom(), View::MAX_ZOOM);
+                editor.view.zoom =
+                    (editor.view.zoom * amount.exp()).clamp(editor.min_zoom(), View::MAX_ZOOM);
                 editor.set_scroll(anchor.time as f32 * editor.view.zoom - anchor.offset);
             } else {
                 let floor = editor.min_zoom();
                 editor
                     .zoom_motion
                     .get_or_insert_with(|| zoom_motion::Zoom::new(editor.view.zoom, floor, now))
-                    .push(delta.y * rate);
+                    .push(amount);
             }
             editor.anchor = Some(Anchor { at: now, ..anchor });
         });
@@ -3196,9 +3212,10 @@ impl Layout {
 /// can change a clip has already converged, so no edit site has to remember to
 /// invalidate, and a frame's worth of picker motion is one install.
 ///
-/// The comparison is the *scene's* inputs, not the list's identity: a write
-/// landing re-resolves the working copy into an equal list, and re-compiling
-/// for that would put one composite behind every save.
+/// The comparison is the *scene's* inputs, not only the list's identity: a
+/// write landing re-resolves the working copy into an equal list, and
+/// re-compiling for that would put one composite behind every save — see
+/// [`stale`].
 ///
 /// Which *document* is installed is not this reconcile's question — a score
 /// switch is the stage's ([`crate::visualizer::Visualizer::relight`]), which
@@ -3208,10 +3225,10 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     if editor.compositing {
         return;
     }
-    let Some(last) = editor.composited.as_ref() else {
+    let Some(last) = editor.composited.as_mut() else {
         return;
     };
-    if same_scene(last, &editor.clips) {
+    if !stale(last, &editor.clips) {
         return;
     }
     let score = editor.score.id.clone();
@@ -3248,6 +3265,24 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     .detach();
 }
 
+/// Does the working copy `clips` light differently from the `installed` one?
+///
+/// Asked on every frame, so the answer is usually one pointer compare:
+/// [`Editor::replace_clips`] always swaps in a fresh list, so the same list is
+/// an unedited one. A new list that compiles to the same scene — a write
+/// landing re-resolves the working copy into an equal one — is adopted as
+/// installed, so it is compared field by field once rather than every frame.
+fn stale(installed: &mut Rc<[Clip]>, clips: &Rc<[Clip]>) -> bool {
+    if Rc::ptr_eq(installed, clips) {
+        return false;
+    }
+    if same_scene(installed, clips) {
+        *installed = Rc::clone(clips);
+        return false;
+    }
+    true
+}
+
 /// Do these two lists compile to the same scene?
 ///
 /// Every field the compositor reads and no others — a clip's lane, label and
@@ -3273,11 +3308,11 @@ pub(crate) fn inspector(
     cx: &mut Context<Luma>,
 ) -> AnyElement {
     sheet::sync(state, window, cx);
-    sheet::panel(state, app)
+    sheet::panel(state, app, None)
 }
 
 /// Direct's graph page: the selected clip's inspector where the timeline was,
-/// under a way back to it.
+/// with a way back to it at the head of the inspector's strip.
 ///
 /// Rendered inside the tab, in place of [`track_editor`], so the page keeps
 /// the tab's focus — ⌘Z still undoes, and Escape reaches the ladder that
@@ -3292,46 +3327,28 @@ pub(crate) fn clip_graph_page(
     cx: &mut Context<Luma>,
 ) -> AnyElement {
     sync_composite(state, cx);
-    let back = app.clone();
-    let bar = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .px(px(16.))
-        .py(px(8.))
-        .border_b_1()
-        .border_color(ladder::trim())
-        .child(
-            luma_ui::button("", Enabled::Yes)
-                .id("clip-graph-back")
-                .pl(px(6.))
-                .pr(px(10.))
-                .gap(px(4.))
-                .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(14.)),
-                )
-                .child("Timeline")
-                .on_click(move |_, _, cx| {
-                    back.update(cx, |this, cx| {
-                        this.close_clip_graph(cx);
-                    })
-                })
-                .agent_node(Role::Button, "Back to timeline"),
-        );
+    let close = app.clone();
+    let back = luma_ui::button("", Enabled::Yes)
+        .id("clip-graph-back")
+        .pl(px(6.))
+        .pr(px(10.))
+        .gap(px(4.))
+        .child(gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(14.)))
+        .child("Timeline")
+        .on_click(move |_, _, cx| {
+            close.update(cx, |this, cx| {
+                this.close_clip_graph(cx);
+            })
+        })
+        .agent_node(Role::Button, "Back to timeline")
+        .into_any_element();
+    sheet::sync(state, window, cx);
     div()
         .size_full()
         .flex()
-        .flex_col()
         .bg(ladder::background())
         .text_color(ladder::foreground())
-        .child(bar)
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .child(inspector(state, app, window, cx)),
-        )
+        .child(sheet::panel(state, app, Some(back)))
         .into_any_element()
 }
 
@@ -4107,6 +4124,22 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
         let at = event.position;
         zoomed.update(cx, |this, cx| this.timeline_wheel(at, delta, gesture, cx));
     });
+
+    // macOS hands a trackpad pinch over as its own event rather than as the
+    // ctrl-wheel other platforms send, so without this the timeline only ever
+    // heard the pinch on Linux and Windows. `delta` is the magnification:
+    // fingers apart is positive and means zoom in, which is already the sign
+    // `timeline_zoom` wants; taking the log turns the `1 + delta` factor into
+    // the additive step the wheel uses.
+    let pinched = app.clone();
+    let under = hitbox.clone();
+    window.on_mouse_event(move |event: &PinchEvent, phase, window, cx| {
+        if phase != DispatchPhase::Bubble || !under.should_handle_scroll(window) {
+            return;
+        }
+        let (at, amount) = (event.position, event.delta.ln_1p());
+        pinched.update(cx, |this, cx| this.timeline_zoom(at, amount, cx));
+    });
 }
 
 /// Paint the timeline in order: ground, ruler,
@@ -4694,16 +4727,36 @@ fn paint_clip(
     window: &mut Window,
     cx: &mut App,
 ) {
+    // Every primitive outside a layer costs gpui a search of everything
+    // painted so far, to order it; inside one, the layer's single ordering
+    // stands for all of it. So a clip is two layers: the plate, body and
+    // alpha line, then the frame and label over them. A layer draws its
+    // sprites after its quads and paths, so a heatmap, which is a sprite,
+    // goes down first on its own.
     let body_alpha = if selected { 1. } else { BODY_ALPHA };
     let header = Bounds {
         origin: box_.origin,
         size: size(box_.size.width, px(CLIP_HEADER)),
     };
-    window.paint_quad(fill(header, clip.color));
-    if !paint_preview(clip_body(box_), clip, previews, selected, window) {
-        window.paint_quad(fill(clip_body(box_), fade(clip.color, body_alpha)));
-    }
-    fades::paint(box_, clip, selected, window);
+    let pictured = paint_preview(clip_body(box_), clip, previews, selected, window);
+    window.paint_layer(box_, |window| {
+        window.paint_quad(fill(header, clip.color));
+        if !pictured {
+            window.paint_quad(fill(clip_body(box_), fade(clip.color, body_alpha)));
+        }
+        fades::paint(box_, clip, selected, window);
+    });
+    window.paint_layer(box_, |window| paint_frame(box_, clip, selected, window, cx));
+}
+
+/// A clip's border, header line, grips and label: everything over its body.
+fn paint_frame(
+    box_: Bounds<Pixels>,
+    clip: &Clip,
+    selected: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
     window.paint_quad(quad(
         box_,
         Corners::default(),
@@ -5124,7 +5177,55 @@ fn label(
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_snap, shift_time, Cursor, Grid, Labels, MIN_GRID_SPACING};
+    use super::{
+        bar_snap, shift_time, stale, BlendMode, Clip, Cursor, Grid, Labels, MIN_GRID_SPACING,
+    };
+    use std::rc::Rc;
+
+    fn clip(id: &str, start: f64) -> Clip {
+        Clip {
+            id: id.to_owned().into(),
+            output: "color".into(),
+            label: id.to_owned().into(),
+            summary: Default::default(),
+            color: luma_ui::ladder::pattern("color"),
+            start,
+            end: start + 1.,
+            row: 0,
+            z: 0,
+            blend: BlendMode::Replace,
+            core: None,
+        }
+    }
+
+    #[test]
+    fn an_edit_reaches_the_rig_and_an_equal_list_does_not() {
+        let mut installed: Rc<[Clip]> = vec![clip("a", 0.), clip("b", 2.)].into();
+        let unchanged = Rc::clone(&installed);
+        assert!(!stale(&mut installed, &unchanged));
+
+        // A re-read that resolves to the same scene is not a recompile, and
+        // is installed in its place.
+        let reread: Rc<[Clip]> = installed.to_vec().into();
+        assert!(!stale(&mut installed, &reread));
+        assert!(Rc::ptr_eq(&installed, &reread));
+
+        // An edit after that adoption is still seen.
+        let mut moved = reread.to_vec();
+        moved[1].start = 3.;
+        let edited: Rc<[Clip]> = moved.into();
+        assert!(stale(&mut installed, &edited));
+        assert!(
+            stale(&mut installed, &edited),
+            "nothing installs it but a composite"
+        );
+
+        // A lane or label is a picture of a clip, not an input to the scene.
+        let mut relabelled = reread.to_vec();
+        relabelled[0].label = "renamed".into();
+        relabelled[0].row = 4;
+        assert!(!stale(&mut installed, &relabelled.into()));
+    }
 
     #[test]
     fn a_vertical_sweep_is_a_line_over_its_lanes() {

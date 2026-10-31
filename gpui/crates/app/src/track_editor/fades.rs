@@ -611,8 +611,71 @@ pub(super) fn paint(box_: Bounds<Pixels>, clip: &Clip, selected: bool, window: &
         return;
     }
     let line = outline(frame, &alpha);
-    let at = |p: Point<f32>| point(px(p.x), px(p.y));
     let body_top = f32::from(frame.body.origin.y);
+    let weight = if selected { 1.5 } else { 1. };
+    let ink = fade(ladder::foreground(), if selected { 0.9 } else { 0.6 });
+    match line[..] {
+        [from, to] if from.y == to.y => {
+            // A level — nearly every clip — is two boxes, not two tessellated
+            // paths: the dimmed band above the line, and the line.
+            let span = |top: f32, height: f32| Bounds {
+                origin: point(px(from.x), px(top)),
+                size: size(px(to.x - from.x), px(height)),
+            };
+            window.paint_quad(fill(
+                span(body_top, from.y - body_top),
+                fade(ladder::background(), 0.4),
+            ));
+            window.paint_quad(fill(span(from.y - weight / 2., weight), ink));
+        }
+        _ => paint_line(&line, frame, body_top, weight, ink, window),
+    }
+    let Alpha::Fades(fades) = alpha else {
+        return;
+    };
+    let handles = handles(frame, fades);
+    let Some(over) = handles
+        .iter()
+        .map(|(_, centre)| mark(*centre))
+        .reduce(|a, b| a.union(&b))
+    else {
+        return;
+    };
+    // Their own layer, so they cover the line even where it is a path: a
+    // layer the caller opened draws its paths after all of its quads.
+    window.paint_layer(over, |window| {
+        for (_, centre) in handles {
+            window.paint_quad(quad(
+                mark(centre),
+                Corners::all(px(MARK / 2.)),
+                fade(ladder::foreground(), if selected { 0.95 } else { 0.7 }),
+                Edges::all(px(1.)),
+                fade(ladder::background(), 0.6),
+                BorderStyle::Solid,
+            ));
+        }
+    });
+}
+
+/// The drawn square of the handle centred on `centre`.
+fn mark(centre: Point<f32>) -> Bounds<Pixels> {
+    Bounds {
+        origin: point(px(centre.x - MARK / 2.), px(centre.y - MARK / 2.)),
+        size: size(px(MARK), px(MARK)),
+    }
+}
+
+/// A line that rises or falls, as paths: the body dimmed above it, and the
+/// line stroked.
+fn paint_line(
+    line: &[Point<f32>],
+    frame: Frame,
+    body_top: f32,
+    weight: f32,
+    ink: Hsla,
+    window: &mut Window,
+) {
+    let at = |p: Point<f32>| point(px(p.x), px(p.y));
     let mut shade = PathBuilder::fill();
     shade.move_to(at(point(frame.left, body_top)));
     shade.line_to(at(point(frame.left + frame.width, body_top)));
@@ -623,49 +686,37 @@ pub(super) fn paint(box_: Bounds<Pixels>, clip: &Clip, selected: bool, window: &
     if let Ok(path) = shade.build() {
         window.paint_path(path, fade(ladder::background(), 0.4));
     }
-    let mut stroke = PathBuilder::stroke(px(if selected { 1.5 } else { 1. }));
+    let mut stroke = PathBuilder::stroke(px(weight));
     stroke.move_to(at(line[0]));
     for p in &line[1..] {
         stroke.line_to(at(*p));
     }
     if let Ok(path) = stroke.build() {
-        window.paint_path(
-            path,
-            fade(ladder::foreground(), if selected { 0.9 } else { 0.6 }),
-        );
-    }
-    let Alpha::Fades(fades) = alpha else {
-        return;
-    };
-    for (_, centre) in handles(frame, fades) {
-        let mark = Bounds {
-            origin: point(px(centre.x - MARK / 2.), px(centre.y - MARK / 2.)),
-            size: size(px(MARK), px(MARK)),
-        };
-        window.paint_quad(quad(
-            mark,
-            Corners::all(px(MARK / 2.)),
-            fade(ladder::foreground(), if selected { 0.95 } else { 0.7 }),
-            Edges::all(px(1.)),
-            fade(ladder::background(), 0.6),
-            BorderStyle::Solid,
-        ));
+        window.paint_path(path, ink);
     }
 }
 
 /// The line's points across the clip, left to right.
 fn outline(frame: Frame, alpha: &Alpha) -> Vec<Point<f32>> {
-    // Every key, and each side of it, so holds keep their corners;
-    // and enough even samples between them for bends to read as curves.
-    let mut xs: Vec<f64> = match alpha {
-        Alpha::Fades(fades) => match fades.value() {
-            Level::Curve(curve) => curve.points.iter().map(|point| point.x).collect(),
-            Level::Flat(_) => Vec::new(),
-        },
-        Alpha::Custom(curve) => curve.points.iter().map(|point| point.x).collect(),
+    // Both ends, every key and each side of it, so holds keep their corners;
+    // and, inside a bend only, enough even samples for it to read as a curve.
+    // A straight segment needs nothing between its keys.
+    let curve = alpha.curve();
+    let bent = |x: f64| {
+        curve.points.windows(2).enumerate().any(|(index, pair)| {
+            pair[0].x < x
+                && x < pair[1].x
+                && !matches!(curve.ease(index), p::Ease::Linear | p::Ease::Hold)
+        })
     };
+    let mut xs: Vec<f64> = curve.points.iter().map(|point| point.x).collect();
+    xs.extend([0., 1.]);
     let steps = (frame.width / 3.).clamp(8., 256.) as usize;
-    xs.extend((0..=steps).map(|i| i as f64 / steps as f64));
+    xs.extend(
+        (1..steps)
+            .map(|i| i as f64 / steps as f64)
+            .filter(|x| bent(*x)),
+    );
     xs.retain(|x| (0. ..=1.).contains(x));
     xs.sort_by(f64::total_cmp);
     xs.dedup_by(|a, b| (*a - *b).abs() <= EPSILON);
