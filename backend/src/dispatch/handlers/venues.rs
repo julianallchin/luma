@@ -3,7 +3,8 @@
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::local::venues as venues_db;
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::venues::Venue;
+use crate::models::venues::{Venue, VenueMember};
+use crate::services::venue_sharing;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 
 /// Every venue in the local library, owned and joined alike. Read-only and
@@ -64,5 +65,52 @@ pub async fn set_venue_haze(
 }
 
 // ============================================================================
-// Helpers
+// Sharing — see `crate::services::venue_sharing`
 // ============================================================================
+
+/// Give the venue a new share code and return it. The previous code stops
+/// working; nobody who already joined loses access. Owner only.
+pub async fn rotate_share_code(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<String, CommandError> {
+    services.require_session().await?;
+    venue_sharing::rotate_share_code(&services.db.0, &venue_id).await
+}
+
+/// Clear the venue's share code, so nobody else can join with it. Owner only.
+pub async fn revoke_share_code(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<(), CommandError> {
+    venue_sharing::revoke_share_code(&services.db.0, &venue_id).await
+}
+
+/// Everyone who can open the venue, owner first. Owner only.
+pub async fn list_venue_members(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<Vec<VenueMember>, CommandError> {
+    venue_sharing::members(&services.db.0, &venue_id).await
+}
+
+/// Take one account's access to the venue away. Owner only.
+pub async fn remove_venue_member(
+    services: &AppServices,
+    venue_id: String,
+    uid: String,
+) -> Result<(), CommandError> {
+    venue_sharing::remove_member(&services.db.0, &venue_id, &uid).await
+}
+
+/// Join the venue a share code names, and return it once it has downloaded.
+pub async fn join_venue(services: &AppServices, code: String) -> Result<Venue, CommandError> {
+    services.require_session().await?;
+    venue_sharing::join(
+        &services.db.0,
+        services.share_codes.as_ref(),
+        &code,
+        venue_sharing::ARRIVAL,
+    )
+    .await
+}

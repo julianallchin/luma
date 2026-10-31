@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**128 commands** across **26 domains** · **6 events**
+**133 commands** across **26 domains** · **6 events**
 
 ## Domains
 
@@ -37,9 +37,9 @@ name.
 | `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
-| `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
+| `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **128** | |
+| **total** | **133** | |
 
 ## Commands
 
@@ -296,6 +296,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `create_venue` | `name: String`<br>`description: Option<String>` | `Venue` |
 | `set_venue_environment` | `venueId: String`<br>`environment: VenueEnvironment` | `()` |
 | `set_venue_haze` | `venueId: String`<br>`haze: VenueHaze` | `()` |
+| `rotate_share_code` | `venueId: String` | `String` |
+| `revoke_share_code` | `venueId: String` | `()` |
+| `list_venue_members` | `venueId: String` | `Vec<VenueMember>` |
+| `remove_venue_member` | `venueId: String`<br>`uid: String` | `()` |
+| `join_venue` | `code: String` | `Venue` |
 
 ### `waveforms`
 

@@ -184,6 +184,9 @@ pub struct AppServices {
     pub(crate) analysis_tasks: AnalysisTaskGroup,
     pub(crate) workers: WorkerEnvironment,
     pub(crate) track_sources: Arc<dyn TrackSources>,
+    /// Where a venue's share code is redeemed. The server, unless a host with
+    /// none installs a stand-in — see [`AppServices::with_share_codes`].
+    pub(crate) share_codes: Arc<dyn crate::services::venue_sharing::ShareCodeServer>,
     pub(crate) fft: FftService,
     /// Decoded stem samples, shared so a track's stems are decoded once.
     pub(crate) render_engine: RenderEngine,
@@ -269,6 +272,9 @@ impl AppServices {
             fixtures_root.clone(),
             host_audio.clone(),
         ));
+        let share_codes = Arc::new(crate::services::venue_sharing::SupabaseShareCodes::new(
+            state_db.0.clone(),
+        ));
         Self {
             track_audio,
             db,
@@ -278,6 +284,7 @@ impl AppServices {
             workers: WorkerEnvironment::from_env_default()
                 .expect("headless worker environment paths must resolve"),
             track_sources: system_track_sources(),
+            share_codes,
             fft: FftService::new(),
             render_engine: render_engine.clone(),
             inputs,
@@ -292,6 +299,17 @@ impl AppServices {
             fixture_principal: None,
             sync: None,
         }
+    }
+
+    /// Redeem share codes somewhere other than the server: a harness with no
+    /// server stands in a [`crate::services::venue_sharing::LocalShareCodes`].
+    #[must_use]
+    pub fn with_share_codes(
+        mut self,
+        share_codes: Arc<dyn crate::services::venue_sharing::ShareCodeServer>,
+    ) -> Self {
+        self.share_codes = share_codes;
+        self
     }
 
     /// Attach the running record replication. The host starts it, because the

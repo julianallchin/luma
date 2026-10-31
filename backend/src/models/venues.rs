@@ -42,7 +42,85 @@ pub struct Venue {
 }
 
 impl Venue {
+    pub fn is_owner(&self) -> bool {
+        self.role == ROLE_OWNER
+    }
+
     pub fn is_member(&self) -> bool {
         self.role == ROLE_MEMBER
+    }
+}
+
+/// Someone who can open a venue, as its owner sees them.
+///
+/// Only an id: the server keeps no profile another account may read, so the
+/// owner sees who joined and when, not their address.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VenueMember {
+    pub uid: String,
+    /// [`ROLE_OWNER`] for the venue's owner, [`ROLE_MEMBER`] for everyone who
+    /// joined with a code.
+    pub role: String,
+    /// When they got access: the venue's creation for its owner, the
+    /// membership row's for everyone else.
+    pub since: String,
+    /// Whether this is the signed-in account.
+    pub is_you: bool,
+}
+
+/// The letters a share code is written in: digits and capitals with every
+/// pair a person could misread or mistype left out (`0`/`O`, `1`/`I`/`L`) and
+/// `U`, as Crockford's base 32 does, so fewer codes spell words. Thirty
+/// symbols, eight places: 6.6 × 10¹¹ codes.
+pub const SHARE_CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTVWXYZ";
+pub const SHARE_CODE_LEN: usize = 8;
+
+/// The stored form of whatever a person typed or pasted, or `None` when it
+/// cannot be a code.
+///
+/// Case, spaces and the display hyphen are forgiven; a letter the alphabet
+/// leaves out is not, because no code contains one.
+pub fn normalize_share_code(input: &str) -> Option<String> {
+    let code: String = input
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let valid = code.len() == SHARE_CODE_LEN
+        && code.bytes().all(|byte| SHARE_CODE_ALPHABET.contains(&byte));
+    valid.then_some(code)
+}
+
+/// A code as people read it: two groups of four, `K7M4-Q9TX`.
+pub fn display_share_code(code: &str) -> String {
+    if code.len() == SHARE_CODE_LEN && code.is_ascii() {
+        format!("{}-{}", &code[..4], &code[4..])
+    } else {
+        code.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_typed_code_is_forgiven_its_case_spacing_and_hyphen_but_not_its_letters() {
+        assert_eq!(
+            normalize_share_code(" k7m4-q9tx ").as_deref(),
+            Some("K7M4Q9TX")
+        );
+        assert_eq!(
+            normalize_share_code("K7M4 Q9TX").as_deref(),
+            Some("K7M4Q9TX")
+        );
+        // `O`, `0`, `I`, `1` and `L` are never in a code.
+        for wrong in ["K7M4Q9TO", "K7M4Q9T0", "K7M4Q9TI", "K7M4Q9T1", "K7M4Q9TL"] {
+            assert_eq!(normalize_share_code(wrong), None, "{wrong}");
+        }
+        assert_eq!(normalize_share_code("K7M4Q9T"), None);
+        assert_eq!(normalize_share_code(""), None);
+        assert_eq!(display_share_code("K7M4Q9TX"), "K7M4-Q9TX");
     }
 }

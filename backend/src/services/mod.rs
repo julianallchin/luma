@@ -13,6 +13,9 @@
 //! already takes its `ResolvedFixture` in a public signature, and the GPUI
 //! fixture picker reads an expression back through its parser
 //! ([`groups::or_terms`]) rather than growing a second one.
+//!
+//! `venue_sharing` is `pub` so the UI harness can stand its
+//! [`venue_sharing::LocalShareCodes`] in for the server.
 
 pub(crate) mod agent_execution;
 pub mod artwork;
@@ -29,4 +32,5 @@ pub mod patch;
 pub(crate) mod perform_set;
 pub mod stage_ops;
 pub mod tracks;
+pub mod venue_sharing;
 pub mod waveforms;

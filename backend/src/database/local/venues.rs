@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
-use crate::models::venues::Venue;
+use crate::models::venues::{Venue, VenueMember};
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 
 /// `role` is not read off the row: it is derived per reader — see
@@ -208,6 +208,83 @@ pub async fn set_haze(access: &mut VenueAccess<'_, Write>, haze: VenueHaze) -> R
         .await
         .map_err(|e| format!("Failed to set venue haze: {e}"))?;
     Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Sharing
+// -----------------------------------------------------------------------------
+
+/// Set or clear the venue's share code, synced with the venue.
+///
+/// Owner-only by the guard's type, which is also what the server's update
+/// policy on `venues` allows. Errors with [`SHARE_CODE_TAKEN`] when another
+/// venue on this device already holds `code`.
+pub async fn set_share_code(
+    access: &mut VenueAccess<'_, Write>,
+    code: Option<&str>,
+) -> Result<(), String> {
+    let venue_id = access.venue_id().to_string();
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(code)
+        .bind(venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|error| match error.as_database_error() {
+            Some(database) if database.is_unique_violation() => SHARE_CODE_TAKEN.to_string(),
+            _ => format!("Failed to set the venue's share code: {error}"),
+        })?;
+    Ok(())
+}
+
+/// What [`set_share_code`] answers when the code is another venue's.
+pub const SHARE_CODE_TAKEN: &str = "share code already in use";
+
+/// The venue's owner and every account that joined it, owner first, then in
+/// the order they joined.
+pub async fn venue_members(access: &mut impl AuthorizedVenue) -> Result<Vec<VenueMember>, String> {
+    let venue_id = access.venue_id().to_string();
+    let you = access.principal().map(str::to_owned);
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT uid, 'owner', created_at FROM venues WHERE id = ?1 AND uid IS NOT NULL
+         UNION ALL
+         SELECT * FROM (
+             SELECT uid, 'member', created_at FROM venue_members
+             WHERE venue_id = ?1
+               AND uid IS NOT (SELECT uid FROM venues WHERE id = ?1)
+             ORDER BY created_at, uid
+         )",
+    )
+    .bind(venue_id)
+    .fetch_all(&mut *access.connection())
+    .await
+    .map_err(|error| format!("Failed to read the venue's members: {error}"))?;
+    Ok(rows
+        .into_iter()
+        .map(|(uid, role, since)| VenueMember {
+            is_you: you.as_deref() == Some(uid.as_str()),
+            uid,
+            role,
+            since,
+        })
+        .collect())
+}
+
+/// Take `uid`'s access to the venue away. The upload carries the delete to
+/// the server, whose delete policy on `venue_members` lets the owner remove
+/// anyone, and the venue's rows leave that account's devices on its next
+/// checkpoint. Whether a row went is the answer.
+pub async fn remove_venue_member(
+    access: &mut VenueAccess<'_, Write>,
+    uid: &str,
+) -> Result<bool, String> {
+    let venue_id = access.venue_id().to_string();
+    let removed = sqlx::query("DELETE FROM venue_members WHERE venue_id = ? AND uid = ?")
+        .bind(venue_id)
+        .bind(uid)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|error| format!("Failed to remove the member: {error}"))?;
+    Ok(removed.rows_affected() > 0)
 }
 
 #[cfg(test)]

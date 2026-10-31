@@ -630,6 +630,124 @@ async fn a_share_code_admits_a_second_user_until_it_is_revoked() {
     b.close().await;
 }
 
+/// The app's own sharing commands, end to end: the owner mints a code through
+/// the service, a second account redeems it through the service and gets the
+/// venue back once it has downloaded, a revoked code admits nobody, and the
+/// owner removing a member takes the venue off their device.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+async fn the_sharing_service_admits_with_a_code_and_revoking_it_admits_nobody() {
+    use crate::services::venue_sharing::{self, Refusal, ShareCodeServer};
+
+    /// The production redemption with a minted token in place of the state
+    /// database's session.
+    struct Minted(crate::database::remote::postgrest::Postgrest, String);
+
+    #[async_trait::async_trait]
+    impl ShareCodeServer for Minted {
+        async fn redeem(&self, code: &str) -> Result<String, Refusal> {
+            venue_sharing::redeem_with_token(&self.0, &self.1, code).await
+        }
+    }
+
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let server = |user: &str| {
+        let token = mint_jwt(&containers.secret, user);
+        Minted(
+            crate::database::remote::postgrest::Postgrest::new(
+                containers.postgrest.clone(),
+                token.clone(),
+            ),
+            token,
+        )
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, OTHER).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    // A join waits for the venue's root, as every venue written today has.
+    sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
+        .bind(crate::venue_graph::root_id(&venue))
+        .bind(USER)
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("root");
+    let code = venue_sharing::rotate_share_code(&a.sql, &venue)
+        .await
+        .expect("mint a code");
+    wait_for_upload(&a.sql).await;
+
+    let joined = venue_sharing::join(&b.sql, &server(OTHER), &code, CONVERGE)
+        .await
+        .expect("join with the code");
+    assert_eq!(joined.id, venue);
+    assert!(joined.is_member());
+    settles(
+        &b.sql,
+        &count("clips", "score_id", &score),
+        "1",
+        "B joined but the venue's score never arrived",
+    )
+    .await;
+    settles(
+        &a.sql,
+        &count("venue_members", "venue_id", &venue),
+        "1",
+        "the owner never saw the membership",
+    )
+    .await;
+    let members = venue_sharing::members(&a.sql, &venue)
+        .await
+        .expect("the owner lists members");
+    assert_eq!(
+        members
+            .iter()
+            .map(|member| member.uid.as_str())
+            .collect::<Vec<_>>(),
+        [USER, OTHER]
+    );
+
+    venue_sharing::revoke_share_code(&a.sql, &venue)
+        .await
+        .expect("revoke");
+    wait_for_upload(&a.sql).await;
+    assert_eq!(
+        server(STRANGER).redeem(&code).await,
+        Err(Refusal::UnknownCode),
+        "a revoked code still admitted someone"
+    );
+    assert_eq!(
+        get(
+            &containers,
+            STRANGER,
+            &format!("/venues?id=eq.{venue}&select=id")
+        )
+        .await,
+        serde_json::json!([])
+    );
+
+    venue_sharing::remove_member(&a.sql, &venue, OTHER)
+        .await
+        .expect("remove the member");
+    settles(
+        &b.sql,
+        &count("venues", "id", &venue),
+        "0",
+        "B kept the venue after the owner removed them",
+    )
+    .await;
+
+    a.close().await;
+    b.close().await;
+}
+
 /// A subagent's draft, merged, arriving on the other device as clips.
 ///
 /// The draft itself syncs — it is the agent's workspace and it follows its

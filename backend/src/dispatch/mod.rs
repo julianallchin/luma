@@ -128,7 +128,7 @@ use crate::models::tracks::{
 };
 use crate::models::universe::UniverseState;
 use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
-use crate::models::venues::Venue;
+use crate::models::venues::{Venue, VenueMember};
 use crate::models::waveforms::TrackWaveform;
 
 use crate::rekordbox::types::RekordboxTrack;
@@ -356,6 +356,11 @@ commands! {
     venues::create_venue(name: String, description: Option<String>) -> Venue;
     venues::set_venue_environment(venue_id: String, environment: VenueEnvironment) -> ();
     venues::set_venue_haze(venue_id: String, haze: VenueHaze) -> ();
+    venues::rotate_share_code(venue_id: String) -> String;
+    venues::revoke_share_code(venue_id: String) -> ();
+    venues::list_venue_members(venue_id: String) -> Vec<VenueMember>;
+    venues::remove_venue_member(venue_id: String, uid: String) -> ();
+    venues::join_venue(code: String) -> Venue;
 
     inputs::input_open(venue_id: String) -> InputState;
     inputs::input_state() -> InputState;
