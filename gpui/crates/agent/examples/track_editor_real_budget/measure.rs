@@ -124,7 +124,28 @@ pub fn main() {
             const waveform = () => app.snapshot().find({{ role: "card", label: "Waveform" }});
             const cards = () => app.snapshot().findAll({{ role: "card" }});
 
+            // Playback redraws every clip on every frame: the case the canvas
+            // has to be cheap for. Measured at the zoom the track opens at and
+            // again zoomed out, with a still of each before it plays, in
+            // Direct — the app's default, and free of Program's preset
+            // browser, whose replayed rows would be most of the frame.
+            function play(at) {{
+                const shot = app.screenshot().path;
+                app.action("luma::PlayPause");
+                app.frames(10, {{ waitMs: 16 }});
+                const frames = measure(() => app.frames(120, {{ waitMs: 16 }}));
+                app.action("luma::PlayPause");
+                app.frames(4);
+                return {{ at, shot, frames }};
+            }}
+            nav.direct();
+            app.frames(30, {{ waitMs: 16 }});
+            const playing = [play("default zoom")];
             app.scroll(waveform(), {{ dy: -800, steps: 20, modifiers: ["platform"] }});
+            app.frames(30, {{ waitMs: 16 }});
+            playing.push(play("zoomed out"));
+            nav.program();
+            app.frames(30, {{ waitMs: 16 }});
             const clips = cards().filter((c) => !c.label.endsWith(" preview")).length - 2;
             const previews = cards().filter((c) => c.label.endsWith(" preview")).length;
 
@@ -149,7 +170,7 @@ pub fn main() {
                     stage.push({{ at: i, fps: label("FPS "), gpu: label("CPU "), ui: label("UI ") }});
                 }}
             }}
-            ({{ clips, previews, scrollOut, zoomIn, scrollIn, zoomOut, stage, mode: app.timings().mode }})
+            ({{ clips, previews, playing, scrollOut, zoomIn, scrollIn, zoomOut, stage, mode: app.timings().mode }})
         "#
         ),
         Duration::from_secs(900),
@@ -166,6 +187,14 @@ pub fn main() {
         leg(&out["scrollIn"]),
         leg(&out["zoomOut"]),
     );
+    for row in out["playing"].as_array().into_iter().flatten() {
+        println!(
+            "  play @ {:<11}: {}\n    still: {}",
+            row["at"].as_str().unwrap_or_default(),
+            leg(&row["frames"]),
+            row["shot"].as_str().unwrap_or_default(),
+        );
+    }
     for row in out["stage"].as_array().into_iter().flatten() {
         println!(
             "  stage {:>4}: {:?}  {:?}  {:?}",

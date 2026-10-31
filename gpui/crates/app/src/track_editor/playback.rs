@@ -36,7 +36,13 @@ impl Luma {
 
     /// One song plays at a time, and it is the front score tab's. Bringing
     /// the venue tab to the front leaves the song that was playing alone.
+    ///
+    /// Except while the add-track dialog is previewing a file: that preview
+    /// holds the player, and the song gets it back when the preview stops.
     pub(crate) fn sync_track_audio(&mut self, cx: &mut Context<Self>) {
+        if self.source_preview.is_some() {
+            return;
+        }
         let Some(front) = self.workspace.active().cloned() else {
             return;
         };

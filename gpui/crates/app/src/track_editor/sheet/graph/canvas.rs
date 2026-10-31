@@ -41,10 +41,15 @@ pub(super) const NODE_FIELD_W: f32 = NODE_W - 2. * NODE_PAD;
 /// Air between columns, which the wires cross, and between cards in one.
 const COLUMN_GAP: f32 = 64.;
 const NODE_GAP: f32 = 16.;
+/// The toolbar cluster's inset from the canvas corner, and its padding
+/// around one control's height.
+const TOOLBAR_INSET: f32 = 8.;
+const TOOLBAR_PAD: f32 = 3.;
 /// Air between the canvas edge and the cards at rest; the top leaves the
-/// toolbar its own band. Screen pixels: the anchor does not zoom.
+/// toolbar cluster room, so the output card does not start under it. Screen
+/// pixels: the anchor does not zoom.
 const CANVAS_PAD: f32 = 20.;
-const CANVAS_TOP: f32 = 52.;
+const CANVAS_TOP: f32 = TOOLBAR_INSET + 2. * TOOLBAR_PAD + CONTROL_HEIGHT + 10.;
 /// A port's ring.
 const PORT: f32 = 10.;
 /// How near a dragged wire's end snaps to a port that takes it, and how near
@@ -694,7 +699,7 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
 
 // -- the canvas -----------------------------------------------------------------
 
-/// The canvas under the name, selection and blend rows.
+/// The canvas under the inspector's header strip.
 pub(super) fn view(cx: &Ctx) -> AnyElement {
     let state = &cx.state.sheet.canvas;
     let columns = edit::columns(cx.graph);
@@ -780,19 +785,16 @@ pub(super) fn view(cx: &Ctx) -> AnyElement {
         .into_any_element()
 }
 
-/// The buttons over the canvas's top-right corner: add a node, the zoom
-/// steps and actual size, and fit.
-fn toolbar(cx: &Ctx) -> Div {
+/// The cluster floating on the canvas's top-right corner: add a node, the
+/// zoom steps and actual size, and fit, on one frosted chip.
+fn toolbar(cx: &Ctx) -> AnyElement {
     let state = &cx.state.sheet.canvas;
     let add = cx.app.clone();
-    let mut bar = div()
-        .absolute()
-        .top(px(8.))
-        .right(px(8.))
-        .flex()
+    let mut bar = luma_ui::float::popover_card()
         .flex_row()
         .items_center()
-        .gap(px(4.))
+        .p(px(TOOLBAR_PAD))
+        .gap(px(2.))
         .child(
             luma_ui::button("Add node", Enabled::Yes)
                 .id("graph-add-node")
@@ -803,6 +805,13 @@ fn toolbar(cx: &Ctx) -> Div {
                     });
                 })
                 .agent_node(Role::Button, "Add node"),
+        )
+        .child(
+            div()
+                .mx(px(4.))
+                .w(px(1.))
+                .h(px(14.))
+                .bg(glass::hairline(0.10)),
         );
     let percent = format!("{:.0}%", state.zoom * 100.);
     bar = bar.child(
@@ -832,7 +841,12 @@ fn toolbar(cx: &Ctx) -> Div {
                 .agent_node(Role::Button, name),
         );
     }
-    bar
+    div()
+        .absolute()
+        .top(px(TOOLBAR_INSET))
+        .right(px(TOOLBAR_INSET))
+        .child(luma_ui::float::frosted_card(bar))
+        .into_any_element()
 }
 
 /// The add menu, where the canvas was right-clicked or under the button.
