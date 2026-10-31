@@ -533,7 +533,7 @@ const BEAM_PIECES: u32 = 16;
 
 /// Radiance per unit of a projector's light: puts a full-white beam on the
 /// same scale as a stage beam in the same haze.
-pub(crate) const GAIN: f32 = 40.0;
+pub(crate) const GAIN: f32 = 80.0;
 
 #[cfg(test)]
 mod tests {
