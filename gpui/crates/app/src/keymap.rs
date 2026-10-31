@@ -108,6 +108,12 @@ actions!(
     [
         /// Start or stop the track editor's transport.
         PlayPause,
+        /// In the add-track source browser: preview the row under the cursor,
+        /// or pause the one playing.
+        ToggleSourcePreview,
+        /// Move the playing source preview 10 s back / forward.
+        SeekSourcePreviewBack,
+        SeekSourcePreviewForward,
         /// Dismiss the overlay that is up, or the insertion menu inside the
         /// editor. Nothing with neither up: the shell is persistent, so there
         /// is no screen to leave.
@@ -215,6 +221,32 @@ actions!(
 
 /// Bind the keys. Called from [`crate::init`], so the real binary and the
 /// harness get the same keyboard.
+/// Bindings that must out-rank a text field's own: call after
+/// [`luma_ui::text_input::init`], never before.
+///
+/// gpui ranks bindings that match at the same depth by registration order,
+/// later first, and these match *at the field* (`AddTracks > PickerSearch`).
+/// Registered earlier, `shift-left` would always select text. Each handler
+/// propagates when the key is not its business — space while typing a query,
+/// shift-arrows with nothing previewing — and gpui then tries the field's own
+/// binding, or types the character, exactly as if this one did not exist.
+pub(crate) fn init_field_overrides(cx: &mut App) {
+    let source_search = format!(
+        "{} > {}",
+        context::ADD_TRACKS,
+        luma_ui::text_input::SEARCH_CONTEXT
+    );
+    cx.bind_keys([
+        KeyBinding::new("space", ToggleSourcePreview, Some(&source_search)),
+        KeyBinding::new("shift-left", SeekSourcePreviewBack, Some(&source_search)),
+        KeyBinding::new(
+            "shift-right",
+            SeekSourcePreviewForward,
+            Some(&source_search),
+        ),
+    ]);
+}
+
 pub(crate) fn init(cx: &mut App) {
     // `secondary-` is cmd on macOS and ctrl elsewhere: gpui resolves it per
     // platform, which is why there is no `cfg` here.

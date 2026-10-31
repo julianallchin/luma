@@ -21,6 +21,9 @@ pub struct RekordboxTrack {
     pub duration_seconds: Option<f64>,
     pub file_size: Option<i32>,
     pub sample_rate: Option<i32>,
+    /// Absolute path of the thumbnail Rekordbox keeps under its `share`
+    /// directory, when it has one.
+    pub artwork_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

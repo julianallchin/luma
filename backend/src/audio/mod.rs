@@ -8,8 +8,8 @@ pub(crate) mod spectrum;
 
 pub use analysis::calculate_frequency_amplitude;
 pub use cache::{
-    load_or_decode_audio_shared, read_pcm_file, read_pcm_header, write_pcm_file, PcmData,
-    PcmHeader, CACHE_VERSION, PCM_HEADER_LEN,
+    decode_file_shared, load_or_decode_audio_shared, read_pcm_file, read_pcm_header,
+    write_pcm_file, PcmData, PcmHeader, CACHE_VERSION, PCM_HEADER_LEN,
 };
 pub use decoder::{stereo_to_mono, SAMPLE_RATE};
 pub use fft::FftService;

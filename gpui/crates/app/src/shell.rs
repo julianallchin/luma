@@ -813,6 +813,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if let Some(Overlay::AddTracks(state)) = app.overlay.open_mut() {
         add_tracks::tick(state, &dialog_focus, window, cx);
     }
+    add_tracks::reap_preview(app, cx);
     if let Some(Overlay::ChatHistory(state)) = app.overlay.open_mut() {
         chat_history::tick(state, window, cx);
     }
@@ -1439,7 +1440,17 @@ fn overlay_layer(
             "Settings dialog",
         ),
         Overlay::AddTracks(state) => (
-            add_tracks::render(state, app.track_import.as_ref(), entity, window, cx),
+            add_tracks::render(
+                state,
+                add_tracks::Ambient {
+                    activity: app.track_import.as_ref(),
+                    preview: app.source_preview.as_ref(),
+                    art: &app.source_art,
+                },
+                entity,
+                window,
+                cx,
+            ),
             "Add tracks dialog",
         ),
         Overlay::ChatHistory(state) => (

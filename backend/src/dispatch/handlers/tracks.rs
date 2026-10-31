@@ -211,6 +211,15 @@ pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result
     Ok(())
 }
 
+/// A DJ library row's cover, as encoded image bytes — see
+/// [`crate::services::artwork`].
+pub async fn source_track_artwork(
+    art: Option<crate::services::artwork::ArtworkRef>,
+    audio_path: Option<String>,
+) -> Result<Option<Vec<u8>>, CommandError> {
+    Ok(crate::services::artwork::artwork_bytes(art, audio_path).await?)
+}
+
 pub(crate) fn emit_import_progress(
     services: &AppServices,
     import_id: &str,
@@ -232,7 +241,7 @@ pub(crate) fn emit_import_progress(
             total,
             track_id,
             current_track,
-            step: None,
+            analysis: None,
             error,
         },
     );

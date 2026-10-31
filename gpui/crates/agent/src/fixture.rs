@@ -347,7 +347,10 @@ impl Fixture {
         // developer's.
         let fixtures_root = (self.rig > 0).then(|| config_dir.join("fixtures"));
         let sync_status = self.sync_status.clone();
-        let source_fixture = self.source_fixture.clone();
+        let source_fixture = self
+            .source_fixture
+            .clone()
+            .map(|fixture| in_library(fixture, &config_dir));
         let source_fixture_delay = self.source_fixture_delay;
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
@@ -1057,6 +1060,39 @@ fn window_size<'de, D: Deserializer<'de>>(
 ) -> Result<Option<gpui::Size<gpui::Pixels>>, D::Error> {
     Ok(Option::<[f32; 2]>::deserialize(de)?
         .map(|[width, height]| gpui::size(gpui::px(width), gpui::px(height))))
+}
+
+/// `$LIBRARY` in a source fixture's strings, as the seeded library's
+/// directory: how a DJ-library row points at a file this fixture wrote —
+/// `"$LIBRARY/aurora.wav"` is the seeded track's real audio, and
+/// `"$LIBRARY/padding-art.png"` the cover `album_art` writes.
+fn in_library(
+    mut fixture: luma_app::SourceAdapterFixture,
+    dir: &Path,
+) -> luma_app::SourceAdapterFixture {
+    fn walk(value: &mut Value, dir: &str) {
+        match value {
+            Value::String(text) if text.contains("$LIBRARY") => {
+                *text = text.replace("$LIBRARY", dir);
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| walk(item, dir)),
+            Value::Object(fields) => fields.values_mut().for_each(|field| walk(field, dir)),
+            _ => {}
+        }
+    }
+    let dir = dir.to_string_lossy();
+    for value in [
+        &mut fixture.library,
+        &mut fixture.playlists,
+        &mut fixture.tracks,
+    ]
+    .into_iter()
+    .chain(fixture.playlist_tracks.values_mut())
+    .chain(fixture.searches.values_mut())
+    {
+        walk(value, &dir);
+    }
+    fixture
 }
 
 /// `luma_app::SourceAdapterFixture` is not `Deserialize` — it is the app's

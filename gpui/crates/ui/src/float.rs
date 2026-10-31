@@ -328,6 +328,25 @@ pub fn empty_row(message: impl Into<SharedString>) -> Div {
 /// long name never pushes the row's lead or its trailing marks out of place.
 /// The caller puts its lead (album art, a glyph, a handle) before this.
 pub fn row_text(title: impl Into<SharedString>, subtitle: Option<SharedString>) -> Div {
+    row_text_with(
+        title,
+        subtitle.map(|subtitle| row_subtitle(subtitle).into_any_element()),
+    )
+}
+
+/// The muted second line of a [`row_text`].
+pub fn row_subtitle(text: impl Into<SharedString>) -> Div {
+    div()
+        .truncate()
+        .text_size(rpx(10.5))
+        .text_color(ladder::muted_foreground())
+        .child(text.into())
+}
+
+/// [`row_text`] with any element on the subtitle line — a row whose second
+/// line is a control rather than words (a scrub bar under a title). The
+/// column keeps the title's truncation and the two lines' rhythm either way.
+pub fn row_text_with(title: impl Into<SharedString>, subtitle: Option<AnyElement>) -> Div {
     div()
         .flex_1()
         .min_w_0()
@@ -336,13 +355,7 @@ pub fn row_text(title: impl Into<SharedString>, subtitle: Option<SharedString>) 
         .justify_center()
         .gap(rpx(2.0))
         .child(div().truncate().text_size(rpx(12.5)).child(title.into()))
-        .children(subtitle.map(|subtitle| {
-            div()
-                .truncate()
-                .text_size(rpx(10.5))
-                .text_color(ladder::muted_foreground())
-                .child(subtitle)
-        }))
+        .children(subtitle)
 }
 
 /// The float tier's "this one is chosen" mark, and the hole it leaves when it

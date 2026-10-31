@@ -13,6 +13,8 @@ pub struct EngineDjTrack {
     pub length: Option<f64>,
     pub origin_database_uuid: Option<String>,
     pub origin_track_id: Option<i64>,
+    /// `AlbumArt.id` of the cover Engine extracted, when it kept one.
+    pub album_art_id: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

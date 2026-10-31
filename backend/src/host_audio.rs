@@ -145,6 +145,16 @@ impl HostAudioState {
         guard.unload();
     }
 
+    /// Let go of `session`'s audio, if it is still the loaded one. A preview
+    /// that has stopped should not keep a decoded song resident until the
+    /// next load happens to replace it.
+    pub fn release(&self, session: u64) {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        if guard.session == session {
+            guard.unload();
+        }
+    }
+
     pub fn snapshot(&self) -> HostAudioSnapshot {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.refresh_progress();

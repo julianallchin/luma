@@ -25,12 +25,15 @@
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::Icon;
-use luma_lib::models::tracks::{TrackBrowserRow, TrackImportPhase, TrackImportProgress};
+use gpui_component::{Icon, IconNamed};
+use luma_lib::models::tracks::{
+    StageOutcome, TrackAnalysisEvent, TrackBrowserRow, TrackImportPhase, TrackImportProgress,
+};
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
 use luma_ui::icons::IconName;
@@ -39,6 +42,12 @@ use luma_ui::text_input::{self, TextInput};
 use luma_ui::{glass, ladder};
 
 use crate::{Luma, SourceLibrary, SourcePlaylist, SourceTrack, TrackImportRequest, TrackSource};
+
+mod art;
+mod preview;
+
+pub(crate) use art::ArtCache;
+pub(crate) use preview::{reap_preview, SourcePreview};
 
 /// The one size every route takes — see the module docs. 680 wide is comet's
 /// palette grammar; the height is the two bands plus a body deep enough for
@@ -131,94 +140,186 @@ pub(crate) struct ImportItem {
     track_id: String,
     title: String,
     art: Option<String>,
-    stage: ItemStage,
+    analysis: ItemAnalysis,
 }
 
+/// One song's analysis as the scheduler has reported it: the stages it was
+/// queued with, and which of them have started and settled.
+///
+/// Status is *derived* from this, never stored, so "Ready" cannot be written
+/// down while a stage is still out — see [`Self::status`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ItemAnalysis {
+    /// Every stage the song will report. Empty until the scheduler queues it.
+    stages: Vec<String>,
+    /// Started and not yet settled, in the order they started.
+    running: Vec<String>,
+    settled: Vec<String>,
+    /// `stage: reason`, one per failed stage.
+    failures: Vec<String>,
+    /// The import has ended: whatever has not settled now never will.
+    ended: bool,
+}
+
+/// What a row says about its song.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ItemStage {
-    Waiting,
-    /// Analysis running, at the named step once one has been announced.
-    Analyzing(Option<String>),
-    Done,
+enum ItemStatus {
+    Queued,
+    Analyzing {
+        running: Vec<String>,
+        settled: usize,
+        total: usize,
+    },
+    Ready,
     Failed(String),
 }
 
-impl ItemStage {
+impl ItemStatus {
     fn finished(&self) -> bool {
-        matches!(self, Self::Done | Self::Failed(_))
+        matches!(self, Self::Ready | Self::Failed(_))
+    }
+}
+
+impl ItemAnalysis {
+    fn status(&self) -> ItemStatus {
+        let total = self.stages.len();
+        let all_settled = total > 0 && self.settled.len() >= total;
+        if all_settled || self.ended {
+            if !self.failures.is_empty() {
+                return ItemStatus::Failed(self.failures.join("; "));
+            }
+            if total > 0 && !all_settled {
+                return ItemStatus::Failed("Analysis stopped before it finished".to_string());
+            }
+            // Never queued and the import is over: the song was already in
+            // the library, so there was nothing to analyse.
+            return ItemStatus::Ready;
+        }
+        if self.running.is_empty() && self.settled.is_empty() {
+            ItemStatus::Queued
+        } else {
+            ItemStatus::Analyzing {
+                running: self.running.clone(),
+                settled: self.settled.len(),
+                total,
+            }
+        }
+    }
+
+    fn apply(&mut self, event: &TrackAnalysisEvent) {
+        match event {
+            TrackAnalysisEvent::Queued { stages } => self.stages = stages.clone(),
+            TrackAnalysisEvent::StageStarted { stage } => {
+                if !self.settled.contains(stage) && !self.running.contains(stage) {
+                    self.running.push(stage.clone());
+                }
+            }
+            TrackAnalysisEvent::StageSettled { stage, outcome } => {
+                self.running.retain(|running| running != stage);
+                if self.settled.contains(stage) {
+                    return;
+                }
+                self.settled.push(stage.clone());
+                if let StageOutcome::Failed(error) = outcome {
+                    self.failures
+                        .push(format!("{}: {error}", stage_label(stage)));
+                }
+            }
+        }
+    }
+}
+
+/// A stage's wire name as a person reads it. The wire names are stable
+/// identifiers (`beat_grid`), not prose; one that is not listed here shows
+/// as itself rather than disappearing.
+fn stage_label(stage: &str) -> &str {
+    match stage {
+        "beat_grid" => "beats",
+        "stems" => "stems",
+        "mert" => "features",
+        "roots" => "chords",
+        "n2n" => "drums",
+        "classifier" => "sections",
+        "genre" => "genre",
+        "waveform" => "waveform",
+        other => other,
     }
 }
 
 impl TrackImportActivity {
-    /// Fold one progress event into the per-song stages.
+    /// Fold one progress event into the per-song analyses.
     ///
-    /// The scheduler announces a song twice with no step — once as it starts,
-    /// once as it finishes — and once per step in between, all from the same
-    /// task, so the order is the song's own order.
+    /// Only analysis events touch a song: phase one's copy events name the
+    /// song they copied too, and reading one of those as "analysis started"
+    /// is exactly how a song used to show Ready while it was still analysing.
     fn apply(&mut self, event: &TrackImportProgress) {
         if event.phase == TrackImportPhase::Complete {
             for item in &mut self.items {
-                if !item.stage.finished() {
-                    item.stage = ItemStage::Done;
-                }
+                item.analysis.ended = true;
             }
             return;
         }
-        let Some(track_id) = &event.track_id else {
+        let (Some(track_id), Some(analysis)) = (&event.track_id, &event.analysis) else {
             return;
         };
-        let Some(item) = self
+        if let Some(item) = self
             .items
             .iter_mut()
             .find(|item| &item.track_id == track_id)
-        else {
-            return;
-        };
-        if item.stage.finished() {
-            return;
+        {
+            item.analysis.apply(analysis);
         }
-        item.stage = match (&event.error, &event.step, &item.stage) {
-            (Some(error), _, _) => ItemStage::Failed(error.clone()),
-            (None, Some(step), _) => ItemStage::Analyzing(Some(step.clone())),
-            (None, None, ItemStage::Waiting) => ItemStage::Analyzing(None),
-            (None, None, _) => ItemStage::Done,
-        };
     }
 
     fn failed(&self) -> usize {
         self.items
             .iter()
-            .filter(|item| matches!(item.stage, ItemStage::Failed(_)))
+            .filter(|item| matches!(item.analysis.status(), ItemStatus::Failed(_)))
             .count()
     }
 
     /// The one line that says where the import is — the sidebar row and the
     /// progress page's title both read it.
+    ///
+    /// Once the songs are known it is counted off their rows, so the header
+    /// and the list cannot disagree: it reads as finished exactly when every
+    /// row does.
     fn summary(&self) -> String {
-        let (done, total) = self
-            .progress
-            .as_ref()
-            .map_or((0, 0), |progress| (progress.done, progress.total));
-        let phase = self.progress.as_ref().map(|progress| &progress.phase);
-        if self.active {
-            let verb = match phase {
-                Some(TrackImportPhase::Analyzing) => "Analyzing",
-                _ => "Importing",
-            };
-            if total == 0 {
-                format!("{verb} songs…")
-            } else {
-                format!("{verb} {} of {total} songs…", (done + 1).min(total))
+        if !self.items.is_empty() {
+            let total = self.items.len();
+            let finished = self
+                .items
+                .iter()
+                .filter(|item| item.analysis.status().finished())
+                .count();
+            if finished < total {
+                return if total == 1 {
+                    "Analyzing 1 song…".to_string()
+                } else {
+                    format!("Analyzing {total} songs · {finished} of {total} done")
+                };
             }
-        } else {
             let failed = self.failed();
-            if failed > 0 {
-                format!("{} failed to import", plural(failed, "song"))
-            } else if self.error.is_some() && self.items.is_empty() {
-                "Import failed".to_string()
+            return if failed > 0 {
+                format!("{} of {total} failed to import", failed)
             } else {
-                format!("Imported {}", plural(self.items.len(), "song"))
+                format!("Imported {}", plural(total, "song"))
+            };
+        }
+        if self.active {
+            let (done, total) = self
+                .progress
+                .as_ref()
+                .map_or((0, 0), |progress| (progress.done, progress.total));
+            if total == 0 {
+                "Importing songs…".to_string()
+            } else {
+                format!("Importing {} of {total} songs…", (done + 1).min(total))
             }
+        } else if self.error.is_some() {
+            "Import failed".to_string()
+        } else {
+            "Nothing was imported".to_string()
         }
     }
 }
@@ -304,6 +405,10 @@ pub(crate) struct AddTracks {
     /// selection is [`Self::selected`].
     browser_active: usize,
     source_active: usize,
+    /// The arrows have moved the source list's cursor since the query was
+    /// last edited. Space previews the cursor row then, and types a space
+    /// otherwise — a query has to be able to contain one.
+    source_navigating: bool,
     browser_scroll: UniformListScrollHandle,
     source_scroll: UniformListScrollHandle,
     /// The import-source menu hanging off the header chip. A [`Popup`] so it
@@ -371,6 +476,7 @@ impl AddTracks {
             browser_query: String::new(),
             browser_active: 0,
             source_active: 0,
+            source_navigating: false,
             browser_scroll: UniformListScrollHandle::new(),
             source_scroll: UniformListScrollHandle::new(),
             source_menu: float::MenuVisibility::Closed,
@@ -575,6 +681,29 @@ impl Luma {
         }
     }
 
+    /// Space in the source list: preview the cursor row. `false` — so the
+    /// field types a space — when the person is typing a query rather than
+    /// walking the list; see [`AddTracks::source_navigating`].
+    fn add_tracks_space(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(crate::shell::Overlay::AddTracks(state)) = self.overlay.as_open() else {
+            return false;
+        };
+        if *state.morph.target_key() != Route::SourceLibrary
+            || !(state.source_navigating || state.source_filter.read(cx).is_empty())
+        {
+            return false;
+        }
+        let Some(id) = state
+            .source_rows
+            .get(state.source_active)
+            .map(|track| track.id.clone())
+        else {
+            return false;
+        };
+        self.toggle_source_preview(&id, cx);
+        true
+    }
+
     /// Move the row cursor, wrapping, and keep it on screen.
     fn add_tracks_step(&mut self, route: Route, delta: isize, cx: &mut Context<Self>) {
         let Some(crate::shell::Overlay::AddTracks(state)) = self.overlay.open_mut() else {
@@ -591,6 +720,9 @@ impl Luma {
         };
         *active = (*active as isize + delta).rem_euclid(count as isize) as usize;
         scroll.scroll_to_item(*active, ScrollStrategy::Nearest);
+        if route == Route::SourceLibrary {
+            state.source_navigating = true;
+        }
         cx.notify();
     }
 
@@ -872,6 +1004,7 @@ impl Luma {
         let instance_id = state.instance_id;
         let source_generation = state.source_generation;
         state.source_active = 0;
+        state.source_navigating = false;
         state.source_scroll.scroll_to_item(0, ScrollStrategy::Top);
         let row_generation = state.begin_source_row_read(if query.is_empty() {
             SourceRowScope::All
@@ -1021,7 +1154,7 @@ impl Luma {
                                     .or_else(|| track.source_filename.clone())
                                     .unwrap_or_else(|| track.file_path.clone()),
                                 art: track.album_art_path.clone(),
-                                stage: ItemStage::Waiting,
+                                analysis: ItemAnalysis::default(),
                             })
                             .collect();
                         venue = activity.venue_id.clone();
@@ -1231,9 +1364,16 @@ fn focus_route(state: &AddTracks, window: &mut Window, cx: &mut Context<Luma>) {
     window.defer(cx, move |window, cx| window.focus(&focus, cx));
 }
 
+/// What the dialog reads from the shell besides its own state.
+pub(crate) struct Ambient<'a> {
+    pub(crate) activity: Option<&'a TrackImportActivity>,
+    pub(crate) preview: Option<&'a SourcePreview>,
+    pub(crate) art: &'a ArtCache,
+}
+
 pub(crate) fn render(
     state: &AddTracks,
-    activity: Option<&TrackImportActivity>,
+    ambient: Ambient<'_>,
     app: &Entity<Luma>,
     window: &Window,
     cx: &mut gpui::App,
@@ -1242,23 +1382,24 @@ pub(crate) fn render(
     let app = app.clone();
     let card_app = app.clone();
     morph::card(&sample, "Add tracks dialog", move |route, mode| {
-        route_content(state, activity, *route, mode, &card_app, window, cx)
+        route_content(state, &ambient, *route, mode, &card_app, window, cx)
     })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn route_content(
     state: &AddTracks,
-    activity: Option<&TrackImportActivity>,
+    ambient: &Ambient<'_>,
     route: Route,
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    let activity = ambient.activity;
     let body = match route {
         Route::TrackBrowser => track_browser(state, mode, app, cx),
-        Route::SourceLibrary => source_library(state, mode, app, cx),
+        Route::SourceLibrary => source_library(state, ambient, mode, app, cx),
         Route::Progress => import_progress(activity, app, cx),
     };
     palette(state, activity, route, mode, app, window, body)
@@ -1294,6 +1435,32 @@ fn palette(
             let event = event.clone();
             keys.update(cx, |this, cx| this.add_tracks_key(&event, cx));
         });
+        // Bound above the search field (`keymap::init_field_overrides`), so
+        // each one hands the key back to the field when it is not about a
+        // preview.
+        let space = app.clone();
+        let back = app.clone();
+        let forward = app.clone();
+        frame = frame
+            .on_action(move |_: &crate::keymap::ToggleSourcePreview, _, cx| {
+                if !space.update(cx, |this, cx| this.add_tracks_space(cx)) {
+                    cx.propagate();
+                }
+            })
+            .on_action(move |_: &crate::keymap::SeekSourcePreviewBack, _, cx| {
+                if !back.update(cx, |this, cx| {
+                    this.nudge_source_preview(-preview::SEEK_STEP, cx)
+                }) {
+                    cx.propagate();
+                }
+            })
+            .on_action(move |_: &crate::keymap::SeekSourcePreviewForward, _, cx| {
+                if !forward.update(cx, |this, cx| {
+                    this.nudge_source_preview(preview::SEEK_STEP, cx)
+                }) {
+                    cx.propagate();
+                }
+            });
     }
     frame
         .child(header(state, activity, route, mode, app, window))
@@ -1567,6 +1734,9 @@ fn footer(activity: Option<&TrackImportActivity>, route: Route) -> Div {
         Route::SourceLibrary => "Select",
         Route::TrackBrowser | Route::Progress => "Open",
     });
+    if route == Route::SourceLibrary {
+        band = band.child(float::key_hint_text("space", "Preview"));
+    }
     band = band.child(float::key_hint_text("⌘↵", "Import"));
     band = band.child(div().flex_1().min_w_0());
     // A route's own failure is shown where its rows would have been, by
@@ -1657,7 +1827,7 @@ fn import_progress(
             )
             .into_any_element();
     }
-    let rows: Vec<(String, String, Option<String>, ItemStage)> = activity
+    let rows: Vec<(String, String, Option<String>, ItemStatus)> = activity
         .items
         .iter()
         .map(|item| {
@@ -1665,7 +1835,7 @@ fn import_progress(
                 item.track_id.clone(),
                 item.title.clone(),
                 item.art.clone(),
-                item.stage.clone(),
+                item.analysis.status(),
             )
         })
         .collect();
@@ -1675,45 +1845,20 @@ fn import_progress(
             uniform_list("track-import-progress", rows.len(), move |range, _, _| {
                 range
                     .map(|index| {
-                        let (id, title, art, stage) = &rows[index];
-                        let (status, color): (String, Hsla) = match stage {
-                            ItemStage::Waiting => {
-                                ("Waiting".to_string(), ladder::muted_foreground().into())
-                            }
-                            ItemStage::Analyzing(Some(step)) => (
-                                format!("Analyzing · {step}"),
-                                ladder::foreground_alpha(0.7),
-                            ),
-                            ItemStage::Analyzing(None) => (
-                                "Analyzing".to_string(),
-                                ladder::foreground_alpha(0.7),
-                            ),
-                            ItemStage::Done => {
-                                ("Ready".to_string(), ladder::muted_foreground().into())
-                            }
-                            ItemStage::Failed(_) => ("Failed".to_string(), ladder::danger().into()),
-                        };
-                        let subtitle = match stage {
-                            ItemStage::Failed(error) => Some(error.as_str()),
-                            _ => None,
-                        };
+                        let (id, title, art, status) = &rows[index];
                         let key = format!("import-{id}");
-                        track_row(RowState::Rest, &key, art.as_deref(), title, subtitle, false)
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.0))
-                                    .text_size(px(11.0))
-                                    .text_color(color)
-                                    .when(*stage == ItemStage::Done, |el| {
-                                        el.child(Icon::new(IconName::Check).size(px(11.0)))
-                                    })
-                                    .child(status.clone()),
-                            )
-                            .id(SharedString::from(key))
-                            .agent_node(Role::Row, format!("{title}: {status}"))
+                        let (label, subtitle) = import_status_words(status);
+                        track_row(
+                            RowState::Rest,
+                            &key,
+                            art.as_deref(),
+                            title,
+                            subtitle.as_deref(),
+                            false,
+                        )
+                        .child(import_status_mark(status, &label))
+                        .id(SharedString::from(key))
+                        .agent_node(Role::Row, format!("{title}: {label}"))
                     })
                     .collect()
             })
@@ -1721,6 +1866,103 @@ fn import_progress(
             .px(px(8.0)),
         )
         .into_any_element()
+}
+
+/// A row's status word, and the line under its title.
+///
+/// The word is what the row's automation label carries, so a script reads
+/// the same sentence a person does: `Analyzing · beats, stems (2 of 8)`.
+fn import_status_words(status: &ItemStatus) -> (String, Option<String>) {
+    match status {
+        ItemStatus::Queued => ("Queued".to_string(), None),
+        ItemStatus::Analyzing {
+            running,
+            settled,
+            total,
+        } => {
+            let stages = running
+                .iter()
+                .map(|stage| stage_label(stage))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let label = if stages.is_empty() {
+                format!("Analyzing ({settled} of {total})")
+            } else {
+                format!("Analyzing · {stages} ({settled} of {total})")
+            };
+            let subtitle = (!stages.is_empty()).then(|| capitalized(&stages));
+            (label, subtitle)
+        }
+        ItemStatus::Ready => ("Ready".to_string(), None),
+        ItemStatus::Failed(reason) => ("Failed".to_string(), Some(reason.clone())),
+    }
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Width of the trailing status column, so the stage bar under a word has
+/// one length on every row and rows that change state do not shift.
+const STATUS_WIDTH: f32 = 96.0;
+/// The stage bar's thickness: a hairline you can read a fill on.
+const STATUS_BAR_HEIGHT: f32 = 3.0;
+
+/// The trailing column: the status word, and while analysing, how many of
+/// the song's stages have settled as a thin bar under it. Stage-count rather
+/// than a percentage because no stage reports fractional progress — a bar
+/// that crept inside a stage would be inventing it.
+fn import_status_mark(status: &ItemStatus, label: &str) -> Div {
+    let (word, color): (&str, Hsla) = match status {
+        ItemStatus::Queued => ("Queued", ladder::muted_foreground().into()),
+        ItemStatus::Analyzing { .. } => ("Analyzing", ladder::foreground_alpha(0.7)),
+        ItemStatus::Ready => ("Ready", ladder::muted_foreground().into()),
+        ItemStatus::Failed(_) => ("Failed", ladder::danger().into()),
+    };
+    let fraction = match status {
+        ItemStatus::Analyzing { settled, total, .. } if *total > 0 => {
+            Some(*settled as f32 / *total as f32)
+        }
+        _ => None,
+    };
+    div()
+        .flex_none()
+        .w(px(STATUS_WIDTH))
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(px(5.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .text_size(px(11.0))
+                .text_color(color)
+                .when(*status == ItemStatus::Ready, |el| {
+                    el.child(Icon::new(IconName::Check).size(px(11.0)))
+                })
+                .child(word.to_string())
+                .agent_node(Role::Text, format!("Import status: {label}")),
+        )
+        .children(fraction.map(|fraction| {
+            div()
+                .w_full()
+                .h(px(STATUS_BAR_HEIGHT))
+                .rounded_full()
+                .bg(glass::ink(0.08))
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction.clamp(0.0, 1.0)))
+                        .rounded_full()
+                        .bg(glass::ink(0.55)),
+                )
+        }))
 }
 
 /// The sidebar's row for an import: there while one runs, and after one
@@ -1848,6 +2090,7 @@ fn track_browser(
 
 fn source_library(
     state: &AddTracks,
+    ambient: &Ambient<'_>,
     mode: ContentMode,
     app: &Entity<Luma>,
     cx: &mut gpui::App,
@@ -1864,7 +2107,7 @@ fn source_library(
     } else if state.source_rows.is_empty() {
         empty_body("No source tracks")
     } else {
-        source_rows(state, mode, app)
+        source_rows(state, ambient, mode, app)
     };
     div()
         .size_full()
@@ -1875,50 +2118,419 @@ fn source_library(
         .into_any_element()
 }
 
-fn source_rows(state: &AddTracks, mode: ContentMode, app: &Entity<Luma>) -> AnyElement {
+fn source_rows(
+    state: &AddTracks,
+    ambient: &Ambient<'_>,
+    mode: ContentMode,
+    app: &Entity<Luma>,
+) -> AnyElement {
     let rows = Rc::clone(&state.source_rows);
     let selected = Rc::new(state.selected.clone());
     let active = state.source_active;
     let scroll = state.source_scroll.clone();
     let app = app.clone();
+    let art = ambient.art.clone();
+    let interactive = mode == ContentMode::Interactive;
+    // A press on a cover or a scrub bar is a pointer gesture inside a
+    // keyboard-first list: it hands focus back to the search field, or the
+    // arrows and space would stop reaching the list the moment you clicked.
+    let keyboard = state.source_filter_focus.clone();
+    let preview = ambient
+        .preview
+        .map(|preview| (preview.track_id.clone(), RowPreview::of(preview)));
     float::viewport()
         .child(
-            uniform_list("source-tracks", rows.len(), move |range, _, _| {
-                range
+            uniform_list("source-tracks", rows.len(), move |range, _, cx| {
+                let mut asked = false;
+                let items = range
                     .map(|index| {
                         let track = &rows[index];
                         let id = track.id.clone();
                         let checked = selected.contains(&id);
                         let title = source_title(track);
-                        let app = app.clone();
                         let key = format!("add-tracks-source-track-{id}");
-                        track_row(
-                            RowState::of(checked, index == active),
-                            &key,
-                            // A DJ-library adapter exposes no art path, so
-                            // these rows show the empty plate — same rhythm as
-                            // the library list beside them.
-                            None,
-                            &title,
-                            track.artist.as_deref(),
-                            true,
-                        )
-                        .id(SharedString::from(key.clone()))
-                        .when(mode == ContentMode::Interactive, |row| {
-                            row.on_click(move |_, _, cx| {
-                                app.update(cx, |this, cx| this.toggle_source_track(&id, cx));
+                        // Asked for here, at layout, so only rows the list
+                        // actually lays out — the visible ones — are read.
+                        let cover = art.lookup(track);
+                        asked |= cover.asked;
+                        let previewing = preview
+                            .as_ref()
+                            .filter(|(track_id, _)| *track_id == id)
+                            .map(|(_, preview)| preview);
+                        let subtitle = match previewing {
+                            Some(preview) => {
+                                Some(scrub_line(preview, &app, &keyboard, interactive))
+                            }
+                            None => track
+                                .artist
+                                .clone()
+                                .map(|artist| float::row_subtitle(artist).into_any_element()),
+                        };
+                        let toggle = app.clone();
+                        row_shell(RowState::of(checked, index == active), &key, true)
+                            .child(preview_art(
+                                cover.image,
+                                previewing,
+                                &key,
+                                &id,
+                                &title,
+                                (&app, &keyboard),
+                                interactive,
+                            ))
+                            .child(float::row_text_with(title.clone(), subtitle))
+                            .id(SharedString::from(key.clone()))
+                            .when(interactive, |row| {
+                                row.on_click(move |_, _, cx| {
+                                    toggle.update(cx, |this, cx| this.toggle_source_track(&id, cx));
+                                })
                             })
-                        })
-                        .agent_node(Role::Row, title)
-                        .agent_disabled(mode != ContentMode::Interactive)
+                            .agent_node(Role::Row, title)
+                            .agent_disabled(!interactive)
                     })
-                    .collect()
+                    .collect();
+                if asked {
+                    // Deferred: this runs mid-layout, and serving a cover
+                    // starts work on the app — which is not to be re-entered
+                    // from inside its own frame.
+                    let app = app.clone();
+                    cx.defer(move |cx| app.update(cx, |this, cx| this.pump_source_art(cx)));
+                }
+                items
             })
             .track_scroll(&scroll)
             .size_full()
             .px(px(8.0)),
         )
         .into_any_element()
+}
+
+/// The preview as one row draws it — copied out of the shell's state so the
+/// list's render closure, which outlives this frame's borrows, can hold it.
+#[derive(Clone)]
+struct RowPreview {
+    playing: bool,
+    /// Decoding: there is no duration or overview yet.
+    loading: bool,
+    failed: Option<String>,
+    position: f32,
+    duration: f32,
+    fraction: f32,
+    scrubbing: bool,
+    overview: Rc<[f32]>,
+}
+
+impl RowPreview {
+    fn of(preview: &SourcePreview) -> Self {
+        let (duration, overview) = preview.loaded.as_ref().map_or_else(
+            || (0.0, Rc::from(Vec::new())),
+            |loaded| (loaded.duration, Rc::clone(&loaded.overview)),
+        );
+        Self {
+            playing: preview.playing,
+            loading: preview.loaded.is_none() && preview.failed.is_none(),
+            failed: preview.failed.clone(),
+            position: preview.position,
+            duration,
+            fraction: preview.fraction(),
+            scrubbing: preview.scrubbing,
+            overview,
+        }
+    }
+}
+
+/// The scrim a cover dims to under the play glyph.
+const ART_SCRIM: f32 = 0.45;
+/// The playing row's scrim: lighter, because it stays up while the row
+/// plays and should read as a state of the cover, not a cover over it.
+const ART_SCRIM_ACTIVE: f32 = 0.32;
+
+/// The row's cover, which is also its play button: on hover it dims under a
+/// play glyph, and while the row previews it holds a pause glyph.
+#[allow(clippy::too_many_arguments)]
+fn preview_art(
+    cover: Option<Arc<RenderImage>>,
+    preview: Option<&RowPreview>,
+    key: &str,
+    track_id: &str,
+    title: &str,
+    (app, keyboard): (&Entity<Luma>, &FocusHandle),
+    interactive: bool,
+) -> AnyElement {
+    let group = SharedString::from(format!("{key}-art"));
+    let keyboard = keyboard.clone();
+    let playing = preview.is_some_and(|preview| preview.playing);
+    let held = preview.is_some_and(|preview| preview.failed.is_none());
+    let loading = preview.is_some_and(|preview| preview.loading);
+    let label = if playing {
+        format!("Pause preview of {title}")
+    } else {
+        format!("Play preview of {title}")
+    };
+    let toggle = app.clone();
+    let track_id = track_id.to_string();
+    let has_cover = cover.is_some();
+    let glyph = if playing {
+        IconName::Pause
+    } else {
+        IconName::Play
+    };
+    let scrim = if held { ART_SCRIM_ACTIVE } else { ART_SCRIM };
+    let glyph_alpha = if loading { 0.55 } else { 0.95 };
+    let reveal = held || interactive;
+    // Cover and overlay are painted, each in a layer of its own. Inside the
+    // dialog's layer every primitive shares one draw order, and gpui then
+    // draws images after quads and glyphs — so an overlay laid out as a
+    // sibling of the image would sit *under* it. A layer per pass is what
+    // puts the scrim and the glyph on top.
+    let paint = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let corners = Corners::all(px(luma_ui::radius::CHIP));
+            if let Some(cover) = &cover {
+                window.paint_layer(bounds, |window| {
+                    window
+                        .paint_image(bounds, bounds, corners, Arc::clone(cover), 0, false)
+                        .ok();
+                });
+            }
+            if !(held || reveal && bounds.contains(&window.mouse_position())) {
+                return;
+            }
+            window.paint_layer(bounds, |window| {
+                window.paint_quad(fill(bounds, glass::scrim(scrim)).corner_radii(corners));
+                let edge = px(ART_GLYPH);
+                let glyph_bounds = Bounds::new(
+                    point(
+                        bounds.center().x - edge / 2.0,
+                        bounds.center().y - edge / 2.0,
+                    ),
+                    size(edge, edge),
+                );
+                window
+                    .paint_svg(
+                        glyph_bounds,
+                        glyph.path(),
+                        None,
+                        TransformationMatrix::unit(),
+                        glass::ink(glyph_alpha),
+                        cx,
+                    )
+                    .ok();
+            });
+        },
+    )
+    .size_full();
+    div()
+        .id(group.clone())
+        .relative()
+        .flex_none()
+        .size(px(ART_SIZE))
+        .rounded(px(luma_ui::radius::CHIP))
+        .bg(glass::wash(glass::WASH_SUBTLE))
+        // No visual change of its own: a hover style is what makes gpui
+        // repaint this cover as the pointer enters and leaves, which is when
+        // the painted overlay above has to appear and go.
+        .hover(|style| style)
+        .when(held, |art| {
+            art.border_1().border_color(glass::hairline(0.35))
+        })
+        .child(if has_cover {
+            paint
+                .agent_node(Role::Text, format!("Cover of {title}"))
+                .into_any_element()
+        } else {
+            paint.into_any_element()
+        })
+        .when(interactive, |art| {
+            art.cursor_pointer().on_click(move |_, window, cx| {
+                // The cover plays; the row around it selects. One press is
+                // one of the two.
+                cx.stop_propagation();
+                window.focus(&keyboard, cx);
+                let track_id = track_id.clone();
+                toggle.update(cx, |this, cx| this.toggle_source_preview(&track_id, cx));
+            })
+        })
+        .agent_node(Role::Button, label)
+        .agent_disabled(!interactive)
+        .into_any_element()
+}
+
+/// The play / pause glyph's edge on a cover.
+const ART_GLYPH: f32 = 13.0;
+
+/// The previewing row's second line: elapsed time, the scrub bar, remaining
+/// time — or why it is not playing.
+fn scrub_line(
+    preview: &RowPreview,
+    app: &Entity<Luma>,
+    keyboard: &FocusHandle,
+    interactive: bool,
+) -> AnyElement {
+    let line = div()
+        .h(px(SCRUB_HEIGHT))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .text_size(px(10.0))
+        .text_color(ladder::muted_foreground());
+    if let Some(error) = &preview.failed {
+        let message = format!("Can't preview: {error}");
+        return line
+            .child(
+                div()
+                    .truncate()
+                    .text_color(ladder::danger())
+                    .child(message.clone()),
+            )
+            .agent_node(Role::Text, message)
+            .into_any_element();
+    }
+    if preview.loading {
+        return line
+            .child("Loading preview…")
+            .agent_node(Role::Text, "Loading preview")
+            .into_any_element();
+    }
+    let elapsed = clock(preview.position);
+    let remaining = format!("-{}", clock(preview.duration - preview.position));
+    let label = format!("Preview position: {elapsed} of {}", clock(preview.duration));
+    line.child(time_label(elapsed))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(scrub_bar(
+                    preview.clone(),
+                    app.clone(),
+                    keyboard.clone(),
+                    interactive,
+                ))
+                .agent_node(Role::Slider, label)
+                .agent_disabled(!interactive),
+        )
+        .child(time_label(remaining))
+        .into_any_element()
+}
+
+/// The scrub line's height: the subtitle's line, so a row does not change
+/// height when it starts previewing.
+const SCRUB_HEIGHT: f32 = 14.0;
+
+fn time_label(text: String) -> Div {
+    div()
+        .flex_none()
+        .min_w(px(28.0))
+        .font_family(luma_ui::fonts::MONO)
+        .child(text)
+}
+
+/// `m:ss`, rounding down — a playhead at 9.99 s has not reached 0:10.
+fn clock(seconds: f32) -> String {
+    let seconds = seconds.max(0.0) as u64;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// The waveform overview the playhead walks across; a press or drag seeks.
+///
+/// A canvas because the drag outlives the element under the pointer: the
+/// listeners are window-level and keyed to the bar's painted bounds, so a
+/// drag that leaves the bar keeps scrubbing to its nearer end.
+fn scrub_bar(
+    preview: RowPreview,
+    app: Entity<Luma>,
+    keyboard: FocusHandle,
+    interactive: bool,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = f32::from(bounds.size.width).max(1.0);
+            let height = f32::from(bounds.size.height);
+            let played = glass::ink(0.78);
+            let ahead = glass::ink(0.22);
+            let peaks = preview.overview.len();
+            if peaks == 0 {
+                // No overview: a plain track with the played part lit.
+                let track = Bounds::new(
+                    point(bounds.origin.x, bounds.center().y - px(1.0)),
+                    size(bounds.size.width, px(2.0)),
+                );
+                window.paint_quad(fill(track, ahead));
+                let mut done = track;
+                done.size.width = px(width * preview.fraction);
+                window.paint_quad(fill(done, played));
+            } else {
+                let step = width / peaks as f32;
+                let bar = (step - 1.0).max(1.0);
+                for (index, peak) in preview.overview.iter().enumerate() {
+                    let x = index as f32 * step;
+                    let h = (peak * height).clamp(1.0, height);
+                    let quad = Bounds::new(
+                        point(
+                            bounds.origin.x + px(x),
+                            bounds.origin.y + px((height - h) / 2.0),
+                        ),
+                        size(px(bar), px(h)),
+                    );
+                    let lit = (x + bar / 2.0) / width <= preview.fraction;
+                    window.paint_quad(fill(quad, if lit { played } else { ahead }));
+                }
+            }
+            let head = Bounds::new(
+                point(
+                    bounds.origin.x + px(width * preview.fraction - 0.5),
+                    bounds.origin.y,
+                ),
+                size(px(1.0), bounds.size.height),
+            );
+            window.paint_quad(fill(head, ladder::playhead()));
+            if !interactive {
+                return;
+            }
+            let duration = preview.duration;
+            let seek_at = move |x: Pixels| {
+                ((f32::from(x - bounds.origin.x)) / width).clamp(0.0, 1.0) * duration
+            };
+            let down = app.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble
+                    || event.button != MouseButton::Left
+                    || !bounds.contains(&event.position)
+                {
+                    return;
+                }
+                // The row selects on click; a press on its bar is a seek.
+                cx.stop_propagation();
+                window.focus(&keyboard, cx);
+                let seconds = seek_at(event.position.x);
+                down.update(cx, |this, cx| {
+                    this.set_source_preview_scrubbing(true, cx);
+                    this.seek_source_preview(seconds, cx);
+                });
+            });
+            if !preview.scrubbing {
+                return;
+            }
+            let drag = app.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left)
+                {
+                    let seconds = seek_at(event.position.x);
+                    drag.update(cx, |this, cx| this.seek_source_preview(seconds, cx));
+                }
+            });
+            let up = app.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+                    up.update(cx, |this, cx| this.set_source_preview_scrubbing(false, cx));
+                }
+            });
+        },
+    )
+    .size_full()
 }
 
 fn source_rail(state: &AddTracks, mode: ContentMode, app: &Entity<Luma>) -> impl IntoElement {
@@ -1992,40 +2604,47 @@ fn track_row(
     subtitle: Option<&str>,
     selectable: bool,
 ) -> Div {
-    let mut row = float::menu_row(state, fade_key.to_string())
-        .h(px(ROW_HEIGHT))
-        .w_full();
-    if selectable {
-        let checked = state == RowState::Selected;
-        row = row.child(
-            div()
-                .size(px(15.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(luma_ui::radius::CHIP))
-                .border_1()
-                .border_color(glass::hairline(if checked { 0.0 } else { 0.18 }))
-                .when(checked, |box_| box_.bg(glass::ink(0.92)))
-                .when(checked, |box_| {
-                    box_.child(
-                        Icon::new(IconName::Check)
-                            .size(px(11.0))
-                            .text_color(ladder::background()),
-                    )
-                }),
-        );
-    }
     // The same square whether or not there is art to put in it, so a list
     // where only some tracks have covers keeps one left edge. `tracks::album_art`
     // is the app's one recipe for this — art is a path on disk, read through
     // gpui's image cache, never inlined bytes (CLAUDE.md).
-    row.child(crate::tracks::album_art(art, ART_SIZE))
+    row_shell(state, fade_key, selectable)
+        .child(crate::tracks::album_art(art, ART_SIZE))
         .child(float::row_text(
             title.to_string(),
             subtitle.map(|subtitle| subtitle.to_string().into()),
         ))
+}
+
+/// A track row up to its cover: the row, and the check box when the list
+/// is multi-select. The caller adds the cover and the words.
+fn row_shell(state: RowState, fade_key: &str, selectable: bool) -> Div {
+    let row = float::menu_row(state, fade_key.to_string())
+        .h(px(ROW_HEIGHT))
+        .w_full();
+    if !selectable {
+        return row;
+    }
+    let checked = state == RowState::Selected;
+    row.child(
+        div()
+            .size(px(15.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(luma_ui::radius::CHIP))
+            .border_1()
+            .border_color(glass::hairline(if checked { 0.0 } else { 0.18 }))
+            .when(checked, |box_| box_.bg(glass::ink(0.92)))
+            .when(checked, |box_| {
+                box_.child(
+                    Icon::new(IconName::Check)
+                        .size(px(11.0))
+                        .text_color(ladder::background()),
+                )
+            }),
+    )
 }
 
 /// The line a list shows in place of rows it does not have.
@@ -2148,14 +2767,16 @@ fn audio_files_in(paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImportItem, ItemStage, TrackImportActivity, TrackImportPhase, TrackImportProgress,
+        ImportItem, ItemAnalysis, ItemStatus, StageOutcome, TrackAnalysisEvent,
+        TrackImportActivity, TrackImportPhase, TrackImportProgress,
     };
+
+    const STAGES: [&str; 4] = ["beat_grid", "stems", "roots", "waveform"];
 
     fn event(
         phase: TrackImportPhase,
         track_id: Option<&str>,
-        step: Option<&str>,
-        error: Option<&str>,
+        analysis: Option<TrackAnalysisEvent>,
     ) -> TrackImportProgress {
         TrackImportProgress {
             import_id: "import".into(),
@@ -2165,9 +2786,41 @@ mod tests {
             total: 2,
             track_id: track_id.map(Into::into),
             current_track: None,
-            step: step.map(Into::into),
-            error: error.map(Into::into),
+            analysis,
+            error: None,
         }
+    }
+
+    fn analysis(track: &str, analysis: TrackAnalysisEvent) -> TrackImportProgress {
+        event(TrackImportPhase::Analyzing, Some(track), Some(analysis))
+    }
+
+    fn queued(track: &str) -> TrackImportProgress {
+        analysis(
+            track,
+            TrackAnalysisEvent::Queued {
+                stages: STAGES.iter().map(|stage| stage.to_string()).collect(),
+            },
+        )
+    }
+
+    fn started(track: &str, stage: &str) -> TrackImportProgress {
+        analysis(
+            track,
+            TrackAnalysisEvent::StageStarted {
+                stage: stage.into(),
+            },
+        )
+    }
+
+    fn settled(track: &str, stage: &str, outcome: StageOutcome) -> TrackImportProgress {
+        analysis(
+            track,
+            TrackAnalysisEvent::StageSettled {
+                stage: stage.into(),
+                outcome,
+            },
+        )
     }
 
     fn activity() -> TrackImportActivity {
@@ -2175,7 +2828,7 @@ mod tests {
             track_id: id.into(),
             title: id.into(),
             art: None,
-            stage: ItemStage::Waiting,
+            analysis: ItemAnalysis::default(),
         };
         TrackImportActivity {
             generation: 1,
@@ -2189,38 +2842,126 @@ mod tests {
         }
     }
 
+    fn status(activity: &TrackImportActivity, index: usize) -> ItemStatus {
+        activity.items[index].analysis.status()
+    }
+
+    /// The bug this fold was rewritten for: phase one's "copied" event names
+    /// the song, and the old fold read it as analysis starting — so the
+    /// scheduler's real start then read as the finish.
     #[test]
-    fn a_song_starts_steps_and_finishes_in_order() {
+    fn a_copy_event_is_not_analysis() {
         let mut activity = activity();
-        let analyzing = TrackImportPhase::Analyzing;
-        activity.apply(&event(analyzing.clone(), Some("a"), None, None));
-        assert_eq!(activity.items[0].stage, ItemStage::Analyzing(None));
-        activity.apply(&event(analyzing.clone(), Some("a"), Some("beats"), None));
-        assert_eq!(
-            activity.items[0].stage,
-            ItemStage::Analyzing(Some("beats".into()))
-        );
-        activity.apply(&event(analyzing, Some("a"), None, None));
-        assert_eq!(activity.items[0].stage, ItemStage::Done);
-        assert_eq!(activity.items[1].stage, ItemStage::Waiting);
+        activity.apply(&event(TrackImportPhase::Importing, Some("a"), None));
+        assert_eq!(status(&activity, 0), ItemStatus::Queued);
+        activity.apply(&queued("a"));
+        activity.apply(&started("a", "beat_grid"));
+        assert!(matches!(status(&activity, 0), ItemStatus::Analyzing { .. }));
+        assert_eq!(activity.summary(), "Analyzing 2 songs · 0 of 2 done");
+    }
+
+    /// "Ready" exactly when every queued stage has settled, whatever order
+    /// the stages start and settle in — parallel siblings settle in any
+    /// order — and never one event sooner.
+    #[test]
+    fn ready_is_never_shown_while_a_stage_is_pending() {
+        // Every interleaving the scheduler can produce for four stages is a
+        // shuffle of their start and settle events with each start before its
+        // settle; a seeded walk visits enough of them to cover the orders.
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..500 {
+            let mut activity = activity();
+            activity.apply(&queued("a"));
+            let mut unstarted: Vec<&str> = STAGES.to_vec();
+            let mut running: Vec<&str> = Vec::new();
+            let mut settled_count = 0;
+            while settled_count < STAGES.len() {
+                let start = !unstarted.is_empty() && (running.is_empty() || next() % 2 == 0);
+                if start {
+                    let stage = unstarted.remove(next() as usize % unstarted.len());
+                    activity.apply(&started("a", stage));
+                    running.push(stage);
+                } else {
+                    let stage = running.remove(next() as usize % running.len());
+                    activity.apply(&settled("a", stage, StageOutcome::Done));
+                    settled_count += 1;
+                }
+                let now = status(&activity, 0);
+                if settled_count < STAGES.len() {
+                    assert!(
+                        matches!(now, ItemStatus::Analyzing { .. }),
+                        "{settled_count} of {} settled reads {now:?}",
+                        STAGES.len()
+                    );
+                    assert!(!activity.summary().starts_with("Imported"));
+                } else {
+                    assert_eq!(now, ItemStatus::Ready);
+                }
+            }
+        }
     }
 
     #[test]
-    fn a_failure_sticks_and_completion_settles_the_rest() {
+    fn a_failed_stage_fails_the_song_once_the_rest_settle() {
         let mut activity = activity();
-        let analyzing = TrackImportPhase::Analyzing;
-        activity.apply(&event(analyzing.clone(), Some("a"), None, None));
-        activity.apply(&event(
-            analyzing.clone(),
-            Some("a"),
-            Some("stems"),
-            Some("boom"),
-        ));
-        activity.apply(&event(analyzing, Some("a"), None, None));
-        assert_eq!(activity.items[0].stage, ItemStage::Failed("boom".into()));
-        activity.apply(&event(TrackImportPhase::Complete, None, None, None));
+        activity.apply(&queued("a"));
+        activity.apply(&started("a", "stems"));
+        activity.apply(&settled("a", "stems", StageOutcome::Failed("boom".into())));
+        // Siblings still running: the song is not finished in either sense.
+        assert!(matches!(status(&activity, 0), ItemStatus::Analyzing { .. }));
+        for stage in ["beat_grid", "roots", "waveform"] {
+            activity.apply(&settled("a", stage, StageOutcome::Skipped));
+        }
+        assert_eq!(
+            status(&activity, 0),
+            ItemStatus::Failed("stems: boom".into())
+        );
+        // A stage settles once: a repeat cannot change the song's story.
+        activity.apply(&settled("a", "stems", StageOutcome::Done));
+        assert_eq!(
+            status(&activity, 0),
+            ItemStatus::Failed("stems: boom".into())
+        );
+    }
+
+    #[test]
+    fn completion_settles_only_what_the_rows_can_account_for() {
+        let mut activity = activity();
+        // `a` was queued and stopped part-way; `b` was never queued, which is
+        // what a song already in the library looks like.
+        activity.apply(&queued("a"));
+        activity.apply(&started("a", "beat_grid"));
+        activity.apply(&event(TrackImportPhase::Complete, None, None));
         activity.active = false;
-        assert_eq!(activity.items[1].stage, ItemStage::Done);
-        assert_eq!(activity.summary(), "1 song failed to import");
+        assert_eq!(
+            status(&activity, 0),
+            ItemStatus::Failed("Analysis stopped before it finished".into())
+        );
+        assert_eq!(status(&activity, 1), ItemStatus::Ready);
+        assert_eq!(activity.summary(), "1 of 2 failed to import");
+    }
+
+    #[test]
+    fn the_header_finishes_with_the_last_row() {
+        let mut activity = activity();
+        for track in ["a", "b"] {
+            activity.apply(&queued(track));
+        }
+        for stage in STAGES {
+            activity.apply(&settled("a", stage, StageOutcome::Done));
+        }
+        assert_eq!(activity.summary(), "Analyzing 2 songs · 1 of 2 done");
+        for stage in STAGES {
+            activity.apply(&settled("b", stage, StageOutcome::Done));
+        }
+        // Before the terminal event arrives: the rows are the truth.
+        assert!(activity.active);
+        assert_eq!(activity.summary(), "Imported 2 songs");
     }
 }

@@ -36,7 +36,9 @@ test("an empty library keeps the palette's header and says it is empty", { fixtu
   // The import chip is in the header on every route, so its presence does
   // not mean the list has loaded — wait for the empty body to name itself.
   const shot = until("the empty all-Luma route", (s) =>
-    s.find({ role: "text", label: "No tracks in your library" }) && s.findAll({ role: "row" }).length === 0 ? s : undefined);
+    s.find({ role: "text", label: "No tracks in your library" }) &&
+    // The dialog's own list — the sidebar behind it has rows of its own.
+    s.findAll({ role: "row" }).filter((n) => inside(n.bounds, dialog(s).bounds)).length === 0 ? s : undefined);
   const card = dialog(shot);
   image.keep(app.screenshot(), "add-tracks/empty-browser");
   image.keep(app.screenshot({ node: card }), "add-tracks/empty-browser-card");
@@ -120,5 +122,68 @@ test(
 
     expect(image.diff(browser.shot, picker.shot)).toBeGreaterThan(0.08);
     expect(image.diff(midpoint.shot, library.shot)).toBeGreaterThan(0.04);
+  },
+);
+
+// Source rows on the fixture's real audio, every other one with its library's
+// thumbnail, so the screenshot shows covers beside placeholders.
+const previewRow = (index) => ({
+  uuid: `preview-${index}`,
+  filePath: "$LIBRARY/zulu.wav",
+  filename: "zulu.wav",
+  title: ["Night Drive", "Low Tide", "Glass Hours", "Afterimage", "Signal Fire", "Northbound"][index],
+  artist: ["Kessler", "Mara Lune", "Okkervil", "Yume", "Sable", "Teo Park"][index],
+  album: null,
+  bpm: 124.0,
+  durationSeconds: 40.0,
+  artworkPath: index % 2 === 0 ? "$LIBRARY/padding-art.png" : null,
+});
+const PREVIEW_ROWS = [0, 1, 2, 3, 4, 5].map(previewRow);
+
+test(
+  "source rows show their covers, and the previewing row its scrub bar",
+  {
+    fixture: {
+      seconds: 8,
+      equal_timestamp_track: true,
+      second_track_seconds: 40,
+      album_art: 0,
+      source_fixture: {
+        library: { trackCount: PREVIEW_ROWS.length },
+        playlists: [{ id: "warmup", name: "Warmup", parentId: null, trackCount: PREVIEW_ROWS.length }],
+        tracks: PREVIEW_ROWS,
+        playlist_tracks: { warmup: PREVIEW_ROWS },
+      },
+    },
+    timeoutMs: 120000,
+  },
+  () => {
+    nav.venue("Test Venue");
+    nav.step("the add-track affordance", "button", "Add track");
+    let shot = until("the browser", (s) => s.find({ role: "button", label: "Import tracks" }) ? s : undefined);
+    app.click(shot.find({ role: "button", label: "Import tracks" }));
+    shot = until("the source menu", (s) => s.find({ role: "row", label: "Rekordbox" })?.enabled ? s : undefined);
+    app.click(shot.find({ role: "row", label: "Rekordbox" }));
+    shot = until("every cover decoded", (s) =>
+      ["Night Drive", "Glass Hours", "Signal Fire"].every((t) => s.find({ role: "text", label: `Cover of ${t}` })) ? s : undefined);
+    image.keep(app.screenshot(), "add-tracks/source-covers");
+
+    app.click(shot.find({ role: "button", label: "Play preview of Glass Hours" }));
+    shot = until("Glass Hours previewing", (s) =>
+      s.find({ role: "button", label: "Pause preview of Glass Hours" }) &&
+      s.findAll({ role: "slider" }).some((n) => n.label.startsWith("Preview position:")) ? s : undefined);
+    app.frames(4, { waitMs: 50 });
+    shot = app.snapshot();
+    image.keep(app.screenshot(), "add-tracks/source-previewing");
+    image.keep(app.screenshot({ node: dialog(shot) }), "add-tracks/source-previewing-card");
+
+    // The scrub bar is the subtitle line of its own row, the text column's
+    // width, and the row did not grow to hold it.
+    const row = listed(shot, "Glass Hours").bounds;
+    const neighbour = listed(shot, "Low Tide").bounds;
+    const bar = shot.findAll({ role: "slider" }).find((n) => n.label.startsWith("Preview position:")).bounds;
+    assert(inside(bar, row), "the scrub bar left its row");
+    expect(bar.width).toBeGreaterThan(row.width / 3);
+    expect(Math.abs(row.height - neighbour.height)).toBeLessThan(0.5);
   },
 );

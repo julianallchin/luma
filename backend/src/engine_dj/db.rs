@@ -57,35 +57,39 @@ pub async fn get_library_info(
     })
 }
 
-/// List all tracks from the Engine DJ library.
-pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<EngineDjTrack>, String> {
-    #[derive(FromRow)]
-    struct TrackRow {
-        id: i64,
-        path: String,
-        filename: String,
-        title: Option<String>,
-        artist: Option<String>,
-        album: Option<String>,
-        #[sqlx(rename = "bpmAnalyzed")]
-        bpm_analyzed: Option<f64>,
-        length: Option<f64>,
-        #[sqlx(rename = "originDatabaseUuid")]
-        origin_database_uuid: Option<String>,
-        #[sqlx(rename = "originTrackId")]
-        origin_track_id: Option<i64>,
-    }
+/// The columns every track read selects, against `Track t`. A macro so each
+/// query stays one `&'static str` — sqlx only takes a built string through
+/// an explicit safety assertion.
+macro_rules! track_columns {
+    () => {
+        "t.id, t.path, t.filename, t.title, t.artist, t.album, t.bpmAnalyzed, \
+         CAST(t.length AS REAL) AS length, t.originDatabaseUuid, t.originTrackId, t.albumArtId"
+    };
+}
 
-    let rows = sqlx::query_as::<_, TrackRow>(
-        "SELECT id, path, filename, title, artist, album, bpmAnalyzed, CAST(length AS REAL) AS length, originDatabaseUuid, originTrackId FROM Track ORDER BY title",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list Engine DJ tracks: {}", e))?;
+/// One row of `track_columns!` — the one shape all three track reads share.
+#[derive(FromRow)]
+struct TrackRow {
+    id: i64,
+    path: String,
+    filename: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    #[sqlx(rename = "bpmAnalyzed")]
+    bpm_analyzed: Option<f64>,
+    length: Option<f64>,
+    #[sqlx(rename = "originDatabaseUuid")]
+    origin_database_uuid: Option<String>,
+    #[sqlx(rename = "originTrackId")]
+    origin_track_id: Option<i64>,
+    #[sqlx(rename = "albumArtId")]
+    album_art_id: Option<i64>,
+}
 
-    Ok(rows
-        .into_iter()
-        .map(|r| EngineDjTrack {
+impl From<TrackRow> for EngineDjTrack {
+    fn from(r: TrackRow) -> Self {
+        Self {
             id: r.id,
             path: r.path,
             filename: r.filename,
@@ -96,8 +100,36 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<EngineDjTrack>, String
             length: r.length,
             origin_database_uuid: r.origin_database_uuid,
             origin_track_id: r.origin_track_id,
-        })
-        .collect())
+            album_art_id: r.album_art_id,
+        }
+    }
+}
+
+/// The cover Engine DJ stored for `album_art_id`, as the encoded image it
+/// keeps (PNG). `None` when the row has no image — Engine keeps a row per
+/// hash even for tracks it found no art in.
+pub async fn album_art(pool: &SqlitePool, album_art_id: i64) -> Result<Option<Vec<u8>>, String> {
+    sqlx::query_scalar::<_, Option<Vec<u8>>>("SELECT albumArt FROM AlbumArt WHERE id = ?")
+        .bind(album_art_id)
+        .fetch_optional(pool)
+        .await
+        .map(Option::flatten)
+        .map(|bytes| bytes.filter(|bytes| !bytes.is_empty()))
+        .map_err(|e| format!("Failed to read Engine DJ album art: {e}"))
+}
+
+/// List all tracks from the Engine DJ library.
+pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<EngineDjTrack>, String> {
+    let rows = sqlx::query_as::<_, TrackRow>(concat!(
+        "SELECT ",
+        track_columns!(),
+        " FROM Track t ORDER BY t.title"
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list Engine DJ tracks: {}", e))?;
+
+    Ok(rows.into_iter().map(EngineDjTrack::from).collect())
 }
 
 /// List all playlists from the Engine DJ library.
@@ -150,79 +182,33 @@ pub async fn get_playlist_tracks(
     pool: &SqlitePool,
     playlist_id: i64,
 ) -> Result<Vec<EngineDjTrack>, String> {
-    #[derive(FromRow)]
-    struct TrackRow {
-        id: i64,
-        path: String,
-        filename: String,
-        title: Option<String>,
-        artist: Option<String>,
-        album: Option<String>,
-        #[sqlx(rename = "bpmAnalyzed")]
-        bpm_analyzed: Option<f64>,
-        length: Option<f64>,
-        #[sqlx(rename = "originDatabaseUuid")]
-        origin_database_uuid: Option<String>,
-        #[sqlx(rename = "originTrackId")]
-        origin_track_id: Option<i64>,
-    }
-
-    let rows = sqlx::query_as::<_, TrackRow>(
-        "SELECT t.id, t.path, t.filename, t.title, t.artist, t.album, t.bpmAnalyzed, CAST(t.length AS REAL) AS length, t.originDatabaseUuid, t.originTrackId
-         FROM Track t
-         INNER JOIN PlaylistEntity pe ON pe.trackId = t.id
-         WHERE pe.listId = ?
-         ORDER BY t.title",
-    )
+    let rows = sqlx::query_as::<_, TrackRow>(concat!(
+        "SELECT ",
+        track_columns!(),
+        " FROM Track t
+             INNER JOIN PlaylistEntity pe ON pe.trackId = t.id
+             WHERE pe.listId = ?
+             ORDER BY t.title"
+    ))
     .bind(playlist_id)
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to get playlist tracks: {}", e))?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| EngineDjTrack {
-            id: r.id,
-            path: r.path,
-            filename: r.filename,
-            title: r.title,
-            artist: r.artist,
-            album: r.album,
-            bpm_analyzed: r.bpm_analyzed,
-            length: r.length,
-            origin_database_uuid: r.origin_database_uuid,
-            origin_track_id: r.origin_track_id,
-        })
-        .collect())
+    Ok(rows.into_iter().map(EngineDjTrack::from).collect())
 }
 
 /// Search tracks by title, artist, or filename.
 pub async fn search_tracks(pool: &SqlitePool, query: &str) -> Result<Vec<EngineDjTrack>, String> {
-    #[derive(FromRow)]
-    struct TrackRow {
-        id: i64,
-        path: String,
-        filename: String,
-        title: Option<String>,
-        artist: Option<String>,
-        album: Option<String>,
-        #[sqlx(rename = "bpmAnalyzed")]
-        bpm_analyzed: Option<f64>,
-        length: Option<f64>,
-        #[sqlx(rename = "originDatabaseUuid")]
-        origin_database_uuid: Option<String>,
-        #[sqlx(rename = "originTrackId")]
-        origin_track_id: Option<i64>,
-    }
-
     let pattern = format!("%{}%", query);
-    let rows = sqlx::query_as::<_, TrackRow>(
-        "SELECT id, path, filename, title, artist, album, bpmAnalyzed, CAST(length AS REAL) AS length, originDatabaseUuid, originTrackId
-         FROM Track
-         WHERE title LIKE ? OR artist LIKE ? OR filename LIKE ?
-         ORDER BY title
-         LIMIT 200",
-    )
+    let rows = sqlx::query_as::<_, TrackRow>(concat!(
+        "SELECT ",
+        track_columns!(),
+        " FROM Track t
+             WHERE t.title LIKE ? OR t.artist LIKE ? OR t.filename LIKE ?
+             ORDER BY t.title
+             LIMIT 200"
+    ))
     .bind(&pattern)
     .bind(&pattern)
     .bind(&pattern)
@@ -230,19 +216,5 @@ pub async fn search_tracks(pool: &SqlitePool, query: &str) -> Result<Vec<EngineD
     .await
     .map_err(|e| format!("Failed to search Engine DJ tracks: {}", e))?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| EngineDjTrack {
-            id: r.id,
-            path: r.path,
-            filename: r.filename,
-            title: r.title,
-            artist: r.artist,
-            album: r.album,
-            bpm_analyzed: r.bpm_analyzed,
-            length: r.length,
-            origin_database_uuid: r.origin_database_uuid,
-            origin_track_id: r.origin_track_id,
-        })
-        .collect())
+    Ok(rows.into_iter().map(EngineDjTrack::from).collect())
 }

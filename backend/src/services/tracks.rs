@@ -21,7 +21,7 @@ use crate::database::local::venue_access::{
 };
 use crate::dispatch::Events;
 use crate::engine_dj::types::EngineDjTrack;
-use crate::models::tracks::{TrackBrowserRow, TrackSummary};
+use crate::models::tracks::{StageOutcome, TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
 use crate::preprocessing::{registry, scheduler, AnalysisGuard, WorkerEnvironment};
 use crate::storage::StorageRoot;
@@ -204,25 +204,12 @@ pub async fn file_fast_import(
     Ok((id, is_new))
 }
 
-/// Extract album art from an audio file and save it to the art directory.
-/// Returns `(art_path, art_mime)`; both `None` when no embedded artwork is
-/// present or the file can't be parsed.
-fn extract_album_art(
-    storage: &StorageRoot,
-    source_path: &Path,
-) -> Result<(Option<String>, Option<String>), String> {
-    let art_dir = storage.art_dir();
-
-    let tagged_file = match Probe::open(source_path) {
-        Ok(probe) => match probe.read() {
-            Ok(tf) => tf,
-            Err(_) => return Ok((None, None)),
-        },
-        Err(_) => return Ok((None, None)),
-    };
-
-    let primary_tag = tagged_file.primary_tag();
-    let picture = primary_tag.and_then(|tag| {
+/// The cover embedded in an audio file's primary tag: the front cover, else
+/// the back, else one marked "other". `None` when there is none or the file
+/// cannot be parsed — a file without art is not an error.
+pub(crate) fn embedded_picture(path: &Path) -> Option<lofty::picture::Picture> {
+    let tagged_file = Probe::open(path).ok()?.read().ok()?;
+    tagged_file.primary_tag().and_then(|tag| {
         tag.pictures()
             .iter()
             .find(|pic| {
@@ -232,9 +219,18 @@ fn extract_album_art(
                 )
             })
             .cloned()
-    });
+    })
+}
 
-    match picture {
+/// Extract album art from an audio file and save it to the art directory.
+/// Returns `(art_path, art_mime)`; both `None` when no embedded artwork is
+/// present or the file can't be parsed.
+fn extract_album_art(
+    storage: &StorageRoot,
+    source_path: &Path,
+) -> Result<(Option<String>, Option<String>), String> {
+    let art_dir = storage.art_dir();
+    match embedded_picture(source_path) {
         Some(picture) => {
             let mime = picture
                 .mime_type()
@@ -461,9 +457,23 @@ fn total_system_memory_gb() -> u64 {
     }
 }
 
-/// Run background analysis for a batch of tracks. Thin wrapper around the
-/// preprocessing DAG scheduler — kept under this name so existing callers
-/// don't need to change.
+/// The stage the waveform branch reports under, beside the DAG's own names.
+pub const WAVEFORM_STAGE: &str = "waveform";
+
+/// Every stage an imported track reports, in no particular order: each
+/// registered preprocessor, and the waveform branch beside them.
+pub fn analysis_stages() -> Vec<String> {
+    crate::preprocessing::registry::registered_preprocessors()
+        .iter()
+        .map(|p| p.name().to_string())
+        .chain(std::iter::once(WAVEFORM_STAGE.to_string()))
+        .collect()
+}
+
+/// Run background analysis for a batch of tracks: the preprocessing DAG and
+/// the waveform branch beside it, then the import's terminal event once both
+/// have drained — a track is not analysed while its waveform is still being
+/// drawn, so neither is the import.
 pub async fn run_background_analysis(
     pool: SqlitePool,
     storage: StorageRoot,
@@ -475,6 +485,13 @@ pub async fn run_background_analysis(
 ) {
     if analysis.checkpoint().is_err() {
         return;
+    }
+    // Every track is queued before any work starts, so a consumer knows the
+    // whole of each track's analysis before the first stage of any of them.
+    let stages = analysis_stages();
+    for track_id in &track_ids {
+        scheduler::StageReport::new(import.clone(), events.clone(), track_id.clone())
+            .queued(stages.clone());
     }
     // Pre-pipeline metadata gap-fill happens before the scheduler — it's a
     // cheap track-row population step, not a preprocessor.
@@ -491,17 +508,18 @@ pub async fn run_background_analysis(
     }
     // Waveform generation is an independent peer to the typed artifact DAG;
     // the identity task group owns and drains both branches together.
-    let waveforms = run_waveform_jobs(&pool, &track_ids, &analysis);
+    let waveforms = run_waveform_jobs(&pool, &track_ids, &analysis, Some((&import, &events)));
     let preprocessing = scheduler::run_for_tracks(
         pool.clone(),
         storage,
         workers,
-        events,
+        events.clone(),
         track_ids.clone(),
         analysis.clone(),
-        Some(import),
+        Some(import.clone()),
     );
-    tokio::join!(waveforms, preprocessing);
+    let ((), summary) = tokio::join!(waveforms, preprocessing);
+    import.complete(&events, summary);
 }
 
 /// Backfill missing track metadata from file tags. Runs before any
@@ -573,25 +591,47 @@ async fn run_bounded_track_jobs<Job, Fut>(
 }
 
 /// Waveform generation for a batch, running beside — and bounded like — the
-/// preprocessor DAG. It is an independent peer of the DAG, not a stage in it.
-async fn run_waveform_jobs(pool: &SqlitePool, track_ids: &[String], analysis: &AnalysisGuard) {
+/// preprocessor DAG. It is an independent peer of the DAG, not a stage in it,
+/// though under an import it reports as one ([`WAVEFORM_STAGE`]).
+async fn run_waveform_jobs(
+    pool: &SqlitePool,
+    track_ids: &[String],
+    analysis: &AnalysisGuard,
+    import: Option<(&scheduler::ImportEventContext, &Events)>,
+) {
     run_bounded_track_jobs(track_ids, analysis, analysis_worker_count(), |track_id| {
         let pool = pool.clone();
         let analysis = analysis.clone();
+        let report = import.map(|(import, events)| {
+            scheduler::StageReport::new(import.clone(), events.clone(), track_id.clone())
+        });
         async move {
+            let settle = |outcome| {
+                if let Some(report) = &report {
+                    report.settle(WAVEFORM_STAGE, outcome);
+                }
+            };
             let Ok(Some(track)) = tracks_db::get_track_by_id(&pool, &track_id).await else {
+                settle(StageOutcome::Skipped);
                 return;
             };
             if !Path::new(&track.file_path).exists() {
+                settle(StageOutcome::Skipped);
                 return;
             }
-            if let Err(e) =
-                crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &analysis).await
+            if let Some(report) = &report {
+                report.started(WAVEFORM_STAGE);
+            }
+            match crate::services::waveforms::ensure_track_waveform(&pool, &track_id, &analysis)
+                .await
             {
-                if analysis.is_cancelled() {
-                    return;
+                Ok(_) => settle(StageOutcome::Done),
+                // A retired identity publishes nothing — see the scheduler.
+                Err(_) if analysis.is_cancelled() => {}
+                Err(e) => {
+                    eprintln!("[preprocessing] waveform failed for {track_id}: {e}");
+                    settle(StageOutcome::Failed(e));
                 }
-                eprintln!("[preprocessing] waveform failed for {track_id}: {e}");
             }
         }
     })

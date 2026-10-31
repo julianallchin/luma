@@ -7,7 +7,6 @@
 use super::support;
 
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -35,20 +34,6 @@ fn silent_wav(path: &Path) {
     std::fs::write(path, bytes).unwrap();
 }
 
-fn install_slow_analysis(cache: &Path) {
-    let bin = cache.join("python-env/bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let python = bin.join("python3");
-    std::fs::write(
-        &python,
-        "#!/bin/sh\nsleep 0.4\ncase \"$1\" in\n  *beat_worker.py) printf '%s\\n' '{\"beats\":[0.0,0.5],\"downbeats\":[0.0],\"bpm\":120.0,\"downbeat_offset\":0.0,\"beats_per_bar\":4}' ;;\n  *) exit 1 ;;\nesac\n",
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&python).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(python, permissions).unwrap();
-}
-
 fn harness() -> Harness {
     let external = std::env::temp_dir().join(format!(
         "luma-gpui-add-tracks-source-{}",
@@ -59,7 +44,7 @@ fn harness() -> Harness {
     let audio = external.join("needle.wav");
     silent_wav(&audio);
     let cache = external.join("cache");
-    install_slow_analysis(&cache);
+    support::install_fake_analysis(&cache, 0.4);
     std::env::set_var("LUMA_CACHE_DIR", cache);
 
     let track = json!({
@@ -241,4 +226,65 @@ fn source_import_survives_close_reconciles_newest_and_joins_the_venue() {
         out["rows"][0], "Needle",
         "import did not reconcile newest-first"
     );
+}
+
+/// The progress page follows a real import, frame by frame: a row is never
+/// finished while its header still says the import is analysing, the header
+/// never finishes while a row is not, and the row passes through analysing
+/// on the way — the pair that once read "Analyzing 1 of 1" over "✓ Ready".
+const PROGRESS_SCRIPT: &str = r#"
+    nav.venue("Test Venue");
+    nav.step("the add-track affordance", "button", "Add track");
+    app.click(until("the browser", (s) => s.find({ role: "button", label: "Import tracks" })
+        !== undefined).find({ role: "button", label: "Import tracks" }));
+    app.click(until("the source menu", (s) => s.find({ role: "row", label: "Rekordbox" }) !== undefined)
+        .find({ role: "row", label: "Rekordbox" }));
+    app.click(until("the source rows", (s) => s.find({ role: "row", label: "Needle" }) !== undefined)
+        .find({ role: "row", label: "Needle" }));
+    app.click(until("the enabled import", (s) =>
+        s.find({ role: "button", label: "Import selected" })?.enabled === true)
+        .find({ role: "button", label: "Import selected" }));
+
+    const row = (s) => s.findAll({ role: "row" }).find((n) => n.label.startsWith("Needle: "));
+    const header = (s) => s.findAll({ role: "text" })
+        .find((n) => /^(Analyzing|Importing|Imported|Nothing|Import failed|\d+ of \d+ failed)/.test(n.label));
+    const seen = [];
+    const violations = [];
+    const final = until("the import to finish on its rows", (s) => {
+        const r = row(s);
+        const h = header(s);
+        if (!r || !h) return undefined;
+        const status = r.label.slice("Needle: ".length);
+        if (seen[seen.length - 1] !== status) seen.push(status);
+        const rowDone = status === "Ready" || status === "Failed";
+        const headerDone = !/^(Analyzing|Importing)/.test(h.label);
+        if (rowDone !== headerDone) violations.push(`${h.label} over ${status}`);
+        return rowDone && headerDone ? s : undefined;
+    }, { timeoutMs: 60000 });
+    ({ seen, violations, header: header(final).label })
+"#;
+
+#[test]
+fn progress_rows_and_header_finish_together() {
+    let _environment = support::environment_lock();
+    let mut harness = harness();
+    let result = harness.exec(&support::script(PROGRESS_SCRIPT), Duration::from_secs(300));
+    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
+    let out = result.result;
+    println!("progress statuses seen: {}", out["seen"]);
+    assert_eq!(out["violations"], json!([]), "seen: {}", out["seen"]);
+    let seen: Vec<&str> = out["seen"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|status| status.as_str().unwrap())
+        .collect();
+    assert!(
+        seen.iter().any(|status| status.starts_with("Analyzing")),
+        "the row skipped analysing: {seen:?}"
+    );
+    // The fake analysis fails every worker but beats, so the honest ending
+    // is a failed song with the header agreeing.
+    assert_eq!(seen.last(), Some(&"Failed"), "{seen:?}");
+    assert_eq!(out["header"], "1 of 1 failed to import");
 }
