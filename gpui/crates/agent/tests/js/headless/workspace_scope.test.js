@@ -16,7 +16,7 @@ const chips = (s) => s.findAll({ role: "button" })
   .map((n) => n.label)
   .filter((label) => label.startsWith("Aurora · #") || label === "Venue");
 const scoreRows = (s) => s.findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
-const chat = (s) => s.findAll({ role: "text" }).some((n) => n.label === "Luma");
+const chat = (s) => s.find({ role: "button", label: "Chat history" }) !== undefined;
 
 // Opening a second score of the same track opens a second tab beside the
 // first, rather than swapping the score inside one track's tab.

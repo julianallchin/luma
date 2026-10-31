@@ -12,23 +12,23 @@ fixture({
 const SEEDED = "Seeded question about score ";
 
 test("a track keeps its chat until an explicit new or history choice", () => {
-  const header = (label) => until(label, (s) => s.find({ role: "text", label }));
+  const header = () => until("the chat header", (s) => s.find({ role: "button", label: "Chat history" }));
   const composer = (s) => s.find({ role: "input", label: "Do anything…" });
   nav.trackEditor("Test Venue", "Aurora");
-  header("Luma");
+  header();
   // A clip is labelled by its name; the fixture's clip is a Wash.
   until("the score's clip", (s) => s.find({ role: "card", label: "Wash" }));
   // Picking the track opened its most recent chat, a seeded one.
   until("the track's chat", (s) => s.findAll({ role: "text" }).some((n) => n.label.startsWith(SEEDED)));
   app.type(composer(until("the composer", composer)), "keep this draft");
   nav.step("new chat", "button", "New chat");
-  header("Luma");
+  header();
   nav.step("history", "button", "Chat history");
   const history = until("the track's history", (s) =>
     s.findAll({ role: "card" }).some((n) => n.label.startsWith(SEEDED)));
   const saved = history.findAll({ role: "card" }).find((n) => n.label.startsWith(SEEDED));
   app.click(saved);
-  header("Luma");
+  header();
   until("history dismissed", (s) => !s.find({ role: "input", label: "Search chats…" }));
 
   // The venue tab shows the venue's own chat; coming back to the score tab
@@ -37,12 +37,12 @@ test("a track keeps its chat until an explicit new or history choice", () => {
   nav.venuePage("Test Venue");
   until("the venue's chat", (s) => !s.find({ role: "text", label: saved.label }));
   nav.step("the score tab again", "button", scoreTab);
-  header("Luma");
+  header();
   app.frames(8, { waitMs: 20 });
   assert(app.snapshot().find({ role: "text", label: saved.label }),
     "the venue tab replaced the score's conversation");
 
   nav.step("close the score tab", "button", `Close ${scoreTab}`);
   until("the score tab closed", (s) => !s.find({ role: "button", label: scoreTab }));
-  header("Luma");
+  header();
 });
