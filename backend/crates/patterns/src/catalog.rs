@@ -5,11 +5,12 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
         Primitive::Kernel(kernel) => kernel.definition(),
         Primitive::Output => crate::output::terminal_definition(),
         Primitive::BandEnergy => crate::features::definition(),
+        Primitive::Control => crate::controls::definition(),
     }
 }
 
-/// The kernels a clip graph lowers onto, plus band energy and the output
-/// terminal.
+/// The kernels a clip graph lowers onto, plus band energy, live controls
+/// and the output terminal.
 pub fn standard_library() -> Library {
     static LIBRARY: std::sync::OnceLock<Library> = std::sync::OnceLock::new();
     LIBRARY
@@ -17,6 +18,7 @@ pub fn standard_library() -> Library {
             let mut library = Library::default();
             for (id, op) in [
                 ("band_energy", Primitive::BandEnergy),
+                ("control", Primitive::Control),
                 ("output", Primitive::Output),
             ] {
                 library.definitions.insert(id.into(), primitive(op));

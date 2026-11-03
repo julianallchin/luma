@@ -2349,3 +2349,65 @@ fn a_period_over_beats_eases_the_random_each_beat_without_a_jump() {
     }
     assert!(between > 4. * near, "between {between}, near {near}");
 }
+
+/// A fader the test moves by hand.
+#[derive(Debug, Default)]
+struct Fader(std::sync::Mutex<f64>);
+impl luma_patterns::ControlSource for Fader {
+    fn value(&self, name: &str) -> f64 {
+        if name == "drop" {
+            *self.0.lock().unwrap()
+        } else {
+            0.25
+        }
+    }
+}
+
+#[test]
+fn a_control_moves_the_light_without_preparing_again() {
+    let graph = graph(json!({
+        "fader": {"kind": "control", "settings": {"name": "drop"}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "fader"}, "low": 0.2, "high": 0.8}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let fader = Arc::new(Fader::default());
+    let prepared = PreparedGraph::new(
+        &standard_library(),
+        &graph,
+        Frame {
+            features: None,
+            cells: &line(),
+            beat: 0.,
+            clip_start: 0.,
+            clip_duration: 16.,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    assert_eq!(prepared.control_names(), ["drop"]);
+    let dimmer = |prepared: &PreparedGraph| {
+        let out = prepared.evaluate_batch(&[3.]).unwrap();
+        out[OUTPUT].lighting().unwrap().values()[[0, 0, DIMMER]]
+    };
+    // Nothing bound: every control reads 0, so the curve's low.
+    assert!((dimmer(&prepared) - 0.2).abs() < 1e-9);
+
+    let prepared = prepared.with_controls(fader.clone());
+    let down = dimmer(&prepared);
+    *fader.0.lock().unwrap() = 1.;
+    let up = dimmer(&prepared);
+    assert!(up > down, "raising the fader brightens the light");
+    assert!((up - 0.8).abs() < 1e-9, "the curve sets the fader's range");
+}
+
+#[test]
+fn a_control_cannot_set_a_clock() {
+    let refused = graph(json!({
+        "fader": {"kind": "control"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "fader"}, "low": 1, "high": 4}},
+        "time1": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
+    .check()
+    .expect_err("a live every is refused");
+    assert!(refused.0.contains("time1.every"), "{}", refused.0);
+}

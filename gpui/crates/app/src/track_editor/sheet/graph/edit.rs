@@ -376,7 +376,13 @@ fn signature(graph: &ClipGraph, values: bool) -> String {
 // -- edits --------------------------------------------------------------------
 
 /// Where a promoted input's values come from: the coordinate node kinds.
-pub(crate) const SOURCES: [Kind; 4] = [Kind::Time, Kind::Space, Kind::Random, Kind::Audio];
+pub(crate) const SOURCES: [Kind; 5] = [
+    Kind::Time,
+    Kind::Space,
+    Kind::Random,
+    Kind::Audio,
+    Kind::Control,
+];
 
 /// A coordinate kind's menu entry.
 pub(crate) fn source_label(kind: Kind) -> &'static str {
@@ -384,6 +390,7 @@ pub(crate) fn source_label(kind: Kind) -> &'static str {
         Kind::Time => "Over time",
         Kind::Space => "Over space",
         Kind::Along => "Along each element",
+        Kind::Control => "From a live control",
         other => other.label(),
     }
 }

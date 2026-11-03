@@ -1,6 +1,6 @@
 //! One small graph per clip (spec: `docs/specs/clip-graphs.md`).
 //!
-//! A clip graph has nodes of 17 kinds. Exactly one node is an output
+//! A clip graph has nodes of 18 kinds. Exactly one node is an output
 //! (`color`, `aim`, `strobe` or `laser`). Every node has one output wire. An input
 //! holds a value, a wire (`{"node": id}`), or nothing; nothing is the only
 //! default. A choice is a setting and is never wired.
@@ -18,7 +18,7 @@ mod lower;
 mod random;
 mod summary;
 
-pub use check::{blend_modes, check, check_clip};
+pub use check::{blend_modes, check, check_clip, is_control_name};
 pub use kernels::Kernel;
 pub(crate) use lower::lower;
 pub use random::sample_random;
@@ -50,6 +50,7 @@ pub enum Kind {
     Along,
     Random,
     Audio,
+    Control,
     Curve,
     Math,
     Value,
@@ -66,12 +67,13 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in menu order.
-    pub const ALL: [Kind; 17] = [
+    pub const ALL: [Kind; 18] = [
         Kind::Time,
         Kind::Space,
         Kind::Along,
         Kind::Random,
         Kind::Audio,
+        Kind::Control,
         Kind::Curve,
         Kind::Math,
         Kind::Value,
@@ -94,6 +96,7 @@ impl Kind {
             Kind::Along => "along",
             Kind::Random => "random",
             Kind::Audio => "audio",
+            Kind::Control => "control",
             Kind::Curve => "curve",
             Kind::Math => "math",
             Kind::Value => "value",
@@ -117,6 +120,7 @@ impl Kind {
             Kind::Along => "Along",
             Kind::Random => "Random",
             Kind::Audio => "Audio",
+            Kind::Control => "Control",
             Kind::Curve => "Curve",
             Kind::Math => "Math",
             Kind::Value => "Value",
@@ -471,6 +475,20 @@ impl ClipGraph {
     }
 
     /// The output node's kind.
+    /// The live controls this graph reads, by name, sorted and each once.
+    /// A control node's index into them is its place here.
+    pub fn controls(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .nodes
+            .values()
+            .filter(|node| node.kind == Kind::Control)
+            .filter_map(|node| node.setting("name"))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     pub fn output_kind(&self) -> Option<Kind> {
         self.output().map(|(_, node)| node.kind)
     }
@@ -527,7 +545,12 @@ impl ClipGraph {
         frame.validate()?;
         self.check()?;
         let root = lower::lower_coordinate(self, id, frame)?;
-        let prepared = crate::PreparedGraph::lowered(&crate::standard_library(), &root, frame)?;
+        let prepared = crate::PreparedGraph::lowered(
+            &crate::standard_library(),
+            &root,
+            frame,
+            self.controls().into_iter().map(String::from).collect(),
+        )?;
         let out = prepared.evaluate_batch(&[frame.beat])?;
         let x = out[lower::COORDINATE]
             .signal()

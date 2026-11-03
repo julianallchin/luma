@@ -168,6 +168,9 @@ pub(in crate::track_editor) struct State {
 /// A node's name being typed on its card.
 pub(in crate::track_editor) struct Rename {
     pub id: String,
+    /// The text setting being typed, such as a control's name; `None` while
+    /// the node's own name is.
+    pub setting: Option<String>,
     pub field: Entity<TextInput>,
     _subs: Vec<Subscription>,
 }
@@ -275,7 +278,9 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
 /// kind it has (`value`).
 fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
-        Kind::Time | Kind::Space | Kind::Along | Kind::Random | Kind::Audio => Signal::Coordinate,
+        Kind::Time | Kind::Space | Kind::Along | Kind::Random | Kind::Audio | Kind::Control => {
+            Signal::Coordinate
+        }
         Kind::Curve | Kind::Math | Kind::Value => match value {
             Some("vector") => Signal::Vector,
             Some("color") => Signal::Color,
@@ -312,12 +317,13 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
-const ADDABLE: [Kind; 13] = [
+const ADDABLE: [Kind; 14] = [
     Kind::Time,
     Kind::Space,
     Kind::Along,
     Kind::Random,
     Kind::Audio,
+    Kind::Control,
     Kind::Curve,
     Kind::Math,
     Kind::Value,
@@ -628,7 +634,7 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
 /// card does not take the keyboard from it.
 pub(super) fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
     let rename = cx.state.sheet.canvas.rename.as_ref();
-    if let Some(rename) = rename.filter(|rename| rename.id == id) {
+    if let Some(rename) = rename.filter(|rename| rename.id == id && rename.setting.is_none()) {
         return luma_ui::float::field()
             .id(SharedString::from(format!("rename-{id}")))
             .flex_1()
@@ -649,7 +655,9 @@ pub(super) fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
             }
             cx.stop_propagation();
             let at = at.clone();
-            app.update(cx, |this, cx| this.graph_rename_start(&at, window, cx));
+            app.update(cx, |this, cx| {
+                this.graph_rename_start(&at, None, window, cx)
+            });
         })
         .agent_node(Role::Text, label.to_owned())
         .into_any_element()
@@ -884,7 +892,7 @@ fn card_menu(cx: &Ctx) -> Option<AnyElement> {
             let at = at_id.clone();
             app.update(cx, |this, cx| {
                 close(this, cx);
-                this.graph_rename_start(&at, window, cx);
+                this.graph_rename_start(&at, None, window, cx);
             });
         });
     if !node.kind.is_output() {
@@ -1554,12 +1562,29 @@ impl Luma {
         });
     }
 
-    /// Open node `id`'s name for typing on its card. Enter or a press
-    /// elsewhere commits it; Escape leaves it as it was.
-    fn graph_rename_start(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// Open node `id`'s name, or with `setting`, that text setting, for
+    /// typing on its card. Enter or a press elsewhere commits it; Escape
+    /// leaves it as it was.
+    pub(in crate::track_editor) fn graph_rename_start(
+        &mut self,
+        id: &str,
+        setting: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (placeholder, text) = match setting {
+            Some(name) => {
+                let graph = self.track_editor_ref().and_then(shown_graph);
+                let value = graph
+                    .and_then(|graph| graph.nodes.get(id)?.setting(name).map(str::to_owned))
+                    .unwrap_or_default();
+                ("Name", value)
+            }
+            None => ("Node name", id.to_owned()),
+        };
         let field = cx.new(|cx| {
-            let mut input = TextInput::search("Node name", cx);
-            input.set_text(id.to_owned(), cx);
+            let mut input = TextInput::search(placeholder, cx);
+            input.set_text(text, cx);
             input
         });
         let keys = cx.subscribe_in(
@@ -1586,6 +1611,7 @@ impl Luma {
             canvas.rename_error = None;
             canvas.rename = Some(Rename {
                 id: id.to_owned(),
+                setting: setting.map(str::to_owned),
                 field,
                 _subs: vec![keys, blur],
             });
@@ -1616,7 +1642,14 @@ impl Luma {
         if let (Some(window), Some(focus)) = (window, focus) {
             window.focus(&focus, cx);
         }
-        let (from, to) = (rename.id, rename.field.read(cx).text().trim().to_owned());
+        let typed = rename.field.read(cx).text().trim().to_owned();
+        if let Some(name) = rename.setting {
+            if save {
+                self.graph_set_text_setting(rename.id, name, typed, cx);
+            }
+            return;
+        }
+        let (from, to) = (rename.id, typed);
         if !save || to == from {
             return;
         }
@@ -1665,6 +1698,33 @@ impl Luma {
                 canvas.defaults.insert(to.clone());
             }
             canvas.hover = None;
+        });
+    }
+
+    /// Set a text setting, such as a control's name. One the graph cannot
+    /// take leaves the old one, and the card says why.
+    fn graph_set_text_setting(
+        &mut self,
+        id: String,
+        name: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut graph) = self.track_editor_ref().and_then(shown_graph) else {
+            return;
+        };
+        if graph.nodes.get(&id).and_then(|node| node.setting(&name)) == Some(value.as_str()) {
+            return;
+        }
+        edit::set_setting(&mut graph, &id, &name, &value);
+        if let Err(error) = graph.check() {
+            self.with_track_editor(cx, |editor| {
+                editor.sheet.canvas.rename_error = Some((id, error.0));
+            });
+            return;
+        }
+        self.graph_live(cx, move |graph| {
+            edit::set_setting(graph, &id, &name, &value)
         });
     }
 

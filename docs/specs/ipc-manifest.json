@@ -419,6 +419,42 @@
           "rust": "String"
         }
       ],
+      "domain": "controls",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/controls.rs"
+      },
+      "name": "control_list",
+      "returns": "Vec<Control>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        },
+        {
+          "name": "value",
+          "rust": "f64"
+        }
+      ],
+      "domain": "controls",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/controls.rs"
+      },
+      "name": "control_set",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
       "domain": "controller",
       "handler": {
         "file": "backend/src/dispatch/handlers/controller.rs"
@@ -3418,6 +3454,11 @@
     },
     {
       "commandCount": 2,
+      "domain": "controls",
+      "handlers": "backend/src/dispatch/handlers/controls.rs"
+    },
+    {
+      "commandCount": 2,
       "domain": "distribute",
       "handlers": "backend/src/dispatch/handlers/distribute.rs"
     },
@@ -3633,8 +3674,8 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 153,
-    "domainCount": 28,
+    "commandCount": 155,
+    "domainCount": 29,
     "eventCount": 12
   },
   "version": 2

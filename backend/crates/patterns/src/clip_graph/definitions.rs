@@ -27,7 +27,7 @@ pub enum InputType {
     Heads,
     /// A wire from a `time` node: its events.
     Time,
-    /// A wire from `time`, `space`, `along`, `random` or `audio`.
+    /// A wire from `time`, `space`, `along`, `random`, `audio` or `control`.
     Coordinate,
     /// A math node's items: two or more numbers and value wires.
     Values,
@@ -496,6 +496,20 @@ fn build(kind: Kind) -> Definition {
                 ),
             ],
             vec![],
+        ),
+        // A live value 0–1, set from the Perform screen, MIDI, OSC or any
+        // other input bound to the control `name`. A curve maps it to the
+        // range an input needs.
+        Kind::Control => (
+            Produces::Coordinate,
+            vec![],
+            vec![(
+                "name",
+                SettingDef {
+                    options: &[],
+                    default: "fader",
+                },
+            )],
         ),
         Kind::Math => (
             Produces::Value,

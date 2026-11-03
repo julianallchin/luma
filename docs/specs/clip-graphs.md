@@ -227,7 +227,7 @@ it (Circle and Pinwheel: the swing; Ballyhoo: speed, scale and swing).
 3. Every node has one output wire. A wire goes into an input of another node.
 4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
-6. Coordinate nodes give a raw 0–1 coordinate: `clock`+`time`, `space`, `random`, `audio`.
+6. Coordinate nodes give a raw 0–1 coordinate: `clock`+`time`, `space`, `random`, `audio`, `control`.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no clock = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
@@ -282,7 +282,7 @@ Wire types (one per node kind):
 |---|---|---|
 | clock | `clock` | `time.clock`, `shuffle.clock` |
 | heads | `mirror`, `shuffle`, `group`, `split` | any `heads` input |
-| coordinate | `time`, `space`, `random`, `audio` | `curve.x` |
+| coordinate | `time`, `space`, `random`, `audio`, `control` | `curve.x` |
 | number | `curve` (kind number) | any number input |
 | vector | `curve` (kind vector) | any vector input |
 | color | `curve` (kind color) | `color.color` |
@@ -498,6 +498,21 @@ head its own value.
 Output 0–1: the band's energy from the full mix (`band_energy`), scaled by
 its min and max over the whole track (`FeatureSource::range`). Threshold, floor and gain live in
 the curve's shape and low/high.
+
+**control** → coordinate (2026-11-02)
+
+| Setting | Options | Default |
+|---|---|---|
+| name | any control name: `[a-z][a-z0-9_]*`, at most 64 bytes | `fader` |
+
+Output 0–1: the venue's live control `name`, set from the Perform screen, a
+fader, pad, MIDI or OSC input. It is the same at every head. A curve maps it
+to an input's range, so one control drives many inputs, each with its own
+range. A control exists by being named; one nothing has set reads 0. It
+reaches no clock input (`every`, `duration`) and no fixed input: those are
+prepared over the whole clip before it plays (rule 5). Setting a value never
+recompiles: `PreparedGraph::with_controls` binds a `ControlSource` the
+control kernel reads at every evaluation. See `docs/design/live-control.md`.
 
 ### 2.4 curve → number, vector or color
 
@@ -771,6 +786,8 @@ Prepare time (cells known):
 4. `space`: constant `a` field (or `Axis`).
 5. `random`: `ClockTable(every)` → `Clock` turns → `Random(u,v,z, turns, glide, scale, contrast, salt)`.
 6. `audio`: `band_energy` → `clip_range` → `Normalize` → 0–1.
+   `control`: the `control` kernel at the name's index among the graph's
+   sorted control names.
 7. `curve`: `Curve(x, low, high; shape, gradient, kind)` → 3 components.
    A list input: its items chained through `Product`.
 8. `shuffle` with a clock: `Rank(index, unit keys)` per event → order field with `E`.
@@ -840,7 +857,7 @@ queries for the UI).
 ## 6. Python API
 
 Module `luma_exec/clip.py`, exposed as `luma.clip`. The exec namespace binds
-these names bare before every cell: `clock, time, space, random, audio, curve,
+these names bare before every cell: `clock, time, space, random, audio, control, curve,
 mirror, shuffle, group, split, color, aim, strobe, preset`.
 
 ### 6.1 Builders
@@ -851,6 +868,7 @@ time(clock=None, delay=0, length=1, phase=0) -> Coordinate
 space(heads=None, direction=None, centre=None, at=None, shift=0, scale=1, kind="line", wrap=None) -> Coordinate
 random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate
 audio(low_hz=None, high_hz=None) -> Coordinate
+control(name="fader") -> Coordinate
 curve(x, shape=None, low=None, high=None, gradient=None) -> Value
 mirror(heads=None, direction=None, at=None) -> Heads
 shuffle(heads=None, clock=None) -> Heads

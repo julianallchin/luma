@@ -22,6 +22,23 @@ pub(crate) fn run(
             crate::clip_graph::OUTPUT.into(),
             EvaluatedValue::output(LightingSignal::terminal(inputs, batch.fixtures)?),
         )])),
+        Primitive::Control => {
+            let index = inputs["index"].sample(0)?.scalar();
+            let value = batch
+                .controls
+                .get(index as usize)
+                .copied()
+                .ok_or_else(|| Error("control index out of range".into()))?;
+            let values = vec![value; batch.times.len()];
+            let kind = outputs["value"].value_type;
+            Ok(BTreeMap::from([(
+                "value".into(),
+                EvaluatedValue::from_signal(
+                    kind,
+                    Signal::series(&values, kind.signal_type().unwrap().unit.unwrap())?,
+                )?,
+            )]))
+        }
         Primitive::BandEnergy => {
             let literals = inputs
                 .iter()

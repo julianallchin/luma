@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**153 commands** across **28 domains** · **12 events**
+**155 commands** across **29 domains** · **12 events**
 
 ## Domains
 
@@ -19,6 +19,7 @@ name.
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
+| `controls` | 2 | `backend/src/dispatch/handlers/controls.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 13 | `backend/src/dispatch/handlers/fixtures.rs` |
@@ -41,7 +42,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **153** | |
+| **total** | **155** | |
 
 ## Commands
 
@@ -105,6 +106,13 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `controller_set_active` | `venueId: String`<br>`active: bool` | `()` |
 | `controller_start_learn` | `venueId: String` | `()` |
 | `controller_cancel_learn` | `venueId: String` | `()` |
+
+### `controls`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `control_list` | `venueId: String` | `Vec<Control>` |
+| `control_set` | `venueId: String`<br>`name: String`<br>`value: f64` | `()` |
 
 ### `distribute`
 

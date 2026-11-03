@@ -1248,6 +1248,7 @@ mod tests {
                 frame,
                 times: &times,
                 fixtures: &[],
+                controls: &[],
             },
         )
         .unwrap();

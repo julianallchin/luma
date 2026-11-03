@@ -78,6 +78,8 @@ pub enum Primitive {
     Kernel(crate::clip_graph::Kernel),
     Output,
     BandEnergy,
+    /// A live control's value; see [`crate::ControlSource`].
+    Control,
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {
@@ -87,7 +89,9 @@ impl Primitive {
     /// head domain/seed, and may be folded when their inputs are constant.
     pub(crate) fn reads_time(self) -> bool {
         match self {
-            Self::BandEnergy => true,
+            // A control is not a function of time, but it changes between
+            // evaluations, so it is never folded or baked either.
+            Self::BandEnergy | Self::Control => true,
             Self::Kernel(kernel) => kernel.reads_time(),
             _ => false,
         }

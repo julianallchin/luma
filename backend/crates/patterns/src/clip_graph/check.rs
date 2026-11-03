@@ -270,7 +270,23 @@ fn node_shape(id: &str, node: &Node) -> Result<()> {
             ));
         }
     }
+    if node.kind == Kind::Control {
+        let name = node.setting("name").unwrap_or_default();
+        if !is_control_name(name) {
+            return fail(format!(
+                "{id}.name: expected a control name in snake_case, such as drop or front_level; got \"{name}\". Example: name=\"fader\""
+            ));
+        }
+    }
     Ok(())
+}
+
+/// A control name: like a group's, `[a-z][a-z0-9_]*`, at most 64 bytes.
+pub fn is_control_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 64
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 // ---- value nodes ----
@@ -921,12 +937,13 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
 // ---- rule 5: axes ----
 
 /// The axes a node's output wire carries: whether it varies over heads,
-/// whether it varies along a laser element, and the clocks whose events it
-/// carries.
+/// whether it varies along a laser element, whether a live control moves
+/// it, and the clocks whose events it carries.
 #[derive(Clone, Default)]
 struct Axes {
     heads: bool,
     along: bool,
+    live: bool,
     clocks: BTreeSet<String>,
 }
 
@@ -974,8 +991,17 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
                     "{id}.{name}: expected a value that is the same all along each laser element; got a wire that varies along it from {source}. Example: wire along only into a figure's x, y, size, rotation or color, through curves and math"
                 ));
             }
+            // A clock's period is integrated over the clip ahead of play,
+            // so nothing live may set it.
+            if carried.live && (def.clock || def.fixed) {
+                return fail(format!(
+                    "{id}.{name}: expected a value fixed for the clip; got a wire a live control moves, from {source}. Example: {}",
+                    example(node.kind, name)
+                ));
+            }
             out.heads |= carried.heads;
             out.along |= carried.along;
+            out.live |= carried.live;
             // A period takes its newest event's value: the events stop here.
             if def.clock {
                 continue;
@@ -1011,6 +1037,9 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
     }
     if node.kind == Kind::Along {
         out.along = true;
+    }
+    if node.kind == Kind::Control {
+        out.live = true;
     }
     match definition.output {
         Produces::Heads => out.heads = false,

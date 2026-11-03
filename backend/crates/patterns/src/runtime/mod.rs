@@ -184,4 +184,6 @@ pub(crate) struct Batch<'a> {
     pub frame: Frame<'a>,
     pub times: &'a [f64],
     pub fixtures: &'a [String],
+    /// The graph's controls' values for this evaluation, by index.
+    pub controls: &'a [f64],
 }

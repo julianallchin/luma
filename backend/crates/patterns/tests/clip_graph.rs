@@ -593,7 +593,7 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
             nodes.push(("figure9".into(), Node::new(Kind::Figure)));
         }
         Kind::Figure => nodes.push(("laser9".into(), laser_of(&id))),
-        Kind::Time | Kind::Space | Kind::Random | Kind::Audio => {
+        Kind::Time | Kind::Space | Kind::Random | Kind::Audio | Kind::Control => {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push(("color9".into(), color("curve9")));
         }
@@ -781,4 +781,18 @@ fn summary_names_the_moving_parts() {
     assert_eq!(summary("Wash"), "still");
     assert_eq!(summary("Follows a band"), "audio 60–300 Hz");
     assert_eq!(summary("Sparkle"), "order · every 0.125");
+}
+
+#[test]
+fn a_control_is_named_like_a_group() {
+    let named = |name: &str| {
+        graph(json!({
+            "c": {"kind": "control", "settings": {"name": name}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "c"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+        .check()
+    };
+    assert!(named("front_level").is_ok());
+    let refused = named("Front Level").expect_err("not snake_case");
+    assert!(refused.0.contains("c.name"), "{}", refused.0);
 }

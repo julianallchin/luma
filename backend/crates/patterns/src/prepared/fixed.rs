@@ -23,7 +23,7 @@ impl PreparedGraph {
                         Source::Slot(index) => baked[*index].is_some(),
                     })
                 {
-                    self.run_step(step, &[self.clip_start], features, &baked)?
+                    self.run_step(step, &[self.clip_start], features, &[], &baked)?
                 } else {
                     continue;
                 };
@@ -61,10 +61,10 @@ impl PreparedGraph {
         let mut slots = baked.to_vec();
         for parent in dependencies {
             let step = &self.steps[parent];
-            for (key, value) in self.run_step(step, &beats, features, &slots)? {
+            for (key, value) in self.run_step(step, &beats, features, &[], &slots)? {
                 slots[step.outputs[&key]] = Some(value);
             }
         }
-        self.run_step(step, &beats, features, &slots)
+        self.run_step(step, &beats, features, &[], &slots)
     }
 }

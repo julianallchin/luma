@@ -281,6 +281,7 @@ pub async fn set_session_item(
         let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
         host_audio.unload();
         perform.stop().await;
+        crate::controls::clear();
         render_engine.reset_for_identity_switch();
         if let Err(error) = controller.disconnect() {
             return Err(rollback_auth_switch(
@@ -490,6 +491,7 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
     host_audio.unload();
     perform.stop().await;
+    crate::controls::clear();
     render_engine.reset_for_identity_switch();
     controller.disconnect()?;
     mixer.disconnect()?;

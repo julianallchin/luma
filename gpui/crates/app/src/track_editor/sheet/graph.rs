@@ -1019,6 +1019,45 @@ pub(super) fn editor(
     canvas::view(&cx)
 }
 
+/// A text setting as a field while it is typed, and as a chip that opens
+/// it otherwise.
+fn text_setting(cx: &Ctx, id: &str, name: &str, current: &str) -> AnyElement {
+    let typing = cx
+        .state
+        .sheet
+        .canvas
+        .rename
+        .as_ref()
+        .filter(|rename| rename.id == id && rename.setting.as_deref() == Some(name));
+    let label = sentence_case(name);
+    if let Some(rename) = typing {
+        return luma_ui::float::field()
+            .id(SharedString::from(format!("setting-{id}-{name}")))
+            .w_full()
+            .key_context(luma_ui::text_input::DRAFT_CONTEXT)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().w_full().child(rename.field.clone()))
+            .agent_node(Role::Input, label)
+            .into_any_element();
+    }
+    let app = cx.app.clone();
+    let (at, setting) = (id.to_owned(), name.to_owned());
+    luma_ui::float::segmented()
+        .w_full()
+        .child(
+            luma_ui::float::segment(current.to_owned(), true, format!("{id}-{name}"))
+                .id(SharedString::from(format!("setting-{id}-{name}")))
+                .on_click(move |_, window, cx| {
+                    let (at, setting) = (at.clone(), setting.clone());
+                    app.update(cx, |this, cx| {
+                        this.graph_rename_start(&at, Some(&setting), window, cx)
+                    });
+                })
+                .agent_node(Role::Button, format!("{label}: {current}")),
+        )
+        .into_any_element()
+}
+
 /// A node's settings as segmented controls, and a space's wrap as a
 /// switch. A curve's kind follows what it feeds, and a math node's op is
 /// its title's button ([`title_buttons`]).
@@ -1034,6 +1073,11 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
     let mut column = div().w_full().flex().flex_col().gap(rpx(8.));
     for (name, setting) in shown {
         let current = node.setting(name).unwrap_or(setting.default);
+        // A setting with no options is text, such as a control's name.
+        if setting.options.is_empty() {
+            column = column.child(text_setting(cx, id, name, current));
+            continue;
+        }
         let mut track = luma_ui::float::segmented().w_full();
         for option in setting.options {
             let app = cx.app.clone();

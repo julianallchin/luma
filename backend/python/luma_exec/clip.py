@@ -53,7 +53,7 @@ from types import MappingProxyType
 from .color import from_srgb
 
 
-BUILDERS = ("time", "space", "along", "random", "audio", "curve", "value", "mirror", "shuffle",
+BUILDERS = ("time", "space", "along", "random", "audio", "control", "curve", "value", "mirror", "shuffle",
             "group", "split", "figure", "color", "aim", "strobe", "laser", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
@@ -68,6 +68,7 @@ _INPUTS = {
     "along": (),
     "random": ("heads", "every", "glide", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
+    "control": (),
     "curve": ("x", "shape", "low", "high", "gradient"),
     "math": ("values",),
     "value": ("value",),
@@ -273,7 +274,7 @@ class _Output(Node):
 
 
 _CLASSES = {"time": Coordinate, "space": Coordinate, "along": Coordinate, "random": Coordinate,
-            "audio": Coordinate,
+            "audio": Coordinate, "control": Coordinate,
             "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
             "split": Heads, "figure": Figure, "color": _Output, "aim": _Output, "strobe": _Output,
             "laser": _Output}
@@ -517,6 +518,19 @@ def audio(low_hz=None, high_hz=None) -> Coordinate:
     if isinstance(low_hz, str) and high_hz is None:
         low_hz, high_hz = _lookup("bands", low_hz, "band", 'audio("low")')[1]
     return _make("audio", low_hz=low_hz, high_hz=high_hz)
+
+
+def control(name="fader") -> Coordinate:
+    """A live control's value, 0-1: a fader, pad, MIDI or OSC input on the
+    Perform screen bound to `name`. Names are snake_case, like groups.
+
+    A curve maps it to a range: curve(control("drop"), "Ramp up", low=0.2).
+    Every clip that names a control reads the same value. It cannot set a
+    clock's every or duration.
+    """
+    if not isinstance(name, str):
+        raise ClipError(f"control.name: expected a control name such as \"drop\"; got {name!r}")
+    return _make("control", {"name": name})
 
 
 def curve(x, shape=None, low=None, high=None, gradient=None) -> Value:
@@ -1137,8 +1151,8 @@ def _arguments(node, ids, inline, order):
             continue
         if _DEFAULT_SETTINGS.get(node.kind, {}).get(name) == value:
             continue
-        # figure("line", ...): a figure's kind goes first, by position.
-        if node.kind == "figure" and name == "kind":
+        # figure("line", ...) and control("drop"): these go first, by position.
+        if (node.kind, name) in (("figure", "kind"), ("control", "name")):
             args.insert(0, repr(value))
             continue
         args.append(f"{name}={value!r}")

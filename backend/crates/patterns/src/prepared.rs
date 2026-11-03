@@ -35,6 +35,10 @@ pub struct PreparedGraph {
     features: Option<std::sync::Arc<dyn crate::FeatureSource>>,
     requests: Vec<crate::FeatureRequest>,
     baked: Vec<Option<EvaluatedValue>>,
+    /// The controls the graph reads, in the order its control kernels
+    /// index them.
+    control_names: Vec<String>,
+    controls: Option<std::sync::Arc<dyn crate::ControlSource>>,
 }
 impl PreparedGraph {
     /// A clip graph, checked and lowered onto kernels of `library` over the
@@ -47,11 +51,22 @@ impl PreparedGraph {
             ));
         }
         graph.check()?;
-        Self::lowered(library, &crate::clip_graph::lower(graph, frame)?, frame)
+        let controls = graph.controls().into_iter().map(String::from).collect();
+        Self::lowered(
+            library,
+            &crate::clip_graph::lower(graph, frame)?,
+            frame,
+            controls,
+        )
     }
 
     /// A lowered definition over the frame's cells, ready to evaluate.
-    pub(crate) fn lowered(library: &Library, root: &Definition, frame: Frame) -> Result<Self> {
+    pub(crate) fn lowered(
+        library: &Library,
+        root: &Definition,
+        frame: Frame,
+        control_names: Vec<String>,
+    ) -> Result<Self> {
         let mut prepared = Self {
             steps: Vec::new(),
             outputs: BTreeMap::new(),
@@ -69,6 +84,8 @@ impl PreparedGraph {
             features: None,
             requests: Vec::new(),
             baked: Vec::new(),
+            control_names,
+            controls: None,
         };
         prepared.outputs = prepared.lower_definition(library, "clip", root, BTreeMap::new())?;
         // A nested definition may offer several independent outputs. Only the
@@ -119,6 +136,35 @@ impl PreparedGraph {
         self.evaluate(self.clip_start)?;
         Ok(self)
     }
+    /// Read live controls from `controls` at every evaluation. Nothing is
+    /// rebuilt: control values are never baked.
+    pub fn with_controls(mut self, controls: std::sync::Arc<dyn crate::ControlSource>) -> Self {
+        self.controls = Some(controls);
+        self
+    }
+
+    /// The controls this graph reads, by name.
+    pub fn control_names(&self) -> &[String] {
+        &self.control_names
+    }
+
+    fn control_values(&self) -> Vec<f64> {
+        self.control_names
+            .iter()
+            .map(|name| {
+                let value = self
+                    .controls
+                    .as_ref()
+                    .map_or(0.0, |source| source.value(name));
+                if value.is_finite() {
+                    value.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
     pub fn dynamic_step_count(&self) -> usize {
         self.live_steps(self.steps.len(), &self.baked, self.outputs.values())
             .len()
@@ -181,9 +227,10 @@ impl PreparedGraph {
         } else {
             baked.to_vec()
         };
+        let controls = self.control_values();
         for index in self.live_steps(self.steps.len(), baked, self.outputs.values()) {
             let step = &self.steps[index];
-            let outputs = self.run_step(step, beats, features, &slots)?;
+            let outputs = self.run_step(step, beats, features, &controls, &slots)?;
             for (name, value) in outputs {
                 slots[step.outputs[&name]] = Some(value);
             }
@@ -205,6 +252,7 @@ impl PreparedGraph {
         step: &Step,
         beats: &[f64],
         features: Option<&dyn crate::FeatureSource>,
+        controls: &[f64],
         slots: &[Option<EvaluatedValue>],
     ) -> Result<BTreeMap<String, EvaluatedValue>> {
         let inputs = step
@@ -220,6 +268,7 @@ impl PreparedGraph {
             Batch {
                 times: beats,
                 fixtures: &self.fixtures,
+                controls,
                 frame: Frame {
                     features,
                     beat: self.clip_start,
@@ -300,6 +349,7 @@ impl PreparedGraph {
                         Batch {
                             fixtures: &self.fixtures,
                             times: &[self.clip_start],
+                            controls: &[],
                             frame: Frame {
                                 features: self.features.as_deref(),
                                 beat: self.clip_start,

@@ -17,6 +17,7 @@ pub mod auth;
 pub mod composable_patterns;
 pub mod compositor;
 pub mod controller;
+pub mod controls;
 pub mod distribute;
 pub mod engine_dj;
 pub mod fixtures;

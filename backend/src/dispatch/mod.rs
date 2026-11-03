@@ -121,6 +121,7 @@ use crate::models::midi::{
 use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
+use crate::controls::Control;
 use crate::models::perform::{PerformSource, PerformState};
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
@@ -403,6 +404,9 @@ commands! {
 
     render_engine::render_clear_active_layer(venue_id: String) -> ();
     render_engine::render_identify(targets: Vec<String>) -> ();
+
+    controls::control_list(venue_id: String) -> Vec<Control>;
+    controls::control_set(venue_id: String, name: String, value: f64) -> ();
 
     perform::perform_start(venue_id: String, source: PerformSource) -> ();
     perform::perform_stop() -> ();

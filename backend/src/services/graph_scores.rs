@@ -143,7 +143,9 @@ async fn prepare_scene_data(
                 .await?,
         )
     };
+    let controls = crate::controls::venue(access.venue_id());
     for (id, clip, cells, prepared) in prepared_clips {
+        let prepared = prepared.with_controls(controls.clone());
         let prepared = match &features {
             Some(features) => match prepared.with_features(features.clone()) {
                 Ok(prepared) => prepared,

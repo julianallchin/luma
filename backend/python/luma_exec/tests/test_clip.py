@@ -212,6 +212,7 @@ CATALOG = {
     "Wobble strobe": "strobe(rate=curve(time(every=0.25), 'Square'))",
     "Triplet pulse": "t = time(every=1/3); color(brightness=curve(t, 'Drop'))",
     "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('low'), 'Ramp up', low=0.2, high=1))",
+    "Drop on a fader": "t = time(every=1); color(brightness=curve(t, 'Drop') * curve(control('drop'), 'Ramp up', low=0.2, high=1))",
     "Named steps": "t = time(every=2); cut = curve(t, 'Step down'); fade = curve(t, 'Fade out'); glow = cut * fade; color(brightness=max(glow, 0.1), alpha=1 - curve(t, 'Ramp up'))",
 }
 
