@@ -58,6 +58,8 @@ A **live clip** is an ordinary clip (same `ClipGraph`, selection, blend mode, z)
 - Its `level` is a control, so its pad and fader come for free.
 - It has a rate setting (×¼ to ×4).
 
+A clip on a track becomes a live clip through **Send to Perform**, which copies it. The two are never linked: graphs are cheap to make, with an agent or by hand, so a copy you can change freely is worth more than a shared original.
+
 Live clips composite over the deck mix with the existing blend modes. That gives one precedence rule (z and blend mode), which is the same rule the editor already uses.
 
 Masters disappear as a concept:
@@ -86,11 +88,10 @@ The Perform screen is the deck cards plus a grid of live clips and on-screen fad
 
 ## Other things worth redesigning
 
-1. **Patterns can't be reused.** Every clip owns its graph, and a clip can't expose inputs, even though the kernel has `Binding::Input`. Busking needs a library of reusable looks. Exposed clip inputs and controls are the same mechanism: a saved pattern's knobs are its exposed inputs, and binding one to a control makes it live.
-2. **Audio features are offline only.** They are analysed per track and normalised over the whole track. For unscripted tracks, a live audio band-energy input is the "autoloop" fallback SoundSwitch users expect.
-3. **The docs have drifted.** The www architecture docs describe forms and say a clip never holds its own graph, which is the opposite of the code. The node reference names a generator that doesn't exist.
-4. **Dead code:**
-   - `PatternArgType`, `PatternArgDef` and `ParamOption` are unused.
+1. **Audio features are offline only.** They are analysed per track and normalised over the whole track. For unscripted tracks, a live audio band-energy input is the "autoloop" fallback SoundSwitch users expect.
+2. **The docs have drifted.** The www architecture docs describe forms and say a clip never holds its own graph, which is the opposite of the code. The node reference names a generator that doesn't exist.
+3. **Dead code:**
+   - `PatternArgType`, `PatternArgDef` and `ParamOption` are unused, and so is the kernel's `Binding::Input`: clips copy rather than share, so nothing exposes inputs.
    - The `clips.graph` and `inputs_json` columns are unused.
    - Identify hardcodes 16 heads.
    - The controller writes dark frames to output directly, bypassing the render loop.
