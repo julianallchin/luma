@@ -219,8 +219,7 @@ pub async fn set_session_item(
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
     let perform = &services.perform;
-    let controller = &services.controller;
-    let mixer = &services.mixer;
+    let inputs = &services.inputs;
     let analysis_tasks = &services.analysis_tasks;
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
         let validated = crate::database::local::auth::validate_supabase_session(&value).await?;
@@ -281,28 +280,9 @@ pub async fn set_session_item(
         let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
         host_audio.unload();
         perform.stop().await;
+        inputs.close().await;
         crate::controls::clear();
         render_engine.reset_for_identity_switch();
-        if let Err(error) = controller.disconnect() {
-            return Err(rollback_auth_switch(
-                &db.0,
-                &mut session_guard,
-                &backup,
-                &admission_backup,
-                error,
-            )
-            .await);
-        }
-        if let Err(error) = mixer.disconnect() {
-            return Err(rollback_auth_switch(
-                &db.0,
-                &mut session_guard,
-                &backup,
-                &admission_backup,
-                error,
-            )
-            .await);
-        }
         if let Err(error) = crate::database::local::auth::replace_session_for_connection(
             &mut session_guard,
             &validated,
@@ -443,8 +423,7 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
     let perform = &services.perform;
-    let controller = &services.controller;
-    let mixer = &services.mixer;
+    let inputs = &services.inputs;
     let analysis_tasks = &services.analysis_tasks;
 
     {
@@ -491,10 +470,9 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
     host_audio.unload();
     perform.stop().await;
+    inputs.close().await;
     crate::controls::clear();
     render_engine.reset_for_identity_switch();
-    controller.disconnect()?;
-    mixer.disconnect()?;
 
     wipe_signed_in_projection(&mut transaction, &principal).await?;
     transaction

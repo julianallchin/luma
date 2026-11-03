@@ -15,8 +15,6 @@ pub enum VenueResource<'a> {
     Group(&'a str),
     Folder(&'a str),
     GroupMember(&'a str),
-    MidiModifier(&'a str),
-    MidiBinding(&'a str),
     Score(&'a str),
     AgentThread(&'a str),
 }
@@ -241,8 +239,6 @@ async fn resolve_venue_id(
              WHERE member.id = ?",
             id,
         ),
-        VenueResource::MidiModifier(id) => ("SELECT venue_id FROM midi_modifiers WHERE id = ?", id),
-        VenueResource::MidiBinding(id) => ("SELECT venue_id FROM midi_bindings WHERE id = ?", id),
         VenueResource::Score(id) => ("SELECT venue_id FROM scores WHERE id = ?", id),
         VenueResource::AgentThread(id) => ("SELECT venue_id FROM agent_threads WHERE id = ?", id),
     };
@@ -316,7 +312,7 @@ mod tests {
         let mut connection = pool.acquire().await.unwrap();
         let tables = venue_owned_tables(&mut connection).await.unwrap();
 
-        for owned in ["fixtures", "venue_nodes", "scores", "midi_bindings"] {
+        for owned in ["fixtures", "venue_nodes", "scores", "control_bindings"] {
             assert!(
                 tables.iter().any(|t| t == owned),
                 "{owned} carries a venue_id and is venue content: {tables:?}"
@@ -364,9 +360,7 @@ mod tests {
              INSERT INTO fixture_groups (id, uid, venue_id, name)
                 VALUES ('shared-group', 'alice', 'shared', 'shared_group');
              INSERT INTO fixture_group_members (id, uid, fixture_id, group_id)
-                VALUES ('shared-member', 'alice', 'shared-fixture', 'shared-group');
-             INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
-                VALUES ('shared-modifier', 'alice', 'shared', 'Shift', '{}')",
+                VALUES ('shared-member', 'alice', 'shared-fixture', 'shared-group')",
         )
         .execute(&pool)
         .await
@@ -445,11 +439,6 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::MidiModifier("shared-modifier"),)
-                .await
-                .is_err()
-        );
         // No trigger refuses a raw UPDATE that goes round `VenueAccess`: a
         // download writes these tables directly, in checkpoint order. The lease
         // above is the app's check and Postgres is the authority.
@@ -491,7 +480,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::MidiModifier("shared-modifier"))
+            VenueAccess::<Write>::write(&pool, VenueResource::Group("shared-group"))
                 .await
                 .is_ok()
         );

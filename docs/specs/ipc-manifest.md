@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**155 commands** across **29 domains** · **12 events**
+**137 commands** across **27 domains** · **6 events**
 
 ## Domains
 
@@ -18,7 +18,6 @@ name.
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
-| `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
 | `controls` | 2 | `backend/src/dispatch/handlers/controls.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
@@ -27,9 +26,8 @@ name.
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
+| `inputs` | 6 | `backend/src/dispatch/handlers/inputs.rs` |
 | `lasers` | 6 | `backend/src/dispatch/handlers/lasers.rs` |
-| `midi` | 8 | `backend/src/dispatch/handlers/midi.rs` |
-| `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
 | `perform` | 6 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
@@ -42,7 +40,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **155** | |
+| **total** | **137** | |
 
 ## Commands
 
@@ -93,19 +91,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `composite_track` | `scoreId: String`<br>`graphScore: Option<luma_patterns::Score>` | `()` |
 | `leave_track` | `scoreId: String` | `()` |
-
-### `controller`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `controller_connect` | `portName: String`<br>`venueId: String` | `()` |
-| `controller_disconnect` | `venueId: String` | `()` |
-| `controller_init_for_venue` | `venueId: String` | `()` |
-| `controller_get_status` | `venueId: String` | `ControllerStatus` |
-| `controller_get_state` | `venueId: String` | `ControllerState` |
-| `controller_set_active` | `venueId: String`<br>`active: bool` | `()` |
-| `controller_start_learn` | `venueId: String` | `()` |
-| `controller_cancel_learn` | `venueId: String` | `()` |
 
 ### `controls`
 
@@ -194,6 +179,17 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `host_set_playback_rate` | `session: u64`<br>`rate: f32` | `()` |
 | `host_snapshot` | — | `HostAudioSnapshot` |
 
+### `inputs`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `input_open` | `venueId: String` | `InputState` |
+| `input_state` | — | `InputState` |
+| `input_learn` | `venueId: String`<br>`control: String`<br>`mode: Mode` | `Binding` |
+| `input_cancel_learn` | — | `()` |
+| `input_update_binding` | `venueId: String`<br>`bindingId: String`<br>`mode: Mode`<br>`invert: bool` | `()` |
+| `input_unbind` | `venueId: String`<br>`bindingId: String` | `()` |
+
 ### `lasers`
 
 | Command | Arguments | Returns |
@@ -204,32 +200,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `list_laser_limits` | `venueId: String` | `Vec<crate::models::lasers::LaserLimit>` |
 | `set_laser_limit` | `venueId: String`<br>`fixtureId: String`<br>`points: Option<Vec<[f64; 2]>>` | `()` |
 | `get_laser_rig` | `venueId: String` | `crate::laser::LaserRig` |
-
-### `midi`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `midi_list_modifiers` | `venueId: String` | `Vec<ModifierDef>` |
-| `midi_create_modifier` | `input: CreateModifierInput` | `ModifierDef` |
-| `midi_delete_modifier` | `id: String` | `()` |
-| `midi_list_bindings` | `venueId: String` | `Vec<MidiBinding>` |
-| `midi_create_binding` | `input: CreateBindingInput` | `MidiBinding` |
-| `midi_update_binding` | `input: UpdateBindingInput` | `MidiBinding` |
-| `midi_delete_binding` | `id: String` | `()` |
-| `midi_reload_mapping` | `venueId: String` | `()` |
-
-### `mixer`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `mixer_list_ports` | — | `Vec<String>` |
-| `mixer_connect` | `venueId: String`<br>`portName: String`<br>`mapping: MixerMapping` | `()` |
-| `mixer_disconnect` | `venueId: String` | `()` |
-| `mixer_init_for_venue` | `venueId: String` | `()` |
-| `mixer_get_status` | `venueId: String` | `MixerStatus` |
-| `mixer_open_port` | `venueId: String`<br>`portName: String` | `()` |
-| `mixer_start_learn` | `venueId: String` | `()` |
-| `mixer_cancel_learn` | `venueId: String` | `()` |
 
 ### `output`
 
@@ -357,15 +327,9 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 
 | Event | Emitters | Listeners | Note |
 | --- | ---: | ---: | --- |
-| `controller_port_change` | 1 | 0 | **orphan** — emitted, nobody listens |
-| `controller_state` | 1 | 0 | **orphan** |
 | `library-changed` | 2 | 0 | **orphan** |
-| `midi_learn_captured` | 1 | 0 | **orphan** |
-| `mixer_learned` | 1 | 0 | **orphan** |
-| `mixer_state` | 1 | 0 | **orphan** |
 | `python-env-progress` | 1 | 0 | **orphan** |
 | `track-import-state` | 2 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 0 | **orphan** |
-| `universe-state-update` | 1 | 0 | **orphan** |
 | `upload-progress-start` | 1 | 0 | **orphan** |
 | `upload-progress-tick` | 1 | 0 | **orphan** |

@@ -453,186 +453,6 @@
         {
           "name": "venueId",
           "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_cancel_learn",
-      "prose": {
-        "notes": "Always called from an effect cleanup while `learning` is true. Same missing-venueId drift as controller_start_learn at both controller-config.tsx sites; those failures are silent (.catch(() => {})).",
-        "returns": "void",
-        "sideEffects": [
-          "disarms learn mode (clears the stored app_handle) so MIDI resumes normal mapping"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "portName",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_connect",
-      "prose": {
-        "notes": "Ordering matters: the write lease is taken first, then connect, then the DB update, then commit — a failed connect aborts without persisting. Caller passes `currentVenue?.id ?? \"\"`, so an empty-string venue id reaches the backend and fails at the access layer rather than being guarded in the UI.",
-        "returns": "void",
-        "sideEffects": [
-          "opens the MIDI input connection and installs the message callback",
-          "persists venue.controller_port = port_name (VenueAccess<Write>, committed)",
-          "emits `controller_port_change` { ports: string[] } on connect",
-          "the installed callback later emits `midi_learn_captured` (learn mode) and `controller_state`, and can push `universe-state-update`"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_disconnect",
-      "prose": {
-        "notes": "Disconnect is sticky — it deliberately forgets the preferred port, so reconnecting requires an explicit controller_connect. Same `?? \"\"` venue-id fallback as controller_connect.",
-        "returns": "void",
-        "sideEffects": [
-          "closes the MIDI connection",
-          "clears venue.controller_port so auto-reconnect stops (VenueAccess<Write>, committed)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_get_state",
-      "prose": {
-        "notes": "Snapshot-then-subscribe: the UI calls this once on mount to seed state, then keeps it live via the `controller_state` Tauri event which carries the identical payload. A port must emit that event on every manual-layer mutation or the UI goes stale. groupIntensities only includes groups with a non-default intensity — absent key means default, not zero.",
-        "returns": "ControllerState { active: boolean, heldModifiers: string[], groupIntensities: Record<string, number> } (camelCase)",
-        "sideEffects": [
-          "none — snapshot read"
-        ]
-      },
-      "returns": "ControllerState"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_get_status",
-      "prose": {
-        "notes": "Polled on a 2s interval from both the Perform page and the controller config dialog — a port must keep it cheap and idempotent. Unlike mixer_get_status the doc comment does not promise auto-reconnect, but the polling cadence implies the same contract; verify against ControllerManager::status before porting.",
-        "returns": "ControllerStatus { connected: boolean, portName: string | null, availablePorts: string[] } (camelCase via ts-rs/serde)",
-        "sideEffects": [
-          "VenueAccess<Read> lease only; auto-reconnect/dead-connection detection lives in ControllerManager::status"
-        ]
-      },
-      "returns": "ControllerStatus"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_init_for_venue",
-      "prose": {
-        "notes": "Must run before the status poll starts for auto-reconnect to work. Called once per venue load alongside mixer_init_for_venue and midi_reload_mapping; errors swallowed. Takes VenueAccess<Read> but binds it `mut` even though nothing writes.",
-        "returns": "void",
-        "sideEffects": [
-          "seeds ControllerManager's preferred port from venue.controller_port (Option<String>) so the status poll can auto-reconnect without user action"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "active",
-          "rust": "bool"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_set_active",
-      "prose": {
-        "notes": "Goes through RenderEngine, not ControllerManager, despite the `controller_` prefix — the manual layer is render state. Caller toggles against ctrlState?.active (undefined → treated as false → sends true) and guards on a truthy currentVenueId.",
-        "returns": "void",
-        "sideEffects": [
-          "enables/disables the manual (controller) render layer inside RenderEngine"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "controller",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controller.rs"
-      },
-      "name": "controller_start_learn",
-      "prose": {
-        "notes": "One-shot arm — the capture disarms itself, so a UI needs to re-arm per binding. DRIFT: both controller-config.tsx call sites invoke it with NO argument object, but venue_id is a required String — those two learn flows reject at the IPC layer and surface as setError(String(e)). Only perform-page.tsx:1026 passes { venueId }.",
-        "returns": "void",
-        "sideEffects": [
-          "arms learn mode: the next parseable MIDI event emits a `midi_learn_captured` event (MidiInput payload) and is swallowed instead of being mapped; learn auto-disarms after one capture"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
         },
         {
           "name": "name",
@@ -1688,6 +1508,104 @@
       "returns": "usize"
     },
     {
+      "args": [],
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "name": "input_cancel_learn",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "control",
+          "rust": "String"
+        },
+        {
+          "name": "mode",
+          "rust": "Mode"
+        }
+      ],
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "name": "input_learn",
+      "returns": "Binding"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "name": "input_open",
+      "returns": "InputState"
+    },
+    {
+      "args": [],
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "name": "input_state",
+      "returns": "InputState"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "bindingId",
+          "rust": "String"
+        }
+      ],
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "name": "input_unbind",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "bindingId",
+          "rust": "String"
+        },
+        {
+          "name": "mode",
+          "rust": "Mode"
+        },
+        {
+          "name": "invert",
+          "rust": "bool"
+        }
+      ],
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "name": "input_update_binding",
+      "returns": "()"
+    },
+    {
       "args": [
         {
           "name": "scoreId",
@@ -1905,173 +1823,6 @@
     {
       "args": [
         {
-          "name": "input",
-          "rust": "CreateBindingInput"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_create_binding",
-      "prose": {
-        "notes": "mode is Option<TriggerMode>; controller-config sends mode: null for continuous setIntensity bindings (no trigger semantics), and Rust falls back to TriggerMode::default() = tapToggleHoldFlash{300}. Field-name drift a port must reproduce exactly: the enum payload keys inside MidiAction / TriggerMode are snake_case (cue_id, group_id, threshold_ms) while the surrounding struct fields are camelCase — this is because the serde rename_all is on the struct, and the enum variants only rename the tag/variant name, not their fields. exclusive is set to requiredModifiers.length > 0 by controller-config.",
-        "returns": "MidiBinding",
-        "sideEffects": [
-          "commits the write transaction"
-        ]
-      },
-      "returns": "MidiBinding"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "CreateModifierInput"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_create_modifier",
-      "prose": {
-        "notes": "Note the nesting collision: the command argument is `input` and the struct field is also `input` (the MidiInput trigger) — payload reads { input: { venueId, name, input: trigger, groups } }. Caller sends groups: null explicitly when no groups are selected (never []). No mapping reload is triggered — controller-config's onCreated handler is what leads to midi_reload_mapping.",
-        "returns": "ModifierDef",
-        "sideEffects": [
-          "commits the write transaction"
-        ]
-      },
-      "returns": "ModifierDef"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_delete_binding",
-      "prose": {
-        "notes": "require_changed() — errors on missing id. Caller does not catch, so a failed delete rejects into the React handler unhandled.",
-        "returns": "void",
-        "sideEffects": [
-          "commits the write transaction"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_delete_modifier",
-      "prose": {
-        "notes": "require_changed() — deleting a missing id errors ('Venue resource not found'). Bindings whose requiredModifiers name this modifier are NOT updated; they will silently stop matching. Caller follows with onChange() -> reloadData() + midi_reload_mapping.",
-        "returns": "void",
-        "sideEffects": [
-          "commits the write transaction"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_list_bindings",
-      "prose": {
-        "notes": "Ordered by display_order ASC. MidiAction is a tagged union { type: 'fireCue', cue_id } | { type: 'setIntensity', group_id: string|null } | { type: 'blackout' } | { type: 'controllerActive' }. TriggerMode is { type: 'toggle' } | { type: 'flash' } | { type: 'tapToggleHoldFlash', threshold_ms: number }. The UI filters cue bindings out of the actions list with b.action.type !== 'fireCue'.",
-        "returns": "MidiBinding[] { id, uid: string|null, venueId, trigger: MidiInput, requiredModifiers: string[], exclusive: boolean, mode: TriggerMode, action: MidiAction, targetOverride: Target|null, displayOrder: number, createdAt, updatedAt }",
-        "sideEffects": []
-      },
-      "returns": "Vec<MidiBinding>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_list_modifiers",
-      "prose": {
-        "notes": "Ordered by name ASC. groups is nullable — null means a named modifier with no group association (distinct from an empty array). MidiInput is a tagged union: { type: 'note', channel, note } | { type: 'controlChange', channel, cc } | { type: 'controlChangeValue', channel, cc }.",
-        "returns": "ModifierDef[] { id, uid: string|null, venueId, name, input: MidiInput, groups: string[]|null, createdAt, updatedAt }",
-        "sideEffects": []
-      },
-      "returns": "Vec<ModifierDef>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_reload_mapping",
-      "prose": {
-        "notes": "Must be called after ANY cue/binding/modifier CRUD and on venue load — no CRUD command reloads the mapping itself. Expensive: it recompiles all cues (stem decode + FFT). Sim-deck compile errors are swallowed (logged, Ok returned), so a green result does not mean cues compiled — the only genuine failure mode surfaced is venue auth / DB read. Group map keys are fixture_id when head_index < 0, otherwise a per-head composite key. All three TS call sites .catch(() => {}) it. Heavy stderr logging including a dump of cue_buffers keys — production smell.",
-        "returns": "void",
-        "sideEffects": [
-          "replaces the in-memory ControllerMappingSnapshot in ControllerManager",
-          "replaces the RenderEngine group→fixture map",
-          "compiles every venue cue into RenderEngine cue_buffers for the simulated deck (reads stems via StemCache, FFT via FftService, fixture defs from the app resource dir, storage root from StorageRoot::from_app)",
-          "writes several eprintln! diagnostics to stderr"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "UpdateBindingInput"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs"
-      },
-      "name": "midi_update_binding",
-      "prose": {
-        "notes": "Sparse patch by binding id; venue derived from the binding. targetOverride is Option<Option<Target>> (undefined = keep, null = clear). Cue editor only ever patches { id, trigger, mode }. Same snake_case-inside-union caveat as create.",
-        "returns": "MidiBinding",
-        "sideEffects": [
-          "commits the write transaction"
-        ]
-      },
-      "returns": "MidiBinding"
-    },
-    {
-      "args": [
-        {
           "name": "venueId",
           "rust": "String"
         }
@@ -2085,184 +1836,6 @@
         "returns": "Vec<crate::models::groups::MissingGroup>"
       },
       "returns": "Vec<crate::models::groups::MissingGroup>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_cancel_learn",
-      "prose": {
-        "notes": "Called from the learn-listener effect cleanup and from the dialog Cancel button; both fire-and-forget. Note it disarms learn but does NOT close a port opened by mixer_open_port — the temporary connection stays live until mixer_connect or mixer_disconnect.",
-        "returns": "void",
-        "sideEffects": [
-          "disarms learn mode so CC traffic resumes mapping to faders"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "portName",
-          "rust": "String"
-        },
-        {
-          "name": "mapping",
-          "rust": "MixerMapping"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_connect",
-      "prose": {
-        "notes": "Mapping is serialised to JSON BEFORE the write lease is taken, so a bad mapping fails before touching the DB; connect precedes the DB write, commit last. channelFaders keys are 1-based deck ids (the UI builds 1..4 from fader_1..fader_4 and omits unmapped ones). After a successful connect the UI fabricates an initial MixerState with every mapped fader at 1.0 and crossfader 0.5 — the backend does not emit an initial state.",
-        "returns": "void",
-        "sideEffects": [
-          "opens the MIDI input and installs the fader callback",
-          "persists venue.mixer_port + venue.mixer_mapping_json (mapping re-serialised to JSON by the command, VenueAccess<Write>, committed)",
-          "the callback emits `mixer_state` { channelFaders, crossfader } on every fader move, and `mixer_learned` { channel, cc } while learn is armed"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_disconnect",
-      "prose": {
-        "notes": "Destructive: the saved MAPPING is dropped too, not just the port — the user must re-learn after disconnecting. Caller then locally sets mixerState null and patches mixerStatus { connected: false, portName: null } rather than re-polling.",
-        "returns": "void",
-        "sideEffects": [
-          "closes the MIDI connection",
-          "clears both venue.mixer_port and venue.mixer_mapping_json so auto-reconnect stops (VenueAccess<Write>, committed)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_get_status",
-      "prose": {
-        "notes": "Documented contract: call every ~2s; the poll IS the reconnect driver. A port must not treat it as a pure read or debounce it away. Caller declares the return shape inline as an anonymous type instead of importing MixerStatus from src/bindings/mixer.ts — drifted duplicate of a generated type.",
-        "returns": "MixerStatus { connected: boolean, portName: string | null, availablePorts: string[] } (camelCase; serialize-only, no Deserialize)",
-        "sideEffects": [
-          "MixerManager::status performs dead-connection detection and auto-reconnect using the preferred config seeded by mixer_init_for_venue — this getter is NOT side-effect free"
-        ]
-      },
-      "returns": "MixerStatus"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_init_for_venue",
-      "prose": {
-        "notes": "Must run before the 2s status poll or auto-reconnect never fires. Corrupt/unparseable mixer_mapping_json is swallowed to None via `.ok()` — the mixer then silently reconnects with no mapping instead of erroring; empty-string json is treated as absent. Called once per venue load next to controller_init_for_venue.",
-        "returns": "void",
-        "sideEffects": [
-          "parses venue.mixer_mapping_json and seeds MixerManager's preferred (port, mapping) so mixer_get_status can auto-reconnect"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_list_ports",
-      "prose": {
-        "notes": "Synchronous, no venue argument, no authorization — the only mixer command without a venue lease. Polled every 1.5s while the mixer dialog is open so hot-plug is detected; the dialog auto-selects ports[0] when nothing is chosen yet.",
-        "returns": "Vec<String> (MIDI input port names)",
-        "sideEffects": [
-          "none"
-        ]
-      },
-      "returns": "Vec<String>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "portName",
-          "rust": "String"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_open_port",
-      "prose": {
-        "notes": "Learn-flow only: lets CC traffic reach the manager before the user saves a mapping. It replaces any live connection's mapping with the default (empty channelFaders, crossfader: None), so opening a port for learn silently disarms a working mixer mapping until mixer_connect is called again — flag this when porting. VenueAccess<Read> despite mutating manager state.",
-        "returns": "void",
-        "sideEffects": [
-          "opens the MIDI port with an EMPTY mapping and does NOT persist anything to the venue DB"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "mixer",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/mixer.rs"
-      },
-      "name": "mixer_start_learn",
-      "prose": {
-        "notes": "Requires an open port — the UI calls mixer_open_port first when nothing is connected. One-shot, so the dialog re-arms per learn target. On capture the UI clears any other target already bound to the same channel+CC, enforcing uniqueness client-side only; the backend does not.",
-        "returns": "void",
-        "sideEffects": [
-          "arms learn: the next CC message emits `mixer_learned` { channel: u8, cc: u8 } (raw serde_json, not a ts-rs type) and is swallowed instead of being mapped to a fader; auto-disarms after one capture"
-        ]
-      },
-      "returns": "()"
     },
     {
       "args": [
@@ -3448,11 +3021,6 @@
       "handlers": "backend/src/dispatch/handlers/compositor.rs"
     },
     {
-      "commandCount": 8,
-      "domain": "controller",
-      "handlers": "backend/src/dispatch/handlers/controller.rs"
-    },
-    {
       "commandCount": 2,
       "domain": "controls",
       "handlers": "backend/src/dispatch/handlers/controls.rs"
@@ -3494,18 +3062,13 @@
     },
     {
       "commandCount": 6,
+      "domain": "inputs",
+      "handlers": "backend/src/dispatch/handlers/inputs.rs"
+    },
+    {
+      "commandCount": 6,
       "domain": "lasers",
       "handlers": "backend/src/dispatch/handlers/lasers.rs"
-    },
-    {
-      "commandCount": 8,
-      "domain": "midi",
-      "handlers": "backend/src/dispatch/handlers/midi.rs"
-    },
-    {
-      "commandCount": 8,
-      "domain": "mixer",
-      "handlers": "backend/src/dispatch/handlers/mixer.rs"
     },
     {
       "commandCount": 4,
@@ -3571,52 +3134,11 @@
   "events": [
     {
       "emitters": [
-        "backend/src/controller_manager.rs"
-      ],
-      "listeners": [],
-      "name": "controller_port_change",
-      "note": "emitted, nobody listens",
-      "orphan": true
-    },
-    {
-      "emitters": [
-        "backend/src/controller_manager.rs"
-      ],
-      "listeners": [],
-      "name": "controller_state",
-      "orphan": true
-    },
-    {
-      "emitters": [
         "backend/src/dispatch/handlers/tracks.rs",
         "backend/src/sync/media.rs"
       ],
       "listeners": [],
       "name": "library-changed",
-      "orphan": true
-    },
-    {
-      "emitters": [
-        "backend/src/controller_manager.rs"
-      ],
-      "listeners": [],
-      "name": "midi_learn_captured",
-      "orphan": true
-    },
-    {
-      "emitters": [
-        "backend/src/mixer_manager.rs"
-      ],
-      "listeners": [],
-      "name": "mixer_learned",
-      "orphan": true
-    },
-    {
-      "emitters": [
-        "backend/src/mixer_manager.rs"
-      ],
-      "listeners": [],
-      "name": "mixer_state",
       "orphan": true
     },
     {
@@ -3649,14 +3171,6 @@
     },
     {
       "emitters": [
-        "backend/src/controller_manager.rs"
-      ],
-      "listeners": [],
-      "name": "universe-state-update",
-      "orphan": true
-    },
-    {
-      "emitters": [
         "backend/src/sync/files.rs"
       ],
       "listeners": [],
@@ -3674,9 +3188,9 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 155,
-    "domainCount": 29,
-    "eventCount": 12
+    "commandCount": 137,
+    "domainCount": 27,
+    "eventCount": 6
   },
   "version": 2
 }

@@ -8,7 +8,7 @@ use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 /// [`get_venue`] — so a venue the admitted principal does not own reads as a
 /// member's however the column was written.
 const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, 'owner' AS role, controller_port, mixer_port, mixer_mapping_json, environment, haze, created_at, updated_at";
+    "id, uid, name, description, share_code, 'owner' AS role, environment, haze, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
@@ -20,7 +20,6 @@ pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, Strin
                     THEN 'owner'
                     ELSE 'member'
                 END AS role,
-                venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
                 venue.environment, venue.haze, venue.created_at, venue.updated_at
          FROM venues venue
          CROSS JOIN auth_write_admission admission
@@ -44,7 +43,6 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
                     THEN 'owner'
                     ELSE 'member'
                 END AS role,
-                venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
                 venue.environment, venue.haze, venue.created_at, venue.updated_at
          FROM venues venue
          CROSS JOIN auth_write_admission admission
@@ -169,21 +167,6 @@ pub async fn delete_venue(access: &mut VenueAccess<'_, Write>) -> Result<(), Str
     Ok(())
 }
 
-/// Set the preferred MIDI controller port for a venue (local-only, not synced).
-pub async fn set_controller_port(
-    access: &mut VenueAccess<'_, Write>,
-    port: Option<&str>,
-) -> Result<(), String> {
-    let venue_id = access.venue_id().to_string();
-    sqlx::query("UPDATE venues SET controller_port = ? WHERE id = ?")
-        .bind(port)
-        .bind(venue_id)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to set controller port: {}", e))?;
-    Ok(())
-}
-
 /// Set this venue's lighting environment, synced with the venue.
 ///
 /// One write for both modes, because the value is one closed enum: switching a
@@ -224,23 +207,6 @@ pub async fn set_haze(access: &mut VenueAccess<'_, Write>, haze: VenueHaze) -> R
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to set venue haze: {e}"))?;
-    Ok(())
-}
-
-/// Set the MIDI mixer port + mapping for a venue (local-only, not synced).
-pub async fn set_mixer_config(
-    access: &mut VenueAccess<'_, Write>,
-    port: Option<&str>,
-    mapping_json: Option<&str>,
-) -> Result<(), String> {
-    let venue_id = access.venue_id().to_string();
-    sqlx::query("UPDATE venues SET mixer_port = ?, mixer_mapping_json = ? WHERE id = ?")
-        .bind(port)
-        .bind(mapping_json)
-        .bind(venue_id)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to set mixer config: {}", e))?;
     Ok(())
 }
 

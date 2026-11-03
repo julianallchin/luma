@@ -942,14 +942,6 @@ async fn every_venue_child_shape_reaches_a_member() {
             "INSERT INTO fixture_group_members (id, uid, venue_id, group_id, fixture_id)
              VALUES ('{group}:{fixture}', '{USER}', '{venue}', '{group}', '{fixture}')"
         ),
-        format!(
-            "INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
-             VALUES ('{venue}-mod', '{USER}', '{venue}', 'shift', '{{}}')"
-        ),
-        format!(
-            "INSERT INTO midi_bindings (id, uid, venue_id, trigger_json, action_json)
-             VALUES ('{venue}-bind', '{USER}', '{venue}', '{{}}', '{{}}')"
-        ),
     ] {
         sqlx::query(sqlx::AssertSqlSafe(statement.clone()))
             .execute(&a.sql)
@@ -968,8 +960,6 @@ async fn every_venue_child_shape_reaches_a_member() {
         ("fixtures", "venue_id", venue.as_str()),
         ("fixture_groups", "venue_id", venue.as_str()),
         ("fixture_group_members", "venue_id", venue.as_str()),
-        ("midi_modifiers", "venue_id", venue.as_str()),
-        ("midi_bindings", "venue_id", venue.as_str()),
         ("scores", "venue_id", venue.as_str()),
         ("clips", "score_id", score.as_str()),
         ("tracks", "id", track.as_str()),

@@ -16,12 +16,6 @@ pub struct Venue {
     #[sqlx(rename = "share_code")]
     pub share_code: Option<String>,
     pub role: String,
-    #[sqlx(rename = "controller_port")]
-    pub controller_port: Option<String>,
-    #[sqlx(rename = "mixer_port")]
-    pub mixer_port: Option<String>,
-    #[sqlx(rename = "mixer_mapping_json")]
-    pub mixer_mapping_json: Option<String>,
     /// What kind of room this is and how far up its one dial is.
     ///
     /// Venue truth, at the tier of the name: every picture of this venue — the

@@ -27,6 +27,9 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
   names `folders` and `folder_tracks`
 - `20261024120000_lasers.sql` — then redeploy `powersync/sync-config.yaml`, which
   names `laser_zones` and `laser_limits`
+- `20261102120000_drop_midi_mappings.sql` — after redeploying
+  `powersync/sync-config.yaml`, which no longer names `midi_modifiers` or
+  `midi_bindings`, and after every client runs a build without them
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

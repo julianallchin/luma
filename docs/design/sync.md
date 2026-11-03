@@ -87,8 +87,7 @@ Clips play score-local definitions only.
 ## History
 
 History is the server's and does not sync. A Postgres trigger on each authored
-table (venues and their content, `scores`, `clips`, MIDI modifiers and
-bindings) appends to `public.history` on every insert, update and delete:
+table (venues and their content, `scores`, `clips`) appends to `public.history` on every insert, update and delete:
 
 `history(id, uid, table_name, row_id, op, before, after, actor, at)`
 
@@ -130,15 +129,13 @@ venue_nodes, venue_edges, venue_node_params, venue_constraints, folders,
 folder_tracks, laser_zones, laser_limits, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
-clips, midi_modifiers,
-midi_bindings, agent_threads, agent_thread_messages,
+clips, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts.
 
-Local only: settings, dmx_routes, preprocessing_failures,
+Local only: settings, control_bindings, dmx_routes, preprocessing_failures,
 track_waveforms, track_mert, agent_thread_runs,
 agent_thread_usage, sync_rejections, auth_write_admission, the
-auth session, and the columns `venues.controller_port`, `venues.mixer_port`,
-`venues.mixer_mapping_json`, `tracks.file_path`, `tracks.album_art_path`,
+auth session, and the columns `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
 
 The local copy is a projection of the server and is never converted in place.

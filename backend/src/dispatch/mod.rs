@@ -102,8 +102,10 @@ macro_rules! commands {
 
 use std::collections::BTreeMap;
 
+use crate::controls::Control;
 use crate::engine_dj::types::EngineDjTrack;
 use crate::host_audio::HostAudioSnapshot;
+use crate::inputs::{Binding, InputState, Mode};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
     AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
@@ -114,14 +116,8 @@ use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::folders::Folder;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
-use crate::models::midi::{
-    ControllerState, ControllerStatus, CreateBindingInput, CreateModifierInput, MidiBinding,
-    ModifierDef, UpdateBindingInput,
-};
-use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
-use crate::controls::Control;
 use crate::models::perform::{PerformSource, PerformState};
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
@@ -371,36 +367,12 @@ commands! {
     venues::set_venue_environment(venue_id: String, environment: VenueEnvironment) -> ();
     venues::set_venue_haze(venue_id: String, haze: VenueHaze) -> ();
 
-    midi::midi_list_modifiers(venue_id: String) -> Vec<ModifierDef>;
-    midi::midi_create_modifier(input: CreateModifierInput) -> ModifierDef;
-    midi::midi_delete_modifier(id: String) -> ();
-    midi::midi_list_bindings(venue_id: String) -> Vec<MidiBinding>;
-    midi::midi_create_binding(input: CreateBindingInput) -> MidiBinding;
-    midi::midi_update_binding(input: UpdateBindingInput) -> MidiBinding;
-    midi::midi_delete_binding(id: String) -> ();
-    midi::midi_reload_mapping(venue_id: String) -> ();
-
-    controller::controller_connect(port_name: String, venue_id: String) -> ();
-    controller::controller_disconnect(venue_id: String) -> ();
-    controller::controller_init_for_venue(venue_id: String) -> ();
-    controller::controller_get_status(venue_id: String) -> ControllerStatus;
-    controller::controller_get_state(venue_id: String) -> ControllerState;
-    controller::controller_set_active(venue_id: String, active: bool) -> ();
-    controller::controller_start_learn(venue_id: String) -> ();
-    controller::controller_cancel_learn(venue_id: String) -> ();
-
-    mixer::mixer_list_ports() -> Vec<String>;
-    mixer::mixer_connect(
-        venue_id: String,
-        port_name: String,
-        mapping: MixerMapping,
-    ) -> ();
-    mixer::mixer_disconnect(venue_id: String) -> ();
-    mixer::mixer_init_for_venue(venue_id: String) -> ();
-    mixer::mixer_get_status(venue_id: String) -> MixerStatus;
-    mixer::mixer_open_port(venue_id: String, port_name: String) -> ();
-    mixer::mixer_start_learn(venue_id: String) -> ();
-    mixer::mixer_cancel_learn(venue_id: String) -> ();
+    inputs::input_open(venue_id: String) -> InputState;
+    inputs::input_state() -> InputState;
+    inputs::input_learn(venue_id: String, control: String, mode: Mode) -> Binding;
+    inputs::input_cancel_learn() -> ();
+    inputs::input_update_binding(venue_id: String, binding_id: String, mode: Mode, invert: bool) -> ();
+    inputs::input_unbind(venue_id: String, binding_id: String) -> ();
 
     render_engine::render_clear_active_layer(venue_id: String) -> ();
     render_engine::render_identify(targets: Vec<String>) -> ();

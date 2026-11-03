@@ -10,12 +10,10 @@ use serde_json::Value;
 use super::CommandError;
 use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::audio::FftService;
-use crate::controller_manager::ControllerManager;
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
-use crate::mixer_manager::MixerManager;
 use crate::output::OutputHub;
 use crate::preprocessing::{AnalysisTaskGroup, WorkerEnvironment};
 use crate::render_engine::RenderEngine;
@@ -189,11 +187,9 @@ pub struct AppServices {
     pub(crate) fft: FftService,
     /// Decoded stem samples, shared so a track's stems are decoded once.
     pub(crate) render_engine: RenderEngine,
-    /// MIDI controller mapping + connection. Held as an `Arc` because its
-    /// interior is bare `Mutex`es — a clone would fork the live mapping.
-    pub(crate) controller: Arc<ControllerManager>,
-    /// Hardware DJ-mixer fader input. `Arc` for the same reason as `controller`.
-    pub(crate) mixer: Arc<MixerManager>,
+    /// MIDI and OSC inputs bound to live controls. `Arc` because it owns
+    /// the open ports — a clone would fork them.
+    pub(crate) inputs: Arc<crate::inputs::InputHub>,
     /// Live follow of a DJ source. `Arc` because it owns the live source
     /// connection — a clone would fork it.
     pub(crate) perform: Arc<crate::perform::PerformSession>,
@@ -265,6 +261,7 @@ impl AppServices {
         host_audio.set_audio_output_enabled(false);
         let track_audio =
             crate::sync::audio::TrackAudio::new(db.0.clone(), state_db.0.clone(), storage.clone());
+        let inputs = Arc::new(crate::inputs::InputHub::new(db.0.clone(), false));
         let perform = Arc::new(crate::perform::PerformSession::new(
             render_engine.clone(),
             db.0.clone(),
@@ -282,8 +279,7 @@ impl AppServices {
             track_sources: system_track_sources(),
             fft: FftService::new(),
             render_engine: render_engine.clone(),
-            controller: Arc::new(ControllerManager::new(render_engine, None)),
-            mixer: Arc::new(MixerManager::new()),
+            inputs,
             perform,
             output: None,
             host_audio,
@@ -326,14 +322,12 @@ impl AppServices {
         .await
     }
 
-    /// Enable physical output for the native desktop host. Harnesses retain
-    /// the headless service set and never bind sockets or open devices.
+    /// Enable physical output, and MIDI and OSC inputs, for the native
+    /// desktop host. Harnesses retain the headless service set and never
+    /// bind sockets or open devices.
     pub async fn with_output(mut self) -> Result<Self, String> {
         let output = Arc::new(OutputHub::new(&self.db.0, self.fixtures_root.clone()).await?);
-        self.controller = Arc::new(ControllerManager::new(
-            self.render_engine.clone(),
-            Some(output.clone()),
-        ));
+        self.inputs = Arc::new(crate::inputs::InputHub::new(self.db.0.clone(), true));
         self.output = Some(output);
         Ok(self)
     }

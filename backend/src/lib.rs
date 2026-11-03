@@ -11,7 +11,6 @@ pub mod controls;
 /// Compile a saved score for read-only render replay and diagnostics.
 pub use compositor::build_score_scene;
 pub mod config;
-mod controller_manager;
 pub mod database;
 pub mod dispatch;
 mod engine_dj;
@@ -20,13 +19,13 @@ mod ffmpeg_env;
 pub mod fixtures;
 pub mod laser;
 mod genre_worker;
+mod inputs;
 /// Where a test that fakes the analysis workers puts a stand-in genre model,
 /// so the genre stage does not download the real one.
 pub use genre_worker::MODEL_FILE_NAME as GENRE_MODEL_FILE_NAME;
 pub mod headless_host;
 pub mod host_audio;
 mod mert_worker;
-mod mixer_manager;
 pub mod models;
 mod n2n_worker;
 pub mod node_graph;

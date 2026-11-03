@@ -4,7 +4,7 @@
 //! Decoupled from audio playback — reads time from HostAudioState only in
 //! edit mode. In perform mode it renders per-deck layers and blends by volume.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -31,31 +31,6 @@ pub struct PerformDeckInput {
     pub clock: DeckClock,
     /// Blend weight. Zero drops the deck from the mix.
     pub volume: f32,
-}
-
-// ============================================================================
-// Manual Layer State — live controller state driven by MIDI
-// ============================================================================
-
-/// Live LD state — modified by MIDI callback, read by 60fps render loop.
-#[derive(Clone, Debug)]
-pub struct ManualLayerState {
-    /// Whether the manual layer is composited on top of the score
-    pub active: bool,
-    /// Modifier names currently held (used for binding resolution)
-    pub held_modifiers: HashSet<String>,
-    /// Per-group intensity (0.0–1.0). Key = group_id.
-    pub per_group: HashMap<String, f32>,
-}
-
-impl Default for ManualLayerState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            held_modifiers: HashSet::new(),
-            per_group: HashMap::new(),
-        }
-    }
 }
 
 // ============================================================================
@@ -110,13 +85,6 @@ pub(crate) struct RenderEngineInner {
     perform_latency: f32,
     /// Fixture identify blink (highest priority)
     identify: Option<IdentifyState>,
-
-    // --- Live controller layer ---
-    /// Live LD state (modified by MIDI callback thread)
-    manual_layer: ManualLayerState,
-    /// group_id → [fixture_id, ...]. Built on mapping reload. Used for
-    /// per-group intensity.
-    group_fixture_map: HashMap<String, Vec<String>>,
     /// Reusable eval scratch arena, held across frames so the hot path stays warm.
     scratch: Arena,
 }
@@ -132,8 +100,6 @@ impl Default for RenderEngine {
                 perform_deck_states: Vec::new(),
                 perform_latency: 0.0,
                 identify: None,
-                manual_layer: ManualLayerState::default(),
-                group_fixture_map: HashMap::new(),
                 scratch: Arena::default(),
             })),
         }
@@ -148,8 +114,6 @@ impl RenderEngine {
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
         guard.identify = None;
-        guard.manual_layer = ManualLayerState::default();
-        guard.group_fixture_map.clear();
         guard.scratch = Arena::default();
     }
 
@@ -192,7 +156,7 @@ impl RenderEngine {
             }
             guard.identify = None;
         }
-        if !guard.perform_deck_states.is_empty() || guard.manual_layer.active {
+        if !guard.perform_deck_states.is_empty() {
             return Some(render_perform_mix(&mut guard));
         }
         let inner = &mut *guard;
@@ -250,7 +214,10 @@ impl RenderEngine {
     }
 
     pub fn set_perform_latency(&self, seconds: f32) {
-        self.inner.lock().expect("render engine poisoned").perform_latency = seconds;
+        self.inner
+            .lock()
+            .expect("render engine poisoned")
+            .perform_latency = seconds;
     }
 
     pub fn clear_perform(&self) {
@@ -278,97 +245,21 @@ impl RenderEngine {
             start: Instant::now(),
         });
     }
-
-    // --- MIDI live layer methods ---
-
-    /// Update the group→fixture map used for target filtering.
-    pub fn set_group_fixture_map(&self, map: HashMap<String, Vec<String>>) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.group_fixture_map = map;
-    }
-
-    /// Toggle whether the manual layer is active.
-    pub fn set_manual_active(&self, active: bool) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.active = active;
-    }
-
-    /// Set one group's intensity (0.0–1.0).
-    pub fn set_group_intensity(&self, group_id: String, intensity: f32) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard
-            .manual_layer
-            .per_group
-            .insert(group_id, intensity.clamp(0.0, 1.0));
-    }
-
-    /// Hold modifier pressed.
-    pub fn modifier_on(&self, name: &str) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.held_modifiers.insert(name.to_string());
-    }
-
-    /// Hold modifier released.
-    pub fn modifier_off(&self, name: &str) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.held_modifiers.remove(name);
-    }
-
-    /// Snapshot of held modifiers for UI display.
-    pub fn get_manual_state_snapshot(&self) -> crate::models::midi::ControllerState {
-        let guard = self.inner.lock().expect("render engine poisoned");
-        let ml = &guard.manual_layer;
-        let group_intensities = ml.per_group.clone();
-
-        crate::models::midi::ControllerState {
-            active: ml.active,
-            held_modifiers: ml.held_modifiers.iter().cloned().collect(),
-            group_intensities,
-        }
-    }
 }
 
 // ============================================================================
 // Perform mix
 // ============================================================================
 
-/// Render each deck's layer at its current time and blend by volume, then dim
-/// the controller's groups by their intensity.
+/// Render each deck's layer at its current time and blend by volume.
 fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
-    let mut universe = score_mix(
+    score_mix(
         &guard.perform_layers,
         &guard.perform_deck_states,
         Instant::now(),
         guard.perform_latency,
         &mut guard.scratch,
-    );
-
-    // Apply per-group intensity as a post-composite dimming pass, so CC faders
-    // act as group dimmers.
-    for (group_id, intensity) in &guard.manual_layer.per_group {
-        if (intensity - 1.0).abs() < 0.001 {
-            continue; // full intensity — skip
-        }
-        let Some(fixture_ids) = guard.group_fixture_map.get(group_id) else {
-            continue;
-        };
-        for (key, prim) in &mut universe.primitives {
-            let fixture_id = if let Some(c) = key.find(':') {
-                &key[..c]
-            } else {
-                key.as_str()
-            };
-            // Members are either whole fixtures ("fid") or single heads ("fid:N").
-            if fixture_ids
-                .iter()
-                .any(|m| m == fixture_id || m == key.as_str())
-            {
-                prim.dimmer = (prim.dimmer * intensity).clamp(0.0, 1.0);
-            }
-        }
-    }
-
-    universe
+    )
 }
 
 /// Score-only blend: evaluate each deck's scene at its time, weighted-average by
@@ -550,16 +441,6 @@ mod tests {
             .start = std::time::Instant::now() - std::time::Duration::from_secs(10);
         assert!(engine.sample(0.0).unwrap().primitives.is_empty());
         assert!(engine.inner.lock().unwrap().identify.is_none());
-    }
-
-    #[test]
-    fn native_sampling_runs_manual_output_without_an_editor_scene() {
-        let engine = super::RenderEngine::default();
-        assert!(engine.sample(0.0).is_none());
-        engine.set_manual_active(true);
-        assert!(engine.sample(0.0).is_some());
-        engine.set_manual_active(false);
-        assert!(engine.sample(0.0).is_none());
     }
 
     #[test]

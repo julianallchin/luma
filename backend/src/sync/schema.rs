@@ -396,37 +396,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         ]
     ),
     table!(
-        "midi_modifiers",
-        "@.id",
-        "uid",
-        [
-            "id",
-            "uid",
-            "venue_id",
-            "name",
-            "input_json",
-            "created_at",
-            "updated_at"
-        ]
-    ),
-    table!(
-        "midi_bindings",
-        "@.id",
-        "uid",
-        [
-            "id",
-            "uid",
-            "venue_id",
-            "trigger_json",
-            "required_modifiers_json",
-            "exclusive",
-            "action_json",
-            "display_order",
-            "created_at",
-            "updated_at"
-        ]
-    ),
-    table!(
         "folders",
         "@.id",
         "uid",
@@ -560,7 +529,7 @@ pub fn table(name: &str) -> Option<&'static SyncedTable> {
 /// They need coercion in both directions. PostgREST will not accept a JSON `0`
 /// for a boolean, and `CAST('true' AS INTEGER)` is 0 in SQLite — so neither end
 /// can be left to convert implicitly.
-pub const BOOLEAN_COLUMNS: &[&str] = &["address_pinned", "exclusive"];
+pub const BOOLEAN_COLUMNS: &[&str] = &["address_pinned"];
 
 /// The column a `*_updated_at` trigger writes and nothing else means.
 ///

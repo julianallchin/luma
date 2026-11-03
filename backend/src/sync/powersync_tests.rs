@@ -219,22 +219,21 @@ fn boolean_columns_match_rather_than_cast() {
 async fn a_downloaded_boolean_becomes_an_integer() {
     let (_directory, pool) = database("boolean.db").await;
     let mut connection = pool.acquire().await.expect("acquire");
-    let bindings = table("midi_bindings").expect("midi_bindings is synced");
-    assert!(bindings.local_defaults.is_empty());
-    let (put, _) = statements(bindings);
+    let fixtures = table("fixtures").expect("fixtures is synced");
+    let (put, _) = statements(fixtures);
     for (sent, expected) in [("true", 1), ("false", 0), ("1", 1), ("0", 0)] {
         let mut query = sqlx::query(sqlx::AssertSqlSafe(put.clone()));
-        for column in bindings.columns {
+        for column in fixtures.columns {
             query = query.bind(match *column {
-                "id" => "binding-1",
-                "exclusive" => sent,
-                "display_order" => "0",
+                "id" => "fixture-1",
+                "address_pinned" => sent,
+                "universe" | "address" | "num_channels" => "1",
                 _ => "x",
             });
         }
         query.execute(&mut *connection).await.expect("put");
         let stored: i64 =
-            sqlx::query_scalar("SELECT exclusive FROM midi_bindings WHERE id = 'binding-1'")
+            sqlx::query_scalar("SELECT address_pinned FROM fixtures WHERE id = 'fixture-1'")
                 .fetch_one(&mut *connection)
                 .await
                 .expect("read");
@@ -249,24 +248,25 @@ async fn an_uploaded_boolean_is_a_json_boolean() {
     let (_directory, pool) = database("upload-boolean.db").await;
     let mut connection = writer(&pool).await;
     sqlx::query(
-        "INSERT INTO midi_bindings (id, uid, venue_id, trigger_json, exclusive, action_json) \
-         VALUES ('binding-1', 'user-1', 'venue-1', '{}', 0, '{}')",
+        "INSERT INTO fixtures (id, uid, venue_id, address, num_channels, manufacturer, model, \
+                               mode_name, fixture_path, address_pinned) \
+         VALUES ('fixture-1', 'user-1', 'venue-1', 1, 1, 'Luma', 'Par', 'Default', 'par.json', 0)",
     )
     .execute(&mut *connection)
     .await
     .expect("insert");
-    sqlx::query("UPDATE midi_bindings SET exclusive = 1 WHERE id = 'binding-1'")
+    sqlx::query("UPDATE fixtures SET address_pinned = 1 WHERE id = 'fixture-1'")
         .execute(&mut *connection)
         .await
         .expect("update");
-    let entries = queue(&mut connection, "midi_bindings").await;
+    let entries = queue(&mut connection, "fixtures").await;
     let put: serde_json::Value =
         serde_json::from_str(entries[0].3.as_deref().expect("put")).expect("json");
-    assert_eq!(put["exclusive"], serde_json::Value::Bool(false));
+    assert_eq!(put["address_pinned"], serde_json::Value::Bool(false));
     let patch: serde_json::Value =
         serde_json::from_str(entries[1].3.as_deref().expect("patch")).expect("json");
     assert_eq!(
-        patch["exclusive"],
+        patch["address_pinned"],
         serde_json::Value::Bool(true),
         "a PATCH keeps the JSON boolean through re-aggregation"
     );
