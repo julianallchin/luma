@@ -8,11 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde::Deserialize;
-
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::{Arena, Scene, Scope};
 use crate::models::universe::{PrimitiveState, UniverseState};
+use crate::perform::clock::DeckClock;
 
 /// Sample a [`Scene`] at a single absolute time → one [`UniverseState`]. The
 /// realtime collapse of the unified `render` API (the render loop's hot path).
@@ -24,12 +23,14 @@ fn sample_scene(scene: &Scene, t: f32, scratch: &mut Arena) -> UniverseState {
         .unwrap_or_default()
 }
 
-/// Per-deck render input from the Perform page.
-#[derive(Deserialize, Clone, Debug)]
+/// One followed deck, as live follow hands it to the engine.
+#[derive(Clone, Copy, Debug)]
 pub struct PerformDeckInput {
     pub deck_id: u8,
-    pub time: f32,
-    pub volume: f32, // effective volume = fader * crossfader weight
+    /// Extrapolated at every sample, so the lights move between reports.
+    pub clock: DeckClock,
+    /// Blend weight. Zero drops the deck from the mix.
+    pub volume: f32,
 }
 
 // ============================================================================
@@ -103,8 +104,10 @@ pub(crate) struct RenderEngineInner {
     active_scene: Option<Scene>,
     /// Per-deck scenes for perform mode (the track's full composite per deck).
     perform_layers: HashMap<u8, Scene>,
-    /// Per-deck time + volume, set by the host each frame
+    /// Per-deck clocks and blend weights, set by live follow.
     perform_deck_states: Vec<PerformDeckInput>,
+    /// Seconds added to every deck's position: positive lights lead the music.
+    perform_latency: f32,
     /// Fixture identify blink (highest priority)
     identify: Option<IdentifyState>,
 
@@ -127,6 +130,7 @@ impl Default for RenderEngine {
                 active_scene: None,
                 perform_layers: HashMap::new(),
                 perform_deck_states: Vec::new(),
+                perform_latency: 0.0,
                 identify: None,
                 manual_layer: ManualLayerState::default(),
                 group_fixture_map: HashMap::new(),
@@ -233,15 +237,26 @@ impl RenderEngine {
     }
 
     pub fn set_perform_deck_states(&self, states: Vec<PerformDeckInput>) {
-        log::debug!("[render] set_perform_deck_states: {} decks", states.len());
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.perform_deck_states = states;
     }
 
+    /// Drop a deck's layer and any build still in flight for it: the deck
+    /// loaded another track.
+    pub(crate) fn clear_deck(&self, id: u8) {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        guard.pending_scenes.remove(&SceneTarget::Deck(id));
+        guard.perform_layers.remove(&id);
+    }
+
+    pub fn set_perform_latency(&self, seconds: f32) {
+        self.inner.lock().expect("render engine poisoned").perform_latency = seconds;
+    }
+
     pub fn clear_perform(&self) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
-        log::warn!(
-            "[render] clear_perform called — clearing {} deck layers and {} deck states",
+        log::debug!(
+            "[render] clear_perform: clearing {} deck layers and {} deck states",
             guard.perform_layers.len(),
             guard.perform_deck_states.len()
         );
@@ -323,6 +338,8 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
     let mut universe = score_mix(
         &guard.perform_layers,
         &guard.perform_deck_states,
+        Instant::now(),
+        guard.perform_latency,
         &mut guard.scratch,
     );
 
@@ -359,6 +376,8 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
 fn score_mix(
     layers: &HashMap<u8, Scene>,
     deck_states: &[PerformDeckInput],
+    now: Instant,
+    latency: f32,
     scratch: &mut Arena,
 ) -> UniverseState {
     let mut frames: Vec<(UniverseState, f32)> = Vec::new();
@@ -367,7 +386,8 @@ fn score_mix(
             continue;
         }
         if let Some(scene) = layers.get(&ds.deck_id) {
-            frames.push((sample_scene(scene, ds.time, scratch), ds.volume));
+            let time = ds.clock.position_at(now) as f32 + latency;
+            frames.push((sample_scene(scene, time, scratch), ds.volume));
         }
     }
 

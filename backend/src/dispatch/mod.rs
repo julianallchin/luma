@@ -121,7 +121,7 @@ use crate::models::midi::{
 use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
-use crate::models::perform::PerformTrackMatch;
+use crate::models::perform::{PerformSource, PerformState};
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
 use crate::models::sync::SyncStatus;
@@ -135,7 +135,6 @@ use crate::models::venues::Venue;
 use crate::models::waveforms::TrackWaveform;
 
 use crate::rekordbox::types::RekordboxTrack;
-use crate::render_engine::PerformDeckInput;
 use crate::settings::AppSettings;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use prodjlink::DiscoveredDevice;
@@ -402,35 +401,15 @@ commands! {
     mixer::mixer_start_learn(venue_id: String) -> ();
     mixer::mixer_cancel_learn(venue_id: String) -> ();
 
-    render_engine::render_set_deck_states(
-        venue_id: String,
-        states: Vec<PerformDeckInput>,
-    ) -> ();
-    render_engine::render_clear_perform(venue_id: String) -> ();
     render_engine::render_clear_active_layer(venue_id: String) -> ();
     render_engine::render_identify(targets: Vec<String>) -> ();
 
-    perform::stagelinq_connect() -> ();
-    perform::stagelinq_disconnect() -> ();
+    perform::perform_start(venue_id: String, source: PerformSource) -> ();
+    perform::perform_stop() -> ();
+    perform::perform_state() -> PerformState;
+    perform::perform_set_latency(latency_ms: f32) -> ();
+    perform::perform_assign_track(deck_id: u8, track_id: Option<String>) -> ();
     perform::prodjlink_discover() -> Vec<DiscoveredDevice>;
-    perform::prodjlink_connect(device_num: u8) -> ();
-    perform::prodjlink_disconnect() -> ();
-    perform::perform_match_track(
-        track_network_path: String,
-        venue_id: String,
-    ) -> PerformTrackMatch;
-    perform::perform_match_track_by_metadata(
-        title: String,
-        artist: String,
-        bpm: f64,
-        duration_secs: f64,
-        venue_id: String,
-    ) -> PerformTrackMatch;
-    perform::render_composite_deck(
-        deck_id: u8,
-        track_id: String,
-        venue_id: String,
-    ) -> ();
 
     host_audio::host_load_track(track_id: String, session: u64) -> ();
     host_audio::host_load_segment(

@@ -18,10 +18,8 @@ use crate::host_audio::HostAudioState;
 use crate::mixer_manager::MixerManager;
 use crate::output::OutputHub;
 use crate::preprocessing::{AnalysisTaskGroup, WorkerEnvironment};
-use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
 use crate::services::fixtures::FixtureState;
-use crate::stagelinq_manager::StageLinqManager;
 use crate::storage::StorageRoot;
 use crate::sync::host::SyncHost;
 
@@ -196,11 +194,9 @@ pub struct AppServices {
     pub(crate) controller: Arc<ControllerManager>,
     /// Hardware DJ-mixer fader input. `Arc` for the same reason as `controller`.
     pub(crate) mixer: Arc<MixerManager>,
-    /// Denon/Engine DJ deck telemetry. `Arc` because its interior is a bare
-    /// `Mutex` holding the live client — a clone would fork the connection.
-    pub(crate) stagelinq: Arc<StageLinqManager>,
-    /// Pioneer Pro DJ Link deck telemetry. `Arc` for the same reason.
-    pub(crate) prodjlink: Arc<ProDJLinkManager>,
+    /// Live follow of a DJ source. `Arc` because it owns the live source
+    /// connection — a clone would fork it.
+    pub(crate) perform: Arc<crate::perform::PerformSession>,
     /// Physical DMX output is installed only by the desktop host.
     pub(crate) output: Option<Arc<OutputHub>>,
     pub(crate) host_audio: HostAudioState,
@@ -269,6 +265,12 @@ impl AppServices {
         host_audio.set_audio_output_enabled(false);
         let track_audio =
             crate::sync::audio::TrackAudio::new(db.0.clone(), state_db.0.clone(), storage.clone());
+        let perform = Arc::new(crate::perform::PerformSession::new(
+            render_engine.clone(),
+            db.0.clone(),
+            storage.clone(),
+            fixtures_root.clone(),
+        ));
         Self {
             track_audio,
             db,
@@ -282,8 +284,7 @@ impl AppServices {
             render_engine: render_engine.clone(),
             controller: Arc::new(ControllerManager::new(render_engine, None)),
             mixer: Arc::new(MixerManager::new()),
-            stagelinq: Arc::new(StageLinqManager::new()),
-            prodjlink: Arc::new(ProDJLinkManager::new()),
+            perform,
             output: None,
             host_audio,
             storage,

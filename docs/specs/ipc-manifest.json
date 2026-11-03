@@ -2231,64 +2231,70 @@
     {
       "args": [
         {
-          "name": "trackNetworkPath",
-          "rust": "String"
+          "name": "deckId",
+          "rust": "u8"
         },
         {
-          "name": "venueId",
-          "rust": "String"
+          "name": "trackId",
+          "rust": "Option<String>"
         }
       ],
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "perform_match_track",
-      "prose": {
-        "notes": "StageLinQ path only — the Pioneer branch of the same store function calls the sibling perform_match_track_by_metadata (title/artist/bpm/durationSecs/venueId) instead. Never errors on 'not found': returns trackId=null with filename='' when the network path can't be parsed, and trackId=null with the parsed filename when no track matches. Takes tracks.first() with no tie-break, so duplicate filenames silently resolve to an arbitrary row. Track lookup is by source filename and is NOT venue-scoped, but the scores lookup IS — a track can match while hasAnnotations is false purely because the score lives in another venue. Caller guards a race by re-checking that the deck still holds the same track_network_path before applying the result.",
-        "returns": "PerformTrackMatch { trackId: string|null, hasAnnotations: bool, filename: string } (camelCase)",
-        "sideEffects": [
-          "opens a read transaction on the venue; no writes"
-        ]
-      },
-      "returns": "PerformTrackMatch"
+      "name": "perform_assign_track",
+      "returns": "()"
     },
     {
       "args": [
         {
-          "name": "title",
-          "rust": "String"
-        },
-        {
-          "name": "artist",
-          "rust": "String"
-        },
-        {
-          "name": "bpm",
-          "rust": "f64"
-        },
-        {
-          "name": "durationSecs",
-          "rust": "f64"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
+          "name": "latencyMs",
+          "rust": "f32"
         }
       ],
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "perform_match_track_by_metadata",
-      "prose": {
-        "notes": "Pro DJ Link path only (StageLinQ uses perform_match_track). Match cascade is ordered: duration ±5s window (queried against the raw pool, NOT through the venue access lease) → BPM filter (exact/×2/÷2, 5% tolerance; passes through when either side has bpm<=0) → bigram Jaccard similarity of normalized 'title artist', min score 0.25, sorted desc, best wins. Empty title AND artist short-circuits to a null match. `filename` falls back to the basename of file_path (split on '/', so Windows paths would not split) when source_filename is null; on a miss it is \"\" not null. trackId is the only nullability signal.",
-        "returns": "PerformTrackMatch { trackId: string | null, hasAnnotations: boolean, filename: string } (serde camelCase)",
-        "sideEffects": [
-          "none — read-only; takes a VenueAccess<Read> lease on VenueResource::Venue(venue_id)"
-        ]
+      "name": "perform_set_latency",
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "source",
+          "rust": "PerformSource"
+        }
+      ],
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "returns": "PerformTrackMatch"
+      "name": "perform_start",
+      "returns": "()"
+    },
+    {
+      "args": [],
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "name": "perform_state",
+      "returns": "PerformState"
+    },
+    {
+      "args": [],
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "name": "perform_stop",
+      "returns": "()"
     },
     {
       "args": [
@@ -2418,45 +2424,6 @@
         ]
       },
       "returns": "Vec<PatchedFixture>"
-    },
-    {
-      "args": [
-        {
-          "name": "deviceNum",
-          "rust": "u8"
-        }
-      ],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "name": "prodjlink_connect",
-      "prose": {
-        "notes": "Pioneer CDJs (not Denon). deviceNum is the virtual player number this app claims — must not collide with a real deck; the UI defaults to 7 and the store falls back to 7 (`deviceNum ?? 7`). Same event-listener-before-invoke ordering requirement as stagelinq_connect; the two connects share one code path in the store selected by `source`.",
-        "returns": "void",
-        "sideEffects": [
-          "claims the given device number on the Pro DJ Link network and starts the client",
-          "streams DeckEvent to the webview as `perform_event`"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "name": "prodjlink_disconnect",
-      "prose": {
-        "notes": "Mirror of stagelinq_disconnect; the store picks between them on `source` and ignores errors from either.",
-        "returns": "void",
-        "sideEffects": [
-          "stops the client, releases the claimed device number, `perform_event` emission ceases",
-          "no-op when nothing is running"
-        ]
-      },
-      "returns": "()"
     },
     {
       "args": [],
@@ -2763,58 +2730,6 @@
     {
       "args": [
         {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "render_engine",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/render_engine.rs"
-      },
-      "name": "render_clear_perform",
-      "prose": {
-        "notes": "Called on Perform page unmount, on Disconnected events and on user disconnect. Note it also wipes cue_buffers, so cues compiled by render_composite_deck_unmatched / midi_compile_cues_for_deck must be recompiled after any clear. All call sites fire-and-forget.",
-        "returns": "void",
-        "sideEffects": [
-          "clears perform_layers, perform_deck_states and all cue_buffers; leaves manual_layer state intact; takes VenueAccess<Read>"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "deckId",
-          "rust": "u8"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "name": "render_composite_deck",
-      "prose": {
-        "notes": "Two-step by design: compositing targets active_scene and is then promoted, so it transiently clobbers whatever the editor had in active_scene. Venue authorization happens inside composite_track (this fn takes no explicit VenueAccess). Callers pair it with midi_compile_cues_for_deck for the same deck+track. Reserved deck id 99 is the simulated deck (render_engine.rs SIM_DECK_ID).",
-        "returns": "void",
-        "sideEffects": [
-          "composite_track writes the compiled Scene into RenderEngine.active_scene",
-          "promote_active_scene_to_deck moves it (take) into perform_layers[deck_id] — active_scene ends up None",
-          "reads stems via StemCache and FFT via FftService (may compute/cache analysis)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "targets",
           "rust": "Vec<String>"
         }
@@ -2829,31 +2744,6 @@
         "returns": "void",
         "sideEffects": [
           "installs an IdentifyState { targets, start: Instant::now() } that drives a two-blink sequence in both the visualizer and ArtNet output"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "states",
-          "rust": "Vec<PerformDeckInput>"
-        }
-      ],
-      "domain": "render_engine",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/render_engine.rs"
-      },
-      "name": "render_set_deck_states",
-      "prose": {
-        "notes": "Hot path — called on every StateChanged frame and on every mixer state change; drives crossfade blending across decks. PerformDeckInput field names are snake_case on the wire (`deck_id`), unlike every other perform payload which is camelCase — the struct has no serde rename_all. Whole-vector replace means a deck omitted from `states` immediately drops to no state. Caller filters decks with sample_rate <= 0 and computes volume = channelFader * crossfaderWeight; time = samples / sample_rate. Errors are swallowed (.catch(() => {})).",
-        "returns": "void",
-        "sideEffects": [
-          "replaces (does not merge) RenderEngine.perform_deck_states; takes VenueAccess<Read>"
         ]
       },
       "returns": "()"
@@ -3378,41 +3268,6 @@
     },
     {
       "args": [],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "name": "stagelinq_connect",
-      "prose": {
-        "notes": "Denon/Engine DJ hardware only. The store registers its `perform_event` listener BEFORE invoking connect — required, or the first DeviceDiscovered/Connected is lost. Event payload is DeckEvent, an externally-tagged-by-`type` enum: DeviceDiscovered|Connected|StateChanged|Disconnected|Error, with StateChanged carrying DeckSnapshot { decks, crossfader, master_tempo }. DeckState/DeckSnapshot/DeckEvent fields are SNAKE_CASE on the wire (no serde rename_all) — the TS store reads deck.beat_bpm / deck.track_network_path directly.",
-        "returns": "void",
-        "sideEffects": [
-          "starts the StageLinQ discovery/connection client and stores it in the manager's Mutex<Option<Client>>",
-          "errors 'StageLinQ already running' if a client is live (not idempotent)",
-          "streams DeckEvent to the webview as the `perform_event` event for the client's lifetime"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "name": "stagelinq_disconnect",
-      "prose": {
-        "notes": "The store's disconnect() does more than call this: it cancels the auto-reconnect timer, unsubscribes its `perform_event` listener, fires render_clear_perform for the current venue, and swallows any error from this command. Ordering: unlisten → clear render → disconnect → reset store state.",
-        "returns": "void",
-        "sideEffects": [
-          "takes the client out of the manager and stops it; `perform_event` emission ceases",
-          "no-op (Ok) when nothing is running — asymmetric with connect, which errors when already running"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs"
@@ -3617,7 +3472,7 @@
       "handlers": "backend/src/dispatch/handlers/output.rs"
     },
     {
-      "commandCount": 8,
+      "commandCount": 6,
       "domain": "perform",
       "handlers": "backend/src/dispatch/handlers/perform.rs"
     },
@@ -3627,7 +3482,7 @@
       "handlers": "backend/src/dispatch/handlers/rekordbox.rs"
     },
     {
-      "commandCount": 4,
+      "commandCount": 2,
       "domain": "render_engine",
       "handlers": "backend/src/dispatch/handlers/render_engine.rs"
     },
@@ -3725,15 +3580,6 @@
     },
     {
       "emitters": [
-        "backend/src/prodjlink_manager.rs",
-        "backend/src/stagelinq_manager.rs"
-      ],
-      "listeners": [],
-      "name": "perform_event",
-      "orphan": true
-    },
-    {
-      "emitters": [
         "backend/src/python_env.rs"
       ],
       "listeners": [],
@@ -3787,9 +3633,9 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 157,
+    "commandCount": 153,
     "domainCount": 28,
-    "eventCount": 13
+    "eventCount": 12
   },
   "version": 2
 }

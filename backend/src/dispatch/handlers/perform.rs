@@ -1,28 +1,49 @@
-//! Live DJ decks: hardware telemetry (StageLinQ / Pro DJ Link), matching a
-//! deck's loaded track against the library, and compositing a matched or
-//! unmatched deck onto a perform slot.
+//! Live follow: decks playing in DJ software drive the matching scores. The
+//! session itself lives in `crate::perform`; these are its controls.
 
-use std::collections::HashSet;
-
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::perform::PerformTrackMatch;
+use crate::models::perform::{PerformSource, PerformState};
 
-// ── StageLinQ (Denon / Engine DJ) ─────────────────────────────────────────────
-
-/// Start the StageLinQ listener. Deck telemetry arrives on `perform_event`, so
-/// a caller that has not subscribed before this returns loses the first
-/// `DeviceDiscovered` / `Connected`.
-pub async fn stagelinq_connect(services: &AppServices) -> Result<(), CommandError> {
-    Ok(services.stagelinq.start(services.events.clone()).await?)
+/// Follow `source`'s decks with `venue_id`'s scores, replacing whatever was
+/// being followed.
+pub async fn perform_start(
+    services: &AppServices,
+    venue_id: String,
+    source: PerformSource,
+) -> Result<(), CommandError> {
+    Ok(services.perform.start(venue_id, source).await?)
 }
 
-/// Stop the StageLinQ listener. Idempotent — stopping when not running is fine.
-pub async fn stagelinq_disconnect(services: &AppServices) -> Result<(), CommandError> {
-    Ok(services.stagelinq.stop().await?)
+/// Stop following and clear every deck's lights. Idempotent.
+pub async fn perform_stop(services: &AppServices) -> Result<(), CommandError> {
+    services.perform.stop().await;
+    Ok(())
 }
 
-// ── Pro DJ Link (Pioneer) ─────────────────────────────────────────────────────
+/// The source, its decks and their matches, positions extrapolated to now.
+pub async fn perform_state(services: &AppServices) -> Result<PerformState, CommandError> {
+    Ok(services.perform.state())
+}
+
+/// Shift every deck's lights `latency_ms` earlier (negative: later), within
+/// ±1 s, to cover the DJ software's and the source's output latency.
+pub async fn perform_set_latency(
+    services: &AppServices,
+    latency_ms: f32,
+) -> Result<(), CommandError> {
+    services.perform.set_latency(latency_ms);
+    Ok(())
+}
+
+/// Pin a deck to a library track, or with no track, match it again. A pinned
+/// track holds until the deck loads another.
+pub async fn perform_assign_track(
+    services: &AppServices,
+    deck_id: u8,
+    track_id: Option<String>,
+) -> Result<(), CommandError> {
+    Ok(services.perform.assign(deck_id, track_id)?)
+}
 
 /// Passively listen for CDJ keepalives for 3 seconds and return what was heard.
 /// Safe to call while not connected — it performs no device-number claim.
@@ -33,230 +54,4 @@ pub async fn prodjlink_discover(
     _services: &AppServices,
 ) -> Result<Vec<prodjlink::DiscoveredDevice>, CommandError> {
     Ok(prodjlink::discover_cdjs(3000).await)
-}
-
-/// Start the Pro DJ Link listener, claiming `device_num` as this app's virtual
-/// player number. It must not collide with a real deck on the network.
-pub async fn prodjlink_connect(services: &AppServices, device_num: u8) -> Result<(), CommandError> {
-    Ok(services
-        .prodjlink
-        .start(services.events.clone(), device_num)
-        .await?)
-}
-
-/// Stop the Pro DJ Link listener. Idempotent, like its StageLinQ mirror.
-pub async fn prodjlink_disconnect(services: &AppServices) -> Result<(), CommandError> {
-    Ok(services.prodjlink.stop().await?)
-}
-
-// ── Track matching ────────────────────────────────────────────────────────────
-
-/// Match a StageLinQ deck's loaded track by the filename in its network path.
-///
-/// The track lookup is library-wide but the annotation lookup is venue-scoped,
-/// so a track can match with `has_annotations` false purely because its score
-/// lives in another venue.
-pub async fn perform_match_track(
-    services: &AppServices,
-    track_network_path: String,
-    venue_id: String,
-) -> Result<PerformTrackMatch, CommandError> {
-    let pool = &services.db.0;
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-
-    let Some(filename) = stagelinq::extract_filename_from_network_path(&track_network_path) else {
-        return Ok(PerformTrackMatch::miss(String::new()));
-    };
-    let filename = filename.to_string();
-
-    let tracks = crate::database::local::tracks::get_tracks_by_source_filename(pool, &filename)
-        .await
-        .map_err(CommandError::Internal)?;
-
-    // No tie-break: duplicate filenames resolve to an arbitrary row.
-    let Some(track) = tracks.first() else {
-        return Ok(PerformTrackMatch::miss(filename));
-    };
-
-    let scores = crate::database::local::scores::list_scores_for_track(&mut access, &track.id)
-        .await
-        .map_err(CommandError::Internal)?;
-
-    Ok(PerformTrackMatch {
-        track_id: Some(track.id.clone()),
-        has_annotations: scores.iter().any(|score| score.annotation_count > 0),
-        filename,
-    })
-}
-
-/// Match a Pro DJ Link deck's loaded track by metadata, since CDJs report no
-/// usable filename.
-///
-/// The cascade is ordered and each stage narrows the last:
-///   1. duration within ±5 s,
-///   2. BPM within 5%, allowing the ×2 / ÷2 harmonic that analyzers disagree on,
-///   3. bigram similarity of the normalized `title artist` string, best wins
-///      above 0.25.
-pub async fn perform_match_track_by_metadata(
-    services: &AppServices,
-    title: String,
-    artist: String,
-    bpm: f64,
-    duration_secs: f64,
-    venue_id: String,
-) -> Result<PerformTrackMatch, CommandError> {
-    let pool = &services.db.0;
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-    if title.is_empty() && artist.is_empty() {
-        return Ok(PerformTrackMatch::miss(String::new()));
-    }
-
-    let candidates =
-        crate::database::local::tracks::get_tracks_by_duration(pool, duration_secs, 5.0)
-            .await
-            .map_err(CommandError::Internal)?;
-
-    let bpm_filtered: Vec<_> = candidates
-        .into_iter()
-        .filter(|t| bpm_matches(t.bpm.unwrap_or(0.0), bpm))
-        .collect();
-
-    if bpm_filtered.is_empty() {
-        return Ok(PerformTrackMatch::miss(String::new()));
-    }
-
-    let query = normalize_for_match(&format!("{title} {artist}"));
-    let mut scored: Vec<_> = bpm_filtered
-        .iter()
-        .map(|t| {
-            let lib = normalize_for_match(&format!(
-                "{} {}",
-                t.title.as_deref().unwrap_or(""),
-                t.artist.as_deref().unwrap_or("")
-            ));
-            let score = bigram_similarity(&query, &lib);
-            (t, score)
-        })
-        .filter(|(_, score)| *score >= 0.25)
-        .collect();
-
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let Some(track) = scored.first().map(|(t, _)| *t) else {
-        return Ok(PerformTrackMatch::miss(String::new()));
-    };
-
-    let filename = track.source_filename.clone().unwrap_or_else(|| {
-        track
-            .file_path
-            .split('/')
-            .next_back()
-            .unwrap_or("")
-            .to_string()
-    });
-
-    let scores = crate::database::local::scores::list_scores_for_track(&mut access, &track.id)
-        .await
-        .map_err(CommandError::Internal)?;
-
-    Ok(PerformTrackMatch {
-        track_id: Some(track.id.clone()),
-        has_annotations: scores.iter().any(|score| score.annotation_count > 0),
-        filename,
-    })
-}
-
-// ── BPM + fuzzy matching helpers ──────────────────────────────────────────────
-
-/// Whether `lib_bpm` is within 5% of `src_bpm` at any of the ×1 / ×2 / ÷2
-/// harmonics analyzers disagree on. Missing BPM on either side passes through
-/// rather than filtering the candidate out.
-fn bpm_matches(lib_bpm: f64, src_bpm: f64) -> bool {
-    if lib_bpm <= 0.0 || src_bpm <= 0.0 {
-        return true;
-    }
-    let tolerance = 0.05;
-    [1.0f64, 2.0, 0.5]
-        .iter()
-        .any(|ratio| (lib_bpm * ratio - src_bpm).abs() / src_bpm <= tolerance)
-}
-
-/// Lowercase, drop everything non-alphanumeric, collapse whitespace.
-fn normalize_for_match(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c.to_lowercase().next().unwrap_or(c)
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Character-bigram Jaccard similarity in [0, 1].
-fn bigram_similarity(a: &str, b: &str) -> f64 {
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
-    }
-    if a == b {
-        return 1.0;
-    }
-    let bigrams_a: HashSet<(char, char)> = a.chars().zip(a.chars().skip(1)).collect();
-    let bigrams_b: HashSet<(char, char)> = b.chars().zip(b.chars().skip(1)).collect();
-    if bigrams_a.is_empty() || bigrams_b.is_empty() {
-        return 0.0;
-    }
-    let intersection = bigrams_a.intersection(&bigrams_b).count();
-    let union = bigrams_a.len() + bigrams_b.len() - intersection;
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
-    }
-}
-
-// ── Composite deck ────────────────────────────────────────────────────────────
-
-/// Compile directly into the matched deck. Until decks select a specific
-/// score, preserve their existing policy of combining scores for the track and
-/// venue; both migrated and legacy documents participate.
-pub async fn render_composite_deck(
-    services: &AppServices,
-    deck_id: u8,
-    track_id: String,
-    venue_id: String,
-) -> Result<(), CommandError> {
-    let update = services
-        .render_engine
-        .begin_scene_update(crate::render_engine::SceneTarget::Deck(deck_id));
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let scores =
-        crate::database::local::scores::list_scores_for_track(&mut access, &track_id).await?;
-    drop(access);
-    let mut annotations = Vec::new();
-    let mut rig = crate::eval::aim::Rig::default();
-    for score in scores {
-        let scene = crate::compositor::build_score_scene(
-            &services.db.0,
-            &services.storage,
-            &services.fixtures_root,
-            &score.id,
-            None,
-        )
-        .await?;
-        if let Some(aimed) = scene.rig() {
-            rig.extend(aimed);
-        }
-        annotations.extend(scene.annotations);
-    }
-    let scene = crate::eval::Scene::new(annotations)
-        .with_rig(rig)
-        .map_err(CommandError::from)?;
-    services.render_engine.finish_scene_update(update, scene);
-    Ok(())
 }

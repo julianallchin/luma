@@ -30,9 +30,9 @@ pub mod models;
 mod n2n_worker;
 pub mod node_graph;
 mod output;
+mod perform;
 mod preprocessing;
 pub use preprocessing::AnalysisTaskGroup;
-mod prodjlink_manager;
 pub mod python_env;
 pub mod recording;
 mod rekordbox;
@@ -42,7 +42,6 @@ mod root_worker;
 pub mod services;
 pub mod settings;
 pub mod stage_render;
-mod stagelinq_manager;
 mod stem_worker;
 pub mod storage;
 /// Record sync. `sync::service::Service` is the whole seam: a host hands it the

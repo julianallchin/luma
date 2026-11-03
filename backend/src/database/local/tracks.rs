@@ -901,37 +901,34 @@ pub async fn get_track_bar_classifications_raw(
     Ok(row)
 }
 
-/// Fetch tracks whose duration is within `tolerance_secs` of `target_duration`.
-/// Also joins `track_beats` to include BPM for subsequent filtering.
+/// A visible track with its BPM, as the live-follow matcher compares them.
 #[derive(sqlx::FromRow)]
 pub struct TrackWithBpm {
     pub id: String,
     pub title: Option<String>,
     pub artist: Option<String>,
-    pub duration_seconds: Option<f64>,
-    pub file_path: String,
-    pub source_filename: Option<String>,
     pub bpm: Option<f64>,
 }
 
-pub async fn get_tracks_by_duration(
+/// Visible tracks to match a deck's track against: every one, or with
+/// `duration` as `(seconds, tolerance)`, those within the tolerance.
+pub async fn get_match_candidates(
     pool: &SqlitePool,
-    target_duration: f64,
-    tolerance_secs: f64,
+    duration: Option<(f64, f64)>,
 ) -> Result<Vec<TrackWithBpm>, String> {
+    let (target, tolerance) = duration.unzip();
     sqlx::query_as::<_, TrackWithBpm>(
-        "SELECT t.id, t.title, t.artist, t.duration_seconds, t.file_path, t.source_filename,
-                tb.bpm
+        "SELECT t.id, t.title, t.artist, tb.bpm
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
-         WHERE ABS(COALESCE(t.duration_seconds, 0) - ?) <= ?",
+         WHERE ?1 IS NULL OR ABS(COALESCE(t.duration_seconds, 0) - ?1) <= ?2",
     )
-    .bind(target_duration)
-    .bind(tolerance_secs)
+    .bind(target)
+    .bind(tolerance)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to fetch tracks by duration: {}", e))
+    .map_err(|e| format!("Failed to fetch tracks to match: {e}"))
 }
 
 pub async fn get_tracks_by_source_filename(

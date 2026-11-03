@@ -4663,6 +4663,7 @@ dependencies = [
  "realfft",
  "rekordbox",
  "reqwest 0.12.28",
+ "rosc",
  "schemars 1.2.2",
  "sentry",
  "serde",
@@ -7378,6 +7379,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4045a00dc327d084a2bbf126976e14125b54f23bd30511d45b842eba76c52d74"
 dependencies = [
  "str_indices",
+]
+
+[[package]]
+name = "rosc"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd37602e1513794e952274082d074e8d31aa7f64d047e3acb746c91db40600a5"
+dependencies = [
+ "byteorder",
+ "nom 7.1.3",
+ "time",
 ]
 
 [[package]]

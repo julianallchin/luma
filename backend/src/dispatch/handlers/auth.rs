@@ -218,6 +218,7 @@ pub async fn set_session_item(
     let workspaces = &services.workspaces;
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
+    let perform = &services.perform;
     let controller = &services.controller;
     let mixer = &services.mixer;
     let analysis_tasks = &services.analysis_tasks;
@@ -279,6 +280,7 @@ pub async fn set_session_item(
         crate::database::local::auth::suspend_write_admission(&db.0, &admission_backup).await?;
         let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
         host_audio.unload();
+        perform.stop().await;
         render_engine.reset_for_identity_switch();
         if let Err(error) = controller.disconnect() {
             return Err(rollback_auth_switch(
@@ -439,6 +441,7 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let workspaces = &services.workspaces;
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
+    let perform = &services.perform;
     let controller = &services.controller;
     let mixer = &services.mixer;
     let analysis_tasks = &services.analysis_tasks;
@@ -486,6 +489,7 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     // effects from completing after prior-principal capabilities are cleared.
     let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
     host_audio.unload();
+    perform.stop().await;
     render_engine.reset_for_identity_switch();
     controller.disconnect()?;
     mixer.disconnect()?;

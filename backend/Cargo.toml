@@ -57,6 +57,8 @@ luma-sync = { path = "crates/sync" }
 sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# OSC, to hear rkbx_link (MIT OR Apache-2.0).
+rosc = "0.11.4"
 thiserror = "2"
 indicatif = "0.17"
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
@@ -68,7 +70,7 @@ realfft = "3.5"
 rayon = "1.10"
 symphonia = { version = "0.5", features = ["mp3", "flac", "wav", "aac", "ogg", "vorbis"] }
 cpal = "0.15"
-tokio = { version = "1", features = ["macros", "sync", "time", "rt", "signal", "process", "io-util"] }
+tokio = { version = "1", features = ["macros", "sync", "time", "rt", "signal", "process", "io-util", "net"] }
 async-trait = "0.1"
 futures-util = "0.3"
 # USB DMX dongles (`src/output/usb.rs`). Pure Rust, so no libusb to install.

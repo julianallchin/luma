@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**157 commands** across **28 domains** · **13 events**
+**153 commands** across **28 domains** · **12 events**
 
 ## Domains
 
@@ -30,9 +30,9 @@ name.
 | `midi` | 8 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
-| `perform` | 8 | `backend/src/dispatch/handlers/perform.rs` |
+| `perform` | 6 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
-| `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
+| `render_engine` | 2 | `backend/src/dispatch/handlers/render_engine.rs` |
 | `scores` | 11 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
@@ -41,7 +41,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **157** | |
+| **total** | **153** | |
 
 ## Commands
 
@@ -236,14 +236,12 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `stagelinq_connect` | — | `()` |
-| `stagelinq_disconnect` | — | `()` |
+| `perform_start` | `venueId: String`<br>`source: PerformSource` | `()` |
+| `perform_stop` | — | `()` |
+| `perform_state` | — | `PerformState` |
+| `perform_set_latency` | `latencyMs: f32` | `()` |
+| `perform_assign_track` | `deckId: u8`<br>`trackId: Option<String>` | `()` |
 | `prodjlink_discover` | — | `Vec<DiscoveredDevice>` |
-| `prodjlink_connect` | `deviceNum: u8` | `()` |
-| `prodjlink_disconnect` | — | `()` |
-| `perform_match_track` | `trackNetworkPath: String`<br>`venueId: String` | `PerformTrackMatch` |
-| `perform_match_track_by_metadata` | `title: String`<br>`artist: String`<br>`bpm: f64`<br>`durationSecs: f64`<br>`venueId: String` | `PerformTrackMatch` |
-| `render_composite_deck` | `deckId: u8`<br>`trackId: String`<br>`venueId: String` | `()` |
 
 ### `rekordbox`
 
@@ -260,8 +258,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `render_set_deck_states` | `venueId: String`<br>`states: Vec<PerformDeckInput>` | `()` |
-| `render_clear_perform` | `venueId: String` | `()` |
 | `render_clear_active_layer` | `venueId: String` | `()` |
 | `render_identify` | `targets: Vec<String>` | `()` |
 
@@ -359,7 +355,6 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `midi_learn_captured` | 1 | 0 | **orphan** |
 | `mixer_learned` | 1 | 0 | **orphan** |
 | `mixer_state` | 1 | 0 | **orphan** |
-| `perform_event` | 2 | 0 | **orphan** |
 | `python-env-progress` | 1 | 0 | **orphan** |
 | `track-import-state` | 2 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 0 | **orphan** |

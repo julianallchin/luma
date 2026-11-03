@@ -1,34 +1,10 @@
-//! Live render-engine control: per-deck perform state, layer teardown, and the
-//! identify blink. Every one of these is authorized by a venue lease and then
-//! mutates in-memory render state — nothing here writes to the database.
+//! Live render-engine control: layer teardown and the identify blink. Every
+//! one of these is authorized by a venue lease and then mutates in-memory
+//! render state — nothing here writes to the database.
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::dispatch::{AppServices, CommandError};
-use crate::render_engine::{authorize_identify_targets, PerformDeckInput};
-
-/// Batch-update per-deck render states (time + volume) from the Perform page.
-/// Called every StateChanged frame to drive real-time crossfade blending.
-pub async fn render_set_deck_states(
-    services: &AppServices,
-    venue_id: String,
-    states: Vec<PerformDeckInput>,
-) -> Result<(), CommandError> {
-    let _access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    services.render_engine.set_perform_deck_states(states);
-    Ok(())
-}
-
-/// Clear all perform state (layers + deck states). Called on disconnect/unmount.
-pub async fn render_clear_perform(
-    services: &AppServices,
-    venue_id: String,
-) -> Result<(), CommandError> {
-    let _access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    services.render_engine.clear_perform();
-    Ok(())
-}
+use crate::render_engine::authorize_identify_targets;
 
 /// Clear the active layer so the render loop emits nothing. Called when
 /// navigating away from the track/pattern editor.
