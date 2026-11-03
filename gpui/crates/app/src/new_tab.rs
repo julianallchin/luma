@@ -25,6 +25,8 @@ use crate::Luma;
 pub(crate) enum Entry {
     /// The venue tab. `name` is the venue's, shown under the word.
     Venue { name: SharedString },
+    /// The venue's Perform tab.
+    Perform,
     /// A track, which opens its scores.
     Track(TrackBrowserRow),
     /// One score of `track` in this venue.
@@ -43,6 +45,7 @@ impl combo::Row for Entry {
     fn key(&self) -> SharedString {
         match self {
             Self::Venue { .. } => "new-tab:venue".into(),
+            Self::Perform => "new-tab:perform".into(),
             Self::Track(track) => format!("new-tab:track:{}", track.id).into(),
             Self::Score { score, .. } => format!("new-tab:score:{}", score.id).into(),
         }
@@ -51,6 +54,7 @@ impl combo::Row for Entry {
     fn label(&self) -> SharedString {
         match self {
             Self::Venue { .. } => "Venue".into(),
+            Self::Perform => "Perform".into(),
             Self::Track(track) => crate::tracks::track_name(track).into(),
             Self::Score { score, title, .. } => format!("#{} · {title}", score.ordinal).into(),
         }
@@ -61,6 +65,7 @@ impl combo::Row for Entry {
     fn matches(&self, query: &str) -> bool {
         match self {
             Self::Venue { name } => "venue".contains(query) || name.to_lowercase().contains(query),
+            Self::Perform => "perform".contains(query),
             Self::Track(track) => crate::tracks::matches(track, query),
             Self::Score { .. } => self.label().to_lowercase().contains(query),
         }
@@ -69,6 +74,11 @@ impl combo::Row for Entry {
     fn content(&self) -> AnyElement {
         let (lead, title, subtitle) = match self {
             Self::Venue { name } => (glyph(IconName::Cpu), "Venue".into(), Some(name.clone())),
+            Self::Perform => (
+                glyph(IconName::Sliders),
+                "Perform".into(),
+                Some("Follow the DJ, play the faders".into()),
+            ),
             Self::Track(track) => (
                 album_art(track.album_art_path.as_deref(), LEAD).into_any_element(),
                 SharedString::from(crate::tracks::track_name(track)),
@@ -142,9 +152,13 @@ impl Luma {
         let Some(browser) = &self.sidebar else {
             return;
         };
-        let rows = std::iter::once(Entry::Venue {
-            name: browser.venue_name().to_string().into(),
-        })
+        let rows = [
+            Entry::Venue {
+                name: browser.venue_name().to_string().into(),
+            },
+            Entry::Perform,
+        ]
+        .into_iter()
         .chain(browser.venue_rows().cloned().map(Entry::Track))
         .collect();
         let root = Level::new(
@@ -239,6 +253,10 @@ impl Luma {
             combo::Event::Pick(Entry::Venue { .. }) => {
                 self.close_new_tab(window, cx);
                 self.open_venue_tab(None, cx);
+            }
+            combo::Event::Pick(Entry::Perform) => {
+                self.close_new_tab(window, cx);
+                self.open_perform_tab(None, cx);
             }
             combo::Event::Pick(Entry::Score { track, score, .. }) => {
                 self.close_new_tab(window, cx);

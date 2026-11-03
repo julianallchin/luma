@@ -53,13 +53,16 @@ pub(crate) enum Target {
     },
     /// One venue's stage, fixture inventory and groups. Singleton per venue.
     Venue { venue: String },
+    /// One venue's live show: the decks being followed and the faders.
+    /// Singleton per venue.
+    Perform { venue: String },
 }
 
 impl Target {
     /// The venue whose tab set this tab belongs to.
     pub(crate) fn venue(&self) -> &str {
         match self {
-            Self::Score { venue, .. } | Self::Venue { venue } => venue,
+            Self::Score { venue, .. } | Self::Venue { venue } | Self::Perform { venue } => venue,
         }
     }
 
@@ -71,6 +74,7 @@ impl Target {
         match self {
             Self::Score { .. } => crate::keymap::context::TRACK_EDITOR,
             Self::Venue { .. } => crate::keymap::context::PATCH,
+            Self::Perform { .. } => crate::keymap::context::PERFORM,
         }
     }
 
@@ -83,6 +87,7 @@ impl Target {
         match self {
             Self::Score { score, .. } => format!("score:{score}"),
             Self::Venue { venue } => format!("venue:{venue}"),
+            Self::Perform { venue } => format!("perform:{venue}"),
         }
     }
 }
@@ -412,6 +417,10 @@ mod tests {
                 venue: "v".to_string(),
             }
             .element_key(),
+            Target::Perform {
+                venue: "v".to_string(),
+            }
+            .element_key(),
         ];
         let unique: std::collections::HashSet<&String> = keys.iter().collect();
         assert_eq!(unique.len(), keys.len());
@@ -422,6 +431,10 @@ mod tests {
         let contexts = [
             track("a").key_context(),
             Target::Venue {
+                venue: "v".to_string(),
+            }
+            .key_context(),
+            Target::Perform {
                 venue: "v".to_string(),
             }
             .key_context(),

@@ -33,7 +33,7 @@ test("switching venues parks the venue's tabs and brings them back", () => {
   const box = offer.find({ role: "card", label: "New tab" }).bounds;
   const listed = offer.findAll((n) => n.role === "row" && n.bounds.y >= box.y && n.bounds.x >= box.x)
     .map((n) => n.label);
-  expect(listed).toEqual(["Venue", "Beta Room Track"]);
+  expect(listed).toEqual(["Venue", "Perform", "Beta Room Track"]);
   app.key("escape");
 
   // Parked is not closed: going back brings Alpha's tab with it.

@@ -69,7 +69,7 @@ pub(crate) fn scope(target: &Target) -> ThreadScope {
             track,
             score,
         } => ThreadScope::track(track, venue, score),
-        Target::Venue { venue } => ThreadScope::venue(venue),
+        Target::Venue { venue } | Target::Perform { venue } => ThreadScope::venue(venue),
     }
 }
 
@@ -91,6 +91,7 @@ impl Body {
         match self {
             Self::TrackEditor(state) => &state.chat,
             Self::Patch(state) => &state.chat,
+            Self::Perform(state) => &state.chat,
         }
     }
 
@@ -98,6 +99,7 @@ impl Body {
         match self {
             Self::TrackEditor(state) => &mut state.chat,
             Self::Patch(state) => &mut state.chat,
+            Self::Perform(state) => &mut state.chat,
         }
     }
 }
@@ -296,6 +298,7 @@ impl Luma {
             match &target {
                 Target::Score { .. } => self.reload_score_contents(target.clone(), cx),
                 Target::Venue { venue } => self.reload_patch(venue.clone(), cx),
+                Target::Perform { .. } => {}
             }
         }
     }

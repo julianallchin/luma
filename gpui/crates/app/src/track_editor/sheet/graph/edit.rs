@@ -390,7 +390,7 @@ pub(crate) fn source_label(kind: Kind) -> &'static str {
         Kind::Time => "Over time",
         Kind::Space => "Over space",
         Kind::Along => "Along each element",
-        Kind::Control => "From a live control",
+        Kind::Control => "Live control",
         other => other.label(),
     }
 }

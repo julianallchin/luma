@@ -113,6 +113,7 @@ impl Overlay {
 pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
     Patch(Box<patch::Patch>),
+    Perform(Box<crate::perform::Perform>),
 }
 
 impl Body {
@@ -121,6 +122,7 @@ impl Body {
         match self {
             Self::TrackEditor(state) => state.title().into(),
             Self::Patch(_) => "Venue".into(),
+            Self::Perform(_) => "Perform".into(),
         }
     }
 }
@@ -265,6 +267,7 @@ impl Luma {
                 }
             }
             Body::Patch(_) => {}
+            Body::Perform(state) => self.close_perform(&state, cx),
         }
     }
 
@@ -1372,7 +1375,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     let layout = matches!(&*body, Body::Patch(_));
     let graph_page = match &mut *body {
         Body::TrackEditor(state) => direct && state.clip_graph_shown(),
-        Body::Patch(_) => false,
+        Body::Patch(_) | Body::Perform(_) => false,
     };
     let mut keys = gpui::KeyContext::default();
     // Direct's graph page is the clip graph's key scope, not the timeline's:
@@ -1398,6 +1401,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Patch(state) => patch::patch(state, &entity).into_any_element(),
+        Body::Perform(state) => crate::perform::perform(state, &entity),
     };
     div()
         .flex_1()

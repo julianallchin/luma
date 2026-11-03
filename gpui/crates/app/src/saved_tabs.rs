@@ -199,6 +199,7 @@ impl Luma {
                             }
                         }
                         Target::Venue { .. } => this.open_venue_tab(thread, cx),
+                        Target::Perform { .. } => this.open_perform_tab(thread, cx),
                     }
                 }
                 if let Some(front) = set.front.and_then(|index| set.tabs.get(index)) {

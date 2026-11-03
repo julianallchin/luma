@@ -133,3 +133,52 @@ fn slab(id: &SharedString, value: f32, fraction: f32, width: f32) -> Div {
                 .agent_node(Role::Text, format!("{id} = {value}")),
         )
 }
+
+/// The vertical fader: [`luma_slider`] stood up, for the Perform screen, where
+/// a row of them reads like the faders of a console. 0–1, filled from the
+/// bottom, the same drag rules: absolute, and only once the pointer moves.
+pub fn luma_fader(
+    id: impl Into<SharedString>,
+    value: f32,
+    height: f32,
+    on_change: impl Fn(f32, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let id = id.into();
+    let fraction = value.clamp(0., 1.);
+    let moved = id.clone();
+    div()
+        .relative()
+        .overflow_hidden()
+        .flex_shrink_0()
+        .w(px(FADER_WIDTH))
+        .h(px(height))
+        .rounded(px(radius::ROW))
+        .border_1()
+        .border_color(glass::hairline(0.08))
+        .bg(glass::ink(0.03))
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .w_full()
+                .h(relative(fraction))
+                .bg(ladder::primary())
+                .opacity(0.35),
+        )
+        // The value, published for a driver, as the slider's readout is.
+        .child(div().agent_node(Role::Text, format!("{id} = {fraction:.2}")))
+        .id(ElementId::Name(id.clone()))
+        .cursor_ns_resize()
+        .on_drag(SliderDrag { id }, |_, _, _, cx| {
+            cx.stop_propagation();
+            cx.new(|_| DragGhost)
+        })
+        .on_drag_move(drag_fraction(
+            moved,
+            move |at, _: &SliderDrag, window, cx| on_change(1. - at.y, window, cx),
+        ))
+}
+
+/// How wide a fader is: a thumb's width, so a row of them fits under a hand.
+const FADER_WIDTH: f32 = 44.;

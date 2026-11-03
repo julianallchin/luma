@@ -692,7 +692,7 @@ impl Luma {
     pub(crate) fn front_track(&self) -> Option<&str> {
         match self.workspace.active()? {
             Target::Score { track, .. } => Some(track),
-            Target::Venue { .. } => None,
+            Target::Venue { .. } | Target::Perform { .. } => None,
         }
     }
 }
@@ -834,6 +834,9 @@ fn tracks_level(
     let venue = Target::Venue {
         venue: state.venue_id.clone(),
     };
+    let perform = Target::Perform {
+        venue: state.venue_id.clone(),
+    };
     div()
         .size_full()
         .flex()
@@ -842,6 +845,11 @@ fn tracks_level(
         .child(venue_row(
             shell.workspace.active() == Some(&venue),
             statuses.get(&venue).copied(),
+            app,
+        ))
+        .child(perform_row(
+            shell.workspace.active() == Some(&perform),
+            statuses.get(&perform).copied(),
             app,
         ))
         .children(
@@ -1169,6 +1177,26 @@ fn venue_row(front: bool, status: Option<TabStatus>, app: &Entity<Luma>) -> Div 
                 .agent_node(Role::Row, VENUE_ROW),
         )
 }
+
+/// The venue's Perform row, under its setup row: opens the Perform tab.
+fn perform_row(front: bool, status: Option<TabStatus>, app: &Entity<Luma>) -> Div {
+    let open = app.clone();
+    div().flex_shrink_0().px(px(PAD_X)).child(
+        float::nav_row(RowState::of(front, false), "perform-row")
+            .id("perform-row")
+            .on_click(move |_, _, cx| open.update(cx, |this, cx| this.open_perform_tab(None, cx)))
+            .child(
+                gpui_component::Icon::new(luma_ui::icons::IconName::Sliders)
+                    .size(px(HEADER_ICON))
+                    .text_color(luma_ui::glass::ink(if front { 0.95 } else { 0.7 })),
+            )
+            .child(div().flex_1().min_w(px(0.)).truncate().child(PERFORM_ROW))
+            .children(status.map(|status| crate::agent::status_dot(status, PERFORM_ROW)))
+            .agent_node(Role::Row, PERFORM_ROW),
+    )
+}
+
+const PERFORM_ROW: &str = "Perform";
 
 /// What the venue's row says. One spelling: the row and its status dot are
 /// both named by it.

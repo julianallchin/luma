@@ -3636,7 +3636,7 @@ impl Luma {
         // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => Some(state.lit()),
-            Some(Body::TrackEditor(_) | Body::Patch(_)) | None => None,
+            Some(Body::TrackEditor(_) | Body::Patch(_) | Body::Perform(_)) | None => None,
         };
         let name = self
             .sidebar

@@ -71,7 +71,7 @@ test("the browser filters a seeded library by venue, ownership and search", () =
     return {
       count: shot.find((node) => /^\d+ songs$/.test(node.label)).label,
       // The songs; the venue's own row leads them and is not a track.
-      rows: shot.findAll({ role: "row" }).map((node) => node.label).filter((label) => label !== "Venue setup"),
+      rows: shot.findAll({ role: "row" }).map((node) => node.label).filter((label) => label !== "Venue setup" && label !== "Perform"),
     };
   };
   const press = (role, label) => {

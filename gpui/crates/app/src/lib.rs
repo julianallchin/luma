@@ -48,6 +48,7 @@ mod keymap;
 mod library;
 mod new_tab;
 mod patch;
+mod perform;
 mod picker_preview;
 mod saved_cameras;
 mod saved_tabs;

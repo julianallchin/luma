@@ -30,6 +30,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Play | media-play | 3328 |
 | Plus | plus | 5963 |
 | SquareTerminal | square-terminal | 4388 |
+| Sliders | sliders-vertical | 6022 |
 | Stage | stage | 6161 |
 | Search | magnifier | 2724 |
 | ThumbsDown | thumbs-down | 1807 |

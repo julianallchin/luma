@@ -297,7 +297,7 @@ mod tests {
 
         let gone = |target: &Target| match target {
             Target::Score { score, .. } => score.contains("gone"),
-            Target::Venue { .. } => false,
+            Target::Venue { .. } | Target::Perform { .. } => false,
         };
         let mut dropped: Vec<&str> = parked
             .retain(&mut live, |target| !gone(target))

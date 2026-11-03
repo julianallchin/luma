@@ -745,5 +745,6 @@ fn kind_icon(target: &Target) -> IconName {
     match target {
         Target::Score { .. } => IconName::Play,
         Target::Venue { .. } => IconName::Cpu,
+        Target::Perform { .. } => IconName::Sliders,
     }
 }

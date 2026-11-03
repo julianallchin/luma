@@ -53,9 +53,9 @@ test("the keyboard walks from a song to its score and opens it", () => {
   until("the songs", (s) => s.find({ role: "row", label: "Borealis" }) !== undefined);
 
   const root = open();
-  // "Venue" leads; the songs follow in the sidebar's order.
-  expect(root.rows[0]).toBe("Venue");
-  expect(root.rows.slice(1).sort()).toEqual(["Aurora", "Borealis"]);
+  // "Venue" and "Perform" lead; the songs follow in the sidebar's order.
+  expect(root.rows.slice(0, 2)).toEqual(["Venue", "Perform"]);
+  expect(root.rows.slice(2).sort()).toEqual(["Aurora", "Borealis"]);
 
   // Typed straight into the field: the caret is there without a click. The
   // match is the add-track dialog's, so an artist finds its song.
@@ -99,9 +99,9 @@ test("typing venue and enter opens the venue tab; escape closes", () => {
   nav.venue("Test Venue");
   until("the songs", (s) => s.find({ role: "row", label: "Borealis" }) !== undefined);
 
-  // Escape closes from any level.
+  // Escape closes from any level. Down past Venue and Perform, to a song.
   open();
-  app.key("down enter");
+  app.key("down down enter");
   until("a level in", (s) => {
     const rows = box(s)?.rows ?? [];
     return rows.length > 0 && rows.every((r) => r.startsWith("#"));

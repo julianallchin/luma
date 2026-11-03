@@ -36,6 +36,7 @@ pub enum IconName {
     Undo,
     RotateLeft,
     RotateRight,
+    Sliders,
 }
 
 impl IconNamed for IconName {
@@ -72,6 +73,7 @@ impl IconNamed for IconName {
             Self::Undo => "nucleo/undo.svg".into(),
             Self::RotateLeft => "nucleo/arrow-rotate-anticlockwise.svg".into(),
             Self::RotateRight => "nucleo/arrow-rotate-clockwise.svg".into(),
+            Self::Sliders => "nucleo/sliders-vertical.svg".into(),
         }
     }
 }
@@ -87,6 +89,9 @@ impl AssetSource for Assets {
             "nucleo/minimize.svg" => Some(include_bytes!("../assets/nucleo/minimize.svg")),
             "nucleo/minus.svg" => Some(include_bytes!("../assets/nucleo/minus.svg")),
             "nucleo/stage.svg" => Some(include_bytes!("../assets/nucleo/stage.svg")),
+            "nucleo/sliders-vertical.svg" => {
+                Some(include_bytes!("../assets/nucleo/sliders-vertical.svg"))
+            }
             "nucleo/magnifier.svg" => Some(include_bytes!("../assets/nucleo/magnifier.svg")),
             "nucleo/camera.svg" => Some(include_bytes!("../assets/nucleo/camera.svg")),
             "nucleo/thumbs-up.svg" => Some(include_bytes!("../assets/nucleo/thumbs-up.svg")),
@@ -192,6 +197,7 @@ impl AssetSource for Assets {
                 "nucleo/robot.svg",
                 "nucleo/sidebar-left.svg",
                 "nucleo/sidebar-right.svg",
+                "nucleo/sliders-vertical.svg",
                 "nucleo/square-terminal.svg",
                 "nucleo/thumbs-up.svg",
                 "nucleo/thumbs-down.svg",

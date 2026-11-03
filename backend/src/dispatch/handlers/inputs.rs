@@ -2,7 +2,7 @@
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::dispatch::{AppServices, CommandError};
-use crate::inputs::{Binding, InputState, Mode};
+pub use crate::inputs::{Address, Binding, InputState, LastInput, Mode};
 
 async fn open(services: &AppServices, venue_id: &str) -> Result<(), CommandError> {
     let _access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue_id)).await?;

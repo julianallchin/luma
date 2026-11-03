@@ -7,9 +7,10 @@ region model of `comet-shell.md` §0 and §2 where they disagree.
 
 1. **A venue is a project.** Each venue has its own tab set. Switching venue
    parks the whole set and brings back that venue's set as it was.
-2. **A tab is a score or the venue.** Tab key:
-   `Score { venue, track, score }` or `Venue { venue }`. Many scores can be
-   open at once, also two scores of the same track. One venue tab per venue.
+2. **A tab is a score, the venue or its Perform screen.** Tab key:
+   `Score { venue, track, score }`, `Venue { venue }` or `Perform { venue }`.
+   Many scores can be open at once, also two scores of the same track. One
+   venue tab and one Perform tab per venue. Perform's chats are venue chats.
 3. **The chat lives inside the tab.** Each tab has its own chat panel and
    remembers which chat it has open, its scroll and its draft. Switching tabs
    never stops a running turn.
@@ -24,7 +25,7 @@ region model of `comet-shell.md` §0 and §2 where they disagree.
    picker. Viewing a finished tab clears its dot. Answering clears "needs
    input".
 7. **The sidebar is a launcher.** It shows the venue row ("Venue setup"), the
-   venue's folders, and all its songs with their scores. A click opens that
+   Perform row, the venue's folders, and all its songs with their scores. A click opens that
    tab, or brings it to the front. The sidebar no longer owns tab sets. A click on a score
    puts the sidebar away after about one double-click interval (400 ms), so
    a double-click on the score's name still reaches the row and renames it.

@@ -57,6 +57,7 @@ pub(crate) mod context {
     pub const VISUALIZER_FULLSCREEN: &str = "VisualizerFullscreen";
     pub const PATCH: &str = "Patch";
     pub const STAGE: &str = "Stage";
+    pub const PERFORM: &str = "Perform";
 
     // Overlay contexts. One overlay is up at a time, over all three regions.
     pub const VENUES: &str = "Venues";
