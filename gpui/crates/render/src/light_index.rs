@@ -1960,7 +1960,7 @@ mod tests {
             let gpu_masks: &[u32] = bytemuck::cast_slice(&view);
             let words = reference.tile_masks.len();
             // Scope: this build never runs `surface_fill`, so the two surface
-            // bucket planes are unwritten here; `gpu.rs` covers them against
+            // bucket planes are unwritten here; `gpu/tests` covers them against
             // an unculled render (`surface_depth_culling_preserves_...`).
             assert_eq!(gpu_masks.len(), words * MASK_PLANES);
             assert_eq!(

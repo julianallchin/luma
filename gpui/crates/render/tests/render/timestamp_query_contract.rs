@@ -1,5 +1,5 @@
 //! Every sample index of a timestamp query set records, high indices
-//! included: the layout in `gpu.rs::QUERY_COUNT` is free to use as many as it
+//! included: the layout in `gpu/mod.rs::QUERY_COUNT` is free to use as many as it
 //! declares. Pinned against a standalone device so a wgpu or driver change
 //! that breaks it is attributed here rather than in the renderer.
 //!

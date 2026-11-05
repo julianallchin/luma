@@ -289,7 +289,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
 
 **Renderer**
 
-- `MSAA_SAMPLES` (`crates/render/src/gpu.rs`) cannot simply be 2: Metal
+- `MSAA_SAMPLES` (`crates/render/src/gpu/mod.rs`) cannot simply be 2: Metal
   refuses 2 samples on `Rgba16Float` unless the device requests
   `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`.
 - wgpu-hal never turns off Metal's fast math, so WGSL cannot promise a float

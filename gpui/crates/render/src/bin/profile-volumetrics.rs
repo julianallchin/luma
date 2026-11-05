@@ -1269,7 +1269,7 @@ mod provenance_tests {
 
     #[test]
     fn provenance_scope_accepts_evidence_and_excludes_its_output() {
-        assert!(relevant_path("gpui/crates/render/src/gpu.rs"));
+        assert!(relevant_path("gpui/crates/render/src/gpu/mod.rs"));
         assert!(relevant_path(
             "gpui/crates/render/goldens/volumetric-stress-32.png"
         ));

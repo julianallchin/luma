@@ -51,7 +51,7 @@ recording nearly free to build on top:
 `venue.render` warm at 960×540 costs ~150 ms. Almost none of that is the GPU.
 
 The renderer's cost model, from the code: `subframes` loops **only the haze pass**
-(`gpu.rs:2971`); depth, scene, shadow, temporal and composite run once. So haze
+(`submit_readback` in `gpu/encode.rs`); depth, scene, shadow, temporal and composite run once. So haze
 ≈ `subframes × haze_steps × (haze_scale² × pixels)` and everything else is paid once.
 Offscreen uses `HAZE_RESOLUTION = 1.0` and `subframes = 16`; live uses `0.5` and `2`.
 That is 4× the march invocations and 8× the passes — 32× the live haze cost.

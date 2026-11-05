@@ -459,7 +459,7 @@ density (as the stage does). Every measurement above was taken at a fixed
 
 `RenderSettings::quality` is `High` (the reference) or `Low` (a laptop GPU).
 The View popover's Viewport section sets it; it is the `stage_low_quality`
-device setting. The renderer turns it into a `QualityBudget` in `gpu.rs`.
+device setting. The renderer turns it into a `QualityBudget` in `gpu/encode.rs`.
 
 Both levels:
 
