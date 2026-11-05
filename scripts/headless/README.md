@@ -6,7 +6,7 @@ These tools run Luma's backend without a window. The binaries live in
 ## Build
 
 ```sh
-cargo +1.97.1 build --manifest-path backend/Cargo.toml \
+cargo build --manifest-path backend/Cargo.toml \
     --bin agent_harness --bin luma-mcp --bin luma-agent --bin render_venue
 ```
 
@@ -59,7 +59,7 @@ To add a command, add it to `dispatch`. The harness needs no change.
 ```sh
 backend/target/debug/luma-agent --thread THREAD_ID --prompt 'Continue the score'
 backend/target/debug/luma-agent --track TRACK_ID --venue VENUE_ID \
-    --engine claude --prompt 'Author the whole track' --sync
+    --engine claude --prompt 'Author the whole track'
 ```
 
 | flag | meaning |
@@ -70,10 +70,11 @@ backend/target/debug/luma-agent --track TRACK_ID --venue VENUE_ID \
 | `--prompt TEXT` | Required. |
 | `--engine api\|codex\|claude` | `api` uses Luma's provider settings. `codex` and `claude` use the installed CLIs and their own accounts. |
 | `--model NAME`, `--effort LEVEL\|auto` | Override the thread's selection. |
-| `--sync` | Sync before and after the turn. |
 
 The turn uses the same service as the in-app chat. Turn events go to stdout as
-JSON lines. The score and thread ids go to stderr.
+JSON lines. The score and thread ids go to stderr. A headless host does not
+run sync: what the turn writes uploads the next time the app opens the same
+library.
 
 ### `author_score.ts`
 
@@ -84,7 +85,7 @@ bun run scripts/headless/author_score.ts --usage-only [--runner claude|codex]
 
 The script resolves a track and a venue by id or name with `luma-mcp`'s `find`
 tool. It checks the subscription quota and then starts `luma-agent` with a
-fixed authoring prompt. It passes `--sync` unless `--fixture-principal` is set.
+fixed authoring prompt.
 
 | flag | meaning |
 |---|---|
@@ -126,7 +127,7 @@ rebuilt. If it was, the client must restart the MCP connection.
 ## `render_venue`: render a saved venue
 
 ```sh
-cargo +1.97.1 run --manifest-path backend/Cargo.toml --bin render_venue -- \
+cargo run --manifest-path backend/Cargo.toml --bin render_venue -- \
     --venue-id UUID --output /tmp/venue.png --view front
 ```
 

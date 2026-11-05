@@ -165,7 +165,7 @@ if (options.usageOnly) {
     process.exit(0);
 }
 const binary = process.env.LUMA_AGENT_BIN ?? join(REPO_ROOT, "backend/target/debug/luma-agent");
-if (!existsSync(binary)) throw new Error(`Build luma-agent first: cargo +1.97.1 build --manifest-path backend/Cargo.toml --bin luma-agent`);
+if (!existsSync(binary)) throw new Error(`Build luma-agent first: cargo build --manifest-path backend/Cargo.toml --bin luma-agent`);
 if (!options.skipUsageCheck) await gate(runner);
 const binding = await resolveBinding(options);
 const prompt = [
@@ -179,7 +179,6 @@ const prompt = [
 const args = [...mcpArgs(options.host), "--track", binding.trackId, "--venue", binding.venueId,
     "--engine", options.runner, "--prompt", prompt];
 if (options.model) args.push("--model", options.model);
-if (!options.host.fixturePrincipal) args.push("--sync");
 const child = spawn(binary, args, { stdio: "inherit", cwd: REPO_ROOT });
 const code = await new Promise<number>((resolve, reject) => {
     child.once("error", reject);

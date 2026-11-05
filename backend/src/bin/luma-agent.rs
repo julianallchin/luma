@@ -20,16 +20,11 @@ async fn run() -> Result<(), String> {
     let (mut thread, mut scope, mut prompt, mut engine) = (None, None, None, None);
     let (mut track, mut venue, mut model) = (None, None, None);
     let mut host = Vec::new();
-    let mut sync = false;
     let mut effort = None;
     while let Some(flag) = args.next() {
         if flag == "--help" {
-            println!("luma-agent (--thread ID | --scope JSON | --track ID --venue ID) --prompt TEXT [--engine api|codex|claude] [--model NAME] [--effort LEVEL|auto] [--sync] [host options]\n\n--scope creates a conversation from a serialized ThreadScope. --thread continues an existing one.\nHost options: --config-dir, --fixtures-root, --cache-dir, --fixture-principal.");
+            println!("luma-agent (--thread ID | --scope JSON | --track ID --venue ID) --prompt TEXT [--engine api|codex|claude] [--model NAME] [--effort LEVEL|auto] [host options]\n\n--scope creates a conversation from a serialized ThreadScope. --thread continues an existing one.\nHost options: --config-dir, --fixtures-root, --cache-dir, --fixture-principal.");
             return Ok(());
-        }
-        if flag == "--sync" {
-            sync = true;
-            continue;
         }
         let value = args
             .next()
@@ -67,9 +62,6 @@ async fn run() -> Result<(), String> {
     let services = boot(&HostConfig::parse_args(host.into_iter())?)
         .await?
         .into_shared();
-    if sync {
-        sync_library(&services).await?;
-    }
     if let (Some(track), Some(venue)) = (track, venue) {
         let score = dispatch(&services, "create_score", &serde_json::json!({
             "requestId":uuid::Uuid::new_v4().to_string(),"trackId":track,"venueId":venue,"name":null
@@ -133,27 +125,6 @@ async fn run() -> Result<(), String> {
         }
     }
     drop(turn);
-    if sync {
-        if let Err(error) = sync_library(&services).await {
-            if outcome.is_ok() {
-                return Err(error);
-            }
-            eprintln!("{error}");
-        }
-    }
     outcome
 }
 
-async fn sync_library(services: &SharedServices) -> Result<(), String> {
-    let report = dispatch(services, "sync_full", &serde_json::json!({}))
-        .await
-        .map_err(|e| e.to_string())?;
-    if report["errors"]
-        .as_array()
-        .is_some_and(|errors| !errors.is_empty())
-    {
-        return Err(format!("sync did not finish: {}", report["errors"]));
-    }
-    eprintln!("sync {report}");
-    Ok(())
-}
