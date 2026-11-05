@@ -44,15 +44,20 @@ pub(super) async fn list(pool: &SqlitePool, venue_id: &str) -> Result<Vec<Bindin
         .collect())
 }
 
-pub(super) async fn insert(
+/// Save `binding`, or, when its control already has a binding for its
+/// input, change that one to its mode and invert. Returns the saved id.
+pub(super) async fn upsert(
     pool: &SqlitePool,
     venue_id: &str,
     binding: &Binding,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let address = serde_json::to_string(&binding.address).map_err(|e| e.to_string())?;
-    sqlx::query(
+    sqlx::query_scalar(
         "INSERT INTO control_bindings (id, venue_id, control, address_json, mode, invert)
-         VALUES (?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (venue_id, control, address_json)
+         DO UPDATE SET mode = excluded.mode, invert = excluded.invert
+         RETURNING id",
     )
     .bind(&binding.id)
     .bind(venue_id)
@@ -60,10 +65,9 @@ pub(super) async fn insert(
     .bind(address)
     .bind(mode_name(binding.mode))
     .bind(i64::from(binding.invert))
-    .execute(pool)
+    .fetch_one(pool)
     .await
-    .map_err(|error| format!("Failed to save the binding: {error}"))?;
-    Ok(())
+    .map_err(|error| format!("Failed to save the binding: {error}"))
 }
 
 pub(super) async fn update(

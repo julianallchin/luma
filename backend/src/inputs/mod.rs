@@ -299,8 +299,9 @@ impl InputHub {
         }
     }
 
-    /// Bind the next input heard to `control` of the open venue. A newer
-    /// learn replaces this one, which then fails.
+    /// Bind the next input heard to `control` of the open venue; an input
+    /// it already has is bound again, as `mode`. A newer learn replaces this
+    /// one, which then fails.
     pub(crate) async fn learn(&self, control: &str, mode: Mode) -> Result<Binding, String> {
         let (reply, heard) = oneshot::channel();
         let venue_id = {
@@ -328,14 +329,14 @@ impl InputHub {
                 );
             }
         };
-        let binding = Binding {
+        let mut binding = Binding {
             id: uuid::Uuid::new_v4().to_string(),
             control: control.to_owned(),
             address,
             mode,
             invert: false,
         };
-        store::insert(&self.pool, &venue_id, &binding).await?;
+        binding.id = store::upsert(&self.pool, &venue_id, &binding).await?;
         self.reload(&venue_id).await?;
         Ok(binding)
     }

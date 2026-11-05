@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{Address, Event};
+use super::{Address, Event, Mode};
 use crate::database::local::{auth, database, state};
 use crate::dispatch::{dispatch, AppServices};
 
@@ -98,6 +98,21 @@ async fn a_learned_fader_follows_its_input_and_is_kept() {
     let state = services.inputs.state();
     assert_eq!(state.bindings.len(), 1);
     assert_eq!(state.bindings[0].control, "drop");
+}
+
+#[tokio::test]
+async fn learning_an_input_again_changes_its_binding() {
+    let (_dir, services, venue) = library().await;
+    learn(&services, &venue, "drop", "fader", cc(20, 0.5)).await;
+    let first = services.inputs.state().bindings[0].id.clone();
+    learn(&services, &venue, "drop", "momentary", cc(20, 1.0)).await;
+    let bindings = services.inputs.state().bindings;
+    assert_eq!(bindings.len(), 1, "{bindings:?}");
+    assert_eq!((bindings[0].id.as_str(), bindings[0].mode), (first.as_str(), Mode::Momentary));
+
+    // Another control may share the input: one pad can drive two things.
+    learn(&services, &venue, "rise", "fader", cc(20, 0.5)).await;
+    assert_eq!(services.inputs.state().bindings.len(), 2);
 }
 
 #[tokio::test]
