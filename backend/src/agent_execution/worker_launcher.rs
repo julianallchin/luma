@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use crate::agent_execution::artifacts::SCRATCH_DIR;
-use crate::agent_execution::sandbox::UNSANDBOXED_VAR;
 use crate::cmd_util::new_process_group;
 
 /// The filesystem and environment authority one worker gets.
@@ -123,22 +122,16 @@ pub fn base_command(
     cmd
 }
 
-/// No sandbox at all: developer-only, and a hard error in release builds unless
-/// the operator opts in explicitly (design §17.7, decision D9).
+/// No sandbox at all. Linux and Windows get this in every build until their
+/// sandboxes exist (design §17.5, §17.6).
 #[derive(Debug, Clone, Copy)]
 pub struct PassthroughLauncher {
     _private: (),
 }
 
 impl PassthroughLauncher {
-    pub fn new() -> Result<Self, String> {
-        if cfg!(debug_assertions) || std::env::var(UNSANDBOXED_VAR).as_deref() == Ok("1") {
-            return Ok(Self { _private: () });
-        }
-        Err(format!(
-            "refusing to run agent Python without a sandbox in a release build; \
-             set {UNSANDBOXED_VAR}=1 to override for local experiments"
-        ))
+    pub fn new() -> Self {
+        Self { _private: () }
     }
 }
 
@@ -235,8 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_is_available_in_debug_builds() {
-        // The test binary is a debug build, so this is the developer path.
-        assert!(PassthroughLauncher::new().is_ok());
+    fn passthrough_is_named_passthrough() {
+        assert_eq!(PassthroughLauncher::new().name(), "passthrough");
     }
 }
