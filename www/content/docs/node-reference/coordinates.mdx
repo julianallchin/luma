@@ -82,7 +82,7 @@ The energy of a frequency band of the track's full mix, 0–1 over the whole tra
 
 `control` · Python: `control(name="fader")` · Gives a coordinate.
 
-A fader: a live value 0–1, the same at every head, that a performer moves. A curve maps it to the range an input needs, so one fader can drive many inputs, each with its own range. In a Perform pattern it is a fader of that pattern, shown in the pattern's cell. In a score it reads the venue's live control called `name`; a control nothing has set reads 0. A fader cannot reach a clock input (`every`, `duration`) or a fixed input: those are prepared before the clip plays. Moving a fader never rebuilds the graph.
+A fader: a live value 0–1, the same at every head, that a performer moves. A curve maps it to the range an input needs, so one fader can drive many inputs, each with its own range. In a Perform pattern it is a fader of that pattern, shown in the pattern's cell. In a score it reads the venue's live control called `name`; a control nothing has set reads 0. A fader cannot reach a clock input (`every`, `duration`) or a fixed input: those are prepared before the clip plays. Moving a fader never prepares the graph again.
 
 No inputs.
 

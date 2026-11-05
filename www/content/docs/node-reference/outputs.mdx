@@ -27,7 +27,7 @@ The light of each head: color × brightness. `brightness` is the pattern across 
 
 `aim` · Python: `aim(heads, base="direction", direction, point, yaw, pitch, alpha)` · Gives nothing: it is the clip's output. Blend modes: Replace, Offset.
 
-Points moving heads. `base` picks the starting aim: `direction` aims along the vector, `point` aims each head at the point, `away` aims each head from the point through the head (a fan that spreads). Then `yaw` and `pitch` turn the aim: positive yaw turns counter-clockwise seen from above, positive pitch turns up. Heads that a mirror folded take the mirror image of yaw and pitch. `point` is in metres in the venue: +U stage right, +V toward the crowd, +Z up; `direction` uses the same axes. `alpha` is the aim's weight. Replace sets a position; Offset adds motion on top of the aim below.
+Points moving heads. `base` picks the starting aim: `direction` aims along the vector, `point` aims each head at the point, `away` aims each head from the point through the head (a fan that spreads). Then `yaw` and `pitch` turn the aim: positive yaw turns counter-clockwise seen from above, positive pitch turns up. Heads that a mirror folded take the mirror image of yaw and pitch. `point` is in metres in the venue: +U stage right, +V toward the crowd, +Z up; `direction` uses the same axes. `alpha` is the aim's weight. In Replace, the heads turn toward this aim by `alpha`. In Offset, the base is not used: `yaw` and `pitch`, times `alpha`, turn the aim of the clips below, so one movement clip can run over many positions.
 
 | Input | Type | Unit | Range | Takes | Empty |
 |---|---|---|---|---|---|

@@ -158,7 +158,7 @@ fn doc(kind: Kind) -> Doc {
         }
         Kind::Control => Doc {
             python: "control(name=\"fader\")",
-            about: s("A fader: a live value 0–1, the same at every head, that a performer moves. A curve maps it to the range an input needs, so one fader can drive many inputs, each with its own range. In a Perform pattern it is a fader of that pattern, shown in the pattern's cell. In a score it reads the venue's live control called `name`; a control nothing has set reads 0. A fader cannot reach a clock input (`every`, `duration`) or a fixed input: those are prepared before the clip plays. Moving a fader never rebuilds the graph."),
+            about: s("A fader: a live value 0–1, the same at every head, that a performer moves. A curve maps it to the range an input needs, so one fader can drive many inputs, each with its own range. In a Perform pattern it is a fader of that pattern, shown in the pattern's cell. In a score it reads the venue's live control called `name`; a control nothing has set reads 0. A fader cannot reach a clock input (`every`, `duration`) or a fixed input: those are prepared before the clip plays. Moving a fader never prepares the graph again."),
             empty: vec![],
             settings: vec![("name", "A control name in snake_case, at most 64 characters, such as `drop` or `front_level`.")],
         },
@@ -270,7 +270,7 @@ fn doc(kind: Kind) -> Doc {
         },
         Kind::Aim => Doc {
             python: "aim(heads, base=\"direction\", direction, point, yaw, pitch, alpha)",
-            about: s("Points moving heads. `base` picks the starting aim: `direction` aims along the vector, `point` aims each head at the point, `away` aims each head from the point through the head (a fan that spreads). Then `yaw` and `pitch` turn the aim: positive yaw turns counter-clockwise seen from above, positive pitch turns up. Heads that a mirror folded take the mirror image of yaw and pitch. `point` is in metres in the venue: +U stage right, +V toward the crowd, +Z up; `direction` uses the same axes. `alpha` is the aim's weight. Replace sets a position; Offset adds motion on top of the aim below."),
+            about: s("Points moving heads. `base` picks the starting aim: `direction` aims along the vector, `point` aims each head at the point, `away` aims each head from the point through the head (a fan that spreads). Then `yaw` and `pitch` turn the aim: positive yaw turns counter-clockwise seen from above, positive pitch turns up. Heads that a mirror folded take the mirror image of yaw and pitch. `point` is in metres in the venue: +U stage right, +V toward the crowd, +Z up; `direction` uses the same axes. `alpha` is the aim's weight. In Replace, the heads turn toward this aim by `alpha`. In Offset, the base is not used: `yaw` and `pitch`, times `alpha`, turn the aim of the clips below, so one movement clip can run over many positions."),
             empty: vec![
                 all_heads(),
                 ("direction", s("(0, 0.766, −0.643): toward the crowd and down.")),
