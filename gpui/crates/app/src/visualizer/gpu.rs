@@ -20,10 +20,6 @@ pub(super) type PickTimeline = SerialPairing<SubmittedFrame>;
 /// singleton, so one identity covers every stage that will ever be on screen.
 static STAGE_IMAGE_ID: std::sync::OnceLock<ImageId> = std::sync::OnceLock::new();
 
-/// The stage's free-running clock: [`luma_render::strobe::clock`], whether
-/// or not the show is playing. The air drifts and the strobes flash on it,
-/// and the DMX engine gates its strobes on the same clock, so the screen
-/// flashes in phase with the rig.
 /// The fixtures whose strobe the rig runs on the fixture's own clock — those
 /// whose mode has a strobe channel — and a [`FixtureClock`] per head of them.
 ///
@@ -78,6 +74,10 @@ impl FixtureStrobes {
     }
 }
 
+/// The stage's free-running clock: [`luma_render::strobe::clock`], whether
+/// or not the show is playing. The air drifts and the strobes flash on it,
+/// and the DMX engine gates its strobes on the same clock, so the screen
+/// flashes in phase with the rig.
 #[derive(Default)]
 pub(super) struct StageClock {
     /// The clock at the last submitted frame.
@@ -233,11 +233,6 @@ pub(super) struct CompletedFrame {
     pub(super) spans: UiSpans,
 }
 
-/// A finished stage frame in the form the compositor will draw it.
-///
-/// The renderer decides which of these it can produce; the screen paints
-/// whichever it is handed. Neither end chooses — that is what keeps the CPU
-/// path a fallback rather than a mode.
 /// Start compiling the renderer's pipelines, on the compositor's device
 /// where the compositor has one to offer.
 ///
