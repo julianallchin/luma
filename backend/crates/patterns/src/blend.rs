@@ -10,7 +10,7 @@ pub enum BlendMode {
     Max,
     Min,
     Subtract,
-    /// An aim clip's fan and motion turn the aim under it
+    /// An aim clip's yaw and pitch turn the aim under it
     /// ([`crate::aim::offset_aim`]). Only aim takes it
     /// ([`crate::blend_modes`]).
     Offset,

@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@xyflow/react": "^12.10.0",
     "fumadocs-core": "^16.3.2",
     "fumadocs-mdx": "^14.2.2",
     "fumadocs-ui": "^16.3.2",

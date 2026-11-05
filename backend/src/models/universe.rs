@@ -9,8 +9,8 @@ pub struct PrimitiveState {
     pub strobe: f32,        // 0.0 (off) - 1.0 (fastest)
     pub position: [f32; 2], // [PanDeg, TiltDeg]
     pub speed: f32,         // 0.0 (frozen) or 1.0 (fast) - binary
-    /// Where the head points in the room, from `aim@1` clips. Never pan or
-    /// tilt: the solver turns it into pan and tilt. `None` is no aim.
+    /// Where the head points in the room, from aim clips. Never pan or tilt:
+    /// the solver turns it into pan and tilt. `None` is no aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim: Option<HeadAim>,
 }
