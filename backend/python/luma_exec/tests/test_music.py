@@ -1,13 +1,9 @@
-"""luma.music: synthetic unit tests, plus answer keys from real tracks.
+"""luma.music, against synthetic loops.
 
-The answer-key tests read Julian's local library read-only and skip when a
-track's files are missing. Run from the repo root:
-
-    ~/.cache/com.luma.luma/python-env/bin/python3 backend/python/luma_exec/tests/test_music.py
+`run_tests.py` runs this with the other suites next door.
 """
 import json
 import re
-import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -25,15 +21,6 @@ def setUpModule():
     modules install their own presets, so this runs before this module."""
     clip.install_presets(json.loads((Path(__file__).resolve().parents[3]
                                      / "crates/patterns/src/presets.json").read_text()))
-
-
-LIBRARY = Path.home() / ".config" / "com.luma.luma"
-SKANKA = ("8bafe654-419b-441f-89a3-7051f2d450f3",
-          "738e753e07f1e1166580a462784cf545d2eb7150ccdf44f6099537d4123ab0bb")
-BACKBONE = ("746d8b01-6962-4251-af4d-60acd52c08c4",
-            "46d842788b38ca895facd7af3110f133e5348dc3b74a55cfbd94e57bbb5eb3a6")
-#: Bars where Julian placed a chase on Backbone's womps (his score, beat 0.5 of each).
-WOMP_BARS = [18, 19, 20, 22, 23, 26, 27, 28, 34, 35, 36, 38, 39, 50, 51, 52, 54, 55, 56]
 
 
 def synthetic(bars=16, bpm=120.0, missing_kick_bar=None, rate=16000):
@@ -135,150 +122,6 @@ class MusicUnitTests(unittest.TestCase):
         features = LumaRecord({"beats": Unavailable("beat detection has not run")}, "luma.features")
         audio = LumaRecord({"rest": Unavailable("no stems")}, "luma.audio")
         self.assertIsInstance(Music.from_bindings(features, audio), Unavailable)
-
-
-def merge_duplicates(times, gap=0.03):
-    """What the binding does to n2n onsets: hits within 30 ms are one hit."""
-    kept = []
-    for t in sorted(times):
-        if not kept or t - kept[-1] >= gap:
-            kept.append(t)
-    return kept
-
-
-def library_track(track_id, track_hash):
-    """Build Music from Julian's library, read-only; None when files are missing."""
-    try:
-        import soundfile
-    except ImportError:
-        return None
-    tracks = LIBRARY / "tracks"
-    mix = tracks / f"{track_hash}.ogg"
-    vocals = tracks / "stems" / track_hash / "vocals.ogg"
-    database = LIBRARY / "luma.db"
-    if not (mix.exists() and vocals.exists() and database.exists()):
-        return None
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-    try:
-        beats, downbeats, bpm, per_bar = connection.execute(
-            "SELECT beats_json, downbeats_json, bpm, beats_per_bar FROM track_beats WHERE track_id = ?",
-            (track_id,)).fetchone()
-        onsets = json.loads(connection.execute(
-            "SELECT onsets_json FROM track_drum_onsets WHERE track_id = ?", (track_id,)).fetchone()[0])
-    finally:
-        connection.close()
-    mix_audio, rate = soundfile.read(mix, dtype="float32", always_2d=True)
-    vocal_audio, _ = soundfile.read(vocals, dtype="float32", always_2d=True)
-    frames = min(len(mix_audio), len(vocal_audio))
-    mert = {kind: tracks / "mert" / f"{track_hash}.{kind}.npy" for kind in ("fullmix", "drum")}
-    return Music(beats=json.loads(beats), downbeats=json.loads(downbeats), beats_per_bar=per_bar, bpm=bpm,
-                 onsets={name: merge_duplicates(times) for name, times in onsets.items()}, rest=mix_audio[:frames] - vocal_audio[:frames], vocals=vocal_audio[:frames],
-                 sample_rate=rate,
-                 mert=np.load(mert["fullmix"]) if mert["fullmix"].exists() else None,
-                 mert_drum=np.load(mert["drum"]) if mert["drum"].exists() else None)
-
-
-def segment_lines(text):
-    """modulation() output as {10: "line plus its ! flags"}, one line per bar."""
-    lines, current = {}, None
-    for line in text.splitlines():
-        match = re.match(r"^(\d+)\.1\.1\s", line)
-        if match:
-            current = int(match[1])
-            lines[current] = line
-        elif current and line.strip().startswith("!"):
-            lines[current] += "\n" + line
-    return lines
-
-
-class SkankaAnswerKey(unittest.TestCase):
-    """Skanka (Hamdi), checked by ear with Julian; UI bars."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.music = library_track(*SKANKA)
-        if cls.music is None:
-            raise unittest.SkipTest("Skanka is not in this library")
-
-    def test_felt_at_140_over_the_70_grid(self):
-        self.assertEqual((round(self.music.feel.bpm), self.music.feel.ratio), (140, 2))
-
-    def test_the_scoop_opens_every_odd_bar_in_the_low_band(self):
-        cycle = self.music.deviations("9-33").splitlines()[2]
-        self.assertRegex(cycle, r"\b9\.1\.[\d.]+(-9\.\d\.[\d.]+)? low \+", cycle)
-
-    def test_wobble_switches_to_eighths_at_10_and_back_at_11(self):
-        lines = segment_lines(self.music.modulation("9-17"))
-        for bar in (10, 12, 14):
-            self.assertIn("mid 1/8 wobble", lines[bar])
-            self.assertIn("! mid 1/8 wobble (was kick-gap sweeps)", lines[bar])
-        for bar in (9, 11, 13):
-            self.assertNotIn("mid 1/8 wobble", lines[bar])
-        for bar in (11, 13):
-            self.assertIn("mid kick-gap sweeps (was 1/8 wobble)", lines[bar])
-
-    def test_bar_13_drops_the_kick_at_16th_4_and_cuts_hats_for_the_first_beat(self):
-        text = self.music.deviations("9-33")
-        self.assertIn("13.1.4 kick missing", text)
-        self.assertRegex(text, r"13\.1\.1-13\.1\.(3\.5|4|4\.5) high -")
-
-    def test_the_same_notch_is_in_21_and_53_but_not_29_45_61(self):
-        text = self.music.deviations("9-33") + self.music.deviations("41-65")
-        for bar in (21, 53):
-            self.assertIn(f"{bar}.1.4 kick missing", text)
-        for bar in (29, 45, 61):
-            self.assertNotIn(f"{bar}.1.4 kick missing", text)
-
-    def test_drops_at_9_and_41_and_the_second_half_repeats_the_first(self):
-        text = self.music.sections()
-        self.assertEqual(re.findall(r"(\d+)\.1\.1 DROP", text), ["9", "41"])
-        repeats = [tuple(map(int, m)) for m in
-                   re.findall(r"(\d+)\.1\.1-(\d+)\.1\.1 ≈ (\d+)\.1\.1-(\d+)\.1\.1", text)]
-        self.assertTrue(any(a <= 41 and b >= 64 and a - c == 32 for a, b, c, _ in repeats), text)
-
-    def test_similar_to_13_is_21_and_53_before_the_hat_cut_bars(self):
-        ranked = [int(line.split(".")[0]) for line in self.music.similar("13").splitlines()[2:]]
-        self.assertEqual(set(ranked[:2]), {21, 53}, ranked)
-        for bar in (29, 45, 61):
-            self.assertGreater(ranked.index(bar), 1)
-
-    def test_similar_to_the_first_drop_phrase_is_the_second(self):
-        self.assertEqual(self.music.similar("9-17").splitlines()[2].split()[0], "41.1.1-49.1.1")
-
-    def test_listen_fits_a_phrase_in_about_thirty_lines(self):
-        text = self.music.listen("9-13")
-        self.assertLessEqual(len(text.splitlines()), 30)
-        self.assertIn("kick   |x.....x.|....x...|x.....x.|....x...", text)
-
-
-class BackboneAnswerKey(unittest.TestCase):
-    """Backbone (Chase & Status): womps are three 8th swells in 70-400 Hz."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.music = library_track(*BACKBONE)
-        if cls.music is None:
-            raise unittest.SkipTest("Backbone is not in this library")
-
-    def test_felt_at_176_over_the_88_grid(self):
-        self.assertEqual((round(self.music.feel.bpm), self.music.feel.ratio), (176, 2))
-
-    def test_modulation_places_three_eighth_swells_where_julian_put_chases(self):
-        found = 0
-        for bar in WOMP_BARS:
-            line = segment_lines(self.music.modulation(bar))[bar]
-            match = re.search(r"low [^|]*@ ([\d. ]+)", line)
-            # Peaks as felt 16ths from the bar's downbeat: 8 to a beat at 2x feel.
-            peaks = [(int(p.split(".")[1]) - 1) * 8 + (float(p.split(".", 2)[2]) - 1) * 2
-                     for p in match[1].split()] if match else []
-            if all(any(abs(p - womp) <= 0.6 for p in peaks) for womp in (5, 7, 9)):
-                found += 1
-        self.assertGreaterEqual(found / len(WOMP_BARS), 0.8, found)
-
-    def test_similar_to_a_womp_cell_returns_the_other_womp_cells(self):
-        text = self.music.similar("18.1-18.3", top=8)
-        ranked = [int(line.split(".")[0]) for line in text.splitlines()[2:]]
-        self.assertTrue(set(ranked) <= set(WOMP_BARS), text)
 
 
 if __name__ == "__main__":

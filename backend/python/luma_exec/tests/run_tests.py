@@ -34,6 +34,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# The suites next door import numpy in this process. A python3 without it
+# re-runs this file under the app's environment, so that one command works
+# whichever python3 is first on PATH.
+try:
+    import numpy  # noqa: F401
+except ImportError:
+    import os
+
+    for _cache in (Path.home() / "Library/Caches", Path.home() / ".cache"):
+        _venv = _cache / "com.luma.luma/python-env/bin/python3"
+        if _venv.exists():
+            os.execv(str(_venv), [str(_venv), *sys.argv])
+    sys.exit("run_tests.py needs numpy: launch the app once to create its Python environment, or pip install numpy scipy librosa matplotlib")
+
 import harness  # noqa: E402
 
 REV1 = harness.manifest_rel("r-1")
@@ -601,7 +615,8 @@ def test_shutdown():
 def run_stdlib_suites() -> int:
     """The focused suites next door, in the same command.
 
-    `test_score.py`, `test_venue.py`, `test_perform.py` and `test_worker.py`
+    `test_score.py`, `test_venue.py`, `test_perform.py`, `test_worker.py` and
+    `test_music.py`
     drive the same facades this file drives through a worker, at a smaller
     radius and with no venv — which is exactly why they are easy to forget. They went unrun for a
     whole surface; one command is the fix.
@@ -611,9 +626,9 @@ def run_stdlib_suites() -> int:
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(
         loader.loadTestsFromName(name)
-        for name in ("test_clip", "test_score", "test_venue", "test_perform", "test_worker")
+        for name in ("test_clip", "test_score", "test_venue", "test_perform", "test_worker", "test_music")
     )
-    print("\n--- stdlib suites (test_clip, test_score, test_venue, test_perform, test_worker) ---")
+    print("\n--- stdlib suites (test_clip, test_score, test_venue, test_perform, test_worker, test_music) ---")
     result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
     return len(result.failures) + len(result.errors)
 
