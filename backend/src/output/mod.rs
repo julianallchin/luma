@@ -151,7 +151,7 @@ impl OutputHub {
 
     /// Take the settings the drivers care about. Turning output off is seen by
     /// every driver on its next loop, which then lets go of its socket or device.
-    pub fn apply_settings(&self, settings: &AppSettings) {
+    fn apply_settings(&self, settings: &AppSettings) {
         self.max_dimmer
             .store(settings.max_dimmer, Ordering::Relaxed);
         *self

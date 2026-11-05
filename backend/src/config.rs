@@ -6,7 +6,7 @@ pub const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpf
 /// The operator fills this in after creating the instance and pointing it at
 /// the Supabase Postgres — see the "PowerSync Cloud" section of
 /// `docs/design/sync.md`. Empty means cloud sync stays off.
-pub const POWERSYNC_URL: &str = "https://6aa483d7a77ca1231d276892.powersync.journeyapps.com";
+const POWERSYNC_URL: &str = "https://6aa483d7a77ca1231d276892.powersync.journeyapps.com";
 
 /// The PowerSync endpoint this build connects to.
 #[must_use]

@@ -462,7 +462,7 @@ pub const WAVEFORM_STAGE: &str = "waveform";
 
 /// Every stage an imported track reports, in no particular order: each
 /// registered preprocessor, and the waveform branch beside them.
-pub fn analysis_stages() -> Vec<String> {
+fn analysis_stages() -> Vec<String> {
     crate::preprocessing::registry::registered_preprocessors()
         .iter()
         .map(|p| p.name().to_string())
@@ -1089,10 +1089,7 @@ fn rollback_staged_track_files(
 
 /// Recover a crash at either side of the track catalog transaction. If the
 /// row remains, put every staged artifact back; otherwise finish deletion.
-pub async fn recover_track_deletions(
-    pool: &SqlitePool,
-    storage: &StorageRoot,
-) -> Result<(), String> {
+async fn recover_track_deletions(pool: &SqlitePool, storage: &StorageRoot) -> Result<(), String> {
     let root = storage.track_deletion_trash_dir();
     let directories = match std::fs::read_dir(&root) {
         Ok(entries) => entries,

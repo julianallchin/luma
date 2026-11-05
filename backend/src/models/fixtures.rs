@@ -424,19 +424,3 @@ pub struct PatchedFixture {
     /// over it. Local-only.
     pub address_pinned: bool,
 }
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub enum FixtureNodeType {
-    Fixture,
-    Head,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct FixtureNode {
-    pub id: String,
-    pub label: String,
-    pub type_: FixtureNodeType,
-    pub children: Vec<FixtureNode>,
-}
