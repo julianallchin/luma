@@ -5,7 +5,9 @@ See [docs/design/sync.md](../docs/design/sync.md).
 ## Supabase
 
 Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
-`20260912000000_row_model.sql` on into the SQL editor, in filename order:
+`20260912000000_row_model.sql` on into the SQL editor, in filename order. The
+list below is every one of them; a note says what must happen before or after.
+A new migration adds its line here.
 
 - `20260912000000_row_model.sql`
 - `20260916000000_stage_child_venue_id.sql`
@@ -25,8 +27,15 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
 - `20260929000000_clip_graphs.sql`
 - `20261001000000_folders.sql` — then redeploy `powersync/sync-config.yaml`, which
   names `folders` and `folder_tracks`
+- `20261002000000_placement_in_venue_nodes.sql`
+- `20261002100000_agent_figures.sql`
+- `20261002100100_bar_classifications_compact.sql`
+- `20261024000200_drop_venue_conversion.sql`
 - `20261024120000_lasers.sql` — then redeploy `powersync/sync-config.yaml`, which
   names `laser_zones` and `laser_limits`
+- `20261025120000_random_node.sql`
+- `20261025130000_laser_elements.sql`
+- `20261026120000_laser_figures.sql`
 - `20261102120000_drop_midi_mappings.sql` — after redeploying
   `powersync/sync-config.yaml`, which no longer names `midi_modifiers` or
   `midi_bindings`, and after every client runs a build without them
