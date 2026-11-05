@@ -126,12 +126,6 @@ pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
     score
 }
 
-/// [`stored_score`] as JSON, for an assertion that reaches into the document
-/// by key rather than by field.
-pub async fn stored_score_json(dir: &Path) -> Value {
-    serde_json::to_value(stored_score(dir).await).expect("a score serializes")
-}
-
 #[cfg(feature = "pixel")]
 pub mod image;
 pub mod session;

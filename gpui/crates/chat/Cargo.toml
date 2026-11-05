@@ -21,7 +21,3 @@ tokio = { version = "1", features = ["rt", "sync"] }
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 
-[features]
-default = []
-agent = ["luma-ui/agent"]
-

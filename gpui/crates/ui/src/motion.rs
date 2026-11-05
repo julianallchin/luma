@@ -186,59 +186,37 @@ pub const ROOT: Spring = Spring;
 // Motion specs (the catalog)
 // ---------------------------------------------------------------------------
 
-/// One catalog entry: duration + optional delay + curve. The delay is folded into
-/// the gpui animation timeline (gpui `Animation` has no native delay): the
-/// animation runs for `delay + duration` and [`progress`](Self::progress) holds 0
-/// until the delay has elapsed.
+/// One catalog entry: duration + curve.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionSpec {
     pub duration_ms: u64,
-    pub delay_ms: u64,
     pub curve: Spring,
 }
 
 impl MotionSpec {
     pub const fn new(duration_ms: u64, curve: Spring) -> Self {
-        Self {
-            duration_ms,
-            delay_ms: 0,
-            curve,
-        }
+        Self { duration_ms, curve }
     }
 
-    pub const fn with_delay(mut self, delay_ms: u64) -> Self {
-        self.delay_ms = delay_ms;
-        self
-    }
-
-    /// Wall-clock span of the whole timeline (delay + duration).
+    /// Wall-clock span of the timeline.
     pub fn total(&self) -> Duration {
-        Duration::from_millis(self.delay_ms + self.duration_ms)
+        Duration::from_millis(self.duration_ms)
     }
 
     /// Eased progress (0..1) for a raw timeline delta (0..1 across [`total`](Self::total)).
     /// Pure — unit-testable without a window.
     pub fn progress(&self, raw_delta: f32) -> f32 {
-        let total = (self.delay_ms + self.duration_ms) as f32;
-        if total <= 0.0 || self.duration_ms == 0 {
+        if self.duration_ms == 0 {
             return 1.0;
         }
-        let t =
-            (raw_delta.clamp(0.0, 1.0) * total - self.delay_ms as f32) / self.duration_ms as f32;
-        self.curve.eval(t.clamp(0.0, 1.0))
+        self.curve.eval(raw_delta.clamp(0.0, 1.0))
     }
 
-    /// A oneshot gpui [`Animation`] for this spec (delay folded in).
+    /// A oneshot gpui [`Animation`] for this spec.
     /// Wall-clock span honors [`speed_scale`] (measurement knob).
     pub fn animation(&self) -> Animation {
         let spec = *self;
         Animation::new(span(&spec)).with_easing(move |d| spec.progress(d))
-    }
-
-    /// A repeating gpui [`Animation`] with linear easing over the raw period —
-    /// for the pulse/wave loaders whose per-cell easing happens in the animator.
-    pub fn repeating(&self) -> Animation {
-        Animation::new(self.total()).repeat()
     }
 }
 
@@ -557,24 +535,6 @@ mod tests {
     }
 
     #[test]
-    fn spec_delay_holds_then_runs() {
-        // The delay and run share the catalog timing ladder.
-        let delayed = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
-        assert_eq!(delayed.total(), Duration::from_millis(QUICK + SLOW));
-        assert_eq!(delayed.progress(0.0), 0.0);
-        // Still inside the delay window.
-        assert_eq!(delayed.progress(0.2), 0.0);
-        // Fully done at the end; clamped beyond.
-        assert_eq!(delayed.progress(1.0), 1.0);
-        assert_eq!(delayed.progress(2.0), 1.0);
-        // Part-way through the run.
-        let mid = delayed.progress(0.65);
-        assert!(mid > 0.0 && mid < 1.0);
-        // No-delay specs pass straight through the curve.
-        assert_close(FADE_QUICK.progress(0.5), ROOT.eval(0.5), 1e-6, "no-delay");
-    }
-
-    #[test]
     fn every_transition_rides_the_root_curve_and_the_ladder() {
         // The design rule, stated where a new entry has to pass it: one curve,
         // and a duration off the ladder. Loader periods are loop lengths, not
@@ -587,10 +547,6 @@ mod tests {
             assert!(
                 [SNAP, QUICK, BASE, SWEEP, SLOW].contains(&spec.duration_ms),
                 "{spec:?} invents a duration"
-            );
-            assert!(
-                spec.delay_ms == 0 || [SNAP, QUICK, BASE, SWEEP, SLOW].contains(&spec.delay_ms),
-                "{spec:?} invents a delay"
             );
         }
         // Strictly increasing, so "a rung below" is a statement about speed and

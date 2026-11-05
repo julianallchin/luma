@@ -332,8 +332,7 @@ converts to gpui's `Fn(f32) -> f32` easing shape.
 
 ### 4.2 The catalog (`motion.rs:283-317`)
 
-`MotionSpec::new(duration_ms, curve)`, optional `.with_delay(ms)` folded into
-the timeline because gpui `Animation` has no native delay (`motion.rs:227-246`).
+`MotionSpec::new(duration_ms, curve)`.
 
 | Spec | ms | curve | use |
 | --- | --- | --- | --- |

@@ -1384,42 +1384,16 @@ pub fn gradient_presets() -> Vec<(SharedString, StripValue)> {
         .collect()
 }
 
-/// The editor's own curves, for a host with no curve picker of its own.
-pub fn envelope_presets() -> Vec<(SharedString, StripValue)> {
-    [
-        ("Hard", Envelope::soft_edges(0.)),
-        ("Soft", soft_preset()),
-        ("Triangle", Envelope::soft_edges(1.)),
-        ("Ramp up", Envelope::linear(vec![[0., 0.], [1., 1.]])),
-        ("Ramp down", Envelope::linear(vec![[0., 1.], [1., 0.]])),
-    ]
-    .into_iter()
-    .map(|(name, curve)| (name.into(), StripValue::Number(curve)))
-    .collect()
-}
-
-fn soft_preset() -> Envelope {
-    Envelope::eased(
-        vec![[0., 0.], [0.2, 1.], [0.8, 1.], [1., 0.]],
-        &[
-            Ease::Bezier([0.35, 0., 0.65, 1.]),
-            Ease::Linear,
-            Ease::Bezier([0.35, 0., 0.65, 1.]),
-        ],
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_preset_is_found_again() {
-        for presets in [gradient_presets(), envelope_presets()] {
-            assert!(!presets.is_empty());
-            for (at, (_, value)) in presets.iter().enumerate() {
-                assert_eq!(presets.iter().position(|(_, p)| p.close(value)), Some(at));
-            }
+        let presets = gradient_presets();
+        assert!(!presets.is_empty());
+        for (at, (_, value)) in presets.iter().enumerate() {
+            assert_eq!(presets.iter().position(|(_, p)| p.close(value)), Some(at));
         }
         let StripValue::Gradient(mut edited) = gradient_presets()[0].1.clone() else {
             unreachable!()

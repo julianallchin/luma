@@ -569,12 +569,6 @@ impl ColorArgEditor {
         self
     }
 
-    /// Stop editing an opacity.
-    pub fn without_opacity(&mut self, cx: &mut Context<Self>) {
-        self.opacity = None;
-        cx.notify();
-    }
-
     /// A host-side write of the opacity.
     pub fn set_opacity(&mut self, opacity: f32, cx: &mut Context<Self>) {
         if self.opacity.is_some() && self.opacity != Some(opacity) {

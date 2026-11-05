@@ -481,7 +481,7 @@ impl<T> Popup<T> {
     /// user who has asked for no animation, and that is not a mistake a call
     /// site should be able to make. [`Self::begin_close_at`] is the pure core,
     /// for tests that have no `App` — the same split
-    /// [`crate::motion::HoverFades`] keeps for wall time.
+    /// [`crate::motion::exit_progress`] keeps for wall time.
     pub fn begin_close(&mut self, cx: &App) -> bool {
         self.begin_close_at(motion::reduced_motion(cx))
     }

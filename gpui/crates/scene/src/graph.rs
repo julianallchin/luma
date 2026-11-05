@@ -119,12 +119,9 @@ impl Default for PickFilter {
 
 #[derive(Default)]
 pub struct SceneGraph {
+    /// Topological: a parent is inserted before its child.
     nodes: Vec<Node>,
     dirty: Vec<bool>,
-    /// Topological: parents before children. Insertion maintains it (a parent
-    /// must exist before its child), and [`SceneGraph::set_parent`] rebuilds
-    /// it.
-    order: Vec<NodeId>,
 }
 
 impl SceneGraph {
@@ -162,7 +159,6 @@ impl SceneGraph {
             flags,
         });
         self.dirty.push(true);
-        self.order.push(id);
         id
     }
 
@@ -177,53 +173,11 @@ impl SceneGraph {
             .map(|(i, n)| (NodeId(i as u32), n))
     }
 
-    #[cfg(test)]
-    pub fn set_local(&mut self, id: NodeId, local: Transform) {
-        self.nodes[id.0 as usize].local = local;
-        self.dirty[id.0 as usize] = true;
-    }
-
-    /// Re-parent a node, keeping its *local* transform. Rebuilds the
-    /// topological order, so it is a structural edit, not a per-frame one.
-    pub fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>) {
-        assert!(parent != Some(id), "a node cannot be its own parent");
-        self.nodes[id.0 as usize].parent = parent;
-        self.dirty[id.0 as usize] = true;
-        self.rebuild_order();
-    }
-
-    fn rebuild_order(&mut self) {
-        let mut order = Vec::with_capacity(self.nodes.len());
-        let mut emitted = vec![false; self.nodes.len()];
-        // Depth counts as the sort key: a node is emitted once its parent is.
-        let mut remaining = self.nodes.len();
-        while remaining > 0 {
-            let before = remaining;
-            for (i, node) in self.nodes.iter().enumerate() {
-                if emitted[i] {
-                    continue;
-                }
-                let ready = match node.parent {
-                    None => true,
-                    Some(p) => emitted[p.0 as usize],
-                };
-                if ready {
-                    emitted[i] = true;
-                    order.push(NodeId(i as u32));
-                    remaining -= 1;
-                }
-            }
-            assert!(before != remaining, "scene graph has a parent cycle");
-        }
-        self.order = order;
-    }
-
-    /// Single pass over the topological order. Runs once per frame, before
+    /// Single pass over the nodes, parents first. Runs once per frame, before
     /// anything reads [`Node::world`].
     pub fn update_world_transforms(&mut self) {
         let mut recomputed = vec![false; self.nodes.len()];
-        for &NodeId(i) in &self.order {
-            let i = i as usize;
+        for i in 0..self.nodes.len() {
             let parent = self.nodes[i].parent;
             let parent_moved = parent.is_some_and(|p| recomputed[p.0 as usize]);
             if !self.dirty[i] && !parent_moved {
@@ -335,33 +289,6 @@ mod tests {
         assert_eq!(
             g.world(c).transform_point3(Vec3::ZERO),
             Vec3::new(1.0, 2.0, 3.0)
-        );
-    }
-
-    #[test]
-    fn moving_a_parent_moves_its_subtree() {
-        let mut g = SceneGraph::new();
-        let a = leaf(&mut g, None, Vec3::ZERO);
-        let b = leaf(&mut g, Some(a), Vec3::new(0.0, 0.0, 1.0));
-        g.update_world_transforms();
-        g.set_local(a, Transform::from_translation(Vec3::new(5.0, 0.0, 0.0)));
-        g.update_world_transforms();
-        assert_eq!(
-            g.world(b).transform_point3(Vec3::ZERO),
-            Vec3::new(5.0, 0.0, 1.0)
-        );
-    }
-
-    #[test]
-    fn reparenting_rebuilds_the_topological_order() {
-        let mut g = SceneGraph::new();
-        let a = leaf(&mut g, None, Vec3::new(1.0, 0.0, 0.0));
-        let b = leaf(&mut g, None, Vec3::new(0.0, 1.0, 0.0));
-        g.set_parent(a, Some(b)); // child now precedes its parent in the arena
-        g.update_world_transforms();
-        assert_eq!(
-            g.world(a).transform_point3(Vec3::ZERO),
-            Vec3::new(1.0, 1.0, 0.0)
         );
     }
 }

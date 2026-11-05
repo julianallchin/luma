@@ -42,4 +42,4 @@ png = "0.17"
 [features]
 default = []
 # Publish the automation node tree so `gpui-agent` can drive these screens.
-agent = ["luma-ui/agent", "luma-chat/agent"]
+agent = ["luma-ui/agent"]

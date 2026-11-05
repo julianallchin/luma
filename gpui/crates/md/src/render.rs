@@ -548,21 +548,9 @@ pub fn inline_code_wash(theme: &Theme) -> Hsla {
 pub const INLINE_CODE_PAD_X: f32 = 2.0;
 pub const INLINE_CODE_INSET_Y: f32 = 2.0;
 
-/// Flatten inline runs into shaped-text inputs. Pure given a theme.
-pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, bold_default: bool) -> FlatText {
-    flatten_runs_weighted(
-        runs,
-        theme,
-        if bold_default {
-            FontWeight::SEMIBOLD
-        } else {
-            FontWeight::NORMAL
-        },
-    )
-}
-
-/// [`flatten_runs`] with an explicit base weight (table headers are 700 per
-/// zeron's `table.headerWeight`; strong runs never drop below semibold).
+/// Flatten inline runs into shaped-text inputs at a base weight (table
+/// headers are 700 per zeron's `table.headerWeight`; strong runs never drop
+/// below semibold). Pure given a theme.
 fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight) -> FlatText {
     let mut text = String::new();
     let mut out: Vec<TextRun> = Vec::with_capacity(runs.len());
@@ -1330,7 +1318,7 @@ mod tests {
             text: text.into(),
             style: InlineStyle::default(),
         };
-        let flat = flatten_runs(
+        let flat = flatten_runs_weighted(
             &[
                 plain("use "),
                 code("foo"),
@@ -1339,7 +1327,7 @@ mod tests {
                 code("bar"),
             ],
             &theme,
-            false,
+            FontWeight::NORMAL,
         );
         // Adjacent code runs merge into ONE wash box; separated ones don't.
         assert_eq!(flat.code_ranges, vec![4..9, 14..17]);
@@ -1373,7 +1361,7 @@ mod tests {
                 },
             },
         ];
-        let flat = flatten_runs(&runs, &theme, false);
+        let flat = flatten_runs_weighted(&runs, &theme, FontWeight::NORMAL);
         assert_eq!(flat.text, "go here now");
         assert_eq!(flat.links, vec![(3..7, "https://x.dev".to_string())]);
         let total: usize = flat.runs.iter().map(|r| r.len).sum();
@@ -1444,7 +1432,7 @@ mod tests {
                 style,
             },
         ];
-        let flat = flatten_runs(&runs, &theme, false);
+        let flat = flatten_runs_weighted(&runs, &theme, FontWeight::NORMAL);
         assert_eq!(flat.links, vec![(0..9, "https://x.dev".to_string())]);
     }
 }
