@@ -137,6 +137,7 @@ impl Default for ProDJDeckState {
 /// Handle to a running Pro DJ Link session.
 pub struct ProDJLinkClient {
     stop_tx: mpsc::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl ProDJLinkClient {
@@ -167,7 +168,7 @@ impl ProDJLinkClient {
         let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
         let cb = Arc::new(callback);
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             run_client(
                 announce_sock,
                 status_sock,
@@ -180,12 +181,23 @@ impl ProDJLinkClient {
             .await;
         });
 
-        Ok(Self { stop_tx })
+        Ok(Self { stop_tx, task })
     }
 
-    /// Stop the client and disconnect from the network.
+    /// Stop the client and disconnect from the network. Returns once the
+    /// session's sockets are closed, so a new session can bind the same ports.
     pub async fn stop(self) {
-        let _ = self.stop_tx.send(()).await;
+        let Self { stop_tx, mut task } = self;
+        let _ = stop_tx.try_send(());
+        // The claim handshake does not listen for stop; give the loop a moment
+        // to say goodbye, then end the task outright.
+        if tokio::time::timeout(Duration::from_millis(250), &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
@@ -436,28 +448,28 @@ fn bind_announce_socket() -> std::io::Result<UdpSocket> {
     UdpSocket::from_std(std_sock)
 }
 
-/// Kill any process holding `port`, then bind a UDP socket on it.
+/// Bind a UDP socket on `port`.
+///
+/// A port someone else holds is their port: rekordbox, another Pro DJ Link
+/// tool, or this very process. This reports it and never kills the holder.
+/// The holder used to be `kill -9`ed by pid from `lsof`, which also matched
+/// Luma's own sockets and so killed Luma.
 async fn bind_udp_port(port: u16) -> std::io::Result<UdpSocket> {
-    kill_port_holder(port);
-    UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
-}
-
-/// Kill whatever process is listening on `port` using lsof.
-fn kill_port_holder(port: u16) {
-    let output = std::process::Command::new("lsof")
-        .args(["-ti", &format!(":{port}")])
-        .output();
-    if let Ok(out) = output {
-        let pids = String::from_utf8_lossy(&out.stdout);
-        for pid_str in pids.split_whitespace() {
-            if let Ok(pid) = pid_str.parse::<u32>() {
-                eprintln!("[prodjlink] killing pid {pid} holding port {port}");
-                let _ = std::process::Command::new("kill")
-                    .args(["-9", &pid.to_string()])
-                    .status();
+    UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AddrInUse {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "port {port} is in use by another app — close rekordbox or any other \
+                         Pro DJ Link software and try again"
+                    ),
+                )
+            } else {
+                error
             }
-        }
-    }
+        })
 }
 
 /// Find the first non-loopback, non-link-local IPv4 address on this machine.
