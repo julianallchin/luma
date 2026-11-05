@@ -6,7 +6,7 @@ the original design; where a later section disagrees with an earlier one, the
 later one is what the code does.
 
 Scope: one module in `backend/src`, one change to `stage_render`, one change to
-`ffmpeg_env`, and thin callers.
+`runtime::ffmpeg`, and thin callers.
 
 The renderer side is `Renderer::render(frame, w, h, subframes)`: deterministic
 K-subframe jitter accumulation with the temporal pass bypassed, with
@@ -41,7 +41,7 @@ recording nearly free to build on top:
   `stage_render`'s pinned `luma-stage-render` thread already owns both for the life of
   the process.
 - **ffmpeg is bundled and alive.** `backend/build.rs` prepares it in
-  `backend/ffmpeg-runtime`, and `ffmpeg_env::ffmpeg_path()` finds it. The local binary
+  `backend/ffmpeg-runtime`, and `runtime::ffmpeg::ffmpeg_path()` finds it. The local binary
   has `libx264`, `h264_videotoolbox`, `aac` and `aac_at`.
 
 ---
@@ -116,7 +116,7 @@ latency. A recording is throughput-bound by definition. Render serially.
 `stage_render` is "one venue, one moment, one PNG". Recording is a different
 abstraction — a *time axis* and a *container format* — so it is a different module,
 not a longer `Shot`. It sits in `backend/src` and not in a crate because everything
-it composes (`compositor`, `eval`, `database::local`, `ffmpeg_env`, `stage_render`)
+it composes (`compositor`, `eval`, `database::local`, `runtime::ffmpeg`, `stage_render`)
 already lives there; a crate would have to drag the database upward.
 
 The module owns, and no caller sees:
@@ -163,10 +163,10 @@ Keep the per-frame channel round-trip (it is microseconds against 10 ms, and it 
 `render_rgba` becomes `Sequence::install(...).frame(...)` — one implementation, not two.
 `subframes` becomes a parameter instead of the hardcoded `DEFAULT_SUBFRAMES`.
 
-### The change to `ffmpeg_env`
+### The change to `runtime::ffmpeg`
 
 A headless bin must find the bundled ffmpeg, or `ffmpeg_path()` falls back to system
-PATH and fails at spawn time with no diagnosis. `ffmpeg_env::init_from(dirs)` holds the
+PATH and fails at spawn time with no diagnosis. `runtime::ffmpeg::init_from(dirs)` holds the
 search; `init_headless()` supplies the headless dirs.
 
 ---
@@ -361,7 +361,7 @@ of a bake actually exists.
 ## 8. What landed, and what the measurements said
 
 Built on `agent-code-execution`: `backend/src/recording.rs`, the `Sequence`
-handle in `stage_render.rs`, an `ffmpeg_env` split, and
+handle in `stage_render.rs`, an `runtime::ffmpeg` split, and
 `backend/src/bin/luma-record.rs`. Scope is one score in, one file out — no
 `--all`, no Python binding, no MCP tool, no app dialog. The `Recording` /
 `Progress` / `Recorded` shapes are §4's, minus `quality` (see the shutter, below)

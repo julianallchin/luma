@@ -6,7 +6,7 @@
 # stays in-process; everything else (transformers, librosa, audio loading)
 # moved to the `mert` preprocessor.
 #
-# torch / torchaudio / torchvision are NOT pinned here — python_env.rs
+# torch / torchaudio / torchvision are NOT pinned here — runtime/python.rs
 # strips them at write time so the cu128 GPU wheels installed in step 1
 # aren't overwritten by CPU PyPI wheels.
 numpy>=1.24.0

@@ -5,14 +5,15 @@
 //! the per-class onset timestamps. The vendored `n2n/` source package + its
 //! checkpoint (`weights.pt`) ship inside the app bundle under
 //! `backend/python/n2n/` and are copied to the user's cache dir on first
-//! run via [`python_env::ensure_python_resource_dir`].
+//! run via [`crate::runtime::python::ensure_python_resource_dir_at`].
 
 use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-const WORKER_SOURCE: &str = include_str!("../python/n2n_worker.py");
+const WORKER_SOURCE: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/python/n2n_worker.py"));
 const WORKER_SCRIPT_NAME: &str = "n2n_worker.py";
 
 /// Per-class onset timestamps. Keys are the n2n 4-class names:

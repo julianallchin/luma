@@ -126,7 +126,7 @@ impl StorageRoot {
     /// `<root>/models` — model weights Luma cannot *ship* but may fetch from
     /// their source on first use. Currently just the genre worker's
     /// `discogs-effnet-bsdynamic-1.onnx` (CC BY-NC-ND, so never bundled or
-    /// committed; `genre_worker::ensure_model` downloads it checksum-pinned
+    /// committed; `genre::process::ensure_model` downloads it checksum-pinned
     /// from MTG's server). A manually dropped-in file is honored and skips the
     /// download; see `docs/genre-model.md`.
     pub fn models_dir(&self) -> PathBuf {

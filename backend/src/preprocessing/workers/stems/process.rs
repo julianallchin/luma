@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
-const WORKER_SOURCE: &str = include_str!("../python/audio_preprocessor.py");
+const WORKER_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/audio_preprocessor.py"
+));
 const WORKER_SCRIPT_NAME: &str = "audio_preprocessor.py";
 const DEMUCS_MODEL: &str = "htdemucs";
 
@@ -40,7 +43,7 @@ pub fn separate_stems(
         .stderr(Stdio::piped());
 
     // Prepend bundled ffmpeg to PATH so the Python worker can find it
-    if let Some(ffmpeg_dir) = crate::ffmpeg_env::ffmpeg_dir() {
+    if let Some(ffmpeg_dir) = crate::runtime::ffmpeg::ffmpeg_dir() {
         let path_var = std::env::var("PATH").unwrap_or_default();
         let sep = if cfg!(windows) { ";" } else { ":" };
         cmd.env(

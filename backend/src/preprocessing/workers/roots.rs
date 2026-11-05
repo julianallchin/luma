@@ -5,6 +5,8 @@
 //! returns an error and the scheduler skips it for this run; it will retry
 //! once stems exist.
 
+pub(crate) mod process;
+
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -13,7 +15,6 @@ use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 use crate::preprocessing::workers::stems::find_stem_file;
-use crate::root_worker;
 
 pub struct RootsPreprocessor;
 
@@ -46,7 +47,7 @@ impl Preprocessor for RootsPreprocessor {
         let workers = ctx.workers().clone();
 
         let root_data =
-            tokio::task::spawn_blocking(move || root_worker::compute_roots(&workers, &sources))
+            tokio::task::spawn_blocking(move || process::compute_roots(&workers, &sources))
                 .await
                 .map_err(|e| format!("Root worker task failed: {e}"))??;
         ctx.checkpoint()?;

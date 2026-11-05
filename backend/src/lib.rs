@@ -2,10 +2,7 @@ pub mod agent;
 pub mod agent_execution;
 pub mod annotation_preview;
 pub mod audio;
-mod beat_worker;
 mod canonical_json;
-mod classifier_worker;
-mod cmd_util;
 mod compositor;
 pub mod controls;
 /// Compile a saved score for read-only render replay and diagnostics.
@@ -15,35 +12,29 @@ pub mod database;
 pub mod dispatch;
 mod engine_dj;
 pub mod eval;
-mod ffmpeg_env;
 pub mod fixtures;
-mod genre_worker;
 mod inputs;
 pub mod laser;
 /// Where a test that fakes the analysis workers puts a stand-in genre model,
 /// so the genre stage does not download the real one.
-pub use genre_worker::MODEL_FILE_NAME as GENRE_MODEL_FILE_NAME;
+pub use preprocessing::workers::genre::process::MODEL_FILE_NAME as GENRE_MODEL_FILE_NAME;
 pub mod headless_host;
 pub mod host_audio;
-mod mert_worker;
 pub mod models;
 pub mod motors;
-mod n2n_worker;
 pub mod node_graph;
 mod output;
 mod perform;
 mod preprocessing;
 pub use preprocessing::AnalysisTaskGroup;
-pub mod python_env;
 pub mod recording;
 mod rekordbox;
 mod render_engine;
 pub mod resources;
-mod root_worker;
+pub mod runtime;
 pub mod services;
 pub mod settings;
 pub mod stage_render;
-mod stem_worker;
 pub mod storage;
 /// Record sync. `sync::service::Service` is the whole seam: a host hands it the
 /// PowerSync database and the state pool, and it connects, reports status and

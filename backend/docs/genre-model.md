@@ -4,7 +4,7 @@ The `genre` preprocessor classifies every bar into the 400-style Discogs
 taxonomy using **Discogs-EffNet** from the Essentia / MTG-UPF model zoo. Unlike
 every other model in Luma, its weights are **not bundled**: they are downloaded
 on first use, directly from MTG's server, checksum-pinned
-(`genre_worker::ensure_model`).
+(`genre::process::ensure_model`).
 
 ## Licensing (read this first)
 
@@ -33,7 +33,7 @@ commercial build, obtain the proprietary license from MTG.**
 
 ## How the weights arrive
 
-On the first `genre` run, `genre_worker::ensure_model` downloads
+On the first `genre` run, `genre::process::ensure_model` downloads
 `discogs-effnet-bsdynamic-1.onnx` (~18 MB) from
 
     https://essentia.upf.edu/models/music-style-classification/discogs-effnet/
@@ -44,13 +44,13 @@ into the app config `models` directory:
 - Linux: `~/.config/com.luma.luma/models/`
 - Windows: `%APPDATA%\com.luma.luma\models\`
 
-The download is SHA-256-pinned (`MODEL_SHA256` in `genre_worker.rs`) and lands
+The download is SHA-256-pinned (`MODEL_SHA256` in `preprocessing/workers/genre/process.rs`) and lands
 via `.part` + atomic rename, so a crashed or corrupt download can never be
 mistaken for the model. If MTG republishes the checkpoint the pin fails closed:
 verify the new file and bump the constant deliberately, because the worker's
 label-order assertion is only known to hold for the pinned file. A manually
 placed file is honored as-is and skips the download. Override the directory
-with `LUMA_MODELS_DIR` (the Python worker honours it, and `genre_worker.rs`
+with `LUMA_MODELS_DIR` (the Python worker honours it, and `preprocessing/workers/genre/process.rs`
 sets it from the resolved storage root).
 
 If the download fails (offline, checksum drift), the preprocessor fails per

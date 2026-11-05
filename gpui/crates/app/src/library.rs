@@ -840,7 +840,7 @@ impl Library {
         // as long as the library lives. It handles its own sign-in state —
         // a 401 backs it off, and the next sign-in's push wakes it.
         if desktop {
-            let ready = luma_lib::python_env::setup_python_env_background(
+            let ready = luma_lib::runtime::python::setup_python_env_background(
                 headless_env::cache_dir()?,
                 luma_lib::resources::resource_dir(),
                 events.clone(),

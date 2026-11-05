@@ -334,7 +334,7 @@ impl Codec {
 /// enough: distribution builds list it on machines with no NVIDIA GPU, so one
 /// black frame is encoded to find out. The bundled static build has no NVENC.
 fn pick_encoder() -> (PathBuf, Codec) {
-    let bundled = crate::ffmpeg_env::ffmpeg_path();
+    let bundled = crate::runtime::ffmpeg::ffmpeg_path();
     if cfg!(target_os = "macos") {
         return (bundled, Codec::VideoToolbox);
     }

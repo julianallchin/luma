@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use crate::agent_execution::artifacts::SCRATCH_DIR;
-use crate::cmd_util::new_process_group;
+use crate::runtime::command::new_process_group;
 
 /// The filesystem and environment authority one worker gets.
 ///

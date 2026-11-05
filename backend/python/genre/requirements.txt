@@ -1,6 +1,6 @@
 # Python dependencies for the per-bar genre worker (Discogs-EffNet ONNX).
 #
-# torch / torchaudio / torchvision are NOT pinned here — python_env.rs strips
+# torch / torchaudio / torchvision are NOT pinned here — runtime/python.rs strips
 # them at write time so the GPU wheels installed in step 1 aren't overwritten
 # by CPU PyPI wheels. The worker's mel frontend uses torchaudio from that
 # step-1 install.

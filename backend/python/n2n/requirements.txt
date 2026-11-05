@@ -9,7 +9,7 @@
 # by the `mert` preprocessor, so transformers is no longer pulled in here
 # (it's installed for the mert worker's requirements).
 #
-# torch / torchaudio / torchvision are NOT pinned here — python_env.rs
+# torch / torchaudio / torchvision are NOT pinned here — runtime/python.rs
 # strips them at write time so the cu128 GPU wheels installed in step 1
 # aren't overwritten by CPU PyPI wheels.
 soundfile>=0.12.0

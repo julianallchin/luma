@@ -1,8 +1,7 @@
 //! Concrete preprocessor implementations.
 //!
-//! Each module wraps an existing python-call worker (`beat_worker`,
-//! `stem_worker`, `root_worker`) in a [`Preprocessor`] impl. The python-call
-//! layer is unchanged; this module owns DB persistence + scheduler wiring.
+//! Each module is one [`Preprocessor`]: it owns the DB persistence and the
+//! scheduler wiring, and its `process` submodule runs the Python worker.
 //!
 //! Bar-indexed preprocessors (`classifier`, `genre`) additionally share the
 //! two helpers below, so they agree on what "bar N" means and self-heal the

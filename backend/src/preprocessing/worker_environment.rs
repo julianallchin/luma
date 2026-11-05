@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::python_env;
+use crate::runtime::python as python_env;
 
 #[derive(Clone, Debug)]
 pub struct WorkerEnvironment {
@@ -114,7 +114,7 @@ impl WorkerEnvironment {
             .to_path_buf();
 
         let mut cmd = Command::new(python);
-        crate::cmd_util::no_window(&mut cmd);
+        crate::runtime::command::no_window(&mut cmd);
         cmd.env("PYTHONUNBUFFERED", "1")
             .current_dir(workdir)
             .arg(script);

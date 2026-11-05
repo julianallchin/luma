@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::sandbox;
 use super::workspace::{PythonWorkspaceService, WorkerEnv};
-use crate::python_env;
+use crate::runtime::python as python_env;
 use crate::storage::StorageRoot;
 
 /// The app cache directory: where the managed venv and the deployed

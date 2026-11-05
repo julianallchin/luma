@@ -183,7 +183,7 @@ bar by bar.
 
 The `genre` node is the one preprocessor whose model Luma does not ship: the
 Essentia Discogs-EffNet weights are CC BY-NC-ND 4.0, so they are never bundled
-(`include_bytes!`) or committed. Instead `genre_worker::ensure_model` downloads
+(`include_bytes!`) or committed. Instead `workers::genre::process::ensure_model` downloads
 them on first use from MTG's own server into `<app config>/models/`,
 checksum-pinned — Luma never redistributes the file, it only fetches from the
 source. Acceptable while Luma is internal; a commercially distributed build
@@ -197,4 +197,4 @@ anything new; this is an exception forced by licensing, not a pattern to copy.
 - Scheduler + topo + dedup: [`scheduler.rs`](scheduler.rs)
 - Failure backoff: [`failures.rs`](failures.rs)
 - Generic Kahn's: [`../topo.rs`](../topo.rs)
-- Python bootstrap (venv, requirements, weight downloads): [`../python_env.rs`](../python_env.rs)
+- Python bootstrap (venv, requirements, weight downloads): [`../runtime/python.rs`](../runtime/python.rs)

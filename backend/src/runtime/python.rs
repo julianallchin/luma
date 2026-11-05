@@ -12,27 +12,27 @@ const PY_MAX_VERSION_EXCLUSIVE: (u32, u32) = (3, 13);
 const REQUIREMENT_FILES: &[(&str, &str)] = &[
     (
         "requirements.txt",
-        include_str!("../python/requirements.txt"),
+        include_str!("../../python/requirements.txt"),
     ),
     (
         "consonance-ACE/requirements.txt",
-        include_str!("../python/consonance-ACE/requirements.txt"),
+        include_str!("../../python/consonance-ACE/requirements.txt"),
     ),
     (
         "mert/requirements.txt",
-        include_str!("../python/mert/requirements.txt"),
+        include_str!("../../python/mert/requirements.txt"),
     ),
     (
         "n2n/requirements.txt",
-        include_str!("../python/n2n/requirements.txt"),
+        include_str!("../../python/n2n/requirements.txt"),
     ),
     (
         "classifier/requirements.txt",
-        include_str!("../python/classifier/requirements.txt"),
+        include_str!("../../python/classifier/requirements.txt"),
     ),
     (
         "genre/requirements.txt",
-        include_str!("../python/genre/requirements.txt"),
+        include_str!("../../python/genre/requirements.txt"),
     ),
 ];
 
@@ -266,7 +266,7 @@ pub fn setup_python_env_background(
     resource_dir: Option<PathBuf>,
     events: Events,
 ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
-    crate::ffmpeg_env::init_headless();
+    crate::runtime::ffmpeg::init_headless();
     let (ready, receiver) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let error_path = cache_dir.join(".python-env-error");
@@ -290,7 +290,7 @@ pub fn setup_python_env_background(
     receiver
 }
 
-const MERT_PRELOAD_SOURCE: &str = include_str!("../python/mert_preload.py");
+const MERT_PRELOAD_SOURCE: &str = include_str!("../../python/mert_preload.py");
 const MERT_PRELOAD_SCRIPT_NAME: &str = "mert_preload.py";
 
 /// Pre-fetch model weights into the HuggingFace cache so the classifier
@@ -303,7 +303,7 @@ fn preload_model_weights(cache_dir: &Path, python_path: &Path) -> Result<(), Str
     let script_path =
         ensure_worker_script_at(cache_dir, MERT_PRELOAD_SCRIPT_NAME, MERT_PRELOAD_SOURCE)?;
     let mut cmd = Command::new(python_path);
-    crate::cmd_util::no_window(&mut cmd);
+    crate::runtime::command::no_window(&mut cmd);
     let output = cmd
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
@@ -562,7 +562,7 @@ fn resolve_torch_install() -> TorchInstall {
 /// Returns `None` if nvidia-smi is absent or fails.
 fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     // 1. Driver CUDA version from the standard nvidia-smi header
-    let header = crate::cmd_util::no_window(&mut Command::new("nvidia-smi"))
+    let header = crate::runtime::command::no_window(&mut Command::new("nvidia-smi"))
         .output()
         .ok()?;
     if !header.status.success() {
@@ -572,7 +572,7 @@ fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     let driver_cuda = parse_nvidia_smi_cuda_version(&header_text)?;
 
     // 2. Compute capability via the structured query interface
-    let query = crate::cmd_util::no_window(
+    let query = crate::runtime::command::no_window(
         Command::new("nvidia-smi").args(["--query-gpu=compute_cap", "--format=csv,noheader"]),
     )
     .output()
@@ -667,7 +667,7 @@ fn create_virtual_env(resource_dir: Option<&Path>, env_dir: &Path) -> Result<(),
     let system_python = resolve_bundled_python(resource_dir)
         .ok_or_else(|| "Unable to locate supported python interpreter".to_string())?;
 
-    let output = crate::cmd_util::no_window(
+    let output = crate::runtime::command::no_window(
         Command::new(&system_python)
             .args(["-m", "venv"])
             .arg(env_dir),
@@ -688,7 +688,7 @@ fn create_virtual_env(resource_dir: Option<&Path>, env_dir: &Path) -> Result<(),
 }
 
 fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
-    crate::cmd_util::no_window(cmd);
+    crate::runtime::command::no_window(cmd);
     let output = cmd
         .output()
         .map_err(|e| format!("Failed to {}: {}", action, e))?;
@@ -765,7 +765,7 @@ fn interpreter_supported(path: &Path) -> Result<bool, String> {
 }
 
 fn interpreter_version_path(path: &Path) -> Result<(u32, u32), String> {
-    let output = crate::cmd_util::no_window(Command::new(path).arg("--version"))
+    let output = crate::runtime::command::no_window(Command::new(path).arg("--version"))
         .output()
         .map_err(|e| {
             format!(

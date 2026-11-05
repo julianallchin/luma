@@ -1,13 +1,14 @@
 //! BeatGridPreprocessor — runs `beat_this` via the python beat worker.
 //!
-//! Wraps the existing [`crate::beat_worker::compute_beats`] function; this
+//! Wraps the existing [`crate::preprocessing::workers::beat_grid::process::compute_beats`] function; this
 //! preprocessor owns scheduling and persistence only.
+
+pub(crate) mod process;
 
 use std::path::Path;
 
 use async_trait::async_trait;
 
-use crate::beat_worker;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
@@ -38,7 +39,7 @@ impl Preprocessor for BeatGridPreprocessor {
         let workers = ctx.workers().clone();
 
         let beat_data =
-            tokio::task::spawn_blocking(move || beat_worker::compute_beats(&workers, &path))
+            tokio::task::spawn_blocking(move || process::compute_beats(&workers, &path))
                 .await
                 .map_err(|e| format!("Beat worker task failed: {e}"))??;
         ctx.checkpoint()?;

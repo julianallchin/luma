@@ -5,7 +5,7 @@
 # overlap-add chunking, writes a per-track .npy cache. Both the bar
 # classifier and the n2n drum-onset worker consume the cache.
 #
-# torch / torchaudio / torchvision are NOT pinned here — python_env.rs
+# torch / torchaudio / torchvision are NOT pinned here — runtime/python.rs
 # strips them at write time so the cu128 GPU wheels installed in step 1
 # aren't overwritten by CPU PyPI wheels. transformers + accelerate pull
 # torch transitively; pip respects the already-installed version.

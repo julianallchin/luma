@@ -2,7 +2,10 @@ use crate::preprocessing::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const WORKER_SOURCE: &str = include_str!("../python/ace_chord_sections_worker.py");
+const WORKER_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/ace_chord_sections_worker.py"
+));
 const WORKER_SCRIPT_NAME: &str = "ace_chord_sections_worker.py";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

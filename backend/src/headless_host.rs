@@ -156,7 +156,7 @@ pub async fn boot(config: &HostConfig) -> Result<AppServices, String> {
     // No `AppHandle` here, so the bundled binary is found from the executable's
     // own location instead of a packaged resource directory. Without this a headless
     // host falls through to system PATH and fails at spawn time.
-    crate::ffmpeg_env::init_headless();
+    crate::runtime::ffmpeg::init_headless();
 
     let db = init_app_db_at(storage.path()).await?;
     let state_db = init_state_db_at(storage.path()).await?;

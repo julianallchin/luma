@@ -2,14 +2,14 @@
 //!
 //! ⚠ The model weights are **CC BY-NC-ND 4.0** (Essentia / MTG-UPF model zoo)
 //! and are *not* bundled or committed: no `include_bytes!` here, unlike
-//! [`crate::classifier_worker`]. They are downloaded on first use straight from
+//! [`crate::preprocessing::workers::classifier::process`]. They are downloaded on first use straight from
 //! MTG's own server into `<app config>/models/` (checksum-pinned), so Luma
 //! never redistributes them — fine while Luma is internal, but a commercially
 //! distributed build still needs MTG's proprietary license. See
 //! `docs/genre-model.md`.
 //!
 //! Bar boundaries go in on stdin as `[[start, end], ...]` — same shape and
-//! reason as [`crate::classifier_worker`] (argv can't carry a few hundred bars
+//! reason as [`crate::preprocessing::workers::classifier::process`] (argv can't carry a few hundred bars
 //! on every platform). The worker answers with the payload below on stdout.
 
 use std::io::Write;
@@ -23,7 +23,10 @@ use crate::preprocessing::WorkerEnvironment;
 use crate::storage::StorageRoot;
 use serde::{Deserialize, Serialize};
 
-const WORKER_SOURCE: &str = include_str!("../python/genre_worker.py");
+const WORKER_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/genre_worker.py"
+));
 const WORKER_SCRIPT_NAME: &str = "genre_worker.py";
 
 /// Model file under [`StorageRoot::models_dir`], fetched by [`ensure_model`].
@@ -132,7 +135,7 @@ pub fn analyze_genres(
     let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let mut child = cmd
         .env("LUMA_MODELS_DIR", &models_dir)
-        .env("LUMA_FFMPEG", crate::ffmpeg_env::ffmpeg_path())
+        .env("LUMA_FFMPEG", crate::runtime::ffmpeg::ffmpeg_path())
         .arg(audio_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

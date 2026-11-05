@@ -2,7 +2,10 @@ use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::path::Path;
 
-const WORKER_SOURCE: &str = include_str!("../python/beat_worker.py");
+const WORKER_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/beat_worker.py"
+));
 const WORKER_SCRIPT_NAME: &str = "beat_worker.py";
 
 #[derive(Debug, Clone)]

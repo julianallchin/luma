@@ -4,19 +4,21 @@
 //! ~1 s analysis patches onto Luma's bar axis, so the track agent can ask
 //! "what is this bar's genre?" rather than only "what is this track?". The
 //! inference logic lives in `python/genre_worker.py`; see
-//! [`crate::genre_worker`] for the process bridge.
+//! [`crate::preprocessing::workers::genre::process`] for the process bridge.
 //!
 //! Bar boundaries come from [`super::build_bar_boundaries`] — the same
 //! function the bar classifier uses — so `features.bars[i]` and
 //! `features.genres[i]` describe the same slice of audio.
 //!
 //! ⚠ The model weights are **CC BY-NC-ND 4.0** (Essentia / MTG-UPF model zoo)
-//! and are not bundled: `genre_worker::ensure_model` downloads them on first
+//! and are not bundled: `process::ensure_model` downloads them on first
 //! use from MTG's own server, checksum-pinned, into `<app config>/models/`.
 //! If the download fails (offline, checksum drift) the failure is recorded in
 //! `preprocessing_failures` with the standard backoff, so a library imported
 //! without connectivity simply carries no genre rows yet and every other node
 //! proceeds normally. See `docs/genre-model.md`.
+
+pub(crate) mod process;
 
 use std::path::Path;
 
@@ -24,7 +26,6 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::database::local::tracks as tracks_db;
-use crate::genre_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 use crate::preprocessing::workers::{build_bar_boundaries, list_pending_bar_aligned};
@@ -82,12 +83,7 @@ impl Preprocessor for GenrePreprocessor {
         let workers = ctx.workers().clone();
         let storage = ctx.storage().clone();
         let analysis = tokio::task::spawn_blocking(move || {
-            genre_worker::analyze_genres(
-                &workers,
-                &storage,
-                Path::new(&audio_path),
-                &bar_boundaries,
-            )
+            process::analyze_genres(&workers, &storage, Path::new(&audio_path), &bar_boundaries)
         })
         .await
         .map_err(|e| format!("Genre worker task failed: {e}"))??;

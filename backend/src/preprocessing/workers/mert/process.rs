@@ -10,7 +10,10 @@ use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-const WORKER_SOURCE: &str = include_str!("../python/mert_worker.py");
+const WORKER_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/mert_worker.py"
+));
 const WORKER_SCRIPT_NAME: &str = "mert_worker.py";
 
 /// Result of a successful MERT extraction. Both caches written by one

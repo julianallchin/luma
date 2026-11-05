@@ -20,9 +20,9 @@ use crate::agent_execution::artifacts::{
 };
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::{AxisSpec, Provenance, TensorRef};
-use crate::classifier_worker::StoredBarClassifications;
 use crate::database::local;
 use crate::preprocessing::workers::build_bar_boundaries;
+use crate::preprocessing::workers::classifier::process::StoredBarClassifications;
 
 /// Drum-onset classes the n2n worker emits.
 pub const DRUM_CLASSES: [&str; 4] = ["kick", "snare", "hat", "cymbal"];
@@ -342,8 +342,10 @@ async fn bars(
 /// F1-optimal per-tag thresholds bundled with the classifier weights. Flat 0.5
 /// badly over-suppresses rare tags (`vocal_chop` is 0.165).
 fn bundled_thresholds() -> Result<BTreeMap<String, f64>, String> {
-    let raw: Value = serde_json::from_str(crate::classifier_worker::bundled_thresholds())
-        .map_err(|e| format!("the bundled classifier thresholds could not be parsed: {e}"))?;
+    let raw: Value = serde_json::from_str(
+        crate::preprocessing::workers::classifier::process::bundled_thresholds(),
+    )
+    .map_err(|e| format!("the bundled classifier thresholds could not be parsed: {e}"))?;
     let map = raw
         .get("thresholds")
         .and_then(|v| v.as_object())
@@ -364,8 +366,8 @@ fn bundled_thresholds() -> Result<BTreeMap<String, f64>, String> {
 /// Stored shape of `track_genres.genres_json` — see `workers/genre.rs`.
 #[derive(serde::Deserialize)]
 struct StoredGenres {
-    bars: Vec<crate::genre_worker::BarGenres>,
-    track_top: Vec<crate::genre_worker::GenreScore>,
+    bars: Vec<crate::preprocessing::workers::genre::process::BarGenres>,
+    track_top: Vec<crate::preprocessing::workers::genre::process::GenreScore>,
 }
 
 /// Per-bar Discogs style activations, on the **same bar axis as

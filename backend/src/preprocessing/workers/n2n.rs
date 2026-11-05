@@ -20,15 +20,16 @@
 //!
 //! Model weights (~190 MB EMA + config, fp32) ship inline at
 //! `python/n2n/weights.pt`; the vendored `python/n2n/` package contains the
-//! sampler / decoder / log-mel frontend. `python_env.rs` installs python
+//! sampler / decoder / log-mel frontend. `runtime/python.rs` installs python
 //! deps via `python/n2n/requirements.txt`.
+
+pub(crate) mod process;
 
 use std::path::Path;
 
 use async_trait::async_trait;
 
 use crate::database::local::tracks as tracks_db;
-use crate::n2n_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 
@@ -94,7 +95,7 @@ impl Preprocessor for N2NPreprocessor {
         let workers = ctx.workers().clone();
 
         let onsets = tokio::task::spawn_blocking(move || {
-            n2n_worker::compute_drum_onsets(
+            process::compute_drum_onsets(
                 &workers,
                 Path::new(&drum_audio),
                 Path::new(&drum_mert_path),

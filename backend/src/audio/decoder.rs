@@ -118,9 +118,9 @@ pub(super) fn decode_track_samples(path: &Path) -> Result<Vec<f32>, String> {
 }
 
 fn decode_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
-    let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
+    let ffmpeg = crate::runtime::ffmpeg::ffmpeg_path();
     let mut cmd = Command::new(&ffmpeg);
-    crate::cmd_util::no_window(&mut cmd);
+    crate::runtime::command::no_window(&mut cmd);
     let output = cmd
         .args([
             "-i",

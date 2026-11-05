@@ -274,7 +274,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
 - Build `luma-mcp` with `--bin luma-mcp` from `backend/`. It is a binary of
   the `luma` package, not a package.
 - A worktree needs `git submodule update --init` before the backend compiles:
-  `backend/src/python_env.rs` embeds the consonance-ACE requirements file.
+  `backend/src/runtime/python.rs` embeds the consonance-ACE requirements file.
   Give each worktree its own absolute `CARGO_TARGET_DIR` or its own `target/`.
 
 **Measuring**

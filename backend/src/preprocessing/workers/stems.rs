@@ -7,6 +7,8 @@
 //! files exist — a user-deleted stems directory triggers re-separation
 //! even if the SQL rows are still present.
 
+pub(crate) mod process;
+
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -14,7 +16,6 @@ use async_trait::async_trait;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::stem_worker;
 
 /// Stem names we must verify on disk. Mirrors the Demucs `htdemucs` outputs.
 const REQUIRED_STEM_NAMES: &[&str] = &["bass", "drums", "other", "vocals"];
@@ -60,7 +61,7 @@ impl Preprocessor for StemsPreprocessor {
         let workers = ctx.workers().clone();
 
         let stem_files = tokio::task::spawn_blocking(move || {
-            stem_worker::separate_stems(&workers, &track_path, &stems_root)
+            process::separate_stems(&workers, &track_path, &stems_root)
         })
         .await
         .map_err(|e| format!("Stem worker task failed: {e}"))??;

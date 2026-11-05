@@ -19,11 +19,12 @@
 //! ~54 MB. Acceptable for a desktop library; if it grows, switch to int8
 //! quantization or share the HF cache across luma installs.
 
+pub(crate) mod process;
+
 use async_trait::async_trait;
 use std::path::PathBuf;
 
 use crate::database::local::tracks as tracks_db;
-use crate::mert_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 use crate::preprocessing::workers::stems::find_stem_file;
@@ -92,13 +93,7 @@ impl Preprocessor for MertPreprocessor {
         let workers = ctx.workers().clone();
 
         let cache = tokio::task::spawn_blocking(move || {
-            mert_worker::compute_mert_cache(
-                &workers,
-                &audio_path,
-                &drum_path,
-                &out_fullmix,
-                &out_drum,
-            )
+            process::compute_mert_cache(&workers, &audio_path, &drum_path, &out_fullmix, &out_drum)
         })
         .await
         .map_err(|e| format!("MERT worker task failed: {e}"))??;

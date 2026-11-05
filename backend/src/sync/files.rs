@@ -80,9 +80,9 @@ fn transcode_to_ogg_opus(source: &std::path::Path) -> Option<Vec<u8>> {
     let tmp = tempfile::Builder::new().suffix(".ogg").tempfile().ok()?;
     let tmp_path = tmp.path().to_path_buf();
 
-    let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
+    let ffmpeg = crate::runtime::ffmpeg::ffmpeg_path();
     let mut cmd = Command::new(&ffmpeg);
-    crate::cmd_util::no_window(&mut cmd);
+    crate::runtime::command::no_window(&mut cmd);
     let output = cmd
         .args([
             "-i",

@@ -20,13 +20,22 @@ use std::process::Stdio;
 use crate::preprocessing::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
 
-const WORKER_SOURCE: &str = include_str!("../python/classifier_worker.py");
+const WORKER_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/classifier_worker.py"
+));
 const WORKER_SCRIPT_NAME: &str = "classifier_worker.py";
 
-const BUNDLED_WEIGHTS: &[u8] = include_bytes!("../python/classifier/bar_window_classifier.pt");
+const BUNDLED_WEIGHTS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/classifier/bar_window_classifier.pt"
+));
 const WEIGHTS_FILE_NAME: &str = "bar_window_classifier.pt";
 
-const BUNDLED_THRESHOLDS: &str = include_str!("../python/classifier/tag_thresholds.json");
+const BUNDLED_THRESHOLDS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/python/classifier/tag_thresholds.json"
+));
 
 /// Bundled per-tag suggestion thresholds (raw JSON from the training-time
 /// LOTO sweep), used in place of a flat 0.5 cutoff.

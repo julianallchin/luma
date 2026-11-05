@@ -3301,7 +3301,7 @@
     {
       "name": "python-env-progress",
       "emitters": [
-        "backend/src/python_env.rs"
+        "backend/src/runtime/python.rs"
       ],
       "listeners": [],
       "orphan": true

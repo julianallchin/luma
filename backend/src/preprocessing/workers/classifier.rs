@@ -15,7 +15,7 @@
 //! reconcile-on-startup re-classifies every track on launch.
 //!
 //! The inference logic lives in `python/classifier_worker.py`; the head
-//! weights ship inline via `include_bytes!` in `crate::classifier_worker`
+//! weights ship inline via `include_bytes!` in `crate::preprocessing::workers::classifier::process`
 //! and bumping `version` re-runs across every track on next launch (the
 //! standard preprocessing-DAG backfill pattern).
 //!
@@ -36,12 +36,14 @@
 //! `version`; the reconcile-on-startup loop will re-classify every
 //! track automatically.
 
+pub(crate) mod process;
+
 use std::path::Path;
 
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::classifier_worker::{self, StoredBarClassifications};
+use self::process::StoredBarClassifications;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
@@ -112,7 +114,7 @@ impl Preprocessor for ClassifierPreprocessor {
         let first_bar = bar_boundaries[0];
         let workers = ctx.workers().clone();
         let analysis = tokio::task::spawn_blocking(move || {
-            classifier_worker::classify_bars(&workers, Path::new(&mert_path), &bar_boundaries)
+            process::classify_bars(&workers, Path::new(&mert_path), &bar_boundaries)
         })
         .await
         .map_err(|e| format!("Classifier worker task failed: {e}"))??;
@@ -140,8 +142,8 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
 
+    use super::process::{self, ClassifierAnalysis, StoredBarClassifications};
     use super::ClassifierPreprocessor;
-    use crate::classifier_worker::{self, ClassifierAnalysis, StoredBarClassifications};
     use crate::preprocessing::preprocessor::Preprocessor;
     use crate::preprocessing::registry;
     use crate::preprocessing::scheduler::topo_layers;
@@ -399,6 +401,6 @@ mod tests {
         // Sanity: include_bytes! resolved against the real .pt file.
         // Bundled checkpoint should be ~1 MB; cheap protection against an
         // empty placeholder making it past review.
-        assert!(classifier_worker::bundled_weights_len() > 100_000);
+        assert!(process::bundled_weights_len() > 100_000);
     }
 }

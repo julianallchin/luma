@@ -3,7 +3,7 @@
 use futures_util::StreamExt;
 use luma_lib::{
     agent::{engine::Engine, AgentService, ThreadScope, TurnEvent, TurnOutcome},
-    dispatch::{dispatch, SharedServices},
+    dispatch::dispatch,
     headless_host::{boot, HostConfig},
 };
 
@@ -127,4 +127,3 @@ async fn run() -> Result<(), String> {
     drop(turn);
     outcome
 }
-

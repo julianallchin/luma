@@ -421,7 +421,9 @@ pub(crate) mod tests {
 
     #[test]
     fn hydrate_writes_a_session_file_at_the_resumable_path() {
-        let _env = CLAUDE_CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = CLAUDE_CONFIG_DIR_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let scratch = tempfile::tempdir().unwrap();
         std::env::set_var("CLAUDE_CONFIG_DIR", scratch.path());
         let cwd = tempfile::tempdir().unwrap();
