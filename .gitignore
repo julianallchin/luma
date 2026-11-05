@@ -40,7 +40,8 @@ __pycache__/
 *.pyo
 
 # Local tool configs
-.claude/
+.claude/*
+!.claude/settings.json
 .mcp.json
 
 # SQLite databases
