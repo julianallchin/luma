@@ -3,7 +3,6 @@
 
 use uuid::Uuid;
 
-use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::lasers::{LaserLimit, LaserZone};
 
@@ -74,20 +73,6 @@ pub async fn save_zone(
     Ok((done.rows_affected() == 1).then_some(zone))
 }
 
-/// Answers how many zones it deleted: one, or none when `id` is not this
-/// venue's. Laser clips naming it draw in the venue's first zone.
-pub async fn delete_zone(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
-    let venue_id = access.venue_id().to_owned();
-    deletes::delete_where(
-        access.connection(),
-        "laser_zones",
-        "id = ? AND venue_id = ?",
-        &[id, &venue_id],
-    )
-    .await
-    .map(|deleted| deleted as u64)
-}
-
 /// Every projector limit in the venue.
 pub async fn list_limits(access: &mut impl AuthorizedVenue) -> Result<Vec<LaserLimit>, String> {
     let venue_id = access.venue_id().to_owned();
@@ -107,50 +92,6 @@ pub async fn list_limits(access: &mut impl AuthorizedVenue) -> Result<Vec<LaserL
             }
         })
         .collect())
-}
-
-/// Set a projector's limit, or clear it with `None`. Answers whether the
-/// fixture is this venue's.
-pub async fn set_limit(
-    access: &mut VenueAccess<'_, Write>,
-    fixture_id: &str,
-    points: Option<&[[f64; 2]]>,
-) -> Result<bool, String> {
-    let venue_id = access.venue_id().to_owned();
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM fixtures WHERE id = ? AND venue_id = ?)")
-            .bind(fixture_id)
-            .bind(&venue_id)
-            .fetch_one(&mut *access.connection())
-            .await
-            .map_err(|error| format!("Failed to read the fixture: {error}"))?;
-    if !exists {
-        return Ok(false);
-    }
-    let Some(points) = points else {
-        deletes::delete_where(
-            access.connection(),
-            "laser_limits",
-            "id = ? AND venue_id = ?",
-            &[fixture_id, &venue_id],
-        )
-        .await?;
-        return Ok(true);
-    };
-    let json = serde_json::to_string(points).map_err(|error| error.to_string())?;
-    let uid = access.principal().map(str::to_owned);
-    sqlx::query(
-        "INSERT INTO laser_limits (id, uid, venue_id, points) VALUES (?, ?, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET points = excluded.points",
-    )
-    .bind(fixture_id)
-    .bind(uid)
-    .bind(&venue_id)
-    .bind(json)
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|error| format!("Failed to save laser limit: {error}"))?;
-    Ok(true)
 }
 
 /// `20261025130000_laser_elements.sql` against the old laser nodes and the

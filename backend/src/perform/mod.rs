@@ -369,13 +369,6 @@ impl PerformSession {
         }
     }
 
-    /// Pin `deck` to `track_id`, or with `None`, match it automatically again.
-    /// A pinned track holds until the deck loads another.
-    pub fn assign(&self, deck: u8, track_id: Option<String>) -> Result<(), String> {
-        let run = self.shared.lock().run;
-        Shared::pin(&self.shared, run, deck, track_id)
-    }
-
     /// Everything live follow knows, extrapolated to now.
     pub fn state(&self) -> PerformState {
         let state = self.shared.lock();

@@ -19,57 +19,6 @@ use crate::packets::{
 };
 use crate::types::*;
 
-// ── Public discovery types ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DiscoveredDevice {
-    pub player: u8,
-    pub name: String,
-    pub ip: String,
-}
-
-/// Passively listen on port 50000 for CDJ keepalives for `timeout_ms` milliseconds.
-/// Returns unique CDJs found, sorted by player number.
-/// Does NOT perform the device-number claim handshake — safe to call before connecting.
-pub async fn discover_cdjs(timeout_ms: u64) -> Vec<DiscoveredDevice> {
-    let Ok(sock) = bind_announce_socket() else {
-        return vec![];
-    };
-    let mut buf = [0u8; 1500];
-    let mut discovered: HashMap<u8, DiscoveredDevice> = HashMap::new();
-    let deadline = sleep(Duration::from_millis(timeout_ms));
-    tokio::pin!(deadline);
-
-    loop {
-        tokio::select! {
-            _ = &mut deadline => break,
-            result = sock.recv_from(&mut buf) => {
-                if let Ok((len, addr)) = result {
-                    let data = &buf[..len];
-                    if let Some(pkt) = parse_keepalive(data) {
-                        let src_ip = match addr {
-                            std::net::SocketAddr::V4(a) => a.ip().to_string(),
-                            std::net::SocketAddr::V6(_) => pkt.ip.to_string(),
-                        };
-                        // Accept CDJ players (0x01, 0x03); skip mixers (0x02)
-                        if pkt.device_type != DEVICE_TYPE_MIXER && !discovered.contains_key(&pkt.player) {
-                            discovered.insert(pkt.player, DiscoveredDevice {
-                                player: pkt.player,
-                                name: pkt.name,
-                                ip: src_ip,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut result: Vec<DiscoveredDevice> = discovered.into_values().collect();
-    result.sort_by_key(|d| d.player);
-    result
-}
-
 // ── Public event + state types ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]

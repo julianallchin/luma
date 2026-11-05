@@ -157,27 +157,6 @@ async fn a_rekordbox_deck_is_matched_without_a_duration_and_followed() {
 }
 
 #[tokio::test]
-async fn an_unknown_track_is_unmatched_until_pinned() {
-    let (_dir, services, venue) = library().await;
-    let rkbx = Rkbx::start(&services, &venue).await;
-    rkbx.load(1, "Not In The Library", "Nobody", 90.0);
-    until(&services, |state| {
-        state
-            .decks
-            .iter()
-            .any(|d| d.id == 2 && d.track == DeckMatch::Unmatched)
-    })
-    .await;
-
-    services.perform.assign(2, Some("track".into())).unwrap();
-    let state = until(&services, |state| matched(state, 2).is_some()).await;
-    assert!(matches!(
-        matched(&state, 2),
-        Some(DeckMatch::Matched { manual: true, .. })
-    ));
-}
-
-#[tokio::test]
 async fn stopping_forgets_the_source_and_its_decks() {
     let (_dir, services, venue) = library().await;
     let rkbx = Rkbx::start(&services, &venue).await;

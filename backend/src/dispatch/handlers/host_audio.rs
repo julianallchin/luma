@@ -1,5 +1,5 @@
-//! Host-level audio playback: load a track or a segment of one, transport
-//! control, and a priming read of the transport state.
+//! Host-level audio playback: load a track, transport control, and a priming
+//! read of the transport state.
 //!
 //! Times crossing this boundary are **segment-relative** once loaded: the host
 //! remembers the segment's absolute start, so `host_seek` and the `currentTime`
@@ -15,69 +15,6 @@ use crate::audio::SAMPLE_RATE;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::dispatch::{AppServices, CommandError};
 use crate::host_audio::{HostAudioControl, HostAudioSnapshot};
-
-/// Load a slice of a track for playback. `start_time` and `end_time` are
-/// absolute track seconds; `end_time <= 0` means "to the end".
-pub async fn host_load_segment(
-    services: &AppServices,
-    track_id: String,
-    session: u64,
-    start_time: f32,
-    end_time: f32,
-) -> Result<(), CommandError> {
-    if !services.host_audio.begin_load(session, track_id.clone()) {
-        return Ok(());
-    }
-    services
-        .track_audio
-        .ensure(&track_id)
-        .await
-        .map_err(|error| CommandError::Internal(error.to_string()))?;
-    let pool = &services.db.0;
-    let mut access = VisibleTrackAccess::<Read>::read(pool, &track_id).await?;
-    let admitted_principal = access.principal().map(str::to_owned);
-    let info = crate::database::local::tracks::get_track_path_and_hash_for_connection(
-        access.connection(),
-        &track_id,
-    )
-    .await
-    .map_err(|e| CommandError::Internal(format!("Failed to fetch track: {}", e)))?;
-    drop(access);
-
-    let audio = decode(&info.file_path, &info.track_hash)?;
-
-    // Frame indices, then sample indices — the buffer is stereo interleaved.
-    let num_frames = audio.len() / 2;
-    let start_frame = (start_time * SAMPLE_RATE as f32).floor().max(0.0) as usize;
-    let end_frame = if end_time > 0.0 {
-        (end_time * SAMPLE_RATE as f32).ceil() as usize
-    } else {
-        num_frames
-    };
-
-    let samples = if start_frame >= num_frames {
-        Vec::new()
-    } else {
-        let capped_end_frame = end_frame.min(num_frames);
-        audio[start_frame * 2..capped_end_frame * 2].to_vec()
-    };
-
-    if samples.is_empty() {
-        return Err(CommandError::Invalid(
-            "Segment time range produced empty audio".into(),
-        ));
-    }
-
-    commit_segment(
-        services,
-        &track_id,
-        admitted_principal.as_deref(),
-        session,
-        samples,
-        start_time,
-    )
-    .await
-}
 
 /// Load a whole track for playback.
 /// Segment start is 0.0, so snapshot times equal absolute track times.
@@ -253,33 +190,6 @@ pub async fn host_set_loop_region(
         HostAudioControl::Loop {
             start: start_seconds,
             end: end_seconds,
-        },
-    )?)
-}
-
-pub async fn host_set_playback_rate(
-    services: &AppServices,
-    session: u64,
-    rate: f32,
-) -> Result<(), CommandError> {
-    Ok(services
-        .host_audio
-        .control(session, HostAudioControl::Rate { rate })?)
-}
-
-pub async fn host_set_playback_range(
-    services: &AppServices,
-    session: u64,
-    start_seconds: f32,
-    end_seconds: f32,
-    looping: bool,
-) -> Result<(), CommandError> {
-    Ok(services.host_audio.control(
-        session,
-        HostAudioControl::Range {
-            start: start_seconds,
-            end: end_seconds,
-            looping,
         },
     )?)
 }

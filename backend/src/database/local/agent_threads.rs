@@ -1184,46 +1184,6 @@ pub async fn record_thread_usage(
     Ok(())
 }
 
-/// Rename a thread. `updated_at` is bumped by the table trigger.
-pub async fn rename_thread(
-    pool: &SqlitePool,
-    thread_id: &str,
-    title: Option<&str>,
-    owner_user_id: Option<&str>,
-) -> Result<AgentThread, String> {
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|e| format!("Failed to begin agent thread rename: {e}"))?;
-    let result = sqlx::query(
-        "UPDATE agent_threads SET title = ?
-         WHERE id = ? AND uid IS ? AND lifecycle_state = 'active'
-           AND uid IS (
-               SELECT active_uid FROM auth_write_admission
-               WHERE singleton = 1 AND armed = 1 AND accepting = 1
-                 AND maintenance = 0 AND remote_writes = 0
-           )",
-    )
-    .bind(title)
-    .bind(thread_id)
-    .bind(owner_user_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|e| format!("Failed to rename agent thread: {e}"))?;
-
-    if result.rows_affected() == 0 {
-        return Err(thread_not_found(thread_id));
-    }
-
-    let thread =
-        get_thread_row_for_connection(&mut transaction, thread_id, owner_user_id, true).await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|e| format!("Failed to commit agent thread rename: {e}"))?;
-    Ok(thread)
-}
-
 /// Change only this principal's active conversation. Runtime selection is
 /// captured when a turn starts, so this preference applies to the next turn.
 pub async fn set_thread_selection(
@@ -1611,11 +1571,6 @@ mod tests {
             .is_err());
         }
 
-        assert!(
-            rename_thread(&pool, &alice.id, Some("stolen"), Some("alice"))
-                .await
-                .is_err()
-        );
         assert!(delete_thread(&pool, &alice.id, Some("alice"))
             .await
             .is_err());
@@ -1906,7 +1861,9 @@ mod tests {
         let source = create_thread(&pool, track_thread("track-1"), None)
             .await
             .unwrap();
-        rename_thread(&pool, &source.id, Some("Original"), None)
+        sqlx::query("UPDATE agent_threads SET title = 'Original' WHERE id = ?")
+            .bind(&source.id)
+            .execute(&pool)
             .await
             .unwrap();
         append_test_messages(
@@ -2266,22 +2223,5 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(node_count, 1);
-    }
-
-    #[tokio::test]
-    async fn rename_sets_and_clears_the_title() {
-        let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1"), None)
-            .await
-            .unwrap();
-        assert_eq!(thread.title, None);
-
-        let renamed = rename_thread(&pool, &thread.id, Some("Strobe pass"), None)
-            .await
-            .unwrap();
-        assert_eq!(renamed.title.as_deref(), Some("Strobe pass"));
-
-        let cleared = rename_thread(&pool, &thread.id, None, None).await.unwrap();
-        assert_eq!(cleared.title, None);
     }
 }

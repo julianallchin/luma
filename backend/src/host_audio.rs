@@ -19,16 +19,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::SAMPLE_RATE;
 
-const PLAYBACK_RATE_MIN: f32 = 0.25;
-const PLAYBACK_RATE_MAX: f32 = 2.0;
-const PLAYBACK_RATE_SCALE: u64 = 1u64 << 32;
+const FIXED_SCALE: u64 = 1u64 << 32;
 
 /// Source frames the output stream advances per device frame, in 32.32 fixed
-/// point: the playback rate times [`SAMPLE_RATE`] over the device's own rate.
-/// This is the one place 48 kHz audio meets the device's rate.
-fn step_fixed(rate: f32, device_rate: u32) -> u64 {
-    let rate = rate.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX) as f64;
-    (rate * SAMPLE_RATE as f64 / device_rate as f64 * PLAYBACK_RATE_SCALE as f64).round() as u64
+/// point: [`SAMPLE_RATE`] over the device's own rate. This is the one place
+/// 48 kHz audio meets the device's rate.
+fn step_fixed(device_rate: u32) -> u64 {
+    (SAMPLE_RATE as f64 / device_rate as f64 * FIXED_SCALE as f64).round() as u64
 }
 
 fn frame_to_fixed(frame: usize) -> u64 {
@@ -100,28 +97,6 @@ impl HostAudioState {
             HostAudioControl::Loop { start, end } => {
                 guard.set_loop_region(start, end);
                 guard.set_loop(start.is_some() && end.is_some());
-                Ok(())
-            }
-            HostAudioControl::Range {
-                start,
-                end,
-                looping,
-            } => {
-                let duration = guard.segment.as_ref().ok_or("No audio is loaded")?.duration;
-                if !start.is_finite()
-                    || !end.is_finite()
-                    || start < 0.
-                    || end <= start
-                    || start >= duration
-                {
-                    return Err("playback range needs finite bounds within the loaded audio".into());
-                }
-                guard.set_loop_region(Some(start), Some(end.min(duration)));
-                guard.set_loop(looping);
-                Ok(())
-            }
-            HostAudioControl::Rate { rate } => {
-                guard.set_playback_rate(rate);
                 Ok(())
             }
         }
@@ -247,15 +222,6 @@ pub enum HostAudioControl {
         start: Option<f32>,
         end: Option<f32>,
     },
-    /// A bounded audition stops or loops at the same audio sample boundary.
-    Range {
-        start: f32,
-        end: f32,
-        looping: bool,
-    },
-    Rate {
-        rate: f32,
-    },
 }
 
 /// Stereo interleaved audio at [`SAMPLE_RATE`].
@@ -312,10 +278,9 @@ mod session_tests {
             .unwrap();
         host.control(
             1,
-            HostAudioControl::Range {
-                start: 1.,
-                end: 2.,
-                looping: true,
+            HostAudioControl::Loop {
+                start: Some(1.),
+                end: Some(2.),
             },
         )
         .unwrap();
@@ -382,9 +347,7 @@ struct SharedAudioState {
     /// Whether looping is enabled
     loop_flag: AtomicBool,
     /// Source frames per device frame in fixed-point (32.32); see [`step_fixed`].
-    playback_rate_fp: AtomicU64,
-    /// The output device's sample rate.
-    device_rate: u32,
+    step_fp: u64,
     /// Loop region start frame (0 = track start). Effective only when loop_flag is set.
     loop_start_frame: AtomicUsize,
     /// Loop region end frame (usize::MAX = end of track). Effective only when loop_flag is set.
@@ -418,7 +381,6 @@ struct HostAudioInner {
     loop_start: Option<f32>, // seconds; None = start of track
     loop_end: Option<f32>,   // seconds; None = end of track
     audio_output_enabled: bool,
-    playback_rate: f32,
 
     segment_start_abs: f32, // Absolute start time of the loaded segment
 }
@@ -438,7 +400,6 @@ impl HostAudioInner {
             loop_start: None,
             loop_end: None,
             audio_output_enabled: true,
-            playback_rate: 1.0,
             segment_start_abs: 0.0,
         }
     }
@@ -470,7 +431,6 @@ impl HostAudioInner {
             self.stream = Some(Self::spawn_persistent_stream(
                 samples,
                 self.loop_enabled,
-                self.playback_rate,
                 ls,
                 le,
             )?);
@@ -514,8 +474,7 @@ impl HostAudioInner {
             if let Some(start) = self.start_instant.take() {
                 let elapsed = start.elapsed().as_secs_f32();
                 let duration = self.segment.as_ref().map(|s| s.duration).unwrap_or(0.0);
-                self.current_time =
-                    (self.start_offset + elapsed * self.playback_rate).min(duration);
+                self.current_time = (self.start_offset + elapsed).min(duration);
             }
         }
 
@@ -547,13 +506,7 @@ impl HostAudioInner {
             let samples: Vec<f32> = (*segment.samples).clone();
             let (ls, le) = self.loop_frames(samples.len() / 2);
 
-            if let Ok(stream) = Self::spawn_persistent_stream(
-                samples,
-                self.loop_enabled,
-                self.playback_rate,
-                ls,
-                le,
-            ) {
+            if let Ok(stream) = Self::spawn_persistent_stream(samples, self.loop_enabled, ls, le) {
                 // If currently playing, set up the stream state
                 if self.is_playing {
                     self.refresh_progress();
@@ -566,28 +519,6 @@ impl HostAudioInner {
                 }
                 self.stream = Some(stream);
             }
-        }
-    }
-
-    fn set_playback_rate(&mut self, rate: f32) {
-        let clamped = rate.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX);
-        if (self.playback_rate - clamped).abs() <= f32::EPSILON {
-            return;
-        }
-
-        if self.is_playing {
-            self.refresh_progress();
-            self.start_offset = self.current_time;
-            self.start_instant = Some(Instant::now());
-        }
-
-        self.playback_rate = clamped;
-
-        if let Some(stream) = &self.stream {
-            stream.shared.playback_rate_fp.store(
-                step_fixed(clamped, stream.shared.device_rate),
-                Ordering::SeqCst,
-            );
         }
     }
 
@@ -720,7 +651,7 @@ impl HostAudioInner {
 
         if let Some(start) = self.start_instant {
             let elapsed = start.elapsed().as_secs_f32();
-            let position = self.start_offset + elapsed * self.playback_rate;
+            let position = self.start_offset + elapsed;
 
             let loop_boundary = self.loop_end.unwrap_or(duration).min(duration);
             if self.loop_enabled && position >= loop_boundary {
@@ -764,7 +695,6 @@ impl HostAudioInner {
     fn spawn_persistent_stream(
         samples: Vec<f32>,
         loop_enabled: bool,
-        playback_rate: f32,
         loop_start_frame: usize,
         loop_end_frame: usize,
     ) -> Result<PersistentStream, String> {
@@ -801,8 +731,7 @@ impl HostAudioInner {
                     frame_idx_fp: AtomicU64::new(0),
                     is_outputting: AtomicBool::new(false),
                     loop_flag: AtomicBool::new(loop_enabled),
-                    playback_rate_fp: AtomicU64::new(step_fixed(playback_rate, device_rate)),
-                    device_rate,
+                    step_fp: step_fixed(device_rate),
                     loop_start_frame: AtomicUsize::new(loop_start_frame),
                     loop_end_frame: AtomicUsize::new(loop_end_frame),
                     samples,
@@ -822,12 +751,9 @@ impl HostAudioInner {
 
                             for frame in data.chunks_mut(out_ch) {
                                 let (left, right) = if is_outputting {
-                                    let playback_rate_fp = shared_for_callback
-                                        .playback_rate_fp
-                                        .load(Ordering::Relaxed);
                                     let current_fp = shared_for_callback
                                         .frame_idx_fp
-                                        .fetch_add(playback_rate_fp, Ordering::Relaxed);
+                                        .fetch_add(shared_for_callback.step_fp, Ordering::Relaxed);
                                     let current_frame = (current_fp >> 32) as usize;
 
                                     let is_looping =
@@ -847,8 +773,7 @@ impl HostAudioInner {
                                     if current_frame < effective_end {
                                         // Linear interpolation toward the next frame.
                                         let samples = &shared_for_callback.samples;
-                                        let frac =
-                                            (current_fp as u32) as f32 / PLAYBACK_RATE_SCALE as f32;
+                                        let frac = (current_fp as u32) as f32 / FIXED_SCALE as f32;
                                         let at = current_frame * 2;
                                         let next = (current_frame + 1).min(num_frames - 1) * 2;
                                         let lerp = |a: f32, b: f32| a + (b - a) * frac;
@@ -962,7 +887,7 @@ pub async fn reload_settings(host: &HostAudioState, pool: &sqlx::SqlitePool) -> 
 }
 
 #[cfg(test)]
-mod preview_tests {
+mod loop_tests {
     use super::*;
     use std::time::Duration;
 
@@ -978,33 +903,13 @@ mod preview_tests {
     }
 
     #[test]
-    fn bounded_audio_stops_or_wraps_at_the_same_boundary() {
+    fn a_loop_wraps_at_its_boundary() {
         let host = host();
         host.control(
             1,
-            HostAudioControl::Range {
-                start: 2.,
-                end: 4.,
-                looping: false,
-            },
-        )
-        .unwrap();
-        let mut inner = host.inner.lock().unwrap();
-        inner.is_playing = true;
-        inner.start_offset = 2.;
-        inner.start_instant = Some(Instant::now() - Duration::from_secs(3));
-        inner.refresh_progress();
-        assert!(!inner.is_playing);
-        assert_eq!(inner.current_time, 4.);
-        assert_eq!(inner.loop_frames(10 * F), (2 * F, 4 * F));
-        drop(inner);
-
-        host.control(
-            1,
-            HostAudioControl::Range {
-                start: 2.,
-                end: 4.,
-                looping: true,
+            HostAudioControl::Loop {
+                start: Some(2.),
+                end: Some(4.),
             },
         )
         .unwrap();
@@ -1016,40 +921,8 @@ mod preview_tests {
         assert!(inner.is_playing);
         assert!((inner.current_time - 3.).abs() < 0.01);
         assert_eq!(inner.loop_frames(10 * F), (2 * F, 4 * F));
-    }
+        drop(inner);
 
-    #[test]
-    fn playback_bounds_are_validated_and_cannot_overrun_samples() {
-        let host = host();
-        host.control(
-            1,
-            HostAudioControl::Range {
-                start: 2.,
-                end: 20.,
-                looping: false,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            host.inner.lock().unwrap().loop_frames(10 * F),
-            (2 * F, 10 * F)
-        );
-        for (start, end) in [(4., 2.), (-1., 4.), (10., 12.), (f32::NAN, 4.)] {
-            assert!(host
-                .control(
-                    1,
-                    HostAudioControl::Range {
-                        start: start,
-                        end: end,
-                        looping: true
-                    }
-                )
-                .is_err());
-            assert_eq!(
-                host.inner.lock().unwrap().loop_frames(10 * F),
-                (2 * F, 10 * F)
-            );
-        }
         host.control(
             1,
             HostAudioControl::Loop {

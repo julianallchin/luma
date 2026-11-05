@@ -28,7 +28,6 @@ pub mod inputs;
 pub mod output;
 pub mod perform;
 pub mod rekordbox;
-pub mod render_engine;
 pub mod scores;
 pub mod settings;
 pub mod stage;

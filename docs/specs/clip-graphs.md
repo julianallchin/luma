@@ -1423,8 +1423,7 @@ two opposite arms; Speed-up chase's event count grows; random: two nodes with
 the same settings differ, one linked node is equal.
 
 B: migrations, `rows.rs`, `schema.rs`, `graph_scores.rs`, `compile_clip`,
-`composable_patterns::preview`, dispatch queries `clip_graph_definitions`
-and `clip_presets`, `track_host/score.rs` (`clip_check`, 12-channel render
+`composable_patterns::preview`, `track_host/score.rs` (`clip_check`, 12-channel render
 with channel names), `bindings/providers/nodes.rs` (definitions) and a
 `presets` binding. Delete `node_graph/lighting.rs`. Tests: row round trip
 with name and graph; `save_score` diff writes `graph_json` only when the

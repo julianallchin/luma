@@ -177,40 +177,6 @@ pub async fn import_tracks(
     })
 }
 
-pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
-    services
-        .track_audio
-        .ensure(&track_id)
-        .await
-        .map_err(|error| CommandError::Internal(error.to_string()))?;
-    let epoch = services.analysis_tasks.current_epoch()?;
-    let pool = services.db.0.clone();
-    let storage = services.storage.clone();
-    let workers = services.workers.clone();
-    let events = services.events.clone();
-    let context = ImportEventContext {
-        import_id: uuid::Uuid::new_v4().to_string(),
-        source: "reprocess".to_string(),
-        done: 0,
-        total: 1,
-    };
-    services
-        .analysis_tasks
-        .spawn(epoch, move |analysis| async move {
-            track_service::run_background_analysis(
-                pool,
-                storage,
-                workers,
-                events,
-                vec![track_id],
-                analysis,
-                context,
-            )
-            .await;
-        })?;
-    Ok(())
-}
-
 /// A DJ library row's cover, as encoded image bytes — see
 /// [`crate::services::artwork`].
 pub async fn source_track_artwork(

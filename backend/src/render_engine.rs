@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::{Arena, Scene, Scope};
 use crate::models::universe::{PrimitiveState, UniverseState};
 use crate::perform::clock::DeckClock;
@@ -57,25 +56,6 @@ pub(crate) struct SceneUpdate {
     generation: u64,
 }
 
-/// Blink-twice identify sequence for one or more targets. A target is a
-/// member key: `"{fixture_id}"` (whole fixture) or `"{fixture_id}:{head}"`
-/// (single head).
-struct IdentifyState {
-    targets: Vec<String>,
-    start: Instant,
-}
-
-/// Two blinks over 0.6s: ON 0–0.15, OFF 0.15–0.3, ON 0.3–0.45, OFF 0.45–0.6
-const IDENTIFY_DURATION: f32 = 0.6;
-
-fn identify_dimmer(elapsed: f32) -> f32 {
-    if (elapsed < 0.15) || (elapsed >= 0.3 && elapsed < 0.45) {
-        1.0
-    } else {
-        0.0
-    }
-}
-
 pub(crate) struct RenderEngineInner {
     scene_generation: u64,
     pending_scenes: HashMap<SceneTarget, u64>,
@@ -89,8 +69,6 @@ pub(crate) struct RenderEngineInner {
     perform_latency: f32,
     /// The Perform set, over the decks or the editor.
     live: Option<LiveSet>,
-    /// Fixture identify blink (highest priority)
-    identify: Option<IdentifyState>,
     /// Reusable eval scratch arena, held across frames so the hot path stays warm.
     scratch: Arena,
 }
@@ -106,7 +84,6 @@ impl Default for RenderEngine {
                 perform_deck_states: Vec::new(),
                 perform_latency: 0.0,
                 live: None,
-                identify: None,
                 scratch: Arena::default(),
             })),
         }
@@ -121,7 +98,6 @@ impl RenderEngine {
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
         guard.live = None;
-        guard.identify = None;
         guard.scratch = Arena::default();
     }
 
@@ -136,34 +112,6 @@ impl RenderEngine {
     /// lock the loop does rather than handing the scene out.
     pub fn sample(&self, t: f32) -> Option<UniverseState> {
         let mut guard = self.inner.lock().expect("render engine poisoned");
-        if let Some(identify) = &guard.identify {
-            let elapsed = identify.start.elapsed().as_secs_f32();
-            if elapsed < IDENTIFY_DURATION {
-                let blink = PrimitiveState {
-                    dimmer: identify_dimmer(elapsed),
-                    color: [1.0, 1.0, 1.0],
-                    strobe: 0.0,
-                    position: [0.0, 0.0],
-                    speed: 0.0,
-                    aim: None,
-                };
-                let mut primitives = HashMap::new();
-                for target in &identify.targets {
-                    if target.contains(':') {
-                        primitives.insert(target.clone(), blink.clone());
-                    } else {
-                        for head in 0..16 {
-                            primitives.insert(format!("{target}:{head}"), blink.clone());
-                        }
-                    }
-                }
-                return Some(UniverseState {
-                    primitives,
-                    lasers: Vec::new(),
-                });
-            }
-            guard.identify = None;
-        }
         let base = if !guard.perform_deck_states.is_empty() {
             Some(render_perform_mix(&mut guard))
         } else {
@@ -281,18 +229,6 @@ impl RenderEngine {
             .pending_scenes
             .retain(|target, _| matches!(target, SceneTarget::Active | SceneTarget::Live));
         guard.perform_deck_states.clear();
-    }
-
-    /// Targets are member keys: `"fid"` (whole fixture) or `"fid:N"` (one head).
-    pub fn identify_targets(&self, targets: Vec<String>) {
-        if targets.is_empty() {
-            return;
-        }
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.identify = Some(IdentifyState {
-            targets,
-            start: Instant::now(),
-        });
     }
 }
 
@@ -420,78 +356,8 @@ fn score_mix(
     }
 }
 
-/// Resolve caller-supplied primitive targets through their fixture rows, then
-/// retain one admitted venue snapshot until the identify effect is installed.
-/// A mixed-venue or unknown target fails as one opaque not-found result.
-pub(crate) async fn authorize_identify_targets<'a>(
-    pool: &'a sqlx::SqlitePool,
-    targets: &[String],
-) -> Result<VenueAccess<'a, Read>, String> {
-    let fixture_ids = targets
-        .iter()
-        .map(|target| identify_fixture_id(target))
-        .collect::<Result<Vec<_>, _>>()?;
-    let first = fixture_ids
-        .first()
-        .ok_or_else(|| "Identify requires at least one fixture target".to_string())?;
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Fixture(first)).await?;
-    let venue_id = access.venue_id().to_owned();
-
-    for fixture_id in fixture_ids.into_iter().skip(1) {
-        let belongs: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM fixtures WHERE id = ? AND venue_id = ?")
-                .bind(fixture_id)
-                .bind(&venue_id)
-                .fetch_optional(access.connection())
-                .await
-                .map_err(|error| format!("Failed to authorize identify target: {error}"))?;
-        if belongs.is_none() {
-            return Err("Venue resource not found".into());
-        }
-    }
-    Ok(access)
-}
-
-fn identify_fixture_id(target: &str) -> Result<&str, String> {
-    let (fixture_id, head) = match target.split_once(':') {
-        Some((fixture_id, head)) => (fixture_id, Some(head)),
-        None => (target, None),
-    };
-    if fixture_id.is_empty()
-        || head.is_some_and(|head| head.is_empty() || head.parse::<usize>().is_err())
-    {
-        return Err("Invalid identify target".into());
-    }
-    Ok(fixture_id)
-}
-
 #[cfg(test)]
 mod tests {
-    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-
-    use super::{authorize_identify_targets, identify_fixture_id};
-
-    #[test]
-    fn native_sampling_identifies_then_returns_to_the_scene() {
-        let engine = super::RenderEngine::default();
-        engine.set_active_scene(Some(crate::eval::Scene::default()));
-        engine.identify_targets(vec!["fixture:3".into(), "multi".into()]);
-        let frame = engine.sample(0.0).unwrap();
-        assert_eq!(frame.primitives.len(), 17);
-        assert!(frame.primitives.contains_key("fixture:3"));
-        assert!(frame.primitives.contains_key("multi:15"));
-        engine
-            .inner
-            .lock()
-            .unwrap()
-            .identify
-            .as_mut()
-            .unwrap()
-            .start = std::time::Instant::now() - std::time::Duration::from_secs(10);
-        assert!(engine.sample(0.0).unwrap().primitives.is_empty());
-        assert!(engine.inner.lock().unwrap().identify.is_none());
-    }
-
     #[test]
     fn scene_updates_cannot_overwrite_newer_scores_or_reopen_closed_slots() {
         use super::{RenderEngine, SceneTarget};
@@ -541,86 +407,5 @@ mod tests {
         engine.finish_scene_update(other, Scene::default());
         assert!(engine.inner.lock().unwrap().pending_scenes.is_empty());
         assert!(engine.sample(0.0).is_some());
-    }
-
-    async fn identify_test_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
-        let directory = tempfile::tempdir().unwrap();
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(directory.path().join("render-identify.db"))
-                    .journal_mode(SqliteJournalMode::Wal)
-                    .create_if_missing(true)
-                    .foreign_keys(false),
-            )
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO venues (id, uid, name) VALUES
-                ('venue-a', 'alice', 'Venue A'),
-                ('venue-b', 'alice', 'Venue B');
-             INSERT INTO fixtures
-                (id, uid, venue_id, address, num_channels, manufacturer, model, mode_name, fixture_path)
-             VALUES
-                ('fixture-a', 'alice', 'venue-a', 1, 1, 'Test', 'A', 'Default', 'a.json'),
-                ('fixture-a2', 'alice', 'venue-a', 2, 1, 'Test', 'A2', 'Default', 'a2.json'),
-                ('fixture-b', 'alice', 'venue-b', 3, 1, 'Test', 'B', 'Default', 'b.json')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        (directory, pool)
-    }
-
-    #[test]
-    fn identify_target_parser_accepts_only_fixture_and_numeric_head_forms() {
-        assert_eq!(identify_fixture_id("fixture-a").unwrap(), "fixture-a");
-        assert_eq!(identify_fixture_id("fixture-a:0").unwrap(), "fixture-a");
-        assert_eq!(identify_fixture_id("fixture-a:42").unwrap(), "fixture-a");
-
-        for invalid in ["", ":0", "fixture-a:", "fixture-a:head", "fixture-a:0:1"] {
-            assert!(
-                identify_fixture_id(invalid).is_err(),
-                "accepted {invalid:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn identify_authorization_requires_one_admitted_venue_for_every_target() {
-        let (_directory, pool) = identify_test_pool().await;
-
-        let access =
-            authorize_identify_targets(&pool, &["fixture-a:0".into(), "fixture-a2".into()])
-                .await
-                .unwrap();
-        assert_eq!(access.venue_id(), "venue-a");
-        drop(access);
-
-        let mixed = authorize_identify_targets(&pool, &["fixture-a".into(), "fixture-b".into()])
-            .await
-            .err()
-            .unwrap();
-        assert_eq!(mixed, "Venue resource not found");
-
-        let unknown = authorize_identify_targets(&pool, &["fixture-a".into(), "missing".into()])
-            .await
-            .err()
-            .unwrap();
-        assert_eq!(unknown, "Venue resource not found");
-
-        crate::database::local::auth::arm_write_admission(&pool, Some("bob"))
-            .await
-            .unwrap();
-        let unauthorized = authorize_identify_targets(&pool, &["fixture-a".into()])
-            .await
-            .err()
-            .unwrap();
-        assert_eq!(unauthorized, "Venue resource not found");
     }
 }

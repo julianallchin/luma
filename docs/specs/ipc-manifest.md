@@ -7,40 +7,39 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**146 commands** across **27 domains** · **6 events**
+**128 commands** across **26 domains** · **6 events**
 
 ## Domains
 
 | Domain | Commands | Handlers |
 | --- | ---: | --- |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
-| `agent_threads` | 8 | `backend/src/dispatch/handlers/agent_threads.rs` |
+| `agent_threads` | 7 | `backend/src/dispatch/handlers/agent_threads.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
-| `controls` | 2 | `backend/src/dispatch/handlers/controls.rs` |
+| `controls` | 1 | `backend/src/dispatch/handlers/controls.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
-| `fixtures` | 13 | `backend/src/dispatch/handlers/fixtures.rs` |
+| `fixtures` | 12 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `folders` | 5 | `backend/src/dispatch/handlers/folders.rs` |
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
-| `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
+| `host_audio` | 6 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `inputs` | 6 | `backend/src/dispatch/handlers/inputs.rs` |
-| `lasers` | 6 | `backend/src/dispatch/handlers/lasers.rs` |
+| `lasers` | 1 | `backend/src/dispatch/handlers/lasers.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
-| `perform` | 15 | `backend/src/dispatch/handlers/perform.rs` |
+| `perform` | 13 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
-| `render_engine` | 2 | `backend/src/dispatch/handlers/render_engine.rs` |
-| `scores` | 11 | `backend/src/dispatch/handlers/scores.rs` |
+| `scores` | 9 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
-| `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
+| `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **146** | |
+| **total** | **128** | |
 
 ## Commands
 
@@ -60,7 +59,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `agent_thread_list` | `agentKind: Option<String>`<br>`subjectKind: Option<String>`<br>`subjectId: Option<String>` | `Vec<AgentThread>` |
 | `agent_thread_create` | `input: CreateAgentThreadInput` | `AgentThread` |
 | `agent_thread_append_messages` | `threadId: String`<br>`input: AppendAgentThreadMessagesInput` | `Vec<AgentThreadMessage>` |
-| `agent_thread_rename` | `threadId: String`<br>`title: Option<String>` | `AgentThread` |
 | `agent_thread_set_model` | `threadId: String`<br>`selection: crate::agent::engine::catalog::Selection` | `AgentThread` |
 | `agent_thread_set_actor` | `threadId: String`<br>`actor: String` | `()` |
 | `agent_thread_record_usage` | `usage: AgentThreadUsage` | `()` |
@@ -97,7 +95,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `control_list` | `venueId: String` | `Vec<Control>` |
-| `control_set` | `venueId: String`<br>`name: String`<br>`value: f64` | `()` |
 
 ### `distribute`
 
@@ -123,7 +120,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_patched_fixtures` | `venueId: String` | `Vec<PatchedFixture>` |
-| `get_fixture_facings` | `venueId: String` | `Vec<FixtureFacing>` |
 | `initialize_fixtures` | — | `usize` |
 | `search_fixtures` | `query: String`<br>`offset: usize`<br>`limit: usize` | `Vec<FixtureEntry>` |
 | `get_fixture_definition` | `path: String` | `FixtureDefinition` |
@@ -170,13 +166,10 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `host_load_track` | `trackId: String`<br>`session: u64` | `()` |
-| `host_load_segment` | `trackId: String`<br>`session: u64`<br>`startTime: f32`<br>`endTime: f32` | `()` |
 | `host_play` | `session: u64`<br>`seconds: f32` | `()` |
 | `host_pause` | `session: u64` | `()` |
 | `host_seek` | `session: u64`<br>`seconds: f32` | `()` |
-| `host_set_playback_range` | `session: u64`<br>`startSeconds: f32`<br>`endSeconds: f32`<br>`looping: bool` | `()` |
 | `host_set_loop_region` | `session: u64`<br>`startSeconds: Option<f32>`<br>`endSeconds: Option<f32>` | `()` |
-| `host_set_playback_rate` | `session: u64`<br>`rate: f32` | `()` |
 | `host_snapshot` | — | `HostAudioSnapshot` |
 
 ### `inputs`
@@ -194,11 +187,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `list_laser_zones` | `venueId: String` | `Vec<crate::models::lasers::LaserZone>` |
-| `save_laser_zone` | `venueId: String`<br>`zoneId: Option<String>`<br>`name: String`<br>`turn: [f64; 2]`<br>`tilt: [f64; 2]` | `crate::models::lasers::LaserZone` |
-| `delete_laser_zone` | `venueId: String`<br>`zoneId: String` | `()` |
-| `list_laser_limits` | `venueId: String` | `Vec<crate::models::lasers::LaserLimit>` |
-| `set_laser_limit` | `venueId: String`<br>`fixtureId: String`<br>`points: Option<Vec<[f64; 2]>>` | `()` |
 | `get_laser_rig` | `venueId: String` | `crate::laser::LaserRig` |
 
 ### `output`
@@ -218,8 +206,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `perform_stop` | — | `()` |
 | `perform_state` | — | `PerformState` |
 | `perform_set_latency` | `latencyMs: f32` | `()` |
-| `perform_assign_track` | `deckId: u8`<br>`trackId: Option<String>` | `()` |
-| `prodjlink_discover` | — | `Vec<DiscoveredDevice>` |
 | `list_perform_patterns` | `venueId: String` | `Vec<PerformPattern>` |
 | `save_perform_pattern` | `venueId: String`<br>`pattern: PerformPattern` | `PerformPattern` |
 | `delete_perform_pattern` | `venueId: String`<br>`patternId: String` | `()` |
@@ -241,13 +227,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `rekordbox_search_tracks` | `query: String` | `Vec<RekordboxTrack>` |
 | `rekordbox_import_tracks` | `trackUuids: Vec<String>` | `TrackImportResult` |
 
-### `render_engine`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `render_clear_active_layer` | `venueId: String` | `()` |
-| `render_identify` | `targets: Vec<String>` | `()` |
-
 ### `scores`
 
 | Command | Arguments | Returns |
@@ -261,8 +240,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `edit_score_document` | `scoreId: String`<br>`edit: luma_patterns::ScoreEdit` | `()` |
 | `preview_score_clips` | `scoreId: String`<br>`clipIds: Vec<String>`<br>`score: Option<luma_patterns::Score>` | `Vec<crate::services::graph_scores::ClipStrip>` |
-| `clip_graph_definitions` | — | `Value` |
-| `clip_presets` | — | `Value` |
 
 ### `settings`
 
@@ -309,7 +286,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_track_beat_validation` | `trackId: String` | `Option<BeatValidation>` |
 | `set_track_beat_validation` | `trackId: String`<br>`grid: BeatGrid`<br>`verdict: BeatValidationVerdict`<br>`reason: Option<BeatValidationReason>` | `()` |
 | `import_tracks` | `filePaths: Vec<String>` | `TrackImportResult` |
-| `reprocess_track` | `trackId: String` | `()` |
 
 ### `venues`
 

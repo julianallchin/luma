@@ -84,6 +84,7 @@ mod tests {
 
     use serde_json::{json, Value};
 
+    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
     use crate::database::local::{auth, database, state};
     use crate::dispatch::{dispatch, AppServices, CommandError};
 
@@ -1038,32 +1039,27 @@ mod tests {
         assert_eq!(report["refusal"], json!(null), "{report}");
     }
 
+    /// Which way every posed fixture's beam points: its mount normal.
     async fn beams(
         services: &AppServices,
         venue: &str,
     ) -> std::collections::BTreeMap<String, [f64; 3]> {
-        dispatch(
-            services,
-            "get_fixture_facings",
-            &json!({ "venueId": venue }),
-        )
-        .await
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| {
-            let d = f["direction"].as_array().unwrap();
-            (
-                f["id"].as_str().unwrap().to_string(),
-                [
-                    d[0].as_f64().unwrap(),
-                    d[1].as_f64().unwrap(),
-                    d[2].as_f64().unwrap(),
-                ],
-            )
-        })
-        .collect()
+        let mut access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue))
+            .await
+            .unwrap();
+        let resolved = crate::venue_graph::resolved(&mut access, &services.fixtures_root)
+            .await
+            .unwrap();
+        crate::services::fixtures::get_patched_fixtures(&mut access)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|f| {
+                let pose = resolved.pose(&f.id)?;
+                let normal = crate::fixtures::layout::fixture_mount(pose).normal();
+                Some((f.id, normal.to_array().map(f64::from)))
+            })
+            .collect()
     }
 
     fn even() -> Value {
@@ -1209,23 +1205,11 @@ mod tests {
     }
 
     async fn facings(services: &AppServices, venue: &str) -> Vec<(String, f64)> {
-        dispatch(
-            services,
-            "get_fixture_facings",
-            &json!({ "venueId": venue }),
-        )
-        .await
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| {
-            (
-                f["id"].as_str().unwrap().to_string(),
-                f["direction"].as_array().unwrap()[2].as_f64().unwrap(),
-            )
-        })
-        .collect()
+        beams(services, venue)
+            .await
+            .into_iter()
+            .map(|(id, direction)| (id, direction[2]))
+            .collect()
     }
 
     async fn graph_nodes(services: &AppServices, venue: &str) -> Vec<String> {

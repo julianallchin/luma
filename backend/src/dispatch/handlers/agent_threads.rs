@@ -109,21 +109,6 @@ pub async fn agent_thread_set_actor(
     Ok(())
 }
 
-pub async fn agent_thread_rename(
-    services: &AppServices,
-    thread_id: String,
-    title: Option<String>,
-) -> Result<AgentThread, CommandError> {
-    let owner_user_id = Some(services.require_session().await?);
-    Ok(db::rename_thread(
-        &services.db.0,
-        &thread_id,
-        title.as_deref(),
-        owner_user_id.as_deref(),
-    )
-    .await?)
-}
-
 pub async fn agent_thread_set_model(
     services: &AppServices,
     thread_id: String,

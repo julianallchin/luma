@@ -3,8 +3,7 @@ use std::path::{Component, Path};
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::dispatch::{AppServices, CommandError};
-use crate::fixtures::layout::fixture_mount;
-use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::patch::{AutoPatchReport, UniverseCell};
 use crate::services::fixture_create;
 use crate::services::fixtures as fixture_service;
@@ -22,40 +21,6 @@ pub async fn get_patched_fixtures(
     let fixtures = fixture_service::get_patched_fixtures(&mut access).await?;
     publish_patch(services, fixtures.clone());
     Ok(fixtures)
-}
-
-/// Which way every **placed** fixture in a venue points.
-///
-/// A companion to [`get_patched_fixtures`] rather than extra columns on it: a
-/// facing is the outward normal of the socket the fixture hangs from, so it is
-/// what the resolver says and cannot be stored beside the patch without going
-/// stale. Callers that need both fetch both — they are already fetching several
-/// things about a venue in parallel.
-///
-/// A fixture the solve cannot reach is **absent from the result** rather than
-/// carried with a fabricated origin pose. Consumers key by id, so absence is
-/// the answer.
-pub async fn get_fixture_facings(
-    services: &AppServices,
-    venue_id: String,
-) -> Result<Vec<FixtureFacing>, CommandError> {
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let venue = crate::venue_graph::resolved(&mut access, &services.fixtures_root).await?;
-    Ok(fixture_service::get_patched_fixtures(&mut access)
-        .await?
-        .into_iter()
-        .filter_map(|f| {
-            let direction = fixture_mount(venue.pose(&f.id)?).normal();
-            Some(FixtureFacing {
-                id: f.id,
-                direction: direction.to_array(),
-                word: fixture_kinematics::StageDirection::of(direction)
-                    .label()
-                    .to_string(),
-            })
-        })
-        .collect())
 }
 
 /// Build the in-memory index of the bundled fixture definitions. Returns how

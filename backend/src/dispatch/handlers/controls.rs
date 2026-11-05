@@ -1,4 +1,4 @@
-//! A venue's live controls: list them, and set one. See `crate::controls`.
+//! A venue's live controls, listed. See `crate::controls`.
 
 use crate::controls::Control;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
@@ -12,25 +12,6 @@ pub async fn control_list(
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(crate::controls::list(&mut access).await?)
-}
-
-/// Set control `name` to `value`, 0–1. Every scene of the venue reads it at
-/// its next frame; nothing recompiles.
-pub async fn control_set(
-    services: &AppServices,
-    venue_id: String,
-    name: String,
-    value: f64,
-) -> Result<(), CommandError> {
-    let _access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    if !luma_patterns::clip_graph::is_control_name(&name) {
-        return Err(CommandError::Invalid(format!(
-            "expected a control name in snake_case, such as drop or front_level; got \"{name}\""
-        )));
-    }
-    crate::controls::venue(&venue_id).set(&name, value);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -127,13 +108,7 @@ mod tests {
             .unwrap();
         assert_eq!(listed, json!([{ "name": "drop", "value": 0.0 }]));
 
-        dispatch(
-            &services,
-            "control_set",
-            &json!({ "venueId": venue, "name": "drop", "value": 1.5 }),
-        )
-        .await
-        .unwrap();
+        crate::controls::venue(&venue).set("drop", 1.5);
         let listed = dispatch(&services, "control_list", &json!({ "venueId": venue }))
             .await
             .unwrap();
@@ -142,14 +117,5 @@ mod tests {
             json!([{ "name": "drop", "value": 1.0 }]),
             "values clamp to 0–1"
         );
-
-        let refused = dispatch(
-            &services,
-            "control_set",
-            &json!({ "venueId": venue, "name": "Drop Now", "value": 0.5 }),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(refused.kind(), "invalid");
     }
 }

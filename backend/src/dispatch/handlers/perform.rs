@@ -38,27 +38,6 @@ pub async fn perform_set_latency(
     Ok(())
 }
 
-/// Pin a deck to a library track, or with no track, match it again. A pinned
-/// track holds until the deck loads another.
-pub async fn perform_assign_track(
-    services: &AppServices,
-    deck_id: u8,
-    track_id: Option<String>,
-) -> Result<(), CommandError> {
-    Ok(services.perform.assign(deck_id, track_id)?)
-}
-
-/// Passively listen for CDJ keepalives for 3 seconds and return what was heard.
-/// Safe to call while not connected — it performs no device-number claim.
-///
-/// An empty list means "nothing heard"; a failure to bind the socket also
-/// yields an empty list, so the two are indistinguishable to the caller.
-pub async fn prodjlink_discover(
-    _services: &AppServices,
-) -> Result<Vec<prodjlink::DiscoveredDevice>, CommandError> {
-    Ok(prodjlink::discover_cdjs(3000).await)
-}
-
 /// The venue's Perform set: its patterns, the top of the set first.
 pub async fn list_perform_patterns(
     services: &AppServices,

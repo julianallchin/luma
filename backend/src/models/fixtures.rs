@@ -425,25 +425,6 @@ pub struct PatchedFixture {
     pub address_pinned: bool,
 }
 
-/// Which way a patched fixture points, derived from its mount.
-///
-/// Orientation is geometry and geometry has one implementation
-/// (`fixture-kinematics`), so this is how a caller *asks* for a fixture's facing
-/// rather than deriving it from `rotX/rotY/rotZ`.
-///
-/// Not a column on [`PatchedFixture`]: that struct is a row, and a derived value
-/// stored beside the thing it is derived from is a value that can be stale.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct FixtureFacing {
-    pub id: String,
-    /// Unit vector in stored data space (`+X` stage right, `+Y` upstage, `+Z` up).
-    pub direction: [f32; 3],
-    /// The same direction as a stage word: `house`, `upstage`, `stage-left`,
-    /// `stage-right`, `up`, `down`.
-    pub word: String,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum FixtureNodeType {

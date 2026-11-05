@@ -16,19 +16,15 @@ pub const PKT_CLAIM_STAGE1: u8 = 0x00;
 pub const PKT_CLAIM_STAGE2: u8 = 0x02;
 pub const PKT_CLAIM_STAGE3: u8 = 0x04;
 pub const PKT_KEEPALIVE: u8 = 0x06;
-pub const PKT_IN_USE: u8 = 0x08;
 /// 0x0a on port 50000 = hello during claim; same value on port 50002 = CDJ status.
 pub const PKT_HELLO: u8 = 0x0a;
 pub const PKT_CDJ_STATUS: u8 = 0x0a;
 pub const PKT_PRECISE_POSITION: u8 = 0x0b;
-pub const PKT_BEAT: u8 = 0x28;
 
 // ── Keepalive device-type byte (0x21) ─────────────────────────────────────────
 
 /// Older CDJ players (NXS, NXS2, XDJ-700, etc.)
 pub const DEVICE_TYPE_CDJ: u8 = 0x01;
-/// CDJ-3000, XDJ-XZ and newer Pioneer players
-pub const DEVICE_TYPE_CDJ_3000: u8 = 0x03;
 /// DJM mixers — excluded from deck tracking
 pub const DEVICE_TYPE_MIXER: u8 = 0x02;
 
@@ -38,18 +34,10 @@ pub const FLAG_ON_AIR: u8 = 0x08;
 pub const FLAG_MASTER: u8 = 0x20;
 pub const FLAG_PLAYING: u8 = 0x40;
 
-// ── Slot IDs (byte at 0x29 in CDJ status) ────────────────────────────────────
-
-pub const SLOT_USB: u8 = 0x03;
-pub const SLOT_SD: u8 = 0x02;
-pub const SLOT_CD: u8 = 0x01;
-
 // ── Virtual CDJ identity ──────────────────────────────────────────────────────
 
 /// Locally-administered fake MAC: 02:00:4c:55:4d:41 ("02:00:LUMA").
 pub const OUR_MAC: [u8; 6] = [0x02, 0x00, 0x4c, 0x55, 0x4d, 0x41];
-/// Device number claimed.  7 is safe (CDJ player slots are 1-4, mixer 33+).
-pub const OUR_DEVICE_NUM: u8 = 7;
 /// Device name shown on CDJ screens.
 pub const OUR_DEVICE_NAME: &str = "Luma";
 /// Keepalive broadcast interval.

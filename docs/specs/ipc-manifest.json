@@ -3,8 +3,8 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 146,
-    "domainCount": 27,
+    "commandCount": 128,
+    "domainCount": 26,
     "eventCount": 6
   },
   "domains": [
@@ -15,7 +15,7 @@
     },
     {
       "domain": "agent_threads",
-      "commandCount": 8,
+      "commandCount": 7,
       "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
     },
     {
@@ -35,7 +35,7 @@
     },
     {
       "domain": "controls",
-      "commandCount": 2,
+      "commandCount": 1,
       "handlers": "backend/src/dispatch/handlers/controls.rs"
     },
     {
@@ -50,7 +50,7 @@
     },
     {
       "domain": "fixtures",
-      "commandCount": 13,
+      "commandCount": 12,
       "handlers": "backend/src/dispatch/handlers/fixtures.rs"
     },
     {
@@ -70,7 +70,7 @@
     },
     {
       "domain": "host_audio",
-      "commandCount": 9,
+      "commandCount": 6,
       "handlers": "backend/src/dispatch/handlers/host_audio.rs"
     },
     {
@@ -80,7 +80,7 @@
     },
     {
       "domain": "lasers",
-      "commandCount": 6,
+      "commandCount": 1,
       "handlers": "backend/src/dispatch/handlers/lasers.rs"
     },
     {
@@ -90,7 +90,7 @@
     },
     {
       "domain": "perform",
-      "commandCount": 15,
+      "commandCount": 13,
       "handlers": "backend/src/dispatch/handlers/perform.rs"
     },
     {
@@ -99,13 +99,8 @@
       "handlers": "backend/src/dispatch/handlers/rekordbox.rs"
     },
     {
-      "domain": "render_engine",
-      "commandCount": 2,
-      "handlers": "backend/src/dispatch/handlers/render_engine.rs"
-    },
-    {
       "domain": "scores",
-      "commandCount": 11,
+      "commandCount": 9,
       "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
     {
@@ -130,7 +125,7 @@
     },
     {
       "domain": "tracks",
-      "commandCount": 7,
+      "commandCount": 6,
       "handlers": "backend/src/dispatch/handlers/tracks.rs"
     },
     {
@@ -265,32 +260,6 @@
       "returns": "()",
       "prose": {
         "returns": "()"
-      }
-    },
-    {
-      "name": "agent_thread_rename",
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        },
-        {
-          "name": "title",
-          "rust": "Option<String>"
-        }
-      ],
-      "returns": "AgentThread",
-      "prose": {
-        "callerUsage": "renameThread(threadId, title) passes the title through unchanged; `null` is a real value meaning 'clear the title'.",
-        "notes": "Title is display metadata and is deliberately NOT part of ExactThreadScope / thread identity. No idempotency key — last write wins.",
-        "returns": "AgentThread (the updated row)",
-        "sideEffects": [
-          "updates title (and updatedAt) on the thread row, scoped to the admitted principal"
-        ]
       }
     },
     {
@@ -479,24 +448,6 @@
       }
     },
     {
-      "name": "clip_graph_definitions",
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "args": [],
-      "returns": "Value"
-    },
-    {
-      "name": "clip_presets",
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "args": [],
-      "returns": "Value"
-    },
-    {
       "name": "composite_track",
       "domain": "compositor",
       "handler": {
@@ -569,28 +520,6 @@
         }
       ],
       "returns": "Vec<Control>"
-    },
-    {
-      "name": "control_set",
-      "domain": "controls",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controls.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "name",
-          "rust": "String"
-        },
-        {
-          "name": "value",
-          "rust": "f64"
-        }
-      ],
-      "returns": "()"
     },
     {
       "name": "create_folder",
@@ -717,24 +646,6 @@
           "Membership rows go away with the group (FK cascade); invalidate_venue_fixture_cache()"
         ]
       }
-    },
-    {
-      "name": "delete_laser_zone",
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "zoneId",
-          "rust": "String"
-        }
-      ],
-      "returns": "()"
     },
     {
       "name": "delete_perform_pattern",
@@ -1164,23 +1075,6 @@
       }
     },
     {
-      "name": "get_fixture_facings",
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "returns": "Vec<FixtureFacing>",
-      "prose": {
-        "returns": "Vec<FixtureFacing>"
-      }
-    },
-    {
       "name": "get_laser_rig",
       "domain": "lasers",
       "handler": {
@@ -1419,41 +1313,6 @@
       }
     },
     {
-      "name": "host_load_segment",
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "session",
-          "rust": "u64"
-        },
-        {
-          "name": "startTime",
-          "rust": "f32"
-        },
-        {
-          "name": "endTime",
-          "rust": "f32"
-        }
-      ],
-      "returns": "()",
-      "prose": {
-        "notes": "Times are absolute track seconds on the way in; the host stores start_time as segment_start_abs, so every later host_seek/host_snapshot time is RELATIVE to the segment start. Errors on an empty range or empty decode. Re-checks that the authenticated principal did not change between the read and the operate access — a port must keep that check. beatGrid is passed through to LoadedSegment but the field is `#[allow(dead_code)]` — currently write-only.",
-        "returns": "void",
-        "sideEffects": [
-          "decodes the file into the shared audio cache (reused by analysis)",
-          "replaces the loaded segment in the global HostAudioState — clobbers whatever host_load_track/host_load_segment loaded before",
-          "takes VisibleTrackAccess Read then re-takes Operate and commits (audit/access trail)"
-        ]
-      }
-    },
-    {
       "name": "host_load_track",
       "domain": "host_audio",
       "handler": {
@@ -1579,57 +1438,6 @@
         "sideEffects": [
           "sets the loop region",
           "implicitly enables looping when BOTH bounds are Some, disables it otherwise"
-        ]
-      }
-    },
-    {
-      "name": "host_set_playback_range",
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "args": [
-        {
-          "name": "session",
-          "rust": "u64"
-        },
-        {
-          "name": "startSeconds",
-          "rust": "f32"
-        },
-        {
-          "name": "endSeconds",
-          "rust": "f32"
-        },
-        {
-          "name": "looping",
-          "rust": "bool"
-        }
-      ],
-      "returns": "()"
-    },
-    {
-      "name": "host_set_playback_rate",
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "args": [
-        {
-          "name": "session",
-          "rust": "u64"
-        },
-        {
-          "name": "rate",
-          "rust": "f32"
-        }
-      ],
-      "returns": "()",
-      "prose": {
-        "notes": "The backend does NOT clamp — the caller clamps to [PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX] before invoking, and sets the store optimistically. A port that drops the frontend clamp will let a 0 or negative rate reach the audio thread. Rate changes pitch (no time-stretch).",
-        "returns": "void (infallible)",
-        "sideEffects": [
-          "updates the fixed-point playback-rate atomic read by the audio thread (resampling ratio)"
         ]
       }
     },
@@ -1859,34 +1667,6 @@
       }
     },
     {
-      "name": "list_laser_limits",
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "returns": "Vec<crate::models::lasers::LaserLimit>"
-    },
-    {
-      "name": "list_laser_zones",
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "returns": "Vec<crate::models::lasers::LaserZone>"
-    },
-    {
       "name": "list_output_devices",
       "domain": "output",
       "handler": {
@@ -2026,24 +1806,6 @@
       "prose": {
         "returns": "Vec<crate::models::groups::MissingGroup>"
       }
-    },
-    {
-      "name": "perform_assign_track",
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "args": [
-        {
-          "name": "deckId",
-          "rust": "u8"
-        },
-        {
-          "name": "trackId",
-          "rust": "Option<String>"
-        }
-      ],
-      "returns": "()"
     },
     {
       "name": "perform_control",
@@ -2289,23 +2051,6 @@
         "returns": "PatchedFixture[] (the resolver's ResolvedFixture list mapped to .fixture, order = resolver order)",
         "sideEffects": [
           "read-only; VenueAccess::<Read> on the venue"
-        ]
-      }
-    },
-    {
-      "name": "prodjlink_discover",
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "args": [],
-      "returns": "Vec<DiscoveredDevice>",
-      "prose": {
-        "notes": "Returns Vec (never errors) — an empty list means 'nothing heard', not failure; if the socket can't bind, discover_cdjs also returns []. So a port cannot distinguish 'no CDJs' from 'networking broken'. The 3000ms timeout is not a parameter. TS mirrors the shape locally as `interface DiscoveredCDJ` in perform-page.tsx rather than using a generated binding — a hand-copied type that will drift.",
-        "returns": "DiscoveredDevice[] { player: u8, name, ip } — snake/flat, no rename_all; unique, sorted by player number",
-        "sideEffects": [
-          "binds UDP port 50000 and passively listens for CDJ keepalives for a HARDCODED 3 seconds — the command blocks that long",
-          "no device-number claim, so it is safe to call while not connected"
         ]
       }
     },
@@ -2574,65 +2319,6 @@
       }
     },
     {
-      "name": "render_clear_active_layer",
-      "domain": "render_engine",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/render_engine.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "returns": "()",
-      "prose": {
-        "notes": "Editor-side counterpart to render_clear_perform: only the active (track/pattern editor) scene, not deck layers. Universe designer pairs it with clearing the frontend universe + dmx stores so fixtures read as off.",
-        "returns": "void",
-        "sideEffects": [
-          "sets RenderEngine.active_scene = None so the render loop emits nothing for the editor layer; takes VenueAccess<Read>"
-        ]
-      }
-    },
-    {
-      "name": "render_identify",
-      "domain": "render_engine",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/render_engine.rs"
-      },
-      "args": [
-        {
-          "name": "targets",
-          "rust": "Vec<String>"
-        }
-      ],
-      "returns": "()",
-      "prose": {
-        "notes": "The only command in this fragment with NO venueId argument — the venue is derived from the fixture ids and every target must resolve to the same venue, otherwise it fails as one opaque not-found. Target grammar is `\"fixtureId\"` (whole fixture) or `\"fixtureId:headIndex\"`. Empty targets vector is an error at the authorize layer (\"Identify requires at least one fixture target\") but a no-op inside identify_targets — two contradictory guards. Callers fire-and-forget.",
-        "returns": "void",
-        "sideEffects": [
-          "installs an IdentifyState { targets, start: Instant::now() } that drives a two-blink sequence in both the visualizer and ArtNet output"
-        ]
-      }
-    },
-    {
-      "name": "reprocess_track",
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        }
-      ],
-      "returns": "()",
-      "prose": {
-        "returns": "()"
-      }
-    },
-    {
       "name": "resolve_venue_group",
       "domain": "group_references",
       "handler": {
@@ -2723,36 +2409,6 @@
           "No Tauri events emitted; results are returned synchronously to the caller"
         ]
       }
-    },
-    {
-      "name": "save_laser_zone",
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "zoneId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "name",
-          "rust": "String"
-        },
-        {
-          "name": "turn",
-          "rust": "[f64; 2]"
-        },
-        {
-          "name": "tilt",
-          "rust": "[f64; 2]"
-        }
-      ],
-      "returns": "crate::models::lasers::LaserZone"
     },
     {
       "name": "save_perform_layout",
@@ -2996,28 +2652,6 @@
         {
           "name": "linked",
           "rust": "bool"
-        }
-      ],
-      "returns": "()"
-    },
-    {
-      "name": "set_laser_limit",
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "fixtureId",
-          "rust": "String"
-        },
-        {
-          "name": "points",
-          "rust": "Option<Vec<[f64; 2]>>"
         }
       ],
       "returns": "()"

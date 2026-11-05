@@ -113,7 +113,7 @@ use crate::models::agent_threads::{
 };
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::distribute::{DistributeLayout, DistributeReport};
-use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::folders::Folder;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::node_graph::BeatGrid;
@@ -134,7 +134,6 @@ use crate::models::waveforms::TrackWaveform;
 use crate::rekordbox::types::RekordboxTrack;
 use crate::settings::AppSettings;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
-use prodjlink::DiscoveredDevice;
 
 commands! {
     composable_patterns::preview_composable_pattern(request: ComposablePreviewRequest) -> ComposablePreview;
@@ -155,7 +154,6 @@ commands! {
         thread_id: String,
         input: AppendAgentThreadMessagesInput,
     ) -> Vec<AgentThreadMessage>;
-    agent_threads::agent_thread_rename(thread_id: String, title: Option<String>) -> AgentThread;
     agent_threads::agent_thread_set_model(thread_id: String, selection: crate::agent::engine::catalog::Selection) -> AgentThread;
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
     agent_threads::agent_thread_record_usage(usage: AgentThreadUsage) -> ();
@@ -170,7 +168,6 @@ commands! {
     agent_execution::cancel_python_cell(thread_id: String) -> bool;
 
     fixtures::get_patched_fixtures(venue_id: String) -> Vec<PatchedFixture>;
-    fixtures::get_fixture_facings(venue_id: String) -> Vec<FixtureFacing>;
     fixtures::initialize_fixtures() -> usize;
     fixtures::search_fixtures(query: String, offset: usize, limit: usize) -> Vec<FixtureEntry>;
     fixtures::get_fixture_definition(path: String) -> FixtureDefinition;
@@ -200,11 +197,6 @@ commands! {
     folders::rename_folder(folder_id: String, name: String) -> ();
     folders::delete_folder(folder_id: String) -> ();
     folders::set_folder_track(folder_id: String, track_id: String, linked: bool) -> ();
-    lasers::list_laser_zones(venue_id: String) -> Vec<crate::models::lasers::LaserZone>;
-    lasers::save_laser_zone(venue_id: String, zone_id: Option<String>, name: String, turn: [f64; 2], tilt: [f64; 2]) -> crate::models::lasers::LaserZone;
-    lasers::delete_laser_zone(venue_id: String, zone_id: String) -> ();
-    lasers::list_laser_limits(venue_id: String) -> Vec<crate::models::lasers::LaserLimit>;
-    lasers::set_laser_limit(venue_id: String, fixture_id: String, points: Option<Vec<[f64; 2]>>) -> ();
     lasers::get_laser_rig(venue_id: String) -> crate::laser::LaserRig;
 
     groups::generate_venue_groups(venue_id: String) -> ();
@@ -272,8 +264,6 @@ commands! {
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
     scores::edit_score_document(score_id: String, edit: luma_patterns::ScoreEdit) -> ();
     scores::preview_score_clips(score_id: String, clip_ids: Vec<String>, score: Option<luma_patterns::Score>) -> Vec<crate::services::graph_scores::ClipStrip>;
-    scores::clip_graph_definitions() -> Value;
-    scores::clip_presets() -> Value;
 
     distribute::distribute(
         venue_id: String,
@@ -374,18 +364,12 @@ commands! {
     inputs::input_update_binding(venue_id: String, binding_id: String, mode: Mode, invert: bool) -> ();
     inputs::input_unbind(venue_id: String, binding_id: String) -> ();
 
-    render_engine::render_clear_active_layer(venue_id: String) -> ();
-    render_engine::render_identify(targets: Vec<String>) -> ();
-
     controls::control_list(venue_id: String) -> Vec<Control>;
-    controls::control_set(venue_id: String, name: String, value: f64) -> ();
 
     perform::perform_start(venue_id: String, source: PerformSource) -> ();
     perform::perform_stop() -> ();
     perform::perform_state() -> PerformState;
     perform::perform_set_latency(latency_ms: f32) -> ();
-    perform::perform_assign_track(deck_id: u8, track_id: Option<String>) -> ();
-    perform::prodjlink_discover() -> Vec<DiscoveredDevice>;
     perform::list_perform_patterns(venue_id: String) -> Vec<PerformPattern>;
     perform::save_perform_pattern(venue_id: String, pattern: PerformPattern) -> PerformPattern;
     perform::delete_perform_pattern(venue_id: String, pattern_id: String) -> ();
@@ -397,22 +381,14 @@ commands! {
     perform::perform_set_bpm(venue_id: String, bpm: f64) -> ();
 
     host_audio::host_load_track(track_id: String, session: u64) -> ();
-    host_audio::host_load_segment(
-        track_id: String,
-        session: u64,
-        start_time: f32,
-        end_time: f32,
-    ) -> ();
     host_audio::host_play(session: u64, seconds: f32) -> ();
     host_audio::host_pause(session: u64) -> ();
     host_audio::host_seek(session: u64, seconds: f32) -> ();
-    host_audio::host_set_playback_range(session: u64, start_seconds: f32, end_seconds: f32, looping: bool) -> ();
     host_audio::host_set_loop_region(
         session: u64,
         start_seconds: Option<f32>,
         end_seconds: Option<f32>,
     ) -> ();
-    host_audio::host_set_playback_rate(session: u64, rate: f32) -> ();
     host_audio::host_snapshot() -> HostAudioSnapshot;
 
     sync::sync_status() -> SyncStatus;
@@ -442,7 +418,6 @@ commands! {
     ) -> TrackImportResult;
 
     tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
-    tracks::reprocess_track(track_id: String) -> ();
 
     auth::current_account() -> Option<crate::database::local::auth::AuthAccount>;
     auth::send_login_code(email: String) -> ();
@@ -533,7 +508,6 @@ mod tests {
     fn background_import_commands_are_dispatched() {
         for command in [
             "import_tracks",
-            "reprocess_track",
             "engine_dj_import_tracks",
             "rekordbox_import_tracks",
         ] {
