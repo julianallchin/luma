@@ -572,24 +572,15 @@ pub(super) fn arrange(width: u16, height: u16, count: usize) -> Arrangement {
     }
 }
 
-/// The glow and ring of a pattern that is on.
-fn lit(tint: Hsla) -> Vec<gpui::BoxShadow> {
-    vec![
-        gpui::BoxShadow {
-            color: tint.opacity(0.9),
-            offset: gpui::point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(1.),
-            inset: true,
-        },
-        gpui::BoxShadow {
-            color: tint.opacity(0.45),
-            offset: gpui::point(px(0.), px(0.)),
-            blur_radius: px(26.),
-            spread_radius: px(-6.),
-            inset: false,
-        },
-    ]
+/// The glow around a pattern, as bright as its pad's envelope.
+fn glow(tint: Hsla, level: f32) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color: tint.opacity(0.45 * level.clamp(0., 1.)),
+        offset: gpui::point(px(0.), px(0.)),
+        blur_radius: px(26.),
+        spread_radius: px(-6.),
+        inset: false,
+    }]
 }
 
 /// The plate every cell is drawn on.
@@ -641,7 +632,7 @@ fn pattern_face(
         .inset_0()
         .rounded_t(corner)
         .when(arrangement == Arrangement::Pad, |fill| fill.rounded_b(corner))
-        .bg(tint.opacity(0.8 * level.clamp(0., 1.)));
+        .bg(tint.opacity(level.clamp(0., 1.)));
     let pad_view = div()
         .relative()
         .w_full()
@@ -706,7 +697,7 @@ fn pattern_face(
         .into_any_element(),
         _ => pad_view.into_any_element(),
     };
-    let card = plate().when(on, |card| card.shadow(lit(tint)));
+    let card = plate().when(level > 0., |card| card.shadow(glow(tint, level)));
     let card = match arrangement {
         Arrangement::Pad => card.child(div().flex_1().min_h_0().flex().child(pad_view)),
         Arrangement::Stood(shown) => card
