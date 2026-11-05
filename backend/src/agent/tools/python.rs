@@ -27,7 +27,7 @@ use crate::storage::StorageRoot;
 /// thread's lifetime, so it lives in a file rather than in a format string.
 ///
 /// Public because it is the contract for *any* host that exposes this kernel —
-/// `luma-mcp` hands the same text to an out-of-process coding agent, and a
+/// `luma-cli mcp` hands the same text to an out-of-process coding agent, and a
 /// second wording would be a second tool.
 pub const PYTHON_TOOL_DESCRIPTION: &str = include_str!("../prompts/python-tool.md");
 
@@ -209,7 +209,7 @@ fn to_stored_output(
 /// The model-facing projection of one executed cell.
 ///
 /// Every host that shows a cell to a model goes through here: the in-app tool
-/// after it has persisted the transcript row, `luma-mcp` straight off the
+/// after it has persisted the transcript row, `luma-cli mcp` straight off the
 /// service result. The clamping and the figure budget are part of the contract,
 /// not of either transport.
 #[must_use]

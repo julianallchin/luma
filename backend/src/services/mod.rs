@@ -1,8 +1,8 @@
 //! Domain behavior the command handlers call.
 //!
 //! One module per domain, and each one is `pub(crate)` unless something outside
-//! the crate genuinely consumes it: the headless binaries (`agent-harness`,
-//! `luma-record`, `render-venue`) and the GPUI host reach past
+//! the crate genuinely consumes it: the headless binaries (`luma-cli rpc`,
+//! `luma-cli record`, `luma-cli render`) and the GPUI host reach past
 //! [`crate::dispatch`] for bootstrap and for the types dispatched commands
 //! return. Those return types (`GraphDocument`, `GraphEditResult`,
 //! `TrackEditResult`) belong in [`crate::models`] — until they move, the seam's

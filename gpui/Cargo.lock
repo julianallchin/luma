@@ -3072,7 +3072,6 @@ dependencies = [
  "luma-patterns",
  "luma-scene",
  "luma-ui",
- "mcp-stdio",
  "rquickjs",
  "serde",
  "serde_json",
@@ -4652,7 +4651,6 @@ dependencies = [
  "luma-render",
  "luma-scene",
  "luma-sync",
- "mcp-stdio",
  "midir",
  "nusb",
  "once_cell",
@@ -4974,13 +4972,6 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
-]
-
-[[package]]
-name = "mcp-stdio"
-version = "0.1.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]

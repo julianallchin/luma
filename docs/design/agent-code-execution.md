@@ -1660,10 +1660,10 @@ migrations. Events go to stderr, because both put their protocol on stdout.
 
 | | |
 |---|---|
-| `backend/src/bin/agent-harness.rs` | one JSON dispatch request per line |
-| `backend/src/bin/luma-mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
+| `backend/src/bin/luma-cli/rpc.rs` | one JSON dispatch request per line |
+| `backend/src/bin/luma-cli/mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
 
-`luma-mcp` tools:
+`luma-cli mcp` tools:
 
 ```text
 find   {track?, venue?}                   matching tracks and venues
@@ -1684,7 +1684,7 @@ same projection as the in-app tool, clamping and figure budget included.
 
 The loop is concurrent, one task per request, because `cancel` must reach a
 `python` that is still in flight. Framing, `initialize`, `ping`, `tools/list`
-and `prompts/*` live in `backend/crates/mcp-stdio`.
+and `prompts/*` live in `backend/src/bin/luma-cli/mcp_stdio.rs`.
 
 The sandbox is not a flag on these hosts. They resolve the worker environment
 through `agent_execution::headless_env`, so `sandbox::default_launcher` decides
@@ -1693,7 +1693,7 @@ through `agent_execution::headless_env`, so `sandbox::default_launcher` decides
 Register the server in a local `.mcp.json`:
 
 ```json
-{ "mcpServers": { "luma": { "command": "./backend/target/debug/luma-mcp", "args": [] } } }
+{ "mcpServers": { "luma": { "command": "./backend/target/debug/luma-cli", "args": ["mcp"] } } }
 ```
 
 Add `["--config-dir", "/path/to/scratch"]` to work against a disposable copy of

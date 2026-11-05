@@ -57,7 +57,7 @@ impl Library {
         self.services.render_engine().sample(t)
     }
 
-    /// Render `spec` to a video — the recording `luma-record` makes, from the
+    /// Render `spec` to a video — the recording `luma-cli record` makes, from the
     /// app. `progress` hears every frame written; setting `cancel` stops at the
     /// next frame.
     pub(crate) fn record<P>(

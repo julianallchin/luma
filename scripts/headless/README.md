@@ -1,21 +1,21 @@
 # Headless tools
 
-These tools run Luma's backend without a window. The binaries live in
-`backend/src/bin/`. The scripts in this directory drive them.
+`luma-cli` runs Luma's backend without a window. Its source is
+`backend/src/bin/luma-cli/`; `luma-cli --help` lists the subcommands. The
+scripts in this directory drive it.
 
 ## Build
 
 ```sh
-cargo build --manifest-path backend/Cargo.toml \
-    --bin agent-harness --bin luma-mcp --bin luma-agent --bin render-venue
+cargo build --manifest-path backend/Cargo.toml --bin luma-cli
 ```
 
-Scripts look for the binaries in `backend/target/debug/`. Set `LUMA_MCP_BIN` or
-`LUMA_AGENT_BIN` to use another build.
+Scripts look for it at `backend/target/debug/luma-cli`. Set `LUMA_CLI_BIN` to
+use another build.
 
 ## Host options
 
-`agent-harness`, `luma-mcp` and `luma-agent` boot through
+`luma-cli rpc`, `luma-cli mcp` and `luma-cli agent` boot through
 `luma_lib::headless_host` and share these options:
 
 | flag | env | default |
@@ -34,7 +34,7 @@ requires `--config-dir`. Use it only with a disposable library.
 
 The default config directory is the real library. Commands write to it.
 
-## `agent-harness`: the dispatch surface
+## `luma-cli rpc`: the dispatch surface
 
 One JSON request per line on stdin. One JSON response per line on stdout.
 
@@ -54,11 +54,11 @@ One JSON request per line on stdin. One JSON response per line on stdout.
 
 To add a command, add it to `dispatch`. The harness needs no change.
 
-## `luma-agent`: one agent turn
+## `luma-cli agent`: one agent turn
 
 ```sh
-backend/target/debug/luma-agent --thread THREAD_ID --prompt 'Continue the score'
-backend/target/debug/luma-agent --track TRACK_ID --venue VENUE_ID \
+backend/target/debug/luma-cli agent --thread THREAD_ID --prompt 'Continue the score'
+backend/target/debug/luma-cli agent --track TRACK_ID --venue VENUE_ID \
     --engine claude --prompt 'Author the whole track'
 ```
 
@@ -83,8 +83,8 @@ bun run scripts/headless/author_score.ts <track> <venue> [--runner claude|codex]
 bun run scripts/headless/author_score.ts --usage-only [--runner claude|codex]
 ```
 
-The script resolves a track and a venue by id or name with `luma-mcp`'s `find`
-tool. It checks the subscription quota and then starts `luma-agent` with a
+The script resolves a track and a venue by id or name with `luma-cli mcp`'s `find`
+tool. It checks the subscription quota and then starts `luma-cli agent` with a
 fixed authoring prompt.
 
 | flag | meaning |
@@ -102,9 +102,9 @@ The quota comes from these modules:
 - `claude-usage.ts`: Claude subscription windows, from `/api/oauth/usage`.
 - `codex-usage.ts`: ChatGPT plan windows, from `/wham/usage`.
 
-## `luma-mcp`: MCP over stdio
+## `luma-cli mcp`: MCP over stdio
 
-`luma-mcp` gives an external coding agent Luma's Python workspace and skills.
+`luma-cli mcp` gives an external coding agent Luma's Python workspace and skills.
 
 | tool | effect |
 |---|---|
@@ -116,7 +116,7 @@ The quota comes from these modules:
 | `skill {name}` | Return one playbook. |
 
 The server also answers `prompts/list` and `prompts/get` with the skills.
-`luma-mcp record-usage --json '<AgentThreadUsage>'` stores usage for a thread.
+`luma-cli mcp record-usage --json '<AgentThreadUsage>'` stores usage for a thread.
 
 Before `open` and `python`, the server checks whether its executable was
 rebuilt. If it was, the client must restart the MCP connection.
@@ -124,10 +124,10 @@ rebuilt. If it was, the client must restart the MCP connection.
 - `mcp-client.ts`: the client side of MCP stdio, used by the other scripts.
 - `mcp_smoke.ts`: runs the protocol against a copy of the real library.
 
-## `render-venue`: render a saved venue
+## `luma-cli render`: render a saved venue
 
 ```sh
-cargo run --manifest-path backend/Cargo.toml --bin render-venue -- \
+cargo run --manifest-path backend/Cargo.toml --bin luma-cli -- render \
     --venue-id UUID --output /tmp/venue.png --view front
 ```
 

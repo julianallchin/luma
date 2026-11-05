@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { mcpArgs, mcpBinary, REAL_CACHE_DIR } from "./mcp-client";
+import { cliBinary, hostArgs, REAL_CACHE_DIR } from "./mcp-client";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const principal = "gauntlet-fixture-owner";
@@ -57,10 +57,9 @@ async function command(binary: string, argv: string[], cwd: string, prefix: stri
 }
 
 async function createVenue(configDir: string, cacheDir: string): Promise<string> {
-    const binary = process.env.LUMA_HARNESS_BIN ?? join(repo, "backend/target/debug/agent-harness");
-    if (!existsSync(binary)) throw new Error("Build agent-harness first with cargo build --manifest-path backend/Cargo.toml --bin agent-harness --bin luma-mcp");
+    const binary = cliBinary();
     const errors = createWriteStream(join(dirname(configDir), "prepare.stderr.log"));
-    const child = spawn(binary, mcpArgs({ configDir, cacheDir, fixturePrincipal: principal }), { cwd: repo, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(binary, ["rpc", ...hostArgs({ configDir, cacheDir, fixturePrincipal: principal })], { cwd: repo, stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.pipe(errors);
     try {
         return await new Promise<string>((yes, no) => {
@@ -201,7 +200,7 @@ if (phase === "prepare") {
         const evidence = join(run, phase!);
         if (existsSync(evidence)) throw new Error(`${phase} already has evidence; use a fresh prepared run for a new round`);
         mkdirSync(evidence);
-        const binary = mcpBinary();
+        const binary = cliBinary();
         const sourcePaths = ["backend/src", "backend/python", "backend/crates", "backend/Cargo.toml", "backend/Cargo.lock", "backend/build.rs",
             "gpui/crates/scene", "gpui/crates/render", "gpui/Cargo.toml", "gpui/Cargo.lock",
             "scripts/headless/venue-show-gauntlet.ts", "scripts/headless/gauntlet-mcp-proxy.py",
@@ -233,7 +232,7 @@ if (phase === "prepare") {
         const task = customPrompt ? readFileSync(resolve(customPrompt), "utf8") : defaultPrompt;
         const prompt = `Use only the Luma MCP tools. Open venue_id=${manifest.venueId}${phase === "show" ? ` and track_id=${manifest.trackId}` : " without a track"}.\n\n${task}`;
         writeFileSync(join(evidence, "prompt.md"), prompt);
-        const config = { mcpServers: { luma: { command: "python3", args: [join(repo, "scripts/headless/gauntlet-mcp-proxy.py"), evidence, binary, ...mcpArgs({ configDir: manifest.configDir, cacheDir: manifest.cacheDir, fixturePrincipal: principal })] } } };
+        const config = { mcpServers: { luma: { command: "python3", args: [join(repo, "scripts/headless/gauntlet-mcp-proxy.py"), evidence, binary, "mcp", ...hostArgs({ configDir: manifest.configDir, cacheDir: manifest.cacheDir, fixturePrincipal: principal })] } } };
         const mcpConfig = join(evidence, "mcp-config.json"); writeFileSync(mcpConfig, JSON.stringify(config, null, 2));
         const argv = ["--print", "--verbose", "--output-format", "stream-json", "--strict-mcp-config", "--mcp-config", mcpConfig,
             "--tools", "", "--allowedTools", "mcp__luma__*", "--disable-slash-commands", "--setting-sources", "", "--system-prompt",
@@ -244,7 +243,7 @@ if (phase === "prepare") {
             const smoke = [join(repo, "scripts/headless/gauntlet-mcp-smoke.py"),
                 "--evidence", join(evidence, "preflight"), "--venue", manifest.venueId];
             if (phase === "show") smoke.push("--track", manifest.trackId);
-            smoke.push("--", binary, ...mcpArgs({ configDir: manifest.configDir, cacheDir: manifest.cacheDir, fixturePrincipal: principal }));
+            smoke.push("--", binary, "mcp", ...hostArgs({ configDir: manifest.configDir, cacheDir: manifest.cacheDir, fixturePrincipal: principal }));
             await command("python3", smoke, run, join(evidence, "preflight"), false);
             await command("claude", argv, run, join(evidence, "agent"));
         }

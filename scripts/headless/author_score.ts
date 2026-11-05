@@ -1,12 +1,11 @@
 /** Resolve a score job and launch Luma's shared Rust agent runtime. */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchClaudeUsage } from "./claude-usage";
 import { fetchCodexUsage } from "./codex-usage";
 import { summarizeUsage, untilReset } from "./usage";
-import { mcpArgs, type McpServerOptions, REAL_CACHE_DIR, startMcpServer, textOf } from "./mcp-client";
+import { cliBinary, hostArgs, type McpServerOptions, REAL_CACHE_DIR, startMcpServer, textOf } from "./mcp-client";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const RUNNERS = { claude: { usage: fetchClaudeUsage }, codex: { usage: fetchCodexUsage } };
@@ -164,8 +163,7 @@ if (options.usageOnly) {
     console.log(summarizeUsage(await runner.usage()));
     process.exit(0);
 }
-const binary = process.env.LUMA_AGENT_BIN ?? join(REPO_ROOT, "backend/target/debug/luma-agent");
-if (!existsSync(binary)) throw new Error(`Build luma-agent first: cargo build --manifest-path backend/Cargo.toml --bin luma-agent`);
+const binary = cliBinary();
 if (!options.skipUsageCheck) await gate(runner);
 const binding = await resolveBinding(options);
 const prompt = [
@@ -176,7 +174,7 @@ const prompt = [
     "Cover the whole track. Verify two or three contrasting moments with luma.venue.render().",
     "Finish with a brief description of the show and counts of clips, sections and groups.",
 ].join("\n");
-const args = [...mcpArgs(options.host), "--track", binding.trackId, "--venue", binding.venueId,
+const args = ["agent", ...hostArgs(options.host), "--track", binding.trackId, "--venue", binding.venueId,
     "--engine", options.runner, "--prompt", prompt];
 if (options.model) args.push("--model", options.model);
 const child = spawn(binary, args, { stdio: "inherit", cwd: REPO_ROOT });

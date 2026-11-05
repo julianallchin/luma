@@ -8,9 +8,7 @@ use luma_scene::View;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::PathBuf;
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
-    let mut args = std::env::args().skip(1);
+pub async fn run(mut args: super::Args) -> Result<(), String> {
     let mut db = StorageRoot::from_env_default()?.luma_db_path();
     let mut venue = None;
     let mut output = None;
@@ -21,7 +19,7 @@ async fn main() -> Result<(), String> {
     let mut height = 1000u32;
     while let Some(arg) = args.next() {
         if arg == "--help" {
-            println!("render-venue --venue-id UUID --output PATH [--db PATH] [--state PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
+            println!("luma-cli render --venue-id UUID --output PATH [--db PATH] [--state PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
             return Ok(());
         }
         let value = args

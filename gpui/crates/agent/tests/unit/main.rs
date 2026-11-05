@@ -6,7 +6,6 @@
 
 mod cached_view;
 mod harness;
-mod mcp;
 
 mod popover;
 

@@ -22,7 +22,7 @@ ported file starts with
 ## 1. Where the agent loop lives
 
 The loop is `luma_lib::agent` (`backend/src/agent/`). It runs without a window,
-so `luma-agent` and `luma-mcp` use the same loop as the app.
+so `luma-cli agent` and `luma-cli mcp` use the same loop as the app.
 
 `AgentService::turn(thread_id, prompt)` returns a `TurnStream`. A host reads
 typed `TurnEvent`s from it. Dropping the stream cancels the turn.

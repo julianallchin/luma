@@ -1,8 +1,8 @@
 # Skills
 
 Status: built. Code: `backend/src/agent/skills.rs`,
-`backend/src/agent/tools/skill.rs`, `backend/src/bin/luma-mcp.rs`,
-`backend/crates/mcp-stdio`.
+`backend/src/agent/tools/skill.rs`, `backend/src/bin/luma-cli/mcp.rs`,
+`backend/src/bin/luma-cli/mcp_stdio.rs`.
 
 Skills are the lighting-craft playbooks an agent reads before it authors. They
 use the [Agent Skills](https://agentskills.io/specification) format.
@@ -49,14 +49,14 @@ Frontmatter keys:
 
 ## MCP
 
-`luma-mcp` gives an external agent the same skills:
+`luma-cli mcp` gives an external agent the same skills:
 
 - A `skill` tool. Its description holds the short instruction and the full
   listing, because an MCP client has no Luma system prompt.
 - The reply to `open` says that craft guidance is available through the
   `skill` tool.
 - `prompts/list` and `prompts/get`. Claude Code shows each skill as
-  `/mcp__luma__<name>`. `mcp_stdio::Surface` answers these from static data.
+  `/mcp__luma__<name>`. `Surface` in `luma-cli`'s `mcp_stdio` module answers these from static data.
 
 Luma does not write skills into a client's own skill directory.
 

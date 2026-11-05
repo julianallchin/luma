@@ -1,7 +1,7 @@
 //! One score, rendered to an mp4 with the track's own audio.
 //!
 //! The one way a score becomes a video: the app's "Export show" and the
-//! `luma-record` CLI both start a [`Recording`] here and wait. This module owns
+//! `luma-cli record` CLI both start a [`Recording`] here and wait. This module owns
 //! the *time axis* and the *container* — span clamping, frame count, shutter,
 //! encoder choice, the audio offset, the ffmpeg argv — and draws each frame
 //! the way the stage does: the same score compile, the same motor lag, the

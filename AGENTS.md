@@ -27,12 +27,12 @@ Format only touched Rust files (`rustfmt <file>`; `rustfmt.toml` sets the editio
 Every committed file has a home and a reader. Before adding one, find its place here; if none fits, ask.
 
 - **One-off scripts, probes, repros, measurements, scratch data** go in `experiments/` (ignored by git) or your scratch directory. Never commit them. A finding worth keeping goes in a doc or a test, not a script.
-- **Rust programs people run** (hosts, the MCP server, `luma-record`) are `src/bin/` of their crate. A developer tool for one crate (a profiler, a golden renderer, a lab) is a `src/bin/` or `examples/` of the crate it exercises, documented in that crate's README or `gpui/BUILD.md`.
+- **Rust programs people run** (`luma-cli`, the app) are `src/bin/` of their crate. A developer tool for one crate (a profiler, a golden renderer, a lab) is a `src/bin/` or `examples/` of the crate it exercises, documented in that crate's README or `gpui/BUILD.md`.
 - **Scripts** go in `scripts/<area>/` (`setup`, `release/`, `headless/`, `library/`), each listed in a README with what it is for. A script that only one task needed is a one-off: see the first rule.
 - **Tests** live with the code they test: Rust unit tests in the module, integration tests in the crate's `tests/`, UI tests as `.test.js` under `gpui/crates/agent/tests/js/`, Python tests under `backend/python/luma_exec/tests/`.
 - **Test reference data** (goldens, reference captures, style specs) goes in `harness/`. Assets the app ships go in `assets/` or `resources/`.
 - **Docs**: how a system works and why goes in `docs/design/` or `docs/specs/` (indexed in `docs/README.md`); user-facing docs go in `www/`; build and test know-how in `gpui/BUILD.md` or the crate's README. No dated handoff notes, audits or friction logs: fix the thing, or put the knowledge where the next reader looks.
-- **Names**: Rust programs are kebab-case (`luma-record`), Rust files and Python files snake_case, docs kebab-case.
+- **Names**: Rust programs are kebab-case (`luma-cli`), Rust files and Python files snake_case, docs kebab-case.
 
 Delete what you added once it has served its purpose.
 

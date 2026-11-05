@@ -285,7 +285,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
   you are comparing against before running tests.
 - Cargo rebuilds by mtime. A file restored from a backup keeps its old mtime,
   and the build silently keeps the stale artifact. `touch` it.
-- Build `luma-mcp` with `--bin luma-mcp` from `backend/`. It is a binary of
+- Build `luma-cli` with `--bin luma-cli` from `backend/`. It is a binary of
   the `luma` package, not a package.
 - A worktree needs `git submodule update --init` before the backend compiles:
   `backend/src/runtime/python.rs` embeds the consonance-ACE requirements file.
@@ -297,9 +297,9 @@ Collected from past work in this tree. Each cost someone an afternoon.
   probe under about 50 runs is measuring the clock governor. Throw away the
   first run, sweep sizes in both directions, and cool down between runs.
 - macOS `sample` over a whole harness run attributes startup and preview
-  renders to the same symbols as live frames. Sample `profile-score`
+  renders to the same symbols as live frames. Sample `luma-cli profile`
   instead. A release-build sample needs `dsymutil` for file:line.
-- `luma-record`'s mp4 is not byte-reproducible. Compare decoded frames.
+- `luma-cli record`'s mp4 is not byte-reproducible. Compare decoded frames.
 
 **Renderer**
 

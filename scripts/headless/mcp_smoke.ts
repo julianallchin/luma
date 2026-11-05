@@ -248,10 +248,10 @@ try {
 			code: [
 				"draft = luma.track.edit()",
 				"span = (0.0, min(8.0, luma.track.duration_s))",
-				"k = clock(every=1)",
-				'pos = curve(time(k), "Ramp up", low=-0.2, high=1)',
+				"k = time(every=1)",
+				'pos = curve(k, "Ramp up", low=-0.2, high=1)',
 				'width = curve(audio("low"), "Ramp up", low=0.05, high=0.4)',
-				'graph = color(brightness=curve(space(offset=pos, width=width), "On"))',
+				'graph = color(brightness=curve(space(shift=pos, scale=width), "On"))',
 				"z = max((c.z for c in luma.track.clips), default=-1) + 1",
 				'kick = draft.add_clip(graph, name="Kick chase", seconds=span, selection="all", z=z)',
 				"draft.check()",
@@ -288,7 +288,7 @@ try {
 		const source = textOf(readBack);
 		check(
 			"the applied clip reads back as Python",
-			!readBack.isError && source.includes("clock(every=1)") && source.includes("audio(") &&
+			!readBack.isError && source.includes("time(every=1)") && source.includes("audio(") &&
 				source.trimEnd().split("\n").at(-1)?.startsWith("color(") === true,
 			source.slice(0, 600),
 		);

@@ -14,17 +14,16 @@
 //! # Shape
 //!
 //! ```text
-//!  MCP client ──stdio──▶ mcp ──▶ interp ──Cmd/JSON──▶ pump ──▶ gpui App
-//!                       (thread B)                 (main thread)
+//!  test script ──▶ interp ──Cmd/JSON──▶ pump ──▶ gpui App
+//!                 (thread B)                 (main thread)
 //! ```
 //!
-//! Three layers, and the split between them is not negotiable:
+//! Two layers, and the split between them is not negotiable:
 //!
 //! - [`pump`] owns the whole gpui side and is the only code that touches
 //!   `&mut App`. It is a loop over [`protocol::Cmd`]s.
 //! - [`interp`] runs QuickJS on a different thread. It holds a channel, never
 //!   a gpui handle, so there is no way for a script to re-enter gpui.
-//! - [`mcp`] is the stdio transport, and exposes exactly two tools.
 //!
 //! Only plain `Send` data crosses between them. That is what makes the
 //! interpreter safe to run scripts of unknown quality: the worst a script can
@@ -57,7 +56,6 @@ pub mod error;
 #[cfg(feature = "app")]
 pub mod fixture;
 pub mod interp;
-pub mod mcp;
 #[cfg(feature = "pixel")]
 mod pixel;
 pub mod protocol;

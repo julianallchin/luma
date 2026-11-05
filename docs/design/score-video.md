@@ -248,13 +248,13 @@ right binding because it already carries both the venue and the track scope
 
 ### MCP
 
-**No new tool.** `luma-mcp` exposes `find / open / python / reset / cancel / skill`;
+**No new tool.** `luma-cli mcp` exposes `find / open / python / reset / cancel / skill`;
 anything reachable from the kernel is reachable from MCP already. Adding a `record`
 tool would be a second way to do one thing.
 
 ### CLI
 
-`backend/src/bin/luma-record.rs`, bootstrapping exactly like `agent-harness.rs`:
+`backend/src/bin/luma-cli/record.rs`, bootstrapping exactly like `luma-cli rpc`:
 
 ```rust
 let config = HostConfig::parse_args(shared_flags)?;
@@ -262,10 +262,10 @@ let services = boot(&config).await?;
 ```
 
 ```
-luma-record --track <id|query> [--venue <id>] --out <file.mp4>
+luma-cli record --track <id|query> [--venue <id>] --out <file.mp4>
             [--view front] [--fps 30] [--size 1920x1080] [--quality final]
             [--from 30 --to 90] [--no-audio]
-luma-record --all --out-dir ./renders [same options]
+luma-cli record --all --out-dir ./renders [same options]
 ```
 
 `--all` enumerates every score in the library and records each in turn — one GPU, so
@@ -362,13 +362,13 @@ of a bake actually exists.
 
 Built on `agent-code-execution`: `backend/src/recording.rs`, the `Sequence`
 handle in `stage_render.rs`, an `runtime::ffmpeg` split, and
-`backend/src/bin/luma-record.rs`. Scope is one score in, one file out — no
+`backend/src/bin/luma-cli/record.rs`. Scope is one score in, one file out — no
 `--all`, no Python binding, no MCP tool, no app dialog. The `Recording` /
 `Progress` / `Recorded` shapes are §4's, minus `quality` (see the shutter, below)
 and `audio` (a recording without the track is not a thing anyone asked for).
 
 ```
-luma-record <score-id> <out.mp4>
+luma-cli record <score-id> <out.mp4>
     [--view front] [--width 1280] [--height 720] [--fps 30] [--span start:end]
     [--config-dir DIR] [--fixtures-root DIR] [--cache-dir DIR]
 ```
@@ -440,7 +440,7 @@ sub-renders (`DEFAULT_SUBFRAMES / K` each), so total haze samples are unchanged
 and only the fixed passes are paid four times.
 
 *Update, 2026-09-30:* `strobe_gate` and every shutter are gone. A frame is
-one moment, live, in the show export and in `luma-record` alike
+one moment, live, in the show export and in `luma-cli record` alike
 (`luma_render::footage::moment`, `stage_render::Sequence::frame_at`). A strobe
 flashes on the free-running clock, not on transport time or the beat, at one
 rate mapping for every fixture (`luma_render::strobe`, 20 Hz per unit). Each
@@ -509,7 +509,7 @@ the source segment decoded independently.
 ### Flagged while passing
 
 `compositor::scores_for_track` composites **every** score on a `(track, venue)`
-— score identity is not part of what it blends. `luma-record <score-id>` renders
+— score identity is not part of what it blends. `luma-cli record <score-id>` renders
 that score's clips alone (`get_clips_of_score`), which is what the request
 means. The two disagree whenever a track carries two scores in one venue, and
 the compositor is the half that should grow a score id.
@@ -520,7 +520,7 @@ the compositor is the half that should grow a score id.
 
 §8 measured one sampling strategy and called it the recording. It is not: it is
 the *isolated-frame* strategy, and the renderer has always had a second one that
-only the live viewport could reach. `luma-record --haze temporal|accumulate`
+only the live viewport could reach. `luma-cli record --haze temporal|accumulate`
 now picks between them.
 
 ```rust
@@ -683,7 +683,7 @@ Two things would change the recommendation and neither is built:
 drifted: the app's had the stage camera, motor lag and the bass shake; the
 CLI's had named views, a missing-audio error and the editor grid. They are now
 one. `recording::record` is the only frame loop, and both the dialog and
-`luma-record` start a `Recording` and wait.
+`luma-cli record` start a `Recording` and wait.
 
 - **Draw.** `luma_render::Recorder`: the live pass chain, pipelined three
   frames deep, read back at ten bits a channel. `Haze` and its `accumulate`
@@ -691,7 +691,7 @@ one. `recording::record` is the only frame loop, and both the dialog and
   recording draws what the stage draws.
 - **Aim.** `stage_render::Aim` is a named view fitted to the rig, or a stage
   camera exactly as held — the dialog passes the stage's, and
-  `luma-record --camera` reads one from the stage's "Export camera" file.
+  `luma-cli record --camera` reads one from the stage's "Export camera" file.
 - **Light.** `build_score_scene` with the editor's working copy when the dialog
   has one, so a file lights what the stage lights. Motor lag is
   `luma_lib::motors`, the stage's own.

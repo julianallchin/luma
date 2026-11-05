@@ -4,7 +4,7 @@
 //! exposes a handful of tools needs four methods of it: `initialize`,
 //! `tools/list`, `tools/call`, and `ping`. Three of those are answered
 //! identically by every server that ever existed; only `tools/call` is the
-//! host's own. So this crate owns the framing and those three, and hands
+//! host's own. So this module owns the framing and those three, and hands
 //! `tools/call` back to the caller.
 //!
 //! `prompts/list` and `prompts/get` join the same class, because a prompt is
@@ -12,26 +12,9 @@
 //! in its [`Surface`] and never sees the request. A host that declares none is
 //! a tools-only server and answers `-32601` to both, unchanged.
 //!
-//! What it deliberately does **not** own is the loop. Luma's hosts disagree
-//! about concurrency for good reasons — the GPUI harness is one blocking thread
-//! per stage, while `luma-mcp` must answer `cancel` *while* a Python cell is
-//! still running — and a serve loop shared between them could only be the
-//! stricter of the two. Read a line, [`route`] it, write the answer.
-//!
-//! ```
-//! use mcp_stdio::{route, Routed, ServerInfo, Surface};
-//! use serde_json::json;
-//!
-//! let info = ServerInfo { name: "example", version: "0.1.0" };
-//! let tools = json!([]);
-//! match route(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, info, &Surface::new(&tools)) {
-//!     Routed::Respond { response, .. } => assert_eq!(response["result"], json!({})),
-//!     Routed::Call { .. } | Routed::Silent => unreachable!(),
-//! }
-//! ```
-
-#![warn(missing_docs)]
-#![warn(clippy::pedantic)]
+//! It does not own the loop: `luma-cli mcp` must answer `cancel` *while* a
+//! Python cell is still running, so it reads a line, [`route`]s it and writes
+//! the answer itself.
 
 use serde_json::{json, Value};
 

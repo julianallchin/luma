@@ -63,7 +63,7 @@ graph is in `venue.rs`; see `docs/design/venue-graph.md`.
 
 ## 6. Export
 
-Built. `luma-record <score-id> <out.mp4>` (`backend/src/bin/luma-record.rs`) records
+Built. `luma-cli record <score-id> <out.mp4>` (`backend/src/bin/luma-cli/record.rs`) records
 one score. Offscreen frames accumulate `DEFAULT_SUBFRAMES` jitter samples at the
 same time with the temporal pass bypassed, so output is deterministic. See
 `docs/design/score-video.md`.

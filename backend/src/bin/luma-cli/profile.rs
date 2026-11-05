@@ -1,5 +1,5 @@
 //! Read-only replay of a saved score through production evaluation and rendering.
-//! profile-score SCORE_ID OUTPUT [width height seconds] [all|no-haze|uniform|snapshot] [TIMES_JSON]
+//! luma-cli profile SCORE_ID OUTPUT [width height seconds] [all|no-haze|uniform|snapshot] [TIMES_JSON]
 //! `snapshot` exports score states without GPU rendering: 1, 3 and 7 seconds by
 //! default, or a JSON array of strictly increasing times from TIMES_JSON.
 use luma_lib::{
@@ -11,9 +11,12 @@ use luma_render::{assets::Library, build_frame_with, Renderer};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::{path::PathBuf, time::Instant};
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
+pub async fn run(args: super::Args) -> Result<(), String> {
+    // Index 0 is the subcommand's place, so the positions below read as the
+    // usage line counts them.
+    let args: Vec<String> = std::iter::once(String::from("profile"))
+        .chain(args)
+        .collect();
     let score = args.get(1).ok_or("score id required")?;
     let output = args.get(2).ok_or("output path required")?;
     let number = |i: usize, default: u32| -> Result<u32, String> {

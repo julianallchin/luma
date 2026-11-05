@@ -27,20 +27,12 @@ use luma_lib::headless_host::{boot, HostConfig};
 // Main loop
 // -----------------------------------------------------------------------------
 
-#[tokio::main]
-async fn main() {
-    if let Err(e) = run().await {
-        eprintln!("[agent-harness] fatal: {e}");
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> Result<(), String> {
-    let config = HostConfig::parse_args(std::env::args().skip(1))?;
+pub async fn run(args: super::Args) -> Result<(), String> {
+    let config = HostConfig::parse_args(args)?;
     let services = boot(&config).await?;
 
     eprintln!(
-        "[agent-harness] ready: config={} fixtures={}",
+        "[luma-cli rpc] ready: config={} fixtures={}",
         services.storage().path().display(),
         services.fixtures_root().display()
     );
@@ -65,7 +57,7 @@ async fn run() -> Result<(), String> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[agent-harness] stdin read failed: {e}");
+                    eprintln!("[luma-cli rpc] stdin read failed: {e}");
                     return;
                 }
             }
@@ -107,13 +99,13 @@ async fn run() -> Result<(), String> {
                 }
             };
             let Ok(mut buf) = serde_json::to_vec(&response) else {
-                eprintln!("[agent-harness] response was not serializable");
+                eprintln!("[luma-cli rpc] response was not serializable");
                 return;
             };
             buf.push(b'\n');
             let mut out = stdout.lock().await;
             if let Err(e) = out.write_all(&buf).and_then(|()| out.flush()) {
-                eprintln!("[agent-harness] stdout write failed: {e}");
+                eprintln!("[luma-cli rpc] stdout write failed: {e}");
             }
         });
     }

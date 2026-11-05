@@ -1,6 +1,6 @@
 //! The command surface. [`handlers`] holds every command as a typed function;
 //! GPUI calls those directly. The JSON adapter here — [`dispatch`] — serves
-//! the hosts that speak JSON by nature: the in-app agent, `luma-mcp`, the
+//! the hosts that speak JSON by nature: the in-app agent, `luma-cli mcp`, the
 //! agent harness and its fixtures. The command table owns wire names and
 //! metadata.
 

@@ -4,7 +4,7 @@
 //! — `<root>/<name>/SKILL.md`, `name` + `description` frontmatter, markdown
 //! body, optional `references/`, `scripts/`, `assets/` beside it. This module is
 //! the one registry: the in-app loop reads its [`SkillRegistry::listing`] into
-//! the system prompt and its bodies through the `skill` tool, and `luma-mcp`
+//! the system prompt and its bodies through the `skill` tool, and `luma-cli mcp`
 //! hands them to an external agent. A second parse of these files anywhere would be a second
 //! vocabulary.
 //!

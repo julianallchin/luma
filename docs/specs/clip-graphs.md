@@ -1460,7 +1460,7 @@ the parity tool, the old-build export step scripted.
    touched crates, `gpui/test` for `clip_graph.test.js`, the Python tests.
 2. E runs the parity check on a copy of the live database and posts
    `report.md`. Zero hard differences is the gate.
-3. End-to-end agent run: rebuild `backend/target/debug/luma-mcp`; run
+3. End-to-end agent run: rebuild `backend/target/debug/luma-cli`; run
    `scripts/headless/mcp_smoke.ts`, which must: `open` a track, run a cell
    that builds "Kick chase" (`audio` on width, `clock` every 1), `check`,
    read `view.output.aim` and `view.output.values`, `apply`, read the clip

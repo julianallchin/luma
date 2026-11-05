@@ -22,7 +22,7 @@
 //! playbooks are the other half, and an external agent gets both from the same
 //! registry the in-app loop reads (see the "Skills" section below).
 //!
-//! Like `agent-harness`, this is a thin adapter over `luma_lib::dispatch` — it
+//! Like `luma-cli rpc`, this is a thin adapter over `luma_lib::dispatch` — it
 //! implements no command of its own, so scope resolution, the binding manifest,
 //! the write-admission gate and the interrupt ladder are the app's, not a
 //! second copy. What it adds is the *session*: an MCP client has no editor to
@@ -37,7 +37,7 @@
 //! One subcommand sits beside the server, sharing its host and its admission:
 //!
 //! ```text
-//! luma-mcp record-usage --json '<AgentThreadUsage>'
+//! luma-cli mcp record-usage --json '<AgentThreadUsage>'
 //! ```
 //!
 //! It exists because a session's *price* is known only after the session ends —
@@ -50,6 +50,10 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
+use super::mcp_stdio::{
+    image_png, ok, prompt, result, route, text, tool, tool_error, ClientInfo, Routed, ServerInfo,
+    Surface,
+};
 use luma_lib::agent::model::ContentBlock;
 use luma_lib::agent::skills::{self, SkillRegistry};
 use luma_lib::agent::tools::python::{cell_content_blocks, PYTHON_TOOL_DESCRIPTION};
@@ -57,10 +61,6 @@ use luma_lib::agent::tools::skill::SKILL_TOOL_DESCRIPTION;
 use luma_lib::dispatch::{self, AppServices};
 use luma_lib::headless_host::{boot, HostConfig};
 use luma_lib::models::agent_execution::PythonCellResult;
-use mcp_stdio::{
-    image_png, ok, prompt, result, route, text, tool, tool_error, ClientInfo, Routed, ServerInfo,
-    Surface,
-};
 
 const SERVER: ServerInfo = ServerInfo {
     name: "luma",
@@ -84,7 +84,7 @@ fn stale_binary() -> Option<String> {
         })
         .as_ref()?;
     if std::fs::metadata(&age.path).ok()?.modified().ok()? > age.built {
-        return Some("luma-mcp was rebuilt, but this client is still running the previous executable. The host must restart the MCP connection. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
+        return Some("luma-cli was rebuilt, but this client is still running the previous executable. The host must restart the MCP connection. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
     }
     fn newer(path: &std::path::Path, built: std::time::SystemTime) -> bool {
         let Ok(entries) = std::fs::read_dir(path) else {
@@ -116,7 +116,7 @@ fn stale_binary() -> Option<String> {
         root.join("../gpui/crates/render/src"),
     ];
     if sources.iter().any(|path| newer(path, age.built)) {
-        return Some("luma-mcp is older than the source it serves. The host must run `cargo build --bin luma-mcp --manifest-path backend/Cargo.toml`, then restart this MCP connection before authoring. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
+        return Some("luma-cli is older than the source it serves. The host must run `cargo build --bin luma-cli --manifest-path backend/Cargo.toml`, then restart this MCP connection before authoring. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
     }
     None
 }
@@ -381,7 +381,7 @@ async fn open(
         // correctness, and refusing to open because the last one would not
         // close would be the worse failure.
         if let Err(error) = close(services, &previous).await {
-            eprintln!("[luma-mcp] closing the previous session: {error}");
+            eprintln!("[luma-cli mcp] closing the previous session: {error}");
         }
     }
 
@@ -478,7 +478,7 @@ async fn open_venue(
     let previous = session.write().await.replace(opened.clone());
     if let Some(previous) = previous {
         if let Err(error) = close(services, &previous).await {
-            eprintln!("[luma-mcp] closing the previous session: {error}");
+            eprintln!("[luma-cli mcp] closing the previous session: {error}");
         }
     }
 
@@ -947,15 +947,7 @@ async fn invoke(services: &AppServices, cmd: &str, args: Value) -> Result<Value,
 // Main loop
 // -----------------------------------------------------------------------------
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("[luma-mcp] fatal: {error}");
-        std::process::exit(1);
-    }
-}
-
-/// `luma-mcp record-usage --json '<AgentThreadUsage>' [host flags]`.
+/// `luma-cli mcp record-usage --json '<AgentThreadUsage>' [host flags]`.
 ///
 /// The session that spent the money is over by the time anyone knows what it
 /// cost: `open` retires its thread when the client disconnects, and the harness
@@ -993,11 +985,11 @@ async fn record_usage(args: impl Iterator<Item = String>) -> Result<(), String> 
     Ok(())
 }
 
-async fn run() -> Result<(), String> {
+pub async fn run(args: super::Args) -> Result<(), String> {
     if let Some(message) = stale_binary() {
-        eprintln!("[luma-mcp] {message}");
+        eprintln!("[luma-cli mcp] {message}");
     }
-    let mut args = std::env::args().skip(1).peekable();
+    let mut args = args.peekable();
     if args.peek().is_some_and(|arg| arg == "record-usage") {
         args.next();
         return record_usage(args).await;
@@ -1005,7 +997,7 @@ async fn run() -> Result<(), String> {
     let config = HostConfig::parse_args(args)?;
     let services = boot(&config).await?.into_shared();
     eprintln!(
-        "[luma-mcp] ready: config={} fixtures={}",
+        "[luma-cli mcp] ready: config={} fixtures={}",
         services.storage().path().display(),
         services.fixtures_root().display()
     );
@@ -1032,7 +1024,7 @@ async fn run() -> Result<(), String> {
                     }
                 }
                 Err(error) => {
-                    eprintln!("[luma-mcp] stdin read failed: {error}");
+                    eprintln!("[luma-cli mcp] stdin read failed: {error}");
                     return;
                 }
             }
@@ -1072,7 +1064,7 @@ async fn run() -> Result<(), String> {
     // A client that hung up mid-cell leaves a kernel with nothing to answer to.
     if let Some(open) = session.write().await.take() {
         if let Err(error) = close(&services, &open).await {
-            eprintln!("[luma-mcp] closing the session: {error}");
+            eprintln!("[luma-cli mcp] closing the session: {error}");
         }
     }
     Ok(())
@@ -1103,7 +1095,7 @@ async fn set_actor(services: &AppServices, command: &str, arguments: Value) -> b
     match invoke(services, command, arguments).await {
         Ok(_) => true,
         Err(error) => {
-            eprintln!("[luma-mcp] naming the writer: {error}");
+            eprintln!("[luma-cli mcp] naming the writer: {error}");
             false
         }
     }
@@ -1111,12 +1103,12 @@ async fn set_actor(services: &AppServices, command: &str, arguments: Value) -> b
 
 async fn write(stdout: &tokio::sync::Mutex<std::io::Stdout>, message: &Value) {
     let Ok(mut buf) = serde_json::to_vec(message) else {
-        eprintln!("[luma-mcp] response was not serializable");
+        eprintln!("[luma-cli mcp] response was not serializable");
         return;
     };
     buf.push(b'\n');
     let mut out = stdout.lock().await;
     if let Err(error) = out.write_all(&buf).and_then(|()| out.flush()) {
-        eprintln!("[luma-mcp] stdout write failed: {error}");
+        eprintln!("[luma-cli mcp] stdout write failed: {error}");
     }
 }

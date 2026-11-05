@@ -176,7 +176,7 @@ scope:** new verbs; a second spelling of one is AF6.
 track and no score. Its cells bind `luma.venue` only: `luma.track` is *absent*
 from the namespace, not an erroring stub — the error is defined out of
 existence. The in-app chat opens on this scope from the patch and stage pages.
-`luma-mcp` gains `open(venue=…)`, which pins such a thread and **mints no
+`luma-cli mcp` gains `open(venue=…)`, which pins such a thread and **mints no
 score** — a score is a track's membership in a room, and there is no track to
 have one; `reset` rebinds the same venue thread.
 

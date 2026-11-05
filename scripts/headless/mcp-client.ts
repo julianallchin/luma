@@ -1,5 +1,5 @@
 /**
- * The client half of MCP stdio, against Luma's `luma-mcp` binary.
+ * The client half of MCP stdio, against `luma-cli mcp`.
  *
  * Newline-delimited JSON-RPC on the child's stdin/stdout — the same wire any
  * MCP client speaks, so a script that uses this is testing the protocol, not a
@@ -51,22 +51,24 @@ export type McpServerOptions = {
 	stderr?: "inherit" | "ignore";
 };
 
-/** Path to the built binary, honouring `LUMA_MCP_BIN`. Throws with the build
- * command when it is missing, because "ENOENT" is not an actionable error. */
-export function mcpBinary(): string {
-	const binary = process.env.LUMA_MCP_BIN ?? join(REPO_ROOT, "backend/target/debug/luma-mcp");
+/** Path to the built `luma-cli`, honouring `LUMA_CLI_BIN`. Throws with the
+ * build command when it is missing, because "ENOENT" is not an actionable
+ * error. */
+export function cliBinary(): string {
+	const binary = process.env.LUMA_CLI_BIN ?? join(REPO_ROOT, "backend/target/debug/luma-cli");
 	if (!existsSync(binary)) {
 		throw new Error(
-			`luma-mcp not found at ${binary}. Build it first:\n` +
-				"  cargo build --bin luma-mcp --manifest-path backend/Cargo.toml",
+			`luma-cli not found at ${binary}. Build it first:\n` +
+				"  cargo build --bin luma-cli --manifest-path backend/Cargo.toml",
 		);
 	}
 	return binary;
 }
 
-/** The argv a host takes for a given library. Shared with anything that has to
- * spawn the same server a different way (an `--mcp-config` file, say). */
-export function mcpArgs(options: McpServerOptions = {}): string[] {
+/** The host options every `luma-cli` subcommand that opens a library takes.
+ * Shared with anything that has to spawn the same server a different way (an
+ * `--mcp-config` file, say). */
+export function hostArgs(options: McpServerOptions = {}): string[] {
 	const args: string[] = [];
 	if (options.configDir) args.push("--config-dir", options.configDir);
 	args.push("--cache-dir", options.cacheDir ?? REAL_CACHE_DIR);
@@ -85,7 +87,7 @@ export type McpServer = {
 };
 
 export function startMcpServer(options: McpServerOptions = {}): McpServer {
-	const child: ChildProcess = spawn(mcpBinary(), mcpArgs(options), {
+	const child: ChildProcess = spawn(cliBinary(), ["mcp", ...hostArgs(options)], {
 		stdio: ["pipe", "pipe", options.stderr ?? "inherit"],
 		cwd: REPO_ROOT,
 	});
@@ -94,7 +96,7 @@ export function startMcpServer(options: McpServerOptions = {}): McpServer {
 	let nextId = 1;
 	let exited: Error | null = null;
 	child.on("exit", (code, signal) => {
-		exited = new Error(`luma-mcp exited (code=${code} signal=${signal})`);
+		exited = new Error(`luma-cli mcp exited (code=${code} signal=${signal})`);
 		for (const p of pending.values()) p.reject(exited);
 		pending.clear();
 	});
@@ -169,7 +171,7 @@ export type ThreadUsage = {
 /**
  * Write one run's cost into the library.
  *
- * A second, short-lived `luma-mcp` — the server that spent the money has
+ * A second, short-lived `luma-cli mcp` — the server that spent the money has
  * already exited, taking its thread with it, and the price only arrives in the
  * harness's final event after that. Same binary, same library, same admission.
  *
@@ -181,8 +183,8 @@ export async function recordUsage(
 	options: McpServerOptions,
 	usage: ThreadUsage,
 ): Promise<string> {
-	const args = ["record-usage", "--json", JSON.stringify(usage), ...mcpArgs(options)];
-	const child = spawn(mcpBinary(), args, { stdio: ["ignore", "pipe", "pipe"], cwd: REPO_ROOT });
+	const args = ["mcp", "record-usage", "--json", JSON.stringify(usage), ...hostArgs(options)];
+	const child = spawn(cliBinary(), args, { stdio: ["ignore", "pipe", "pipe"], cwd: REPO_ROOT });
 	let out = "";
 	child.stdout?.on("data", (chunk) => {
 		out += chunk;

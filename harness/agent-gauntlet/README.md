@@ -14,7 +14,7 @@ or evidence. The model defaults to the CLI's configured default; `--model`
 is an explicit override for a requested model.
 
 ```sh
-cargo build --manifest-path backend/Cargo.toml --bin agent-harness --bin luma-mcp
+cargo build --manifest-path backend/Cargo.toml --bin luma-cli
 python3 scripts/headless/gauntlet-mcp-proxy.test.py
 bun scripts/headless/venue-show-gauntlet.ts prepare
 # Use the temporary run directory printed above:

@@ -7,23 +7,14 @@ use luma_lib::{
     headless_host::{boot, HostConfig},
 };
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("luma-agent: {error}");
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> Result<(), String> {
-    let mut args = std::env::args().skip(1);
+pub async fn run(mut args: super::Args) -> Result<(), String> {
     let (mut thread, mut scope, mut prompt, mut engine) = (None, None, None, None);
     let (mut track, mut venue, mut model) = (None, None, None);
     let mut host = Vec::new();
     let mut effort = None;
     while let Some(flag) = args.next() {
         if flag == "--help" {
-            println!("luma-agent (--thread ID | --scope JSON | --track ID --venue ID) --prompt TEXT [--engine api|codex|claude] [--model NAME] [--effort LEVEL|auto] [host options]\n\n--scope creates a conversation from a serialized ThreadScope. --thread continues an existing one.\nHost options: --config-dir, --fixtures-root, --cache-dir, --fixture-principal.");
+            println!("luma-cli agent (--thread ID | --scope JSON | --track ID --venue ID) --prompt TEXT [--engine api|codex|claude] [--model NAME] [--effort LEVEL|auto] [host options]\n\n--scope creates a conversation from a serialized ThreadScope. --thread continues an existing one.\nHost options: --config-dir, --fixtures-root, --cache-dir, --fixture-principal.");
             return Ok(());
         }
         let value = args

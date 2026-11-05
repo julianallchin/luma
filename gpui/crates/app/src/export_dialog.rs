@@ -1,6 +1,6 @@
 //! The "Export show" dialog: choose a size and a file, then watch the score
 //! render. The rendering is [`luma_lib::recording`]'s — the same recording
-//! `luma-record` makes — seen through the stage's camera; this is only the
+//! `luma-cli record` makes — seen through the stage's camera; this is only the
 //! card over it.
 
 use std::path::{Path, PathBuf};
@@ -307,7 +307,7 @@ impl Luma {
     }
 
     /// Stop the render at the next frame. What was rendered stays a playable
-    /// file, as a stopped `luma-record` leaves it.
+    /// file, as a stopped `luma-cli record` leaves it.
     fn cancel_show_export(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.show_export_mut() {
             dialog.phase = Phase::Setup { error: None };

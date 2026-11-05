@@ -15,7 +15,7 @@ works and the decisions behind it.
 - [specs/aim.md](specs/aim.md) — the room frame, the pan/tilt solver, moving in black, motor lag
 - [design/lasers.md](design/lasers.md) — beam shows from ILDA projectors: zones, figures, output
 - [design/live-control.md](design/live-control.md) — controls, MIDI and OSC bindings, the Perform tab and set
-- [design/score-video.md](design/score-video.md) — recording a score as video (`luma-record`, Export show)
+- [design/score-video.md](design/score-video.md) — recording a score as video (`luma-cli record`, Export show)
 
 ## Venues and the editor
 

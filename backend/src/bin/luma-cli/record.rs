@@ -1,11 +1,11 @@
-//! `luma-record <score-id> <output.mp4>` — one score in, one mp4 out.
+//! `luma-cli record <score-id> <output.mp4>` — one score in, one mp4 out.
 //!
 //! A thin caller. Everything that makes a recording a recording lives in
 //! `luma_lib::recording`; this binary parses flags, boots the same headless host
-//! `agent-harness` and `luma-mcp` boot, and prints progress.
+//! `luma-cli rpc` and `luma-cli mcp` boot, and prints progress.
 //!
 //! ```text
-//! luma-record <score-id> <out.mp4>
+//! luma-cli record <score-id> <out.mp4>
 //!     [--view front|audience|overhead|quarter-left|quarter-right|dj]
 //!     [--camera EXPORT.json]
 //!     [--width 1280] [--height 720] [--fps 30] [--span 30:90]
@@ -25,20 +25,12 @@ use luma_lib::stage_render::Aim;
 use luma_render::camera_export::CameraExport;
 use luma_scene::{Camera, View};
 
-const USAGE: &str = "usage: luma-record <score-id> <output.mp4> \
+const USAGE: &str = "usage: luma-cli record <score-id> <output.mp4> \
 [--view front | --camera EXPORT.json] [--width 1280] [--height 720] [--fps 30] [--span start:end] \
 [--config-dir DIR] [--fixtures-root DIR] [--cache-dir DIR]";
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("luma-record: {error}");
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> Result<(), String> {
-    let (spec, host) = parse(std::env::args().skip(1))?;
+pub async fn run(args: super::Args) -> Result<(), String> {
+    let (spec, host) = parse(args)?;
     let services = boot(&host).await?;
 
     let cancel: Arc<AtomicBool> = Arc::default();
