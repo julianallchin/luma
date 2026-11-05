@@ -1,0 +1,10 @@
+# Settings for every cargo command run inside the repository.
+
+[env]
+# NVIDIA's driver caches compiled GPU pipelines on disk, capped at 1 GB by
+# default and never evicted. Every rebuild is a new binary to the driver, so a
+# few months of builds fill it, and then every process that renders (each test
+# binary, each UI test app) recompiles every pipeline from scratch: about 13 s
+# per process on an RTX card. 10 GB keeps the cache writing. Other GPUs ignore
+# the variable. If renders are slow again, clear ~/.cache/nvidia/GLCache.
+__GL_SHADER_DISK_CACHE_SIZE = "10737418240"

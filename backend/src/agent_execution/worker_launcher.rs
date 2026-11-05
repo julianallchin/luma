@@ -113,7 +113,14 @@ pub fn base_command(
         .env("HOME", &scratch)
         .env("TMPDIR", &scratch)
         .env("MPLCONFIGDIR", scratch.join(".matplotlib"))
-        .env("LC_ALL", "en_US.UTF-8");
+        .env("LC_ALL", "en_US.UTF-8")
+        // One BLAS thread. NumPy and SciPy each bundle an OpenBLAS that starts
+        // a thread per core and spins it while idle: two pools of 32 busy
+        // threads per worker, which a cell's small arrays never need and the
+        // stage renderer beside it pays for.
+        .env("OPENBLAS_NUM_THREADS", "1")
+        .env("OMP_NUM_THREADS", "1")
+        .env("MKL_NUM_THREADS", "1");
     for (key, value) in &policy.env {
         cmd.env(key, value);
     }

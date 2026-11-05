@@ -121,7 +121,23 @@ Cargo holds one exclusive lock per target directory, so concurrent builds in one
 directory wait for each other. A no-op build with a high wall time and near-zero
 CPU is waiting on `target/debug/.cargo-lock`. A large target directory also
 makes `sys` time high, because every fingerprint check reads the file system.
-Do not let target directories grow without limit.
+Do not let target directories grow without limit. `cargo clean -p luma` in
+`backend/` and `gpui/` drops the biggest stale artifacts and keeps the
+dependencies, so the next build only redoes our own crates.
+
+Do not point two worktrees at one `CARGO_TARGET_DIR`. Cargo hashes path
+packages by their location in the workspace, so both worktrees write to the
+same artifacts, and a build script's output can name files in the other
+worktree, or in one that has been deleted.
+
+When every render or render test is slow (more than 10 s before the first
+frame), the GPU driver is compiling all the pipelines again. NVIDIA's
+on-disk shader cache is capped at 1 GB and never evicted. Each rebuild is a
+new binary to the driver, so the cache fills up and then stops saving
+anything. The root `.cargo/config.toml` and `gpui/dev.py` raise the cap
+through `__GL_SHADER_DISK_CACHE_SIZE`. A process started some other way does
+not get that setting. If renders slow down again, clear
+`~/.cache/nvidia/GLCache`.
 
 `cargo check` does not link. Fewer test binaries help `build` and
 `test --no-run` more than they help `check`.

@@ -102,18 +102,21 @@ midir = "0.9"
 sentry = { version = "0.34", default-features = false, features = ["backtrace", "panic", "reqwest", "rustls"] }
 
 # Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
+# Line tables, not full DWARF: backtraces keep `file:line`, and the test
+# binaries and headless hosts this workspace builds link far faster. The app is
+# built from gpui/, which already builds this crate this way. For a debugger
+# session, build with `CARGO_PROFILE_DEV_DEBUG=true`.
 [profile.dev]
 opt-level = 0
+debug = "line-tables-only"
 
-# Dependencies carry no debuginfo. `"*"` never matches workspace members, so
-# everything under `src/` keeps full DWARF and stays steppable in a debugger —
-# this only gives up line numbers inside third-party frames, which is the half
-# of the tree nobody sets a breakpoint in and most of the bytes on disk.
-#
-# The gpui workspace goes further and drops its own crates to line tables too;
-# it is a test harness, where a backtrace is the whole debugging story. This is
-# the app someone actually steps through, so it keeps them.
+# Dependencies are optimized and carry no debuginfo, as in gpui/: the
+# renderer, the PNG encoder and the audio decoders are far too slow at
+# opt-level 0, and the tests that render, encode or decode spent most of their
+# time there. `"*"` never matches workspace members, so they stay fast to
+# rebuild.
 [profile.dev.package."*"]
+opt-level = 2
 debug = false
 
 # Optimized dev builds for real-time audio/DSP testing

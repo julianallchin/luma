@@ -113,7 +113,10 @@ def main():
                     stop(app)
                     app = None
                     print("[dev] Starting app…", flush=True)
-                    app = subprocess.Popen([executable], cwd=ROOT, start_new_session=True)
+                    # The same GPU pipeline-cache cap as .cargo/config.toml; this
+                    # process starts the app itself, so cargo's [env] never reaches it.
+                    env = {**os.environ, "__GL_SHADER_DISK_CACHE_SIZE": os.environ.get("__GL_SHADER_DISK_CACHE_SIZE", "10737418240")}
+                    app = subprocess.Popen([executable], cwd=ROOT, start_new_session=True, env=env)
             time.sleep(POLL_SECONDS)
     except KeyboardInterrupt:
         print("\n[dev] Stopping.", flush=True)
