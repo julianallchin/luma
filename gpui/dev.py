@@ -62,7 +62,7 @@ def stop(process):
 def build():
     print("[dev] Building…", flush=True)
     process = subprocess.Popen(
-        ["cargo", "+1.97.1", "build", "--manifest-path", "gpui/Cargo.toml",
+        ["cargo", "build", "--manifest-path", "gpui/Cargo.toml",
          "-p", "luma-app", "--bin", "luma-app",
          "--message-format=json-render-diagnostics"],
         cwd=ROOT, stdout=subprocess.PIPE, text=True, start_new_session=True,

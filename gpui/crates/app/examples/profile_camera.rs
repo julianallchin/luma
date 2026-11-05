@@ -11,7 +11,7 @@
 //! # A COPY of the library: opening a pool is read-only here, but keep the
 //! # live one out of reach. Only luma.db and the score's track files are read.
 //! LUMA_CONFIG_DIR=/path/to/library/copy LUMA_PROFILE_DETAIL=1 \
-//! cargo +1.97.1 run --release --manifest-path gpui/Cargo.toml -p luma-app \
+//! cargo run --release --manifest-path gpui/Cargo.toml -p luma-app \
 //!     --example profile_camera -- EXPORT.json [--quality=high|low] \
 //!     [--warmup=120] [--frames=300] [--png=OUT.png] [--compare=BASE.png]
 //! ```

@@ -115,9 +115,9 @@ The full mode is 17.0× slower. Isolation controls retain geometry/depth and env
 Reproduction (from the repository root; app remains closed):
 
 ```sh
-cargo +1.97.1 run --manifest-path backend/Cargo.toml --bin render_venue -- --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
-LUMA_GEOMETRY_SHADOWS=0 cargo +1.97.1 run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
-LUMA_GEOMETRY_SHADOWS=1 cargo +1.97.1 run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
+cargo run --manifest-path backend/Cargo.toml --bin render_venue -- --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
+LUMA_GEOMETRY_SHADOWS=0 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
+LUMA_GEOMETRY_SHADOWS=1 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
 ```
 
 Add `--surface-only` or `--haze-only` for isolation; `--image=/tmp/capture.png` captures the measured setup after the timing loop. Synthetic modes also accept `--cones=450`, so shadow workloads are no longer accidentally fixed at 120 emitters. Raw JSON, the saved catalogue, and inspected images are under `/tmp/luma-harness-visibility/`. Compact results were in `gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json` (deleted from the tree on 2026-10-24; git history has it).
@@ -182,7 +182,7 @@ spatial reconstruction remain approximations. No claim of Depence/Unreal parity.
 Reproduce after exporting the same read-only catalogue described above:
 
 ```sh
-cargo +1.97.1 build --manifest-path gpui/Cargo.toml -p luma-render --release --bin profile-volumetrics
+cargo build --manifest-path gpui/Cargo.toml -p luma-render --release --bin profile-volumetrics
 cd gpui
 LUMA_GEOMETRY_SHADOWS=1 ./target/release/profile-volumetrics --catalogue=/tmp/luma-harness-visibility/gasworks.json --warmup-frames=60 --measured-frames=600
 ```

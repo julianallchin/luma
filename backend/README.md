@@ -33,6 +33,6 @@ loops.
 `luma.db` is in the `com.luma.luma` platform config directory.
 
 ```sh
-cargo +1.97.1 check --manifest-path backend/Cargo.toml --workspace --all-targets
-cargo +1.97.1 test --manifest-path backend/Cargo.toml --lib
+cargo check --manifest-path backend/Cargo.toml --workspace --all-targets
+cargo test --manifest-path backend/Cargo.toml --lib
 ```

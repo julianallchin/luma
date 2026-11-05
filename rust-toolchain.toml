@@ -1,0 +1,7 @@
+# The one toolchain for both workspaces (`backend/` and `gpui/`). rustup reads
+# this file from any directory inside the repository, so plain `cargo` uses it.
+# zed's gpui tracks recent stable, and powersync_core needs at least 1.96.
+# CI and the release workflow name the same version; bump all three together.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

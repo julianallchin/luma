@@ -6,7 +6,7 @@ settings, camera, GPU timings and PNGs for every case. `render_next` drives live
 captures; `render_reference` is used only for explicitly named high-sample references.
 
 ```sh
-cargo +1.97.1 build --manifest-path gpui/Cargo.toml -p luma-render --bin haze-lab
+cargo build --manifest-path gpui/Cargo.toml -p luma-render --bin haze-lab
 # A self-contained physical shadow case: one Atomic 3000, 1.5 metres behind a truss.
 gpui/target/debug/haze-lab capture gpui/crates/render/experiments/haze-shadow-suite.json /tmp/haze/live live
 gpui/target/debug/haze-lab capture gpui/crates/render/experiments/haze-shadow-suite.json /tmp/haze/reference reference128

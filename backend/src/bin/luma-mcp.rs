@@ -116,7 +116,7 @@ fn stale_binary() -> Option<String> {
         root.join("../gpui/crates/render/src"),
     ];
     if sources.iter().any(|path| newer(path, age.built)) {
-        return Some("luma-mcp is older than the source it serves. The host must run `cargo +1.97.1 build --bin luma-mcp --manifest-path backend/Cargo.toml`, then restart this MCP connection before authoring. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
+        return Some("luma-mcp is older than the source it serves. The host must run `cargo build --bin luma-mcp --manifest-path backend/Cargo.toml`, then restart this MCP connection before authoring. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
     }
     None
 }

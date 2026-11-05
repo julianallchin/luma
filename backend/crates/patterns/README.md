@@ -50,8 +50,8 @@ direction, independently normalized per requested group.
 Run checks from the repository root:
 
 ```
-cargo +1.97.1 test --manifest-path backend/Cargo.toml -p luma-patterns
-cargo +1.97.1 clippy --manifest-path backend/Cargo.toml -p luma-patterns --all-targets -- -D warnings
+cargo test --manifest-path backend/Cargo.toml -p luma-patterns
+cargo clippy --manifest-path backend/Cargo.toml -p luma-patterns --all-targets -- -D warnings
 ```
 
 `pattern-eval` reads one JSON request on stdin and writes JSON on stdout. It
@@ -75,7 +75,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 ```
 
 ```
-cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
+cargo run --manifest-path backend/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
 ```
 
 ## Clip forms
@@ -138,7 +138,7 @@ Save one returned frame as JSON to render it in the real venue. `render_venue`
 is a backend binary:
 
 ```
-cargo +1.97.1 run --manifest-path backend/Cargo.toml --bin render_venue -- \
+cargo run --manifest-path backend/Cargo.toml --bin render_venue -- \
   --db /path/to/disposable/luma.db --venue-id UUID \
   --state /path/to/frame.json --output /path/to/preview.png
 ```

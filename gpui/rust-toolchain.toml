@@ -1,4 +1,0 @@
-# zed's gpui tracks recent stable (slice_as_array etc.); pinned here so the
-# harness builds without touching the toolchain backend is linted with.
-[toolchain]
-channel = "1.97.1"

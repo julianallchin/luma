@@ -7,7 +7,7 @@ Thanks for your interest in contributing to Luma! Here's how to get started.
 1. Fork the repository
 2. Create a feature branch (`git checkout -b my-feature`)
 3. Make your changes
-4. Run checks: `cargo +1.97.1 check --manifest-path gpui/Cargo.toml --workspace --all-targets`
+4. Run checks: `cargo check --manifest-path gpui/Cargo.toml --workspace --all-targets`
 5. Commit and push your branch
 6. Open a pull request against `main`
 

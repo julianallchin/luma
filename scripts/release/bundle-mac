@@ -34,11 +34,11 @@ arch=$(uname -m)
 [[ $arch == arm64 ]] && arch=aarch64
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/Cargo.toml | head -1)
 dist="$repo/dist"
-target_dir=$(cargo +1.97.1 metadata --manifest-path gpui/Cargo.toml --format-version 1 --no-deps |
+target_dir=$(cargo metadata --manifest-path gpui/Cargo.toml --format-version 1 --no-deps |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
 
 echo "Building Luma $version ($arch, ${LUMA_RELEASE_CHANNEL:-dev})"
-cargo +1.97.1 build --release --locked --manifest-path gpui/Cargo.toml -p luma-app
+cargo build --release --locked --manifest-path gpui/Cargo.toml -p luma-app
 
 app="$dist/Luma.app"
 rm -rf "$app"

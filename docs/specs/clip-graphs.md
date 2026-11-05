@@ -1456,7 +1456,7 @@ the parity tool, the old-build export step scripted.
 
 ### Phase 3: integrate
 
-1. One agent (B) builds everything: `cargo +1.97.1 check --manifest-path
+1. One agent (B) builds everything: `cargo check --manifest-path
    gpui/Cargo.toml --workspace --all-targets`, backend crate tests for the
    touched crates, `gpui/test` for `clip_graph.test.js`, the Python tests.
 2. E runs the parity check on a copy of the live database and posts

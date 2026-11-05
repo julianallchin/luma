@@ -1,6 +1,6 @@
 //! Opt-in timing of the exact sampler used by the native waveform strips.
 //! Run from the GPUI workspace to use the desktop app's backend optimisation:
-//! cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib waveform_sampling_timings -- --ignored --nocapture
+//! cargo test --manifest-path gpui/Cargo.toml -p luma --lib waveform_sampling_timings -- --ignored --nocapture
 use super::*;
 use std::{hint::black_box, time::Instant};
 

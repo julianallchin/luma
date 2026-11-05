@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-- **Rust 1.97.1.** `gpui/rust-toolchain.toml` pins it. From the repository
-  root, pass `+1.97.1` to cargo.
+- **Rust 1.97.1.** The repository's `rust-toolchain.toml` pins it for both
+  workspaces, and rustup installs it on the first `cargo` run inside the
+  repository.
 - **Git LFS.** The n2n drum-onset weights (`backend/python/n2n/weights.pt`) are
   an LFS file. The hooks in `.githooks/` call `git-lfs` and stop if it is
   missing. Enable them with `git config core.hooksPath .githooks`.

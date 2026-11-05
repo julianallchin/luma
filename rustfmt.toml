@@ -1,0 +1,4 @@
+# Luma's crates are edition 2021. Without this, `rustfmt <file>` formats with
+# the toolchain's newest style edition and reorders every `use` list; `cargo
+# fmt` reads each crate's own edition and needs no help.
+edition = "2021"

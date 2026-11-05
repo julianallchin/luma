@@ -75,7 +75,7 @@ diff is complete by construction. What the diff currently holds:
   Linux enables the existing `luma_ui::dialog::frosted` primitive and floating
   tint tokens; desktop-window translucency remains a separate macOS feature.
   Run the exact compositor's GPU pixel tests from the workspace with
-  `cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma-ui --test backdrop`.
+  `cargo test --manifest-path gpui/Cargo.toml -p luma-ui --test backdrop`.
 - **Color emoji font selection** in `gpui_wgpu/src/cosmic_text_system.rs`.
   Color emoji faces are valid without a Latin `m` glyph. Explicit emoji
   presentation selectors choose the emoji face for the whole grapheme,

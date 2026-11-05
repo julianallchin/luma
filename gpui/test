@@ -16,6 +16,8 @@ for arg in "$@"; do
 		export CARGO_TARGET_DIR
 	fi
 done
+# The repository's toolchain, named because this may run from outside it.
+toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$here/../rust-toolchain.toml")
 # shellcheck disable=SC2086 # $features is deliberately split
-exec cargo +1.97.1 run -q --manifest-path "$here/Cargo.toml" -p gpui-agent --bin luma-test \
+exec cargo +"$toolchain" run -q --manifest-path "$here/Cargo.toml" -p gpui-agent --bin luma-test \
 	$features -- "$@"

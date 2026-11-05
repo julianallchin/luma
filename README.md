@@ -44,6 +44,6 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 2. Initialize submodules: `git submodule update --init --recursive`.
 3. Enable the Git LFS hooks: `git config core.hooksPath .githooks`.
 4. Follow the [GPUI build prerequisites](gpui/BUILD.md).
-5. Start development: `cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-app`.
+5. Start development: `cargo run --manifest-path gpui/Cargo.toml -p luma-app`.
 
 The first build downloads a bundled Python 3.12 runtime and ffmpeg. The app creates the managed Python environment for the analysis workers (beat detection, stem separation, chord analysis) in the background at startup.

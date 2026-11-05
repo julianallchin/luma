@@ -14,9 +14,9 @@ Several agents work in this tree at once. Never run `git stash`, `git checkout -
 - `harness/`: native renderer goldens, reference captures, fonts, and image comparison tools.
 - `www/`: independent documentation site; use Bun for its JavaScript tooling.
 
-Run the app with `cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-app`.
-Check it with `cargo +1.97.1 check --manifest-path gpui/Cargo.toml --workspace --all-targets`.
-Run targeted tests with `cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p <crate>`.
+Run the app with `cargo run --manifest-path gpui/Cargo.toml -p luma-app`.
+Check it with `cargo check --manifest-path gpui/Cargo.toml --workspace --all-targets`.
+Run targeted tests with `cargo test --manifest-path gpui/Cargo.toml -p <crate>`.
 Format only touched Rust files; never run tree-wide formatting in this shared checkout.
 
 ## Code Philosophy
