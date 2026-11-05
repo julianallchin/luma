@@ -283,7 +283,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
   probe under about 50 runs is measuring the clock governor. Throw away the
   first run, sweep sizes in both directions, and cool down between runs.
 - macOS `sample` over a whole harness run attributes startup and preview
-  renders to the same symbols as live frames. Sample `profile_score` or
+  renders to the same symbols as live frames. Sample `profile-score` or
   `haze-lab` instead. A release-build sample needs `dsymutil` for file:line.
 - `luma-record`'s mp4 is not byte-reproducible. Compare decoded frames.
 

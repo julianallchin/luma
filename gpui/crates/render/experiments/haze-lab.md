@@ -12,7 +12,7 @@ gpui/target/debug/haze-lab capture gpui/crates/render/experiments/haze-shadow-su
 gpui/target/debug/haze-lab capture gpui/crates/render/experiments/haze-shadow-suite.json /tmp/haze/reference reference128
 ```
 
-For a saved score, `profile_score SCORE_ID OUTPUT_JSON 960 640 12 snapshot`
+For a saved score, `profile-score SCORE_ID OUTPUT_JSON 960 640 12 snapshot`
 exports evaluated states at 1, 3 and 7 seconds through a read-only database
 connection. Build that binary with the backend's `perf` profile for CPU timing;
 see `gpui/BUILD.md` before selecting a target directory. The export records the

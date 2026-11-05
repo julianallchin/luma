@@ -1660,7 +1660,7 @@ migrations. Events go to stderr, because both put their protocol on stdout.
 
 | | |
 |---|---|
-| `backend/src/bin/agent_harness.rs` | one JSON dispatch request per line |
+| `backend/src/bin/agent-harness.rs` | one JSON dispatch request per line |
 | `backend/src/bin/luma-mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
 
 `luma-mcp` tools:

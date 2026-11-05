@@ -7,7 +7,7 @@ These tools run Luma's backend without a window. The binaries live in
 
 ```sh
 cargo build --manifest-path backend/Cargo.toml \
-    --bin agent_harness --bin luma-mcp --bin luma-agent --bin render_venue
+    --bin agent-harness --bin luma-mcp --bin luma-agent --bin render-venue
 ```
 
 Scripts look for the binaries in `backend/target/debug/`. Set `LUMA_MCP_BIN` or
@@ -15,7 +15,7 @@ Scripts look for the binaries in `backend/target/debug/`. Set `LUMA_MCP_BIN` or
 
 ## Host options
 
-`agent_harness`, `luma-mcp` and `luma-agent` boot through
+`agent-harness`, `luma-mcp` and `luma-agent` boot through
 `luma_lib::headless_host` and share these options:
 
 | flag | env | default |
@@ -34,7 +34,7 @@ requires `--config-dir`. Use it only with a disposable library.
 
 The default config directory is the real library. Commands write to it.
 
-## `agent_harness`: the dispatch surface
+## `agent-harness`: the dispatch surface
 
 One JSON request per line on stdin. One JSON response per line on stdout.
 
@@ -124,10 +124,10 @@ rebuilt. If it was, the client must restart the MCP connection.
 - `mcp-client.ts`: the client side of MCP stdio, used by the other scripts.
 - `mcp_smoke.ts`: runs the protocol against a copy of the real library.
 
-## `render_venue`: render a saved venue
+## `render-venue`: render a saved venue
 
 ```sh
-cargo run --manifest-path backend/Cargo.toml --bin render_venue -- \
+cargo run --manifest-path backend/Cargo.toml --bin render-venue -- \
     --venue-id UUID --output /tmp/venue.png --view front
 ```
 

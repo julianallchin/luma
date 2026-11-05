@@ -97,7 +97,7 @@ Remaining: hardware/software traversal comparison, scalable sampling of lights, 
 
 The user reported about 5 FPS with the experiment enabled. The desktop app is now closed; renderer investigations use the offscreen harness. The live telemetry recorded a sampled 180.34 ms GPU frame (130.84 ms volume, 49.48 ms scene), 450 lit cones, and 389.9 mean lights/tile at 1146×1051. CPU submission was about 1.03 ms. This is a GPU visibility cost failure, not evidence of a CPU BVH rebuild bottleneck.
 
-The read-only `render_venue` CLI can now export `--format catalogue`. It uses the same solved venue graph and fixture definitions as GPUI, with no session startup, migrations, or library writes. `profile-volumetrics --catalogue=PATH` loads that snapshot and renders a fixed full-output red rig with a fitted quarter-right camera. Live resolution settings are pinned to half-resolution haze, eight normal samples and two experimental fallback samples. This deliberately does not claim to replay the user's score or camera.
+The read-only `render-venue` CLI can now export `--format catalogue`. It uses the same solved venue graph and fixture definitions as GPUI, with no session startup, migrations, or library writes. `profile-volumetrics --catalogue=PATH` loads that snapshot and renders a fixed full-output red rig with a fitted quarter-right camera. Live resolution settings are pinned to half-resolution haze, eight normal samples and two experimental fallback samples. This deliberately does not claim to replay the user's score or camera.
 
 Gasworks Park contains 92 patched fixtures and 83 resolved stage pieces. Full output resolves to 470 cones and 215,059 opaque triangles. Release Vulkan / RTX 5090, 1146×1051, 30 warmup + 120 measured frames per mode:
 
@@ -115,7 +115,7 @@ The full mode is 17.0× slower. Isolation controls retain geometry/depth and env
 Reproduction (from the repository root; app remains closed):
 
 ```sh
-cargo run --manifest-path backend/Cargo.toml --bin render_venue -- --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
+cargo run --manifest-path backend/Cargo.toml --bin render-venue -- --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
 LUMA_GEOMETRY_SHADOWS=0 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
 LUMA_GEOMETRY_SHADOWS=1 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
 ```

@@ -22,7 +22,7 @@
 //! playbooks are the other half, and an external agent gets both from the same
 //! registry the in-app loop reads (see the "Skills" section below).
 //!
-//! Like `agent_harness`, this is a thin adapter over `luma_lib::dispatch` — it
+//! Like `agent-harness`, this is a thin adapter over `luma_lib::dispatch` — it
 //! implements no command of its own, so scope resolution, the binding manifest,
 //! the write-admission gate and the interrupt ladder are the app's, not a
 //! second copy. What it adds is the *session*: an MCP client has no editor to

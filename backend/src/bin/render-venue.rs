@@ -21,7 +21,7 @@ async fn main() -> Result<(), String> {
     let mut height = 1000u32;
     while let Some(arg) = args.next() {
         if arg == "--help" {
-            println!("render_venue --venue-id UUID --output PATH [--db PATH] [--state PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
+            println!("render-venue --venue-id UUID --output PATH [--db PATH] [--state PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
             return Ok(());
         }
         let value = args

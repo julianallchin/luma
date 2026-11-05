@@ -601,7 +601,7 @@ fn profile_catalogue(
     );
     let catalogue = luma_render::Catalogue::load(path)?;
     // `--scene=N` picks a scene; a scene with pinned state (a score snapshot
-    // from `profile_score ... snapshot`) is lit by that state at its time.
+    // from `profile-score ... snapshot`) is lit by that state at its time.
     let scene_index: usize = arguments
         .iter()
         .find_map(|a| a.strip_prefix("--scene="))

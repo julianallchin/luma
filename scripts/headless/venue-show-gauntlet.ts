@@ -57,8 +57,8 @@ async function command(binary: string, argv: string[], cwd: string, prefix: stri
 }
 
 async function createVenue(configDir: string, cacheDir: string): Promise<string> {
-    const binary = process.env.LUMA_HARNESS_BIN ?? join(repo, "backend/target/debug/agent_harness");
-    if (!existsSync(binary)) throw new Error("Build agent_harness first with cargo build --manifest-path backend/Cargo.toml --bin agent_harness --bin luma-mcp");
+    const binary = process.env.LUMA_HARNESS_BIN ?? join(repo, "backend/target/debug/agent-harness");
+    if (!existsSync(binary)) throw new Error("Build agent-harness first with cargo build --manifest-path backend/Cargo.toml --bin agent-harness --bin luma-mcp");
     const errors = createWriteStream(join(dirname(configDir), "prepare.stderr.log"));
     const child = spawn(binary, mcpArgs({ configDir, cacheDir, fixturePrincipal: principal }), { cwd: repo, stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.pipe(errors);

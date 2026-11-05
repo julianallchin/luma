@@ -254,7 +254,7 @@ tool would be a second way to do one thing.
 
 ### CLI
 
-`backend/src/bin/luma-record.rs`, bootstrapping exactly like `agent_harness.rs`:
+`backend/src/bin/luma-record.rs`, bootstrapping exactly like `agent-harness.rs`:
 
 ```rust
 let config = HostConfig::parse_args(shared_flags)?;

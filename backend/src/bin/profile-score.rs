@@ -1,5 +1,5 @@
 //! Read-only replay of a saved score through production evaluation and rendering.
-//! profile_score SCORE_ID OUTPUT [width height seconds] [all|no-haze|uniform|snapshot] [TIMES_JSON]
+//! profile-score SCORE_ID OUTPUT [width height seconds] [all|no-haze|uniform|snapshot] [TIMES_JSON]
 //! `snapshot` exports score states without GPU rendering: 1, 3 and 7 seconds by
 //! default, or a JSON array of strictly increasing times from TIMES_JSON.
 use luma_lib::{

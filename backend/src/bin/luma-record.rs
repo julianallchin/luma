@@ -2,7 +2,7 @@
 //!
 //! A thin caller. Everything that makes a recording a recording lives in
 //! `luma_lib::recording`; this binary parses flags, boots the same headless host
-//! `agent_harness` and `luma-mcp` boot, and prints progress.
+//! `agent-harness` and `luma-mcp` boot, and prints progress.
 //!
 //! ```text
 //! luma-record <score-id> <out.mp4>

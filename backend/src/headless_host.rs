@@ -1,7 +1,7 @@
 //! Bootstrapping a windowless Luma host.
 //!
 //! Three binaries serve Luma's backend without a renderer — the JSON-RPC
-//! `agent_harness`, the MCP `luma-mcp` server, and the `luma-record` encoder —
+//! `agent-harness`, the MCP `luma-mcp` server, and the `luma-record` encoder —
 //! and none has an `AppHandle`, a WebView, or an NSApplication. What they share
 //! is everything up to the first request: the same flags, the same database migrations, the same
 //! write-admission gate, the same managed-venv workspace service, and the same

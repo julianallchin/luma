@@ -134,11 +134,11 @@ fixture definitions are reported rather than replaced by invented single-head
 geometry. Preview retains venue and track
 read authorization and does not change the active scene or drive hardware.
 
-Save one returned frame as JSON to render it in the real venue. `render_venue`
+Save one returned frame as JSON to render it in the real venue. `render-venue`
 is a backend binary:
 
 ```
-cargo run --manifest-path backend/Cargo.toml --bin render_venue -- \
+cargo run --manifest-path backend/Cargo.toml --bin render-venue -- \
   --db /path/to/disposable/luma.db --venue-id UUID \
   --state /path/to/frame.json --output /path/to/preview.png
 ```
