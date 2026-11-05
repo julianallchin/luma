@@ -3,10 +3,6 @@ name = "rekordbox"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "rekordbox_read"
-path = "src/bin/rekordbox_read.rs"
-
 [lib]
 path = "src/lib.rs"
 

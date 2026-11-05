@@ -80,26 +80,6 @@ impl BiquadCoeffs {
     }
 }
 
-/// Apply a Butterworth lowpass filter (2nd order).
-pub fn lowpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32> {
-    let Some(coeffs) = BiquadCoeffs::lowpass(cutoff_hz, sample_rate) else {
-        return samples.to_vec();
-    };
-    let mut output = samples.to_vec();
-    coeffs.apply_inplace(&mut output);
-    output
-}
-
-/// Apply a Butterworth highpass filter (2nd order).
-pub fn highpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec<f32> {
-    let Some(coeffs) = BiquadCoeffs::highpass(cutoff_hz, sample_rate) else {
-        return samples.to_vec();
-    };
-    let mut output = samples.to_vec();
-    coeffs.apply_inplace(&mut output);
-    output
-}
-
 /// Pre-filtered 3-band audio (low, mid, high) for shared use across resolutions.
 pub struct FilteredBands {
     pub low: Vec<f32>,

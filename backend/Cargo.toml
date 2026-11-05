@@ -29,14 +29,6 @@ name = "luma_lib"
 crate-type = ["rlib"]
 
 [[bin]]
-name = "bench_waveform"
-path = "src/bin/bench_waveform.rs"
-
-[[bin]]
-name = "dump_venue"
-path = "src/bin/dump_venue.rs"
-
-[[bin]]
 name = "luma-record"
 path = "src/bin/luma-record.rs"
 

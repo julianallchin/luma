@@ -10,11 +10,3 @@ serde_json = "1"
 byteorder = "1"
 if-addrs = "0.13"
 
-[[bin]]
-name = "stagelinq-debug"
-path = "src/bin/debug.rs"
-
-[[bin]]
-name = "tcp-test"
-path = "src/bin/tcp_test.rs"
-

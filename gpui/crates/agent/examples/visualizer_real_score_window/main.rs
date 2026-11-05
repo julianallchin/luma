@@ -10,9 +10,9 @@
 //!
 //! # Why this exists next to the synthetic instruments
 //!
-//! `app_pixel visualizer_playback_zoom_repro` sweeps a *shape* — rig size, clip count —
-//! and answers "what does this configuration cost". It cannot answer "why is
-//! this show slow at 0:49", because the thing that changes at 0:49 is content:
+//! A synthetic sweep of a rig's *shape* — rig size, clip count — answers
+//! "what does this configuration cost". It cannot answer "why is this show
+//! slow at 0:49", because the thing that changes at 0:49 is content:
 //! which fixtures a clip selects, and what kind of fixtures those are. Only the
 //! user's own library has that.
 //!
