@@ -8,7 +8,7 @@ var<workgroup> segments: array<vec4<f32>, FOG_SLICES>;
 // straight after `fog-prepare`, so the surface pass can read camera
 // transmittance without waiting for the lit grid. Same taps, same scan.
 override TRANSMITTANCE_ONLY: bool = false;
-// FOG_TAU_MODE (injected with `fog_tau_read`/`fog_tau_write` from `gpu.rs`):
+// FOG_TAU_MODE (injected with `fog_tau_read`/`fog_tau_write` from `gpu/pipelines.rs`):
 // 1 = this prefix also records each slice's optical depth τ (slice 0: the
 // camera's entry transmittance) in the `fog-tau` texture; 2 = read those
 // back instead of re-tapping the density; 0 = neither.
