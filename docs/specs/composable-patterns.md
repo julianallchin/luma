@@ -80,26 +80,10 @@ curves and complete effects are ordinary graphs. Selecting an unavailable stem
 or analysis is a preparation error. Audio source and drum choices remain typed
 inputs, with the same choices in Python, graph controls and clip controls.
 
-## Forms and sources
+## Authoring
 
-A clip plays a shipped form; see [clip-forms.md](clip-forms.md). `color@1` is
-one color. Its `color` and `brightness` inputs are fixed or take a source:
-`time` (one curve over the clip), `hit` (one curve per hit of `every`), `noise`,
-`audio` (brightness only) or `space`. On a color, `time` and `hit` can read a
-gradient at positions from a curve: `{"gradient": {...}, "curve": {...}}`.
-
-A `space` source is an axis (a mapping: source, span, mirror, plane) and the
-values along it from 0 to 1: a gradient for a color, a curve for a number. It
-lowers to `mapped_position` and then `sample_gradient` or `envelope`. With
-`move` (path, travel, width, width_relative, boundary), a number space source
-is a chase: one stroke per hit of `every`, with the curve across the stroke.
-It lowers to the stroke graph (`core/event_life`, `coordinate_offset` and the
-envelope of the stroke), with one channel per live stroke. While a stroke
-moves, hit sources on the other inputs read each stroke's life.
-
-The old color form ids (`color.constant@1`, `color.time@1`, `color.space@1`,
-`color.chase@1`) are not forms. The stored rows were migrated to `color@1` on
-2026-09-28, and an old id is refused like any unknown form.
+A clip's graph is authored as described in [clip-graphs.md](clip-graphs.md),
+which replaced the shipped forms and sources this section used to describe.
 
 ## Persistence
 

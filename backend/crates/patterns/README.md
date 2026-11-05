@@ -99,8 +99,8 @@ Kernels evaluate whole fixture × time × event tensors. Static work folds once;
 Random ranks groups once per event, rather than once per head. There is no
 separate form interpreter.
 
-See [the source model](../../../docs/design/2026-09-28-sources-implementation.md)
-for schema, migration and verification details.
+See [clip graphs](../../../docs/specs/clip-graphs.md) for the graph model,
+its schema and its checks.
 
 ## Host integration
 
