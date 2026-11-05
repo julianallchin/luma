@@ -42,10 +42,6 @@ pub struct Venue {
 }
 
 impl Venue {
-    pub fn is_owner(&self) -> bool {
-        self.role == ROLE_OWNER
-    }
-
     pub fn is_member(&self) -> bool {
         self.role == ROLE_MEMBER
     }

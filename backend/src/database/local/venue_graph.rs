@@ -49,13 +49,6 @@ pub fn graph_committed() {
     crate::services::groups::invalidate_venue_fixture_cache();
 }
 
-/// The three tables this module owns.
-///
-/// Sync is the one writer that does not come through the functions below: it
-/// upserts and deletes graph rows straight from the registry, by name. This is
-/// how it says the same thing they say.
-pub const TABLES: &[&str] = &["venue_nodes", "venue_node_params", "venue_constraints"];
-
 /// One `venue_nodes` row as SQLite hands it over: the placement as four
 /// nullable columns, which the schema's CHECK keeps all-or-nothing.
 #[derive(sqlx::FromRow)]

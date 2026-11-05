@@ -164,11 +164,6 @@ impl PreparedGraph {
             .collect()
     }
 
-    pub fn dynamic_step_count(&self) -> usize {
-        self.live_steps(self.steps.len(), &self.baked, self.outputs.values())
-            .len()
-    }
-
     fn live_steps<'a>(
         &self,
         before: usize,

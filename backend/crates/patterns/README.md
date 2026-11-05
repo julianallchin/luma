@@ -105,9 +105,8 @@ its schema and its checks.
 ## Host integration
 
 `PreparedGraph` flattens once and executes each operation once per requested time
-batch. `Score::prepare_clip` freezes
-clip inputs and enforces the clip span. Native visualizer previews share this
-path, including real track audio, beat-grid interpolation and argument overrides.
+batch. Native visualizer previews share this path, including real track audio,
+beat-grid interpolation and argument overrides.
 
 ## Native venue previews
 

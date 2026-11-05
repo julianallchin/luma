@@ -851,37 +851,6 @@ impl GroupSources {
             .collect()
     }
 
-    /// Every group's members as the compositor's *member keys*:
-    /// `"<fixture>"` for a whole fixture, `"<fixture>:<head>"` for one head.
-    ///
-    /// Keyed by node id, derived nodes included — a controller fader bound to
-    /// `spots_left_wing` has to find that set, and only the authored table
-    /// having an id for it is what made every such binding silently do nothing.
-    #[must_use]
-    pub fn member_keys(&self) -> HashMap<String, Vec<String>> {
-        self.hierarchy()
-            .into_iter()
-            .map(|node| {
-                let keys = node
-                    .fixtures
-                    .iter()
-                    .flat_map(|fixture| {
-                        // A fixture the group holds whole is one key; the mode
-                        // that defines no heads is held whole too.
-                        if fixture.heads.is_empty()
-                            || fixture.heads.len() as i64 == fixture.head_count
-                        {
-                            vec![fixture.id.clone()]
-                        } else {
-                            fixture.heads.iter().map(|head| head.id.clone()).collect()
-                        }
-                    })
-                    .collect();
-                (node.id, keys)
-            })
-            .collect()
-    }
-
     /// Which heads of `fixture` a node holds — `None` when it holds the whole
     /// fixture, which is every derived node and the ordinary authored row.
     fn member_heads(&self, group_id: &str, fixture_id: &str) -> Option<Vec<i64>> {

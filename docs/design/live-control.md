@@ -100,7 +100,6 @@ The Perform tab has a chat of its own (`perform_set` threads, apart from the ven
 1. **Audio features are offline only.** They are analysed per track and normalised over the whole track. For unscripted tracks, a live audio band-energy input is the "autoloop" fallback SoundSwitch users expect.
 2. **The docs have drifted.** The www architecture docs describe forms and say a pattern never holds its own graph, which is the opposite of the code. The node reference names a generator that doesn't exist.
 3. **Dead code:**
-   - `PatternArgType`, `PatternArgDef` and `ParamOption` are unused, and so is the kernel's `Binding::Input`: patterns copy rather than share, so nothing exposes inputs.
+   - The kernel's `Binding::Input` is unused: patterns copy rather than share, so nothing exposes inputs.
    - The `clips.graph` and `inputs_json` columns are unused.
-   - Identify hardcodes 16 heads.
    - The controller writes dark frames to output directly, bypassing the render loop.

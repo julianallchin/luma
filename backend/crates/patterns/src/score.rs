@@ -1,5 +1,5 @@
 use crate::clip_graph::ClipGraph;
-use crate::{Error, Frame, Library, PreparedGraph, Result, Value};
+use crate::{Error, Frame, Library, PreparedGraph, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -158,46 +158,6 @@ impl Score {
         score.validate(base)?;
         Ok(score)
     }
-    /// Prepare one clip over `cells`. The program owns its geometry and can
-    /// render any frame, including a backwards seek.
-    pub fn prepare_clip(
-        &self,
-        base: &Library,
-        clip_id: &str,
-        cells: &[crate::Cell],
-    ) -> Result<PreparedClip> {
-        let clip = self
-            .clips
-            .get(clip_id)
-            .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
-        Self::validate_clip(base, clip_id, clip)?;
-        let program = PreparedGraph::new(
-            base,
-            &clip.graph,
-            Frame {
-                features: None,
-                cells,
-                beat: clip.start,
-                clip_start: clip.start,
-                clip_duration: clip.duration,
-                seed: clip.seed,
-            },
-        )?;
-        Ok(PreparedClip {
-            program,
-            start: clip.start,
-            end: clip.start + clip.duration,
-        })
-    }
-    pub fn evaluate_clip(
-        &self,
-        base: &Library,
-        clip_id: &str,
-        beat: f64,
-        cells: &[crate::Cell],
-    ) -> Result<BTreeMap<String, Value>> {
-        self.prepare_clip(base, clip_id, cells)?.evaluate(beat)
-    }
 }
 
 /// One writer's changes to a score, against the copy it read: each clip it
@@ -247,24 +207,6 @@ impl ScoreEdit {
         clips.retain(|id, _| !self.removed.contains(id));
         clips.extend(self.clips.clone());
         Score { clips }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PreparedClip {
-    program: PreparedGraph,
-    start: f64,
-    end: f64,
-}
-impl PreparedClip {
-    pub fn evaluate(&self, beat: f64) -> Result<BTreeMap<String, Value>> {
-        if !beat.is_finite() {
-            return Err(Error("musical time must be finite".into()));
-        }
-        if beat < self.start || beat >= self.end {
-            return Ok(BTreeMap::new());
-        }
-        self.program.evaluate(beat)
     }
 }
 

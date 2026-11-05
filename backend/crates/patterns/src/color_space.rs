@@ -213,8 +213,6 @@ impl Gamut {
     /// sRGB primaries. Also the gamut assumed for a fixture's red, green and
     /// blue emitters, since fixture definitions do not say where they are.
     pub const SRGB: Self = Self::from_primaries(SRGB_PRIMARIES);
-    /// Rec. 2020 itself: every stored color is inside it.
-    pub const REC2020: Self = Self::from_primaries(REC2020_PRIMARIES);
 
     /// Emitters with CIE 1931 xy chromaticities `xy`, balanced to D65.
     pub const fn from_primaries(xy: [[f64; 2]; 3]) -> Self {

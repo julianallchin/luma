@@ -248,19 +248,3 @@ pub async fn get_patched_fixtures(
     .await
     .map_err(|e| format!("Failed to get patched fixtures: {}", e))
 }
-
-/// Fetch a single fixture by ID
-pub async fn get_fixture(
-    access: &mut impl AuthorizedVenue,
-    id: &str,
-) -> Result<PatchedFixture, String> {
-    sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned
-         FROM fixtures WHERE id = ? AND venue_id = ?",
-    )
-    .bind(id)
-    .bind(access.venue_id().to_owned())
-    .fetch_one(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to get fixture: {}", e))
-}

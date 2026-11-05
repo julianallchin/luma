@@ -1,41 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-/// One named option of a choice input: the id stored in the clip, and the
-/// label a picker shows for it.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub struct ParamOption {
-    pub id: String,
-    pub label: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PatternArgType {
-    Envelope,
-    Beats,
-    Proportion,
-    Position,
-    Boolean,
-    Mapping,
-    Boundary,
-    /// One of a form input's named options.
-    Choice,
-
-    Color,
-    Scalar,
-    Selection,
-    Gradient,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PatternArgDef {
-    pub id: String,
-    pub name: String,
-    pub arg_type: PatternArgType,
-    pub default_value: Value,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]

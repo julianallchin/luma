@@ -82,19 +82,4 @@ impl Gradient {
         let t = (position - a.t) / (b.t - a.t);
         crate::color_space::interpolate(a.color, b.color, t)
     }
-    pub fn sample_alpha(&self, position: f64) -> f64 {
-        if self.stops.is_empty() {
-            return 1.;
-        }
-        let right = self.stops.partition_point(|s| s.t <= position);
-        if right == 0 {
-            return self.stops[0].alpha;
-        }
-        if right == self.stops.len() {
-            return self.stops[right - 1].alpha;
-        }
-        let (a, b) = (&self.stops[right - 1], &self.stops[right]);
-        let t = (position - a.t) / (b.t - a.t);
-        a.alpha + (b.alpha - a.alpha) * t
-    }
 }

@@ -220,10 +220,6 @@ pub fn principal_key(principal: Option<&str>) -> String {
     principal.map_or_else(|| "signed-out".to_owned(), |id| format!("signed-in:{id}"))
 }
 
-/// What a command says when it would write a synced row and nobody is signed
-/// in. The gate is `AppServices::require_session`; this is its words.
-pub const SIGN_IN_REQUIRED: &str = "Sign in to Luma before changing anything";
-
 /// Host-only snapshot of the app database's authenticated-write gate. Auth
 /// commands capture this while holding the global sync lock, close admission,
 /// and may restore the exact prior mode only if the gate is still in the

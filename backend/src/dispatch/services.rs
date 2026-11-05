@@ -436,22 +436,6 @@ impl AppServices {
         .map_err(CommandError::Internal)
     }
 
-    /// The principal of the verified host session in the state database.
-    ///
-    /// Not interchangeable with the app database's signed-write admission gate:
-    /// this one can refresh a Supabase session, that one reads a local gate.
-    /// Which of the two a command wants is per-command — see the port guide.
-    ///
-    /// # Errors
-    ///
-    /// [`CommandError::Internal`] if the session cannot be read or verified.
-    pub async fn session_user_id(&self) -> Result<Option<String>, CommandError> {
-        match &self.fixture_principal {
-            Some(principal) => Ok(Some(principal.clone())),
-            None => Ok(auth::get_current_user_id(&self.state_db.0).await?),
-        }
-    }
-
     /// What media transfer reaches outside its own handles. Derived from these
     /// fields rather than stored, so the two cannot drift.
     pub fn sync_host(&self) -> SyncHost {
