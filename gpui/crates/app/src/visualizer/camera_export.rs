@@ -143,3 +143,17 @@ fn debug_dir() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     Ok(dir)
 }
+
+impl super::Visualizer {
+    /// Export the next frame's camera, sun and shadow cascades — see
+    /// [`camera_export`]. Wakes a resting stage, so the frame is drawn.
+    pub(crate) fn export_camera(&mut self) {
+        let mut stage = self.stage.borrow_mut();
+        stage.exports.request = Some(Request {
+            venue_id: self.venue_id.clone(),
+            venue_name: self.venue_name.clone(),
+            score_id: self.lit.as_ref().map(|lit| lit.score.clone()),
+        });
+        stage.idle = None;
+    }
+}
