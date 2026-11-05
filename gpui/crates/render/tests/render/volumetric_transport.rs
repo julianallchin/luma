@@ -252,7 +252,7 @@ fn capture_transport(name: &str, pixels: &[u8]) {
 /// So this is deliberately several times the measured warmup. It exists only
 /// so a genuinely wedged worker fails the run instead of hanging it. What a
 /// frame *costs* is asserted where it can be measured meaningfully — the
-/// budget tests and `profile-volumetrics` — and deliberately not here, where
+/// budget tests — and deliberately not here, where
 /// the number would be dominated by shader compilation.
 const WORKER_LIVENESS_TIMEOUT: Duration = Duration::from_secs(180);
 

@@ -85,8 +85,8 @@ pub enum Mode {
 ///
 /// So this is several times the measured warmup, and a pixel-mode test that
 /// trips it has a genuinely stuck app rather than a slow one. What a frame
-/// *costs* belongs in the budget tests and `profile-volumetrics`, where it can
-/// be measured without shader compilation in the number.
+/// *costs* belongs in the budget tests, where it can be measured without
+/// shader compilation in the number.
 ///
 /// [`Config::default`] keeps a short bound, because a harness driving its own
 /// small view really does have nothing to warm up.

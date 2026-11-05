@@ -86,10 +86,8 @@ the watcher and its app. The watcher uses Cargo's target-directory setting.
 
 `luma-app` stays at `opt-level = 0` so that a debugger works well there.
 
-`profile-volumetrics` refuses a debug build
-(`crates/render/src/bin/profile-volumetrics.rs:150-153`). When a profiler and
-the running app disagree about the renderer, first check that they are the same
-build.
+When a profile and the running app disagree about the renderer, first check
+that they are the same build.
 
 Any change to `[profile.*]` changes every artifact fingerprint. It forces a
 cold rebuild for every agent that shares the target directory, one at a time
@@ -283,7 +281,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
 - `cargo test` stops at the first failing test binary. Pass `--no-fail-fast`
   when a run should report every failure, as a golden run should.
 - An integration test build also builds the crate's binaries, so
-  `cargo test -p luma-render` relinks `target/debug/haze-lab`. Copy a binary
+  `cargo test -p luma-render` relinks `target/debug/render-goldens`. Copy a binary
   you are comparing against before running tests.
 - Cargo rebuilds by mtime. A file restored from a backup keeps its old mtime,
   and the build silently keeps the stale artifact. `touch` it.
@@ -299,8 +297,8 @@ Collected from past work in this tree. Each cost someone an afternoon.
   probe under about 50 runs is measuring the clock governor. Throw away the
   first run, sweep sizes in both directions, and cool down between runs.
 - macOS `sample` over a whole harness run attributes startup and preview
-  renders to the same symbols as live frames. Sample `profile-score` or
-  `haze-lab` instead. A release-build sample needs `dsymutil` for file:line.
+  renders to the same symbols as live frames. Sample `profile-score`
+  instead. A release-build sample needs `dsymutil` for file:line.
 - `luma-record`'s mp4 is not byte-reproducible. Compare decoded frames.
 
 **Renderer**

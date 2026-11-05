@@ -2,6 +2,8 @@
 
 Status: implementation direction, 2026-09-05. The user sets the target at Depence visual quality and Unreal-class realism while retaining high interactive performance. This is not a claim that the current renderer meets that target.
 
+The `profile-volumetrics` profiler this doc's measurements and reproductions use was removed on 2026-11-05. Its commands are kept as the record of how the numbers were taken; the tool is in git history before that date.
+
 ## Acceptance before algorithms
 
 The user clarified that this pass should have minimal performance impact on the current non-Mac machine; a substantial Mac performance/approximation pass comes later. Hardware, output resolution, fixture count, and frame-rate target must be stated together for that pass. The available development GPU is an RTX 5090 running Vulkan; timings here cannot establish Apple Silicon performance. Treat 1080p, 60 Hz, and 512 moving fixtures as a provisional workload, not an agreed specification.

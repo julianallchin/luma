@@ -76,8 +76,8 @@ debug = false
 # of UI-thread frame assembly at 0, 1.0 ms at 2 — the whole UI half of the frame
 # goes 21.6 ms to 3.1 ms. A dev build is what anybody actually running the app
 # has, so leaving these at 0 means the renderer everyone sees is not the
-# renderer `profile-volumetrics --release` measures, which is why that profiler
-# kept reporting budgets the app could not hold.
+# renderer a release-build profile measures, and a profile reports budgets the
+# app cannot hold.
 #
 # Deliberately not `luma-app`: it is the crate under active edit, its own
 # per-frame work is thin, and it is the one where a stepping debugger earns its

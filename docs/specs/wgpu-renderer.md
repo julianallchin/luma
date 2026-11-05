@@ -76,9 +76,6 @@ Future work: an app dialog, a Python binding, and recording many scores in one r
   and exits non-zero on drift.
 - `render-contract-goldens` writes `gpui/crates/render/goldens/contracts/`. Each PNG
   has a sidecar with its full scene.
-- `profile-volumetrics` measures GPU and CPU frame cost.
-- `haze-lab` pins haze quality experiments. See
-  `gpui/crates/render/experiments/haze-lab.md`.
 
 ## 8. Future work
 
