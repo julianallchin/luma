@@ -39,3 +39,35 @@ jobs:
       - name: Test native pattern workflow
         run: cargo test -p gpui-agent --test headless lighting_patterns
         working-directory: gpui
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libfontconfig1-dev libssl-dev libclang-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+      - name: Test backend
+        run: cargo test --workspace --no-fail-fast
+        working-directory: backend
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the agent executor's libraries
+        run: pip install numpy scipy librosa matplotlib
+      - name: Test the agent executor
+        run: python backend/python/luma_exec/tests/run_tests.py
