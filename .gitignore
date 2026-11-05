@@ -19,9 +19,12 @@ dist/
 .idea/
 *.swp
 
-# Rust build artifacts
+# Rust build artifacts, wherever a target directory lands
 target/
-backend/target/
+# Pixel-feature builds get their own tree so feature flips never evict the
+# headless one; see gpui/BUILD.md. Unanchored so it also catches a stray tree
+# from a relative CARGO_TARGET_DIR, which cargo resolves against the cwd.
+target-pixel/
 
 # Bundled Python runtime (downloaded during build)
 backend/python-runtime/*
@@ -40,47 +43,17 @@ __pycache__/
 .claude/
 .mcp.json
 
-# Local tooling scripts (vendor large binary frameworks — not tracked in git).
-# The headless agent harness driver is source, not vendored bytes — keep it.
-scripts/*
-!scripts/setup
-!scripts/headless/
-!scripts/library/
-!scripts/release/
-
-# Root docs (canonical docs live in www/)
-/docs/*
-# …except migration specs — the contract ports are verified against
-!/docs/specs/
-# …and design docs — architecture decisions implementation is steered by
-!/docs/design/
-# …and research notes — evidence gathered before design decisions
-!/docs/research/
-
 # SQLite databases
 *.sqlite
 *.db
 
-# Experiments directory (large datasets/binaries — not tracked in git)
+# Local scratch: experiments, large datasets and binaries
 experiments/
 
-# Component screenshot harness output + gpui workspace build artifacts
+# Harness output: saved screenshots, and the captures `live-goldens` writes
+# for eyeballing (they are not goldens)
 harness/shots/
-# `live-goldens` writes fresh captures here for eyeballing; they are not goldens
 harness/goldens/scenes-live/
-gpui/target/
-# Pixel-feature builds get their own tree so feature flips never evict the
-# headless one — see gpui/BUILD.md. Unanchored so it also catches a stray tree
-# from a *relative* CARGO_TARGET_DIR, which cargo resolves against the cwd:
-# running the pixel command from a subdirectory once left 6.8 GB at
-# crates/agent/tests/target-pixel/.
-target-pixel/
 
-# Perf campaign captures — thousands of retina PNG frames per run, plus the
-# library backup and binaries each run folder keeps. The notes and runner
-# scripts beside them are tracked; the frames are re-shot by re-running the
-# capture.
-harness/perf/**/run-*/
-harness/perf/**/*.png
+# The PowerSync test stack's run directory
 deploy/test-stack/run/
-__pycache__/
