@@ -26,8 +26,9 @@ The parser reads:
 `Channel::get_type` in `backend/src/models/fixtures.rs` sets the channel type.
 
 1. It checks the preset first. A preset that starts with `Intensity` is
-   Intensity. `Color` or `Colour` is Colour. A preset that contains `Pan`,
-   `Tilt`, `Shutter` or `Strobe` is Pan, Tilt or Shutter.
+   Intensity. `Color` or `Colour` is Colour. `Speed` is Speed, even when the
+   preset also names pan or tilt. A preset that contains `Pan`, `Tilt`,
+   `Shutter` or `Strobe` is Pan, Tilt or Shutter.
 2. Then it checks the group: Intensity, Colour, Pan, Tilt, Beam, Shutter,
    Speed, Gobo, Prism, Effect, Maintenance or Nothing.
 3. With no group, it reads the channel name.
@@ -73,11 +74,11 @@ manufacturer:
 ```
 resources/fixtures/2511260420/
   Chauvet/
-    Chauvet-COLORband-PiX-M-USB.qxf
+    Chauvet-ColorBand-Pix-M-USB.qxf
   Martin/
     Martin-MAC-Aura.qxf
   Generic/
-    Generic-Dimmer.qxf
+    Generic-Generic-RGB.qxf
 ```
 
 `resolve_fixtures_root_from` in `backend/src/services/fixtures.rs` finds this

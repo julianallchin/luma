@@ -39,15 +39,20 @@ is then evaluated and added with `composite_frame`. Only the capabilities that
 the clip's graph writes are changed. The other capabilities of lower layers
 stay.
 
-When a head has no value yet, it takes the clip's values directly. When a lower
-layer already lit the head, the values blend:
+Each layer carries its alpha per head: the clip's opacity. The clip's values
+blend with the values under them by the blend mode, and the result mixes with
+the values under them by alpha. Alpha 0 is no clip, in every mode. A head with
+no value yet blends against no light.
 
 | Capability | Rule |
 |------------|------|
-| Color and dimmer | `blend_light`, on the light (color times dimmer) |
-| Strobe | `blend_value` with the clip's blend mode, clamped to 0–1 |
+| Color and dimmer | `blend_light_alpha`, on the light (color times dimmer) |
+| Strobe | `blend_value_alpha` with the clip's blend mode, clamped to 0–1 |
+| Aim | `replace`: `blend_aim`; `offset`: `offset_aim` (below) |
 | Position | The top layer replaces the value |
 | Speed | Binary: above 0.5 is 1, else 0 |
+
+Laser clips draw elements into the frame's laser list instead.
 
 A head that no clip writes has these defaults: dimmer 0, color white, strobe
 0, position (0, 0), speed 1.
@@ -66,26 +71,25 @@ value.
 | `screen` | `1 - (1 - base) * (1 - top)` |
 | `max` | `max(base, top)` |
 | `min` | `min(base, top)` |
-| `lighten` | `max(base, top)` |
-| `value` | `top * top + base * (1 - top)` |
 | `subtract` | `max(base - top, 0)` |
 
 The default blend mode of a clip is `replace`.
 
-An aim clip takes `replace` or `offset` only, and no light clip takes
-`offset` (`blend_modes` in `backend/crates/patterns/src/clip_graph/check.rs`). A
+An aim clip takes `replace` or `offset` only, a laser clip `replace` or
+`add`, and no other clip takes `offset` (`blend_modes` in
+`backend/crates/patterns/src/clip_graph/check.rs`). A
 `replace` aim blends toward the clip's aim by alpha along the shortest arc
-(`blend_aim`). An `offset` aim gives a turn per head instead: its fan's lean
-and its motion's yaw and pitch. `offset_frame` turns the aim under the clip
+(`blend_aim`). An `offset` aim gives a turn per head instead: the aim node's
+yaw and pitch. `offset_frame` turns the aim under the clip
 by it, with every angle times alpha (`offset_aim`). Over no aim the turn
 starts from the head's home.
 
 `blend_light` blends one head's light. The light is the color times the
 dimmer, in linear Rec. 2020. No light under a head is a dimmer of 0.
 
-- `replace` sets the top dimmer and moves the color toward the top color by
-  that dimmer. Over no light it takes the top color. Black on `replace`
-  paints black.
+- `replace` is the top light: the top color and the top dimmer. Black on
+  `replace` paints black. Opacity is alpha's job: `blend_light_alpha` mixes
+  the result with the light below by alpha.
 - Every other mode applies `blend_value` to each channel of the light. The
   new dimmer is the peak channel, and the color is the light divided by it.
   So `add` and `screen` over black equal `add` and `screen` over nothing, and
@@ -97,8 +101,8 @@ dimmer, in linear Rec. 2020. No light under a head is a dimmer of 0.
 ## Sampling
 
 `RenderEngine::sample(t)` returns the lighting state at one time. The native
-visualizer calls it for each frame it draws. The desktop Art-Net loop calls it
-every 23 ms with the audio playback time (`run_artnet` in
+visualizer calls it for each frame it draws. The desktop output loop calls it
+every 23 ms with the audio playback time (`run_output` in
 `backend/src/dispatch/services.rs`).
 
 ## Perform mode
@@ -109,8 +113,9 @@ When decks are live, `sample` uses the perform mix instead of the editor scene
 1. Each deck with a volume above zero renders its own scene at the deck time.
 2. Dimmer, color, strobe and speed are averaged, weighted by deck volume.
    Position comes from the deck with the highest volume.
-3. The venue's Perform set composites over that mix: each live pattern at its
-   pad's envelope, its level and the Perform master
+3. The venue's Perform set composites over that mix. Each pattern's pad is a
+   button node wired into its graph's alpha, so the graph fades itself in and
+   out; the set scales it by its level times the Perform master
    (`backend/src/perform/live.rs`).
 
 See [Performing](/docs/user-guide/performing).

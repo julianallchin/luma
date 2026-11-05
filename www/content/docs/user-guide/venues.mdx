@@ -9,10 +9,11 @@ A venue is one physical room. It holds the fixtures in the room, their DMX addre
 
 ## Tabs
 
-The workspace has two kinds of tab scope:
+Each venue has its own set of tabs, of three kinds:
 
-- **Venue.** One venue. The venue tab holds the patch, the stage and the groups.
-- **Track.** One track in one venue. It holds the track editor and graph tabs.
+- **Venue.** The venue's stage, patch and groups. One per venue.
+- **Score.** One score of one track in the venue. It holds the track editor.
+- **Perform.** The venue's live show: the decks Luma follows and the live patterns. One per venue.
 
 ## Patch Fixtures
 
@@ -40,7 +41,7 @@ Positions use a Z-up, right-handed coordinate system in metres.
 
 ### Why Positions Matter
 
-Forms can use head positions. A chase can travel from one side of a group to the other. Because forms read positions, the same clip works with 8 fixtures or 80.
+A clip graph can read head positions: a `space` node gives each head its place along a direction, by its order, or around a centre. A chase can travel from one side of a group to the other. Because graphs read positions, the same clip works with 8 fixtures or 80.
 
 ## Multi-Head Fixtures
 

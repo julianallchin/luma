@@ -13,7 +13,7 @@ output. The documentation website in `www/` is a separate Next.js application.
 - **Rendering**: wgpu, with a shared scene model and fixture kinematics.
 - **Backend**: Rust, Tokio, SQLite through sqlx, symphonia for decoding and CPAL for playback.
 - **Analysis**: Python workers for beats, stems, chords, MERT features, drum onsets, bar classifications and genres.
-- **Networking**: PowerSync and Supabase for sync, StageLinQ and Pro DJ Link for DJ equipment, and Art-Net for DMX output.
+- **Networking**: PowerSync and Supabase for sync, StageLinQ, Pro DJ Link and rekordbox (through rkbx_link over OSC) for DJ equipment, MIDI and OSC for live control, and Art-Net and USB DMX interfaces for DMX output.
 
 ## Data
 
@@ -41,12 +41,17 @@ gpui/
   crates/scene/     Shared scene model and spatial geometry
   crates/render/    wgpu renderer
   crates/agent/     Native automation and UI test harness
+  crates/update/    App updates
 backend/
   src/models/       Shared Rust schemas
   src/database/     Local SQLite and remote database access
   src/services/     Domain operations
   src/dispatch/     Command table and handlers
   src/eval/         Scene compilation and compositing
+  src/output/       DMX output: Art-Net and USB
+  src/inputs/       MIDI and OSC inputs
+  src/perform/      DJ deck sources and the Perform set
+  src/laser/        Laser projectors and the laser solver
   src/sync/         PowerSync row sync and media transfer
   src/preprocessing/  Audio-analysis scheduling
   src/agent_execution/  Python workspaces and tools
@@ -64,7 +69,7 @@ www/                Documentation website
 ```
 
 The native app calls the backend through `luma_lib::dispatch`. Events carry
-progress back to GPUI. The desktop host enables Art-Net output. Headless test
+progress back to GPUI. The desktop host enables DMX output (Art-Net and USB) and the MIDI and OSC inputs. Headless test
 hosts do not bind sockets.
 
 The `gpui/` and `backend/` Rust workspaces are separate. See `gpui/BUILD.md`

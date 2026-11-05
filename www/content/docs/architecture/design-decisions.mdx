@@ -18,11 +18,14 @@ group. The fallback operator (`>`) lets an expression choose another group when
 the first one matches nothing. See
 [Selection System](/docs/architecture/selection-system).
 
-## Graphs from small primitives
+## One small graph per clip
 
-A clip plays a form: a shipped graph built from a small set of numerical
-primitives. Looks such as chase, pulse and dissolve are presets of forms, not
-Rust kernels. Layers combine forms; a clip never holds its own graph.
+Every clip owns one small graph of typed nodes: 19 kinds, one output node. A
+value is typed, a choice is a setting, and anything that varies is a wire.
+Looks such as chase, pulse and dissolve are preset graphs
+(`backend/crates/patterns/src/presets.json`), not Rust kernels. An agent
+writes the same graph as Python, with the same node names. The spec is
+`docs/specs/clip-graphs.md`.
 
 ## Evaluation is a function of time
 
@@ -40,8 +43,9 @@ to seconds. A clip stays on the same beats when the beat grid changes.
 
 ## Unwired is not zero
 
-An unwired `output` input leaves that capability to lower layers. A clip that
-only sets color does not turn off a movement from a lower clip.
+A clip writes only what its output node drives. A color clip does not turn
+off a movement from a lower clip. Alpha 0 is no clip: the light below shows,
+in every blend mode.
 
 ## One SQLite database
 

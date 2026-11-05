@@ -1,6 +1,6 @@
 ---
 title: Selection System
-description: Group expressions, cells, mapping sources, rig UV and circle fitting
+description: Group expressions, cells, positions in a clip graph and rig UV
 ---
 
 The selection system turns a group expression into a list of fixture heads.
@@ -31,7 +31,7 @@ The parser gives these operators precedence from lowest to highest:
 |----------|------|---------|
 | `>` | Fallback | Use the left side. If it matches nothing, use the right side. |
 | `\|` | OR | Either side matches |
-| `^` | XOR | Exactly one side matches |
+| `^` | XOR | One side. If both sides match, the seed picks one at random |
 | `&` | AND | Both sides match |
 | `~` | NOT | Negates the next term |
 | `( )` | Grouping | Changes the order |
@@ -40,8 +40,8 @@ The parser gives these operators precedence from lowest to highest:
 
 A selection is only a group expression (`Selection` in
 `backend/crates/patterns/src/selection.rs`). It always means every fixture the
-expression matches. For a random share of heads, use the Sparkle form and set
-its coverage. For specific heads, make a group for them.
+expression matches. For a random share of heads, use a `shuffle` node read by an
+order `space` and a curve, as the Sparkle preset does. For specific heads, make a group for them.
 
 A stored selection that still has a `subset` key from an older version loads as
 the whole group. The key is dropped when the selection is saved.
@@ -62,22 +62,15 @@ clip and gives the engine a list of `Cell` values
 `Cell::stage_coordinates` converts venue space to stage space: U right, V
 downstage, Z up.
 
-## Mapping sources
+## Positions in a clip graph
 
-The `resolve_mapping` node turns cells into a coordinate from 0 to 1. The
-source is one of:
-
-| Source | Meaning |
-|--------|---------|
-| `z` | Up |
-| `u` | Stage right |
-| `v` | Downstage |
-| `major_axis` | The principal axis, with its sign set by an authored direction |
-| `circle` | The angle on a fitted circle, with an authored origin |
-| `order` | Selection order |
-| `vector` | A custom direction in stage coordinates |
-
-A mapping can also run per group and in reverse.
+A `space` node turns the cells into a coordinate per head. Its `kind` is
+`line` (along a direction), `order` (sorted along a direction), `radial`
+(distance from a centre) or `angle` (turns around a centre). Its ruler runs
+0–1 across the clip's selection. A `split` node makes each fixture or each
+group its own span, and a `mirror` node folds the heads across a plane. A
+negative direction runs the other way. See the
+[node reference](/docs/node-reference/coordinates#space).
 
 ## Rig UV
 

@@ -18,6 +18,7 @@ pub struct PrimitiveState {
     pub strobe: f32,        // 0.0 (off) - 1.0 (fastest)
     pub position: [f32; 2], // [PanDeg, TiltDeg]
     pub speed: f32,         // 0.0 (frozen) or 1.0 (fast) - binary
+    pub aim: Option<HeadAim>, // where the head points; the solver turns it into pan and tilt
 }
 ```
 

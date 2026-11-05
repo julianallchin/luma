@@ -15,26 +15,26 @@ A score that another user wrote opens in read-only mode. You can view it, but yo
 
 ## Add a Clip
 
-1. Click **Add pattern**. A searchable pattern picker opens.
-2. The picker shows a looping preview of the pattern on the current venue.
-3. Choose a pattern. Luma adds it to the timeline as a clip.
+1. Click **Add pattern**, or right-click the timeline. The **Insert pattern** dialog opens.
+2. The dialog lists the presets and a blank start for each output. It shows a looping preview of the highlighted preset on the current venue.
+3. Choose one. Luma adds it to the timeline as a clip.
 
-See [Forms and Presets](/docs/user-guide/patterns).
+You can also drag a preset from the preset browser, which the inspector shows while no clip is selected. See [Clips and Presets](/docs/user-guide/patterns).
 
 ## Clip Properties
 
 | Property | Description |
 |----------|-------------|
-| **Form** | The form that the clip plays. |
+| **Name** | The clip's name. The timeline shows it with a one-line summary of the graph. |
 | **Start** | Where the clip begins, in beats. |
 | **Duration** | How long the clip lasts, in beats. |
 | **Z index** | The stacking order. A clip with a higher z index is placed above a clip with a lower z index. |
 | **Blend mode** | How the clip combines with the clips below it. The default is `replace`. |
 | **Selection** | A [selection expression](/docs/user-guide/groups-and-tags#selection-expressions). The default is `all`. |
-| **Inputs** | A value for every input of the form, such as color, width or every. |
-| **Seed** | The seed for random choices in the form. |
+| **Graph** | The clip's own [graph](/docs/user-guide/patterns#the-graph) of nodes. |
+| **Seed** | The seed for the graph's random choices. |
 
-The clip inspector shows the blend mode and the form's inputs. It sorts known inputs under the headings **Shape**, **Space**, **Timing** and **Appearance**.
+The inspector shows the clip's name, selection, blend mode and graph.
 
 **Pick fixtures** opens a dialog. It lists the venue's groups next to a picture of the venue. Tick groups to write a union such as `front_wash | back_movers`. The dialog cannot write `&`, `~` or `^`. If the current expression uses them, the dialog shows it as read-only text.
 
@@ -44,16 +44,13 @@ Luma evaluates the score for each frame. It takes the clips that are active at t
 
 For each head:
 
-- **The first clip** that lights a head sets its values directly.
-- **Each later clip** blends onto the result with its blend mode.
-- **Only the capabilities that a clip drives** take part. A clip that drives only color does not change dimmer, strobe, position or speed.
-- **Color** blends with the top clip's dimmer as its opacity. A dark clip changes the color less than a bright clip.
-- **Dimmer and strobe** blend with the blend mode.
-- **Position** is taken from the top clip.
-- **Speed** is taken from the top clip and is 0 or 1.
+- **Only the capabilities that a clip drives** take part. A color clip does not change strobe or aim.
+- **Color and dimmer** blend with the clip's blend mode, then mix with the light below by the clip's alpha. Alpha 0 leaves the light below as it was, in every mode. Where no clip lit the head, the light below is no light.
+- **Strobe** blends the same way, against no strobe.
+- **Aim** blends by the aim clip's blend mode, below. After the clips are combined, Luma turns each head's aim into pan and tilt.
 
-The nine light blend modes and their formulas are in the [blend mode table](/docs/architecture/compositor#blend-modes). An aim clip takes one of two modes instead. **Replace** points the heads at the clip's aim. **Offset** ignores the clip's base, and its fan and motion turn the aim under it. Alpha scales the degrees. Over no aim, it starts from the head's home. Offset clips stack, so one movement clip can run over many positions.
+The seven light blend modes and their formulas are in the [blend mode table](/docs/architecture/compositor#blend-modes). An aim clip takes one of two modes instead. **Replace** turns the heads toward the clip's aim along the shortest arc, by its alpha. **Offset** turns the aim under it by the clip's yaw and pitch, times its alpha. Over no aim, it starts from the head's home. Offset clips stack, so one movement clip can run over many positions. A laser clip takes **Replace**, which morphs the elements under it into its own, or **Add**, which draws both.
 
 ## Next Steps
 
-The perform backend exists, but the native app has no Perform view yet. See [Perform](/docs/user-guide/performing).
+Play scores live from the decks on the [Perform](/docs/user-guide/performing) tab.

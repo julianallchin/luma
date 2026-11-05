@@ -17,7 +17,7 @@ Library                                  Venue
 |   |-- Drum onsets
 |   '-- Bar classifications, genres
 '-- Scores (one track + one venue)
-    '-- Clips (form, start, duration, z index, blend mode, selection, inputs, seed)
+    '-- Clips (name, graph, start, duration, z index, blend mode, selection, seed)
 ```
 
 ## Venue
@@ -54,35 +54,35 @@ The light show for one track in one venue. A score is stored as rows: one `score
 
 ## Clip
 
-One placement of a form on a score's timeline. A clip has a start and a duration in beats, a z index, a blend mode, a selection expression, input values and a seed.
+One placement of a clip graph on a score's timeline. A clip has a name, a start and a duration in beats, a z index, a blend mode, a selection expression, a seed and its own graph.
 
-## Graph Definition
+## Clip Graph
 
-A node graph with named inputs and outputs. A definition is either a primitive (a kernel in Rust) or a graph of other definitions. The standard library holds the built-in definitions. A clip plays one of its forms.
+The small graph that a clip owns. It has 1 to 64 nodes of 19 kinds, and exactly one of them is the output node. See the [node reference](/docs/node-reference).
 
-## Standard Library
+## Output Node
 
-The built-in definitions from `luma_patterns::standard_library()`. See the [node reference](/docs/node-reference).
+The node of a clip graph that says what the clip does: `color` (color, brightness, alpha), `aim` (where moving heads point), `strobe` (rate, alpha) or `laser` (figures on laser projectors). A clip writes only what its output node drives.
 
-## Output (Apply)
+## Preset
 
-The terminal node of a lighting graph. Its catalog id is `output` and its display name is **Apply**. It has optional inputs for color, pan, tilt, strobe and movement speed. An input that is not wired leaves that capability unchanged.
+A shipped clip graph with a name and a blend mode, such as Chase or Rainbow. Adding a preset copies its graph into the new clip. See [Clips and Presets](/docs/user-guide/patterns).
+
+## Kernel Graph
+
+The internal graph a clip graph lowers onto before it plays: primitive kernels from `luma_patterns::standard_library()`, wired together. Users and agents never edit it.
 
 ## Signal
 
-The value that flows on a wire. A signal is a three-dimensional array with a unit and a channel layout. The units are number, beats, proportion (0–1), position, degrees and seconds. The channel layouts are one value, RGB, pan/tilt and a vector of N components.
-
-## Rate
-
-Each port is `fixed` or `frame`. A fixed value does not change during the clip. A frame value can change on every frame. A frame-rate wire cannot connect to a fixed input.
+The value that flows on a kernel graph's wire. A signal is a three-dimensional array (heads × time × channels) with a unit and a channel layout.
 
 ## Blend Mode
 
-How a clip combines with the clips below it. Light has nine modes; see the [blend mode table](/docs/architecture/compositor#blend-modes). An aim clip takes **replace** or **offset**: offset turns the aim under the clip by the clip's fan and motion.
+How a clip combines with the clips below it. Light has seven modes; see the [blend mode table](/docs/architecture/compositor#blend-modes). An aim clip takes **replace** or **offset**: offset turns the aim under the clip by the aim node's yaw and pitch. A laser clip takes **replace** or **add**.
 
 ## PrimitiveState
 
-The output of one head at one moment: dimmer (0–1), color (linear Rec. 2020, 0–1), strobe (0–1), position (pan and tilt in degrees) and speed (0 or 1).
+The output of one head at one moment: dimmer (0–1), color (linear Rec. 2020, 0–1), strobe (0–1), position (pan and tilt in degrees), speed (0 or 1) and aim (a direction in the room and a weight, which a solver turns into pan and tilt).
 
 ## UniverseState
 

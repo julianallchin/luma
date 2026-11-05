@@ -41,9 +41,9 @@ Luma also makes waveform data for the timeline.
 
 A preprocessor has a version. When the version increases, Luma runs it again on every track.
 
-## What Forms Can Read
+## What a Graph Can Read
 
-Clips are placed in beats, so every form follows the beat grid. An **Audio** source reads the energy of one frequency range of the full mix.
+Clips are placed in beats, so every clip graph follows the beat grid: a `time` node counts in beats. An `audio` node reads the energy of one frequency band of the full mix, 0–1 over the whole track.
 
 ## Analysis Environment
 
@@ -55,4 +55,4 @@ Luma looks for a bundled ffmpeg first. If it does not find one, it uses the ffmp
 
 ## Next Steps
 
-[Forms and presets](/docs/user-guide/patterns).
+[Clips and presets](/docs/user-guide/patterns).
