@@ -38,6 +38,7 @@ const JSON_PATH: &str = "../docs/specs/ipc-manifest.json";
 const MD_PATH: &str = "../docs/specs/ipc-manifest.md";
 
 /// Rebuild both files from `table` and report whether the tree already matched.
+/// With `LUMA_UPDATE_GOLDENS` set, a stale file is rewritten.
 ///
 /// # Panics
 ///
@@ -55,11 +56,16 @@ pub(super) fn check(table: &[Command]) -> Result<(), String> {
     let json = render_json(table, &root, &previous, &events);
     let markdown = render_markdown(table, &events);
 
+    // Check-only unless asked, so a first run on a clean tree never rewrites
+    // a tracked file and then fails.
+    let update = std::env::var_os("LUMA_UPDATE_GOLDENS").is_some();
     let mut stale = Vec::new();
     for (path, contents) in [(JSON_PATH, &json), (MD_PATH, &markdown)] {
         let path = root.join(path);
         if fs::read_to_string(&path).ok().as_ref() != Some(contents) {
-            fs::write(&path, contents).expect("write manifest");
+            if update {
+                fs::write(&path, contents).expect("write manifest");
+            }
             stale.push(path.display().to_string());
         }
     }

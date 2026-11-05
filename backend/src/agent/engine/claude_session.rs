@@ -305,9 +305,13 @@ fn write_session(session_id: &str, cwd: &Path, entries: &[Value]) -> Result<(), 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::agent::model::ModelRole;
+
+    /// Held by every test that sets `CLAUDE_CONFIG_DIR`: the variable is
+    /// process-wide and tests run in parallel.
+    pub(crate) static CLAUDE_CONFIG_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn text(role: ModelRole, text: &str) -> ModelMessage {
         ModelMessage {
@@ -417,6 +421,7 @@ mod tests {
 
     #[test]
     fn hydrate_writes_a_session_file_at_the_resumable_path() {
+        let _env = CLAUDE_CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let scratch = tempfile::tempdir().unwrap();
         std::env::set_var("CLAUDE_CONFIG_DIR", scratch.path());
         let cwd = tempfile::tempdir().unwrap();

@@ -396,9 +396,11 @@ fn golden() -> String {
     out
 }
 
-fn write_if_changed(path: PathBuf, contents: &str) -> bool {
+/// Whether `path` differs from `contents`. With `LUMA_UPDATE_GOLDENS` set, a
+/// stale golden is rewritten.
+fn golden_is_stale(path: PathBuf, contents: &str) -> bool {
     let same = std::fs::read_to_string(&path).is_ok_and(|old| old == contents);
-    if !same {
+    if !same && std::env::var_os("LUMA_UPDATE_GOLDENS").is_some() {
         std::fs::write(&path, contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }
     !same
@@ -408,8 +410,8 @@ fn write_if_changed(path: PathBuf, contents: &str) -> bool {
 fn venue_poses_golden_is_current() {
     let path = luma_render::repo_root().join("harness/goldens/venue-poses.json");
     assert!(
-        !write_if_changed(path, &golden()),
-        "the venue-pose golden was stale and has been rewritten — review and commit it"
+        !golden_is_stale(path, &golden()),
+        "the venue-pose golden is stale; regenerate with LUMA_UPDATE_GOLDENS=1, review and commit it"
     );
 }
 
@@ -540,8 +542,8 @@ fn a_fixture_hangs_off_its_host_by_its_housing() {
 fn venue_tiles_golden_is_current() {
     let path = luma_render::repo_root().join("harness/goldens/venue-tiles.json");
     assert!(
-        !write_if_changed(path, &tiles_golden()),
-        "the tile-map golden was stale and has been rewritten — review and commit it"
+        !golden_is_stale(path, &tiles_golden()),
+        "the tile-map golden is stale; regenerate with LUMA_UPDATE_GOLDENS=1, review and commit it"
     );
 }
 

@@ -5,9 +5,15 @@ No pytest: plain asserts plus a tiny runner, because the app venv is not
 guaranteed to have a test framework. Every test drives a real worker subprocess
 over the real NDJSON protocol against a synthetic workspace.
 
-Run:
-    ~/Library/Caches/com.luma.luma/python-env/bin/python3 \\
-        backend/python/luma_exec/tests/run_tests.py
+Run from the repository root, with any Python 3.12 that has numpy, scipy,
+librosa and matplotlib (the app's own environment is found and preferred when
+it exists):
+
+    python3 backend/python/luma_exec/tests/run_tests.py
+
+The app creates its environment at first launch: on macOS
+`~/Library/Caches/com.luma.luma/python-env`, on Linux
+`~/.cache/com.luma.luma/python-env`.
 
 Coverage (design §21.5 + §21.6):
     variable persistence, binding refresh across revisions, `luma` repair after
@@ -530,7 +536,7 @@ def test_host_call_payload_is_bounded_before_it_reaches_the_host():
 def test_clip_builders_are_bare_names_in_every_cell():
     client = shared()
     ok(client.execute("time = 5", manifest_rel=REV1))
-    result = ok(client.execute("color(brightness=curve(time(clock(every=2)), [[0, 0], [1, 1]])).json()['nodes']['clock1']"))
+    result = ok(client.execute("color(brightness=curve(time(every=2), [[0, 0], [1, 1]])).json()['nodes']['time1']"))
     assert "every" in result["repr"], result["repr"]
 
 

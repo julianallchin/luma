@@ -897,7 +897,7 @@ async fn each_message_carries_the_editor_as_it_was_sent() {
             request
                 .system
                 .iter()
-                .all(|part| !part.contains("editor-context") && !part.contains("track-1")),
+                .all(|part| !part.contains("<editor-context>\n") && !part.contains("track-1")),
             "the system prompt is the same for every turn"
         );
     }

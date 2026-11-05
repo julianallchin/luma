@@ -406,11 +406,12 @@ class WorkerClient:
 
 def find_python() -> tuple[str, bool]:
     """Return (interpreter, is_app_venv). Prefers the Luma app venv."""
-    candidate = Path.home() / "Library/Caches/com.luma.luma/python-env/bin/python3"
-    if candidate.exists():
-        probe = subprocess.run(
-            [str(candidate), "-c", "import numpy"], capture_output=True
-        )
-        if probe.returncode == 0:
-            return str(candidate), True
+    for cache in (Path.home() / "Library/Caches", Path.home() / ".cache"):
+        candidate = cache / "com.luma.luma/python-env/bin/python3"
+        if candidate.exists():
+            probe = subprocess.run(
+                [str(candidate), "-c", "import numpy"], capture_output=True
+            )
+            if probe.returncode == 0:
+                return str(candidate), True
     return sys.executable, False

@@ -323,6 +323,9 @@ mod tests {
         use crate::agent::tools::ToolRegistry;
         use crate::agent::transcript::{AgentChatMessage, Transcript};
 
+        let _env = super::claude_session::tests::CLAUDE_CONFIG_DIR_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let scratch = tempfile::tempdir().unwrap();
         std::env::set_var("CLAUDE_CONFIG_DIR", scratch.path());
         let cwd = tempfile::tempdir().unwrap();

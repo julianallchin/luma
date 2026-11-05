@@ -56,7 +56,10 @@ luma-patterns = { path = "crates/patterns" }
 luma-sync = { path = "crates/sync" }
 sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` because the app gets it anyway (zed's gpui turns it on), and
+# a headless build without it orders every JSON object differently: the IPC
+# manifest test then rewrites the whole file.
+serde_json = { version = "1", features = ["preserve_order"] }
 # OSC, to hear rkbx_link (MIT OR Apache-2.0).
 rosc = "0.11.4"
 thiserror = "2"
