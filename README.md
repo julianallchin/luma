@@ -84,6 +84,6 @@ some native crates.
 - [AGENTS.md](AGENTS.md) — conventions: code philosophy, migrations, tests, UI style
 - [gpui/BUILD.md](gpui/BUILD.md) — build profiles, target directories, the test harness
 - [backend/README.md](backend/README.md) — the backend's layout
-- [docs/specs/](docs/specs) and [docs/design/](docs/design) — how each system is meant to work; [docs/design/sync.md](docs/design/sync.md) for sync
+- [docs/README.md](docs/README.md) — an index of how each system works
 - [deploy/README.md](deploy/README.md) — deploying Supabase and PowerSync
 - [RELEASING.md](RELEASING.md) — tagging a release and the nightly build

@@ -128,7 +128,7 @@ impl StorageRoot {
     /// `discogs-effnet-bsdynamic-1.onnx` (CC BY-NC-ND, so never bundled or
     /// committed; `genre::process::ensure_model` downloads it checksum-pinned
     /// from MTG's server). A manually dropped-in file is honored and skips the
-    /// download; see `docs/genre-model.md`.
+    /// download; see `docs/design/genre-model.md`.
     pub fn models_dir(&self) -> PathBuf {
         self.0.join("models")
     }

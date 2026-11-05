@@ -6,7 +6,7 @@
 //! MTG's own server into `<app config>/models/` (checksum-pinned), so Luma
 //! never redistributes them — fine while Luma is internal, but a commercially
 //! distributed build still needs MTG's proprietary license. See
-//! `docs/genre-model.md`.
+//! `docs/design/genre-model.md`.
 //!
 //! Bar boundaries go in on stdin as `[[start, end], ...]` — same shape and
 //! reason as [`crate::preprocessing::workers::classifier::process`] (argv can't carry a few hundred bars

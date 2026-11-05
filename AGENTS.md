@@ -11,7 +11,8 @@ Several agents work in this tree at once. Never run `git stash`, `git checkout -
 - `gpui/`: native UI, renderer, scene model, and test harness. Read `gpui/BUILD.md` for prerequisites and build-cache conventions.
 - `backend/`: shared backend, models, append-only SQLite migrations, and Python analysis workers.
 - `resources/`: shared fixture definitions and meshes.
-- `harness/`: native renderer goldens, reference captures, fonts, and image comparison tools.
+- `harness/`: test reference data: renderer goldens, reference captures, style specs, and image comparison tools.
+- `assets/`: the app icon and the fonts the app embeds.
 - `www/`: independent documentation site; use Bun for its JavaScript tooling.
 
 A fresh clone needs `scripts/setup` once. `rust-toolchain.toml` pins the toolchain for both workspaces, so plain `cargo` is right from anywhere in the repository. Run commands from the repository root.
@@ -20,6 +21,20 @@ Run the app with `python3 gpui/dev.py` (rebuilds on save) or `cargo run --manife
 Check it with `cargo check --manifest-path gpui/Cargo.toml --workspace --all-targets`.
 Run targeted tests with `cargo test --manifest-path gpui/Cargo.toml -p <crate>`; backend tests with `cargo test --manifest-path backend/Cargo.toml --workspace`; the agent executor's Python tests with `python3 backend/python/luma_exec/tests/run_tests.py`. The README's "Tests" table lists the rest.
 Format only touched Rust files (`rustfmt <file>`; `rustfmt.toml` sets the edition); never run tree-wide formatting in this shared checkout.
+
+## Where things go
+
+Every committed file has a home and a reader. Before adding one, find its place here; if none fits, ask.
+
+- **One-off scripts, probes, repros, measurements, scratch data** go in `experiments/` (ignored by git) or your scratch directory. Never commit them. A finding worth keeping goes in a doc or a test, not a script.
+- **Rust programs people run** (hosts, the MCP server, `luma-record`) are `src/bin/` of their crate. A developer tool for one crate (a profiler, a golden renderer, a lab) is a `src/bin/` or `examples/` of the crate it exercises, documented in that crate's README or `gpui/BUILD.md`.
+- **Scripts** go in `scripts/<area>/` (`setup`, `release/`, `headless/`, `library/`), each listed in a README with what it is for. A script that only one task needed is a one-off: see the first rule.
+- **Tests** live with the code they test: Rust unit tests in the module, integration tests in the crate's `tests/`, UI tests as `.test.js` under `gpui/crates/agent/tests/js/`, Python tests under `backend/python/luma_exec/tests/`.
+- **Test reference data** (goldens, reference captures, style specs) goes in `harness/`. Assets the app ships go in `assets/` or `resources/`.
+- **Docs**: how a system works and why goes in `docs/design/` or `docs/specs/` (indexed in `docs/README.md`); user-facing docs go in `www/`; build and test know-how in `gpui/BUILD.md` or the crate's README. No dated handoff notes, audits or friction logs: fix the thing, or put the knowledge where the next reader looks.
+- **Names**: Rust programs are kebab-case (`luma-record`), Rust files and Python files snake_case, docs kebab-case.
+
+Delete what you added once it has served its purpose.
 
 ## Code Philosophy
 

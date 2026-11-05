@@ -16,7 +16,7 @@
 //! If the download fails (offline, checksum drift) the failure is recorded in
 //! `preprocessing_failures` with the standard backoff, so a library imported
 //! without connectivity simply carries no genre rows yet and every other node
-//! proceeds normally. See `docs/genre-model.md`.
+//! proceeds normally. See `docs/design/genre-model.md`.
 
 pub(crate) mod process;
 

@@ -188,7 +188,7 @@ them on first use from MTG's own server into `<app config>/models/`,
 checksum-pinned — Luma never redistributes the file, it only fetches from the
 source. Acceptable while Luma is internal; a commercially distributed build
 still needs MTG's proprietary license — see
-[`../../docs/genre-model.md`](../../docs/genre-model.md). Prefer bundling for
+[`docs/design/genre-model.md`](../../../docs/design/genre-model.md). Prefer bundling for
 anything new; this is an exception forced by licensing, not a pattern to copy.
 
 ## Pointers
