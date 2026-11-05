@@ -169,16 +169,18 @@ impl Shared {
         };
         let controls = crate::controls::venue(&venue_id);
         let at = Instant::now();
+        // A key is down at any value above 0: a pad's note carries how hard
+        // it was hit, not whether it is held, and only its release is 0.
+        let down = event.value > 0.0;
         for binding in state.bindings.iter().filter(|b| b.address == event.address) {
-            let value = if binding.invert {
-                1.0 - event.value
-            } else {
-                event.value
-            };
             match binding.mode {
-                Mode::Fader => controls.set(&binding.control, value),
-                Mode::Momentary => controls.press(&binding.control, value > 0.5, at),
-                Mode::Toggle => controls.set(&binding.control, f64::from(u8::from(value > 0.5))),
+                Mode::Fader if binding.invert => controls.set(&binding.control, 1.0 - event.value),
+                Mode::Fader => controls.set(&binding.control, event.value),
+                Mode::Momentary => controls.press(&binding.control, down != binding.invert, at),
+                Mode::Toggle => controls.set(
+                    &binding.control,
+                    f64::from(u8::from(down != binding.invert)),
+                ),
             }
         }
     }

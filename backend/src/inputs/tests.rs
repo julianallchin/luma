@@ -178,6 +178,14 @@ async fn a_pad_plays_a_button_as_the_button_says() {
         services.inputs.receive(cc(30, 0.0));
         assert_eq!(value(&venue, &pad), expected, "each press flips it");
     }
+    // A soft hit is a press: a pad's note carries how hard, not whether.
+    let soft = 20.0 / 127.0;
+    services.inputs.receive(cc(30, soft));
+    services.inputs.receive(cc(30, 0.0));
+    assert_eq!(value(&venue, &pad), 1.0, "a soft hit flips it too");
+    services.inputs.receive(cc(30, soft));
+    services.inputs.receive(cc(30, 0.0));
+    assert_eq!(value(&venue, &pad), 0.0);
     services.inputs.receive(cc(31, 1.0));
     assert_eq!(value(&venue, &pad), 1.0, "a latching key sets its state");
     services.inputs.receive(cc(31, 1.0));
