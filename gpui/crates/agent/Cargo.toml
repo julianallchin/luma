@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["app"]
-# The Luma view tree the MCP binary drives. Off, the crate is a harness with no
+# The Luma view tree the harness drives. Off, the crate is a harness with no
 # app in it — which is what `cargo test` wants.
 #
 # It also carries the seeded library (`fixture`), which the script runner and
@@ -66,6 +66,20 @@ async-trait = { version = "0.1", optional = true }
 name = "luma-test"
 path = "src/bin/luma-test/main.rs"
 required-features = ["app"]
+# Its tests are the JS suites it runs; it has none of its own to link.
+test = false
+
+# Built only with `--features pixel`: without it these would link two empty
+# test binaries on every run.
+[[test]]
+name = "app_pixel"
+path = "tests/app_pixel/main.rs"
+required-features = ["pixel"]
+
+[[test]]
+name = "ui_pixel"
+path = "tests/ui_pixel/main.rs"
+required-features = ["pixel"]
 
 # The fixture crates (`luma`, `sqlx`, …) come in through `app`, which every
 # suite that seeds a library already needs.

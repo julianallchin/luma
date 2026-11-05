@@ -4,7 +4,7 @@
 //! up, and it is marched every frame from the real camera, as Unreal's
 //! Volumetric Cloud and HDRP's Volumetric Clouds are: the camera may walk
 //! hundreds of metres from the stage or rise over it, and the cloud bases
-//! turn in perspective as it does. See `experiments/clouds-prior-art.md`.
+//! turn in perspective as it does. See `docs/design/clouds-prior-art.md`.
 //!
 //! This file is the CPU half: what each preset is, the weather map, the blue
 //! noise the march is jittered with, and the per-quality budget. The GPU

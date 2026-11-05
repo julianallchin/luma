@@ -27,6 +27,7 @@ mod lens_footprint;
 mod outdoor_haze;
 mod post_look;
 mod procedural_haze;
+mod reflection_probes;
 mod renderer_contract_goldens;
 mod resize_probe;
 mod sky_clouds;

@@ -1,4 +1,4 @@
-//! The harness's own tests: the pump, the interpreter and the MCP protocol,
+//! The harness's own tests: the pump and the interpreter,
 //! exercised without the Luma app.
 //!
 //! These need no library and no renderer, so they are the one group that runs

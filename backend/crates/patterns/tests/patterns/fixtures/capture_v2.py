@@ -1,5 +1,5 @@
 """Capture graph version 2 output for every shipped preset and Slash, as played
-by commit 691cd753, into v2_frames.json (read by tests/clip_graph_runtime.rs).
+by commit 691cd753, into v2_frames.json (read by tests/patterns/clip_graph_runtime.rs).
 
     git archive 691cd753 | tar -x -C <dir>; build its examples/clip_graph_parity
     python3 capture_v2.py <that clip_graph_parity>

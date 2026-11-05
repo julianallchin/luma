@@ -757,9 +757,9 @@ fn deterministic_haze_is_independent_of_live_subframe_budget() {
 fn live_shadow_intervals_agree_with_converged_transport() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let catalogue =
-        luma_render::Catalogue::load(&root.join("experiments/haze-shadow.json")).unwrap();
+        luma_render::Catalogue::load(&root.join("tests/fixtures/haze-shadow.json")).unwrap();
     let suite: serde_json::Value = serde_json::from_reader(
-        File::open(root.join("experiments/haze-shadow-suite.json")).unwrap(),
+        File::open(root.join("tests/fixtures/haze-shadow-suite.json")).unwrap(),
     )
     .unwrap();
     let mut library = Library::new(root.join("../../../resources/meshes"));

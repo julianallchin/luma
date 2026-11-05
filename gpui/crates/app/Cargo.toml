@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# The window around the library crate. It has no tests of its own, so no
+# test binary is linked for it.
+[[bin]]
+name = "luma-app"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 luma-patterns = { path = "../../../backend/crates/patterns" }

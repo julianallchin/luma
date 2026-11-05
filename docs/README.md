@@ -31,6 +31,7 @@ works and the decisions behind it.
 - [specs/wgpu-renderer.md](specs/wgpu-renderer.md) — the renderer's architecture
 - [design/stage-rendering-quality.md](design/stage-rendering-quality.md) — quality targets and how they are met
 - [design/haze-lit-interval-cache.md](design/haze-lit-interval-cache.md) — the haze path
+- [design/clouds-prior-art.md](design/clouds-prior-art.md) — research behind the sky-cloud layer
 - [design/presentation-seam.md](design/presentation-seam.md) — handing a rendered stage to gpui
 - [design/visualizer-fullscreen.md](design/visualizer-fullscreen.md) — fullscreen stage
 

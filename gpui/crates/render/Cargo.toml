@@ -8,6 +8,18 @@ publish = false
 # No windowing, no gpui: the device is ours, and every frame lands in a texture.
 # Presentation lives here too: `viewport` and `share` hand finished frames to
 # the app, whose `visualizer` puts them on screen.
+# The golden renderers have no tests of their own; their output is what the
+# `render` test binary checks. No test binary is linked for them.
+[[bin]]
+name = "render-goldens"
+path = "src/bin/render-goldens.rs"
+test = false
+
+[[bin]]
+name = "render-contract-goldens"
+path = "src/bin/render-contract-goldens.rs"
+test = false
+
 [dependencies]
 luma-scene = { path = "../scene" }
 # Reaches across into the backend workspace, the same direction `luma-app`
