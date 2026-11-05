@@ -36,9 +36,8 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 - **`www/`** — Documentation site ([luma.show](https://luma.show))
 - **`resources/fixtures/`** — QLC+ fixture definition library (thousands of fixtures)
 - **`harness/`** — Renderer goldens, reference captures and image comparison tools (`cd harness && bun install`)
-- **`experiments/powersync/`** — A disposable Postgres, PostgREST and PowerSync stack for the sync tests
 - **`scripts/`** — Setup, release bundling, headless agent tools (`scripts/headless/`) and a library backup (`scripts/library/snapshot.py`)
-- **`deploy/`**, **`supabase/`** — The sync service's rules and the server's migrations
+- **`deploy/`**, **`supabase/`** — The sync service's rules, the server's migrations, and a disposable Postgres + PowerSync stack for the sync tests (`deploy/test-stack/`)
 
 ## Getting Started
 
@@ -73,7 +72,7 @@ Run from the repository root:
 | UI script tests (`*.test.js`) | `gpui/test` (see [gpui/BUILD.md](gpui/BUILD.md#script-tests-gpuitest)) |
 | One native crate | `cargo test --manifest-path gpui/Cargo.toml -p luma-render` |
 | Agent Python executor | `python3 backend/python/luma_exec/tests/run_tests.py` |
-| Sync against a live stack (Docker) | `python3 experiments/powersync/run.py --test sync::two_device_tests` |
+| Sync against a live stack (Docker) | `python3 deploy/test-stack/run.py --test sync::two_device_tests` |
 
 A golden test fails when its file is stale and never rewrites it; regenerate
 with `LUMA_UPDATE_GOLDENS=1`, review the diff and commit it. CI

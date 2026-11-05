@@ -64,5 +64,5 @@ alter role powersync_role with password '<generated>';
 4. Run `powersync deploy sync-config --directory=deploy/powersync`.
 5. Put the instance URL in `backend/src/config.rs` as `POWERSYNC_URL`.
 
-`experiments/powersync/run.py` checks a change to either file against
+`deploy/test-stack/run.py` checks a change to either file against
 disposable containers.

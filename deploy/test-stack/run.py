@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-REPO = ROOT.parent.parent
+REPO = ROOT.parents[1]
 # Every migration from the row model on, in order: the row model rebuilt the
 # schema from scratch, so nothing before it applies.
 MIGRATIONS = sorted(

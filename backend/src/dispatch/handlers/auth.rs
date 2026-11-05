@@ -624,7 +624,7 @@ mod tests {
     /// those tables directly. The checks are the gate itself, which the commands read through
     /// `AppServices::require_session`, and Postgres row-level security, which
     /// is the authority a second device cannot talk its way past —
-    /// `experiments/powersync/run.py` is where that is checked.
+    /// `deploy/test-stack/run.py` is where that is checked.
     #[tokio::test]
     async fn admission_names_the_principal_this_device_writes_as() {
         let directory = tempfile::tempdir().unwrap();

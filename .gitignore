@@ -62,8 +62,7 @@ scripts/*
 *.db
 
 # Experiments directory (large datasets/binaries — not tracked in git)
-experiments/*
-!experiments/powersync/
+experiments/
 
 # Component screenshot harness output + gpui workspace build artifacts
 harness/shots/
@@ -83,5 +82,5 @@ target-pixel/
 # capture.
 harness/perf/**/run-*/
 harness/perf/**/*.png
-experiments/powersync/run/
+deploy/test-stack/run/
 __pycache__/

@@ -180,7 +180,7 @@ venue between devices. Only the three hardware-port columns above are local.
 - `deploy/powersync/sync-config.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
   a parameter query and may return at most a thousand rows, so every one of
   them counts venues, scores or shared tracks — never their children.
-- `experiments/powersync/run.py`: disposable Postgres, PostgREST and PowerSync
+- `deploy/test-stack/run.py`: disposable Postgres, PostgREST and PowerSync
   containers for the two-device tests.
 
 ## PowerSync Cloud

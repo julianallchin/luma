@@ -3,10 +3,10 @@
 //! Raw-table statements, upload triggers and the PostgREST translation only
 //! agree with each other through a real server, so these are the only tests
 //! that can prove the client layer right. They need the containers
-//! `experiments/powersync/run.py` brings up, and skip without them:
+//! `deploy/test-stack/run.py` brings up, and skip without them:
 //!
 //! ```text
-//! python3 experiments/powersync/run.py --test sync::two_device_tests
+//! python3 deploy/test-stack/run.py --test sync::two_device_tests
 //! ```
 
 use std::path::Path;
@@ -22,7 +22,7 @@ use sqlx::SqlitePool;
 
 use super::schema::schema;
 
-/// The two accounts `experiments/powersync/run.py` puts in `auth.users`
+/// The two accounts `deploy/test-stack/run.py` puts in `auth.users`
 /// before it runs these tests. Fixed rather than minted here because the
 /// server's foreign keys are real: a row whose `uid` is nobody is refused.
 const USER: &str = "00000000-0000-0000-0000-0000000000aa";
@@ -32,7 +32,7 @@ const OTHER: &str = "00000000-0000-0000-0000-0000000000bb";
 const STRANGER: &str = "00000000-0000-0000-0000-0000000000cc";
 const CONVERGE: Duration = Duration::from_secs(30);
 
-/// The key id in `experiments/powersync/service.yaml`'s inline JWKS.
+/// The key id in `deploy/test-stack/service.yaml`'s inline JWKS.
 const JWT_KID: &str = "luma-row-model-test";
 
 struct Containers {
@@ -42,7 +42,7 @@ struct Containers {
 }
 
 impl Containers {
-    /// The environment `experiments/powersync/run.py` exports, or nothing.
+    /// The environment `deploy/test-stack/run.py` exports, or nothing.
     fn from_env() -> Option<Self> {
         Some(Self {
             powersync: std::env::var("LUMA_TEST_POWERSYNC_URL").ok()?,
@@ -82,7 +82,7 @@ fn mint_jwt(secret: &str, user: &str) -> String {
         .as_secs()
         + 3600;
     // The `kid` names the key in the service's inline JWKS — see
-    // `experiments/powersync/service.yaml`. PowerSync refuses a token whose
+    // `deploy/test-stack/service.yaml`. PowerSync refuses a token whose
     // header names no key it knows.
     let header = URL_SAFE_NO_PAD
         .encode(serde_json::json!({ "alg": "HS256", "kid": JWT_KID, "typ": "JWT" }).to_string());
@@ -429,7 +429,7 @@ fn count(table: &str, column: &str, scope: &str) -> String {
 /// Two devices, one account: a score written on A appears on B, each edits,
 /// and both land on the same rows.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn powersync_two_devices() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
@@ -484,7 +484,7 @@ async fn powersync_two_devices() {
 /// the restart, the edit would be lost in a way nothing else in this suite
 /// would notice.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn an_offline_edit_survives_a_restart() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
@@ -540,7 +540,7 @@ async fn an_offline_edit_survives_a_restart() {
 /// Two users and a share code: B joins A's venue, sees the score, edits it, A
 /// sees the edit — and when A revokes the membership B loses the venue's rows.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn a_share_code_admits_a_second_user_until_it_is_revoked() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
@@ -636,7 +636,7 @@ async fn a_share_code_admits_a_second_user_until_it_is_revoked() {
 /// owner — but what the other device shows is the merge: the live rows the
 /// merge wrote.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn a_merged_draft_arrives_as_clips() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
@@ -726,7 +726,7 @@ async fn a_merged_draft_arrives_as_clips() {
 
 /// A conversation follows its owner between devices, messages and all.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn a_conversation_follows_its_owner() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
@@ -800,7 +800,7 @@ async fn a_conversation_follows_its_owner() {
 /// PostgREST rather than over a device, because a refusal is the server's
 /// answer and a client that never asked would pass either way.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn a_stranger_reaches_nothing_of_a_shared_venue() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
@@ -887,7 +887,7 @@ async fn a_stranger_reaches_nothing_of_a_shared_venue() {
 /// service refuses, fails the whole stream, and the only symptom is rows that
 /// never arrive.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn every_venue_child_shape_reaches_a_member() {
     let Some(containers) = Containers::from_env() else {
         eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
