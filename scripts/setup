@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Prepare a fresh clone for development. Safe to run again at any time.
+#
+#   scripts/setup
+#
+# Installs what it can (the Rust toolchain, submodules, LFS files, the git
+# hooks) and checks the rest (system libraries, Xcode, Python), printing the
+# command for anything missing. Exits non-zero if something still needs you.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+problems=0
+ok() { printf '  ok   %s\n' "$1"; }
+todo() {
+	printf '  TODO %s\n' "$1"
+	[ $# -gt 1 ] && printf '       %s\n' "${@:2}"
+	problems=$((problems + 1))
+}
+
+echo "Rust"
+if command -v rustup >/dev/null 2>&1; then
+	# Installs the channel rust-toolchain.toml names, with its components.
+	if rustup toolchain install >/dev/null 2>&1 || rustup show active-toolchain >/dev/null 2>&1; then
+		ok "$(cargo --version)"
+	else
+		todo "rustup could not install the pinned toolchain" "rustup toolchain install $(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+	fi
+else
+	todo "rustup is not installed" "https://rust-lang.org/tools/install/"
+fi
+
+echo "Git"
+if command -v git-lfs >/dev/null 2>&1; then
+	git config core.hooksPath .githooks
+	ok "hooks: .githooks (Git LFS)"
+	if git lfs pull >/dev/null 2>&1; then
+		ok "LFS files (n2n weights, floor textures)"
+	else
+		todo "git lfs pull failed" "git lfs pull"
+	fi
+else
+	todo "git-lfs is not installed; the hooks and the n2n weights need it" "apt install git-lfs  |  brew install git-lfs"
+fi
+if git submodule update --init --recursive >/dev/null 2>&1; then
+	ok "submodules (backend/python/consonance-ACE)"
+else
+	todo "the consonance-ACE submodule did not clone; the backend does not compile without it" \
+		"its URL is SSH (git@github.com:...), so GitHub needs your SSH key" \
+		"git submodule update --init --recursive"
+fi
+
+echo "System"
+case "$(uname -s)" in
+Linux)
+	# The libraries CI installs (.github/workflows/ci.yml), found through
+	# pkg-config because package names differ between distributions. A miss
+	# is a warning: it shows up at link time as `unable to find library`.
+	missing=""
+	for pair in alsa:libasound2-dev xkbcommon-x11:libxkbcommon-x11-dev \
+		wayland-client:libwayland-dev vulkan:libvulkan-dev \
+		fontconfig:libfontconfig1-dev openssl:libssl-dev x11-xcb:libx11-xcb-dev \
+		xcb-shape:libxcb-shape0-dev xcb-xfixes:libxcb-xfixes0-dev; do
+		pkg-config --exists "${pair%%:*}" 2>/dev/null || missing="$missing ${pair#*:}"
+	done
+	ldconfig -p 2>/dev/null | grep -q 'libclang' || missing="$missing libclang-dev"
+	if [ -z "$missing" ]; then
+		ok "system libraries"
+	else
+		echo "  ?    not found by pkg-config; if the build fails to link, install (Debian names):"
+		echo "       sudo apt-get install -y$missing"
+	fi
+	if [ -e /etc/udev/rules.d/70-luma-dmx.rules ]; then
+		ok "USB DMX udev rule"
+	else
+		echo "  -    optional, for USB DMX dongles: sudo cp resources/linux/70-luma-dmx.rules /etc/udev/rules.d/"
+	fi
+	;;
+Darwin)
+	if xcrun -f metal >/dev/null 2>&1; then
+		ok "Xcode Metal compiler"
+	else
+		todo "the Metal shader compiler is missing; install Xcode (not only the command line tools)" "xcode-select -s /Applications/Xcode.app"
+	fi
+	;;
+*)
+	echo "  ?    $(uname -s) is not a supported development platform"
+	;;
+esac
+if command -v python3 >/dev/null 2>&1; then
+	ok "$(python3 --version) (for gpui/dev.py)"
+else
+	todo "python3 is missing; gpui/dev.py needs it"
+fi
+if command -v bun >/dev/null 2>&1; then
+	ok "bun $(bun --version) (harness, www, scripts/headless)"
+else
+	echo "  -    optional: bun, for harness/, www/ and scripts/headless/ (https://bun.sh)"
+fi
+
+echo
+if [ "$problems" -eq 0 ]; then
+	echo "Ready. Run the app with:  python3 gpui/dev.py"
+	echo "The first build downloads Python 3.12 and ffmpeg into backend/."
+else
+	echo "$problems thing(s) above need you; run scripts/setup again afterwards."
+	exit 1
+fi

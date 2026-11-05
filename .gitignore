@@ -43,8 +43,8 @@ __pycache__/
 # Local tooling scripts (vendor large binary frameworks — not tracked in git).
 # The headless agent harness driver is source, not vendored bytes — keep it.
 scripts/*
+!scripts/setup
 !scripts/headless/
-!scripts/arena/
 !scripts/library/
 !scripts/release/
 
@@ -56,8 +56,6 @@ scripts/*
 !/docs/design/
 # …and research notes — evidence gathered before design decisions
 !/docs/research/
-# …and the agent friction log
-!/docs/AGENT_FRICTION.md
 
 # SQLite databases
 *.sqlite

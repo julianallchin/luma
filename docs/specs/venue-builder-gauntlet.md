@@ -186,9 +186,8 @@ script dispatches an agent holding *only* the facade plus `describe` and
 the crossbar facing the house, two towers with 4 washes each"), and collects
 four artefacts, shipped with the round: the tool-call transcript, the final
 `describe()`, front and top renders, and the agent's own friction notes. A
-critic judges the rig against the task and files what it finds in
-`docs/AGENT_FRICTION.md` under a new **Tool friction** subheading — product
-friction still goes in the task report.
+critic judges the rig against the task and reports what it finds with the
+round, tool friction and product friction alike.
 
 **Evidence and acceptance.** One test builds a rig twice — by script through the
 facade, and by the harness driving B4/B5 — then diffs `venue_nodes`,

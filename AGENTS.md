@@ -14,10 +14,12 @@ Several agents work in this tree at once. Never run `git stash`, `git checkout -
 - `harness/`: native renderer goldens, reference captures, fonts, and image comparison tools.
 - `www/`: independent documentation site; use Bun for its JavaScript tooling.
 
-Run the app with `cargo run --manifest-path gpui/Cargo.toml -p luma-app`.
+A fresh clone needs `scripts/setup` once. `rust-toolchain.toml` pins the toolchain for both workspaces, so plain `cargo` is right from anywhere in the repository. Run commands from the repository root.
+
+Run the app with `python3 gpui/dev.py` (rebuilds on save) or `cargo run --manifest-path gpui/Cargo.toml -p luma-app`.
 Check it with `cargo check --manifest-path gpui/Cargo.toml --workspace --all-targets`.
-Run targeted tests with `cargo test --manifest-path gpui/Cargo.toml -p <crate>`.
-Format only touched Rust files; never run tree-wide formatting in this shared checkout.
+Run targeted tests with `cargo test --manifest-path gpui/Cargo.toml -p <crate>`; backend tests with `cargo test --manifest-path backend/Cargo.toml --workspace`; the agent executor's Python tests with `python3 backend/python/luma_exec/tests/run_tests.py`. The README's "Tests" table lists the rest.
+Format only touched Rust files (`rustfmt <file>`; `rustfmt.toml` sets the edition); never run tree-wide formatting in this shared checkout.
 
 ## Code Philosophy
 
@@ -36,6 +38,8 @@ Use standard Rust formatting and clippy. Keep backend modules cohesive around do
 - Migrations are **append-only** once run on any machine: sqlx checksums each version (SHA-384), so editing an applied file breaks every launch with a checksum mismatch.
 - To amend a migration, add a new timestamped file — never edit or renumber an existing one.
 - Keep `backend/migrations` (local SQLite) and `supabase/migrations` (remote Postgres) symmetric: a schema change that syncs needs a file in both.
+- Give each migration a version prefix no other file in its folder uses, and give a synced change the same file name in both folders.
+- A Supabase migration also gets its line in `deploy/README.md`, with what must be deployed before or after it.
 
 ## Testing Guidelines
 
@@ -46,6 +50,7 @@ Use the GPUI harness for UI verification and `luma-render` tests/captures for re
 - **No absolute timings and no sleeps.** Wait with `until`; compare timings against a measurement from the same run.
 - **Never loosen a test or raise a timeout to make it pass.** A skipped test says why: `test.skip("bug: …")`.
 - **Run the tests you changed**, not the whole suite.
+- **Goldens are check-only.** A stale golden fails and is left alone; regenerate it with `LUMA_UPDATE_GOLDENS=1`, then review and commit the diff. A new golden test follows the same rule.
 
 ## Data & File Locations
 
@@ -93,7 +98,7 @@ Groups are the core mechanism for targeting fixtures in scores. A score never re
 ### How it works
 
 - **Groups** are user-created collections of fixtures within a venue (e.g., `front_wash`, `drum_uplighters`, `back_movers`). Each group has a snake_case name and optional axis positions (LR/FB/AB) for spatial selection.
-- **Selection expressions** in scores reference group names with boolean operators (`front_wash & left_movers`, `drum_uplighters | dj_booth > back_wash`). The `all` keyword selects every fixture. At runtime, the expression resolves to whichever fixtures belong to the named groups in the current venue.
+- **Selection expressions** in scores reference group names with boolean operators (`front_wash & left_movers`, `drum_uplighters | dj_booth > back_wash`, `all & ~back_wash`). The `all` keyword selects every fixture. At runtime, the expression resolves to whichever fixtures belong to the named groups in the current venue.
 - **Venue portability**: When moving a score between venues, an LLM can remap group names (e.g., `front_wash` in venue A → `house_pars` in venue B).
 
 ### Group naming

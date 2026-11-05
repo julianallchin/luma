@@ -238,9 +238,9 @@ cargo test -p gpui-agent --no-fail-fast --test headless track_editor -- --test-t
 ```
 
 Look for process-wide state that a new `Fixture` does not reset, for example
-`STAGE_IMAGE_ID` (`crates/app/src/visualizer.rs`), the glass `GENERATION`
-counter (`crates/ui/src/glass.rs`) and the `HOVER_FADES` thread-local
-(`crates/ui/src/motion.rs`). Changing `HARNESS_CONCURRENCY` does not fix it.
+`STAGE_IMAGE_ID` (`crates/app/src/visualizer.rs`) and the glass `GENERATION`
+counter (`crates/ui/src/glass.rs`). The `HOVER_FADES` thread-local this list
+used to name is gone: hover fades live in each element's state now. Changing `HARNESS_CONCURRENCY` does not fix it.
 
 ## Measuring frame cost in the harness
 
@@ -257,3 +257,52 @@ counter (`crates/ui/src/glass.rs`) and the `HOVER_FADES` thread-local
   change, as `add_tracks.rs` (`browser_shown`) and `tracks.rs` (`refilter`) do.
 - Under machine contention every timing is several times larger. Use the
   minimum of several runs, not the mean.
+
+## Gotchas
+
+Collected from past work in this tree. Each cost someone an afternoon.
+
+**Builds and tests**
+
+- `cargo test` stops at the first failing test binary. Pass `--no-fail-fast`
+  when a run should report every failure, as a golden run should.
+- An integration test build also builds the crate's binaries, so
+  `cargo test -p luma-render` relinks `target/debug/haze-lab`. Copy a binary
+  you are comparing against before running tests.
+- Cargo rebuilds by mtime. A file restored from a backup keeps its old mtime,
+  and the build silently keeps the stale artifact. `touch` it.
+- Build `luma-mcp` with `--bin luma-mcp` from `backend/`. It is a binary of
+  the `luma` package, not a package.
+- A worktree needs `git submodule update --init` before the backend compiles:
+  `backend/src/python_env.rs` embeds the consonance-ACE requirements file.
+  Give each worktree its own absolute `CARGO_TARGET_DIR` or its own `target/`.
+
+**Measuring**
+
+- The GPU's clock ramps. The first run after the app quits reads high, and any
+  probe under about 50 runs is measuring the clock governor. Throw away the
+  first run, sweep sizes in both directions, and cool down between runs.
+- macOS `sample` over a whole harness run attributes startup and preview
+  renders to the same symbols as live frames. Sample `profile_score` or
+  `haze-lab` instead. A release-build sample needs `dsymutil` for file:line.
+- `luma-record`'s mp4 is not byte-reproducible. Compare decoded frames.
+
+**Renderer**
+
+- `MSAA_SAMPLES` (`crates/render/src/gpu.rs`) cannot simply be 2: Metal
+  refuses 2 samples on `Rgba16Float` unless the device requests
+  `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`.
+- wgpu-hal never turns off Metal's fast math, so WGSL cannot promise a float
+  operation order. Exactness evidence for a rewrite is a CPU mirror test plus
+  pixels.
+- naga's MSL backend never emits `[[early_fragment_tests]]`: fragment atomics
+  run before the depth test.
+- One buffer cannot be a read-write storage binding and the
+  `dispatch_workgroups_indirect` source in the same dispatch.
+
+**Data and tools**
+
+- Open a live `luma.db` (WAL) with `sqlite3` by its plain path. `?mode=ro`
+  has failed on it.
+- Homebrew's Python 3.14 has shipped a broken `pyexpat`. Use 3.12 for tools.
+- zsh does not word-split an unquoted `$var`. Use an array, or `xargs`.
