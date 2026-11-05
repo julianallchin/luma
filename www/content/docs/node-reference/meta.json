@@ -1,15 +1,12 @@
 {
+  "title": "Node Reference",
   "pages": [
     "index",
-    "time-and-events",
-    "audio",
-    "space",
-    "masks",
-    "aim",
-    "color",
-    "forms",
-    "math",
-    "output"
-  ],
-  "title": "Node Reference"
+    "coordinates",
+    "values",
+    "heads",
+    "outputs",
+    "lasers",
+    "presets"
+  ]
 }
