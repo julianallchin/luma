@@ -1,8 +1,7 @@
 # Harness
 
-Reference data, fonts and image tools for native UI and renderer tests.
+Reference data and image tools for native UI and renderer tests.
 
-- `fonts/`: Inter fonts. The native app embeds them, so they must stay here.
 - `goldens/`: numerical contracts and reference images. Backend, scene and
   render tests read them. `goldens/scenes-wgpu/` holds renderer reference
   images.

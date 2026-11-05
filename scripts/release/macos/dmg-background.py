@@ -15,7 +15,7 @@ WIDTH, HEIGHT = 660, 420
 APP, APPLICATIONS = (180, 196), (480, 196)
 ICON = 128
 HERE = Path(__file__).resolve().parent
-FONT = HERE.parents[2] / "harness" / "fonts" / "Inter-Regular.ttf"
+FONT = HERE.parents[2] / "assets" / "fonts" / "Inter-Regular.ttf"
 
 BACKGROUND = (14, 14, 15)
 ARROW = (90, 90, 92)

@@ -8,7 +8,7 @@ fn chat_emoji_uses_color_glyphs() {
     let system = gpui_platform::current_platform(true).text_system();
     system
         .add_fonts(vec![Cow::Borrowed(
-            include_bytes!("../../../../../harness/fonts/Inter-Regular.ttf").as_slice(),
+            include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf").as_slice(),
         )])
         .expect("Inter");
     let font = system

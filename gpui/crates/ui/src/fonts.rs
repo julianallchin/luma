@@ -49,8 +49,8 @@ pub fn font(family: impl Into<SharedString>) -> Font {
 pub fn install(cx: &App) {
     cx.text_system()
         .add_fonts(vec![
-            Cow::Borrowed(include_bytes!("../../../../harness/fonts/Inter-Regular.ttf").as_slice()),
-            Cow::Borrowed(include_bytes!("../../../../harness/fonts/Inter-Bold.ttf").as_slice()),
+            Cow::Borrowed(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").as_slice()),
+            Cow::Borrowed(include_bytes!("../../../../assets/fonts/Inter-Bold.ttf").as_slice()),
         ])
         .expect("failed to load embedded Inter");
 }
