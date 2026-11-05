@@ -19,6 +19,7 @@
 pub mod audio;
 pub mod features;
 pub mod nodes;
+pub mod perform;
 pub mod track;
 pub mod venue;
 
@@ -44,7 +45,7 @@ pub const NO_VENUE: &str = "no venue is open";
 /// Deliberately free of UI types.
 #[derive(Debug, Clone, Default)]
 pub struct BindingScope {
-    /// `"track_copilot"` | `"venue_rig"`.
+    /// `"track_copilot"` | `"venue_rig"` | `"perform_set"`.
     pub agent_kind: String,
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
@@ -137,6 +138,7 @@ pub async fn assemble_bindings(
     audio::provide(&mut builder, &ctx, store).await?;
     features::provide(&mut builder, &ctx, store).await?;
     venue::provide(&mut builder, &ctx, store).await?;
+    perform::provide(&mut builder, &ctx).await?;
     nodes::provide(&mut builder)?;
 
     builder.build().map_err(String::from)

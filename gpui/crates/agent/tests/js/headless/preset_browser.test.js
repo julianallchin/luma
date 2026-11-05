@@ -32,7 +32,7 @@ test("the browser lists presets by output, filters, and places on click", () => 
   // With nothing selected the inspector is the browser, open and visible.
   const browser = node("card", "Presets").bounds;
   expect(browser.width).toBeGreaterThan(0);
-  expect(app.snapshot().find({ role: "card", label: "Clip graph" })).toBe(undefined);
+  expect(app.snapshot().find({ role: "card", label: "Pattern graph" })).toBe(undefined);
 
   // The list scrolls; the output kinds come in shipped order, one caption
   // each, and the tiles follow the shipped order.
@@ -53,7 +53,7 @@ test("the browser lists presets by output, filters, and places on click", () => 
 
   // A click places the preset; the placed clip is selected.
   app.click(node("row", "Fan"));
-  until("the clip inputs", (s) => s.find({ role: "card", label: "Clip graph" }));
+  until("the clip inputs", (s) => s.find({ role: "card", label: "Pattern graph" }));
   expect(app.snapshot().find({ role: "card", label: "Presets" })).toBe(undefined);
   app.click(node("card", "Waveform"));
   until("the browser back", (s) => s.find({ role: "card", label: "Presets" }));
@@ -91,7 +91,7 @@ test("a row dragged onto the timeline shows where it lands and lands there", () 
   const seen = ghosts().map((n) => n.bounds);
   assert(seen.length > 0, "no drop preview while over the lane");
   assert(Math.abs(seen.at(-1).y - lane.y) < 4, `the drop preview is not in the lane: ${JSON.stringify(seen.at(-1))} vs ${JSON.stringify(lane)}`);
-  until("the clip inputs", (s) => s.find({ role: "card", label: "Clip graph" }));
+  until("the clip inputs", (s) => s.find({ role: "card", label: "Pattern graph" }));
   expect(app.snapshot().find({ role: "card", label: "Pulse drop preview" })).toBe(undefined);
   // The placed clip is written after a round trip.
   app.frames(8, { waitMs: 80 });

@@ -18,8 +18,8 @@ fixture({
 
 const rows = (s) => s.findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
 const labels = (s) => rows(s).map((n) => n.label);
-const withClips = (s) => rows(s).find((n) => n.label.includes("· 1 clips ·"));
-const empty = (s) => rows(s).find((n) => n.label.includes("· 0 clips ·"));
+const withClips = (s) => rows(s).find((n) => n.label.includes("· 1 patterns ·"));
+const empty = (s) => rows(s).find((n) => n.label.includes("· 0 patterns ·"));
 const menu = (s) => s.find({ role: "card", label: "Context menu" });
 const dialog = (s) => s.find({ role: "card", label: "Confirm dialog" });
 // The menu's row and the dialog's confirm button share a label; the dialog's
@@ -64,7 +64,7 @@ test(`deleting a score with clips asks first and the answer decides`, () => {
   app.click(openMenu(withClips(level)).find({ role: "button", label: "Delete score" }));
   const asked = until("the confirmation", (s) => dialog(s) !== undefined);
   // The sentence quotes what the row said, so the two cannot disagree.
-  expect(asked.findAll({ role: "text" }).map((n) => n.label).join(" | ")).toContain("1 clip");
+  expect(asked.findAll({ role: "text" }).map((n) => n.label).join(" | ")).toContain("1 pattern");
 
   app.click(asked.find({ role: "button", label: "Cancel" }));
   const cancelled = until("the dialog gone", (s) => dialog(s) === undefined);

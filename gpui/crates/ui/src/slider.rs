@@ -18,6 +18,7 @@
 //! around: this control also sets DMX dimmer levels, and a stray click
 //! landing on the box should not slam a rig to full. Movement is consent.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::arg::{drag_fraction, OwnedDrag};
@@ -134,51 +135,81 @@ fn slab(id: &SharedString, value: f32, fraction: f32, width: f32) -> Div {
         )
 }
 
-/// The vertical fader: [`luma_slider`] stood up, for the Perform screen, where
-/// a row of them reads like the faders of a console. 0–1, filled from the
-/// bottom, the same drag rules: absolute, and only once the pointer moves.
+/// The fader of the Perform screen, live: [`fader_track`] that a drag moves.
+/// 0–1, and the same drag rules as [`luma_slider`]: absolute, and only once
+/// the pointer moves.
+///
+/// It has no size of its own: it fills the box its caller gives it, so a
+/// tall cell gets a tall fader and a wide one a wide fader.
 pub fn luma_fader(
     id: impl Into<SharedString>,
     value: f32,
-    height: f32,
+    axis: Axis,
+    tint: Hsla,
     on_change: impl Fn(f32, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     let id = id.into();
-    let fraction = value.clamp(0., 1.);
     let moved = id.clone();
-    div()
-        .relative()
-        .overflow_hidden()
-        .flex_shrink_0()
-        .w(px(FADER_WIDTH))
-        .h(px(height))
-        .rounded(px(radius::ROW))
-        .border_1()
-        .border_color(glass::hairline(0.08))
-        .bg(glass::ink(0.03))
-        .child(
-            div()
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .w_full()
-                .h(relative(fraction))
-                .bg(ladder::primary())
-                .opacity(0.35),
-        )
+    let vertical = axis == Axis::Vertical;
+    fader_track(value, axis, tint)
         // The value, published for a driver, as the slider's readout is.
-        .child(div().agent_node(Role::Text, format!("{id} = {fraction:.2}")))
+        .child(div().agent_node(Role::Text, format!("{id} = {:.2}", value.clamp(0., 1.))))
         .id(ElementId::Name(id.clone()))
-        .cursor_ns_resize()
+        .when(vertical, |el| el.cursor_ns_resize())
+        .when(!vertical, |el| el.cursor_ew_resize())
         .on_drag(SliderDrag { id }, |_, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| DragGhost)
         })
         .on_drag_move(drag_fraction(
             moved,
-            move |at, _: &SliderDrag, window, cx| on_change(1. - at.y, window, cx),
+            move |at, _: &SliderDrag, window, cx| {
+                on_change(if vertical { 1. - at.y } else { at.x }, window, cx)
+            },
         ))
 }
 
-/// How wide a fader is: a thumb's width, so a row of them fits under a hand.
-const FADER_WIDTH: f32 = 44.;
+/// A fader as it looks, without the drag: a recessed track that the value
+/// fills, from the bottom (`Axis::Vertical`) or from the left, in `tint`,
+/// with a bright edge where the value is. For a fader shown where a drag
+/// means something else, such as a layout being arranged.
+pub fn fader_track(value: f32, axis: Axis, tint: Hsla) -> Div {
+    let fraction = value.clamp(0., 1.);
+    let vertical = axis == Axis::Vertical;
+    let fill = div()
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .bg(tint.opacity(0.45))
+        .when(vertical, |fill| fill.w_full().h(relative(fraction)))
+        .when(!vertical, |fill| fill.h_full().w(relative(fraction)));
+    // The edge rides the fill's end, inside the track at both ends.
+    let edge = div()
+        .absolute()
+        .bg(ladder::foreground_alpha(0.9))
+        .when(vertical, |edge| {
+            edge.left_0()
+                .w_full()
+                .h(px(FADER_EDGE))
+                .bottom(relative(fraction))
+                .mb(px(-FADER_EDGE * fraction))
+        })
+        .when(!vertical, |edge| {
+            edge.top_0()
+                .h_full()
+                .w(px(FADER_EDGE))
+                .left(relative(fraction))
+                .ml(px(-FADER_EDGE * fraction))
+        })
+        .when(fraction <= 0., |edge| edge.invisible());
+    div()
+        .relative()
+        .overflow_hidden()
+        .rounded(px(radius::CONTROL))
+        .bg(glass::scrim(0.28))
+        .child(fill)
+        .child(edge)
+}
+
+/// How thick the bright edge at a fader's value is.
+const FADER_EDGE: f32 = 2.;

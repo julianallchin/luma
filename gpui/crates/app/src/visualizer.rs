@@ -46,9 +46,7 @@
 //! [`coords::three_from_world`].
 
 mod camera_export;
-mod motors;
 mod settings;
-pub(crate) mod show_export;
 pub(crate) use settings::{environment_panel, ENVIRONMENT_PANEL_WIDTH};
 
 use std::cell::RefCell;
@@ -524,7 +522,7 @@ pub(crate) struct Visualizer {
     bass: Option<Bass>,
     /// Where the preview draws each head while its motors turn toward the
     /// score's pan and tilt.
-    motors: motors::Motors,
+    motors: luma_lib::motors::Motors,
     /// The score whose composite has actually *landed* on the render engine.
     ///
     /// Distinct from [`Self::subject`], which is what this stage has asked
@@ -1395,12 +1393,6 @@ const GLARE_MAX: f32 = 2.0;
 /// The glare threshold's travel, in multiples of diffuse white.
 const GLARE_THRESHOLD: std::ops::RangeInclusive<f32> = 0.5..=8.0;
 
-/// The stored look, or the stage default when there is none or it no longer
-/// parses (an older build's shape, a hand-edited row).
-fn stored_look(json: &str) -> scene_desc::Look {
-    serde_json::from_str(json).unwrap_or(scene_desc::Look::STAGE)
-}
-
 /// A percent from anywhere — a slider, a stored setting, an older build — held
 /// to the one range the renderer has an answer for.
 fn clamp_render_scale(percent: i64) -> u8 {
@@ -1484,7 +1476,7 @@ impl Visualizer {
                     state.render_controls.gizmos_enabled = settings.stage_gizmos;
                     state.render_controls.render_scale_percent =
                         clamp_render_scale(i64::from(settings.render_scale));
-                    state.render_controls.look = stored_look(&settings.stage_look);
+                    state.render_controls.look = scene_desc::Look::stored(&settings.stage_look);
                     state.render_controls.quality = if settings.stage_low_quality {
                         scene_desc::Quality::Low
                     } else {
@@ -5876,36 +5868,6 @@ mod view_tests {
         assert_eq!(controls.look.exposure.ev, 0.0);
     }
 
-    /// A stored look round-trips, and one that no longer parses falls back to
-    /// the stage default rather than to a black or blinding stage.
-    #[test]
-    fn a_stored_look_is_read_back_or_defaulted() {
-        let mut look = scene_desc::Look::STAGE;
-        look.tone = scene_desc::ToneCurve::Aces;
-        look.exposure.ev = -1.5;
-        let json = serde_json::to_string(&look).unwrap();
-        assert_eq!(stored_look(&json), look);
-        assert_eq!(stored_look(""), scene_desc::Look::STAGE);
-        // A look stored before there was a glare style keeps its dials and
-        // takes the default style.
-        let older = r#"{"tone":"aces","exposure":{"auto":true,"ev":0.5,"minEv":-2.5,"maxEv":1.0},"glare":{"strength":1.0,"threshold":2.0,"star":0.3}}"#;
-        let read = stored_look(older);
-        assert_eq!(read.exposure.ev, 0.5);
-        assert_eq!(read.glare.style, scene_desc::GlareStyle::default());
-        // And one stored before the footage look has it off.
-        assert!(!read.footage.enabled);
-        // One stored while the footage look had a shutter angle and a
-        // rolling readout keeps the rest of its dials.
-        let shuttered = r#"{"tone":"agxPunchy","exposure":{"auto":true,"ev":0.0,"minEv":-2.5,"maxEv":1.0},"glare":{"strength":1.0,"threshold":2.0,"star":0.3},"footage":{"enabled":true,"shutterDeg":180.0,"readoutMs":10.0,"noise":0.4,"handheld":0.2,"bass":0.1}}"#;
-        let read = stored_look(shuttered);
-        assert!(read.footage.enabled);
-        assert_eq!(
-            (read.footage.noise, read.footage.handheld, read.footage.bass),
-            (0.4, 0.2, 0.1)
-        );
-        assert_eq!(stored_look("{\"tone\":\"sepia\"}"), scene_desc::Look::STAGE);
-    }
-
     /// The footage look is off by default, turns on with its dials, keeps them
     /// in range and is saved with the rest of the look.
     #[test]
@@ -5923,7 +5885,7 @@ mod view_tests {
             (0.5, 1.0, 0.25)
         );
         let json = serde_json::to_string(&controls.look).unwrap();
-        assert_eq!(stored_look(&json).footage, footage);
+        assert_eq!(scene_desc::Look::stored(&json).footage, footage);
     }
 }
 

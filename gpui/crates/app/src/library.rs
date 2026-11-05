@@ -2865,12 +2865,23 @@ impl Library {
         self.services.render_engine().sample(t)
     }
 
-    /// [`Self::sample_universe`], owned by a thread of its own: the same
-    /// evaluation of the installed score, for an export that samples it while
-    /// the UI thread keeps drawing.
-    pub fn score_sampler(&self) -> impl Fn(f32) -> Option<UniverseState> + Send + 'static {
-        let services = self.services.clone();
-        move |t| services.render_engine().sample(t)
+    /// Render `spec` to a video — the recording `luma-record` makes, from the
+    /// app. `progress` hears every frame written; setting `cancel` stops at the
+    /// next frame.
+    pub(crate) fn record<P>(
+        &self,
+        spec: luma_lib::recording::Recording,
+        cancel: luma_lib::recording::CancelFlag,
+        progress: P,
+    ) -> impl Future<Output = Result<luma_lib::recording::Recorded, LibraryError>> + use<P>
+    where
+        P: Fn(luma_lib::recording::Progress) + Send + 'static,
+    {
+        self.call("record", move |services| async move {
+            luma_lib::recording::record(&services, spec, cancel, progress)
+                .await
+                .map_err(|error| CommandError::Internal(error.to_string()))
+        })
     }
 
     /// Append one entry to the render telemetry log, and forget about it.

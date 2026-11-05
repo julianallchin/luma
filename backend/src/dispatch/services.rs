@@ -267,6 +267,7 @@ impl AppServices {
             db.0.clone(),
             storage.clone(),
             fixtures_root.clone(),
+            host_audio.clone(),
         ));
         Self {
             track_audio,

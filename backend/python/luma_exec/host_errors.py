@@ -27,3 +27,18 @@ class VenueRefused(RuntimeError):
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(reason)
+
+
+class PerformRefused(RuntimeError):
+    """A `luma.perform` verb the set would not accept. Nothing was saved.
+
+    Raised for a pattern the checker refuses (its message is the checker's),
+    a cell off its page or over another, a page too small for its cells, a
+    selection naming a group the venue does not have, an id the set does not
+    have, a control played while the venue's set is not open, and a learn
+    that heard nothing. The message says what to change.
+    """
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)

@@ -8,8 +8,10 @@
 //! screen only reads [`PerformSession::state`] and sets the few controls.
 
 pub(crate) mod clock;
+pub(crate) mod live;
 mod matching;
 mod rkbx;
+mod virtual_deck;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -20,8 +22,10 @@ use sqlx::SqlitePool;
 use tokio::task::JoinHandle;
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::models::perform::{DeckMatch, PerformDeck, PerformSource, PerformState};
+use crate::host_audio::HostAudioState;
+use crate::models::perform::{DeckMatch, PerformClock, PerformDeck, PerformSource, PerformState};
 use crate::render_engine::{PerformDeckInput, RenderEngine, SceneTarget};
+use live::LiveClock;
 use crate::storage::StorageRoot;
 use clock::DeckFollower;
 
@@ -109,6 +113,14 @@ struct State {
     saw_position: bool,
     latency_ms: f32,
     decks: BTreeMap<u8, Deck>,
+    /// The venue whose Perform set is open. It outlives any source:
+    /// following nothing, the set runs on the tapped tempo.
+    set_venue: Option<String>,
+    /// The deck and song the set was compiled on, or `None` for the tapped
+    /// tempo.
+    set_track: Option<(u8, String)>,
+    /// The clock the open set runs on, `None` until it has compiled.
+    set_clock: Option<LiveClock>,
 }
 
 struct Shared {
@@ -117,12 +129,15 @@ struct Shared {
     pool: SqlitePool,
     storage: StorageRoot,
     fixtures_root: PathBuf,
+    /// The app's audio player, which a virtual source follows.
+    host: HostAudioState,
 }
 
 enum Source {
     Rkbx(rkbx::Listener),
     ProDjLink(prodjlink::ProDJLinkClient),
     StageLinq(stagelinq::StageLinqClient),
+    Virtual(JoinHandle<()>),
 }
 
 struct Running {
@@ -143,6 +158,7 @@ impl PerformSession {
         pool: SqlitePool,
         storage: StorageRoot,
         fixtures_root: PathBuf,
+        host: HostAudioState,
     ) -> Self {
         Self {
             shared: Arc::new(Shared {
@@ -157,11 +173,15 @@ impl PerformSession {
                     saw_position: false,
                     latency_ms: 0.0,
                     decks: BTreeMap::new(),
+                    set_venue: None,
+                    set_track: None,
+                    set_clock: None,
                 }),
                 render,
                 pool,
                 storage,
                 fixtures_root,
+                host,
             }),
             running: tokio::sync::Mutex::new(None),
         }
@@ -173,16 +193,11 @@ impl PerformSession {
             .await
             .map_err(|error| error.to_string())?;
         let mut running = self.running.lock().await;
-        self.shutdown(running.take()).await;
-
-        let run = {
-            let mut state = self.shared.lock();
-            state.run += 1;
-            state.source = Some(source.clone());
-            state.venue_id = Some(venue_id);
-            state.detail = "Starting".into();
-            state.run
-        };
+        // Name the new source before the old one stops, so a read taken while
+        // it stops sees the switch, never a moment of not following. The bump
+        // in `run` is what silences the old source's late callbacks.
+        let run = self.shared.reset_to(Some((source.clone(), venue_id)));
+        self.stop_source(running.take()).await;
         let started = match &source {
             PerformSource::RkbxLink { address } => {
                 let address = address.as_deref().unwrap_or(rkbx::DEFAULT_ADDRESS);
@@ -210,6 +225,19 @@ impl PerformSession {
                     .await
                     .map(Source::StageLinq)
             }
+            PerformSource::Virtual => {
+                {
+                    let mut state = self.shared.lock();
+                    state.connected = true;
+                    state.detail = "Following Luma's player".into();
+                }
+                let host = self.shared.host.clone();
+                Ok(Source::Virtual(virtual_deck::follow(
+                    self.shared.clone(),
+                    host,
+                    run,
+                )))
+            }
         };
         let source = match started {
             Ok(source) => source,
@@ -228,6 +256,8 @@ impl PerformSession {
             }
         });
         *running = Some(Running { source, ticker });
+        drop(running);
+        self.relive().await;
         Ok(())
     }
 
@@ -235,10 +265,30 @@ impl PerformSession {
     pub async fn stop(&self) {
         let mut running = self.running.lock().await;
         self.shutdown(running.take()).await;
+        drop(running);
+        self.relive().await;
+    }
+
+    /// The decks changed under the set: put it on whatever is master now,
+    /// the tapped tempo until live follow finds one.
+    async fn relive(&self) {
+        let open = {
+            let mut state = self.shared.lock();
+            state.set_track = master(&state);
+            state.set_venue.is_some()
+        };
+        if open {
+            Shared::recompile_set(self.shared.clone()).await;
+        }
     }
 
     async fn shutdown(&self, running: Option<Running>) {
         self.shared.reset();
+        self.stop_source(running).await;
+    }
+
+    /// End a running source's task and connection, leaving the state alone.
+    async fn stop_source(&self, running: Option<Running>) {
         let Some(running) = running else {
             return;
         };
@@ -247,6 +297,10 @@ impl PerformSession {
             Source::Rkbx(listener) => drop(listener),
             Source::ProDjLink(client) => client.stop().await,
             Source::StageLinq(client) => client.stop().await,
+            Source::Virtual(task) => {
+                task.abort();
+                let _ = task.await;
+            }
         }
     }
 
@@ -260,38 +314,78 @@ impl PerformSession {
         self.shared.render.set_perform_latency(latency_ms / 1000.0);
     }
 
+    /// Open `venue_id`'s Perform set: compile every pattern of it, to play
+    /// as its controls say. Replaces the set open before.
+    pub async fn open_set(&self, venue_id: String) -> Result<(), String> {
+        VenueAccess::<Read>::read(&self.shared.pool, VenueResource::Venue(&venue_id))
+            .await
+            .map_err(|error| error.to_string())?;
+        {
+            let mut state = self.shared.lock();
+            state.set_venue = Some(venue_id);
+            state.set_track = master(&state);
+        }
+        Shared::recompile_set(self.shared.clone()).await;
+        Ok(())
+    }
+
+    /// Set control `name` of the open set's venue to `value`, 0–1: a pad or
+    /// fader of the Perform tab. No database read: the venue was admitted when
+    /// its set opened, and this runs on every fader move.
+    pub fn set_control(&self, name: &str, value: f64) -> Result<(), String> {
+        let venue_id = self
+            .shared
+            .lock()
+            .set_venue
+            .clone()
+            .ok_or("No Perform set is open")?;
+        crate::controls::venue(&venue_id).set(name, value);
+        Ok(())
+    }
+
+    /// Press (`down`) or release button `name` of the open set's venue: a
+    /// button node of a pattern, its pad or another. It plays as the button says: a toggle
+    /// flips on the press, a flash is on while held.
+    pub fn press(&self, name: &str, down: bool) -> Result<(), String> {
+        let venue_id = self
+            .shared
+            .lock()
+            .set_venue
+            .clone()
+            .ok_or("No Perform set is open")?;
+        crate::controls::venue(&venue_id).press(name, down, Instant::now());
+        Ok(())
+    }
+
+    /// The venue whose Perform set is open, if one is.
+    pub fn open_venue(&self) -> Option<String> {
+        self.shared.lock().set_venue.clone()
+    }
+
+    /// `venue_id`'s Perform set changed: recompile it if it is open.
+    pub async fn set_changed(&self, venue_id: &str) {
+        if self.shared.lock().set_venue.as_deref() == Some(venue_id) {
+            Shared::recompile_set(self.shared.clone()).await;
+        }
+    }
+
     /// Pin `deck` to `track_id`, or with `None`, match it automatically again.
     /// A pinned track holds until the deck loads another.
     pub fn assign(&self, deck: u8, track_id: Option<String>) -> Result<(), String> {
-        let mut state = self.shared.lock();
-        let run = state.run;
-        let venue_id = state.venue_id.clone().ok_or("Live follow is off")?;
-        let entry = state.decks.get_mut(&deck).ok_or("No such deck")?;
-        entry.generation += 1;
-        entry.matched = DeckMatch::Matching;
-        match track_id {
-            Some(track_id) => {
-                entry.match_due = None;
-                let job = Job {
-                    run,
-                    deck,
-                    generation: entry.generation,
-                    venue_id,
-                    track: entry.track.clone(),
-                    pinned: Some(track_id),
-                };
-                tokio::spawn(resolve(self.shared.clone(), job));
-            }
-            None => entry.match_due = Some(Instant::now()),
-        }
-        Ok(())
+        let run = self.shared.lock().run;
+        Shared::pin(&self.shared, run, deck, track_id)
     }
 
     /// Everything live follow knows, extrapolated to now.
     pub fn state(&self) -> PerformState {
         let state = self.shared.lock();
         let Some(source) = state.source.clone() else {
-            return PerformState::off(state.latency_ms);
+            return PerformState::off(
+                state.latency_ms,
+                set_clock(&state),
+                set_controls(&state),
+                set_buttons(&state),
+            );
         };
         let now = Instant::now();
         let problem = state.problem.clone().or_else(|| {
@@ -341,6 +435,9 @@ impl PerformSession {
                     }
                 })
                 .collect(),
+            clock: set_clock(&state),
+            controls: set_controls(&state),
+            buttons: set_buttons(&state),
         }
     }
 }
@@ -350,19 +447,121 @@ impl Shared {
         self.state.lock().expect("perform state poisoned")
     }
 
+    /// Pin `deck` to `track_id` for `run`, or with `None`, match it
+    /// automatically again.
+    fn pin(shared: &Arc<Self>, run: u64, deck: u8, track_id: Option<String>) -> Result<(), String> {
+        let mut state = shared.lock();
+        if state.run != run {
+            return Err("Live follow moved on".into());
+        }
+        let venue_id = state.venue_id.clone().ok_or("Live follow is off")?;
+        let entry = state.decks.get_mut(&deck).ok_or("No such deck")?;
+        entry.generation += 1;
+        entry.matched = DeckMatch::Matching;
+        match track_id {
+            Some(track_id) => {
+                entry.match_due = None;
+                let job = Job {
+                    run,
+                    deck,
+                    generation: entry.generation,
+                    venue_id,
+                    track: entry.track.clone(),
+                    pinned: Some(track_id),
+                };
+                tokio::spawn(resolve(shared.clone(), job));
+            }
+            None => entry.match_due = Some(Instant::now()),
+        }
+        Ok(())
+    }
+
+    /// Compile the open set on the clock in `set_track` and install it. A
+    /// newer build supersedes this one.
+    async fn recompile_set(shared: Arc<Self>) {
+        let update = shared.render.begin_scene_update(SceneTarget::Live);
+        let (venue_id, track) = {
+            let state = shared.lock();
+            (state.set_venue.clone(), state.set_track.clone())
+        };
+        let Some(venue_id) = venue_id else {
+            shared.render.finish_live_update(update, None);
+            return;
+        };
+        match Self::compile_set(&shared, &venue_id, track.as_ref()).await {
+            Ok((clock, set)) => {
+                let mut state = shared.lock();
+                state.set_clock = Some(clock);
+                follow_tempo(&state);
+                drop(state);
+                shared.render.finish_live_update(update, set);
+            }
+            Err(message) => {
+                log::warn!("the Perform set did not compile: {message}");
+                shared.lock().problem = Some(format!("Perform set: {message}"));
+                shared.render.finish_live_update(update, None);
+            }
+        }
+    }
+
+    async fn compile_set(
+        shared: &Shared,
+        venue_id: &str,
+        track: Option<&(u8, String)>,
+    ) -> Result<(LiveClock, Option<live::LiveSet>), String> {
+        let mut access = VenueAccess::<Read>::read(&shared.pool, VenueResource::Venue(venue_id))
+            .await
+            .map_err(|error| error.to_string())?;
+        let patterns = crate::database::local::perform_set::list(&mut access).await?;
+        let layout = crate::database::local::perform_set::layout(&mut access)
+            .await?
+            .unwrap_or_default();
+        live::compile(
+            &mut access,
+            &shared.fixtures_root,
+            &shared.storage,
+            &patterns,
+            &layout,
+            track.map(|(deck, track_id)| (*deck, track_id.as_str())),
+        )
+        .await
+    }
+
+    /// Forget `deck` and clear its lights: its source has nothing loaded.
+    fn remove_deck(&self, run: u64, deck: u8) {
+        let mut state = self.lock();
+        if state.run != run || state.decks.remove(&deck).is_none() {
+            return;
+        }
+        self.render.clear_deck(deck);
+        self.push(&state);
+    }
+
     /// Forget the source and its decks, and clear their lights.
     fn reset(&self) {
+        self.reset_to(None);
+    }
+
+    /// Clear the session for `next` (a source and its venue, or nothing) in
+    /// one step, so no read sees the gap between two sources. Returns the new
+    /// run.
+    fn reset_to(&self, next: Option<(PerformSource, String)>) -> u64 {
         let mut state = self.lock();
         state.run += 1;
-        state.source = None;
-        state.venue_id = None;
+        let starting = next.is_some();
+        let (source, venue_id) = next.unzip();
+        state.source = source;
+        state.venue_id = venue_id;
         state.connected = false;
-        state.detail.clear();
+        state.detail = if starting { "Starting".into() } else { String::new() };
         state.problem = None;
         state.last_heard = None;
         state.saw_position = false;
         state.decks.clear();
+        let run = state.run;
+        drop(state);
         self.render.clear_perform();
+        run
     }
 
     /// Take one reading. `None` says only that the source was heard.
@@ -431,6 +630,14 @@ impl Shared {
         }
         if stopped {
             shared.push(&state);
+        }
+        follow_tempo(&state);
+        // The set follows the master deck's song.
+        let master = master(&state);
+        if state.set_venue.is_some() && master != state.set_track {
+            state.set_track = master;
+            drop(state);
+            tokio::spawn(Self::recompile_set(shared.clone()));
         }
     }
 
@@ -569,6 +776,69 @@ impl Shared {
 
 /// One deck to resolve: match its track (or take the pinned one) and compile
 /// that track's scores into the deck's layer.
+/// The deck the Perform set follows: the loudest playing deck whose song
+/// matched the library, else any matched deck. `None` puts it on the tapped
+/// tempo.
+fn master(state: &State) -> Option<(u8, String)> {
+    let matched = |deck: &Deck| match &deck.matched {
+        DeckMatch::Matched { track_id, .. } => Some(track_id.clone()),
+        _ => None,
+    };
+    let playing = state
+        .decks
+        .iter()
+        .filter(|(_, deck)| deck.follower.clock().is_some_and(|clock| clock.playing()))
+        .filter_map(|(id, deck)| matched(deck).map(|track| (*id, track, deck.volume)))
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(id, track, _)| (id, track));
+    playing.or_else(|| {
+        state
+            .decks
+            .iter()
+            .find_map(|(id, deck)| matched(deck).map(|track| (*id, track)))
+    })
+}
+
+/// What the open set is timed by, `None` until it has compiled.
+fn set_clock(state: &State) -> Option<PerformClock> {
+    let venue_id = state.set_venue.as_deref()?;
+    Some(match state.set_clock? {
+        LiveClock::Deck(deck) => PerformClock::Deck { deck },
+        LiveClock::Tap => PerformClock::Tap(crate::controls::venue(venue_id).tempo(Instant::now())),
+    })
+}
+
+/// Count the open set's buttons' beats at the tempo its clock runs at: its
+/// deck's, or the tapped one.
+fn follow_tempo(state: &State) {
+    let Some(venue_id) = state.set_venue.as_deref() else {
+        return;
+    };
+    let bpm = match state.set_clock {
+        Some(LiveClock::Deck(deck)) => state.decks.get(&deck).map(|deck| deck.bpm),
+        _ => None,
+    };
+    crate::controls::venue(venue_id).follow(bpm);
+}
+
+/// The open set's buttons as they stand now.
+fn set_buttons(state: &State) -> BTreeMap<String, luma_patterns::press::Button> {
+    state
+        .set_venue
+        .as_deref()
+        .map(|venue_id| crate::controls::venue(venue_id).buttons())
+        .unwrap_or_default()
+}
+
+/// The open set's venue's controls, as set now.
+fn set_controls(state: &State) -> BTreeMap<String, f64> {
+    state
+        .set_venue
+        .as_deref()
+        .map(|venue_id| crate::controls::venue(venue_id).values())
+        .unwrap_or_default()
+}
+
 struct Job {
     run: u64,
     deck: u8,

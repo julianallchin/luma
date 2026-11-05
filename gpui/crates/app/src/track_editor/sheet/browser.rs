@@ -1,4 +1,4 @@
-//! The preset browser: what the inspector shows while no clip is selected.
+//! The preset browser: what the sheet shows while it has no subject.
 //!
 //! The shipped presets, grouped by output kind, one row each: the name, and
 //! a strip of the preset (time across, heads down). The
@@ -7,11 +7,15 @@
 //! render it against, the row shows the same strip on a stand-in rig, a
 //! straight line of heads that needs no venue or score.
 //!
-//! A click places the preset at the playhead on the selected lane; a drag
-//! places it where it is dropped. Both go through the picker's insertion
-//! path. While the pointer is over a tile, the stage plays the preset alone
-//! on the target selection, a two-bar loop from the playhead. The score and
-//! the transport do not change; leaving the tile gives the stage back.
+//! In a track editor a click places the preset at the playhead on the
+//! selected lane; a drag places it where it is dropped. Both go through the
+//! picker's insertion path. While the pointer is over a tile, the stage plays
+//! the preset alone on the target selection, a two-bar loop from the
+//! playhead. The score and the transport do not change; leaving the tile
+//! gives the stage back.
+//!
+//! In a Perform tab there is no score: the strips are the stand-in rig's,
+//! and a click starts a pattern of the set from the preset.
 
 use std::collections::VecDeque;
 
@@ -118,30 +122,31 @@ impl Editor {
 
 // -- sync ---------------------------------------------------------------------
 
-/// Called while no clip is selected: read the search and render the next
-/// missing thumbnail.
-pub(super) fn sync(editor: &mut Editor, cx: &mut Context<Luma>) {
-    let search = editor
-        .sheet
-        .browser
+/// Called while there is no subject: read the search and, against a score,
+/// render the next missing thumbnail.
+pub(super) fn sync(host: &mut HostMut, cx: &mut Context<Luma>) {
+    let target = host.host().target();
+    let browser = &mut host.sheet().browser;
+    let search = browser
         .search
         .get_or_insert_with(|| cx.new(|cx| TextInput::search("Search presets…", cx)))
         .clone();
-    editor.sheet.browser.query = search.read(cx).text().to_string();
+    browser.query = search.read(cx).text().to_string();
     // A drag let go anywhere but the timeline places nothing.
     if !cx.has_active_drag() {
-        editor.sheet.browser.drop = None;
+        browser.drop = None;
     }
-    fetch_stand_ins(editor, cx);
-    fetch_thumbnail(editor, cx);
+    fetch_stand_ins(browser, target, cx);
+    if let HostMut::Track(editor) = host {
+        fetch_thumbnail(editor, cx);
+    }
 }
 
 /// Render every preset's strip on the stand-in rig, once, off the UI thread.
-fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
-    if std::mem::replace(&mut editor.sheet.browser.stand_ins_asked, true) {
+fn fetch_stand_ins(browser: &mut State, target: Target, cx: &mut Context<Luma>) {
+    if std::mem::replace(&mut browser.stand_ins_asked, true) {
         return;
     }
-    let target = editor.target();
     cx.spawn(async move |this, cx| {
         let strips = cx
             .background_executor()
@@ -161,19 +166,20 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
             })
             .await;
         this.update(cx, |this, cx| {
-            this.edit_track_tab(&target, cx, |editor| {
-                editor.sheet.browser.stand_ins = Some(Rc::new(strips));
-            });
+            if let Some(sheet) = this.sheet_at(&target) {
+                sheet.browser.stand_ins = Some(Rc::new(strips));
+                cx.notify();
+            }
         })
         .ok();
     })
     .detach();
 }
 
-/// Called while a clip is selected: the browser is gone, and so is anything
+/// Called while there is a subject: the browser is gone, and so is anything
 /// it was playing.
-pub(super) fn leave(editor: &mut Editor) {
-    let browser = &mut editor.sheet.browser;
+pub(super) fn leave(sheet: &mut super::State) {
+    let browser = &mut sheet.browser;
     browser.hovered = None;
     browser.audition = None;
     browser.drop = None;
@@ -432,10 +438,15 @@ impl Luma {
     }
 
     /// A click on a tile: place the preset at the playhead on the selected
-    /// lane.
+    /// lane, or start a pattern of the Perform set from it.
     fn place_preset(&mut self, preset: &'static ClipPreset, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
-            return;
+        let editor = match self.sheet_host() {
+            Some(Host::Track(editor)) => editor,
+            Some(Host::Pattern(open)) => {
+                let target = open.target.clone();
+                return self.add_perform_pattern(&target, preset, cx);
+            }
+            None => return,
         };
         if !editor.writable() {
             return;
@@ -545,9 +556,11 @@ impl Luma {
 // -- rendering ----------------------------------------------------------------
 
 /// The browser's content: the search, then a row per preset under its form.
-pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
+/// Only a track editor has a timeline to drag a preset onto.
+pub(super) fn body(host: Host, app: &Entity<Luma>) -> AnyElement {
     let pad = px(luma_ui::sheet::PAD);
-    let browser = &state.sheet.browser;
+    let browser = &host.sheet().browser;
+    let drags = matches!(host, Host::Track(_));
     let groups = grouped(&browser.query);
     div()
         .size_full()
@@ -587,7 +600,7 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
                             .children(
                                 presets
                                     .into_iter()
-                                    .map(|preset| row(preset, strip(browser, preset), app)),
+                                    .map(|preset| row(preset, strip(browser, preset), drags, app)),
                             )
                     }))
                     .child(div().h(pad).flex_none()),
@@ -596,7 +609,12 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-fn row(preset: &'static ClipPreset, strip: Option<Preview>, app: &Entity<Luma>) -> AnyElement {
+fn row(
+    preset: &'static ClipPreset,
+    strip: Option<Preview>,
+    drags: bool,
+    app: &Entity<Luma>,
+) -> AnyElement {
     let name: SharedString = preset.name.clone().into();
     let key = format!("preset-row-{}", key(preset));
     let carried = strip.clone();
@@ -630,12 +648,14 @@ fn row(preset: &'static ClipPreset, strip: Option<Preview>, app: &Entity<Luma>) 
                 .on_click(move |_, _, cx| {
                     place.update(cx, |this, cx| this.place_preset(preset, cx));
                 })
-                .on_drag(PresetDrag(preset), move |_, _, _, cx| {
-                    cx.stop_propagation();
-                    let strip = carried.clone();
-                    cx.new(|_| Carried {
-                        name: preset.name.clone().into(),
-                        strip,
+                .when(drags, |row| {
+                    row.on_drag(PresetDrag(preset), move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        let strip = carried.clone();
+                        cx.new(|_| Carried {
+                            name: preset.name.clone().into(),
+                            strip,
+                        })
                     })
                 })
                 .agent_node(Role::Row, name),

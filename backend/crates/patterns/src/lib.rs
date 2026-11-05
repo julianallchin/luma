@@ -16,6 +16,7 @@ pub mod laser;
 mod mapping;
 mod output;
 mod prepared;
+pub mod press;
 mod presets;
 mod runtime;
 mod score;

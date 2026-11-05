@@ -13,7 +13,9 @@
 use crate::database::local::agent_threads as threads_db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
-use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
+use crate::services::agent_execution::{
+    cancel_python_cell_inner, run_python_cell_inner, LiveHandles,
+};
 
 /// Run one cell in the durable thread's kernel. `turn_message_id` is required:
 /// a cell with edit authority must be attributable to a durable turn — a user
@@ -31,6 +33,7 @@ pub async fn run_python_cell(
         &services.storage,
         &services.fixtures_root,
         &services.workspaces,
+        &LiveHandles::of(services),
         thread_id,
         code,
         scope,

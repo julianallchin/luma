@@ -49,7 +49,7 @@ test("a clip edge dragged on the timeline moves, stays moved, and the playhead r
   nav.venue("Test Venue");
   app.frames(8);
   const opened = open();
-  expect(opened.status).toContain("2 clips");
+  expect(opened.status).toContain("2 patterns");
   expect(opened.clips.length).toBe(2);
   expect(opened.buttons).toContain("Play");
 
@@ -68,7 +68,7 @@ test("a clip edge dragged on the timeline moves, stays moved, and the playhead r
   nav.closeTab();
   app.frames(6);
   const reopened = open();
-  expect(reopened.status).toContain("2 clips");
+  expect(reopened.status).toContain("2 patterns");
   expect(reopened.clips).toEqual(moved.clips);
 
   // Playing moves the playhead on its own, and the button says so.

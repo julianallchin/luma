@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use sqlx::SqlitePool;
@@ -45,7 +45,8 @@ impl TrackAudio {
     }
 
     /// Resolve local audio first, fetching and retaining missing audio once.
-    pub(crate) async fn ensure(&self, track_id: &str) -> Result<(), SyncError> {
+    /// Returns where the file is.
+    pub(crate) async fn ensure(&self, track_id: &str) -> Result<PathBuf, SyncError> {
         let lock = {
             let mut downloads = self.downloads.lock().await;
             downloads.retain(|_, lock| lock.strong_count() > 0);
@@ -71,7 +72,7 @@ impl TrackAudio {
                 .await?;
         access.finish().await.map_err(SyncError::Local)?;
         if !source.file_path.ends_with(".stub") && Path::new(&source.file_path).is_file() {
-            return Ok(());
+            return Ok(source.file_path.into());
         }
 
         let storage_path = source.storage_path.as_deref().ok_or_else(|| {
@@ -149,7 +150,7 @@ impl TrackAudio {
             .await
             .map_err(SyncError::Local)?;
         access.commit().await.map_err(SyncError::Local)?;
-        Ok(())
+        Ok(dest)
     }
 }
 

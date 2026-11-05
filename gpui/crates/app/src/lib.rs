@@ -621,18 +621,6 @@ impl Render for Luma {
             }))
             .child(fullscreen::content(self, window, cx))
             .into_any_element();
-        // The once-per-frame hover tick, at the tail so it runs after every
-        // row above has read its blend. Without it a hover wash is evaluated
-        // exactly once — on the frame the pointer's own `refresh` produced —
-        // and then freezes part-way until something unrelated invalidates the
-        // window. That is what "hover feels laggy" is, and it is also why a
-        // wash could appear to stop halfway through.
-        //
-        // The tick doubles as the staleness sweep: a row that unmounts mid-
-        // hover never gets its leave event, and this is what drops its entry.
-        if motion::hover_fades_active() {
-            window.request_animation_frame();
-        }
         root
     }
 }

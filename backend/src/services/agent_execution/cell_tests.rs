@@ -21,7 +21,9 @@ use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
     AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
 };
-use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
+use crate::services::agent_execution::{
+    cancel_python_cell_inner, run_python_cell_inner, LiveHandles,
+};
 use crate::storage::StorageRoot;
 
 const TRACK_ID: &str = "trk-cell";
@@ -105,6 +107,7 @@ struct Fixture {
     storage: StorageRoot,
     resource_root: PathBuf,
     service: PythonWorkspaceService,
+    live: LiveHandles,
     venue_id: String,
 }
 
@@ -125,12 +128,23 @@ impl Fixture {
         );
         let service = PythonWorkspaceService::with_env(storage.agent_workspaces_dir(), env);
 
+        let live = LiveHandles {
+            perform: Arc::new(crate::perform::PerformSession::new(
+                crate::render_engine::RenderEngine::default(),
+                pool.clone(),
+                storage.clone(),
+                repo_fixtures_root(),
+                crate::host_audio::HostAudioState::default(),
+            )),
+            inputs: Arc::new(crate::inputs::InputHub::new(pool.clone(), false)),
+        };
         let f = Self {
             _dir: dir,
             pool,
             storage,
             resource_root: repo_fixtures_root(),
             service,
+            live,
             // Unique per test: `services::groups` keeps a process-wide cache.
             venue_id: format!("ven-{}", uuid::Uuid::new_v4()),
         };
@@ -329,6 +343,7 @@ impl Fixture {
             &self.storage,
             &self.resource_root,
             &self.service,
+            &self.live,
             thread_id.to_string(),
             code.to_string(),
             scope,
@@ -478,6 +493,7 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         &f.storage,
         &f.resource_root,
         &f.service,
+        &f.live,
         thread.clone(),
         "1 + 1".into(),
         scope,
@@ -530,6 +546,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
             &f.storage,
             &f.resource_root,
             &f.service,
+            &f.live,
             thread.clone(),
             "1 + 1".into(),
             scope.clone(),
@@ -550,6 +567,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         &f.storage,
         &f.resource_root,
         &f.service,
+        &f.live,
         thread.clone(),
         "1 + 1".into(),
         scope,
@@ -595,6 +613,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         &f.storage,
         &f.resource_root,
         &f.service,
+        &f.live,
         thread.clone(),
         "1 + 1".into(),
         session_scope,
@@ -1002,6 +1021,96 @@ async fn a_piece_the_catalog_does_not_have_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
+// The Perform facade changes a venue's set
+// ---------------------------------------------------------------------------
+
+/// A Perform thread's cell builds patterns into cells of the venue's set and
+/// reads its own effect back, and a refusal saves nothing; a venue thread of
+/// the same room has no Perform set at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_perform_thread_changes_the_set_and_a_venue_thread_cannot() {
+    let Some(f) = Fixture::new("perform facade").await else {
+        return;
+    };
+    let (venue_id, venue_thread) = f.empty_venue().await;
+    let thread = crate::database::local::agent_threads::create_thread(
+        &f.pool,
+        CreateAgentThreadInput {
+            agent_kind: "perform_set".to_string(),
+            subject_kind: Some("venue".into()),
+            subject_id: Some(venue_id.clone()),
+            venue_id: Some(venue_id.clone()),
+            ..Default::default()
+        },
+        None,
+    )
+    .await
+    .expect("create Perform thread")
+    .id;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+wash = luma.perform.add(preset("Wash"), name="Warm wash", at=(2, 1))
+graph = color(brightness=curve(control("speed"), [[0, 0], [1, 1]]))
+pulse = luma.perform.add(graph, name="Pulse", size=(1, 2))
+fader = luma.perform.place("fader", label="Speeds", targets=[wash, pulse.control("speed")])
+try:
+    luma.perform.move(pulse, at=(2, 1))
+    refused = None
+except luma.PerformRefused as error:
+    refused = str(error)
+(wash.cell.at, [p.name for p in luma.perform.patterns], len(fader.targets), refused)
+"#,
+        )
+        .await;
+    expect_ok(&out, "the Perform cell");
+    let repr = out.repr.as_deref().unwrap_or_default();
+    assert!(
+        repr.starts_with("((2, 1), ['Pulse', 'Warm wash'], 2, 'cells "),
+        "{repr}"
+    );
+    assert!(repr.contains("overlap"), "{repr}");
+
+    let mut access = crate::database::local::venue_access::VenueAccess::<
+        crate::database::local::venue_access::Read,
+    >::read(
+        &f.pool,
+        crate::database::local::venue_access::VenueResource::Venue(&venue_id),
+    )
+    .await
+    .unwrap();
+    let set = crate::services::perform_set::read(&mut access)
+        .await
+        .unwrap();
+    drop(access);
+    assert_eq!(set.patterns.len(), 2);
+    let pulse = set.patterns.iter().find(|p| p.name == "Pulse").unwrap();
+    let cell = set.layout.cells_of(&pulse.id).next().unwrap();
+    assert_ne!(
+        (cell.column, cell.row),
+        (2, 1),
+        "the refused move saved nothing"
+    );
+
+    let elsewhere = f
+        .run_in_venue(&venue_thread, &venue_id, "luma.perform")
+        .await;
+    expect_ok(&elsewhere, "a venue thread");
+    assert!(
+        elsewhere
+            .repr
+            .as_deref()
+            .is_some_and(|repr| repr.contains("only in the Perform tab")),
+        "{:?}",
+        elsewhere.repr
+    );
+    f.service.shutdown_all();
+}
+
+// ---------------------------------------------------------------------------
 // B6 — the usability run
 // ---------------------------------------------------------------------------
 
@@ -1204,6 +1313,7 @@ projector.path
         &f.storage,
         &f.resource_root,
         &f.service,
+        &f.live,
         track,
         r#"
 import io

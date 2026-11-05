@@ -1,8 +1,16 @@
 //! The "Export show" dialog: choose a size and a file, then watch the score
-//! render. The rendering is [`crate::visualizer::show_export`]'s; this is
-//! only the card over it.
+//! render. The rendering is [`luma_lib::recording`]'s — the same recording
+//! `luma-record` makes — seen through the stage's camera; this is only the
+//! card over it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
+use luma_lib::recording::Recording;
+use luma_lib::stage_render::Aim;
+use tokio::sync::watch;
 
 use gpui::prelude::*;
 use gpui::{div, px, relative, AnyElement, Context, Entity, SharedString};
@@ -12,8 +20,10 @@ use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{float, glass, ladder};
 
 use crate::shell::{Body, Overlay};
-use crate::visualizer::show_export::{self, Export, Job};
 use crate::Luma;
+
+/// Output frames per second.
+const FPS: u32 = 60;
 
 /// The export's frame. Always 16:9, whatever shape the stage pane has: the
 /// camera keeps its vertical field of view and the frame shows more width.
@@ -51,12 +61,35 @@ enum Phase {
     Failed(String),
 }
 
+/// What the open score gives an export: see
+/// [`Editor::export_source`](crate::track_editor::Editor::export_source).
+pub(crate) struct Source {
+    pub(crate) track_name: String,
+    /// The score's length, in seconds.
+    pub(crate) duration: f32,
+    pub(crate) score_id: String,
+    /// The editor's working copy, so the file lights what the stage lights.
+    pub(crate) score: Option<luma_patterns::Score>,
+}
+
+/// A running export. Dropping it cancels: the recording stops at the next
+/// frame.
+struct Export {
+    /// Frames written, and the frames there will be.
+    progress: watch::Receiver<(u64, u64)>,
+    started: Instant,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Export {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
 /// The dialog's state, in [`Overlay::ShowExport`].
 pub(crate) struct ExportDialog {
-    track_name: String,
-    /// The score's length, in seconds.
-    duration: f32,
-    audio: PathBuf,
+    source: Source,
     resolution: Resolution,
     output: PathBuf,
     phase: Phase,
@@ -71,6 +104,11 @@ impl ExportDialog {
 
     fn size(&self) -> (u32, u32) {
         self.resolution.frame()
+    }
+
+    /// Whether the export running now is the one `cancel` stops.
+    fn runs(&self, cancel: &Arc<AtomicBool>) -> bool {
+        matches!(&self.phase, Phase::Running(export) if Arc::ptr_eq(&export.cancel, cancel))
     }
 }
 
@@ -111,15 +149,13 @@ impl Luma {
         let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
             return;
         };
-        let Some((track_name, duration, audio)) = editor.export_source() else {
+        let Some(source) = editor.export_source() else {
             return;
         };
         self.overlay
             .open(Overlay::ShowExport(Box::new(ExportDialog {
-                output: default_output(&track_name),
-                track_name,
-                duration,
-                audio,
+                output: default_output(&source.track_name),
+                source,
                 resolution: Resolution::Uhd,
                 phase: Phase::Setup { error: None },
             })));
@@ -177,23 +213,18 @@ impl Luma {
         .detach();
     }
 
-    /// Snapshot the stage and start rendering.
+    /// Start recording the score through the stage's camera.
     fn start_show_export(&mut self, cx: &mut Context<Self>) {
-        let shot = self
-            .visualizer
-            .as_ref()
-            .filter(|stage| stage.is_lit())
-            .and_then(|stage| stage.shot());
-        let sample = self.library.score_sampler();
+        let camera = self.visualizer.as_ref().map(|stage| stage.camera());
         let Some(dialog) = self.show_export_mut() else {
             return;
         };
         if dialog.is_running() {
             return;
         }
-        let Some(shot) = shot else {
+        let Some(camera) = camera else {
             dialog.phase = Phase::Setup {
-                error: Some("The stage has not lit this score yet. Try again in a moment.".into()),
+                error: Some("Open the stage to choose the camera, then try again.".into()),
             };
             cx.notify();
             return;
@@ -207,40 +238,43 @@ impl Luma {
                 return;
             }
         }
-        let job = Job {
+        let spec = Recording {
+            score_id: dialog.source.score_id.clone(),
+            score: dialog.source.score.clone(),
+            aim: Aim::Camera(camera),
+            span: None,
             size: dialog.size(),
-            shot,
-            duration: dialog.duration,
-            sample: Box::new(sample),
-            audio: Some(dialog.audio.clone()).filter(|audio| audio.is_file()),
+            fps: FPS,
             output: dialog.output.clone(),
         };
-        let export = Export::start(job);
-        let mut updates = export.updates();
-        dialog.phase = Phase::Running(export);
+        let (report, mut updates) = watch::channel((0, 0));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let recording = self
+            .library
+            .record(spec, Arc::clone(&cancel), move |progress| {
+                report.send_replace((progress.frame, progress.total));
+            });
+        let Some(dialog) = self.show_export_mut() else {
+            return;
+        };
+        dialog.phase = Phase::Running(Export {
+            progress: updates.clone(),
+            started: Instant::now(),
+            cancel: Arc::clone(&cancel),
+        });
         cx.notify();
+        // Redraw the card as frames land, for as long as this export runs.
+        let this_run = Arc::clone(&cancel);
         cx.spawn(async move |this, cx| {
-            // Ends when the export finishes, or when the dialog lets it go
-            // and the thread drops its sender.
             while updates.changed().await.is_ok() {
                 let running = this.update(cx, |this, cx| {
-                    let Some(dialog) = this.show_export_mut() else {
-                        return false;
-                    };
-                    let Phase::Running(export) = &dialog.phase else {
-                        return false;
-                    };
-                    match export.progress().outcome {
-                        None => {}
-                        Some(Ok(())) => {
-                            dialog.phase = Phase::Done {
-                                path: dialog.output.clone(),
-                            }
-                        }
-                        Some(Err(error)) => dialog.phase = Phase::Failed(error),
+                    let running = this
+                        .show_export_mut()
+                        .is_some_and(|dialog| dialog.runs(&this_run));
+                    if running {
+                        cx.notify();
                     }
-                    cx.notify();
-                    dialog.is_running()
+                    running
                 });
                 if !matches!(running, Ok(true)) {
                     return;
@@ -248,10 +282,32 @@ impl Luma {
             }
         })
         .detach();
+        cx.spawn(async move |this, cx| {
+            let outcome = recording.await;
+            this.update(cx, |this, cx| {
+                let Some(dialog) = this.show_export_mut() else {
+                    return;
+                };
+                // A cancelled run, or one a newer Start replaced, reports
+                // nothing.
+                if !dialog.runs(&cancel) {
+                    return;
+                }
+                dialog.phase = match outcome {
+                    Ok(recorded) => Phase::Done {
+                        path: recorded.path,
+                    },
+                    Err(error) => Phase::Failed(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    /// Stop the render. Dropping the export kills ffmpeg and deletes the
-    /// partial file.
+    /// Stop the render at the next frame. What was rendered stays a playable
+    /// file, as a stopped `luma-record` leaves it.
     fn cancel_show_export(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.show_export_mut() {
             dialog.phase = Phase::Setup { error: None };
@@ -316,7 +372,7 @@ pub(crate) fn render(state: &ExportDialog, app: &Entity<Luma>) -> AnyElement {
         .flex_col()
         .gap(px(4.))
         .child(text("Export show", 15., 0.95))
-        .child(text(state.track_name.clone(), 13., 0.6));
+        .child(text(state.source.track_name.clone(), 13., 0.6));
     let content = match &state.phase {
         Phase::Setup { error } => setup(state, error.as_deref(), app),
         Phase::Running(export) => running(export, app),
@@ -391,7 +447,6 @@ fn setup(state: &ExportDialog, error: Option<&str>, app: &Entity<Luma>) -> gpui:
         );
     }
     let (width, height) = state.size();
-    let seconds = show_export::frame_count(state.duration) as f64 / f64::from(show_export::FPS);
     let file = div()
         .flex()
         .flex_row()
@@ -429,8 +484,8 @@ fn setup(state: &ExportDialog, error: Option<&str>, app: &Entity<Luma>) -> gpui:
         .child(float::field_row("File", file).items_stretch())
         .child(luma_ui::caption(format!(
             "{} at {} fps, from the stage's current view",
-            clock(seconds),
-            show_export::FPS
+            clock(f64::from(state.source.duration)),
+            FPS
         )))
         .when_some(error, |el, error| {
             el.child(float::error_row(error.to_string()))
@@ -454,18 +509,18 @@ fn setup(state: &ExportDialog, error: Option<&str>, app: &Entity<Luma>) -> gpui:
 }
 
 fn running(export: &Export, app: &Entity<Luma>) -> gpui::Div {
-    let progress = export.progress();
-    let elapsed = progress.started.elapsed().as_secs_f64();
-    let fraction = if progress.total == 0 {
+    let (done, total) = *export.progress.borrow();
+    let elapsed = export.started.elapsed().as_secs_f64();
+    let fraction = if total == 0 {
         0.0
     } else {
-        progress.done as f32 / progress.total as f32
+        done as f32 / total as f32
     };
-    let fps = progress.done as f64 / elapsed.max(1e-3);
-    let left = if progress.done == 0 {
+    let fps = done as f64 / elapsed.max(1e-3);
+    let left = if done == 0 {
         "—".to_string()
     } else {
-        clock((progress.total - progress.done) as f64 / fps)
+        clock((total - done) as f64 / fps)
     };
     let bar = div()
         .w_full()
@@ -484,11 +539,7 @@ fn running(export: &Export, app: &Entity<Luma>) -> gpui::Div {
         .flex_col()
         .gap(px(12.))
         .child(bar)
-        .child(text(
-            format!("{} / {} frames", progress.done, progress.total),
-            13.,
-            0.8,
-        ))
+        .child(text(format!("{done} / {total} frames"), 13., 0.8))
         .child(luma_ui::caption(format!(
             "{} elapsed · {fps:.0} fps · {left} left",
             clock(elapsed)

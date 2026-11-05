@@ -1,10 +1,13 @@
 //! Inputs bound to live controls: MIDI and OSC, from any device.
 //!
 //! A [`Binding`] maps one input address (a MIDI CC or note, an OSC address
-//! and argument) to a control of the open venue, with a mode: a fader
-//! follows the input, a momentary pad is 1 while held, a toggle flips on
-//! each press. Bindings are this machine's, like the devices plugged into
-//! it, and are kept per venue in the local-only `control_bindings` table.
+//! and argument) to a control of the open venue, with a mode that says what
+//! the hardware sends: a fader's position, a pad's press and release, or a
+//! latching key's state. How a button plays (toggle or flash, its envelope)
+//! is the button's own, in the controls bank, so a pad on screen and one on
+//! a controller always agree. Bindings are this machine's, like the devices
+//! plugged into it, and are kept per venue in the local-only
+//! `control_bindings` table.
 //!
 //! Every MIDI input port is opened as it appears; OSC is heard on UDP
 //! [`OSC_ADDRESS`]. Anything that can send OSC (a phone, TouchOSC, a sensor
@@ -14,7 +17,6 @@ mod midi;
 mod osc;
 mod store;
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,16 +50,21 @@ pub enum Address {
     },
 }
 
-/// How an input sets its control.
+/// What the hardware sends, and so how its messages reach the control.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    /// The control follows the input.
+    /// A fader or knob: the control follows its position.
     #[default]
     Fader,
-    /// 1 while the input is pressed, 0 when released.
+    /// A pad that sends a press and a release: each is a press of the
+    /// control's button, which plays by its own mode (a toggle flips on the
+    /// press, a flash holds until the release). A control no button
+    /// declares is 1 while held.
     Momentary,
-    /// Flips between 0 and 1 on each press.
+    /// A key that latches by itself: each message is its new state, on or
+    /// off. The control's button is gated to that state whatever its mode,
+    /// with its own envelope; any other control is set to 1 or 0.
     Toggle,
 }
 
@@ -113,8 +120,6 @@ struct Learn {
 struct State {
     venue_id: Option<String>,
     bindings: Vec<Binding>,
-    /// Per toggle binding: whether its input is held, and whether it is on.
-    toggles: HashMap<String, (bool, bool)>,
     learn: Option<Learn>,
     last: Option<(Event, Instant)>,
     midi_ports: Vec<String>,
@@ -163,27 +168,40 @@ impl Shared {
             return;
         };
         let controls = crate::controls::venue(&venue_id);
-        let State {
-            bindings, toggles, ..
-        } = &mut *state;
-        for binding in bindings.iter().filter(|b| b.address == event.address) {
-            let pressed = event.value > 0.5;
-            let value = match binding.mode {
-                Mode::Fader => event.value,
-                Mode::Momentary => f64::from(u8::from(pressed)),
-                Mode::Toggle => {
-                    let (held, on) = toggles.entry(binding.id.clone()).or_default();
-                    let rising = pressed && !*held;
-                    *held = pressed;
-                    if !rising {
-                        continue;
-                    }
-                    *on = !*on;
-                    f64::from(u8::from(*on))
-                }
+        let at = Instant::now();
+        for binding in state.bindings.iter().filter(|b| b.address == event.address) {
+            let value = if binding.invert {
+                1.0 - event.value
+            } else {
+                event.value
             };
-            let value = if binding.invert { 1.0 - value } else { value };
-            controls.set(&binding.control, value);
+            match binding.mode {
+                Mode::Fader => controls.set(&binding.control, value),
+                Mode::Momentary => controls.press(&binding.control, value > 0.5, at),
+                Mode::Toggle => controls.set(&binding.control, f64::from(u8::from(value > 0.5))),
+            }
+        }
+    }
+}
+
+/// A learn being waited for. However the wait ends (heard, timed out, or
+/// dropped by a caller that stopped waiting), the learn is over; a newer one
+/// that replaced it is not.
+struct Waiting<'a> {
+    shared: &'a Shared,
+    heard: oneshot::Receiver<Address>,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.heard.close();
+        let mut state = self.shared.lock();
+        if state
+            .learn
+            .as_ref()
+            .is_some_and(|learn| learn.reply.is_closed())
+        {
+            state.learn = None;
         }
     }
 }
@@ -223,7 +241,6 @@ impl InputHub {
             let mut state = self.shared.lock();
             state.venue_id = Some(venue_id.to_owned());
             state.bindings = bindings;
-            state.toggles.clear();
         }
         let mut listeners = self.listeners.lock().await;
         if self.devices && listeners.is_none() {
@@ -296,18 +313,14 @@ impl InputHub {
             });
             venue_id
         };
-        let address = match tokio::time::timeout(LEARN_FOR, heard).await {
+        let mut waiting = Waiting {
+            shared: &self.shared,
+            heard,
+        };
+        let address = match tokio::time::timeout(LEARN_FOR, &mut waiting.heard).await {
             Ok(Ok(address)) => address,
             Ok(Err(_)) => return Err("Learning was replaced or cancelled".into()),
             Err(_) => {
-                let mut state = self.shared.lock();
-                if state
-                    .learn
-                    .as_ref()
-                    .is_some_and(|learn| learn.control == control)
-                {
-                    state.learn = None;
-                }
                 return Err(
                     "Nothing was heard. Move a fader or press a pad, then try again".into(),
                 );

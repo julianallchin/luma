@@ -26,6 +26,7 @@
 //! the file with `img(path)` and
 //! GPUI's image cache handles the decode and the lazy load.
 
+use luma_ui::motion::FadeHover;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -1101,24 +1102,17 @@ fn header_field() -> Div {
 }
 
 /// A square header button in the field's material.
-fn square(icon: luma_ui::icons::IconName, fade_key: &str) -> Div {
-    let fade_key = SharedString::from(fade_key.to_string());
-    let mut button = header_field()
+fn square(icon: luma_ui::icons::IconName, _fade_key: &str) -> Div {
+    header_field()
         .w(px(HEADER_CONTROL))
         .px(px(0.))
         .justify_center()
         .cursor_pointer()
         .text_color(luma_ui::glass::ink(0.7))
         .child(gpui_component::Icon::new(icon).size(px(HEADER_ICON)))
-        .bg(luma_ui::motion::hover_blend(
-            &fade_key,
-            luma_ui::glass::ink(0.03),
-            luma_ui::glass::glass_hover(),
-        ));
-    button
-        .interactivity()
-        .on_hover(luma_ui::motion::hover_listener(fade_key));
-    button
+        .bg(luma_ui::glass::ink(0.03))
+        .hover(|style| style.bg(luma_ui::glass::glass_hover()))
+        .fade_hover()
 }
 
 /// The venue select. It reopens the venue picker — the picker overlay is the
@@ -1469,12 +1463,9 @@ fn track_row(
                 .shadow(luma_ui::glass::card_selected_shadows())
         })
         .when(!picked, |row| {
-            row.bg(luma_ui::motion::hover_blend(
-                &format!("track-row-{key}"),
-                luma_ui::glass::wash(0.),
-                luma_ui::glass::glass_hover(),
-            ))
-            .on_hover(luma_ui::motion::hover_listener(format!("track-row-{key}")))
+            row.bg(luma_ui::glass::wash(0.))
+                .hover(|style| style.bg(luma_ui::glass::glass_hover()))
+                .fade_hover()
         })
         // The row the shared element is carrying is drawn by the flight, not
         // here — one track, one row on screen.

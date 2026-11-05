@@ -23,7 +23,7 @@ test("the row opens a track's scores, and the level switches, mints and pops", (
   nav.scores("Aurora");
   const listed = rows().map((n) => n.label);
   expect(ordinals(listed)).toEqual(["#1", "#2", "#3"]);
-  expect(listed.filter((l) => l.includes("· 1 clips ·")).length).toBe(1);
+  expect(listed.filter((l) => l.includes("· 1 patterns ·")).length).toBe(1);
   // The track list is gone, not merely covered: a level parked off the edge
   // would still be a tab stop.
   expect(app.snapshot().find({ role: "input", label: "Search tracks" })).toBe(undefined);

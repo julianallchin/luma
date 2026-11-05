@@ -221,10 +221,13 @@ pub struct GroupTreeNode {
     pub fixtures: Vec<String>,
 }
 
-/// A selector name used by saved scores but absent from their venue.
+/// A selector name used by saved patterns but absent from their venue: the
+/// scores that use it, and the Perform patterns.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MissingGroup {
     pub name: String,
     pub scores: Vec<String>,
+    #[serde(default)]
+    pub perform_patterns: Vec<String>,
 }

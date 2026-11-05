@@ -38,6 +38,6 @@ test("escape drops an expression draft and keeps the selection", () => {
   until("the sheet", () => field("expression") !== undefined);
 
   escapeDraft("expression", "nowhere");
-  assert(app.snapshot().find({ role: "card", label: "Clip graph" }) !== undefined,
+  assert(app.snapshot().find({ role: "card", label: "Pattern graph" }) !== undefined,
     "escape in the expression field also cleared the selection");
 });

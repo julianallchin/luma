@@ -10,15 +10,19 @@ region model of `comet-shell.md` §0 and §2 where they disagree.
 2. **A tab is a score, the venue or its Perform screen.** Tab key:
    `Score { venue, track, score }`, `Venue { venue }` or `Perform { venue }`.
    Many scores can be open at once, also two scores of the same track. One
-   venue tab and one Perform tab per venue. Perform's chats are venue chats.
+   venue tab and one Perform tab per venue.
 3. **The chat lives inside the tab.** Each tab has its own chat panel and
    remembers which chat it has open, its scroll and its draft. Switching tabs
    never stops a running turn.
-4. **Chats belong to a score or a venue.** A score tab's chats are that
-   score's chats. The venue tab's chats are venue chats (`venue_rig`, already
-   supported by the backend). Pattern chats are gone.
+4. **Chats belong to a score, a venue or its Perform set.** A score tab's
+   chats are that score's chats. The venue tab's chats are venue chats
+   (`venue_rig`). The Perform tab's chats are the venue's Perform chats
+   (`perform_set`), a workspace of their own: they work on the Perform set
+   through `luma.perform`, and never list with the venue's. Pattern chats are
+   gone.
 5. **The chat list follows the tab.** "Chats" lists the chats of the tab's
-   score, or of the venue for the venue tab.
+   score, of the venue for the venue tab, or of its Perform set for the
+   Perform tab.
 6. **Status dots.** A tab shows a dot while its agent is working, when it
    needs input, and when it finished while the tab was not in front. The same
    dot shows on the tab's sidebar row and, for other venues, in the venue

@@ -24,7 +24,7 @@ test("edit focus keeps the controls usable and renders both picker previews", ()
   // Taller stage, same inspector: it keeps usable height and stays above the timeline.
   app.drag(node("slider", "Stage height"), { dx: 0, dy: 160 });
   app.frames(5, { waitMs: 50 });
-  const inspector = node("card", "Clip graph").bounds;
+  const inspector = node("card", "Pattern graph").bounds;
   const timeline = node("card", "Waveform").bounds;
   expect(inspector.height).toBeGreaterThan(299);
   expect(inspector.y + inspector.height).toBeLessThan(timeline.y + 1);

@@ -1,54 +1,368 @@
 //! The Perform tab: one venue's live show.
 //!
-//! Three things, top to bottom: the DJ source being followed and its decks,
-//! then a fader for every live control of the venue. A control exists by
-//! being named in a clip (`control("drop")`), so the faders are the venue's
-//! clips' own inputs; moving one changes the lights at the next frame
-//! without compiling anything. Under each fader, Learn binds the next MIDI or
-//! OSC input heard to it, and each binding is a chip that cycles its mode.
+//! It has two views. Perform is the show: the decks being followed (or,
+//! with no deck to follow, the tapped tempo), then the venue's pages of
+//! cells, to play and nothing else. Setup is the same grid to arrange: the
+//! DJ source, cells placed from an empty place's "+", moved and resized by
+//! dragging, rows that play one at a time, and an inspector for the selected
+//! cell: its pattern's name and group, and what it is mapped to.
 //!
-//! The backend owns everything live — the follow session, the control bank,
-//! the input hub — so this tab only reads and asks. It polls while it is
-//! open: the decks' positions and the last input heard change many times a
-//! second and are nobody's event.
+//! A cell is a pattern of the venue's Perform set: its pad (the button node
+//! its graph's alpha depends on) turns it on and off, its level fader and the
+//! other faders and buttons of its graph play it. A
+//! cell can also hold the master, tap, or a fader of its own that moves
+//! several things at once. Everything moves a control of the venue: the
+//! backend's control bank holds them and every input writes there, so a pad
+//! pressed here, a MIDI key and an OSC button are one thing; this tab shows
+//! what the bank holds, as of its last read. Learn binds the next input heard
+//! to one of a cell's controls.
+//!
+//! With the Virtual source, Luma's own player is the deck: Choose song opens
+//! the add-song dialog to pick any library track, which loads and plays. It
+//! is for practising and seeing patterns, on the player the track editor
+//! uses.
+//!
+//! The backend owns everything live (the follow session, the Perform set,
+//! the control bank, the input hub), so this tab only reads and asks. It
+//! polls while it is open: decks, values and the last input heard change
+//! many times a second and are nobody's event.
 
-use std::collections::HashMap;
+mod add;
+mod deck_strip;
+mod grid;
+mod inspector;
+pub(crate) mod pattern_sheet;
+mod surface;
+
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Entity, SharedString};
-use luma_lib::controls::Control;
+use gpui::{div, px, AnyElement, Context, Entity, Focusable as _, Hsla, SharedString, Window};
+use luma_lib::controls::{perform as names, Control, UNTAPPED_BPM};
+use luma_patterns::press::Button;
 use luma_lib::dispatch::handlers::inputs::{Address, Binding, InputState, Mode};
-use luma_lib::models::perform::{DeckMatch, PerformDeck, PerformSource, PerformState};
+use luma_lib::host_audio::HostAudioSnapshot;
+use luma_lib::models::perform::{
+    Cell, CellContent, PerformClock, PerformLayout, PerformPattern, PerformSource, PerformState,
+};
+use luma_patterns::clip_graph::LiveInputKind;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
+use luma_ui::text_input::{self, TextInput};
 use luma_ui::{float, glass, ladder};
 
 use crate::shell::Body;
 use crate::tabs::Target;
 use crate::Luma;
+use surface::{Edit, Rect, View};
 
-/// How often the decks and inputs are read while the tab is open.
-const POLL: Duration = Duration::from_millis(100);
-/// The controls come from the venue's clips, which change rarely: read them
-/// every this many polls.
-const CONTROLS_EVERY: u64 = 10;
-/// How long a fader the person moved keeps its own value over what a poll
-/// read, so a read that left before the move cannot pull it back.
+/// How often the decks, values and inputs are read while the tab is open.
+const POLL: Duration = Duration::from_millis(40);
+/// The venue's own controls come from its patterns, which change rarely:
+/// read them every this many polls.
+const CONTROLS_EVERY: u64 = 25;
+/// How long a value moved here wins over what a poll read, so a read that
+/// left before the move cannot pull it back.
 const HELD_FOR: Duration = Duration::from_millis(400);
-const FADER_HEIGHT: f32 = 180.;
 
 pub(crate) struct Perform {
     pub(crate) venue_id: String,
     pub(crate) chat: crate::agent::TabChat,
-    controls: Vec<Control>,
-    inputs: Option<InputState>,
     follow: Option<PerformState>,
-    /// Faders moved here, with when, so a stale read does not snap them back.
-    held: HashMap<String, Instant>,
-    /// The control a Learn pressed here waits to bind.
+    inputs: Option<InputState>,
+    /// The venue's Perform set, the top first. `None` until read.
+    pub(crate) patterns: Option<Vec<PerformPattern>>,
+    /// The venue's layout. `None` until read.
+    layout: Option<PerformLayout>,
+    /// Bumped by every edit made here, to the set and to the layout. A read
+    /// that left before an edit would put back what the edit replaced, so it
+    /// lands only if nothing was edited since it left.
+    edits: u64,
+    /// The venue's own controls, for a fader cell to move.
+    controls: Vec<Control>,
+    /// The venue's named groups, for a pattern to light.
+    groups: Vec<String>,
+    surface: surface::Surface,
+    /// The graph editor, open on one of the set's patterns.
+    pub(crate) pattern_sheet: Option<pattern_sheet::PatternSheet>,
+    /// Values moved here, and when, so a stale read does not snap them back.
+    held: HashMap<String, (f64, Instant)>,
+    /// The button the pointer holds down, so only its own release lets go.
+    pressed: Option<String>,
+    /// The control a Learn click waits to bind, and the poll it began at:
+    /// a read that left before then cannot say it ended.
     learning: Option<String>,
+    learning_since: u64,
+    /// A name being typed: a page's, a pattern's or a fader cell's.
+    draft: Option<Draft>,
+    /// The inspector's group menu is open.
+    group_menu: bool,
+    /// Each matched deck's waveform and beats, read once per track.
+    tracks: HashMap<String, Rc<deck_strip::TrackView>>,
+    fetching: HashSet<String>,
+    /// When the decks' positions were read, to run them on between polls.
+    polled_at: Instant,
+    /// The app's audio player, as of the last poll: what the virtual deck
+    /// plays, and the session its transport speaks for.
+    player: Option<HostAudioSnapshot>,
+    /// The source just clicked, shown until a read reports it (or the request
+    /// fails), so a poll already in flight cannot flip the chooser back.
+    choosing: Option<Option<PerformSource>>,
     error: Option<String>,
     polls: u64,
+}
+
+/// A name being typed, and what it names.
+struct Draft {
+    of: Named,
+    field: Entity<TextInput>,
+    _subscriptions: Vec<gpui::Subscription>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Named {
+    Page(String),
+    Pattern(String),
+    /// A fader cell's label, by cell id.
+    Fader(String),
+}
+
+/// One thing of a cell a hand plays: a pad, a fader or a button, and the
+/// control it moves.
+pub(super) struct Part {
+    pub control: String,
+    pub label: String,
+    pub kind: PartKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PartKind {
+    /// A pattern's pad: the button node its graph's alpha depends on.
+    Pad,
+    /// A fader, and what it reads before it is first moved.
+    Fader {
+        rest: f64,
+    },
+    /// Another button node of a pattern's graph.
+    Button,
+    Tap,
+}
+
+impl PartKind {
+    /// The way a controller binds to it.
+    pub(super) fn mode(self) -> Mode {
+        match self {
+            Self::Fader { .. } => Mode::Fader,
+            Self::Pad | Self::Button | Self::Tap => Mode::Momentary,
+        }
+    }
+}
+
+impl Perform {
+    /// Control `name` now: a button's envelope, played on from the last
+    /// poll; else what was just moved here, or what the bank holds; `rest`
+    /// while the bank has nothing for it.
+    fn value(&self, name: &str, rest: f64) -> f64 {
+        if let Some(button) = self.button(name) {
+            return button.value(self.bpm());
+        }
+        match self.held.get(name) {
+            Some((value, at)) if at.elapsed() < HELD_FOR => *value,
+            _ => self
+                .follow
+                .as_ref()
+                .and_then(|follow| follow.controls.get(name).copied())
+                .unwrap_or(rest),
+        }
+    }
+
+    /// Whether button `name` is on: held, or toggled on.
+    fn on(&self, name: &str) -> bool {
+        self.button(name).is_some_and(|button| button.on())
+    }
+
+    /// Whether any button's envelope is still moving, so the surface draws
+    /// every frame until it settles.
+    pub(super) fn moving(&self) -> bool {
+        let bpm = self.bpm();
+        self.follow.as_ref().is_some_and(|follow| {
+            follow
+                .buttons
+                .keys()
+                .filter_map(|name| self.button(name))
+                .any(|button| button.moving(bpm))
+        })
+    }
+
+    /// Button `name` as it stands now: as last polled, run on since.
+    fn button(&self, name: &str) -> Option<Button> {
+        let button = self.follow.as_ref()?.buttons.get(name)?;
+        Some(button.later(self.polled_at.elapsed().as_secs_f64()))
+    }
+
+    /// The tempo the set's buttons count beats in.
+    fn bpm(&self) -> f64 {
+        self.tempo().map_or(UNTAPPED_BPM, |(bpm, _)| bpm)
+    }
+
+    /// Pattern `id`'s pad control, when its graph has a pad.
+    fn pad(&self, id: &str) -> Option<String> {
+        names::pad(self.pattern(id)?)
+    }
+
+    fn pattern(&self, id: &str) -> Option<&PerformPattern> {
+        self.patterns
+            .as_ref()?
+            .iter()
+            .find(|pattern| pattern.id == id)
+    }
+
+    fn page(&self) -> Option<&luma_lib::models::perform::LayoutPage> {
+        self.surface.page(self.layout.as_ref()?)
+    }
+
+    fn cell(&self, id: &str) -> Option<&Cell> {
+        self.page()?.cells.iter().find(|cell| cell.id == id)
+    }
+
+    fn selected_cell(&self) -> Option<&Cell> {
+        self.cell(self.surface.selected.as_deref()?)
+    }
+
+    fn bindings<'a>(&'a self, control: &'a str) -> impl Iterator<Item = &'a Binding> + 'a {
+        self.inputs
+            .iter()
+            .flat_map(|inputs| inputs.bindings.iter())
+            .filter(move |binding| binding.control == control)
+    }
+
+    /// What a cell is called.
+    fn title(&self, cell: &Cell) -> String {
+        match &cell.content {
+            CellContent::Pattern { pattern_id } => self
+                .pattern(pattern_id)
+                .map_or_else(|| "Deleted pattern".into(), |pattern| pattern.name.clone()),
+            CellContent::Master => "Master".into(),
+            CellContent::Tap => "Tap".into(),
+            CellContent::Fader { label, .. } if label.is_empty() => "Fader".into(),
+            CellContent::Fader { label, .. } => label.clone(),
+        }
+    }
+
+    /// A cell's colour: its pattern's, or a quiet white.
+    fn tint(&self, cell: &Cell) -> Hsla {
+        match &cell.content {
+            CellContent::Pattern { pattern_id } => ladder::pattern(pattern_id).into(),
+            CellContent::Fader { .. } => Hsla::from(ladder::accent()),
+            CellContent::Master | CellContent::Tap => ladder::foreground_alpha(0.8),
+        }
+    }
+
+    /// What a hand plays in a cell: for a pattern its pad first, when its
+    /// graph has one, then its level and its graph's other faders and
+    /// buttons.
+    fn parts(&self, cell: &Cell) -> Vec<Part> {
+        let part = |control: String, label: &str, kind| Part {
+            control,
+            label: label.to_owned(),
+            kind,
+        };
+        match &cell.content {
+            CellContent::Pattern { pattern_id } => {
+                let level = part(
+                    names::level(pattern_id),
+                    "Level",
+                    PartKind::Fader { rest: 1. },
+                );
+                let Some(pattern) = self.pattern(pattern_id) else {
+                    return vec![level];
+                };
+                let pad = pattern.graph.pad().map(|pad| pad.node);
+                let mut parts: Vec<Part> = pad
+                    .iter()
+                    .map(|node| part(names::node(pattern_id, node), "Pad", PartKind::Pad))
+                    .collect();
+                parts.push(level);
+                parts.extend(
+                    pattern
+                        .graph
+                        .live_inputs()
+                        .into_iter()
+                        .filter(|input| pad.as_ref() != Some(&input.node))
+                        .map(|input| {
+                            let kind = match input.kind {
+                                LiveInputKind::Fader => PartKind::Fader { rest: 0. },
+                                LiveInputKind::Button(_) => PartKind::Button,
+                            };
+                            part(names::node(pattern_id, &input.node), &input.name, kind)
+                        }),
+                );
+                parts
+            }
+            CellContent::Master => vec![part(
+                names::MASTER.into(),
+                "Master",
+                PartKind::Fader { rest: 1. },
+            )],
+            CellContent::Tap => vec![part(names::TAP.into(), "Tap", PartKind::Tap)],
+            CellContent::Fader { .. } => vec![part(
+                names::cell(&cell.id),
+                &self.title(cell),
+                PartKind::Fader { rest: 0. },
+            )],
+        }
+    }
+
+    /// The tempo the set plays at now, and where its beat is when known.
+    fn tempo(&self) -> Option<(f64, Option<f64>)> {
+        let follow = self.follow.as_ref()?;
+        match follow.clock.as_ref()? {
+            PerformClock::Tap(tempo) => Some((
+                tempo.bpm,
+                Some(tempo.beat + self.polled_at.elapsed().as_secs_f64() * tempo.bpm / 60.),
+            )),
+            PerformClock::Deck { deck } => follow
+                .decks
+                .iter()
+                .find(|one| one.id == *deck)
+                .map(|one| (one.bpm, None)),
+        }
+    }
+
+    /// The tab as a chat message reports it: the page on screen, the
+    /// selected cell, and what plays. Read once per message sent.
+    pub(crate) fn agent_context(&self) -> luma_lib::agent::PerformView {
+        luma_lib::agent::PerformView::capture(
+            self.surface.view == View::Setup,
+            self.layout.as_ref(),
+            self.surface.page,
+            self.surface.selected.as_deref(),
+            self.patterns.as_deref().unwrap_or_default(),
+            self.follow.as_ref(),
+        )
+    }
+
+    /// The source shown: the one just chosen, or the one followed.
+    fn source(&self) -> Option<&PerformSource> {
+        match &self.choosing {
+            Some(choice) => choice.as_ref(),
+            None => self
+                .follow
+                .as_ref()
+                .and_then(|follow| follow.source.as_ref()),
+        }
+    }
+}
+
+/// A group's name as a person reads it: `front_wash` is "Front wash".
+fn group_label(expression: &str) -> String {
+    let words = expression.replace('_', " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 impl Luma {
@@ -70,16 +384,32 @@ impl Luma {
         let state = Perform {
             venue_id: venue_id.clone(),
             chat,
-            controls: Vec::new(),
-            inputs: None,
             follow: None,
+            inputs: None,
+            patterns: None,
+            layout: None,
+            edits: 0,
+            controls: Vec::new(),
+            groups: Vec::new(),
+            surface: surface::Surface::default(),
+            pattern_sheet: None,
             held: HashMap::new(),
+            pressed: None,
             learning: None,
+            learning_since: 0,
+            draft: None,
+            group_menu: false,
+            tracks: HashMap::new(),
+            fetching: HashSet::new(),
+            polled_at: Instant::now(),
+            player: None,
+            choosing: None,
             error: None,
             polls: 0,
         };
         self.open_tab(target.clone(), move || Body::Perform(Box::new(state)), cx);
         self.poll_perform(target.clone(), cx);
+        self.reload_perform_set(&target, cx);
         let opened = self.library.input_open(&venue_id);
         cx.spawn(async move |this, cx| {
             let opened = opened.await;
@@ -110,23 +440,29 @@ impl Luma {
         cx.spawn(async move |this, cx| loop {
             // The reads are made inside the update: the library is the app's,
             // and a tab that closed since the last poll ends the loop here.
-            let Ok(Some((follow, inputs, controls))) = this.update(cx, |this, _| {
-                let venue = this.perform_mut(&target).map(|state| {
-                    state.polls += 1;
-                    (state.polls, state.venue_id.clone())
-                });
-                venue.map(|(polls, venue)| {
-                    (
-                        this.library.perform_state(),
-                        this.library.input_state(),
-                        (polls % CONTROLS_EVERY == 1).then(|| this.library.control_list(&venue)),
-                    )
+            let Ok(Some((polled, follow, inputs, controls, player))) =
+                this.update(cx, |this, _| {
+                    let venue = this.perform_mut(&target).map(|state| {
+                        state.polls += 1;
+                        (state.polls, state.venue_id.clone())
+                    });
+                    venue.map(|(polls, venue)| {
+                        (
+                            polls,
+                            this.library.perform_state(),
+                            this.library.input_state(),
+                            (polls % CONTROLS_EVERY == 1)
+                                .then(|| this.library.control_list(&venue)),
+                            this.library.transport_after(Duration::ZERO),
+                        )
+                    })
                 })
-            }) else {
+            else {
                 return;
             };
             let follow = follow.await;
             let inputs = inputs.await;
+            let player = player.await;
             let controls = match controls {
                 Some(controls) => Some(controls.await),
                 None => None,
@@ -135,19 +471,47 @@ impl Luma {
                 let Some(state) = this.perform_mut(&target) else {
                     return None;
                 };
-                state.follow = follow.ok();
+                if let Ok(player) = player {
+                    state.player = Some(player);
+                }
+                // A failed read keeps what we knew: dropping to `None` would
+                // flash the chooser to Off until the next poll.
+                if let Ok(follow) = follow {
+                    if state
+                        .choosing
+                        .as_ref()
+                        .is_some_and(|choice| same_source(choice.as_ref(), follow.source.as_ref()))
+                    {
+                        state.choosing = None;
+                    }
+                    state.follow = Some(follow);
+                    state.polled_at = Instant::now();
+                }
                 if let Ok(inputs) = inputs {
                     // Learning ended somewhere other than here: a binding
                     // landed, or it was cancelled.
-                    if inputs.learning.is_none() {
+                    if inputs.learning.is_none() && polled > state.learning_since {
                         state.learning = None;
                     }
                     state.inputs = Some(inputs);
                 }
                 match controls {
-                    Some(Ok(controls)) => state.landed_controls(controls),
+                    Some(Ok(controls)) => state.controls = controls,
                     Some(Err(error)) => state.error = Some(error.to_string()),
                     None => {}
+                }
+                state.held.retain(|_, (_, at)| at.elapsed() < HELD_FOR);
+                let wanted: Vec<String> = state
+                    .follow
+                    .iter()
+                    .flat_map(|follow| follow.decks.iter())
+                    .filter_map(deck_strip::track_id)
+                    .filter(|id| !state.tracks.contains_key(*id) && !state.fetching.contains(*id))
+                    .map(str::to_owned)
+                    .collect();
+                state.fetching.extend(wanted.iter().cloned());
+                for track_id in wanted {
+                    this.load_deck_track(&target, track_id, cx);
                 }
                 cx.notify();
                 Some(this.library.debounce(POLL))
@@ -172,42 +536,71 @@ impl Luma {
         }
     }
 
-    fn set_control(&mut self, target: &Target, name: &str, value: f32, cx: &mut Context<Self>) {
+    /// Set control `name` to `value`, 0–1, as a fader here moved it.
+    fn set_perform_value(
+        &mut self,
+        target: &Target,
+        name: &str,
+        value: f32,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
         let value = f64::from(value.clamp(0., 1.));
-        if let Some(control) = state.controls.iter_mut().find(|c| c.name == name) {
-            control.value = value;
-        }
-        state.held.insert(name.to_owned(), Instant::now());
-        let set = self.library.control_set(target.venue(), name, value);
+        state.held.insert(name.to_owned(), (value, Instant::now()));
+        let set = self.library.perform_control(name, value);
         cx.notify();
-        cx.background_spawn(async move {
-            set.await.ok();
-        })
-        .detach();
+        self.after_request(target.clone(), set, cx);
     }
 
-    fn learn_control(&mut self, target: &Target, name: &str, cx: &mut Context<Self>) {
+    /// A button of a cell pressed (`down`) or let go: a pad or another button
+    /// node, or tap. The backend plays a button node by its settings, toggle
+    /// or flash.
+    /// A release counts only for the button the pointer pressed.
+    fn press_part(
+        &mut self,
+        target: &Target,
+        name: &str,
+        kind: PartKind,
+        down: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        if down {
+            state.pressed = Some(name.to_owned());
+        } else if state.pressed.as_deref() == Some(name) {
+            state.pressed = None;
+        } else {
+            return;
+        }
+        let request: std::pin::Pin<Box<dyn std::future::Future<Output = _>>> = match kind {
+            PartKind::Tap => Box::pin(
+                self.library
+                    .perform_control(name, f64::from(u8::from(down))),
+            ),
+            _ => Box::pin(self.library.perform_press(name, down)),
+        };
+        cx.notify();
+        self.after_request(target.clone(), request, cx);
+    }
+
+    /// Learn: bind the next input heard to control `name`, the way `mode`
+    /// says. A second click on the one waiting stops waiting.
+    fn learn(&mut self, target: &Target, name: &str, mode: Mode, cx: &mut Context<Self>) {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
         if state.learning.as_deref() == Some(name) {
-            state.learning = None;
-            let cancel = self.library.input_cancel_learn();
-            cx.notify();
-            cx.background_spawn(async move {
-                cancel.await.ok();
-            })
-            .detach();
-            return;
+            return self.stop_learning(target, cx);
         }
         state.learning = Some(name.to_owned());
+        state.learning_since = state.polls;
         state.error = None;
-        let learn = self.library.input_learn(target.venue(), name, Mode::Fader);
-        let target = target.clone();
-        let name = name.to_owned();
+        let learn = self.library.input_learn(target.venue(), name, mode);
+        let (target, name) = (target.clone(), name.to_owned());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let learned = learn.await;
@@ -226,6 +619,56 @@ impl Luma {
             .ok();
         })
         .detach();
+    }
+
+    fn stop_learning(&mut self, target: &Target, cx: &mut Context<Self>) {
+        if let Some(state) = self.perform_mut(target) {
+            if state.learning.take().is_some() {
+                let cancel = self.library.input_cancel_learn();
+                cx.notify();
+                self.after_request(target.clone(), cancel, cx);
+            }
+        }
+    }
+
+    /// Change the surface or the layout from the screen. Leaving the cell or
+    /// the view a Learn was for stops it, and closes the inspector's menu.
+    fn edit_surface(&mut self, target: &Target, edit: Edit, cx: &mut Context<Self>) {
+        if matches!(
+            edit,
+            Edit::View(_) | Edit::Page(_) | Edit::Select(_) | Edit::Adding(_)
+        ) {
+            self.stop_learning(target, cx);
+            if let Some(state) = self.perform_mut(target) {
+                state.group_menu = false;
+            }
+        }
+        self.apply_surface(target, edit, cx);
+    }
+
+    /// Apply `edit`; a changed layout is saved.
+    fn apply_surface(&mut self, target: &Target, edit: Edit, cx: &mut Context<Self>) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        let Some(layout) = state.layout.as_mut() else {
+            return;
+        };
+        let changed = match state.surface.apply(layout, edit) {
+            Ok(true) => Some(layout.clone()),
+            Ok(false) => None,
+            Err(message) => {
+                state.error = Some(message);
+                None
+            }
+        };
+        if let Some(layout) = changed {
+            state.edits += 1;
+            state.error = None;
+            let save = self.library.save_perform_layout(target.venue(), layout);
+            self.after_request(target.clone(), save, cx);
+        }
+        cx.notify();
     }
 
     fn change_binding(
@@ -284,17 +727,526 @@ impl Luma {
             return;
         };
         state.error = None;
+        state.choosing = Some(source.clone());
+        cx.notify();
         let target = target.clone();
-        match source {
-            Some(source) => {
-                let start = self.library.perform_start(target.venue(), source);
-                self.after_request(target, start, cx);
+        let request: std::pin::Pin<Box<dyn std::future::Future<Output = _>>> = match source {
+            Some(source) => Box::pin(self.library.perform_start(target.venue(), source)),
+            None => Box::pin(self.library.perform_stop()),
+        };
+        cx.spawn(async move |this, cx| {
+            let done = request.await;
+            this.update(cx, |this, cx| {
+                if let (Some(state), Err(error)) = (this.perform_mut(&target), done) {
+                    // The backend fell back to not following; show that.
+                    state.choosing = None;
+                    state.error = Some(error.to_string());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Read a matched deck's waveform and beats for its strip.
+    fn load_deck_track(&mut self, target: &Target, track_id: String, cx: &mut Context<Self>) {
+        let waveform = self.library.track_waveform(&track_id);
+        let beats = self.library.track_beats(&track_id);
+        let target = target.clone();
+        cx.spawn(async move |this, cx| {
+            let view = deck_strip::TrackView::new(waveform.await.ok(), beats.await.ok().flatten());
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.perform_mut(&target) {
+                    state.fetching.remove(&track_id);
+                    state.tracks.insert(track_id, Rc::new(view));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Read the venue's Perform set, layout, controls and groups, and have
+    /// the backend play the set: when the tab opens, after a change here,
+    /// and when a sync brings one. A venue with no layout yet gets one laid
+    /// out from its set.
+    pub(crate) fn reload_perform_set(&mut self, target: &Target, cx: &mut Context<Self>) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        let venue_id = state.venue_id.clone();
+        let edits = state.edits;
+        let patterns = self.library.perform_patterns(&venue_id);
+        let layout = self.library.perform_layout(&venue_id);
+        let controls = self.library.control_list(&venue_id);
+        let groups = self.library.venue_groups(&venue_id);
+        let open = self.library.perform_open_set(&venue_id);
+        let target = target.clone();
+        cx.spawn(async move |this, cx| {
+            let (patterns, layout) = (patterns.await, layout.await);
+            let controls = controls.await.unwrap_or_default();
+            let groups = groups.await.unwrap_or_default();
+            let opened = open.await;
+            this.update(cx, |this, cx| {
+                let Some(state) = this.perform_mut(&target) else {
+                    return;
+                };
+                state.groups = groups
+                    .into_iter()
+                    .filter_map(|group| group.name.filter(|name| !name.is_empty()))
+                    .collect();
+                state.controls = controls;
+                let mut generated = None;
+                match (patterns, layout) {
+                    // Edited here since the read left: what is here is newer.
+                    (Ok(_), Ok(_)) if state.edits != edits => {}
+                    (Ok(patterns), Ok(layout)) => {
+                        let layout = layout.unwrap_or_else(|| {
+                            let made = PerformLayout::generated(&patterns);
+                            generated = Some(made.clone());
+                            made
+                        });
+                        state.patterns = Some(patterns);
+                        state.layout = Some(layout);
+                    }
+                    (Err(error), _) | (_, Err(error)) => state.error = Some(error.to_string()),
+                }
+                if let Err(error) = opened {
+                    state.error = Some(error.to_string());
+                }
+                if let Some(layout) = generated {
+                    let save = this.library.save_perform_layout(target.venue(), layout);
+                    this.after_request(target.clone(), save, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Store `pattern` (new or changed) and show it in the set at once.
+    pub(crate) fn store_perform_pattern(
+        &mut self,
+        target: &Target,
+        pattern: PerformPattern,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        state.edits += 1;
+        if let Some(patterns) = state.patterns.as_mut() {
+            match patterns.iter_mut().find(|one| one.id == pattern.id) {
+                Some(one) => *one = pattern.clone(),
+                None => patterns.push(pattern.clone()),
             }
-            None => {
-                let stop = self.library.perform_stop();
-                self.after_request(target, stop, cx);
+            patterns.sort_by(|a, b| b.z_index.cmp(&a.z_index));
+        }
+        let save = self.library.save_perform_pattern(target.venue(), pattern);
+        cx.notify();
+        self.save_pattern(target, save, cx);
+    }
+
+    fn save_pattern(
+        &mut self,
+        target: &Target,
+        save: impl std::future::Future<Output = Result<PerformPattern, crate::LibraryError>> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let target = target.clone();
+        cx.spawn(async move |this, cx| {
+            let saved = save.await;
+            this.update(cx, |this, cx| {
+                if let Err(error) = saved {
+                    if let Some(state) = this.perform_mut(&target) {
+                        state.error = Some(error.to_string());
+                    }
+                    // What was stored is what stands.
+                    this.reload_perform_set(&target, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The top of the set, for a new pattern to go on.
+    fn top_of_set(state: &Perform) -> i64 {
+        state
+            .patterns
+            .iter()
+            .flatten()
+            .map(|pattern| pattern.z_index)
+            .max()
+            .map_or(0, |z| z + 1)
+    }
+
+    /// Where a new cell goes: the place whose "+" menu is open, or else the
+    /// first free place of the page shown.
+    fn new_place(state: &Perform) -> Option<Rect> {
+        match &state.surface.adding {
+            Some(adding) => Some(Rect::at(adding.column, adding.row)),
+            None => surface::room(state.page()?, 1, 1),
+        }
+    }
+
+    /// Start a pattern from `preset` at the top of the set, in the place
+    /// whose "+" menu is open, lighting the group chosen there (everything,
+    /// when none was). From the graph editor's preset browser, it goes back
+    /// to the grid with the new cell selected.
+    pub(crate) fn add_perform_pattern(
+        &mut self,
+        target: &Target,
+        preset: &luma_patterns::ClipPreset,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        let Some(place) = Self::new_place(state) else {
+            state.error = Some("No room on this page. Make it bigger or clear a place.".into());
+            return cx.notify();
+        };
+        let expression = state
+            .surface
+            .adding
+            .as_ref()
+            .map_or_else(|| "all".to_owned(), |adding| adding.group.clone());
+        let pattern = PerformPattern {
+            id: uuid::Uuid::new_v4().to_string(),
+            venue_id: state.venue_id.clone(),
+            name: preset.name.clone(),
+            selection: luma_patterns::Selection { expression },
+            z_index: Self::top_of_set(state),
+            blend_mode: preset.blend_mode,
+            seed: uuid::Uuid::new_v4().as_u64_pair().0,
+            graph: preset.graph.clone().with_pad(),
+        };
+        // Picked in the browser: nothing was edited there to save.
+        if state
+            .pattern_sheet
+            .as_ref()
+            .is_some_and(|sheet| sheet.pattern.is_none())
+        {
+            state.pattern_sheet = None;
+        }
+        let content = CellContent::Pattern {
+            pattern_id: pattern.id.clone(),
+        };
+        self.store_perform_pattern(target, pattern, cx);
+        self.apply_surface(target, Edit::Place(place, content), cx);
+    }
+
+    /// Put the master, tap or a new fader in the place whose "+" menu is
+    /// open.
+    fn add_cell(&mut self, target: &Target, content: CellContent, cx: &mut Context<Self>) {
+        let Some(place) = self
+            .perform_mut(target)
+            .and_then(|state| Self::new_place(state))
+        else {
+            return;
+        };
+        self.apply_surface(target, Edit::Place(place, content), cx);
+    }
+
+    /// Copy cell `cell_id`'s pattern into a new cell of the same size, in the
+    /// first place on the page with room for it.
+    fn duplicate_cell(&mut self, target: &Target, cell_id: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        let (Some(cell), Some(page)) = (state.cell(cell_id), state.page()) else {
+            return;
+        };
+        let Some(original) = cell.pattern_id().and_then(|id| state.pattern(id)) else {
+            return;
+        };
+        let place =
+            surface::room(page, cell.width, cell.height).or_else(|| surface::room(page, 1, 1));
+        let Some(place) = place else {
+            state.error = Some("No room on this page for a copy.".into());
+            return cx.notify();
+        };
+        let copy = PerformPattern {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("{} copy", original.name),
+            z_index: Self::top_of_set(state),
+            ..original.clone()
+        };
+        let content = CellContent::Pattern {
+            pattern_id: copy.id.clone(),
+        };
+        self.store_perform_pattern(target, copy, cx);
+        self.apply_surface(target, Edit::Place(place, content), cx);
+    }
+
+    /// Ask before deleting a pattern: its cell, its graph and its mappings
+    /// go.
+    fn ask_delete_pattern(&mut self, target: &Target, pattern_id: &str, cx: &mut Context<Self>) {
+        let Some(name) = self
+            .perform_mut(target)
+            .and_then(|state| state.pattern(pattern_id))
+            .map(|pattern| pattern.name.clone())
+        else {
+            return;
+        };
+        self.ask(
+            crate::confirm::Confirm {
+                title: format!("Delete {name}?").into(),
+                body: "The pattern and its cell go. This can't be undone.".into(),
+                verb: "Delete pattern".into(),
+                action: crate::confirm::Action::DeletePerformPattern {
+                    venue_id: target.venue().into(),
+                    pattern_id: pattern_id.into(),
+                },
+            },
+            cx,
+        );
+    }
+
+    /// Delete pattern `pattern_id` of venue `venue_id`'s set, and its cell.
+    pub(crate) fn delete_perform_pattern(
+        &mut self,
+        venue_id: &str,
+        pattern_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let target = Target::Perform {
+            venue: venue_id.to_owned(),
+        };
+        let Some(state) = self.perform_mut(&target) else {
+            return;
+        };
+        state.edits += 1;
+        state
+            .patterns
+            .iter_mut()
+            .for_each(|list| list.retain(|pattern| pattern.id != pattern_id));
+        if let Some(layout) = state.layout.as_mut() {
+            layout.forget(pattern_id);
+        }
+        if state
+            .surface
+            .selected
+            .as_deref()
+            .is_some_and(|id| state.cell(id).is_none())
+        {
+            state.surface.selected = None;
+        }
+        if state
+            .pattern_sheet
+            .as_ref()
+            .is_some_and(|sheet| sheet.pattern_id() == pattern_id)
+        {
+            state.pattern_sheet = None;
+        }
+        let delete = self.library.delete_perform_pattern(venue_id, pattern_id);
+        cx.notify();
+        self.after_request(target, delete, cx);
+    }
+
+    /// Start typing a name in place of `of`'s.
+    fn start_draft(
+        &mut self,
+        target: &Target,
+        of: Named,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        let (placeholder, text) = match &of {
+            Named::Page(id) => (
+                "Page name",
+                state
+                    .layout
+                    .iter()
+                    .flat_map(|layout| layout.pages.iter())
+                    .find(|page| page.id == *id)
+                    .map(|page| page.name.clone()),
+            ),
+            Named::Pattern(id) => ("Pattern name", state.pattern(id).map(|p| p.name.clone())),
+            Named::Fader(id) => (
+                "Fader name",
+                state.cell(id).and_then(|cell| match &cell.content {
+                    CellContent::Fader { label, .. } => Some(label.clone()),
+                    _ => None,
+                }),
+            ),
+        };
+        let Some(text) = text else {
+            return;
+        };
+        let field = cx.new(|cx| {
+            let mut input = TextInput::search(placeholder, cx);
+            input.set_text(text, cx);
+            input
+        });
+        let keys = {
+            let target = target.clone();
+            cx.subscribe_in(
+                &field,
+                window,
+                move |this: &mut Luma, _, event: &text_input::Event, _, cx| match event {
+                    text_input::Event::Submitted | text_input::Event::Blurred => {
+                        this.finish_draft(&target, true, cx)
+                    }
+                    text_input::Event::Cancelled => this.finish_draft(&target, false, cx),
+                    _ => {}
+                },
+            )
+        };
+        // Focus leaving by the keyboard; whichever of this and `Blurred`
+        // comes second finds nothing to commit.
+        let focus = field.read(cx).focus_handle(cx);
+        let blur = {
+            let (luma, target) = (cx.entity().downgrade(), target.clone());
+            window.on_focus_out(&focus, cx, move |_, _, cx| {
+                luma.update(cx, |this, cx| this.finish_draft(&target, true, cx))
+                    .ok();
+            })
+        };
+        if let Some(state) = self.perform_mut(target) {
+            state.draft = Some(Draft {
+                of,
+                field,
+                _subscriptions: vec![keys, blur],
+            });
+        }
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// End the name being typed; `save` keeps it, when it is not empty.
+    fn finish_draft(&mut self, target: &Target, save: bool, cx: &mut Context<Self>) {
+        let Some(draft) = self
+            .perform_mut(target)
+            .and_then(|state| state.draft.take())
+        else {
+            return;
+        };
+        cx.notify();
+        let typed = draft.field.read(cx).text().trim().to_owned();
+        if !save || typed.is_empty() {
+            return;
+        }
+        match draft.of {
+            Named::Page(id) => {
+                let shown = self
+                    .perform_mut(target)
+                    .and_then(|state| state.page())
+                    .is_some_and(|page| page.id == id);
+                if shown {
+                    self.apply_surface(target, Edit::RenamePage(typed), cx);
+                }
+            }
+            Named::Pattern(id) => {
+                let renamed = self
+                    .perform_mut(target)
+                    .and_then(|state| state.pattern(&id))
+                    .filter(|pattern| pattern.name != typed)
+                    .map(|pattern| PerformPattern {
+                        name: typed,
+                        ..pattern.clone()
+                    });
+                if let Some(pattern) = renamed {
+                    self.store_perform_pattern(target, pattern, cx);
+                }
+            }
+            Named::Fader(id) => {
+                let content = self
+                    .perform_mut(target)
+                    .and_then(|state| state.cell(&id))
+                    .and_then(|cell| match &cell.content {
+                        CellContent::Fader { targets, .. } => Some(CellContent::Fader {
+                            label: typed,
+                            targets: targets.clone(),
+                        }),
+                        _ => None,
+                    });
+                if let Some(content) = content {
+                    self.apply_surface(target, Edit::SetContent(id, content), cx);
+                }
             }
         }
+    }
+
+    /// Open or close the inspector's group menu.
+    fn toggle_group_menu(&mut self, target: &Target, cx: &mut Context<Self>) {
+        if let Some(state) = self.perform_mut(target) {
+            state.group_menu = !state.group_menu;
+            cx.notify();
+        }
+    }
+
+    /// Have pattern `id` light `expression`: a group's name, or `all`.
+    fn set_pattern_group(
+        &mut self,
+        target: &Target,
+        id: &str,
+        expression: String,
+        cx: &mut Context<Self>,
+    ) {
+        let regrouped = self
+            .perform_mut(target)
+            .and_then(|state| state.pattern(id))
+            .filter(|pattern| pattern.selection.expression != expression)
+            .map(|pattern| PerformPattern {
+                selection: luma_patterns::Selection { expression },
+                ..pattern.clone()
+            });
+        if let Some(pattern) = regrouped {
+            self.store_perform_pattern(target, pattern, cx);
+        }
+    }
+
+    /// Set the tapped tempo, from the tempo strip's nudges.
+    fn set_tap_bpm(&mut self, target: &Target, bpm: f64, cx: &mut Context<Self>) {
+        let set = self.library.perform_set_bpm(target.venue(), bpm);
+        self.after_request(target.clone(), set, cx);
+    }
+
+    /// Load `track_id` onto the player and play it from the top: the
+    /// virtual deck follows whatever the player has.
+    pub(crate) fn play_virtual(&mut self, target: &Target, track_id: &str, cx: &mut Context<Self>) {
+        let (session, load) = self.library.load_audio(track_id);
+        let play = self.library.play(session, 0.);
+        let target = target.clone();
+        cx.spawn(async move |this, cx| {
+            let done = match load.await {
+                Ok(()) => play.await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = done {
+                this.update(cx, |this, cx| {
+                    if let Some(state) = this.perform_mut(&target) {
+                        state.error = Some(error.to_string());
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn virtual_transport(
+        &mut self,
+        target: &Target,
+        session: u64,
+        transport: Transport,
+        cx: &mut Context<Self>,
+    ) {
+        let request: std::pin::Pin<Box<dyn std::future::Future<Output = _>>> = match transport {
+            Transport::PlayFrom(at) => Box::pin(self.library.play(session, at)),
+            Transport::Pause => Box::pin(self.library.pause(session)),
+            Transport::SeekTo(at) => Box::pin(self.library.seek(session, at)),
+        };
+        self.after_request(target.clone(), request, cx);
     }
 
     fn set_perform_latency(&mut self, latency_ms: f32, cx: &mut Context<Self>) {
@@ -303,20 +1255,6 @@ impl Luma {
             set.await.ok();
         })
         .detach();
-    }
-}
-
-impl Perform {
-    fn landed_controls(&mut self, mut controls: Vec<Control>) {
-        self.held.retain(|_, at| at.elapsed() < HELD_FOR);
-        for control in &mut controls {
-            if self.held.contains_key(&control.name) {
-                if let Some(mine) = self.controls.iter().find(|c| c.name == control.name) {
-                    control.value = mine.value;
-                }
-            }
-        }
-        self.controls = controls;
     }
 }
 
@@ -335,11 +1273,12 @@ fn next_mode(mode: Mode) -> Mode {
     }
 }
 
+/// How a controller's input plays its control, in a word.
 fn mode_word(mode: Mode) -> &'static str {
     match mode {
         Mode::Fader => "Fader",
         Mode::Momentary => "Hold",
-        Mode::Toggle => "Toggle",
+        Mode::Toggle => "Latching",
     }
 }
 
@@ -354,38 +1293,168 @@ fn address_label(address: &Address) -> String {
     }
 }
 
+/// An input in a few letters, for a badge on a cell: "CC7", "N36", "OSC".
+fn address_badge(address: &Address) -> String {
+    match address {
+        Address::MidiCc { number, .. } => format!("CC{number}"),
+        Address::MidiNote { number, .. } => format!("N{number}"),
+        Address::Osc { .. } => "OSC".into(),
+    }
+}
+
+/// The same kind of source, whatever its settings.
+fn same_source(a: Option<&PerformSource>, b: Option<&PerformSource>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => std::mem::discriminant(a) == std::mem::discriminant(b),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
+
+/// What the virtual deck's buttons ask of the player.
+#[derive(Clone, Copy)]
+enum Transport {
+    PlayFrom(f32),
+    Pause,
+    SeekTo(f32),
+}
 
 pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
     let target = Target::Perform {
         venue: state.venue_id.clone(),
     };
+    // The graph editor takes the whole tab until its way back.
+    if let Some(page) = pattern_sheet::page(state, &target, app) {
+        return div()
+            .id("perform")
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(page)
+            .into_any_element();
+    }
+    let setup = state.surface.view == View::Setup;
+    let main = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .px(px(18.))
+        .pb(px(16.))
+        .children(state.error.clone().map(float::error_row))
+        .child(if setup {
+            source_bar(state, &target, app).into_any_element()
+        } else {
+            decks(state, &target, app).into_any_element()
+        })
+        .child(grid::surface(state, &target, app));
     div()
         .id("perform")
         .size_full()
         .flex()
         .flex_col()
-        .overflow_y_scroll()
-        .child(band(state, &target, app))
-        .children(
-            state
-                .error
-                .clone()
-                .map(|error| div().px(px(20.)).pt(px(12.)).child(float::error_row(error))),
+        .child(header(state, &target, app))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(main)
+                .children(setup.then(|| inspector::panel(state, &target, app))),
         )
-        .child(decks(state))
-        .child(faders(state, &target, app))
         .into_any_element()
 }
 
-/// Title, the source chooser, its status and the latency.
-fn band(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
+/// The title, what is followed, and the Perform | Setup switch.
+fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
     let follow = state.follow.as_ref();
-    let source = follow.and_then(|follow| follow.source.as_ref());
+    let setup = state.surface.view == View::Setup;
+    let (status, problem) = match follow.and_then(|follow| follow.problem.clone()) {
+        Some(problem) => (problem, true),
+        None if setup => ("Changes save as you go".to_owned(), false),
+        None => (following(state), false),
+    };
+    let views = [(View::Perform, "Perform"), (View::Setup, "Setup")]
+        .into_iter()
+        .fold(float::pill_segmented(), |track, (view, label)| {
+            let chosen = state.surface.view == view;
+            let (app, target) = (app.clone(), target.clone());
+            let key = format!("perform-view-{label}");
+            track.child(
+                float::pill_segment(label, chosen, key.clone())
+                    .id(SharedString::from(key))
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| {
+                            this.edit_surface(&target, Edit::View(view), cx)
+                        });
+                    })
+                    .agent_node(Role::Toggle, label)
+                    .agent_focused(chosen),
+            )
+        });
+    div()
+        .flex_shrink_0()
+        .h(px(52.))
+        .px(px(18.))
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(
+            div()
+                .text_size(px(15.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(ladder::foreground())
+                .child("Perform"),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(12.))
+                .text_color(if problem {
+                    Hsla::from(ladder::danger())
+                } else {
+                    ladder::foreground_alpha(0.5)
+                })
+                .child(status.clone())
+                .agent_node(Role::Text, status),
+        )
+        .child(div().flex_1())
+        .child(views)
+}
+
+/// What is followed, in a few words: "Pro DJ Link · 2 decks".
+fn following(state: &Perform) -> String {
+    let Some(follow) = state.follow.as_ref() else {
+        return String::new();
+    };
+    let source = match follow.source.as_ref() {
+        None => return "Not following a DJ".into(),
+        Some(PerformSource::RkbxLink { .. }) => "Rekordbox",
+        Some(PerformSource::ProDjLink { .. }) => "Pro DJ Link",
+        Some(PerformSource::StageLinq) => "StageLinQ",
+        Some(PerformSource::Virtual) => "Virtual deck",
+    };
+    match (follow.connected, follow.decks.len()) {
+        (false, _) => format!("{source} · connecting…"),
+        (true, 0) => format!("{source} · no decks yet"),
+        (true, 1) => format!("{source} · 1 deck"),
+        (true, decks) => format!("{source} · {decks} decks"),
+    }
+}
+
+/// Setup's source chooser, its status, and the latency.
+fn source_bar(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
+    let follow = state.follow.as_ref();
+    let source = state.source();
+    let known = follow.is_some() || state.choosing.is_some();
     let latency = follow.map_or(0., |follow| follow.latency_ms);
-    let choices: [(&str, Option<PerformSource>); 4] = [
+    let choices: [(&str, Option<PerformSource>); 5] = [
         ("Off", None),
         ("Rekordbox", Some(PerformSource::RkbxLink { address: None })),
         (
@@ -393,17 +1462,14 @@ fn band(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElemen
             Some(PerformSource::ProDjLink { device_num: 5 }),
         ),
         ("StageLinQ", Some(PerformSource::StageLinq)),
+        ("Virtual", Some(PerformSource::Virtual)),
     ];
     let chooser = choices
         .into_iter()
         .fold(float::segmented(), |track, (label, choice)| {
-            let chosen = match (&choice, source) {
-                (None, None) => true,
-                (Some(choice), Some(source)) => {
-                    std::mem::discriminant(choice) == std::mem::discriminant(source)
-                }
-                _ => false,
-            };
+            // Until the first read lands nothing is chosen: an unknown source
+            // is not Off, and showing Off made a followed source flicker.
+            let chosen = known && same_source(choice.as_ref(), source);
             let app = app.clone();
             let target = target.clone();
             let key = format!("perform-source-{label}");
@@ -421,26 +1487,19 @@ fn band(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElemen
     let latency_app = app.clone();
     div()
         .flex_shrink_0()
-        .px(px(20.))
-        .py(px(14.))
         .flex()
         .flex_col()
-        .gap(px(10.))
-        .border_b_1()
-        .border_color(glass::hairline(0.07))
+        .gap(px(8.))
+        .px(px(14.))
+        .py(px(10.))
+        .rounded(px(luma_ui::radius::CARD))
+        .bg(glass::card_bg())
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .child(
-                    div()
-                        .mr(px(8.))
-                        .text_size(px(15.))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(ladder::foreground())
-                        .child("Perform"),
-                )
+                .child(luma_ui::caption("Source"))
                 .child(chooser)
                 .child(div().flex_1())
                 .child(luma_ui::caption("Latency (ms)"))
@@ -480,7 +1539,7 @@ fn status_line(follow: Option<&PerformState>, inputs: Option<&InputState>) -> im
                 parts.push(format!("heard {:.1} s ago", ms as f64 / 1000.));
             }
         }
-        _ => parts.push("Not following a DJ".into()),
+        _ => parts.push("Not following a DJ: the set plays on the tapped tempo".into()),
     }
     if let Some(inputs) = inputs {
         parts.push(match inputs.midi_ports.as_slice() {
@@ -499,249 +1558,181 @@ fn status_line(follow: Option<&PerformState>, inputs: Option<&InputState>) -> im
         }
     }
     let line = parts.join("  ·  ");
-    let problem = follow.and_then(|follow| follow.problem.clone());
     div()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(
-            div()
-                .text_size(px(11.5))
-                .text_color(ladder::foreground_alpha(0.55))
-                .child(line.clone())
-                .agent_node(Role::Text, line),
-        )
-        .children(problem.map(|problem| {
-            div()
-                .text_size(px(11.5))
-                .text_color(ladder::danger())
-                .child(problem.clone())
-                .agent_node(Role::Text, problem)
-        }))
+        .text_size(px(11.5))
+        .text_color(ladder::foreground_alpha(0.5))
+        .child(line.clone())
+        .agent_node(Role::Text, line)
 }
 
-fn decks(state: &Perform) -> impl IntoElement {
+fn decks(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
+    let virtual_deck = matches!(state.source(), Some(PerformSource::Virtual));
+    let transport = virtual_deck
+        .then_some(state.player.as_ref())
+        .flatten()
+        .filter(|player| player.is_loaded);
     let decks = state
         .follow
         .as_ref()
         .map(|follow| follow.decks.as_slice())
         .unwrap_or_default();
-    div()
-        .flex_shrink_0()
-        .px(px(20.))
-        .pt(px(16.))
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .child(float::section_heading("Decks"))
-        .child(if decks.is_empty() {
-            div()
-                .text_size(px(12.))
-                .text_color(ladder::foreground_alpha(0.45))
-                .child("No decks yet. Pick a source above and load a track.")
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(10.))
-                .children(decks.iter().map(deck))
-                .into_any_element()
-        })
-}
-
-fn deck(deck: &PerformDeck) -> impl IntoElement {
-    let (status, live) = match &deck.track {
-        DeckMatch::Unknown => ("Nothing loaded".to_string(), false),
-        DeckMatch::Matching => ("Matching…".to_string(), false),
-        DeckMatch::Matched {
-            has_score: true, ..
-        } => ("Driving the lights".to_string(), true),
-        DeckMatch::Matched { .. } => ("No score in this venue".to_string(), false),
-        DeckMatch::Unmatched => ("Not in your library".to_string(), false),
-        DeckMatch::Failed { message } => (message.clone(), false),
+    // The add-song dialog, opened to choose what the virtual deck plays.
+    let pick = |label: &'static str| {
+        let (app, target) = (app.clone(), target.clone());
+        float::btn(label, "virtual-pick")
+            .id("virtual-pick")
+            .on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| this.show_track_to_play(target.clone(), cx));
+            })
+            .agent_node(Role::Button, label)
     };
-    let title = if deck.title.is_empty() {
-        "—".to_string()
-    } else {
-        deck.title.clone()
-    };
-    let seconds = deck.position.max(0.) as u64;
-    let readout = format!(
-        "{}  {:>2}:{:02}  {:.1} BPM",
-        if deck.playing { "▶" } else { "❚❚" },
-        seconds / 60,
-        seconds % 60,
-        deck.bpm
-    );
-    let name = format!("Deck {}", deck.id);
-    div()
-        .w(px(240.))
-        .p(px(12.))
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .rounded(px(luma_ui::radius::ROW))
-        .bg(glass::card_bg())
-        .border_1()
-        .border_color(if live {
-            gpui::Hsla::from(ladder::primary())
-        } else {
-            glass::hairline(0.08)
-        })
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(ladder::foreground_alpha(0.5))
-                .child(name.clone()),
-        )
-        .child(
-            div()
-                .text_size(px(13.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(ladder::foreground())
-                .truncate()
-                .child(title.clone()),
-        )
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(ladder::foreground_alpha(0.6))
-                .truncate()
-                .child(deck.artist.clone()),
-        )
-        .child(
-            div()
-                .font_family(luma_ui::fonts::MONO)
-                .text_size(px(11.))
-                .text_color(ladder::foreground_alpha(0.8))
-                .child(readout.clone()),
-        )
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(if live {
-                    ladder::foreground_alpha(0.9)
-                } else {
-                    ladder::foreground_alpha(0.5)
-                })
-                .child(status.clone()),
-        )
-        .agent_node(
-            Role::Card,
-            format!("{name}: {title} · {readout} · {status}"),
-        )
-}
-
-fn faders(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
-    let bindings = state
-        .inputs
+    let tempo = match state
+        .follow
         .as_ref()
-        .map(|inputs| inputs.bindings.as_slice())
-        .unwrap_or_default();
+        .and_then(|follow| follow.clock.as_ref())
+    {
+        Some(PerformClock::Tap(tempo)) => Some(*tempo),
+        _ => None,
+    };
+    let tap = tempo.map(|tempo| {
+        let press = |down: bool| {
+            let (app, target) = (app.clone(), target.clone());
+            move |app_cx: &mut gpui::App| {
+                app.update(app_cx, |this, cx| {
+                    this.press_part(&target, names::TAP, PartKind::Tap, down, cx)
+                });
+            }
+        };
+        let (down, up, out) = (press(true), press(false), press(false));
+        let nudge = |label: &'static str, key: &'static str, bpm: f64| {
+            let (app, target) = (app.clone(), target.clone());
+            float::btn(label, key)
+                .id(key)
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| this.set_tap_bpm(&target, bpm, cx));
+                })
+                .agent_node(Role::Button, format!("BPM {label}"))
+        };
+        deck_strip::tempo_strip(
+            tempo,
+            state.polled_at,
+            div()
+                .flex()
+                .gap(px(4.))
+                .child(
+                    float::btn_primary("Tap")
+                        .id("perform-tap")
+                        .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| down(cx))
+                        .on_mouse_up(gpui::MouseButton::Left, move |_, _, cx| up(cx))
+                        .on_mouse_up_out(gpui::MouseButton::Left, move |_, _, cx| out(cx))
+                        .agent_node(Role::Button, "Tap"),
+                )
+                .child(nudge("−1", "perform-bpm-down", (tempo.bpm - 1.).round()))
+                .child(nudge("+1", "perform-bpm-up", (tempo.bpm + 1.).round()))
+                .child(nudge("½×", "perform-bpm-half", tempo.bpm / 2.))
+                .child(nudge("2×", "perform-bpm-double", tempo.bpm * 2.))
+                .into_any_element(),
+        )
+    });
+    let strips = (!decks.is_empty()).then(|| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .children(decks.iter().map(|one| {
+                let view = deck_strip::track_id(one).and_then(|id| state.tracks.get(id).cloned());
+                let controls = transport.map(|player| {
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .pt(px(4.))
+                        .child(deck_transport(player, target, app))
+                        .child(pick("Change song"))
+                        .into_any_element()
+                });
+                deck_strip::strip(one, state.polled_at, view, controls)
+            }))
+    });
+    // A virtual deck with nothing on it says how to put something on.
+    let empty_virtual = (virtual_deck && decks.is_empty()).then(|| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .text_size(px(12.))
+            .text_color(ladder::foreground_alpha(0.45))
+            .child("No song on the virtual deck.")
+            .child(pick("Choose song"))
+    });
     div()
         .flex_shrink_0()
-        .px(px(20.))
-        .py(px(16.))
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(float::section_heading("Controls"))
-        .child(if state.controls.is_empty() {
-            div()
-                .text_size(px(12.))
-                .text_color(ladder::foreground_alpha(0.45))
-                .child(
-                    "No controls yet. Add a \u{201c}Live control\u{201d} node to a clip, \
-                     and its fader appears here.",
-                )
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(14.))
-                .children(state.controls.iter().map(|control| {
-                    let mine: Vec<&Binding> = bindings
-                        .iter()
-                        .filter(|b| b.control == control.name)
-                        .collect();
-                    let learning = state.learning.as_deref() == Some(control.name.as_str());
-                    strip(control, &mine, learning, target, app)
-                }))
-                .into_any_element()
-        })
+        .children(tap)
+        .children(strips)
+        .children(empty_virtual)
 }
 
-/// One control: its name, its fader, its value, Learn, and its bindings.
-fn strip(
-    control: &Control,
-    bindings: &[&Binding],
-    learning: bool,
+/// Play or pause, and back to the top, for the virtual deck.
+fn deck_transport(
+    player: &HostAudioSnapshot,
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
-    let name = control.name.clone();
-    let moved = (app.clone(), target.clone(), name.clone());
-    let learn = (app.clone(), target.clone(), name.clone());
-    let learn_key = format!("perform-learn-{name}");
+    let session = player.session;
+    let at = player.current_time;
+    let playing = player.is_playing;
+    let (toggle_app, top_app) = (app.clone(), app.clone());
+    let (toggle_target, top_target) = (target.clone(), target.clone());
     div()
-        .w(px(96.))
         .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(6.))
+        .gap(px(4.))
         .child(
-            div()
-                .w_full()
-                .text_center()
-                .truncate()
-                .text_size(px(12.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(ladder::foreground())
-                .child(name.clone()),
+            float::btn(if playing { "Pause" } else { "Play" }, "virtual-play")
+                .id("virtual-play")
+                .on_click(move |_, _, cx| {
+                    toggle_app.update(cx, |this, cx| {
+                        let transport = if playing {
+                            Transport::Pause
+                        } else {
+                            Transport::PlayFrom(at)
+                        };
+                        this.virtual_transport(&toggle_target, session, transport, cx);
+                    });
+                })
+                .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
         )
         .child(
-            luma_ui::luma_fader(
-                SharedString::from(format!("perform-fader-{name}")),
-                control.value as f32,
-                FADER_HEIGHT,
-                move |value, _, cx| {
-                    let (app, target, name) = &moved;
-                    app.update(cx, |this, cx| this.set_control(target, name, value, cx));
-                },
-            )
-            .agent_node(Role::Slider, name.clone()),
-        )
-        .child(
-            div()
-                .font_family(luma_ui::fonts::MONO)
-                .text_size(px(11.))
-                .text_color(ladder::foreground_alpha(0.7))
-                .child(format!("{:.0}%", control.value * 100.)),
-        )
-        .child(
-            float::btn(
-                if learning { "Move it…" } else { "Learn" },
-                learn_key.clone(),
-            )
-            .id(SharedString::from(learn_key))
-            .when(learning, |btn| btn.bg(glass::card_selected_bg()))
-            .on_click(move |_, _, cx| {
-                let (app, target, name) = &learn;
-                app.update(cx, |this, cx| this.learn_control(target, name, cx));
-            })
-            .agent_node(Role::Button, format!("Learn {name}"))
-            .agent_focused(learning),
-        )
-        .children(
-            bindings
-                .iter()
-                .map(|binding| binding_chip(binding, target, app)),
+            float::btn("From the top", "virtual-top")
+                .id("virtual-top")
+                .on_click(move |_, _, cx| {
+                    top_app.update(cx, |this, cx| {
+                        let transport = if playing {
+                            Transport::PlayFrom(0.)
+                        } else {
+                            Transport::SeekTo(0.)
+                        };
+                        this.virtual_transport(&top_target, session, transport, cx);
+                    });
+                })
+                .agent_node(Role::Button, "From the top"),
         )
 }
 
-/// A binding: its input and mode (click to cycle the mode), invert, remove.
+/// The field a name is typed in, in place of the name. Presses in it stay
+/// there, so what it sits on does not take them.
+fn draft_field(draft: &Draft, label: &'static str, width: gpui::Length) -> impl IntoElement {
+    float::field()
+        .id(label)
+        .w(width)
+        .key_context(text_input::DRAFT_CONTEXT)
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(div().w_full().child(draft.field.clone()))
+        .agent_node(Role::Input, label)
+}
+
+/// A binding: its input, its mode (click to cycle it), invert, remove.
 fn binding_chip(binding: &Binding, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
     let label = address_label(&binding.address);
     let on = |change: BindingChange| {
@@ -753,69 +1744,55 @@ fn binding_chip(binding: &Binding, target: &Target, app: &Entity<Luma>) -> impl 
         }
     };
     let id = &binding.id;
-    let small = |el: gpui::Div| {
-        el.px(px(6.))
-            .h(px(20.))
-            .flex()
-            .items_center()
-            .rounded(px(luma_ui::radius::CONTROL))
-            .text_size(px(10.5))
-            .cursor_pointer()
-            .hover(|style| style.bg(glass::glass_hover()))
-    };
+    let word = mode_word(binding.mode);
     div()
         .w_full()
         .flex()
-        .flex_col()
-        .gap(px(2.))
-        .p(px(4.))
+        .items_center()
+        .gap(px(6.))
+        .pl(px(10.))
+        .pr(px(4.))
+        .py(px(4.))
         .rounded(px(luma_ui::radius::ROW))
-        .bg(glass::ink(0.04))
+        .bg(glass::scrim(0.18))
         .child(
             div()
-                .w_full()
-                .text_center()
+                .flex_1()
+                .min_w_0()
                 .truncate()
-                .text_size(px(10.5))
-                .text_color(ladder::foreground_alpha(0.8))
+                .font_family(luma_ui::fonts::MONO)
+                .text_size(px(11.))
+                .text_color(ladder::foreground_alpha(0.85))
                 .child(label.clone()),
         )
         .child(
-            div()
-                .flex()
-                .justify_between()
-                .child(
-                    small(div())
-                        .id(SharedString::from(format!("binding-mode-{id}")))
-                        .text_color(ladder::foreground_alpha(0.75))
-                        .child(mode_word(binding.mode))
-                        .on_click(on(BindingChange::NextMode))
-                        .agent_node(
-                            Role::Button,
-                            format!("{label} mode {}", mode_word(binding.mode)),
-                        ),
-                )
-                .child(
-                    small(div())
-                        .id(SharedString::from(format!("binding-invert-{id}")))
-                        .text_color(ladder::foreground_alpha(if binding.invert {
-                            1.0
-                        } else {
-                            0.4
-                        }))
-                        .when(binding.invert, |el| el.bg(glass::card_selected_bg()))
-                        .child("Inv")
-                        .on_click(on(BindingChange::Invert))
-                        .agent_node(Role::Toggle, format!("{label} invert"))
-                        .agent_focused(binding.invert),
-                )
-                .child(
-                    small(div())
-                        .id(SharedString::from(format!("binding-remove-{id}")))
-                        .text_color(ladder::foreground_alpha(0.55))
-                        .child("✕")
-                        .on_click(on(BindingChange::Remove))
-                        .agent_node(Role::Button, format!("Remove {label}")),
-                ),
+            float::chip()
+                .id(SharedString::from(format!("binding-mode-{id}")))
+                .child(word)
+                .on_click(on(BindingChange::NextMode))
+                .agent_node(Role::Button, format!("{label} mode {word}")),
+        )
+        .child(
+            float::chip()
+                .id(SharedString::from(format!("binding-invert-{id}")))
+                .when(binding.invert, |chip| {
+                    chip.bg(glass::card_selected_bg())
+                        .shadow(glass::card_selected_shadows())
+                })
+                .when(!binding.invert, |chip| {
+                    chip.text_color(ladder::foreground_alpha(0.45))
+                })
+                .child("Invert")
+                .on_click(on(BindingChange::Invert))
+                .agent_node(Role::Toggle, format!("{label} invert"))
+                .agent_focused(binding.invert),
+        )
+        .child(
+            float::chip()
+                .id(SharedString::from(format!("binding-remove-{id}")))
+                .text_color(Hsla::from(ladder::danger()))
+                .child("Remove")
+                .on_click(on(BindingChange::Remove))
+                .agent_node(Role::Button, format!("Remove {label}")),
         )
 }

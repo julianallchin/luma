@@ -20,6 +20,7 @@
 //! otherwise find. Only the open venue's rows answer the pointer: another
 //! venue's score belongs to that venue's tab set.
 
+use luma_ui::motion::FadeHover;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -201,7 +202,7 @@ impl ScoreRow {
 
     /// The line under the title: clips, age and what the agent spent.
     pub(crate) fn detail(&self) -> SharedString {
-        format!("{} clips · {}{}", self.clips, self.age, self.spend).into()
+        format!("{} patterns · {}{}", self.clips, self.age, self.spend).into()
     }
 }
 
@@ -490,7 +491,7 @@ impl Luma {
                 title: format!("Delete score #{ordinal}?").into(),
                 body: format!(
                     "It holds {clips} {}. Deleting archives the document — its history is kept, but it leaves this list.",
-                    if clips == 1 { "clip" } else { "clips" }
+                    if clips == 1 { "pattern" } else { "patterns" }
                 )
                 .into(),
                 verb: "Delete score".into(),
@@ -752,12 +753,9 @@ fn head(scores: &Scores, app: &Entity<Luma>, window: &Window, flying: bool) -> D
                 .items_center()
                 .gap(px(6.))
                 .text_size(px(11.))
-                .text_color(luma_ui::motion::hover_blend(
-                    "scores-back",
-                    glass::ink(0.55),
-                    glass::ink(0.9),
-                ))
-                .on_hover(luma_ui::motion::hover_listener("scores-back"))
+                .text_color(glass::ink(0.55))
+                .hover(|style| style.text_color(glass::ink(0.9)))
+                .fade_hover()
                 .on_click(move |_, _, cx| {
                     back.update(cx, |this, cx| this.leave_scores(cx));
                 })
@@ -885,7 +883,7 @@ fn score_row(
         .map(|(app, _)| (app.clone(), row.id.clone()));
     let id = SharedString::from(format!("score-{}", row.id));
     let label = format!(
-        "#{} · {} · {} clips · {}{}{}",
+        "#{} · {} · {} patterns · {}{}{}",
         row.ordinal,
         row.author,
         row.clips,

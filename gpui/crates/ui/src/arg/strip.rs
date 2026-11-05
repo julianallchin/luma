@@ -965,7 +965,9 @@ impl CurveStrip {
             };
             let number = matches!(self.value, StripValue::Number(_));
             crate::float::segmented().children(options.into_iter().map(|(label, ease, chosen)| {
-                crate::float::segment(label, chosen, format!("{}-{label}", self.id))
+                let key = format!("{}-{label}", self.id);
+                crate::float::segment(label, chosen, key.clone())
+                    .id(SharedString::from(key))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {

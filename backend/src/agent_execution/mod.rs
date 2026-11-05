@@ -22,6 +22,7 @@ pub mod error;
 pub mod headless_env;
 #[cfg(test)]
 mod kernel_tests;
+pub mod perform_host;
 pub mod sandbox;
 #[cfg(all(test, target_os = "macos"))]
 mod sandbox_tests;

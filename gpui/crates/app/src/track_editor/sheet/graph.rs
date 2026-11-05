@@ -603,12 +603,13 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
 /// `duration`, delay or phase has no one clock to draw.
 fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Clock> {
     let app = app.upgrade()?;
-    let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
-        return None;
-    };
-    let clip = primary_clip(editor)?;
-    let graph = &clip.core.as_ref()?.graph;
-    let (_, length, elapsed) = clip_beats(editor, clip)?;
+    let host = app.read(cx).sheet_host()?;
+    let graph = host.subject()?.graph;
+    let Beats {
+        length,
+        elapsed,
+        playing,
+    } = host.beats()?;
     let (time, _) = coordinate(graph, curve)?;
     let time = graph.nodes.get(&time)?;
     let number = |name: &str| match time.inputs.get(name).map(|held| graph.resolve(held)) {
@@ -635,20 +636,8 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
     Some(strip::Clock {
         beats: life,
         phase: inside.then_some(x),
-        playing: editor.transport.playing,
+        playing,
     })
-}
-
-/// The clip's beats: where the playhead is since the clip start, and how
-/// long the clip lasts.
-fn clip_beats(editor: &Editor, clip: &Clip) -> Option<(f64, f64, f64)> {
-    let timeline = editor.beats.as_deref()?.timeline().ok()?;
-    let start = timeline.beat_at(clip.start).ok()?;
-    let length = timeline.beat_at(clip.end).ok()? - start;
-    let now = timeline
-        .beat_at(f64::from(editor.transport.position))
-        .ok()?;
-    Some((start, length, now - start))
 }
 
 /// A random node's settings as the preview draws them: a value node's
@@ -705,19 +694,20 @@ fn random_preview(
     let transport: random::TransportSource = Rc::new(move |cx| {
         let transport = |cx: &App| {
             let app = app.upgrade()?;
-            let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
-                return None;
-            };
-            let clip = primary_clip(editor)?;
-            let (_, length, elapsed) = clip_beats(editor, clip)?;
+            let host = app.read(cx).sheet_host()?;
+            let Beats {
+                length,
+                elapsed,
+                playing,
+            } = host.beats()?;
             Some(random::Transport {
-                seed: clip.core.as_ref()?.seed,
+                seed: host.subject()?.seed,
                 beat: if (0. ..=length).contains(&elapsed) {
                     elapsed
                 } else {
                     0.
                 },
-                playing: editor.transport.playing,
+                playing,
             })
         };
         transport(cx).unwrap_or_default()
@@ -861,13 +851,13 @@ impl Luma {
     fn graph_pick(&mut self, id: &str, input: &str, pick: Pick, cx: &mut Context<Self>) {
         if matches!(pick, Pick::Links) {
             let key = menu_key(id, input);
-            self.with_track_editor(cx, |editor| editor.sheet.open = Some(Menu::Link(key)));
+            self.with_sheet(cx, |sheet| sheet.open = Some(Menu::Link(key)));
             return;
         }
         let key = (id.to_owned(), input.to_owned());
         let last = self
-            .track_editor_ref()
-            .and_then(|editor| editor.sheet.last.get(&key).cloned());
+            .sheet_ref()
+            .and_then(|sheet| sheet.last.get(&key).cloned());
         let (at, name) = key.clone();
         let mut held = None;
         let held_out = &mut held;
@@ -901,8 +891,8 @@ impl Luma {
             Pick::Links => {}
         });
         if let Some(value) = held {
-            self.with_track_editor(cx, |editor| {
-                editor.sheet.last.insert(key, value);
+            self.with_sheet(cx, |sheet| {
+                sheet.last.insert(key, value);
             });
         }
     }
@@ -923,8 +913,8 @@ impl Luma {
         });
         if let Some(value) = held {
             let key = (id.to_owned(), input.to_owned());
-            self.with_track_editor(cx, |editor| {
-                editor.sheet.last.insert(key, value);
+            self.with_sheet(cx, |sheet| {
+                sheet.last.insert(key, value);
             });
         }
     }
@@ -933,7 +923,7 @@ impl Luma {
 // -- rendering ----------------------------------------------------------------
 
 pub(super) struct Ctx<'a> {
-    state: &'a Editor,
+    sheet: &'a State,
     controls: &'a Controls,
     graph: &'a ClipGraph,
     app: &'a Entity<Luma>,
@@ -1005,13 +995,13 @@ fn visible(node: &Node, input: &str) -> bool {
 
 /// The graph editor under the blend row: the clip's graph as a canvas.
 pub(super) fn editor(
-    state: &Editor,
+    sheet: &State,
     controls: &Controls,
     graph: &ClipGraph,
     app: &Entity<Luma>,
 ) -> AnyElement {
     let cx = Ctx {
-        state,
+        sheet,
         controls,
         graph,
         app,
@@ -1020,41 +1010,57 @@ pub(super) fn editor(
 }
 
 /// A text setting as a field while it is typed, and as a chip that opens
-/// it otherwise.
+/// it otherwise. A name fills the card's width; any other, such as a
+/// button's attack, sits after its label.
 fn text_setting(cx: &Ctx, id: &str, name: &str, current: &str) -> AnyElement {
     let typing = cx
-        .state
         .sheet
         .canvas
         .rename
         .as_ref()
         .filter(|rename| rename.id == id && rename.setting.as_deref() == Some(name));
     let label = sentence_case(name);
-    if let Some(rename) = typing {
-        return luma_ui::float::field()
+    let control = if let Some(rename) = typing {
+        luma_ui::float::field()
             .id(SharedString::from(format!("setting-{id}-{name}")))
             .w_full()
             .key_context(luma_ui::text_input::DRAFT_CONTEXT)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().w_full().child(rename.field.clone()))
-            .agent_node(Role::Input, label)
-            .into_any_element();
+            .agent_node(Role::Input, label.clone())
+            .into_any_element()
+    } else {
+        let app = cx.app.clone();
+        let (at, setting) = (id.to_owned(), name.to_owned());
+        luma_ui::float::segmented()
+            .w_full()
+            .child(
+                luma_ui::float::segment(current.to_owned(), true, format!("{id}-{name}"))
+                    .id(SharedString::from(format!("setting-{id}-{name}")))
+                    .on_click(move |_, window, cx| {
+                        let (at, setting) = (at.clone(), setting.clone());
+                        app.update(cx, |this, cx| {
+                            this.graph_rename_start(&at, Some(&setting), window, cx)
+                        });
+                    })
+                    .agent_node(Role::Button, format!("{label}: {current}")),
+            )
+            .into_any_element()
+    };
+    if name == "name" {
+        return control;
     }
-    let app = cx.app.clone();
-    let (at, setting) = (id.to_owned(), name.to_owned());
-    luma_ui::float::segmented()
+    div()
         .w_full()
-        .child(
-            luma_ui::float::segment(current.to_owned(), true, format!("{id}-{name}"))
-                .id(SharedString::from(format!("setting-{id}-{name}")))
-                .on_click(move |_, window, cx| {
-                    let (at, setting) = (at.clone(), setting.clone());
-                    app.update(cx, |this, cx| {
-                        this.graph_rename_start(&at, Some(&setting), window, cx)
-                    });
-                })
-                .agent_node(Role::Button, format!("{label}: {current}")),
-        )
+        .h(rpx(CONTROL_HEIGHT))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(rpx(8.))
+        .child(luma_ui::caption(label))
+        .child(div().flex_1())
+        // As wide as a vector's field.
+        .child(div().w(rpx(VECTOR_FIELD_W)).child(control))
         .into_any_element()
 }
 
@@ -1073,7 +1079,8 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
     let mut column = div().w_full().flex().flex_col().gap(rpx(8.));
     for (name, setting) in shown {
         let current = node.setting(name).unwrap_or(setting.default);
-        // A setting with no options is text, such as a control's name.
+        // A setting with no options is text, such as a control's name or a
+        // button's attack.
         if setting.options.is_empty() {
             column = column.child(text_setting(cx, id, name, current));
             continue;
@@ -1176,7 +1183,7 @@ pub(super) fn title_buttons(cx: &Ctx, id: &str) -> Vec<AnyElement> {
     match node.kind {
         Kind::Math => vec![op_button(cx, id, node)],
         Kind::Curve if curve_open(cx, id) => {
-            let wide = cx.state.sheet.canvas.wide.contains(id);
+            let wide = cx.sheet.canvas.wide.contains(id);
             let app = cx.app.clone();
             let at = id.to_owned();
             let widen = icon_button(
@@ -1191,8 +1198,8 @@ pub(super) fn title_buttons(cx: &Ctx, id: &str) -> Vec<AnyElement> {
             .on_click(move |_, _, cx| {
                 let at = at.clone();
                 app.update(cx, |this, cx| {
-                    this.with_track_editor(cx, |editor| {
-                        let wide = &mut editor.sheet.canvas.wide;
+                    this.with_sheet(cx, |sheet| {
+                        let wide = &mut sheet.canvas.wide;
                         if !wide.remove(&at) {
                             wide.insert(at);
                         }
@@ -1220,8 +1227,7 @@ pub(super) fn title_buttons(cx: &Ctx, id: &str) -> Vec<AnyElement> {
 /// or a bound.
 pub(super) fn curve_open(cx: &Ctx, id: &str) -> bool {
     let node = &cx.graph.nodes[id];
-    cx.state
-        .sheet
+    cx.sheet
         .canvas
         .expanded
         .get(id)
@@ -1241,8 +1247,8 @@ fn toggle_curve(
     move |_, _, cx| {
         let at = at.clone();
         app.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
-                editor.sheet.canvas.expanded.insert(at, !open);
+            this.with_sheet(cx, |sheet| {
+                sheet.canvas.expanded.insert(at, !open);
             })
         });
     }
@@ -1277,7 +1283,7 @@ fn curve_rows(cx: &Ctx, id: &str) -> Vec<AnyElement> {
         .filter(|input| visible(node, input))
         .collect();
     if curve_open(cx, id) {
-        let all = cx.state.sheet.canvas.defaults.contains(id);
+        let all = cx.sheet.canvas.defaults.contains(id);
         let unset =
             |input: &str| matches!(input, "low" | "high") && !node.inputs.contains_key(input);
         let mut rows: Vec<AnyElement> = inputs
@@ -1299,8 +1305,8 @@ fn curve_rows(cx: &Ctx, id: &str) -> Vec<AnyElement> {
                             .on_click(move |_, _, cx| {
                                 let at = at.clone();
                                 app.update(cx, |this, cx| {
-                                    this.with_track_editor(cx, |editor| {
-                                        editor.sheet.canvas.defaults.insert(at);
+                                    this.with_sheet(cx, |sheet| {
+                                        sheet.canvas.defaults.insert(at);
                                     })
                                 });
                             })
@@ -1369,11 +1375,11 @@ fn op_button(cx: &Ctx, id: &str, node: &Node) -> AnyElement {
         format!("{id}.op"),
         op_symbol(current),
         &names,
-        menu_visibility(cx.state, Menu::Source(key)),
+        menu_visibility(cx.sheet, Menu::Source(key)),
         move |_, cx| {
             toggle.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.sheet.open = match editor.sheet.open {
+                this.with_sheet(cx, |sheet| {
+                    sheet.open = match sheet.open {
                         Some(Menu::Source(k)) if k == key => None,
                         _ => Some(Menu::Source(key)),
                     };
@@ -1386,7 +1392,7 @@ fn op_button(cx: &Ctx, id: &str, node: &Node) -> AnyElement {
             };
             let at = at.clone();
             choose.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                this.with_sheet(cx, |sheet| sheet.open = None);
                 this.graph_live(cx, move |graph| edit::set_setting(graph, &at, "op", op));
             });
         },
@@ -1567,8 +1573,8 @@ fn field_element(field: &Field) -> Div {
 
 fn source_chip(cx: &Ctx, id: &str, input: &str, chip: Chip) -> AnyElement {
     let key = menu_key(id, input);
-    let linking = cx.state.sheet.open == Some(Menu::Link(key))
-        || matches!(cx.state.sheet.closing, Some((Menu::Link(k), _)) if k == key);
+    let linking = cx.sheet.open == Some(Menu::Link(key))
+        || matches!(cx.sheet.closing, Some((Menu::Link(k), _)) if k == key);
     let (menu, labels, picks): (Menu, Vec<String>, Vec<Option<Pick>>) = if linking {
         let targets = edit::link_candidates(cx.graph, id, input);
         (
@@ -1598,11 +1604,11 @@ fn source_chip(cx: &Ctx, id: &str, input: &str, chip: Chip) -> AnyElement {
         format!("{id}.{input} source"),
         &chip.reading,
         &names,
-        menu_visibility(cx.state, menu),
+        menu_visibility(cx.sheet, menu),
         move |_, cx| {
             toggle.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.sheet.open = match editor.sheet.open {
+                this.with_sheet(cx, |sheet| {
+                    sheet.open = match sheet.open {
                         Some(Menu::Source(k) | Menu::Link(k)) if k == key => None,
                         _ => Some(Menu::Source(key)),
                     };
@@ -1614,7 +1620,7 @@ fn source_chip(cx: &Ctx, id: &str, input: &str, chip: Chip) -> AnyElement {
             let pick = picks.get(index).cloned().flatten();
             let target = targets.get(index).cloned();
             choose.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                this.with_sheet(cx, |sheet| sheet.open = None);
                 match pick {
                     Some(pick) => this.graph_pick(&at, &name, pick, cx),
                     None => {

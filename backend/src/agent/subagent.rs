@@ -296,6 +296,7 @@ pub(super) async fn delegate(
             .map(|scope| TurnContext {
                 scope: Some(scope),
                 editor: None,
+                perform: None,
             }),
     };
     let (result, transcript) = run_child(ctx, &child.id, prompt, &mut snapshot).await;

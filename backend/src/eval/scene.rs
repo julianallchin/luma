@@ -123,6 +123,43 @@ impl Scene {
     }
 }
 
+impl Scene {
+    /// This scene composited over `base` at `t`, annotation `i` at
+    /// `levels[i]` (missing levels are full), then aimed. Live patterns in
+    /// Perform layer this way over the decks' mix: each writes only what it
+    /// outputs, so the base keeps everything else.
+    pub fn render_onto(
+        &self,
+        base: UniverseState,
+        t: f32,
+        levels: &[f32],
+        scratch: &mut Arena,
+    ) -> UniverseState {
+        let times = [t];
+        let result = composite_from(
+            &self.annotations,
+            &times,
+            vec![base.clone()],
+            Some(levels),
+            scratch,
+            self.rig(),
+        )
+        .and_then(|mut frames| {
+            if let Some(aiming) = &self.aiming {
+                aiming.apply(&self.annotations, &times, &mut frames, scratch)?;
+            }
+            Ok(frames)
+        });
+        match result {
+            Ok(mut frames) => frames.pop().unwrap_or(base),
+            Err(error) => {
+                log::error!("Live pattern evaluation: {error}");
+                base
+            }
+        }
+    }
+}
+
 /// The z-ordered composite of `annotations` at `times`, before any aiming.
 /// An Offset aim clip over no aim starts from the head's home in `rig`; a
 /// head the rig does not hold starts from straight down.
@@ -135,12 +172,33 @@ pub(crate) fn composite(
     scratch: &mut Arena,
     rig: Option<&Rig>,
 ) -> Result<Vec<UniverseState>, String> {
+    let frames = times.iter().map(|_| blank_frame()).collect();
+    composite_from(annotations, times, frames, None, scratch, rig)
+}
+
+/// [`composite`] starting from `frames` (one per time) rather than from no
+/// light, with annotation `i`'s opacity scaled by `levels[i]` when given.
+fn composite_from(
+    annotations: &[CompiledAnnotation],
+    times: &[f32],
+    mut frames: Vec<UniverseState>,
+    levels: Option<&[f32]>,
+    scratch: &mut Arena,
+    rig: Option<&Rig>,
+) -> Result<Vec<UniverseState>, String> {
     let home = |id: &str| {
         rig.and_then(|rig| rig.head(id))
             .map_or(luma_patterns::aim::DOWN, crate::eval::aim::Head::home)
     };
-    let mut frames: Vec<UniverseState> = times.iter().map(|_| blank_frame()).collect();
     for (layer, ann) in annotations.iter().enumerate() {
+        let level = levels
+            .and_then(|levels| levels.get(layer))
+            .copied()
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        if level <= 0.0 {
+            continue;
+        }
         let active = |t: &f32| *t >= ann.span.0 && *t < ann.span.1;
         if !times.iter().any(active) {
             continue;
@@ -179,7 +237,12 @@ pub(crate) fn composite(
             continue;
         }
         let got = try_layers(ann.plan.as_ref(), &sample_times, scratch)?;
-        for ((k, _), layer) in slots.zip(got) {
+        for ((k, _), mut layer) in slots.zip(got) {
+            if level < 1.0 {
+                for id in layer.frame.primitives.keys() {
+                    *layer.alpha.entry(id.clone()).or_insert(1.0) *= level;
+                }
+            }
             composite_frame(&mut frames[k], &layer, &ann.plan.outputs, ann.blend_mode);
         }
     }

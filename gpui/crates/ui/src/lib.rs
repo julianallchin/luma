@@ -108,7 +108,7 @@ pub fn rem_scale(window: &gpui::Window) -> f32 {
 pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
 pub use rem_scale::rem_scaled;
 pub use select::luma_select_item;
-pub use slider::{luma_fader, luma_slider};
+pub use slider::{fader_track, luma_fader, luma_slider};
 pub use text::{caption, plate};
 
 pub mod icons;

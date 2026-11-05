@@ -562,7 +562,7 @@ fn stand_in_rig(cells: &[luma_patterns::Cell]) -> crate::eval::aim::Rig {
 /// A stand-in track for a clip that follows a band: every band hits on
 /// each beat and decays until the next, like a four-on-the-floor kick.
 #[derive(Debug)]
-struct BeatPulse;
+pub(crate) struct BeatPulse;
 
 impl luma_patterns::FeatureSource for BeatPulse {
     fn sample(

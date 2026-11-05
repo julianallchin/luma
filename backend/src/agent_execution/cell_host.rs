@@ -3,7 +3,8 @@
 //! Python names a method; this decides which domain owns it and whether that
 //! domain is in scope at all. Keeping the split here — rather than letting one
 //! domain handler grow a second domain's methods — is what lets a graph thread
-//! have `venue.render` without also having `track.apply`.
+//! have `venue.render` without also having `track.apply`, and a Perform thread
+//! have `perform.add` without either.
 
 use std::future::Future;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::agent_execution::perform_host::PerformHost;
 use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::venue_host::VenueHost;
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
@@ -30,14 +32,23 @@ const HOST_CANCEL_POLL: Duration = Duration::from_millis(25);
 pub struct CellHost {
     track: Option<std::sync::Arc<TrackHost>>,
     venue: Option<VenueHost>,
+    perform: Option<PerformHost>,
 }
 
 impl CellHost {
     /// `None` when the cell has no host capability at all, which is the
     /// difference between `run_cell_with_host` and `run_cell`.
     #[must_use]
-    pub fn new(track: Option<std::sync::Arc<TrackHost>>, venue: Option<VenueHost>) -> Option<Self> {
-        (track.is_some() || venue.is_some()).then_some(Self { track, venue })
+    pub fn new(
+        track: Option<std::sync::Arc<TrackHost>>,
+        venue: Option<VenueHost>,
+        perform: Option<PerformHost>,
+    ) -> Option<Self> {
+        (track.is_some() || venue.is_some() || perform.is_some()).then_some(Self {
+            track,
+            venue,
+            perform,
+        })
     }
 }
 
@@ -61,6 +72,13 @@ impl HostCallHandler for CellHost {
                 None => Err(HostCallError::new(
                     "forbidden",
                     "this thread has no venue in scope",
+                )),
+            },
+            Some("perform") => match &self.perform {
+                Some(perform) => perform.handle(method, payload, context),
+                None => Err(HostCallError::new(
+                    "forbidden",
+                    "this thread has no Perform set in scope; chat from the Perform tab",
                 )),
             },
             _ => Err(HostCallError::new(

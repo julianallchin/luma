@@ -205,7 +205,7 @@ pub(crate) fn empty_note(node: &Node, input: &str) -> &'static str {
         (Kind::Group, "size") => "One fixture",
         (Kind::Time, "every") => "Once",
         (Kind::Time, "duration") if node.inputs.contains_key("every") => "Same as every",
-        (Kind::Time, "duration") => "Whole clip",
+        (Kind::Time, "duration") => "Whole pattern",
         (Kind::Curve, "gradient") => "Needs colors",
         (Kind::Curve, _) => "Needs a value",
         _ => "Empty",
@@ -376,12 +376,13 @@ fn signature(graph: &ClipGraph, values: bool) -> String {
 // -- edits --------------------------------------------------------------------
 
 /// Where a promoted input's values come from: the coordinate node kinds.
-pub(crate) const SOURCES: [Kind; 5] = [
+pub(crate) const SOURCES: [Kind; 6] = [
     Kind::Time,
     Kind::Space,
     Kind::Random,
     Kind::Audio,
     Kind::Control,
+    Kind::Button,
 ];
 
 /// A coordinate kind's menu entry.
@@ -390,7 +391,6 @@ pub(crate) fn source_label(kind: Kind) -> &'static str {
         Kind::Time => "Over time",
         Kind::Space => "Over space",
         Kind::Along => "Along each element",
-        Kind::Control => "Live control",
         other => other.label(),
     }
 }

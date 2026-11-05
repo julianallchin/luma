@@ -383,7 +383,8 @@ impl Luma {
             // dialog open over the timeline still answers Escape first. In
             // Direct the graph page is a rung of its own: Escape goes back to
             // the timeline with the clip still selected, and the next one lets
-            // go of it.
+            // go of it. So is a Perform tab's pattern editor: Escape goes back
+            // to the surface.
             None => {
                 if self.dismiss_sheet_menu() {
                     cx.notify();
@@ -391,6 +392,11 @@ impl Luma {
                 }
                 if self.close_clip_graph(cx) {
                     return;
+                }
+                if let Some(target) = self.workspace.active().cloned() {
+                    if self.close_pattern_sheet(&target, cx) {
+                        return;
+                    }
                 }
                 if self.clear_clip_selection(cx) {
                     return;
@@ -1375,13 +1381,15 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     let layout = matches!(&*body, Body::Patch(_));
     let graph_page = match &mut *body {
         Body::TrackEditor(state) => direct && state.clip_graph_shown(),
-        Body::Patch(_) | Body::Perform(_) => false,
+        Body::Perform(state) => state.pattern_sheet.is_some(),
+        Body::Patch(_) => false,
     };
     let mut keys = gpui::KeyContext::default();
     // Direct's graph page is the clip graph's key scope, not the timeline's:
     // the timeline's letters and Delete act on the selected *clips*, and over
-    // the page the selection is the clip being edited. Program's inspector
-    // sits outside the tab for the same reason.
+    // the page the selection is the clip being edited. A Perform tab's
+    // pattern editor is the same page. Program's inspector sits outside the
+    // tab for the same reason.
     keys.add(if layout {
         keymap::context::STAGE
     } else if graph_page {
@@ -1401,7 +1409,10 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Patch(state) => patch::patch(state, &entity).into_any_element(),
-        Body::Perform(state) => crate::perform::perform(state, &entity),
+        Body::Perform(state) => {
+            crate::perform::pattern_sheet::sync(state, window, cx);
+            crate::perform::perform(state, &entity)
+        }
     };
     div()
         .flex_1()

@@ -188,3 +188,270 @@ async fn stopping_forgets_the_source_and_its_decks() {
     let state = services.perform.state();
     assert!(state.source.is_none() && state.decks.is_empty());
 }
+
+#[tokio::test]
+async fn the_virtual_deck_follows_the_player() {
+    use crate::host_audio::HostAudioControl;
+
+    let (_dir, services, venue) = library().await;
+    services
+        .perform
+        .start(venue.clone(), PerformSource::Virtual)
+        .await
+        .unwrap();
+    assert!(services.perform.state().decks.is_empty(), "nothing loaded");
+
+    // Ten seconds of silence, as the library's "Strobe".
+    let host = services.host_audio();
+    assert!(host.begin_load(1, "track".into()));
+    host.finish_load(1, vec![0.0; 48_000 * 2 * 10], 0.0)
+        .unwrap();
+    host.control(1, HostAudioControl::Play { seconds: 2.0 })
+        .unwrap();
+
+    let state = until(&services, |state| matched(state, 1).is_some()).await;
+    assert!(matches!(
+        matched(&state, 1),
+        Some(DeckMatch::Matched { manual: true, .. })
+    ));
+    let state = until(&services, |state| state.decks[0].playing).await;
+    assert_eq!(state.decks[0].title, "Strobe");
+    let earlier = state.decks[0].position;
+    assert!(earlier >= 2.0, "the player's playhead: {earlier}");
+    until(&services, |state| state.decks[0].position > earlier).await;
+
+    host.unload();
+    until(&services, |state| state.decks.is_empty()).await;
+}
+
+fn wash(id: &str) -> crate::models::perform::PerformPattern {
+    let wash = luma_patterns::presets()
+        .clip("Wash")
+        .expect("the shipped Wash");
+    crate::models::perform::PerformPattern {
+        id: id.into(),
+        venue_id: String::new(),
+        name: "Wash".into(),
+        selection: serde_json::from_value(json!({ "expression": "all" })).unwrap(),
+        z_index: 0,
+        blend_mode: wash.blend_mode,
+        seed: u64::MAX,
+        graph: wash.graph.clone().with_pad(),
+    }
+}
+
+#[tokio::test]
+async fn the_perform_set_saves_lists_changes_and_deletes() {
+    use crate::models::perform::{Cell, CellContent, ControlTarget, PerformLayout, PerformPattern};
+
+    let (_dir, services, venue) = library().await;
+    let pattern = wash(&uuid::Uuid::new_v4().to_string());
+    let saved: PerformPattern =
+        serde_json::from_value(save(&services, &venue, &pattern).await.unwrap()).unwrap();
+    assert_eq!(saved.venue_id, venue, "stored in the venue it was saved to");
+    assert_eq!(saved.seed, u64::MAX, "a full u64 seed survives");
+
+    let mut changed = PerformPattern {
+        name: "Front wash".into(),
+        ..saved.clone()
+    };
+    let pad = changed.graph.pad().expect("a pad").node;
+    changed
+        .graph
+        .nodes
+        .get_mut(&pad)
+        .unwrap()
+        .settings
+        .insert("mode".into(), "flash".into());
+    save(&services, &venue, &changed).await.unwrap();
+    let listed: Vec<PerformPattern> = serde_json::from_value(
+        dispatch(
+            &services,
+            "list_perform_patterns",
+            &json!({ "venueId": venue }),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        listed,
+        vec![changed.clone()],
+        "saving the same id changes it, its graph's pad among it"
+    );
+
+    let nameless = PerformPattern {
+        name: String::new(),
+        ..pattern.clone()
+    };
+    assert!(
+        save(&services, &venue, &nameless).await.is_err(),
+        "a pattern the score checker would refuse is refused here too"
+    );
+
+    let mut layout = PerformLayout::generated(&listed);
+    let page = &mut layout.pages[0];
+    let (column, row) = page.free_spot(1, 1).expect("room for a fader");
+    page.cells.push(Cell {
+        id: "speeds".into(),
+        column,
+        row,
+        width: 1,
+        height: 1,
+        content: CellContent::Fader {
+            label: "Speeds".into(),
+            targets: vec![
+                ControlTarget::Level {
+                    pattern_id: saved.id.clone(),
+                },
+                ControlTarget::Named {
+                    name: "drop".into(),
+                },
+            ],
+        },
+    });
+    dispatch(
+        &services,
+        "save_perform_layout",
+        &json!({ "venueId": venue, "layout": layout }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(read_layout(&services, &venue).await, Some(layout.clone()));
+
+    dispatch(
+        &services,
+        "delete_perform_pattern",
+        &json!({ "venueId": venue, "patternId": saved.id }),
+    )
+    .await
+    .unwrap();
+    let listed = dispatch(
+        &services,
+        "list_perform_patterns",
+        &json!({ "venueId": venue }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed, json!([]));
+    let pruned = read_layout(&services, &venue).await.unwrap();
+    assert!(
+        pruned.cells_of(&saved.id).next().is_none(),
+        "the deleted pattern's cell went with it"
+    );
+    let left: Vec<&CellContent> = pruned.pages[0]
+        .cells
+        .iter()
+        .map(|cell| &cell.content)
+        .collect();
+    assert_eq!(
+        left,
+        vec![
+            &CellContent::Tap,
+            &CellContent::Master,
+            &CellContent::Fader {
+                label: "Speeds".into(),
+                targets: vec![ControlTarget::Named {
+                    name: "drop".into()
+                }],
+            },
+        ],
+        "and so did the fader's hold on its level"
+    );
+}
+
+#[tokio::test]
+async fn an_open_set_plays_its_pads_and_faders() {
+    use crate::controls::perform;
+    use crate::models::perform::PerformLayout;
+
+    let (_dir, services, venue) = library().await;
+    let pattern = wash("wash");
+    save(&services, &venue, &pattern).await.unwrap();
+    let layout = PerformLayout::generated(std::slice::from_ref(&pattern));
+    dispatch(
+        &services,
+        "save_perform_layout",
+        &json!({ "venueId": venue, "layout": layout }),
+    )
+    .await
+    .unwrap();
+    dispatch(&services, "perform_open_set", &json!({ "venueId": venue }))
+        .await
+        .unwrap();
+
+    let pad = perform::pad(&pattern).expect("a pad");
+    dispatch(
+        &services,
+        "perform_press",
+        &json!({ "name": pad, "down": true }),
+    )
+    .await
+    .unwrap();
+    dispatch(
+        &services,
+        "perform_press",
+        &json!({ "name": pad, "down": false }),
+    )
+    .await
+    .unwrap();
+    let state = services.perform.state();
+    assert!(state.buttons[&pad].on(), "a toggle pad stays on");
+    assert_eq!(state.buttons[&pad].value(120.0), 1.0);
+    assert_eq!(state.controls[&perform::level("wash")], 1.0);
+    assert_eq!(state.controls[perform::MASTER], 1.0);
+}
+
+#[tokio::test]
+async fn a_layout_cell_must_fit_its_page() {
+    use crate::models::perform::PerformLayout;
+
+    let (_dir, services, venue) = library().await;
+    let mut layout = PerformLayout::generated(&[]);
+    layout.pages[0].cells[0].column = layout.pages[0].columns;
+    let refused = dispatch(
+        &services,
+        "save_perform_layout",
+        &json!({ "venueId": venue, "layout": layout }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.kind(), "invalid");
+
+    let mut layout = PerformLayout::generated(&[]);
+    let (first, second) = (
+        layout.pages[0].cells[0].clone(),
+        &mut layout.pages[0].cells[1],
+    );
+    (second.column, second.row) = (first.column, first.row);
+    let refused = dispatch(
+        &services,
+        "save_perform_layout",
+        &json!({ "venueId": venue, "layout": layout }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.kind(), "invalid", "two cells over each other");
+}
+
+async fn save(
+    services: &AppServices,
+    venue: &str,
+    pattern: &crate::models::perform::PerformPattern,
+) -> Result<serde_json::Value, crate::dispatch::CommandError> {
+    let args = json!({ "venueId": venue, "pattern": pattern });
+    dispatch(services, "save_perform_pattern", &args).await
+}
+
+async fn read_layout(
+    services: &AppServices,
+    venue: &str,
+) -> Option<crate::models::perform::PerformLayout> {
+    let args = json!({ "venueId": venue });
+    serde_json::from_value(
+        dispatch(services, "get_perform_layout", &args)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
+}

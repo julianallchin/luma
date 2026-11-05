@@ -13,7 +13,7 @@ test(
   () => {
     const read = () => {
       const shot = app.snapshot();
-      const inspector = shot.find({ role: "card", label: "Clip graph" }) ?? shot.find({ role: "card", label: "Presets" });
+      const inspector = shot.find({ role: "card", label: "Pattern graph" }) ?? shot.find({ role: "card", label: "Presets" });
       return {
         showing: inspector?.label ?? null,
         width: inspector?.bounds.width ?? 0,
@@ -39,7 +39,7 @@ test(
     const selecting = sample();
     until("the clip's controls", () => node("button", "Pick fixtures"));
     const opened = read();
-    expect(opened.showing).toBe("Clip graph");
+    expect(opened.showing).toBe("Pattern graph");
     app.click(node("card", "Waveform"));
     const clearing = sample();
     until("the presets again", () => node("card", "Presets"));
@@ -62,10 +62,10 @@ test("the inspector stays beside the timeline and pickers accept keyboard input"
   until("the clip", () => node("card", CARD));
   app.click(node("card", CARD));
   until("the clip's controls", () => node("button", "Pick fixtures"));
-  const before = node("card", "Clip graph").bounds;
+  const before = node("card", "Pattern graph").bounds;
   app.drag(node("slider", "Stage height"), { dx: 0, dy: -140 });
   app.frames(4);
-  const inspector = node("card", "Clip graph").bounds;
+  const inspector = node("card", "Pattern graph").bounds;
   const wave = node("card", "Waveform").bounds;
   // A shorter stage gives the inspector room, and it stays beside the
   // timeline with its controls on screen.

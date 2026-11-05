@@ -19,7 +19,7 @@ use crate::agent::model::ContentBlock;
 use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::models::agent_execution::{PythonCellResult, PythonStoredFigure, PythonToolOutput};
 use crate::services::agent_execution::{
-    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner,
+    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner, LiveHandles,
 };
 use crate::storage::StorageRoot;
 
@@ -115,6 +115,7 @@ impl Tool for PythonTool {
             &ctx.services().storage,
             &ctx.services().fixtures_root,
             &ctx.services().workspaces,
+            &LiveHandles::of(ctx.services()),
             ctx.thread_id.to_string(),
             args.code,
             ctx.scope.clone(),

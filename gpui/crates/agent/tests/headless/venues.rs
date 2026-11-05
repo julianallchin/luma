@@ -468,14 +468,21 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         // different frames — read the list after both have landed.
         const opened = until("the new venue's empty track list", (s) =>
             s.find({ role: "text", label: "No tracks imported" }) !== undefined ? s : undefined);
+        // A new venue has no rig, so creating it closes the dialog onto its
+        // setup page.
+        const setup = until("the new venue's setup page", (s) =>
+            s.find({ role: "card", label: "Venue dialog" }) === undefined
+                && s.find({ role: "card", label: "Morning Room Venue" }) !== undefined);
         ({ loading,
            focused: create.find({ role: "input", label: "Venue name" }).focused,
-           opened: opened.find({ role: "text", label: "No tracks imported" }) !== undefined })
+           opened: opened.find({ role: "text", label: "No tracks imported" }) !== undefined,
+           setup: !!setup })
     "#,
     );
     assert_eq!(out["loading"], true);
     assert_eq!(out["focused"], true);
     assert_eq!(out["opened"], true);
+    assert_eq!(out["setup"], true);
     drop(empty);
     let mut created_restore = harness(&empty_dir, luma_app::NavigationFixture::default());
     let out = exec(

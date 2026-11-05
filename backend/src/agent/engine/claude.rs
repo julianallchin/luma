@@ -519,7 +519,10 @@ fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
         let label = text("displayName").unwrap_or(id);
         // A dated id such as `claude-haiku-4-5-20251001` is the curated row
         // under another name.
-        if models.iter().any(|m| m.id.as_deref() == Some(id) || m.label == label) {
+        if models
+            .iter()
+            .any(|m| m.id.as_deref() == Some(id) || m.label == label)
+        {
             continue;
         }
         let efforts = entry["supportedEffortLevels"]
@@ -683,7 +686,11 @@ mod tests {
         ];
         let models = catalog(&live);
         for model in &models {
-            assert!(model.context_window.is_some(), "{} has no window", model.label);
+            assert!(
+                model.context_window.is_some(),
+                "{} has no window",
+                model.label
+            );
         }
         let window_of = |label: &str| {
             models

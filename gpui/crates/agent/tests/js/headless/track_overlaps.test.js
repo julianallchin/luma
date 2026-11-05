@@ -20,7 +20,7 @@ test("overlapping clips have separate clickable rows and independent edits", () 
   }
   for (let i = 0; i < 3; i++) {
     app.click(clips()[i]);
-    until("the clip's inspector", (s) => s.find({ role: "card", label: "Clip graph" }));
+    until("the clip's inspector", (s) => s.find({ role: "card", label: "Pattern graph" }));
   }
   // Removing the middle clip leaves both others intact.
   app.click(clips()[1]);

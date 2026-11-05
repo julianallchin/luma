@@ -35,9 +35,9 @@ pub struct PreparedGraph {
     features: Option<std::sync::Arc<dyn crate::FeatureSource>>,
     requests: Vec<crate::FeatureRequest>,
     baked: Vec<Option<EvaluatedValue>>,
-    /// The controls the graph reads, in the order its control kernels
-    /// index them.
-    control_names: Vec<String>,
+    /// The graph's fader and button nodes, in the order its control
+    /// kernels index them.
+    live_inputs: Vec<crate::clip_graph::LiveInput>,
     controls: Option<std::sync::Arc<dyn crate::ControlSource>>,
 }
 impl PreparedGraph {
@@ -51,12 +51,11 @@ impl PreparedGraph {
             ));
         }
         graph.check()?;
-        let controls = graph.controls().into_iter().map(String::from).collect();
         Self::lowered(
             library,
             &crate::clip_graph::lower(graph, frame)?,
             frame,
-            controls,
+            graph.live_inputs(),
         )
     }
 
@@ -65,7 +64,7 @@ impl PreparedGraph {
         library: &Library,
         root: &Definition,
         frame: Frame,
-        control_names: Vec<String>,
+        live_inputs: Vec<crate::clip_graph::LiveInput>,
     ) -> Result<Self> {
         let mut prepared = Self {
             steps: Vec::new(),
@@ -84,7 +83,7 @@ impl PreparedGraph {
             features: None,
             requests: Vec::new(),
             baked: Vec::new(),
-            control_names,
+            live_inputs,
             controls: None,
         };
         prepared.outputs = prepared.lower_definition(library, "clip", root, BTreeMap::new())?;
@@ -136,26 +135,26 @@ impl PreparedGraph {
         self.evaluate(self.clip_start)?;
         Ok(self)
     }
-    /// Read live controls from `controls` at every evaluation. Nothing is
-    /// rebuilt: control values are never baked.
+    /// Read the fader and button nodes from `controls` at every
+    /// evaluation. Nothing is rebuilt: live values are never baked.
     pub fn with_controls(mut self, controls: std::sync::Arc<dyn crate::ControlSource>) -> Self {
         self.controls = Some(controls);
         self
     }
 
-    /// The controls this graph reads, by name.
-    pub fn control_names(&self) -> &[String] {
-        &self.control_names
+    /// The graph's fader and button nodes, in node order.
+    pub fn live_inputs(&self) -> &[crate::clip_graph::LiveInput] {
+        &self.live_inputs
     }
 
     fn control_values(&self) -> Vec<f64> {
-        self.control_names
+        self.live_inputs
             .iter()
-            .map(|name| {
+            .map(|input| {
                 let value = self
                     .controls
                     .as_ref()
-                    .map_or(0.0, |source| source.value(name));
+                    .map_or(0.0, |source| source.value(input));
                 if value.is_finite() {
                     value.clamp(0.0, 1.0)
                 } else {

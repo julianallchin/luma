@@ -74,3 +74,5 @@ streams:
       - SELECT * FROM folder_tracks WHERE venue_id IN accessible_venues
       - SELECT * FROM laser_zones WHERE venue_id IN accessible_venues
       - SELECT * FROM laser_limits WHERE venue_id IN accessible_venues
+      - SELECT * FROM perform_patterns WHERE venue_id IN accessible_venues
+      - SELECT * FROM perform_layouts WHERE venue_id IN accessible_venues

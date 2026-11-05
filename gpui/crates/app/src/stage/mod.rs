@@ -32,6 +32,7 @@
 pub(crate) mod hand;
 pub(crate) mod preview;
 
+use luma_ui::motion::FadeHover;
 use std::collections::{BTreeMap, HashMap};
 
 use gpui::prelude::*;
@@ -4326,14 +4327,8 @@ fn elements(view: &StageView, app: &Entity<Luma>) -> AnyElement {
                     luma_ui::glass::wash(0.0)
                 })
                 .when(!selected, |line| {
-                    line.bg(luma_ui::motion::hover_blend(
-                        &format!("venue-element-{id}"),
-                        luma_ui::glass::wash(0.),
-                        luma_ui::glass::glass_hover(),
-                    ))
-                    .on_hover(luma_ui::motion::hover_listener(format!(
-                        "venue-element-{id}"
-                    )))
+                    line.hover(|style| style.bg(luma_ui::glass::glass_hover()))
+                        .fade_hover()
                 })
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {

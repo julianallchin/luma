@@ -80,7 +80,7 @@ function begin() {
   nav.venue("Test Venue");
   app.frames(8);
   open();
-  expect(status()).toContain("3 clips");
+  expect(status()).toContain("3 patterns");
 }
 
 test("press regions, the header grab, the marquee, resize, snap and move", () => {

@@ -134,7 +134,7 @@ impl Editor {
             .timeline()
             .map_err(|error| error.to_string())?;
         for clip in self.clips.iter() {
-            let mut authored = clip.core.clone().ok_or("clip has no authored body")?;
+            let mut authored = clip.core.clone().ok_or("pattern has no authored body")?;
             // Preserve the exact authored beat when a gesture changed only
             // color/selection. Beat-to-second round trips need not be bit exact.
             if clock

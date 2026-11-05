@@ -1,18 +1,17 @@
 //! One score, rendered to an mp4 with the track's own audio.
 //!
-//! This module owns the *time axis* and the *container*. `stage_render` is one
-//! venue at one moment; recording is a grid of moments and a file format, which
-//! is a different abstraction and therefore a different module. Everything a
-//! caller would otherwise re-derive — span clamping, frame count, shutter,
-//! encoder choice, the audio offset, the ffmpeg argv — lives here exactly once,
-//! so the CLI, and any later app dialog, only start a recording and wait.
+//! The one way a score becomes a video: the app's "Export show" and the
+//! `luma-record` CLI both start a [`Recording`] here and wait. This module owns
+//! the *time axis* and the *container* — span clamping, frame count, shutter,
+//! encoder choice, the audio offset, the ffmpeg argv — and draws each frame
+//! the way the stage does: the same score compile, the same motor lag, the
+//! same bass under the footage look, and the live pass chain through
+//! [`Recorder`], read back at ten bits a channel.
 //!
-//! The whole performance argument is that scene assembly happens *once*.
-//! `venue.render`'s ~150 ms per still is almost all `VenueGeometry::load` +
-//! `build_scene_strict` + a PNG deflate; a recording pays those on frame zero
-//! and then per frame carries only `(light state, t)` through
-//! [`stage_render::Sequence`], with RGBA going straight into the pipe.
+//! Scene assembly happens *once*: the venue, the score and the audio are read
+//! before frame zero, and each frame carries only its light state and moment.
 
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -22,89 +21,21 @@ use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 
+use crate::dispatch::AppServices;
 use crate::eval::{Arena, Scope};
-use crate::stage_render::{self, Continuity, Sequence, VenueGeometry};
-use crate::storage::StorageRoot;
+use crate::host_audio::TrackAudio;
+use crate::motors::Motors;
+use crate::stage_render::{self, Aim, VenueGeometry};
 use luma_render::frame::Moment;
-use luma_render::{footage, DEFAULT_SUBFRAMES, LIVE_SUBFRAMES};
-use luma_scene::View;
+use luma_render::{assets, build_frame_at, coords, footage, Recorder};
 
-/// How a recording integrates time into each output frame.
+/// Frames drawn and discarded before the span starts.
 ///
-/// The renderer's haze march is stochastic, and there are two ways to pay for
-/// a clean one. Both are here because they are not interchangeable — one is a
-/// camera and one is a memory — and which one a recording wants is a question
-/// about the *content*, not a quality dial.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Haze {
-    /// Every output frame is a function of its own `t` alone.
-    ///
-    /// [`DEFAULT_SUBFRAMES`] haze marches per output frame, with the
-    /// renderer's temporal history cut before each frame so nothing leaks
-    /// between them. Deterministic and slow.
-    #[default]
-    Accumulate,
-    /// Frames are consecutive, so let the renderer remember.
-    ///
-    /// Exactly the live viewport's path: [`LIVE_SUBFRAMES`] marches per frame,
-    /// blended into the haze history at 18% each, warmed up over
-    /// `WARMUP_FRAMES` discarded frames before the span starts. Eight times
-    /// fewer marches than [`Haze::Accumulate`].
-    ///
-    /// The tail is also conditional. The renderer resets its history whenever
-    /// the *cone geometry* changes — any moving head, every frame — so on a
-    /// rig with movers this mode degrades to a bare [`LIVE_SUBFRAMES`]-sample
-    /// march with no integration at all. See §9.
-    Temporal,
-}
-
-impl Haze {
-    /// Jitter samples per output frame.
-    const fn subframes(self) -> u32 {
-        match self {
-            Self::Accumulate => DEFAULT_SUBFRAMES,
-            Self::Temporal => LIVE_SUBFRAMES,
-        }
-    }
-
-    const fn continuity(self) -> Continuity {
-        match self {
-            Self::Accumulate => Continuity::Cut,
-            Self::Temporal => Continuity::Next,
-        }
-    }
-
-    /// Frames rendered and thrown away before the span, so the history is
-    /// converged when the first kept frame is drawn.
-    const fn warmup(self) -> u64 {
-        match self {
-            Self::Accumulate => 0,
-            Self::Temporal => WARMUP_FRAMES,
-        }
-    }
-}
-
-impl std::str::FromStr for Haze {
-    type Err = String;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        match name {
-            "accumulate" => Ok(Self::Accumulate),
-            "temporal" => Ok(Self::Temporal),
-            other => Err(format!(
-                "--haze takes accumulate or temporal, not {other:?}"
-            )),
-        }
-    }
-}
-
-/// Frames [`Haze::Temporal`] draws and discards before the span starts.
-///
-/// The temporal resolve keeps 82% of the history and mixes in 18% of the new
-/// march, so the weight of the unconverged first frame decays as `0.82^n`:
-/// under 5% by 16 frames and under 1% by 24. Twenty-four is 0.8 s at 30 fps
-/// and about a second of wall time — cheap insurance against a recording that
-/// opens visibly noisier than it ends.
+/// The renderer's temporal resolve keeps 82% of the haze history and mixes in
+/// 18% of the new march, so the weight of the unconverged first frame decays
+/// as `0.82^n`: under 5% by 16 frames and under 1% by 24. Twenty-four is
+/// 0.8 s at 30 fps and about a second of wall time — cheap insurance against a
+/// recording that opens visibly noisier than it ends.
 const WARMUP_FRAMES: u64 = 24;
 
 /// Bits per pixel per second for the hardware encoder's target bitrate.
@@ -117,13 +48,14 @@ const BITS_PER_PIXEL: f64 = 0.15;
 pub struct Recording {
     /// The score to render. Its track and venue come with it.
     pub score_id: String,
-    pub view: View,
+    /// The editor's working copy of the score, when one is open, so the
+    /// recording lights what the stage lights. `None` records the saved score.
+    pub score: Option<luma_patterns::Score>,
+    pub aim: Aim,
     /// Seconds, clamped into the track. `None` records the whole track.
     pub span: Option<(f32, f32)>,
     pub size: (u32, u32),
     pub fps: u32,
-    /// How each output frame integrates time.
-    pub haze: Haze,
     pub output: PathBuf,
 }
 
@@ -170,8 +102,8 @@ pub enum RecordError {
     NoDuration,
     #[error("--span {0}:{1} is empty or outside the track")]
     EmptySpan(f32, f32),
-    #[error("the track's audio file is missing: {0}")]
-    NoAudio(PathBuf),
+    #[error("the track's audio is not on this device: {0}")]
+    NoAudio(String),
     #[error("ffmpeg could not be started ({0}); is the bundled runtime present?")]
     FfmpegSpawn(#[source] std::io::Error),
     #[error("the frame could not be handed to ffmpeg: {0}")]
@@ -192,21 +124,20 @@ impl From<String> for RecordError {
 
 /// Render `spec` to an mp4 with the track's audio.
 ///
-/// Blocks on a blocking-pool thread for the whole render; `cancel` is polled
-/// once per frame and `progress` is called once per frame.
+/// The audio is fetched the way playback fetches it when it is not on this
+/// device yet. Blocks on a blocking-pool thread for the whole render; `cancel`
+/// is polled once per frame and `progress` is called once per frame.
 ///
 /// # Errors
-/// A missing score or venue, an empty span, a missing audio file, no GPU, or a
-/// non-zero ffmpeg exit — whose stderr is in the message.
+/// A missing score or venue, an empty span, audio that cannot be fetched, no
+/// GPU, or a non-zero ffmpeg exit — whose stderr is in the message.
 pub async fn record(
-    pool: &SqlitePool,
-    storage: &StorageRoot,
-    fixtures_root: &Path,
+    services: &AppServices,
     spec: Recording,
     cancel: CancelFlag,
     progress: impl Fn(Progress) + Send + 'static,
 ) -> Result<Recorded, RecordError> {
-    let session = Session::prepare(pool, storage, fixtures_root, spec).await?;
+    let session = Session::prepare(services, spec).await?;
     tokio::task::spawn_blocking(move || session.run(&cancel, &progress))
         .await
         .map_err(|error| RecordError::Library(format!("the recording task failed: {error}")))?
@@ -227,18 +158,12 @@ struct TimeAxis {
     start: f32,
     fps: u32,
     frames: u64,
-    haze: Haze,
 }
 
 impl TimeAxis {
     /// `fps` is clamped to at least 1: zero frames per second is not a
     /// recording, and refusing it would only push the check to every caller.
-    fn new(
-        span: Option<(f32, f32)>,
-        duration: f32,
-        fps: u32,
-        haze: Haze,
-    ) -> Result<Self, RecordError> {
+    fn new(span: Option<(f32, f32)>, duration: f32, fps: u32) -> Result<Self, RecordError> {
         let fps = fps.max(1);
         let (start, end) = span.unwrap_or((0.0, duration));
         // Checked before the clamp, not after: `f32::clamp` *panics* on a NaN
@@ -258,7 +183,6 @@ impl TimeAxis {
             start,
             fps,
             frames: frames as u64,
-            haze,
         })
     }
 
@@ -277,12 +201,11 @@ impl TimeAxis {
         f64::from(self.start) + n as f64 / f64::from(self.fps)
     }
 
-    /// The frame that ends at `time`: one moment, as live and the show export
-    /// draw it ([`footage::moment`]). Its strobes flash when a flash begins in
-    /// the frame interval before it. A recording has no bass envelope, so the
-    /// bass shake stays still.
-    fn moment(&self, time: f64) -> Moment {
-        footage::moment(time, 1.0 / f64::from(self.fps), 0.0)
+    /// The frame that ends at `time`, with the track's bass at `bass`: one
+    /// moment, as live draws it ([`footage::moment`]). Its strobes flash when
+    /// a flash begins in the frame interval before it.
+    fn moment(&self, time: f64, bass: f32) -> Moment {
+        footage::moment(time, 1.0 / f64::from(self.fps), bass)
     }
 
     /// The moments drawn and discarded before frame zero, in order, so that the
@@ -295,8 +218,16 @@ impl TimeAxis {
     /// the haze without inventing a `t` the score has no state for.
     fn warmup(&self) -> impl Iterator<Item = f64> + use<> {
         let (start, fps) = (f64::from(self.start), f64::from(self.fps));
-        let count = self.haze.warmup();
-        (0..count).map(move |i| (start - (count - i) as f64 / fps).max(0.0))
+        (0..WARMUP_FRAMES).map(move |i| (start - (WARMUP_FRAMES - i) as f64 / fps).max(0.0))
+    }
+
+    /// Every moment drawn, in order, and whether it goes into the file: the
+    /// warm-up, then the span.
+    fn ticks(&self) -> impl Iterator<Item = (f64, bool)> + use<> {
+        let axis = *self;
+        self.warmup()
+            .map(|time| (time, false))
+            .chain((0..axis.frames).map(move |n| (axis.time(n), true)))
     }
 }
 
@@ -304,34 +235,15 @@ impl TimeAxis {
 // the encoder
 // ---------------------------------------------------------------------------
 
-/// How the frames handed to [`Encoder::write`] are laid out. Both are sRGB,
-/// four bytes a pixel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pixels {
-    /// Eight bits a channel, red first.
-    Rgba8,
-    /// Ten bits a channel in a little-endian 32-bit word: red in the low ten
-    /// bits, then green, blue and two bits of alpha. What wgpu's
-    /// `Rgb10a2Unorm` reads back as.
-    Rgb10A2,
-}
-
-impl Pixels {
-    /// ffmpeg's name for the layout. `x2bgr10le` names the word's fields
-    /// from the most significant bit down, so red is the low ten bits.
-    fn ffmpeg_name(self) -> &'static str {
-        match self {
-            Self::Rgba8 => "rgba",
-            Self::Rgb10A2 => "x2bgr10le",
-        }
-    }
-}
-
 /// Everything the ffmpeg argv is a function of.
+///
+/// Frames are sRGB at ten bits a channel, as [`Recorder`] reads them back: a
+/// little-endian 32-bit word a pixel, red in the low ten bits, then green,
+/// blue and two bits of alpha — ffmpeg's `x2bgr10le`, which names the fields
+/// from the most significant bit down.
 pub struct Encode<'a> {
     pub size: (u32, u32),
     pub fps: u32,
-    pub pixels: Pixels,
     /// The track file, where in it the video starts, and how long it runs.
     /// `None` writes a silent file.
     pub audio: Option<(&'a Path, f32, f32)>,
@@ -471,7 +383,7 @@ fn ffmpeg_argv(encode: &Encode, codec: Codec) -> Vec<String> {
         "-f".into(),
         "rawvideo".into(),
         "-pix_fmt".into(),
-        encode.pixels.ffmpeg_name().into(),
+        "x2bgr10le".into(),
         "-s".into(),
         format!("{width}x{height}"),
         "-r".into(),
@@ -666,42 +578,53 @@ struct Session {
     axis: TimeAxis,
     lighting: crate::eval::Scene,
     geometry: VenueGeometry,
+    settings: crate::settings::AppSettings,
     meshes_root: PathBuf,
-    view: View,
+    aim: Aim,
     size: (u32, u32),
     audio: PathBuf,
+    /// The decoded track, for the footage look's bass shake.
+    bass: TrackAudio,
     output: PathBuf,
 }
 
 impl Session {
-    async fn prepare(
-        pool: &SqlitePool,
-        storage: &StorageRoot,
-        fixtures_root: &Path,
-        spec: Recording,
-    ) -> Result<Self, RecordError> {
+    async fn prepare(services: &AppServices, spec: Recording) -> Result<Self, RecordError> {
+        let (pool, storage, fixtures_root) = (
+            &services.db().0,
+            services.storage(),
+            services.fixtures_root(),
+        );
         let (track_id, venue_id) = score_scope(pool, &spec.score_id).await?;
 
         let duration = crate::database::local::tracks::get_track_duration(pool, &track_id)
             .await?
             .ok_or(RecordError::NoDuration)? as f32;
-        let axis = TimeAxis::new(spec.span, duration, spec.fps, spec.haze)?;
+        let axis = TimeAxis::new(spec.span, duration, spec.fps)?;
 
-        let audio = PathBuf::from(
-            crate::database::local::tracks::get_track_path_and_hash(pool, &track_id)
-                .await?
-                .file_path,
-        );
-        if !audio.is_file() {
-            return Err(RecordError::NoAudio(audio));
-        }
+        let audio = services
+            .track_audio
+            .ensure(&track_id)
+            .await
+            .map_err(|error| RecordError::NoAudio(error.to_string()))?;
+        // Decoded through the cache playback fills, so a track the stage has
+        // played is not decoded twice.
+        let hash = crate::database::local::tracks::get_track_path_and_hash(pool, &track_id)
+            .await?
+            .track_hash;
+        let path = audio.clone();
+        let samples = tokio::task::spawn_blocking(move || {
+            crate::audio::load_or_decode_audio_shared(&path, &hash)
+        })
+        .await
+        .map_err(|error| RecordError::Library(format!("the decode failed: {error}")))??;
 
         let lighting = crate::compositor::build_score_scene(
             pool,
             storage,
             fixtures_root,
             &spec.score_id,
-            None,
+            spec.score,
         )
         .await?;
         if lighting.annotations.is_empty() {
@@ -712,15 +635,18 @@ impl Session {
         if geometry.is_empty() {
             return Err(RecordError::EmptyVenue);
         }
+        let settings = crate::settings::load_settings(pool).await?;
 
         Ok(Self {
             axis,
             lighting,
             geometry,
+            settings,
             meshes_root: stage_render::meshes_root(Some(fixtures_root)),
-            view: spec.view,
-            size: spec.size,
+            aim: spec.aim,
+            size: (spec.size.0.max(1), spec.size.1.max(1)),
             audio,
+            bass: TrackAudio::whole(samples),
             output: spec.output,
         })
     }
@@ -731,78 +657,97 @@ impl Session {
         cancel: &AtomicBool,
         progress: &(dyn Fn(Progress) + Send),
     ) -> Result<Recorded, RecordError> {
-        let (scene, definitions) = self.geometry.scene();
-        let booth = self.geometry.booth();
-        let sequence = Sequence::install(
-            scene,
-            definitions,
-            self.geometry.lasers.clone(),
-            self.meshes_root.clone(),
-            self.view,
-            booth,
-            self.size,
-        )?;
-        let (width, height) = sequence.size();
+        let (width, height) = self.size;
+        let (mut scene, definitions) = self.geometry.show_scene(&self.settings);
+        let camera = self
+            .aim
+            .camera(&scene, &definitions, self.geometry.booth(), self.size);
+        scene.camera.position = coords::three_from_world(camera.position()).to_array();
+        scene.camera.target = coords::three_from_world(camera.target).to_array();
+        scene.render.fov = camera.fov_y_deg;
 
         let mut encoder = Encoder::start(&Encode {
-            size: (width, height),
+            size: self.size,
             fps: self.axis.fps,
-            pixels: Pixels::Rgba8,
             audio: Some((&self.audio, self.axis.start, self.axis.seconds())),
             output: &self.output,
         })?;
-
-        let haze = self.axis.haze;
+        let mut recorder = Recorder::new()
+            .map_err(|error| RecordError::Library(format!("no GPU for the recording: {error}")))?;
+        let mut assets = assets::Library::new(self.meshes_root.clone());
+        let mut motors = Motors::default();
         let mut arena = Arena::default();
-        // The light state at the frame's track time, drawn at its moment.
-        // Before the top of the track the score holds its first state.
-        let frame = |time: f64, arena: &mut Arena| -> Result<Vec<u8>, RecordError> {
-            let state = self
-                .lighting
-                .render(&[time.max(0.0) as f32], Scope::Composite, arena)
-                .into_iter()
-                .next();
-            Ok(sequence.frame_at(
-                state,
-                self.axis.moment(time),
-                haze.subframes(),
-                haze.continuity(),
-            )?)
-        };
-        // Warm the haze history before the clock starts, so the discarded
-        // frames do not land in the measured cost of the kept ones.
-        for t in self.axis.warmup() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            frame(t, &mut arena)?;
-        }
+
         let started = Instant::now();
         let (mut render, mut encode) = (Duration::ZERO, Duration::ZERO);
         let mut written = 0u64;
         let mut cancelled = false;
-
-        for n in 0..self.axis.frames() {
+        // Whether each frame in flight is kept, oldest first. The recorder
+        // hands frames back in the order they went in.
+        let mut in_flight = VecDeque::new();
+        let mut keep =
+            |kept: Option<bool>, pixels: Vec<u8>, render: Duration| -> Result<(), RecordError> {
+                if kept != Some(true) {
+                    return Ok(());
+                }
+                let clock = Instant::now();
+                encoder.write(pixels)?;
+                encode += clock.elapsed();
+                written += 1;
+                progress(Progress {
+                    frame: written,
+                    total: self.axis.frames(),
+                    elapsed: started.elapsed(),
+                    render,
+                    encode,
+                });
+                Ok(())
+            };
+        for (time, kept) in self.axis.ticks() {
             if cancel.load(Ordering::Relaxed) {
                 cancelled = true;
                 break;
             }
             let clock = Instant::now();
-            let pixels = frame(self.axis.time(n), &mut arena)?;
+            // The light state at the frame's track time, turned by the motors
+            // and drawn at its moment, as the stage draws it.
+            let score = time as f32;
+            let state = self
+                .lighting
+                .render(&[score], Scope::Composite, &mut arena)
+                .into_iter()
+                .next();
+            let universe = motors.step(time, score, state);
+            let moment = self.axis.moment(time, self.bass.bass_at(score));
+            let mut frame = build_frame_at(
+                &scene,
+                &definitions,
+                &|id, head| stage_render::primitive_state(universe.as_ref(), id, head),
+                moment,
+                &mut assets,
+            )
+            .map_err(|error| {
+                RecordError::Library(format!("could not assemble the frame: {error}"))
+            })?;
+            if let Some(state) = &universe {
+                frame.lasers = stage_render::laser_scans(&self.geometry.lasers, state, time);
+            }
+            in_flight.push_back(kept);
+            let done = recorder.push(&frame, width, height).map_err(|error| {
+                RecordError::Library(format!("could not render the frame: {error}"))
+            })?;
             render += clock.elapsed();
-
-            let clock = Instant::now();
-            encoder.write(pixels)?;
-            encode += clock.elapsed();
-            written += 1;
-            progress(Progress {
-                frame: written,
-                total: self.axis.frames(),
-                elapsed: started.elapsed(),
-                render,
-                encode,
-            });
+            if let Some(pixels) = done {
+                keep(in_flight.pop_front(), pixels, render)?;
+            }
         }
+        while let Some(pixels) = recorder
+            .pop()
+            .map_err(|error| RecordError::Library(format!("could not render the frame: {error}")))?
+        {
+            keep(in_flight.pop_front(), pixels, render)?;
+        }
+        drop(keep);
         let elapsed = started.elapsed();
 
         // A cancelled recording is still closed the ordinary way, so what
@@ -841,8 +786,7 @@ mod tests {
 
     #[test]
     fn the_whole_track_is_the_default_span() {
-        let axis =
-            TimeAxis::new(None, 10.0, 30, Haze::Accumulate).expect("a ten second track records");
+        let axis = TimeAxis::new(None, 10.0, 30).expect("a ten second track records");
         assert_eq!(axis.frames(), 300);
         assert!((axis.time(0) - 0.0).abs() < 1e-6);
         // The last frame is one interval before the end, not at it.
@@ -852,18 +796,13 @@ mod tests {
 
     #[test]
     fn a_span_is_clamped_into_the_track_rather_than_refused() {
-        let axis = TimeAxis::new(Some((-5.0, 400.0)), 10.0, 30, Haze::Accumulate)
-            .expect("clamps to the track");
-        assert_eq!(
-            axis,
-            TimeAxis::new(None, 10.0, 30, Haze::Accumulate).unwrap()
-        );
+        let axis = TimeAxis::new(Some((-5.0, 400.0)), 10.0, 30).expect("clamps to the track");
+        assert_eq!(axis, TimeAxis::new(None, 10.0, 30).unwrap());
     }
 
     #[test]
     fn a_span_records_only_its_own_frames() {
-        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 25, Haze::Accumulate)
-            .expect("a ten second span");
+        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 25).expect("a ten second span");
         assert_eq!(axis.frames(), 250);
         assert!((axis.time(0) - 30.0).abs() < 1e-5);
     }
@@ -871,51 +810,43 @@ mod tests {
     #[test]
     fn a_span_that_clamps_to_nothing_is_the_one_error() {
         assert!(matches!(
-            TimeAxis::new(Some((40.0, 30.0)), 200.0, 30, Haze::Accumulate),
+            TimeAxis::new(Some((40.0, 30.0)), 200.0, 30),
             Err(RecordError::EmptySpan(..))
         ));
         assert!(matches!(
-            TimeAxis::new(Some((300.0, 400.0)), 200.0, 30, Haze::Accumulate),
+            TimeAxis::new(Some((300.0, 400.0)), 200.0, 30),
             Err(RecordError::EmptySpan(..))
         ));
         assert!(matches!(
-            TimeAxis::new(None, f32::NAN, 30, Haze::Accumulate),
+            TimeAxis::new(None, f32::NAN, 30),
             Err(RecordError::EmptySpan(..))
         ));
     }
 
     #[test]
     fn zero_fps_is_repaired_not_refused() {
-        let axis =
-            TimeAxis::new(None, 4.0, 0, Haze::Accumulate).expect("clamped to one frame per second");
+        let axis = TimeAxis::new(None, 4.0, 0).expect("clamped to one frame per second");
         assert_eq!(axis.frames(), 4);
     }
 
     #[test]
     fn a_frame_is_one_moment_whose_slice_meets_the_next() {
-        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30, Haze::Accumulate).unwrap();
+        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30).unwrap();
         for n in [0u64, 1, 299] {
-            let moment = axis.moment(axis.time(n));
+            let moment = axis.moment(axis.time(n), 0.0);
             // The frame ends on its time, and its strobes answer for the whole
             // interval since the frame before.
             assert_eq!(moment.time, axis.time(n));
             assert!((moment.slice.open + moment.slice.length - moment.time).abs() < 1e-12);
             assert!((moment.slice.length - 1.0 / 30.0).abs() < 1e-12);
-            let next = axis.moment(axis.time(n + 1)).slice;
+            let next = axis.moment(axis.time(n + 1), 0.0).slice;
             assert!((next.open - moment.time).abs() < 1e-12);
         }
     }
 
     #[test]
-    fn only_temporal_warms_up_and_it_lands_on_the_output_grid() {
-        assert_eq!(
-            TimeAxis::new(None, 10.0, 30, Haze::Accumulate)
-                .unwrap()
-                .warmup()
-                .count(),
-            0
-        );
-        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30, Haze::Temporal).unwrap();
+    fn the_warm_up_lands_on_the_output_grid() {
+        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30).unwrap();
         let warm: Vec<f64> = axis.warmup().collect();
         assert_eq!(warm.len(), WARMUP_FRAMES as usize);
         // Ascending, and the last one is one interval before frame zero, so
@@ -929,26 +860,27 @@ mod tests {
 
     #[test]
     fn a_warm_up_never_walks_off_the_front_of_the_track() {
-        let axis = TimeAxis::new(None, 10.0, 30, Haze::Temporal).unwrap();
+        let axis = TimeAxis::new(None, 10.0, 30).unwrap();
         assert!(axis.warmup().all(|t| t >= 0.0));
     }
 
     #[test]
-    fn the_two_modes_spend_the_export_and_the_live_haze_budgets() {
-        assert_eq!(Haze::Accumulate.subframes(), DEFAULT_SUBFRAMES);
-        assert_eq!(Haze::Temporal.subframes(), LIVE_SUBFRAMES);
-        assert_eq!(Haze::Accumulate.continuity(), Continuity::Cut);
-        assert_eq!(Haze::Temporal.continuity(), Continuity::Next);
+    fn every_frame_of_the_span_is_kept_once_after_the_warm_up() {
+        let axis = TimeAxis::new(Some((2.0, 3.0)), 10.0, 30).unwrap();
+        let ticks: Vec<(f64, bool)> = axis.ticks().collect();
+        let warm = WARMUP_FRAMES as usize;
+        assert_eq!(ticks.len(), warm + 30);
+        assert!(ticks[..warm].iter().all(|&(_, kept)| !kept));
+        let kept: Vec<f64> = ticks[warm..].iter().map(|&(time, _)| time).collect();
+        assert!(ticks[warm..].iter().all(|&(_, kept)| kept));
+        assert_eq!(kept, (0..30).map(|n| axis.time(n)).collect::<Vec<_>>());
     }
 
     #[test]
-    fn a_mode_is_named_by_its_flag_value() {
-        use std::str::FromStr;
-        assert_eq!(Haze::from_str("temporal"), Ok(Haze::Temporal));
-        assert_eq!(Haze::from_str("accumulate"), Ok(Haze::Accumulate));
-        assert_eq!(Haze::default(), Haze::Accumulate);
-        assert!(Haze::from_str("Temporal").is_err());
-        assert!(Haze::from_str("").is_err());
+    fn the_bass_reaches_the_moment() {
+        let axis = TimeAxis::new(None, 10.0, 30).unwrap();
+        assert_eq!(axis.moment(1.0, 0.7).bass, 0.7);
+        assert_eq!(axis.moment(1.0, 0.0).bass, 0.0);
     }
 
     #[test]
@@ -957,14 +889,13 @@ mod tests {
             &Encode {
                 size: (1280, 720),
                 fps: 30,
-                pixels: Pixels::Rgba8,
                 audio: Some((Path::new("/tracks/a.mp3"), 0.0, 10.0)),
                 output: Path::new("/out/a.mp4"),
             },
             Codec::X264,
         );
         let line = argv.join(" ");
-        assert!(line.contains("-f rawvideo -pix_fmt rgba -s 1280x720 -r 30 -i pipe:0"));
+        assert!(line.contains("-f rawvideo -pix_fmt x2bgr10le -s 1280x720 -r 30 -i pipe:0"));
         assert!(line.contains("-t 10 -i /tracks/a.mp3 -map 0:v:0 -map 1:a:0"));
         // Converted with the matrix it is tagged with.
         assert!(line.contains("out_color_matrix=bt709"));
@@ -983,7 +914,6 @@ mod tests {
             &Encode {
                 size: (640, 360),
                 fps: 25,
-                pixels: Pixels::Rgba8,
                 audio: Some((Path::new("/tracks/a.mp3"), 30.0, 12.5)),
                 output: Path::new("/out/a.mp4"),
             },
@@ -1004,7 +934,6 @@ mod tests {
             &Encode {
                 size: (640, 360),
                 fps: 60,
-                pixels: Pixels::Rgb10A2,
                 audio: None,
                 output: Path::new("/out/a.mp4"),
             },
@@ -1029,7 +958,6 @@ mod tests {
         let encode = Encode {
             size: (width, height),
             fps: 30,
-            pixels: Pixels::Rgb10A2,
             audio: None,
             output: &output,
         };

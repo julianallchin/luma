@@ -1,9 +1,9 @@
 # Recording a score as video
 
-Status: **built** for the CLI slice — see §8 for what landed, what was measured,
-and what the measurements changed, and §9 for the second sampling mode. §1–§7
-are the original design; where a later section disagrees with an earlier one,
-the later one is what the code does.
+Status: **built**, and the app's "Export show" is now a caller too — see §10,
+which supersedes §9. §8 is what landed first and what was measured. §1–§7 are
+the original design; where a later section disagrees with an earlier one, the
+later one is what the code does.
 
 Scope: one module in `backend/src`, one change to `stage_render`, one change to
 `ffmpeg_env`, and thin callers.
@@ -674,3 +674,32 @@ Two things would change the recommendation and neither is built:
    `build_frame_with`. That is still the root cause of why time integration costs
    a whole re-render, and it is a `luma_render::frame` change, not a recording
    one.
+
+---
+
+## 10. One recorder
+
+"Export show" had grown its own frame loop beside this module, and the two
+drifted: the app's had the stage camera, motor lag and the bass shake; the
+CLI's had named views, a missing-audio error and the editor grid. They are now
+one. `recording::record` is the only frame loop, and both the dialog and
+`luma-record` start a `Recording` and wait.
+
+- **Draw.** `luma_render::Recorder`: the live pass chain, pipelined three
+  frames deep, read back at ten bits a channel. `Haze` and its `accumulate`
+  mode are gone with the second loop, and with them §9's 180° shutter: a
+  recording draws what the stage draws.
+- **Aim.** `stage_render::Aim` is a named view fitted to the rig, or a stage
+  camera exactly as held — the dialog passes the stage's, and
+  `luma-record --camera` reads one from the stage's "Export camera" file.
+- **Light.** `build_score_scene` with the editor's working copy when the dialog
+  has one, so a file lights what the stage lights. Motor lag is
+  `luma_lib::motors`, the stage's own.
+- **Look.** `VenueGeometry::show_scene`: the device's stage look at full
+  quality, without the grid and gizmos.
+- **Audio.** `TrackAudio::ensure`, the fetch playback and the waveform use, so
+  a track whose audio lives on another device is downloaded rather than
+  refused. The bass shake reads the track decoded through playback's cache.
+- **Size.** Recordings are uncapped; `MAX_DIMENSION` is the agent's still cap
+  and applies to stills only.
+

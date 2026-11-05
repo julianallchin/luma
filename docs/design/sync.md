@@ -126,7 +126,7 @@ is an upsert.
 
 venues, venue_members, fixtures, fixture_groups, fixture_group_members,
 venue_nodes, venue_edges, venue_node_params, venue_constraints, folders,
-folder_tracks, laser_zones, laser_limits, tracks,
+folder_tracks, laser_zones, laser_limits, perform_patterns, perform_layouts, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
 clips, agent_threads, agent_thread_messages,

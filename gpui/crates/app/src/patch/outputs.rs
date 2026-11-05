@@ -6,6 +6,7 @@
 //! several ports, and a universe with none is sent nowhere, which the row says
 //! out loud.
 
+use luma_ui::motion::FadeHover;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, SharedString};
 
@@ -270,12 +271,9 @@ fn choice(
         .id(SharedString::from(key.clone()))
         .text_size(px(11.0))
         .text_color(ladder::foreground_90())
-        .bg(luma_ui::motion::hover_blend(
-            &key,
-            luma_ui::glass::wash(0.),
-            ladder::hover().into(),
-        ))
-        .on_hover(luma_ui::motion::hover_listener(key.clone()))
+        .bg(luma_ui::glass::wash(0.))
+        .hover(|style| style.bg(ladder::hover()))
+        .fade_hover()
         .child(label.clone())
         .on_click(move |_, _, cx| {
             let venue = venue.clone();

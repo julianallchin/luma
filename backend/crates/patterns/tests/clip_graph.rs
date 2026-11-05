@@ -593,7 +593,7 @@ fn smallest_graph(kind: Kind) -> ClipGraph {
             nodes.push(("figure9".into(), Node::new(Kind::Figure)));
         }
         Kind::Figure => nodes.push(("laser9".into(), laser_of(&id))),
-        Kind::Time | Kind::Space | Kind::Random | Kind::Audio | Kind::Control => {
+        Kind::Time | Kind::Space | Kind::Random | Kind::Audio | Kind::Control | Kind::Button => {
             nodes.push(("curve9".into(), curve_of(&id)));
             nodes.push(("color9".into(), color("curve9")));
         }
@@ -795,4 +795,83 @@ fn a_control_is_named_like_a_group() {
     assert!(named("front_level").is_ok());
     let refused = named("Front Level").expect_err("not snake_case");
     assert!(refused.0.contains("c.name"), "{}", refused.0);
+}
+
+// ---- the pad ----
+
+fn pad_of(nodes: Value) -> Option<String> {
+    graph(nodes).pad().map(|pad| pad.node)
+}
+
+#[test]
+fn the_pad_is_the_button_alpha_depends_on() {
+    let wired = pad_of(json!({
+        "pad": {"kind": "button"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "pad"}}},
+        "color1": {"kind": "color", "inputs": {"alpha": {"node": "curve1"}}}}));
+    assert_eq!(wired.as_deref(), Some("pad"), "through its curve");
+
+    let through_math = pad_of(json!({
+        "hit": {"kind": "button"},
+        "fader": {"kind": "control"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "hit"}}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "fader"}}},
+        "math1": {"kind": "math", "inputs": {"values": [{"node": "curve2"}, {"node": "curve1"}]}},
+        "color1": {"kind": "color", "inputs": {"alpha": {"node": "math1"}}}}));
+    assert_eq!(
+        through_math.as_deref(),
+        Some("hit"),
+        "past a fader and math"
+    );
+
+    let elsewhere = pad_of(json!({
+        "hit": {"kind": "button"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "hit"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}, "alpha": 0.5}}}));
+    assert_eq!(elsewhere, None, "a button on brightness is no pad");
+}
+
+#[test]
+fn of_several_buttons_on_alpha_the_first_by_id_is_the_pad() {
+    let pad = pad_of(json!({
+        "b": {"kind": "button"},
+        "a": {"kind": "button"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "b"}}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "a"}}},
+        "math1": {"kind": "math", "inputs": {"values": [{"node": "curve1"}, {"node": "curve2"}]}},
+        "color1": {"kind": "color", "inputs": {"alpha": {"node": "math1"}}}}));
+    assert_eq!(pad.as_deref(), Some("a"));
+}
+
+#[test]
+fn with_pad_wires_a_toggle_into_alpha_and_keeps_what_alpha_held() {
+    let wash = presets().clip("Wash").unwrap().graph.clone();
+    assert_eq!(wash.pad(), None);
+    let padded = wash.clone().with_pad();
+    padded.check().expect("a padded graph passes");
+    let pad = padded.pad().expect("a pad");
+    assert_eq!(pad.name, "pad");
+    let luma_patterns::clip_graph::LiveInputKind::Button(press) = pad.kind else {
+        panic!("a pad is a button: {:?}", pad.kind);
+    };
+    assert_eq!(press.mode, luma_patterns::press::PressMode::Toggle);
+    assert_eq!(padded.clone().with_pad(), padded, "one pad is enough");
+
+    let half = graph(json!({"color1": {"kind": "color", "inputs": {"alpha": 0.5}}})).with_pad();
+    half.check().expect("passes");
+    assert!(half.pad().is_some());
+    let (_, output) = half.output().unwrap();
+    let math = &half.nodes[output.inputs["alpha"].source().expect("alpha is wired")];
+    assert_eq!(math.kind, Kind::Math);
+    assert!(
+        matches!(&math.inputs["values"], Input::List(values) if values.contains(&Input::Number(0.5))),
+        "the pad times the alpha it had: {:?}",
+        math.inputs
+    );
+
+    assert_eq!(
+        ClipGraph::default().with_pad(),
+        ClipGraph::default(),
+        "no output, no pad"
+    );
 }

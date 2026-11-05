@@ -1,14 +1,19 @@
 //! Editor context is captured in the durable user turn, never in tool arguments.
 //!
 //! Each user message carries the editor as it stood when the message was
-//! sent, as a hidden part. The model reads that part as a short
+//! sent, as a hidden part: the track editor's timeline, or the Perform tab's
+//! page, selection and what is playing. The model reads that part as a short
 //! `<editor-context>` text block after the message; the chat does not show it.
 //! The system prompt stays the same for the whole thread, so its cache holds.
 
 use std::fmt::Write as _;
 
+use crate::controls::perform as names;
 use crate::models::agent_threads::AgentThread;
 use crate::models::node_graph::BeatGrid;
+use crate::models::perform::{
+    Cell, CellContent, PerformClock, PerformLayout, PerformPattern, PerformSource, PerformState,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -19,6 +24,9 @@ pub const PART_TYPE: &str = "data-luma-context";
 
 /// At most this many clips go into one message's context.
 pub const MAX_CLIPS: usize = 40;
+
+/// At most this many playing patterns go into one message's context.
+pub const MAX_PLAYING: usize = 40;
 
 /// The track editor when a message was sent. Times are seconds from the
 /// start of the track.
@@ -154,6 +162,244 @@ impl EditorState {
                 })
                 .collect(),
             clips_omitted,
+        }
+    }
+}
+
+/// The Perform tab when a message was sent.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformView {
+    /// Setup, where the set is arranged, rather than Perform, where it is
+    /// played.
+    pub setup: bool,
+    pub page: Option<PerformPageView>,
+    pub selected: Option<PerformCellView>,
+    /// The patterns that play: those whose pads are on and, while the set is
+    /// open, those with no pad; the top of the set first, at most
+    /// [`MAX_PLAYING`].
+    pub playing: Vec<PlayingPattern>,
+    #[serde(default)]
+    pub playing_omitted: usize,
+    /// The Perform master, 0–1.
+    pub master: f64,
+    pub clock: Option<PerformClockView>,
+    /// The DJ source followed, and whether it is up.
+    pub source: Option<PerformSourceView>,
+    pub decks: Vec<PerformDeckView>,
+}
+
+/// The page on screen.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformPageView {
+    pub id: String,
+    pub name: String,
+    /// Counted from 1.
+    pub number: usize,
+    pub of: usize,
+    pub columns: u16,
+    pub rows: u16,
+}
+
+/// A cell, where it is and what it holds, in words.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformCellView {
+    pub id: String,
+    pub column: u16,
+    pub row: u16,
+    pub width: u16,
+    pub height: u16,
+    /// `pattern <id> "<name>", selection <expression>`, `master`, `tap` or
+    /// `fader "<label>"` and what it moves.
+    pub holds: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayingPattern {
+    pub id: String,
+    pub name: String,
+    pub level: f64,
+}
+
+/// What the set plays at: a deck's tempo, or the tapped one.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformClockView {
+    /// The deck it follows; `None` is the tapped tempo.
+    pub deck: Option<u8>,
+    pub bpm: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformSourceView {
+    pub name: String,
+    pub connected: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformDeckView {
+    pub id: u8,
+    pub title: String,
+    pub artist: String,
+    pub bpm: f64,
+    pub playing: bool,
+}
+
+impl PerformView {
+    /// Put the Perform tab's state into the shape a message carries: the
+    /// page on screen (`page` indexes `layout.pages`), the selected cell, and
+    /// from `live`, what plays and to what.
+    #[must_use]
+    pub fn capture(
+        setup: bool,
+        layout: Option<&PerformLayout>,
+        page: usize,
+        selected: Option<&str>,
+        patterns: &[PerformPattern],
+        live: Option<&PerformState>,
+    ) -> Self {
+        let pages = layout.map_or(&[][..], |layout| &layout.pages[..]);
+        let shown = pages.get(page.min(pages.len().saturating_sub(1)));
+        let value = |name: &str, rest: f64| {
+            live.and_then(|live| live.controls.get(name).copied())
+                .unwrap_or(rest)
+        };
+        let mut playing: Vec<PlayingPattern> = patterns
+            .iter()
+            .filter(|pattern| {
+                live.is_some_and(|live| match names::pad(pattern) {
+                    Some(pad) => live.buttons.get(&pad).is_some_and(|pad| pad.on()),
+                    None => live.clock.is_some(),
+                })
+            })
+            .map(|pattern| PlayingPattern {
+                id: pattern.id.clone(),
+                name: pattern.name.clone(),
+                level: value(&names::level(&pattern.id), 1.0),
+            })
+            .collect();
+        let playing_omitted = playing.len().saturating_sub(MAX_PLAYING);
+        playing.truncate(MAX_PLAYING);
+        Self {
+            setup,
+            page: shown.map(|shown| PerformPageView {
+                id: shown.id.clone(),
+                name: shown.name.clone(),
+                number: pages.iter().position(|one| one.id == shown.id).unwrap_or(0) + 1,
+                of: pages.len(),
+                columns: shown.columns,
+                rows: shown.rows,
+            }),
+            selected: shown
+                .and_then(|shown| {
+                    shown
+                        .cells
+                        .iter()
+                        .find(|cell| Some(cell.id.as_str()) == selected)
+                })
+                .map(|cell| PerformCellView {
+                    id: cell.id.clone(),
+                    column: cell.column,
+                    row: cell.row,
+                    width: cell.width,
+                    height: cell.height,
+                    holds: holds(cell, patterns),
+                }),
+            playing,
+            playing_omitted,
+            master: value(names::MASTER, 1.0),
+            clock: live
+                .and_then(|live| live.clock.as_ref())
+                .map(|clock| match clock {
+                    PerformClock::Deck { deck } => PerformClockView {
+                        deck: Some(*deck),
+                        bpm: live
+                            .and_then(|live| live.decks.iter().find(|one| one.id == *deck))
+                            .map(|one| one.bpm),
+                    },
+                    PerformClock::Tap(tempo) => PerformClockView {
+                        deck: None,
+                        bpm: Some(tempo.bpm),
+                    },
+                }),
+            source: live.and_then(|live| {
+                live.source.as_ref().map(|source| PerformSourceView {
+                    name: match source {
+                        PerformSource::RkbxLink { .. } => "Rekordbox (rkbx_link)",
+                        PerformSource::ProDjLink { .. } => "Pro DJ Link",
+                        PerformSource::StageLinq => "StageLinQ",
+                        PerformSource::Virtual => "Luma's player",
+                    }
+                    .into(),
+                    connected: live.connected,
+                })
+            }),
+            decks: live
+                .map(|live| {
+                    live.decks
+                        .iter()
+                        .map(|deck| PerformDeckView {
+                            id: deck.id,
+                            title: deck.title.clone(),
+                            artist: deck.artist.clone(),
+                            bpm: deck.bpm,
+                            playing: deck.playing,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// What `cell` holds, as the context block says it.
+fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
+    let name = |id: &str| {
+        patterns
+            .iter()
+            .find(|pattern| pattern.id == id)
+            .map_or_else(
+                || "a deleted pattern".to_owned(),
+                |pattern| format!("{:?}", pattern.name),
+            )
+    };
+    match &cell.content {
+        CellContent::Pattern { pattern_id } => {
+            match patterns.iter().find(|p| &p.id == pattern_id) {
+                Some(pattern) => format!(
+                    "pattern {} {:?}, selection {}",
+                    pattern.id, pattern.name, pattern.selection.expression
+                ),
+                None => format!("pattern {pattern_id}, deleted"),
+            }
+        }
+        CellContent::Master => "master".into(),
+        CellContent::Tap => "tap".into(),
+        CellContent::Fader { label, targets } => {
+            let targets: Vec<String> = targets
+                .iter()
+                .map(|target| match target {
+                    crate::models::perform::ControlTarget::Level { pattern_id } => {
+                        format!("the level of {}", name(pattern_id))
+                    }
+                    crate::models::perform::ControlTarget::Node { pattern_id, node } => {
+                        format!("{node} of {}", name(pattern_id))
+                    }
+                    crate::models::perform::ControlTarget::Named { name } => {
+                        format!("control {name}")
+                    }
+                })
+                .collect();
+            if targets.is_empty() {
+                format!("fader {label:?}, moving nothing")
+            } else {
+                format!("fader {label:?}, moving {}", targets.join(", "))
+            }
         }
     }
 }
@@ -300,8 +546,72 @@ pub fn render(context: &TurnContext) -> String {
     if let Some(editor) = &context.editor {
         render_editor(&mut out, editor);
     }
+    if let Some(perform) = &context.perform {
+        render_perform(&mut out, perform);
+    }
     out.push_str("</editor-context>");
     out
+}
+
+fn render_perform(out: &mut String, perform: &PerformView) {
+    let view = if perform.setup { "Setup" } else { "Perform" };
+    let _ = writeln!(out, "Perform tab, {view} view");
+    match &perform.page {
+        Some(page) => {
+            let _ = writeln!(
+                out,
+                "Page {} {:?} ({} of {}), {} columns by {} rows",
+                page.id, page.name, page.number, page.of, page.columns, page.rows
+            );
+        }
+        None => out.push_str("No page yet\n"),
+    }
+    if let Some(cell) = &perform.selected {
+        let _ = writeln!(
+            out,
+            "Selected cell: {} at column {}, row {}, {} by {}: {}",
+            cell.id, cell.column, cell.row, cell.width, cell.height, cell.holds
+        );
+    }
+    let total = perform.playing.len() + perform.playing_omitted;
+    if total == 0 {
+        out.push_str("Playing: nothing\n");
+    } else {
+        let _ = writeln!(out, "Playing ({total}):");
+        for pattern in &perform.playing {
+            let _ = writeln!(
+                out,
+                "- {} {:?} at level {:.2}",
+                pattern.id, pattern.name, pattern.level
+            );
+        }
+        if perform.playing_omitted > 0 {
+            let _ = writeln!(out, "…and {} more", perform.playing_omitted);
+        }
+    }
+    let _ = writeln!(out, "Master: {:.2}", perform.master);
+    if let Some(clock) = &perform.clock {
+        let bpm = clock
+            .bpm
+            .map(|bpm| format!(", {bpm:.1} BPM"))
+            .unwrap_or_default();
+        let _ = match clock.deck {
+            Some(deck) => writeln!(out, "Clock: deck {deck}{bpm}"),
+            None => writeln!(out, "Clock: tapped tempo{bpm}"),
+        };
+    }
+    if let Some(source) = &perform.source {
+        let state = if source.connected { "up" } else { "not up" };
+        let _ = writeln!(out, "Following: {}, {state}", source.name);
+    }
+    for deck in &perform.decks {
+        let playing = if deck.playing { "playing" } else { "stopped" };
+        let _ = writeln!(
+            out,
+            "Deck {}: {:?} by {:?}, {:.1} BPM, {playing}",
+            deck.id, deck.title, deck.artist, deck.bpm
+        );
+    }
 }
 
 fn render_editor(out: &mut String, editor: &EditorState) {
@@ -463,6 +773,7 @@ mod tests {
         TurnContext {
             scope: Some(ThreadScope::track("track-1", "venue-1", "score-1")),
             editor: Some(editor),
+            perform: None,
         }
     }
 
@@ -605,6 +916,84 @@ mod tests {
         assert!(text.contains("\n…and 15 more\n</editor-context>"), "{text}");
     }
 
+    fn perform_pattern(id: &str, name: &str) -> PerformPattern {
+        let preset = luma_patterns::presets().clip("Wash").expect("Wash");
+        PerformPattern {
+            id: id.into(),
+            venue_id: "venue-1".into(),
+            name: name.into(),
+            selection: luma_patterns::Selection {
+                expression: "front_wash".into(),
+            },
+            z_index: 0,
+            blend_mode: preset.blend_mode,
+            seed: 1,
+            graph: preset.graph.clone().with_pad(),
+        }
+    }
+
+    /// From the Perform tab, a message says the page on screen, the
+    /// selected cell, what plays at what level, and the clock.
+    #[test]
+    fn a_perform_message_says_what_is_on_screen_and_what_plays() {
+        let patterns = [
+            perform_pattern("p1", "Warm wash"),
+            perform_pattern("p2", "Strobe"),
+        ];
+        let mut layout = PerformLayout::generated(&patterns);
+        layout.pages[0].name = "Main".into();
+        let selected = layout.pages[0].cells[0].id.clone();
+        let on = luma_patterns::press::Button {
+            press: Default::default(),
+            gate: Some(luma_patterns::press::Gate {
+                on_for: 1.0,
+                off_for: None,
+            }),
+        };
+        let live = PerformState::off(
+            0.0,
+            Some(PerformClock::Tap(crate::models::perform::Tempo {
+                bpm: 124.0,
+                beat: 3.0,
+            })),
+            [(names::level("p1"), 0.5), (names::MASTER.to_owned(), 0.8)].into(),
+            [(names::pad(&patterns[0]).expect("a pad"), on)].into(),
+        );
+        let view = PerformView::capture(
+            true,
+            Some(&layout),
+            0,
+            Some(&selected),
+            &patterns,
+            Some(&live),
+        );
+        assert_eq!(view.playing.len(), 1, "only the pattern whose pad is on");
+        let text = render(&TurnContext {
+            scope: Some(ThreadScope::perform("venue-1")),
+            editor: None,
+            perform: Some(view),
+        });
+        assert!(
+            text.starts_with("<editor-context>\nVenue: venue-1\n"),
+            "{text}"
+        );
+        assert!(text.contains("Perform tab, Setup view\n"), "{text}");
+        assert!(text.contains("\"Main\" (1 of 1)"), "{text}");
+        assert!(
+            text.contains(
+                "at column 0, row 0, 1 by 1: pattern p1 \"Warm wash\", selection front_wash"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("- p1 \"Warm wash\" at level 0.50\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Strobe\" at level"), "{text}");
+        assert!(text.contains("Master: 0.80\n"), "{text}");
+        assert!(text.contains("Clock: tapped tempo, 124.0 BPM\n"), "{text}");
+    }
+
     /// Rows written before messages carried the editor still parse, and say
     /// which ids were open.
     #[test]
@@ -612,9 +1001,12 @@ mod tests {
         let mut old = serde_json::to_value(TurnContext {
             scope: Some(ThreadScope::track("track-1", "venue-1", "score-1")),
             editor: None,
+            perform: None,
         })
         .expect("context");
-        old.as_object_mut().expect("object").remove("editor");
+        let object = old.as_object_mut().expect("object");
+        object.remove("editor");
+        object.remove("perform");
         let context: TurnContext = serde_json::from_value(old).expect("old row");
         assert!(context.editor.is_none());
         let message = AgentChatMessage {
@@ -628,6 +1020,7 @@ mod tests {
         let empty = TurnContext {
             scope: None,
             editor: None,
+            perform: None,
         };
         assert!(render(&empty).contains("No track or venue is open."));
     }

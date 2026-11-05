@@ -227,7 +227,7 @@ it (Circle and Pinwheel: the swing; Ballyhoo: speed, scale and swing).
 3. Every node has one output wire. A wire goes into an input of another node.
 4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
-6. Coordinate nodes give a raw 0–1 coordinate: `clock`+`time`, `space`, `random`, `audio`, `control`.
+6. Coordinate nodes give a raw 0–1 coordinate: `clock`+`time`, `space`, `random`, `audio`, `control`, `button`.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no clock = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
@@ -282,7 +282,7 @@ Wire types (one per node kind):
 |---|---|---|
 | clock | `clock` | `time.clock`, `shuffle.clock` |
 | heads | `mirror`, `shuffle`, `group`, `split` | any `heads` input |
-| coordinate | `time`, `space`, `random`, `audio`, `control` | `curve.x` |
+| coordinate | `time`, `space`, `random`, `audio`, `control`, `button` | `curve.x` |
 | number | `curve` (kind number) | any number input |
 | vector | `curve` (kind vector) | any vector input |
 | color | `curve` (kind color) | `color.color` |
@@ -499,20 +499,58 @@ Output 0–1: the band's energy from the full mix (`band_energy`), scaled by
 its min and max over the whole track (`FeatureSource::range`). Threshold, floor and gain live in
 the curve's shape and low/high.
 
-**control** → coordinate (2026-11-02)
+**control** → coordinate (2026-11-02). Shown to users as a *fader*.
 
 | Setting | Options | Default |
 |---|---|---|
 | name | any control name: `[a-z][a-z0-9_]*`, at most 64 bytes | `fader` |
 
-Output 0–1: the venue's live control `name`, set from the Perform screen, a
-fader, pad, MIDI or OSC input. It is the same at every head. A curve maps it
-to an input's range, so one control drives many inputs, each with its own
-range. A control exists by being named; one nothing has set reads 0. It
-reaches no clock input (`every`, `duration`) and no fixed input: those are
-prepared over the whole clip before it plays (rule 5). Setting a value never
-recompiles: `PreparedGraph::with_controls` binds a `ControlSource` the
-control kernel reads at every evaluation. See `docs/design/live-control.md`.
+Output 0–1, the same at every head: a fader a performer moves. A curve maps
+it to an input's range, so one fader drives many inputs, each with its own
+range. What it reads is the host's: in a score, the venue's live control
+`name`, set from the Perform screen, MIDI or OSC (a control exists by being
+named; one nothing has set reads 0); in a Perform pattern, a value of that
+pattern keyed by the node's id, so a rename keeps its bindings. It reaches no
+clock input (`every`, `duration`) and no fixed input: those are prepared over
+the whole clip before it plays (rule 5). Setting a value never recompiles:
+`PreparedGraph::with_controls` binds a `ControlSource` the control kernel
+reads at every evaluation. See `docs/design/live-control.md`.
+
+**button** → coordinate (2026-11-04)
+
+| Setting | Options | Default |
+|---|---|---|
+| name | any control name, as `control`'s | `button` |
+| mode | `flash`, `toggle` | `flash` |
+| attack | a length ≥ 0, in `unit` | `0` |
+| decay | a length ≥ 0, in `unit` | `0` |
+| sustain | a level 0–1 | `1` |
+| release | a length ≥ 0, in `unit` | `0` |
+| unit | `beats`, `seconds` | `beats` |
+| shape | `smooth`, `linear`, `punchy`, `snap` | `smooth` |
+
+Output 0–1, the same at every head: a button's envelope
+(`luma_patterns::press`). A press turns it on until the next press (`toggle`)
+or while held (`flash`); its value rises over the attack, falls to the
+sustain over the decay, holds while on, and falls to 0 over the release, each
+stage shaped by `shape`. Beats are counted at the tempo the Perform set plays
+at. In a Perform pattern it is a button of that pattern, keyed by node id, and
+plays by these settings; in a score it reads the venue's control `name` as a
+plain gate, and its envelope does not apply. `ClipGraph::live_inputs` lists
+both kinds with each button's `Press`. The same rule 5 holds as for
+`control`.
+
+**The pad (2026-11-05).** A Perform pattern's pad, the button that turns it
+on and off, is the button node the output's `alpha` depends on: wired into
+`alpha` through a curve, and through any curves and math between
+(`ClipGraph::pad`). With several, the first by id is the pad; the others stay
+buttons of the pattern. There is no flag: the wiring says it, so the pad's
+mode and envelope are its node's settings and its fade is in the graph's
+alpha. A graph with no button on `alpha` has no pad, and as a Perform pattern
+plays at its level whenever the set is open. A new Perform pattern gets one
+when its graph has none (`ClipGraph::with_pad`): a `toggle` button named
+`pad`, through a ramp curve into `alpha`, times (a `*` math node) whatever
+`alpha` held. In a score the pad is an ordinary button.
 
 ### 2.4 curve → number, vector or color
 
@@ -786,8 +824,8 @@ Prepare time (cells known):
 4. `space`: constant `a` field (or `Axis`).
 5. `random`: `ClockTable(every)` → `Clock` turns → `Random(u,v,z, turns, glide, scale, contrast, salt)`.
 6. `audio`: `band_energy` → `clip_range` → `Normalize` → 0–1.
-   `control`: the `control` kernel at the name's index among the graph's
-   sorted control names.
+   `control` and `button`: the `control` kernel at the node's index among
+   the graph's live inputs (its control and button nodes, in id order).
 7. `curve`: `Curve(x, low, high; shape, gradient, kind)` → 3 components.
    A list input: its items chained through `Product`.
 8. `shuffle` with a clock: `Rank(index, unit keys)` per event → order field with `E`.
@@ -857,7 +895,7 @@ queries for the UI).
 ## 6. Python API
 
 Module `luma_exec/clip.py`, exposed as `luma.clip`. The exec namespace binds
-these names bare before every cell: `clock, time, space, random, audio, control, curve,
+these names bare before every cell: `clock, time, space, random, audio, control, button, curve,
 mirror, shuffle, group, split, color, aim, strobe, preset`.
 
 ### 6.1 Builders
@@ -869,6 +907,7 @@ space(heads=None, direction=None, centre=None, at=None, shift=0, scale=1, kind="
 random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate
 audio(low_hz=None, high_hz=None) -> Coordinate
 control(name="fader") -> Coordinate
+button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats", shape="smooth") -> Coordinate
 curve(x, shape=None, low=None, high=None, gradient=None) -> Value
 mirror(heads=None, direction=None, at=None) -> Heads
 shuffle(heads=None, clock=None) -> Heads
@@ -1006,7 +1045,7 @@ plus the working order. Delete every mention of forms, `inputs=`,
 
 ### 7.1 Layout
 
-The inspector (`id("clip-inspector")`, card "Clip graph") is the graph
+The inspector (`id("clip-inspector")`, card "Pattern graph") is the graph
 editor. It is a node-and-wire canvas (decision 28, changed 2026-09-29): one
 card per node in columns, sources on the left and the output on the right,
 each wire drawn from a node's output port to the input port it feeds. The

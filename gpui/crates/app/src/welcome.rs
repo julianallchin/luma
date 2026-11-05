@@ -445,7 +445,11 @@ impl Luma {
                     return;
                 }
                 match result {
-                    Ok(venue) => this.open_venue(venue, cx),
+                    // A new venue has no rig yet, so it starts on its setup tab.
+                    Ok(venue) => {
+                        this.open_venue(venue, cx);
+                        this.open_venue_tab(None, cx);
+                    }
                     Err(error) => {
                         if let Some(Overlay::Venues(state)) = this.overlay.open_mut() {
                             state.creating = false;

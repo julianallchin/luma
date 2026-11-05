@@ -30,6 +30,11 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
 - `20261102120000_drop_midi_mappings.sql` — after redeploying
   `powersync/sync-config.yaml`, which no longer names `midi_modifiers` or
   `midi_bindings`, and after every client runs a build without them
+- `20261104120000_perform.sql` — then redeploy
+  `powersync/sync-config.yaml`, which names `perform_patterns` and
+  `perform_layouts`
+- `20261105120000_perform_pad_in_graph.sql` — after every client runs a
+  build that no longer uploads `perform_patterns.pad_json`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

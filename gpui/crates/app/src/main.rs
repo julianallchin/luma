@@ -52,8 +52,11 @@ fn main() {
             // gives no edge-resize and silently ignores `zoom:`. Its close /
             // minimise / zoom buttons are the window's traffic lights on
             // macOS, moved into the head band — see `chrome`'s module docs.
+            // The title is hidden on macOS (`appears_transparent`), but on
+            // Linux it and `app_id` are how the compositor, window rules and
+            // screen-share pickers name the window.
             titlebar: Some(TitlebarOptions {
-                title: None,
+                title: Some("Luma".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(luma_app::traffic_light_position()),
             }),
@@ -61,6 +64,7 @@ fn main() {
             // titlebar above is what decides the chrome.
             window_decorations: Some(WindowDecorations::Client),
             app_owns_titlebar_drag: true,
+            app_id: Some("luma".into()),
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: point(px(120.), px(120.)),
                 size: size(px(1200.), px(800.)),

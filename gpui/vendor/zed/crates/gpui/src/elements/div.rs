@@ -40,7 +40,7 @@ use std::{
     mem,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use super::ImageCacheProvider;
@@ -809,6 +809,23 @@ pub trait InteractiveElement: Sized {
             "hover style already set"
         );
         self.interactivity().hover_style = Some(Box::new(f(StyleRefinement::default())));
+        self
+    }
+
+    /// Fade out of the [`hover`](Self::hover) style when the pointer leaves,
+    /// over `duration` along `easing` (which maps 0..1 elapsed to 0..1
+    /// progress). Entering still applies the hover style at once.
+    ///
+    /// Background, border and text colors blend; any other hover property
+    /// holds until the fade is half done. The fade's progress lives in this
+    /// element's state, so the element needs an id — without one the hover
+    /// style snaps as before. While a fade runs it redraws only the view that
+    /// owns the element; reduced motion snaps.
+    fn hover_fade(mut self, duration: Duration, easing: impl Fn(f32) -> f32 + 'static) -> Self {
+        self.interactivity().hover_fade = Some(HoverFade {
+            duration,
+            easing: Rc::new(easing),
+        });
         self
     }
 
@@ -2047,6 +2064,7 @@ pub struct Interactivity {
     pub(crate) in_focus_style: Option<Box<StyleRefinement>>,
     pub(crate) focus_visible_style: Option<Box<StyleRefinement>>,
     pub(crate) hover_style: Option<Box<StyleRefinement>>,
+    pub(crate) hover_fade: Option<HoverFade>,
     pub(crate) group_hover_style: Option<GroupStyle>,
     pub(crate) active_style: Option<Box<StyleRefinement>>,
     pub(crate) group_active_style: Option<GroupStyle>,
@@ -3331,8 +3349,26 @@ impl Interactivity {
                     false
                 };
 
-                if is_hovered {
+                let fade_state = element_state
+                    .as_ref()
+                    .and_then(|state| state.hover_state.as_ref());
+                let progress = match (&self.hover_fade, fade_state) {
+                    (Some(fade), Some(state)) => fade.progress(
+                        &mut state.borrow_mut().fade,
+                        is_hovered,
+                        cx.reduce_motion(),
+                        window,
+                    ),
+                    _ if is_hovered => 1.,
+                    _ => 0.,
+                };
+
+                if progress >= 1. {
                     style.refine(hover_style);
+                } else if progress > 0. {
+                    let mut hovered = style.clone();
+                    hovered.refine(hover_style);
+                    style = blend_hover(style, hovered, progress);
                 }
             }
         }
@@ -3504,13 +3540,144 @@ impl ElementClickedState {
 }
 
 /// Whether or not the element or a group that contains it is hovered.
-#[derive(Copy, Clone, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Default, PartialEq)]
 pub struct ElementHoverState {
     /// True if this element's group is hovered, false otherwise
     pub group: bool,
 
     /// True if this element is hovered, false otherwise
     pub element: bool,
+
+    /// Where a [`hover_fade`](InteractiveElement::hover_fade) stands: `None`
+    /// at rest.
+    fade: Option<HoverFadeState>,
+}
+
+/// A hover style's fade out, from [`InteractiveElement::hover_fade`].
+#[derive(Clone)]
+pub(crate) struct HoverFade {
+    duration: Duration,
+    easing: Rc<dyn Fn(f32) -> f32>,
+}
+
+/// One element's fade: hovered, or leaving from `from` since `started`.
+#[derive(Copy, Clone, PartialEq)]
+struct HoverFadeState {
+    hovered: bool,
+    from: f32,
+    started: Instant,
+}
+
+impl HoverFade {
+    fn value(&self, state: &HoverFadeState, now: Instant) -> f32 {
+        if state.hovered {
+            return 1.;
+        }
+        let elapsed = now.saturating_duration_since(state.started);
+        if self.duration.is_zero() || elapsed >= self.duration {
+            return 0.;
+        }
+        let raw = elapsed.as_secs_f32() / self.duration.as_secs_f32();
+        state.from * (1. - (self.easing)(raw).clamp(0., 1.))
+    }
+
+    /// How hovered the element looks this frame (0..1), turning toward
+    /// `hovered`. Asks for another frame while the fade is running.
+    fn progress(
+        &self,
+        state: &mut Option<HoverFadeState>,
+        hovered: bool,
+        reduced: bool,
+        window: &mut Window,
+    ) -> f32 {
+        let now = Instant::now();
+        match state {
+            Some(current) if current.hovered == hovered => {}
+            Some(current) => {
+                let from = self.value(current, now);
+                *state = Some(HoverFadeState {
+                    hovered,
+                    from,
+                    started: now,
+                });
+            }
+            None if hovered => {
+                *state = Some(HoverFadeState {
+                    hovered,
+                    from: 1.,
+                    started: now,
+                });
+            }
+            None => return 0.,
+        }
+        let value = match state {
+            Some(_) if reduced && !hovered => 0.,
+            Some(current) => self.value(current, now),
+            None => 0.,
+        };
+        if hovered {
+            return 1.;
+        }
+        if value > 0. {
+            window.request_animation_frame();
+        } else {
+            *state = None;
+        }
+        value
+    }
+}
+
+/// `rest` turned `t` of the way toward `hovered`: colors blend, anything else
+/// switches at the halfway point.
+fn blend_hover(rest: Style, hovered: Style, t: f32) -> Style {
+    let mut blended = if t >= 0.5 { hovered.clone() } else { rest.clone() };
+    // A gradient has no single color to blend; it switches at halfway. A
+    // missing background blends as the other color made transparent.
+    let as_solid = |fill: &Option<crate::Fill>| -> Option<Option<crate::Hsla>> {
+        match fill {
+            None => Some(None),
+            Some(crate::Fill::Color(background)) => background.as_solid().map(Some),
+        }
+    };
+    if let (Some(from), Some(to)) = (as_solid(&rest.background), as_solid(&hovered.background)) {
+        let pair = match (from, to) {
+            (Some(from), Some(to)) => Some((from, to)),
+            (None, Some(to)) => Some((to.opacity(0.), to)),
+            (Some(from), None) => Some((from, from.opacity(0.))),
+            (None, None) => None,
+        };
+        if let Some((from, to)) = pair {
+            blended.background = Some(crate::Fill::Color(crate::solid_background(mix_color(
+                from, to, t,
+            ))));
+        }
+    }
+    if let (Some(from), Some(to)) = (rest.border_color, hovered.border_color) {
+        blended.border_color = Some(mix_color(from, to, t));
+    }
+    if let (Some(from), Some(to)) = (rest.text.color, hovered.text.color) {
+        blended.text.color = Some(mix_color(from, to, t));
+    }
+    blended
+}
+
+/// Blend two colors as a browser transitions them: per channel in sRGB with
+/// premultiplied alpha, so a wash fading in from transparent brightens
+/// without passing through grey.
+fn mix_color(from: crate::Hsla, to: crate::Hsla, t: f32) -> crate::Hsla {
+    let t = t.clamp(0., 1.);
+    let (f, g) = (crate::Rgba::from(from), crate::Rgba::from(to));
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    let a = lerp(f.a, g.a);
+    if a <= f32::EPSILON {
+        return crate::Hsla::from(crate::Rgba { a: 0., ..g });
+    }
+    crate::Hsla::from(crate::Rgba {
+        r: lerp(f.r * f.a, g.r * g.a) / a,
+        g: lerp(f.g * f.a, g.g * g.a) / a,
+        b: lerp(f.b * f.a, g.b * g.a) / a,
+        a,
+    })
 }
 
 pub(crate) enum ActiveTooltip {

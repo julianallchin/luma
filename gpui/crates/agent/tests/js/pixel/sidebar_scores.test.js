@@ -78,7 +78,7 @@ test("the sidebar pushes to a track's scores and pops back", { timeoutMs: 180000
 
   // Every score on the pair, once each, with the clips telling them apart.
   expect(labels.map((l) => l.split(" ")[0]).sort()).toEqual(["#1", "#2", "#3"]);
-  expect(labels.filter((l) => l.includes("· 2 clips ·")).length).toBe(1);
+  expect(labels.filter((l) => l.includes("· 2 patterns ·")).length).toBe(1);
   assert(labels.every((l) => l.includes("· You ·")), `a fixture has one principal: ${labels}`);
 
   app.click(scoreRows().find((n) => n.label.startsWith("#2 ")));

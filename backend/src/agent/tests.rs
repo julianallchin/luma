@@ -857,6 +857,7 @@ fn prompt_at(text: &str, playhead: f64) -> UserPrompt {
         context: Some(TurnContext {
             scope: Some(ThreadScope::track("track-1", "venue-1", "score-1")),
             editor: Some(EditorState::capture(playhead, None, [], None)),
+            perform: None,
         }),
     }
 }
@@ -1321,6 +1322,7 @@ async fn one_conversation_follows_turn_context_without_changing_identity() {
                 context: Some(TurnContext {
                     scope,
                     editor: None,
+                    perform: None,
                 }),
             },
         ))
@@ -1353,6 +1355,106 @@ async fn one_conversation_follows_turn_context_without_changing_identity() {
         reopened.thread.agent_kind, "venue_rig",
         "creation metadata must remain immutable"
     );
+}
+
+/// The Perform tab's chats are a workspace of their own: the same venue's
+/// chats and its Perform chats never list together.
+#[tokio::test]
+async fn perform_chats_are_apart_from_the_venues() {
+    let fixture = fixture().await;
+    let service = AgentService::new(fixture.services.clone());
+    let venue = ThreadScope::venue("venue-1");
+    let perform = ThreadScope::perform("venue-1");
+    let room = service.new_thread(&venue).await.unwrap().thread;
+    let set = service.new_thread(&perform).await.unwrap().thread;
+    let ids = |threads: Vec<crate::models::agent_threads::AgentThread>| {
+        threads
+            .into_iter()
+            .map(|thread| thread.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(service.list_threads(&venue).await.unwrap()),
+        [room.id.clone()]
+    );
+    assert_eq!(
+        ids(service.list_threads(&perform).await.unwrap()),
+        [set.id.clone()]
+    );
+    assert_eq!(
+        service.resolve_thread(&perform).await.unwrap().thread.id,
+        set.id
+    );
+    assert_eq!(ThreadScope::try_from(&set).unwrap(), perform);
+    assert!(!venue.matches(&set) && !perform.matches(&room));
+}
+
+/// Stores a Perform pattern as a cell's host call would, through the same
+/// change the Perform tab's commands make.
+struct StorePattern;
+
+#[async_trait]
+impl Tool for StorePattern {
+    fn name(&self) -> &'static str {
+        "store_pattern"
+    }
+    fn description(&self) -> std::borrow::Cow<'static, str> {
+        "Store a Perform pattern.".into()
+    }
+    fn schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn call(&self, ctx: &ToolContext<'_>, _: Value) -> Result<Value, String> {
+        let preset = luma_patterns::presets().clip("Wash").expect("Wash");
+        let pattern = crate::models::perform::PerformPattern {
+            id: "8c1d2b8e-0000-4000-8000-000000000001".into(),
+            venue_id: "venue-1".into(),
+            name: "Wash".into(),
+            selection: luma_patterns::Selection::all(),
+            z_index: 0,
+            blend_mode: preset.blend_mode,
+            seed: 7,
+            graph: preset.graph.clone(),
+        };
+        crate::dispatch::dispatch(
+            ctx.services(),
+            "save_perform_pattern",
+            &json!({"venueId": "venue-1", "pattern": pattern}),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(json!({"stored": true}))
+    }
+}
+
+/// A Perform turn that changes the set says so, so the open Perform tab reads
+/// it again; one that only talks says nothing.
+#[tokio::test]
+async fn a_perform_turn_that_changes_the_set_says_so() {
+    let fixture = fixture().await;
+    let perform = ThreadScope::perform("venue-1");
+    let service = AgentService::new(fixture.services.clone());
+    let thread = service.new_thread(&perform).await.unwrap().thread;
+    let service = service
+        .with_model(Arc::new(ScriptedModel::new(vec![
+            reply_step("Nothing to change."),
+            call_step("store-1", "store_pattern", "{}"),
+            reply_step("A wash is on the grid."),
+        ])))
+        .with_tools(ToolRegistry::new(vec![Arc::new(StorePattern)]));
+    let prompt = |text: &str| UserPrompt {
+        text: text.into(),
+        context: Some(TurnContext {
+            scope: Some(perform.clone()),
+            editor: None,
+            perform: None,
+        }),
+    };
+    let changed = |events: &[TurnEvent]| events.contains(&TurnEvent::DocumentChanged);
+    let talked = drain(&mut service.turn(&thread.id, prompt("Hello"))).await;
+    assert!(!changed(&talked), "{talked:#?}");
+    let stored = drain(&mut service.turn(&thread.id, prompt("Add a wash"))).await;
+    assert!(changed(&stored), "{stored:#?}");
 }
 
 /// A real native JSON-lines session delegates to two real child turns. The

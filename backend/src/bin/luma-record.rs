@@ -7,8 +7,8 @@
 //! ```text
 //! luma-record <score-id> <out.mp4>
 //!     [--view front|audience|overhead|quarter-left|quarter-right|dj]
+//!     [--camera EXPORT.json]
 //!     [--width 1280] [--height 720] [--fps 30] [--span 30:90]
-//!     [--haze accumulate|temporal]
 //!     [--config-dir DIR] [--fixtures-root DIR] [--cache-dir DIR]
 //! ```
 
@@ -20,12 +20,13 @@ use std::time::Instant;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use luma_lib::headless_host::{boot, HostConfig};
-use luma_lib::recording::{record, Haze, Recording};
-use luma_scene::View;
+use luma_lib::recording::{record, Recording};
+use luma_lib::stage_render::Aim;
+use luma_render::camera_export::CameraExport;
+use luma_scene::{Camera, View};
 
 const USAGE: &str = "usage: luma-record <score-id> <output.mp4> \
-[--view front] [--width 1280] [--height 720] [--fps 30] [--span start:end] \
-[--haze accumulate|temporal] \
+[--view front | --camera EXPORT.json] [--width 1280] [--height 720] [--fps 30] [--span start:end] \
 [--config-dir DIR] [--fixtures-root DIR] [--cache-dir DIR]";
 
 #[tokio::main]
@@ -71,19 +72,12 @@ async fn run() -> Result<(), String> {
     };
 
     let started = Instant::now();
-    let out = record(
-        &services.db().0,
-        services.storage(),
-        services.fixtures_root(),
-        spec,
-        cancel,
-        progress,
-    )
-    .await
-    .map_err(|error| {
-        bar.abandon();
-        error.to_string()
-    })?;
+    let out = record(&services, spec, cancel, progress)
+        .await
+        .map_err(|error| {
+            bar.abandon();
+            error.to_string()
+        })?;
     bar.finish_and_clear();
 
     let wall = started.elapsed().as_secs_f64();
@@ -103,6 +97,24 @@ render {:.0} ms/frame · encode {:.1} ms/frame",
     Ok(())
 }
 
+/// The camera a stage's "Export camera" file was taken from.
+fn stage_camera(path: &str) -> Result<Camera, String> {
+    let export = CameraExport::read(std::path::Path::new(path))
+        .map_err(|error| format!("{path}: {error}"))?;
+    let orbit = export
+        .camera
+        .orbit
+        .ok_or_else(|| format!("{path} has no orbit; export the camera again from the stage"))?;
+    Ok(Camera {
+        target: orbit.target.into(),
+        radius: orbit.radius,
+        azimuth: orbit.azimuth,
+        polar: orbit.polar,
+        fov_y_deg: export.camera.fov_y_deg,
+        ..Camera::default()
+    })
+}
+
 /// Split the command line into a [`Recording`] and the shared headless flags.
 ///
 /// Unknown flags are forwarded to [`HostConfig::parse_args`] rather than
@@ -110,11 +122,10 @@ render {:.0} ms/frame · encode {:.1} ms/frame",
 fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), String> {
     let mut positional = Vec::new();
     let mut shared = Vec::new();
-    let mut view = View::Front;
+    let mut aim = Aim::View(View::Front);
     let mut size = (1280u32, 720u32);
     let mut fps = 30u32;
     let mut span = None;
-    let mut haze = Haze::default();
 
     let mut args = args;
     while let Some(arg) = args.next() {
@@ -122,13 +133,15 @@ fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), 
             "-h" | "--help" => return Err(USAGE.into()),
             "--view" => {
                 let name = args.next().ok_or("--view needs a value")?;
-                view = View::from_str(&name).map_err(|error| error.to_string())?;
+                aim = Aim::View(View::from_str(&name).map_err(|error| error.to_string())?);
+            }
+            "--camera" => {
+                aim = Aim::Camera(stage_camera(&args.next().ok_or("--camera needs a file")?)?)
             }
             "--width" => size.0 = number(args.next(), "--width")?,
             "--height" => size.1 = number(args.next(), "--height")?,
             "--fps" => fps = number(args.next(), "--fps")?,
             "--span" => span = Some(parse_span(&args.next().ok_or("--span needs a value")?)?),
-            "--haze" => haze = Haze::from_str(&args.next().ok_or("--haze needs a value")?)?,
             other if other.starts_with("--") => {
                 let value = args
                     .next()
@@ -144,11 +157,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), 
     Ok((
         Recording {
             score_id,
-            view,
+            score: None,
+            aim,
             span,
             size,
             fps,
-            haze,
             output: PathBuf::from(output),
         },
         HostConfig::parse_args(shared.into_iter())?,
@@ -193,7 +206,7 @@ mod tests {
         assert_eq!(out.score_id, "score-1");
         assert_eq!(out.output, PathBuf::from("out.mp4"));
         assert_eq!((out.size, out.fps), ((1280, 720), 30));
-        assert!(matches!(out.view, View::Front));
+        assert_eq!(out.aim, Aim::View(View::Front));
         assert!(out.span.is_none());
     }
 
@@ -213,21 +226,6 @@ mod tests {
             spec(&["s", "o.mp4", "--span", ":30"]).span,
             Some((0.0, 30.0))
         );
-    }
-
-    #[test]
-    fn the_default_mode_is_accumulate_and_the_flag_picks_the_other() {
-        assert_eq!(spec(&["s", "o.mp4"]).haze, Haze::Accumulate);
-        assert_eq!(
-            spec(&["s", "o.mp4", "--haze", "temporal"]).haze,
-            Haze::Temporal
-        );
-        assert!(parse(
-            ["s", "o.mp4", "--haze", "fast"]
-                .iter()
-                .map(|s| (*s).to_string())
-        )
-        .is_err());
     }
 
     #[test]

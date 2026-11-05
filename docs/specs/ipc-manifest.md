@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**137 commands** across **27 domains** · **6 events**
+**146 commands** across **27 domains** · **6 events**
 
 ## Domains
 
@@ -29,7 +29,7 @@ name.
 | `inputs` | 6 | `backend/src/dispatch/handlers/inputs.rs` |
 | `lasers` | 6 | `backend/src/dispatch/handlers/lasers.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
-| `perform` | 6 | `backend/src/dispatch/handlers/perform.rs` |
+| `perform` | 15 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 2 | `backend/src/dispatch/handlers/render_engine.rs` |
 | `scores` | 11 | `backend/src/dispatch/handlers/scores.rs` |
@@ -40,7 +40,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **137** | |
+| **total** | **146** | |
 
 ## Commands
 
@@ -220,6 +220,15 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `perform_set_latency` | `latencyMs: f32` | `()` |
 | `perform_assign_track` | `deckId: u8`<br>`trackId: Option<String>` | `()` |
 | `prodjlink_discover` | — | `Vec<DiscoveredDevice>` |
+| `list_perform_patterns` | `venueId: String` | `Vec<PerformPattern>` |
+| `save_perform_pattern` | `venueId: String`<br>`pattern: PerformPattern` | `PerformPattern` |
+| `delete_perform_pattern` | `venueId: String`<br>`patternId: String` | `()` |
+| `get_perform_layout` | `venueId: String` | `Option<PerformLayout>` |
+| `save_perform_layout` | `venueId: String`<br>`layout: PerformLayout` | `()` |
+| `perform_open_set` | `venueId: String` | `()` |
+| `perform_control` | `name: String`<br>`value: f64` | `()` |
+| `perform_press` | `name: String`<br>`down: bool` | `()` |
+| `perform_set_bpm` | `venueId: String`<br>`bpm: f64` | `()` |
 
 ### `rekordbox`
 

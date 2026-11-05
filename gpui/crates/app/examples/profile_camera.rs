@@ -21,6 +21,7 @@
 //! `--haze=DENSITY` replaces the haze density (0 turns haze off).
 //! `--compare` prints how far the written PNG is from another one.
 //! `--list-cones` prints the lit fixture cones at the playhead and exits.
+//! `--venue-light` keeps the venue's sun and sky instead of the export's.
 //!
 //! The haze clock runs at 60 frames a second from zero, so two runs with the
 //! same arguments draw the same frames.
@@ -115,7 +116,7 @@ fn main() -> Result<(), String> {
     render.show_grid = settings.stage_grid;
     render.show_gizmos = settings.stage_gizmos;
     render.geometry_shadows = true;
-    render.look = serde_json::from_str(&settings.stage_look).unwrap_or(Look::STAGE);
+    render.look = Look::stored(&settings.stage_look);
 
     let playhead = export.scene.playhead_s;
     let state = match &program {
@@ -136,7 +137,17 @@ fn main() -> Result<(), String> {
         &mut library,
     )
     .map_err(|e| e.to_string())?;
+    if let Some(state) = &state {
+        frame.lasers =
+            luma_lib::stage_render::laser_scans(&geometry.lasers, state, f64::from(playhead));
+    }
+    // `--venue-light` keeps the venue's own sun and sky: an export written by
+    // hand for a venue it was not taken in has no sun of its own to give.
+    let venue_light = (frame.directional, frame.sky.clone());
     export.apply(&mut frame);
+    if args.iter().any(|a| a == "--venue-light") {
+        (frame.directional, frame.sky) = venue_light;
+    }
     if let Some(density) = flag("haze") {
         frame.haze_density = density.parse().map_err(|e| format!("--haze: {e}"))?;
     }

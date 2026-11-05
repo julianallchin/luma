@@ -8,6 +8,7 @@ pub mod folders;
 pub mod groups;
 pub mod lasers;
 pub mod outputs;
+pub mod perform_set;
 pub mod scores;
 pub mod settings;
 pub mod state;

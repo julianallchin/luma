@@ -152,7 +152,8 @@ Messages are `agent_thread_messages` rows. Each holds the complete structured
 parts: text, reasoning, tool calls with their inputs, and tool results.
 `agent_thread_transcript_heads` names each thread's last message.
 
-`AgentKind` is `TrackCopilot` or `VenueRig`. `ThreadScope`
+`AgentKind` is `TrackCopilot`, `VenueRig` or `PerformSet` (the Perform tab's
+chats, about one venue's Perform set). `ThreadScope`
 (`backend/src/agent/mod.rs`) is the kind, the subject, the venue and the
 score. The subject is metadata, not identity: several threads may
 share one track.
@@ -208,6 +209,11 @@ History does not sync to devices. Undo in the editors stays in memory. See
 - In a subagent thread, `track.score_apply` writes the draft's `state_json`.
   When the child succeeds, `services/drafts.rs` merges the draft onto the live
   rows per clip and per definition. See `docs/design/subagents.md`.
+- In a Perform thread, each `luma.perform` verb (`agent_execution/perform_host.rs`)
+  is one `services/perform_set.rs` change, the one the Perform tab's commands
+  make: the same checks, one transaction, and the open set recompiled. A
+  turn whose set changed says so (`TurnEvent::DocumentChanged`), and the
+  Perform tab reads it again.
 
 ---
 
@@ -1505,7 +1511,8 @@ On macOS, sandbox initialization failure is a hard stop for the Python tool. It
 never warns and continues unsandboxed. The passthrough runs on macOS only in a
 debug build with `LUMA_UNSANDBOXED_PYTHON=1`.
 
-On Linux and Windows this rule does not hold yet (§17.5, §17.6).
+On Linux and Windows this rule does not hold yet (§17.5, §17.6). Every build,
+release included, runs agent Python through the passthrough there.
 
 ---
 

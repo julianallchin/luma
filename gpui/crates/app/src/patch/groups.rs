@@ -1,4 +1,5 @@
 //! Groups are saved fixture collections. Generation only provides a starting set.
+use luma_ui::motion::FadeHover;
 use super::Patch;
 use crate::{shell::Body, Luma};
 use gpui::prelude::*;
@@ -319,12 +320,9 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                             .py(px(7.0))
                             .rounded(px(6.0))
                             .cursor_pointer()
-                            .bg(luma_ui::motion::hover_blend(
-                                &format!("patch-group-{id}"),
-                                luma_ui::glass::wash(0.),
-                                luma_ui::glass::glass_hover(),
-                            ))
-                            .on_hover(luma_ui::motion::hover_listener(format!("patch-group-{id}")))
+                            .bg(luma_ui::glass::wash(0.))
+                            .hover(|style| style.bg(luma_ui::glass::glass_hover()))
+                            .fade_hover()
                             .child(
                                 div()
                                     .flex_1()
@@ -507,7 +505,7 @@ pub(crate) fn repair_dialog(state: &Repair, app: &Entity<Luma>) -> AnyElement {
     let close = app.clone();
     let mut body = div().p(px(20.)).flex().flex_col().gap(px(12.))
         .child(div().text_size(px(16.)).child(format!("Missing group: {}", missing.name)))
-        .child(div().text_size(px(12.)).child(format!("{} saved scores use this name. Recreate it, or change their selectors to an existing group.", missing.scores.len())))
+        .child(div().text_size(px(12.)).child(missing_usage(missing)))
         .child(float::btn(format!("Recreate with {} selected fixtures",state.fixtures.len()), "recreate-group").id("recreate-group")
             .on_click(move |_,_,cx| recreate.update(cx, |this,cx| this.resolve_group(true,cx))).agent_node(Role::Button,"Recreate missing group").agent_disabled(state.busy))
         .child(float::label("Replace references with"));
@@ -575,5 +573,26 @@ pub(crate) fn repair_dialog(state: &Repair, app: &Entity<Luma>) -> AnyElement {
         "Group repair dialog",
         luma_ui::dialog::morph::MorphSize::new(480., 440.),
         body.into_any_element(),
+    )
+}
+
+/// Who uses a missing group's name, and what to do about it.
+fn missing_usage(missing: &luma_lib::models::groups::MissingGroup) -> String {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let users: Vec<String> = [
+        count(missing.scores.len(), "saved score", "saved scores"),
+        count(missing.perform_patterns.len(), "Perform pattern", "Perform patterns"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    format!(
+        "{} {} this name. Recreate it, or change their selectors to an existing group.",
+        users.join(" and "),
+        if missing.scores.len() + missing.perform_patterns.len() == 1 { "uses" } else { "use" },
     )
 }

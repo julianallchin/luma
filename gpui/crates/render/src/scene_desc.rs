@@ -417,6 +417,13 @@ pub struct Look {
 }
 
 impl Look {
+    /// A look as settings store it, or the stage default when there is none
+    /// or it no longer parses (an older build's shape, a hand-edited row).
+    #[must_use]
+    pub fn stored(json: &str) -> Self {
+        serde_json::from_str(json).unwrap_or(Self::STAGE)
+    }
+
     /// Fixed exposure, AgX, no glare: the look before the post chain existed.
     pub const NEUTRAL: Self = Self {
         tone: ToneCurve::Agx,
@@ -2260,6 +2267,36 @@ impl Definition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stored look round-trips, and one that no longer parses falls back to
+    /// the stage default rather than to a black or blinding stage.
+    #[test]
+    fn a_stored_look_is_read_back_or_defaulted() {
+        let mut look = Look::STAGE;
+        look.tone = ToneCurve::Aces;
+        look.exposure.ev = -1.5;
+        let json = serde_json::to_string(&look).unwrap();
+        assert_eq!(Look::stored(&json), look);
+        assert_eq!(Look::stored(""), Look::STAGE);
+        // A look stored before there was a glare style keeps its dials and
+        // takes the default style.
+        let older = r#"{"tone":"aces","exposure":{"auto":true,"ev":0.5,"minEv":-2.5,"maxEv":1.0},"glare":{"strength":1.0,"threshold":2.0,"star":0.3}}"#;
+        let read = Look::stored(older);
+        assert_eq!(read.exposure.ev, 0.5);
+        assert_eq!(read.glare.style, GlareStyle::default());
+        // And one stored before the footage look has it off.
+        assert!(!read.footage.enabled);
+        // One stored while the footage look had a shutter angle and a
+        // rolling readout keeps the rest of its dials.
+        let shuttered = r#"{"tone":"agxPunchy","exposure":{"auto":true,"ev":0.0,"minEv":-2.5,"maxEv":1.0},"glare":{"strength":1.0,"threshold":2.0,"star":0.3},"footage":{"enabled":true,"shutterDeg":180.0,"readoutMs":10.0,"noise":0.4,"handheld":0.2,"bass":0.1}}"#;
+        let read = Look::stored(shuttered);
+        assert!(read.footage.enabled);
+        assert_eq!(
+            (read.footage.noise, read.footage.handheld, read.footage.bass),
+            (0.4, 0.2, 0.1)
+        );
+        assert_eq!(Look::stored("{\"tone\":\"sepia\"}"), Look::STAGE);
+    }
 
     #[test]
     fn sun_azimuth_round_trips_through_the_environment_record() {

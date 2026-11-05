@@ -106,10 +106,13 @@ pub(super) enum ToolEntry {
     Scripted(ScriptedTool),
 }
 
-/// `{ name, result, latency_ms?, error?, description?, schema? }`.
+/// `{ name, result, latency_ms?, error?, description?, schema?, dispatch? }`.
 ///
 /// Named like the tool it stands in for, because a tool's name is how the
 /// chat narrates it. `error` answers as a failed call instead of `result`.
+/// `dispatch` is the app commands the call runs before it answers, in order:
+/// the writes a Python cell's host calls would make, so a test sees the app
+/// take in an agent's change as it would a real one.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ScriptedTool {
@@ -124,6 +127,16 @@ pub(super) struct ScriptedTool {
     result: Value,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    dispatch: Vec<Command>,
+}
+
+/// `{ command, args }`: one app command, as `luma_lib::dispatch` names it.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Command {
+    command: String,
+    args: Value,
 }
 
 /// `Tool::name` is `&'static str`. One short string per scripted tool per
@@ -155,8 +168,13 @@ impl Tool for ScriptedTool {
         self.schema.clone()
     }
 
-    async fn call(&self, _ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
+    async fn call(&self, ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
         tokio::time::sleep(Duration::from_millis(self.latency_ms)).await;
+        for command in &self.dispatch {
+            luma_lib::dispatch::dispatch(ctx.services(), &command.command, &command.args)
+                .await
+                .map_err(|error| format!("{}: {error}", command.command))?;
+        }
         match &self.error {
             Some(error) => Err(error.clone()),
             None => Ok(self.result.clone()),

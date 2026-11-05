@@ -27,7 +27,8 @@ pub enum InputType {
     Heads,
     /// A wire from a `time` node: its events.
     Time,
-    /// A wire from `time`, `space`, `along`, `random`, `audio` or `control`.
+    /// A wire from `time`, `space`, `along`, `random`, `audio`, `control` or
+    /// `button`.
     Coordinate,
     /// A math node's items: two or more numbers and value wires.
     Values,
@@ -345,6 +346,11 @@ fn build(kind: Kind) -> Definition {
     let wire = |ty, example| InputDef::new(ty, None, example);
     let share = |example| number(Unit::Share, example).range(0., 1.);
     let heads = || ("heads", wire(T::Heads, "group()"));
+    // A setting of any text, such as a number.
+    let any = |default| SettingDef {
+        options: &[],
+        default,
+    };
     let (output, inputs, settings): (Produces, Vec<(&'static str, InputDef)>, Vec<_>) = match kind {
         Kind::Color => (
             Produces::Output,
@@ -497,9 +503,8 @@ fn build(kind: Kind) -> Definition {
             ],
             vec![],
         ),
-        // A live value 0–1, set from the Perform screen, MIDI, OSC or any
-        // other input bound to the control `name`. A curve maps it to the
-        // range an input needs.
+        // A fader: a live value 0–1 a performer moves. A curve maps it to
+        // the range an input needs.
         Kind::Control => (
             Produces::Coordinate,
             vec![],
@@ -510,6 +515,47 @@ fn build(kind: Kind) -> Definition {
                     default: "fader",
                 },
             )],
+        ),
+        // A button a performer presses: 0–1 along its envelope, which rises
+        // over the attack, falls to the sustain over the decay, and falls to
+        // 0 over the release. The four lengths are numbers in `unit`.
+        Kind::Button => (
+            Produces::Coordinate,
+            vec![],
+            vec![
+                (
+                    "name",
+                    SettingDef {
+                        options: &[],
+                        default: "button",
+                    },
+                ),
+                (
+                    "mode",
+                    SettingDef {
+                        options: &["flash", "toggle"],
+                        default: "flash",
+                    },
+                ),
+                ("attack", any("0")),
+                ("decay", any("0")),
+                ("sustain", any("1")),
+                ("release", any("0")),
+                (
+                    "unit",
+                    SettingDef {
+                        options: &["beats", "seconds"],
+                        default: "beats",
+                    },
+                ),
+                (
+                    "shape",
+                    SettingDef {
+                        options: &["smooth", "linear", "punchy", "snap"],
+                        default: "smooth",
+                    },
+                ),
+            ],
         ),
         Kind::Math => (
             Produces::Value,

@@ -1,12 +1,12 @@
-//! The Perform screen's commands: live follow, a venue's controls, and the
-//! inputs bound to them.
+//! The Perform screen's commands: live follow, the venue's Perform set and
+//! its layout, the venue's controls, and the inputs bound to them.
 
 use std::future::Future;
 
 use luma_lib::controls::Control;
 use luma_lib::dispatch::handlers;
 use luma_lib::dispatch::handlers::inputs::{Binding, InputState, Mode};
-use luma_lib::models::perform::{PerformSource, PerformState};
+use luma_lib::models::perform::{PerformLayout, PerformPattern, PerformSource, PerformState};
 
 use super::{Library, LibraryError};
 
@@ -45,6 +45,111 @@ impl Library {
         })
     }
 
+    /// A venue's Perform set: its patterns, the top of the set first.
+    pub(crate) fn perform_patterns(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<PerformPattern>, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("list_perform_patterns", |services| async move {
+            handlers::perform::list_perform_patterns(&services, venue_id).await
+        })
+    }
+
+    /// Store a Perform pattern, new or changed, under its own id.
+    pub(crate) fn save_perform_pattern(
+        &self,
+        venue_id: &str,
+        pattern: PerformPattern,
+    ) -> impl Future<Output = Result<PerformPattern, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("save_perform_pattern", |services| async move {
+            handlers::perform::save_perform_pattern(&services, venue_id, pattern).await
+        })
+    }
+
+    /// Delete a Perform pattern, its cell, and every fader cell's hold on it.
+    pub(crate) fn delete_perform_pattern(
+        &self,
+        venue_id: &str,
+        pattern_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (venue_id, pattern_id) = (venue_id.to_owned(), pattern_id.to_owned());
+        self.call("delete_perform_pattern", |services| async move {
+            handlers::perform::delete_perform_pattern(&services, venue_id, pattern_id).await
+        })
+    }
+
+    /// A venue's Perform layout, `None` before one is saved.
+    pub(crate) fn perform_layout(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Option<PerformLayout>, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("get_perform_layout", |services| async move {
+            handlers::perform::get_perform_layout(&services, venue_id).await
+        })
+    }
+
+    pub(crate) fn save_perform_layout(
+        &self,
+        venue_id: &str,
+        layout: PerformLayout,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("save_perform_layout", |services| async move {
+            handlers::perform::save_perform_layout(&services, venue_id, layout).await
+        })
+    }
+
+    /// Compile a venue's Perform set, to play as its controls say.
+    pub(crate) fn perform_open_set(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("perform_open_set", |services| async move {
+            handlers::perform::perform_open_set(&services, venue_id).await
+        })
+    }
+
+    /// Set a control of the open Perform set's venue: a pad or a fader.
+    pub(crate) fn perform_control(
+        &self,
+        name: &str,
+        value: f64,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let name = name.to_owned();
+        self.call("perform_control", move |services| async move {
+            handlers::perform::perform_control(&services, name, value).await
+        })
+    }
+
+    /// Press (`down`) or let go of a button of the open Perform set: a
+    /// button node of a pattern's graph, its pad among them. It plays as the button
+    /// says: a toggle flips on the press, a flash holds until the release.
+    pub(crate) fn perform_press(
+        &self,
+        name: &str,
+        down: bool,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let name = name.to_owned();
+        self.call("perform_press", move |services| async move {
+            handlers::perform::perform_press(&services, name, down).await
+        })
+    }
+
+    pub(crate) fn perform_set_bpm(
+        &self,
+        venue_id: &str,
+        bpm: f64,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("perform_set_bpm", move |services| async move {
+            handlers::perform::perform_set_bpm(&services, venue_id, bpm).await
+        })
+    }
+
     pub(crate) fn control_list(
         &self,
         venue_id: &str,
@@ -52,18 +157,6 @@ impl Library {
         let venue_id = venue_id.to_owned();
         self.call("control_list", move |services| async move {
             handlers::controls::control_list(&services, venue_id).await
-        })
-    }
-
-    pub(crate) fn control_set(
-        &self,
-        venue_id: &str,
-        name: &str,
-        value: f64,
-    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let (venue_id, name) = (venue_id.to_owned(), name.to_owned());
-        self.call("control_set", move |services| async move {
-            handlers::controls::control_set(&services, venue_id, name, value).await
         })
     }
 

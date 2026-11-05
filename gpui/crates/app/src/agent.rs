@@ -1,5 +1,6 @@
 //! Each tab owns its chat. A score tab's chats are that score's; the venue
-//! tab's chats are the venue's (`docs/specs/venue-tabs.md` rules 3 and 4).
+//! tab's chats are the venue's, and the Perform tab's are its Perform set's
+//! (`docs/specs/venue-tabs.md` rules 3 and 4).
 //!
 //! Every panel shares the app's one [`RunningTurns`], so a turn belongs to its
 //! thread and not to whichever tab is in front: switching tabs or venues lets
@@ -69,20 +70,26 @@ pub(crate) fn scope(target: &Target) -> ThreadScope {
             track,
             score,
         } => ThreadScope::track(track, venue, score),
-        Target::Venue { venue } | Target::Perform { venue } => ThreadScope::venue(venue),
+        Target::Venue { venue } => ThreadScope::venue(venue),
+        Target::Perform { venue } => ThreadScope::perform(venue),
     }
 }
 
 /// What a message sent from `target`'s chat is about: the tab's subject, and
-/// how its timeline stands when it is a score.
+/// how its timeline stands when it is a score, or its page and what plays
+/// when it is Perform.
 fn turn_context(app: &Luma, target: &Target) -> TurnContext {
-    let editor = match app.parked.body(&app.workspace, target) {
-        Some(Body::TrackEditor(editor)) => Some(editor.agent_context()),
-        _ => None,
-    };
+    let body = app.parked.body(&app.workspace, target);
     TurnContext {
         scope: Some(scope(target)),
-        editor,
+        editor: match body {
+            Some(Body::TrackEditor(editor)) => Some(editor.agent_context()),
+            _ => None,
+        },
+        perform: match body {
+            Some(Body::Perform(perform)) => Some(perform.agent_context()),
+            _ => None,
+        },
     }
 }
 
@@ -127,6 +134,7 @@ impl Luma {
                     TurnContext {
                         scope: Some(subject.clone()),
                         editor: None,
+                        perform: None,
                     },
                     |app| turn_context(app.read(cx), &source),
                 )
@@ -298,7 +306,7 @@ impl Luma {
             match &target {
                 Target::Score { .. } => self.reload_score_contents(target.clone(), cx),
                 Target::Venue { venue } => self.reload_patch(venue.clone(), cx),
-                Target::Perform { .. } => {}
+                Target::Perform { .. } => self.reload_perform_set(&target, cx),
             }
         }
     }

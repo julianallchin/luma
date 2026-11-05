@@ -35,7 +35,7 @@ pub mod transcript;
 mod turn;
 
 pub use context::{
-    BarBeat, ClipSpan, CursorSpan, EditorClip, EditorCursor, EditorState, TimePoint,
+    BarBeat, ClipSpan, CursorSpan, EditorClip, EditorCursor, EditorState, PerformView, TimePoint,
 };
 pub use transcript::{
     apply, to_model_messages, AgentChatMessage, AgentChatPart, Applied, RequestUsage, Role,
@@ -331,6 +331,7 @@ impl TryFrom<&AgentThread> for ThreadScope {
         match thread.route().map_err(AgentError::Invalid)? {
             ThreadRoute::Unbound => Err(AgentError::Invalid("no editor context is open".into())),
             ThreadRoute::Venue { venue_id } => Ok(Self::venue(venue_id)),
+            ThreadRoute::Perform { venue_id } => Ok(Self::perform(venue_id)),
             ThreadRoute::Track {
                 track_id,
                 venue_id,
@@ -374,6 +375,16 @@ impl ThreadScope {
         }
     }
 
+    /// The Perform tab's scope: one venue's Perform set. Its own workspace,
+    /// apart from the venue's chats, though its subject is the same venue.
+    #[must_use]
+    pub fn perform(venue_id: impl Into<String>) -> Self {
+        Self {
+            agent_kind: AgentKind::PerformSet,
+            ..Self::venue(venue_id)
+        }
+    }
+
     /// Whether `thread` is one of the conversations this scope names.
     ///
     /// Public because the native shell lists a subject's threads through
@@ -412,6 +423,9 @@ pub struct TurnContext {
     /// messages carried it.
     #[serde(default)]
     pub editor: Option<EditorState>,
+    /// The Perform tab, when the message was sent from it.
+    #[serde(default)]
+    pub perform: Option<PerformView>,
 }
 
 /// What the user asked for.

@@ -347,9 +347,18 @@ impl Route {
     }
 }
 
+/// What picking a library track does.
+pub(crate) enum Purpose {
+    /// Add it to the venue: the dialog's ordinary job.
+    AddToVenue,
+    /// Play it on the Perform tab's virtual deck, then close.
+    PlayVirtual(crate::tabs::Target),
+}
+
 pub(crate) struct AddTracks {
     instance_id: uuid::Uuid,
     venue_id: String,
+    purpose: Purpose,
     morph: MorphDialog<Route>,
     browser_rows: Rc<[TrackBrowserRow]>,
     /// [`Self::browser_rows`] narrowed to the filter, kept rather than derived.
@@ -420,7 +429,7 @@ pub(crate) struct AddTracks {
 }
 
 impl AddTracks {
-    fn new(venue_id: String, route: Route, cx: &mut Context<Luma>) -> Self {
+    fn new(venue_id: String, route: Route, purpose: Purpose, cx: &mut Context<Luma>) -> Self {
         let browser_filter = cx.new(|cx| TextInput::search("Search all tracks…", cx));
         let source_filter = cx.new(|cx| TextInput::search("Search source…", cx));
         let browser_filter_focus = browser_filter.read(cx).focus_handle(cx);
@@ -449,6 +458,7 @@ impl AddTracks {
         Self {
             instance_id: uuid::Uuid::new_v4(),
             venue_id,
+            purpose,
             morph: MorphDialog::new(route.descriptor(), PALETTE_SIZE),
             browser_rows: Rc::from(Vec::new()),
             browser_shown: Rc::from(Vec::new()),
@@ -573,7 +583,31 @@ impl AddTracks {
 
 impl Luma {
     pub(crate) fn show_add_tracks(&mut self, cx: &mut Context<Self>) {
-        self.open_add_tracks(Route::TrackBrowser, cx);
+        self.open_add_tracks(Route::TrackBrowser, Purpose::AddToVenue, cx);
+    }
+
+    /// The same dialog, to choose a song for Perform's virtual deck.
+    pub(crate) fn show_track_to_play(&mut self, target: crate::tabs::Target, cx: &mut Context<Self>) {
+        self.open_add_tracks(Route::TrackBrowser, Purpose::PlayVirtual(target), cx);
+    }
+
+    /// A library row picked, by click or Enter: what that means depends on
+    /// why the dialog is open.
+    fn pick_library_track(&mut self, track_id: String, cx: &mut Context<Self>) {
+        let play = match self.overlay.as_open() {
+            Some(crate::shell::Overlay::AddTracks(state)) => match &state.purpose {
+                Purpose::PlayVirtual(target) => Some(target.clone()),
+                Purpose::AddToVenue => None,
+            },
+            _ => None,
+        };
+        match play {
+            Some(target) => {
+                self.dismiss_overlay(cx);
+                self.play_virtual(&target, &track_id, cx);
+            }
+            None => self.add_track_to_venue(track_id, cx),
+        }
     }
 
     /// The sidebar's import row: the dialog, opened on the import's progress.
@@ -581,10 +615,10 @@ impl Luma {
         if let Some(activity) = &mut self.track_import {
             activity.seen = true;
         }
-        self.open_add_tracks(Route::Progress, cx);
+        self.open_add_tracks(Route::Progress, Purpose::AddToVenue, cx);
     }
 
-    fn open_add_tracks(&mut self, route: Route, cx: &mut Context<Self>) {
+    fn open_add_tracks(&mut self, route: Route, purpose: Purpose, cx: &mut Context<Self>) {
         let Some(venue_id) = self
             .sidebar
             .as_ref()
@@ -592,7 +626,7 @@ impl Luma {
         else {
             return;
         };
-        let state = AddTracks::new(venue_id, route, cx);
+        let state = AddTracks::new(venue_id, route, purpose, cx);
         self.overlay
             .open(crate::shell::Overlay::AddTracks(Box::new(state)));
         cx.notify();
@@ -736,7 +770,7 @@ impl Luma {
                 let Some(track) = state.browser_shown.get(state.browser_active).cloned() else {
                     return;
                 };
-                self.add_track_to_venue(track.id, cx);
+                self.pick_library_track(track.id, cx);
             }
             // The source list is multi-select: activating a row toggles it,
             // and ⌘⏎ is what commits the set.
@@ -759,10 +793,20 @@ impl Luma {
         match route {
             // "Import" is a question — from where? — so the chord opens the
             // menu that asks it rather than guessing a source.
-            Route::TrackBrowser => self.toggle_source_menu(cx),
+            Route::TrackBrowser if !self.picking_to_play() => self.toggle_source_menu(cx),
+            Route::TrackBrowser => {}
             Route::SourceLibrary => self.import_source_selection(cx),
             Route::Progress => self.dismiss_overlay(cx),
         }
+    }
+
+    /// The dialog is open to choose a song to play, not to add one.
+    fn picking_to_play(&self) -> bool {
+        matches!(
+            self.overlay.as_open(),
+            Some(crate::shell::Overlay::AddTracks(state))
+                if matches!(state.purpose, Purpose::PlayVirtual(_))
+        )
     }
 
     /// Open or dismiss the import-source menu.
@@ -1607,6 +1651,10 @@ fn submit_chip(
     app: &Entity<Luma>,
     window: &Window,
 ) -> Option<AnyElement> {
+    // Choosing a song to play imports nothing.
+    if matches!(state.purpose, Purpose::PlayVirtual(_)) {
+        return None;
+    }
     let interactive = mode == ContentMode::Interactive;
     let (label, enabled, id, node) = match route {
         Route::TrackBrowser => (
@@ -2073,7 +2121,7 @@ fn track_browser(
                         .when(mode == ContentMode::Interactive, |row| {
                             row.on_click(move |_, _, cx| {
                                 let id = id.clone();
-                                app.update(cx, |this, cx| this.add_track_to_venue(id, cx));
+                                app.update(cx, |this, cx| this.pick_library_track(id, cx));
                             })
                         })
                         .agent_node(Role::Row, title)

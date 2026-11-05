@@ -53,7 +53,7 @@ from types import MappingProxyType
 from .color import from_srgb
 
 
-BUILDERS = ("time", "space", "along", "random", "audio", "control", "curve", "value", "mirror", "shuffle",
+BUILDERS = ("time", "space", "along", "random", "audio", "control", "button", "curve", "value", "mirror", "shuffle",
             "group", "split", "figure", "color", "aim", "strobe", "laser", "preset", "max", "min")
 # Names that cannot be node ids: the builders, and `math`, a kind with no
 # builder (math is Python operators).
@@ -69,6 +69,7 @@ _INPUTS = {
     "random": ("heads", "every", "glide", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "control": (),
+    "button": (),
     "curve": ("x", "shape", "low", "high", "gradient"),
     "math": ("values",),
     "value": ("value",),
@@ -274,7 +275,7 @@ class _Output(Node):
 
 
 _CLASSES = {"time": Coordinate, "space": Coordinate, "along": Coordinate, "random": Coordinate,
-            "audio": Coordinate, "control": Coordinate,
+            "audio": Coordinate, "control": Coordinate, "button": Coordinate,
             "curve": Value, "math": Value, "value": Value, "mirror": Heads, "shuffle": Heads, "group": Heads,
             "split": Heads, "figure": Figure, "color": _Output, "aim": _Output, "strobe": _Output,
             "laser": _Output}
@@ -531,6 +532,33 @@ def control(name="fader") -> Coordinate:
     if not isinstance(name, str):
         raise ClipError(f"control.name: expected a control name such as \"drop\"; got {name!r}")
     return _make("control", {"name": name})
+
+
+# A button's lengths and sustain, stored as settings: text of a number.
+_BUTTON_NUMBERS = ("attack", "decay", "sustain", "release")
+
+
+def button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats",
+           shape="smooth") -> Coordinate:
+    """A button's envelope, 0-1: a pad a performer presses.
+
+    mode "flash" is on while held, "toggle" from one press to the next. The
+    value rises over the attack, falls to the sustain (0-1) over the decay,
+    holds while on, and falls to 0 over the release; lengths are in unit
+    ("beats" or "seconds"), each stage shaped "smooth", "linear", "punchy" or
+    "snap". A hit: button("hit", decay=0.5, sustain=0, shape="punchy").
+    In a score it reads the venue's control `name`, as a plain gate. In a
+    Perform pattern the button the output's alpha depends on is its pad, which
+    turns it on and off: color(..., alpha=curve(button("pad", "toggle",
+    attack=2, release=4))) fades in over 2 beats and out over 4.
+    """
+    if not isinstance(name, str):
+        raise ClipError(f"button.name: expected a control name such as \"hit\"; got {name!r}")
+    settings = {"name": name, "mode": mode, "unit": unit, "shape": shape}
+    for key, value in zip(_BUTTON_NUMBERS, (attack, decay, sustain, release)):
+        value = float(_number(value, f"button.{key}"))
+        settings[key] = str(int(value)) if value.is_integer() else repr(value)
+    return _make("button", settings)
 
 
 def curve(x, shape=None, low=None, high=None, gradient=None) -> Value:
@@ -1076,7 +1104,9 @@ def _gradient_literal(value):
 
 
 _DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
-                     "figure": {"kind": "beams"}, "laser": {"zone": ""}}
+                     "figure": {"kind": "beams"}, "laser": {"zone": ""},
+                     "button": {"name": "button", "mode": "flash", "attack": "0", "decay": "0", "sustain": "1",
+                                "release": "0", "unit": "beats", "shape": "smooth"}}
 # Python precedence: an atom (a name, a number, a call) binds tightest.
 _ATOM = 3
 _PRECEDENCE = {"*": 2, "+": 1, "-": 1}
@@ -1151,9 +1181,13 @@ def _arguments(node, ids, inline, order):
             continue
         if _DEFAULT_SETTINGS.get(node.kind, {}).get(name) == value:
             continue
-        # figure("line", ...) and control("drop"): these go first, by position.
-        if (node.kind, name) in (("figure", "kind"), ("control", "name")):
+        # figure("line", ...), control("drop") and button("hit"): these go
+        # first, by position.
+        if (node.kind, name) in (("figure", "kind"), ("control", "name"), ("button", "name")):
             args.insert(0, repr(value))
+            continue
+        if node.kind == "button" and name in _BUTTON_NUMBERS:
+            args.append(f"{name}={value}")
             continue
         args.append(f"{name}={value!r}")
     return args

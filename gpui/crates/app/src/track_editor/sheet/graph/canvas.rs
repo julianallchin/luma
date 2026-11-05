@@ -278,9 +278,13 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
 /// kind it has (`value`).
 fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
-        Kind::Time | Kind::Space | Kind::Along | Kind::Random | Kind::Audio | Kind::Control => {
-            Signal::Coordinate
-        }
+        Kind::Time
+        | Kind::Space
+        | Kind::Along
+        | Kind::Random
+        | Kind::Audio
+        | Kind::Control
+        | Kind::Button => Signal::Coordinate,
         Kind::Curve | Kind::Math | Kind::Value => match value {
             Some("vector") => Signal::Vector,
             Some("color") => Signal::Color,
@@ -317,13 +321,14 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
-const ADDABLE: [Kind; 14] = [
+const ADDABLE: [Kind; 15] = [
     Kind::Time,
     Kind::Space,
     Kind::Along,
     Kind::Random,
     Kind::Audio,
     Kind::Control,
+    Kind::Button,
     Kind::Curve,
     Kind::Math,
     Kind::Value,
@@ -392,7 +397,7 @@ fn ring(signal: Signal, filled: bool, tone: Tone, record: impl Fn(Point<Pixels>)
 /// comes out with its row's remove button.
 pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> {
     let signal = input_signal(cx.graph, id, input)?;
-    let canvas = &cx.state.sheet.canvas;
+    let canvas = &cx.sheet.canvas;
     let key: Port = (id.to_owned(), input.to_owned());
     let inputs = &cx.graph.nodes[id].inputs;
     let held = match input.split_once('#') {
@@ -447,7 +452,7 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> 
 /// A node's output port, on the card's right edge. A press drags a new wire
 /// out of it.
 fn output_port(cx: &Ctx, from: Source, label: String) -> AnyElement {
-    let canvas = &cx.state.sheet.canvas;
+    let canvas = &cx.sheet.canvas;
     let wired = match &from {
         Source::Node(id) => !edit::references(cx.graph, id).is_empty(),
         Source::Draft(_) => false,
@@ -562,7 +567,7 @@ pub(super) fn port_slot(port: AnyElement) -> Div {
 /// preview.
 fn node_card(cx: &Ctx, id: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
-    let canvas = &cx.state.sheet.canvas;
+    let canvas = &cx.sheet.canvas;
     let label = edit::label(id);
     let wide = canvas.wide.contains(id) && super::curve_open(cx, id);
     let mut buttons = super::title_buttons(cx, id);
@@ -608,8 +613,8 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
             cx.stop_propagation();
             let place = (menu_at.clone(), event.position);
             menu.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.sheet.canvas.card_menu = Some(place);
+                this.with_sheet(cx, |sheet| {
+                    sheet.canvas.card_menu = Some(place);
                 })
             });
         })
@@ -633,7 +638,7 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
 /// field while it is being typed. Presses in the field stay there, so the
 /// card does not take the keyboard from it.
 pub(super) fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
-    let rename = cx.state.sheet.canvas.rename.as_ref();
+    let rename = cx.sheet.canvas.rename.as_ref();
     if let Some(rename) = rename.filter(|rename| rename.id == id && rename.setting.is_none()) {
         return luma_ui::float::field()
             .id(SharedString::from(format!("rename-{id}")))
@@ -673,8 +678,8 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
         .id(SharedString::from(format!("discard-draft-{index}")))
         .on_click(move |_, _, cx| {
             app.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    let drafts = &mut editor.sheet.canvas.drafts;
+                this.with_sheet(cx, |sheet| {
+                    let drafts = &mut sheet.canvas.drafts;
                     if index < drafts.len() {
                         drafts.remove(index);
                     }
@@ -709,7 +714,7 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
 
 /// The canvas under the inspector's header strip.
 pub(super) fn view(cx: &Ctx) -> AnyElement {
-    let state = &cx.state.sheet.canvas;
+    let state = &cx.sheet.canvas;
     let columns = edit::columns(cx.graph);
     let geometry = state.geometry.clone();
     // Right to left in `columns`, so the sources come first on screen.
@@ -796,7 +801,7 @@ pub(super) fn view(cx: &Ctx) -> AnyElement {
 /// The cluster floating on the canvas's top-right corner: add a node, the
 /// zoom steps and actual size, and fit, on one frosted chip.
 fn toolbar(cx: &Ctx) -> AnyElement {
-    let state = &cx.state.sheet.canvas;
+    let state = &cx.sheet.canvas;
     let add = cx.app.clone();
     let mut bar = luma_ui::float::popover_card()
         .flex_row()
@@ -809,7 +814,7 @@ fn toolbar(cx: &Ctx) -> AnyElement {
                 .on_click(move |event, _, cx| {
                     let at = event.position();
                     add.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| editor.sheet.canvas.menu = Some(at))
+                        this.with_sheet(cx, |sheet| sheet.canvas.menu = Some(at))
                     });
                 })
                 .agent_node(Role::Button, "Add node"),
@@ -859,7 +864,7 @@ fn toolbar(cx: &Ctx) -> AnyElement {
 
 /// The add menu, where the canvas was right-clicked or under the button.
 fn add_menu(cx: &Ctx) -> Option<AnyElement> {
-    let at = cx.state.sheet.canvas.menu?;
+    let at = cx.sheet.canvas.menu?;
     let menu = ADDABLE.iter().fold(
         luma_ui::menu::ContextMenu::new("graph-add-menu", at),
         |menu, kind| {
@@ -873,7 +878,7 @@ fn add_menu(cx: &Ctx) -> Option<AnyElement> {
     let app = cx.app.clone();
     Some(menu.render(move |_, cx| {
         app.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| editor.sheet.canvas.menu = None)
+            this.with_sheet(cx, |sheet| sheet.canvas.menu = None)
         });
     }))
 }
@@ -881,10 +886,10 @@ fn add_menu(cx: &Ctx) -> Option<AnyElement> {
 /// A card's menu, where the card was right-clicked: rename the node, and
 /// delete it unless it is the output.
 fn card_menu(cx: &Ctx) -> Option<AnyElement> {
-    let (id, at) = cx.state.sheet.canvas.card_menu.clone()?;
+    let (id, at) = cx.sheet.canvas.card_menu.clone()?;
     let node = cx.graph.nodes.get(&id)?;
     let close = |this: &mut Luma, cx: &mut Context<Luma>| {
-        this.with_track_editor(cx, |editor| editor.sheet.canvas.card_menu = None)
+        this.with_sheet(cx, |sheet| sheet.canvas.card_menu = None)
     };
     let (app, at_id) = (cx.app.clone(), id.clone());
     let mut menu =
@@ -920,7 +925,7 @@ struct Link {
 /// The wires, under the cards, from the port centres the cards recorded
 /// this frame; the wire being dragged; and the canvas's pointer handling.
 fn wires(cx: &Ctx) -> AnyElement {
-    let state = &cx.state.sheet.canvas;
+    let state = &cx.sheet.canvas;
     let geometry = state.geometry.clone();
     let painted = state.geometry.clone();
     let detach = state.dragging().and_then(|(_, detach)| detach.cloned());
@@ -1048,7 +1053,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, bounds: Bounds<Pixels>, window: &
                 pressed.update(cx, |this, cx| this.canvas_pan_press(at, true, window, cx));
             }
             MouseButton::Right if inside.is_hovered(window) => pressed.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| editor.sheet.canvas.menu = Some(at))
+                this.with_sheet(cx, |sheet| sheet.canvas.menu = Some(at))
             }),
             _ => {}
         }
@@ -1200,11 +1205,6 @@ fn snap_target(
 
 // -- gestures ---------------------------------------------------------------------
 
-/// The primary clip's graph, as the canvas shows it.
-fn shown_graph(editor: &Editor) -> Option<ClipGraph> {
-    Some(primary_clip(editor)?.core.as_ref()?.graph.clone())
-}
-
 impl Luma {
     fn canvas_pan_press(
         &mut self,
@@ -1213,8 +1213,8 @@ impl Luma {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.with_track_editor(cx, |editor| {
-            let canvas = &mut editor.sheet.canvas;
+        self.with_sheet(cx, |sheet| {
+            let canvas = &mut sheet.canvas;
             if clear {
                 canvas.selected = None;
                 // A left press on a lit wire picks it; anywhere else drops it.
@@ -1233,8 +1233,8 @@ impl Luma {
     /// press on a card's title used to leave the keyboard where it was.
     fn canvas_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self
-            .track_editor_ref()
-            .and_then(|editor| editor.sheet.canvas.focus.clone())
+            .sheet_ref()
+            .and_then(|sheet| sheet.canvas.focus.clone())
         {
             focus.focus(window, cx);
         }
@@ -1249,12 +1249,12 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         let changed = self
-            .track_editor_ref()
-            .is_some_and(|editor| editor.sheet.canvas.selected != node);
+            .sheet_ref()
+            .is_some_and(|sheet| sheet.canvas.selected != node);
         if changed {
-            self.with_track_editor(cx, |editor| {
-                editor.sheet.canvas.selected = node;
-                editor.sheet.canvas.wire = None;
+            self.with_sheet(cx, |sheet| {
+                sheet.canvas.selected = node;
+                sheet.canvas.wire = None;
             });
         }
         if let Some(window) = focus {
@@ -1270,8 +1270,8 @@ impl Luma {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.with_track_editor(cx, |editor| {
-            editor.sheet.canvas.gesture = Some(Gesture::Wire {
+        self.with_sheet(cx, |sheet| {
+            sheet.canvas.gesture = Some(Gesture::Wire {
                 from,
                 detach,
                 at,
@@ -1285,27 +1285,28 @@ impl Luma {
     /// otherwise, over the canvas, the wire under it lights. Nothing redraws
     /// unless something changed.
     fn canvas_move(&mut self, at: Point<Pixels>, over: bool, cx: &mut Context<Self>) {
-        let Some(editor) = self.track_editor_ref() else {
+        let Some(host) = self.sheet_host() else {
             return;
         };
-        let canvas = &editor.sheet.canvas;
+        let canvas = &host.sheet().canvas;
+        let graph = host.subject().map(|subject| subject.graph);
         match &canvas.gesture {
             Some(Gesture::Wire { from, .. }) => {
-                let snap = shown_graph(editor).and_then(|graph| {
-                    snap_target(&canvas.geometry.borrow(), &graph, &canvas.drafts, from, at)
+                let snap = graph.and_then(|graph| {
+                    snap_target(&canvas.geometry.borrow(), graph, &canvas.drafts, from, at)
                 });
-                self.with_track_editor(cx, |editor| {
+                self.with_sheet(cx, |sheet| {
                     if let Some(Gesture::Wire {
                         at: to, snap: s, ..
-                    }) = &mut editor.sheet.canvas.gesture
+                    }) = &mut sheet.canvas.gesture
                     {
                         *to = at;
                         *s = snap;
                     }
                 });
             }
-            Some(Gesture::Pan { .. }) => self.with_track_editor(cx, |editor| {
-                let canvas = &mut editor.sheet.canvas;
+            Some(Gesture::Pan { .. }) => self.with_sheet(cx, |sheet| {
+                let canvas = &mut sheet.canvas;
                 if let Some(Gesture::Pan { last }) = &mut canvas.gesture {
                     canvas.pan = canvas.pan + (at - *last);
                     *last = at;
@@ -1314,10 +1315,10 @@ impl Luma {
             None => {
                 let hover = over
                     .then(|| {
-                        let graph = shown_graph(editor)?;
+                        let graph = graph?;
                         let geometry = canvas.geometry.borrow();
                         let zoom = canvas.zoom;
-                        super::links(&graph)
+                        super::links(graph)
                             .into_iter()
                             .filter_map(|(from, to)| {
                                 let start = geometry.output(&Source::Node(from))?;
@@ -1334,21 +1335,21 @@ impl Luma {
                     })
                     .flatten();
                 if hover != canvas.hover {
-                    self.with_track_editor(cx, |editor| editor.sheet.canvas.hover = hover);
+                    self.with_sheet(cx, |sheet| sheet.canvas.hover = hover);
                 }
             }
         }
     }
 
     fn canvas_pan_by(&mut self, delta: Point<Pixels>, cx: &mut Context<Self>) {
-        self.with_track_editor(cx, |editor| {
-            let canvas = &mut editor.sheet.canvas;
+        self.with_sheet(cx, |sheet| {
+            let canvas = &mut sheet.canvas;
             canvas.pan = canvas.pan + delta;
         });
     }
 
     fn canvas_zoom(&mut self, about: Point<Pixels>, factor: f32, cx: &mut Context<Self>) {
-        self.with_track_editor(cx, |editor| editor.sheet.canvas.zoom_about(about, factor));
+        self.with_sheet(cx, |sheet| sheet.canvas.zoom_about(about, factor));
     }
 
     /// A canvas key or toolbar button: `+`/`=` and `-` zoom about the
@@ -1363,23 +1364,23 @@ impl Luma {
                 } else {
                     ZOOM_STEP
                 };
-                self.with_track_editor(cx, |editor| {
-                    let canvas = &mut editor.sheet.canvas;
+                self.with_sheet(cx, |sheet| {
+                    let canvas = &mut sheet.canvas;
                     let centre = canvas.centre();
                     canvas.zoom_about(centre, factor);
                 });
             }
-            "0" => self.with_track_editor(cx, |editor| {
-                let canvas = &mut editor.sheet.canvas;
+            "0" => self.with_sheet(cx, |sheet| {
+                let canvas = &mut sheet.canvas;
                 canvas.zoom = 1.;
                 canvas.pan = Point::default();
             }),
-            "fit" => self.with_track_editor(cx, |editor| editor.sheet.canvas.fit()),
+            "fit" => self.with_sheet(cx, |sheet| sheet.canvas.fit()),
             "delete" | "backspace" => {
                 let (selected, wire) = self
-                    .track_editor_ref()
-                    .map(|editor| {
-                        let canvas = &editor.sheet.canvas;
+                    .sheet_ref()
+                    .map(|sheet| {
+                        let canvas = &sheet.canvas;
                         (canvas.selected.clone(), canvas.wire.clone())
                     })
                     .unwrap_or_default();
@@ -1388,16 +1389,13 @@ impl Luma {
                     // The input goes back to its last value, as a wire
                     // dragged off it and dropped on nothing does.
                     (None, Some((id, input))) => {
-                        self.with_track_editor(cx, |editor| editor.sheet.canvas.wire = None);
+                        self.with_sheet(cx, |sheet| sheet.canvas.wire = None);
                         // An undo may have taken the wire out since the pick.
-                        let wired =
-                            self.track_editor_ref()
-                                .and_then(shown_graph)
-                                .is_some_and(|graph| {
-                                    super::links(&graph)
-                                        .iter()
-                                        .any(|(_, to)| *to == (id.clone(), input.clone()))
-                                });
+                        let wired = self.shown_graph().is_some_and(|graph| {
+                            super::links(&graph)
+                                .iter()
+                                .any(|(_, to)| *to == (id.clone(), input.clone()))
+                        });
                         if wired {
                             self.graph_pick(&id, &input, Pick::Value, cx);
                         }
@@ -1407,8 +1405,8 @@ impl Luma {
             }
             "escape" => {
                 let mut handled = false;
-                self.with_track_editor(cx, |editor| {
-                    let canvas = &mut editor.sheet.canvas;
+                self.with_sheet(cx, |sheet| {
+                    let canvas = &mut sheet.canvas;
                     handled = canvas.cancel()
                         || canvas.selected.take().is_some()
                         || canvas.wire.take().is_some();
@@ -1424,10 +1422,10 @@ impl Luma {
     /// input port under it; or, when it was picked up from an input and
     /// dropped on nothing, that input goes back to its last value.
     fn canvas_release(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(editor) = self.track_editor_ref() else {
+        let Some(sheet) = self.sheet_ref() else {
             return;
         };
-        let canvas = &editor.sheet.canvas;
+        let canvas = &sheet.canvas;
         let Some(gesture) = &canvas.gesture else {
             return;
         };
@@ -1450,11 +1448,11 @@ impl Luma {
                 Some((from.clone(), detach.clone(), target, canvas.drafts.clone()))
             }
         };
-        self.with_track_editor(cx, |editor| editor.sheet.canvas.gesture = None);
+        self.with_sheet(cx, |sheet| sheet.canvas.gesture = None);
         let Some((from, detach, target, drafts)) = wire else {
             return;
         };
-        let Some(graph) = self.track_editor_ref().and_then(shown_graph) else {
+        let Some(graph) = self.shown_graph() else {
             return;
         };
         match target {
@@ -1472,8 +1470,8 @@ impl Luma {
                     edit::label(&id),
                     input_label(&input).to_lowercase()
                 );
-                self.with_track_editor(cx, |editor| {
-                    editor.sheet.error = Some(format!("{what} cannot feed {into}"));
+                self.with_sheet(cx, |sheet| {
+                    sheet.error = Some(format!("{what} cannot feed {into}"));
                 });
             }
             None => {
@@ -1498,9 +1496,7 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         let key = (id.to_owned(), input.to_owned());
-        let last = self
-            .track_editor_ref()
-            .map(|editor| editor.sheet.last.clone());
+        let last = self.sheet_ref().map(|sheet| sheet.last.clone());
         let last = last.unwrap_or_default();
         let mut held: Option<Input> = None;
         let held_out = &mut held;
@@ -1528,21 +1524,20 @@ impl Luma {
             }
         });
         let linked = self
-            .track_editor_ref()
-            .and_then(primary_clip)
-            .and_then(|clip| clip.core.as_ref())
-            .and_then(|core| core.graph.nodes.get(id)?.inputs.get(input).cloned())
+            .sheet_host()
+            .and_then(Host::subject)
+            .and_then(|subject| subject.graph.nodes.get(id)?.inputs.get(input).cloned())
             .is_some_and(|held| held.sources().next().is_some());
-        self.with_track_editor(cx, |editor| {
+        self.with_sheet(cx, |sheet| {
             if !linked {
                 return;
             }
             if let Some(value) = held {
-                editor.sheet.last.insert(key, value);
+                sheet.last.insert(key, value);
             }
             if let Some((index, _)) = draft {
-                if index < editor.sheet.canvas.drafts.len() {
-                    editor.sheet.canvas.drafts.remove(index);
+                if index < sheet.canvas.drafts.len() {
+                    sheet.canvas.drafts.remove(index);
                 }
             }
         });
@@ -1550,8 +1545,8 @@ impl Luma {
 
     /// A draft from the add menu, placed where the menu opened.
     fn canvas_add(&mut self, kind: Kind, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.with_track_editor(cx, |editor| {
-            let canvas = &mut editor.sheet.canvas;
+        self.with_sheet(cx, |sheet| {
+            let canvas = &mut sheet.canvas;
             let from = at - canvas.anchor();
             let zoom = canvas.zoom;
             canvas.menu = None;
@@ -1574,13 +1569,13 @@ impl Luma {
     ) {
         let (placeholder, text) = match setting {
             Some(name) => {
-                let graph = self.track_editor_ref().and_then(shown_graph);
+                let graph = self.shown_graph();
                 let value = graph
                     .and_then(|graph| graph.nodes.get(id)?.setting(name).map(str::to_owned))
                     .unwrap_or_default();
-                ("Name", value)
+                (sentence_case(name), value)
             }
-            None => ("Node name", id.to_owned()),
+            None => ("Node name".to_owned(), id.to_owned()),
         };
         let field = cx.new(|cx| {
             let mut input = TextInput::search(placeholder, cx);
@@ -1606,8 +1601,8 @@ impl Luma {
             luma.update(cx, |this, cx| this.graph_rename_finish(true, None, cx))
                 .ok();
         });
-        self.with_track_editor(cx, |editor| {
-            let canvas = &mut editor.sheet.canvas;
+        self.with_sheet(cx, |sheet| {
+            let canvas = &mut sheet.canvas;
             canvas.rename_error = None;
             canvas.rename = Some(Rename {
                 id: id.to_owned(),
@@ -1632,9 +1627,9 @@ impl Luma {
     ) {
         let mut ended = None;
         let mut focus = None;
-        self.with_track_editor(cx, |editor| {
-            ended = editor.sheet.canvas.rename.take();
-            focus = editor.sheet.canvas.focus.clone();
+        self.with_sheet(cx, |sheet| {
+            ended = sheet.canvas.rename.take();
+            focus = sheet.canvas.focus.clone();
         });
         let Some(rename) = ended else {
             return;
@@ -1653,12 +1648,12 @@ impl Luma {
         if !save || to == from {
             return;
         }
-        let Some(mut graph) = self.track_editor_ref().and_then(shown_graph) else {
+        let Some(mut graph) = self.shown_graph() else {
             return;
         };
         if let Err(error) = edit::rename(&mut graph, &from, &to) {
-            self.with_track_editor(cx, |editor| {
-                editor.sheet.canvas.rename_error = Some((from, error));
+            self.with_sheet(cx, |sheet| {
+                sheet.canvas.rename_error = Some((from, error));
             });
             return;
         }
@@ -1667,15 +1662,13 @@ impl Luma {
             let _ = edit::rename(graph, &from, &to);
         });
         let renamed = self
-            .track_editor_ref()
-            .and_then(shown_graph)
+            .shown_graph()
             .is_some_and(|graph| graph.nodes.contains_key(&to));
         if !renamed {
             return;
         }
         // What the sheet keeps by node follows the node to its new name.
-        self.with_track_editor(cx, |editor| {
-            let sheet = &mut editor.sheet;
+        self.with_sheet(cx, |sheet| {
             sheet.last = std::mem::take(&mut sheet.last)
                 .into_iter()
                 .map(|((at, input), value)| {
@@ -1710,7 +1703,7 @@ impl Luma {
         value: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(mut graph) = self.track_editor_ref().and_then(shown_graph) else {
+        let Some(mut graph) = self.shown_graph() else {
             return;
         };
         if graph.nodes.get(&id).and_then(|node| node.setting(&name)) == Some(value.as_str()) {
@@ -1718,8 +1711,8 @@ impl Luma {
         }
         edit::set_setting(&mut graph, &id, &name, &value);
         if let Err(error) = graph.check() {
-            self.with_track_editor(cx, |editor| {
-                editor.sheet.canvas.rename_error = Some((id, error.0));
+            self.with_sheet(cx, |sheet| {
+                sheet.canvas.rename_error = Some((id, error.0));
             });
             return;
         }
@@ -1731,18 +1724,16 @@ impl Luma {
     /// Delete a node: each input it fed goes back to its last value, or to
     /// empty.
     fn graph_delete_node(&mut self, id: &str, cx: &mut Context<Self>) {
-        let last = self
-            .track_editor_ref()
-            .map(|editor| editor.sheet.last.clone());
+        let last = self.sheet_ref().map(|sheet| sheet.last.clone());
         let last = last.unwrap_or_default();
         self.graph_live(cx, |graph| {
             edit::delete(graph, id, |graph, at, name| {
                 restore(graph, at, name, last.get(&(at.to_owned(), name.to_owned())))
             });
         });
-        self.with_track_editor(cx, |editor| {
-            if editor.sheet.canvas.selected.as_deref() == Some(id) {
-                editor.sheet.canvas.selected = None;
+        self.with_sheet(cx, |sheet| {
+            if sheet.canvas.selected.as_deref() == Some(id) {
+                sheet.canvas.selected = None;
             }
         });
     }

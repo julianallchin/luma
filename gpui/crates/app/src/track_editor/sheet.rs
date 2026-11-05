@@ -1,10 +1,17 @@
-//! Clip controls: Program's inspector under the visualizer, and Direct's
-//! graph page in the timeline's place. In Program the inspector is always
-//! open and has its own scrolling viewport, independent of timeline height.
-//! With a clip selected it shows the clip's
-//! name, selection, blend and graph (see [`graph`]); with none it shows the
-//! preset browser. Selection retargets the existing controls; graph writes
-//! keep their debounced history and persistence path.
+//! Pattern controls: Program's inspector under the visualizer, Direct's
+//! graph page in the timeline's place, and the Perform tab's pattern editor.
+//! In Program the inspector is always open and has its own scrolling
+//! viewport, independent of timeline height.
+//! With a subject it shows its name, selection, blend and graph (see
+//! [`graph`]); with none it shows the preset browser. Selection retargets the
+//! existing controls; graph writes keep their debounced history and
+//! persistence path.
+//!
+//! The sheet is open in a [`Host`]: a score's track editor, whose subject is
+//! its selected clips, or a Perform tab, whose subject is one pattern of its
+//! set. Everything the sheet reads of its subject comes through
+//! [`Host::subject`], and every edit through one funnel,
+//! [`Luma::sheet_live`], which is where the two hosts part.
 
 use luma_patterns::clip_graph::{ClipGraph, Input, Kind};
 use luma_patterns::Selection;
@@ -19,6 +26,7 @@ use luma_ui::text_input::{self, TextInput};
 use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
+use crate::perform::pattern_sheet::PatternSheet;
 
 mod browser;
 pub(super) mod graph;
@@ -41,7 +49,7 @@ const ARG_FLUSH: Duration = Duration::from_millis(250);
 
 // -- state --------------------------------------------------------------------
 
-/// The sheet's own state, owned by the [`Editor`].
+/// The sheet's own state, owned by its host.
 pub(crate) struct State {
     /// The venue's group names, for the expression editor's autocomplete.
     groups: Groups,
@@ -56,8 +64,8 @@ pub(crate) struct State {
     was_open: Option<Menu>,
     /// The menu that just closed, playing its exit.
     closing: Option<(Menu, MenuVisibility)>,
-    /// A live burst is running: its checkpoint is recorded and a trailing
-    /// commit is owed.
+    /// A live burst is running: a trailing commit is owed (and in a track
+    /// editor, its checkpoint is recorded).
     burst: bool,
     /// Debounce generation for the trailing commit; each live edit retires
     /// the timer before it.
@@ -69,8 +77,8 @@ pub(crate) struct State {
     error: Option<String>,
     /// The graph canvas's view, gesture and unwired nodes.
     canvas: graph::canvas::State,
-    /// The heads of the primary clip's selection, for the head marks of a
-    /// strip across space.
+    /// The heads of the subject's selection, for the head marks of a strip
+    /// across space.
     heads: Heads,
 }
 
@@ -106,6 +114,11 @@ impl State {
         self.built = None;
     }
 
+    /// Whether live edits are waiting on their trailing write.
+    pub(crate) fn owes_write(&self) -> bool {
+        self.burst
+    }
+
     /// Close whichever menu the sheet has up, reporting whether there was one.
     pub(crate) fn dismiss_menu(&mut self) -> bool {
         self.open.take().is_some()
@@ -135,12 +148,12 @@ enum Menu {
 /// reading the sheet draws — the render path may not go back to the
 /// selection for them.
 struct Built {
-    /// The primary (first selected) clip the controls read from.
+    /// The subject the controls read from: [`Subject::id`].
     primary: SharedString,
-    /// How many clips are selected.
+    /// How many bodies an edit writes.
     count: usize,
-    /// The graph shape every selected clip shares; `None` when they differ,
-    /// which leaves only the name to edit.
+    /// The graph shape every body shares; `None` when they differ, which
+    /// leaves only the name to edit.
     shape: Option<String>,
     /// The primary graph's [`graph::edit::layout`] the widgets were built for.
     layout: Option<String>,
@@ -149,7 +162,7 @@ struct Built {
     synced_name: (String, String),
     selection: Entity<GroupExpressionEditor>,
     synced_selection: String,
-    /// The primary clip's blend mode and output kind.
+    /// The subject's blend mode and output kind.
     blend: BlendMode,
     output: Option<Kind>,
     graph: Option<ClipGraph>,
@@ -157,7 +170,218 @@ struct Built {
     _subs: Vec<Subscription>,
 }
 
-// -- subject ------------------------------------------------------------------
+// -- host and subject ---------------------------------------------------------
+
+/// Where the sheet is open.
+#[derive(Clone, Copy)]
+pub(crate) enum Host<'a> {
+    /// A score's track editor. The subject is its selected clips, the first
+    /// selected primary: the controls read it, and an edit writes them all.
+    Track(&'a Editor),
+    /// A Perform tab's pattern editor. The subject is the one pattern it
+    /// holds; with none, it is choosing a preset to start one.
+    Pattern(&'a PatternSheet),
+}
+
+/// [`Host`], to sync the sheet in.
+pub(crate) enum HostMut<'a> {
+    Track(&'a mut Editor),
+    Pattern(&'a mut PatternSheet),
+}
+
+/// What the sheet edits, as its host holds it: the primary clip, or the
+/// pattern.
+pub(super) struct Subject<'a> {
+    /// What the controls are built for.
+    id: &'a str,
+    name: &'a str,
+    /// The graph's summary, where the host keeps one.
+    summary: Option<&'a str>,
+    selection: &'a Selection,
+    seed: u64,
+    /// The seed the selection resolves with.
+    selection_seed: u64,
+    graph: &'a ClipGraph,
+    blend: BlendMode,
+}
+
+impl Subject<'_> {
+    /// What the name field reads while it is empty, and what a cleared name
+    /// becomes: the graph's summary.
+    fn placeholder(&self) -> String {
+        self.summary
+            .map_or_else(|| self.graph.summary(), str::to_owned)
+    }
+}
+
+/// Where the playhead is in the subject, in beats since its start, and how
+/// long the subject lasts.
+pub(super) struct Beats {
+    pub(super) length: f64,
+    pub(super) elapsed: f64,
+    pub(super) playing: bool,
+}
+
+impl<'a> Host<'a> {
+    /// The sheet open in `body`, if one is.
+    pub(crate) fn of(body: &'a Body) -> Option<Self> {
+        match body {
+            Body::TrackEditor(editor) => Some(Self::Track(editor)),
+            Body::Perform(perform) => perform.pattern_sheet.as_ref().map(Self::Pattern),
+            Body::Patch(_) => None,
+        }
+    }
+
+    pub(super) fn sheet(self) -> &'a State {
+        match self {
+            Self::Track(editor) => &editor.sheet,
+            Self::Pattern(open) => &open.sheet,
+        }
+    }
+
+    /// The tab the sheet is in, where the answer to a request it made lands.
+    fn target(self) -> Target {
+        match self {
+            Self::Track(editor) => editor.target(),
+            Self::Pattern(open) => open.target.clone(),
+        }
+    }
+
+    fn venue(self) -> &'a str {
+        match self {
+            Self::Track(editor) => &editor.venue_id,
+            Self::Pattern(open) => open.target.venue(),
+        }
+    }
+
+    pub(super) fn subject(self) -> Option<Subject<'a>> {
+        match self {
+            Self::Track(editor) => {
+                let clip = primary_clip(editor)?;
+                let core = clip.core.as_ref()?;
+                Some(Subject {
+                    id: &clip.id,
+                    name: &core.name,
+                    summary: Some(&clip.summary),
+                    selection: &core.selection,
+                    seed: core.seed,
+                    selection_seed: core.selection_seed.unwrap_or(core.seed),
+                    graph: &core.graph,
+                    blend: clip.blend,
+                })
+            }
+            Self::Pattern(open) => {
+                let pattern = open.pattern.as_ref()?;
+                Some(Subject {
+                    id: &pattern.id,
+                    name: &pattern.name,
+                    summary: None,
+                    selection: &pattern.selection,
+                    seed: pattern.seed,
+                    selection_seed: pattern.seed,
+                    graph: &pattern.graph,
+                    blend: pattern.blend_mode,
+                })
+            }
+        }
+    }
+
+    /// How many bodies an edit writes.
+    fn count(self) -> usize {
+        match self {
+            Self::Track(editor) => editor.selected.len(),
+            Self::Pattern(open) => usize::from(open.pattern.is_some()),
+        }
+    }
+
+    /// The graph shape every body shares, or `None` when they differ.
+    fn shape(self) -> Option<String> {
+        match self {
+            Self::Track(editor) => shared_shape(editor),
+            Self::Pattern(open) => open
+                .pattern
+                .as_ref()
+                .map(|pattern| graph::edit::shape(&pattern.graph)),
+        }
+    }
+
+    /// Where the playhead is in the subject. A Perform pattern has no
+    /// timeline to have one on.
+    pub(super) fn beats(self) -> Option<Beats> {
+        match self {
+            Self::Track(editor) => {
+                let clip = primary_clip(editor)?;
+                let timeline = editor.beats.as_deref()?.timeline().ok()?;
+                let start = timeline.beat_at(clip.start).ok()?;
+                let now = timeline
+                    .beat_at(f64::from(editor.transport.position))
+                    .ok()?;
+                Some(Beats {
+                    length: timeline.beat_at(clip.end).ok()? - start,
+                    elapsed: now - start,
+                    playing: editor.transport.playing,
+                })
+            }
+            Self::Pattern(_) => None,
+        }
+    }
+}
+
+impl HostMut<'_> {
+    fn host(&self) -> Host<'_> {
+        match self {
+            Self::Track(editor) => Host::Track(editor),
+            Self::Pattern(open) => Host::Pattern(open),
+        }
+    }
+
+    fn sheet(&mut self) -> &mut State {
+        match self {
+            Self::Track(editor) => &mut editor.sheet,
+            Self::Pattern(open) => &mut open.sheet,
+        }
+    }
+}
+
+/// The sheet open in `body`, to change.
+fn sheet_mut(body: &mut Body) -> Option<&mut State> {
+    match body {
+        Body::TrackEditor(editor) => Some(&mut editor.sheet),
+        Body::Perform(perform) => perform.pattern_sheet.as_mut().map(|open| &mut open.sheet),
+        Body::Patch(_) => None,
+    }
+}
+
+impl Luma {
+    /// Where the active tab's sheet is open, if it has one.
+    pub(super) fn sheet_host(&self) -> Option<Host<'_>> {
+        Host::of(self.workspace.active_body()?)
+    }
+
+    /// The active tab's sheet, read-only.
+    pub(super) fn sheet_ref(&self) -> Option<&State> {
+        self.sheet_host().map(Host::sheet)
+    }
+
+    /// Change the active tab's sheet, and redraw.
+    pub(super) fn with_sheet(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut State)) {
+        if let Some(sheet) = self.workspace.active_body_mut().and_then(sheet_mut) {
+            edit(sheet);
+            cx.notify();
+        }
+    }
+
+    /// The sheet of tab `target`, shown or parked: where the answer to a
+    /// request it made lands.
+    fn sheet_at(&mut self, target: &Target) -> Option<&mut State> {
+        sheet_mut(self.parked.body_mut(&mut self.workspace, target)?)
+    }
+
+    /// The subject's graph, as the canvas shows it.
+    pub(super) fn shown_graph(&self) -> Option<ClipGraph> {
+        Some(self.sheet_host()?.subject()?.graph.clone())
+    }
+}
 
 fn primary_clip(editor: &Editor) -> Option<&Clip> {
     let id = editor.selected.first()?;
@@ -186,55 +410,57 @@ fn shared_shape(editor: &Editor) -> Option<String> {
 
 // -- sync ---------------------------------------------------------------------
 
-/// Refresh controls from the selected clip without overwriting active drafts.
-pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
-    tick_menus(&mut editor.sheet, window, cx);
-    ensure_groups(editor, cx);
-    ensure_heads(editor, cx);
-    let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
-        editor.sheet.open = None;
-        editor.sheet.built = None;
-        browser::sync(editor, cx);
+/// Refresh controls from the subject without overwriting active drafts.
+pub(crate) fn sync(mut host: HostMut, window: &mut Window, cx: &mut Context<Luma>) {
+    tick_menus(host.sheet(), window, cx);
+    ensure_groups(&mut host, cx);
+    ensure_heads(&mut host, cx);
+    let Some(primary) = host.host().subject().map(|subject| subject.id.to_owned()) else {
+        let sheet = host.sheet();
+        sheet.open = None;
+        sheet.built = None;
+        browser::sync(&mut host, cx);
         return;
     };
-    browser::leave(editor);
-    let shape = shared_shape(editor);
-    let count = editor.selected.len();
-    let rebuild = match &editor.sheet.built {
-        Some(built) => built.primary != primary || built.count != count,
+    browser::leave(host.sheet());
+    let shape = host.host().shape();
+    let count = host.host().count();
+    let rebuild = match &host.sheet().built {
+        Some(built) => built.primary.as_ref() != primary || built.count != count,
         None => true,
     };
     if rebuild {
-        editor.sheet.open = None;
-        editor.sheet.last.clear();
-        editor.sheet.error = None;
-        editor.sheet.canvas = graph::canvas::State::default();
-        let built = build(editor, primary, window, cx);
-        editor.sheet.built = Some(built);
+        let built = build(host.host(), primary.into(), window, cx);
+        let sheet = host.sheet();
+        sheet.open = None;
+        sheet.last.clear();
+        sheet.error = None;
+        sheet.canvas = graph::canvas::State::default();
+        sheet.built = Some(built);
     }
-    if editor.sheet.canvas.focus.is_none() {
-        editor.sheet.canvas.focus = Some(cx.focus_handle());
+    let sheet = host.sheet();
+    if sheet.canvas.focus.is_none() {
+        sheet.canvas.focus = Some(cx.focus_handle());
     }
     let graph = shape
         .as_ref()
-        .and_then(|_| primary_clip(editor)?.core.as_ref())
-        .map(|core| core.graph.clone());
+        .and_then(|_| Some(host.host().subject()?.graph.clone()));
     let layout = graph.as_ref().map(graph::edit::layout);
-    let reshaped = editor
-        .sheet
+    let reshaped = host
+        .sheet()
         .built
         .as_ref()
         .is_some_and(|built| built.shape != shape || built.layout != layout);
     if reshaped {
         let controls = graph.as_ref().map(|graph| graph::build(graph, window, cx));
-        if let Some(built) = editor.sheet.built.as_mut() {
+        if let Some(built) = host.sheet().built.as_mut() {
             built.shape = shape;
             built.layout = layout;
             built.graph = graph;
             built.controls = controls;
         }
     }
-    resync(editor, window, cx);
+    resync(&mut host, window, cx);
 }
 
 /// Start a closed menu's exit, and keep frames coming while it plays: a menu
@@ -265,72 +491,69 @@ fn tick_menus(sheet: &mut State, window: &mut Window, cx: &mut Context<Luma>) {
 }
 
 /// How `menu` shows: open, playing its exit, or closed.
-fn menu_visibility(state: &Editor, menu: Menu) -> MenuVisibility {
-    match state.sheet.closing {
-        _ if state.sheet.open == Some(menu) => MenuVisibility::Open,
+fn menu_visibility(sheet: &State, menu: Menu) -> MenuVisibility {
+    match sheet.closing {
+        _ if sheet.open == Some(menu) => MenuVisibility::Open,
         Some((closing, visibility)) if closing == menu => visibility,
         _ => MenuVisibility::Closed,
     }
 }
 
 /// Ask for the venue's group names, once.
-fn ensure_groups(editor: &mut Editor, cx: &mut Context<Luma>) {
-    if !matches!(editor.sheet.groups, Groups::NotAsked) {
+fn ensure_groups(host: &mut HostMut, cx: &mut Context<Luma>) {
+    if !matches!(host.sheet().groups, Groups::NotAsked) {
         return;
     }
-    editor.sheet.groups = Groups::Loading;
-    let venue = editor.venue_id.clone();
+    host.sheet().groups = Groups::Loading;
+    let (target, venue) = (host.host().target(), host.host().venue().to_owned());
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| this.library.venue_groups(&venue)) else {
             return;
         };
         let rows = pending.await;
         this.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
-                if editor.venue_id != venue {
-                    return;
-                }
+            if let Some(sheet) = this.sheet_at(&target) {
                 let names: Vec<SharedString> = rows
                     .into_iter()
                     .flatten()
                     .filter_map(|group| group.name)
                     .map(SharedString::from)
                     .collect();
-                editor.sheet.groups = Groups::Ready(Rc::new(names));
-            });
+                sheet.groups = Groups::Ready(Rc::new(names));
+                cx.notify();
+            }
         })
         .ok();
     })
     .detach();
 }
 
-/// Ask for the heads of the primary clip's selection when its graph lies
-/// across space, once per venue, selection and seed.
-fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
-    let Some(core) = primary_clip(editor).and_then(|clip| clip.core.as_ref()) else {
+/// Ask for the heads of the subject's selection when its graph lies across
+/// space, once per venue, selection and seed.
+fn ensure_heads(host: &mut HostMut, cx: &mut Context<Luma>) {
+    let read = host.host();
+    let Some(subject) = read.subject() else {
         return;
     };
-    if !core
-        .graph
-        .nodes
-        .values()
-        .any(|node| node.kind == Kind::Space)
-    {
+    let graph = subject.graph;
+    if !graph.nodes.values().any(|node| node.kind == Kind::Space) {
         return;
     }
-    let seed = core.selection_seed.unwrap_or(core.seed);
-    let selection = core.selection.clone();
-    let elements = core.graph.laser().map(|laser| laser.count());
+    let seed = subject.selection_seed;
+    let selection = subject.selection.clone();
+    let elements = graph.laser().map(|laser| laser.count());
     let key = (
-        editor.venue_id.clone(),
+        read.venue().to_owned(),
         selection.to_value().to_string(),
         seed,
         elements,
     );
-    if editor.sheet.heads.key.as_ref() == Some(&key) {
+    let target = read.target();
+    let sheet = host.sheet();
+    if sheet.heads.key.as_ref() == Some(&key) {
         return;
     }
-    editor.sheet.heads = Heads {
+    sheet.heads = Heads {
         key: Some(key.clone()),
         cells: None,
     };
@@ -343,13 +566,15 @@ fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
         };
         let cells = pending.await;
         this.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
-                if editor.sheet.heads.key.as_ref() != Some(&key) {
-                    return;
-                }
-                // A selection that does not resolve has no heads to show.
-                editor.sheet.heads.cells = Some(cells.unwrap_or_default().into());
-            });
+            let Some(sheet) = this.sheet_at(&target) else {
+                return;
+            };
+            if sheet.heads.key.as_ref() != Some(&key) {
+                return;
+            }
+            // A selection that does not resolve has no heads to show.
+            sheet.heads.cells = Some(cells.unwrap_or_default().into());
+            cx.notify();
         })
         .ok();
     })
@@ -358,17 +583,15 @@ fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
 
 /// The name, selection and blend controls for one subject; the graph's are
 /// built on the first sync after, from its shape.
-fn build(
-    editor: &Editor,
-    primary: SharedString,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) -> Built {
+fn build(host: Host, primary: SharedString, window: &mut Window, cx: &mut Context<Luma>) -> Built {
     let mut subs = Vec::new();
-    let clip = primary_clip(editor);
-    let core = clip.and_then(|clip| clip.core.as_ref());
-    let name_text = core.map_or_else(String::new, |core| core.name.clone());
-    let placeholder = clip.map_or_else(String::new, |clip| clip.summary.to_string());
+    let subject = host.subject();
+    let name_text = subject
+        .as_ref()
+        .map_or_else(String::new, |subject| subject.name.to_owned());
+    let placeholder = subject
+        .as_ref()
+        .map_or_else(String::new, Subject::placeholder);
     let name = cx.new(|cx| {
         let mut input = TextInput::search(placeholder.clone(), cx);
         input.set_text(name_text.clone(), cx);
@@ -380,11 +603,11 @@ fn build(
             match event {
                 text_input::Event::Submitted | text_input::Event::Blurred => {
                     let name = field.read(cx).text().trim().to_string();
-                    this.rename_clips(name, cx);
+                    this.rename_subject(name, cx);
                 }
                 // Escape puts the stored name back.
-                text_input::Event::Cancelled => this.with_track_editor(cx, |editor| {
-                    if let Some(built) = editor.sheet.built.as_mut() {
+                text_input::Event::Cancelled => this.with_sheet(cx, |sheet| {
+                    if let Some(built) = sheet.built.as_mut() {
                         built.synced_name = Default::default();
                     }
                 }),
@@ -393,11 +616,13 @@ fn build(
         },
     ));
 
-    let groups: Vec<SharedString> = match &editor.sheet.groups {
+    let groups: Vec<SharedString> = match &host.sheet().groups {
         Groups::Ready(names) => names.as_ref().clone(),
         _ => Vec::new(),
     };
-    let expression = core.map_or_else(String::new, |core| core.selection.expression.clone());
+    let expression = subject
+        .as_ref()
+        .map_or_else(String::new, |subject| subject.selection.expression.clone());
     let selection = cx.new(|cx| {
         GroupExpressionEditor::new(
             groups.iter().cloned(),
@@ -417,15 +642,17 @@ fn build(
 
     Built {
         primary,
-        count: editor.selected.len(),
+        count: host.count(),
         shape: None,
         layout: None,
         name,
         synced_name: (name_text, placeholder),
         selection,
         synced_selection: expression,
-        blend: clip.map_or(BlendMode::Replace, |clip| clip.blend),
-        output: core.and_then(|core| core.graph.output_kind()),
+        blend: subject
+            .as_ref()
+            .map_or(BlendMode::Replace, |subject| subject.blend),
+        output: subject.and_then(|subject| subject.graph.output_kind()),
         graph: None,
         controls: None,
         _subs: subs,
@@ -435,28 +662,23 @@ fn build(
 /// Refresh every reading the sheet draws, and push externally moved values
 /// into the widgets that show them.
 ///
-/// "Externally" is anything that rewrote the working copy — an undo, a lost
-/// write reloading, another gesture — including this sheet's own edits, whose
-/// echo the synced copies filter out: a value the sheet itself wrote comes
-/// back equal, so a widget's in-progress state survives.
-fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
-    let Some(clip) = primary_clip(editor).cloned() else {
+/// "Externally" is anything that rewrote the subject — an undo, a lost write
+/// reloading, another gesture — including this sheet's own edits, whose echo
+/// the synced copies filter out: a value the sheet itself wrote comes back
+/// equal, so a widget's in-progress state survives.
+fn resync(host: &mut HostMut, window: &mut Window, cx: &mut Context<Luma>) {
+    let Some(subject) = host.host().subject() else {
         return;
     };
-    let focused = editor
-        .sheet
-        .built
-        .as_ref()
-        .is_some_and(|built| built.name.read(cx).focus_handle(cx).is_focused(window));
-    let Some(built) = editor.sheet.built.as_mut() else {
+    let name = (subject.name.to_owned(), subject.placeholder());
+    let (blend, expression) = (subject.blend, subject.selection.expression.clone());
+    let graph = subject.graph.clone();
+    let Some(built) = host.sheet().built.as_mut() else {
         return;
     };
-    built.blend = clip.blend;
-    let Some(core) = clip.core.as_ref() else {
-        return;
-    };
-    built.output = core.graph.output_kind();
-    let name = (core.name.clone(), clip.summary.to_string());
+    let focused = built.name.read(cx).focus_handle(cx).is_focused(window);
+    built.blend = blend;
+    built.output = graph.output_kind();
     if built.synced_name != name && !focused {
         built.name.update(cx, |field, cx| {
             field.set_placeholder(name.1.clone(), cx);
@@ -464,8 +686,7 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
         });
         built.synced_name = name;
     }
-    if built.synced_selection != core.selection.expression {
-        let expression = core.selection.expression.clone();
+    if built.synced_selection != expression {
         built
             .selection
             .update(cx, |field, cx| field.set_text(expression.clone(), cx));
@@ -473,19 +694,111 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
     }
     if built.shape.is_some() {
         if let Some(controls) = built.controls.as_mut() {
-            graph::sync(controls, &core.graph, window, cx);
+            graph::sync(controls, &graph, window, cx);
         }
-        built.graph = Some(core.graph.clone());
+        built.graph = Some(graph);
     }
 }
 
 // -- the write paths ----------------------------------------------------------
 
+/// `body` with `edit` applied: `None` when that changed nothing, and the
+/// checker's words when the result fails its checks.
+fn edited(
+    library: &luma_patterns::Library,
+    id: &str,
+    body: &luma_patterns::Clip,
+    edit: &mut impl FnMut(&mut luma_patterns::Clip),
+) -> Result<Option<luma_patterns::Clip>, String> {
+    let mut edited = body.clone();
+    edit(&mut edited);
+    if edited == *body {
+        return Ok(None);
+    }
+    luma_patterns::Score::validate_clip(library, id, &edited).map_err(|error| error.to_string())?;
+    Ok(Some(edited))
+}
+
+/// A live edit of the selected clips: the working copy now, with the
+/// [`History`] checkpoint on a burst's first edit. Returns the clips it
+/// changed, whose previews are owed.
+fn clips_live(
+    editor: &mut Editor,
+    edit: &mut impl FnMut(&mut luma_patterns::Clip),
+) -> Vec<SharedString> {
+    let mut touched: Vec<SharedString> = Vec::new();
+    if !editor.writable() || editor.selected.is_empty() {
+        return touched;
+    }
+    let library = luma_patterns::standard_library();
+    let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
+    let mut refused = None;
+    for clip in &mut clips {
+        if !editor.selected.contains(&clip.id) {
+            continue;
+        }
+        let Some(core) = clip.core.as_mut() else {
+            continue;
+        };
+        match edited(&library, &clip.id, core, edit) {
+            Ok(Some(edited)) => {
+                *core = edited;
+                clip.refresh();
+                touched.push(clip.id.clone());
+            }
+            Ok(None) => {}
+            Err(error) => refused = Some(error),
+        }
+    }
+    editor.sheet.error = refused;
+    if touched.is_empty() {
+        return touched;
+    }
+    if !editor.sheet.burst {
+        editor.checkpoint();
+        editor.sheet.burst = true;
+    }
+    editor.replace_clips(clips);
+    touched
+}
+
+/// A live edit of the open Perform pattern, checked as a clip: its copy now,
+/// and a save owed. Returns whether it changed.
+fn pattern_live(open: &mut PatternSheet, edit: &mut impl FnMut(&mut luma_patterns::Clip)) -> bool {
+    let Some(pattern) = open.pattern.as_mut() else {
+        return false;
+    };
+    let library = luma_patterns::standard_library();
+    // Timed as the backend checks a pattern it saves.
+    let result = edited(&library, &pattern.id, &pattern.as_clip(0., 1.), edit);
+    open.sheet.error = result.as_ref().err().cloned();
+    let Ok(Some(clip)) = result else {
+        return false;
+    };
+    pattern.name = clip.name;
+    pattern.selection = clip.selection;
+    pattern.blend_mode = clip.blend_mode;
+    pattern.seed = clip.seed;
+    pattern.graph = clip.graph;
+    open.sheet.burst = true;
+    true
+}
+
 impl Luma {
-    /// A blend pick from the sheet: every selected clip whose output takes
-    /// the mode takes it, in one committed write. An aim takes replace or
+    /// A blend pick from the sheet. In a track editor every selected clip
+    /// whose output takes the mode takes it, in one committed write; a
+    /// Perform pattern takes it as a live edit. An aim takes replace or
     /// offset; light takes the light modes.
     pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
+        if matches!(self.sheet_host(), Some(Host::Pattern(_))) {
+            self.sheet_live(cx, |clip| {
+                let output = clip.graph.output_kind().map_or("color", Kind::name);
+                if blend_modes(output).contains(&mode) {
+                    clip.blend_mode = mode;
+                }
+            });
+            return;
+        }
         self.track_command(
             move |editor| {
                 if editor.selected.is_empty() {
@@ -505,31 +818,38 @@ impl Luma {
         );
     }
 
-    /// A name from the sheet, on every selected clip, in one committed write.
-    /// A clip needs a name: a cleared field names each clip after its
-    /// summary.
-    fn rename_clips(&mut self, name: String, cx: &mut Context<Self>) {
-        let named = |clip: &Clip| {
+    /// A name from the sheet, on every body of the subject: in a track
+    /// editor in one committed write, on a Perform pattern as a live edit. A
+    /// pattern needs a name: a cleared field names it after its summary.
+    fn rename_subject(&mut self, name: String, cx: &mut Context<Self>) {
+        let named = |summary: &str| {
             if name.is_empty() {
-                clip.summary.to_string()
+                summary.to_owned()
             } else {
                 name.clone()
             }
         };
-        let unchanged = self.track_editor_ref().is_none_or(|editor| {
-            selected_clips(editor).all(|clip| {
+        let unchanged = match self.sheet_host() {
+            Some(Host::Track(editor)) => selected_clips(editor).all(|clip| {
                 clip.core
                     .as_ref()
-                    .is_some_and(|core| core.name == named(clip))
-            })
-        });
+                    .is_some_and(|core| core.name == named(&clip.summary))
+            }),
+            host => host
+                .and_then(Host::subject)
+                .is_none_or(|subject| subject.name == named(&subject.placeholder())),
+        };
         if unchanged {
             // The field may still read empty; put the stored name back.
-            self.with_track_editor(cx, |editor| {
-                if let Some(built) = editor.sheet.built.as_mut() {
+            self.with_sheet(cx, |sheet| {
+                if let Some(built) = sheet.built.as_mut() {
                     built.synced_name = Default::default();
                 }
             });
+            return;
+        }
+        if matches!(self.sheet_host(), Some(Host::Pattern(_))) {
+            self.sheet_live(cx, |clip| clip.name = named(&clip.graph.summary()));
             return;
         }
         self.track_command(
@@ -539,7 +859,7 @@ impl Luma {
                     if !editor.selected.contains(&clip.id) {
                         continue;
                     }
-                    let name = named(clip);
+                    let name = named(&clip.summary);
                     if let Some(core) = clip.core.as_mut() {
                         core.name = name;
                     }
@@ -551,72 +871,49 @@ impl Luma {
         );
     }
 
-    /// The fast path: apply `edit` to every selected clip now — working copy
-    /// and heatmap previews — and owe the seam one write on the trailing
-    /// edge. A clip `edit` leaves failing its checks keeps its old body, and
-    /// the sheet says why.
+    /// The fast path, and the one funnel every live edit of the subject
+    /// takes: apply `edit` to each of its bodies now, and owe the host one
+    /// write on the trailing edge. A body `edit` leaves failing its checks
+    /// keeps its old one, and the sheet says why.
     ///
-    /// The first edit of a burst records the [`History`] checkpoint; the
+    /// In a track editor the first edit of a burst records the [`History`]
+    /// checkpoint and the clips' heatmap previews follow each edit; the
     /// flush closes the burst, so a whole picker drag is one undo step and
-    /// one write.
-    fn clips_live(
+    /// one write. A Perform pattern's write is a save of the pattern, which
+    /// the backend plays from.
+    fn sheet_live(
         &mut self,
         cx: &mut Context<Self>,
         mut edit: impl FnMut(&mut luma_patterns::Clip),
     ) {
-        let mut touched: Vec<SharedString> = Vec::new();
-        self.with_track_editor(cx, |editor| {
-            if !editor.writable() || editor.selected.is_empty() {
-                return;
-            }
-            let library = luma_patterns::standard_library();
-            let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
-            let mut refused = None;
-            for clip in &mut clips {
-                if !editor.selected.contains(&clip.id) {
-                    continue;
+        let owed = match self.workspace.active_body_mut() {
+            Some(Body::TrackEditor(editor)) => {
+                let touched = clips_live(editor, &mut edit);
+                let owed = !touched.is_empty();
+                if owed {
+                    self.refresh_clip_previews(touched, cx);
                 }
-                let Some(core) = clip.core.as_mut() else {
-                    continue;
-                };
-                let mut edited = core.clone();
-                edit(&mut edited);
-                if edited == *core {
-                    continue;
-                }
-                if let Err(error) = luma_patterns::Score::validate_clip(&library, &clip.id, &edited)
-                {
-                    refused = Some(error.to_string());
-                    continue;
-                }
-                *core = edited;
-                clip.refresh();
-                touched.push(clip.id.clone());
+                owed
             }
-            editor.sheet.error = refused;
-            if touched.is_empty() {
-                return;
-            }
-            if !editor.sheet.burst {
-                editor.checkpoint();
-                editor.sheet.burst = true;
-            }
-            editor.replace_clips(clips);
-        });
-        if touched.is_empty() {
-            return;
+            Some(Body::Perform(perform)) => perform
+                .pattern_sheet
+                .as_mut()
+                .is_some_and(|open| pattern_live(open, &mut edit)),
+            _ => return,
+        };
+        cx.notify();
+        if owed {
+            self.schedule_arg_flush(cx);
         }
-        self.refresh_clip_previews(touched, cx);
-        self.schedule_arg_flush(cx);
     }
 
-    /// A graph edit from the sheet or the timeline, on every selected clip.
+    /// A graph edit from the sheet, on every body of the subject.
     pub(crate) fn graph_live(
         &mut self,
         cx: &mut Context<Self>,
         mut edit: impl FnMut(&mut ClipGraph),
     ) {
-        self.clips_live(cx, |clip| edit(&mut clip.graph));
+        self.sheet_live(cx, |clip| edit(&mut clip.graph));
     }
 
     /// A selection edit: the expression field and the fixture picker commit
@@ -626,74 +923,104 @@ impl Luma {
         cx: &mut Context<Self>,
         mut edit: impl FnMut(&mut Selection),
     ) {
-        self.clips_live(cx, |clip| edit(&mut clip.selection));
+        self.sheet_live(cx, |clip| edit(&mut clip.selection));
     }
 
-    /// Open the fixture picker on the selected clips' selection.
+    /// Open the fixture picker on the subject's selection.
     ///
     /// The sheet reads out what the dialog cannot see for itself: what the
     /// selection currently says, and the venue's group vocabulary the
     /// expression field already loaded for its autocomplete — asking for it
     /// twice would be a second load of the same list.
     fn pick_fixtures(&mut self, cx: &mut Context<Self>) {
-        let mut opened = None;
-        self.with_track_editor(cx, |editor| {
-            let groups = match &editor.sheet.groups {
-                Groups::Ready(names) => names.as_ref().clone(),
-                Groups::NotAsked | Groups::Loading => Vec::new(),
-            };
-            let selection = primary_clip(editor)
-                .and_then(|clip| clip.core.as_ref())
-                .map_or_else(Selection::all, |core| core.selection.clone());
-            opened = Some((editor.venue_id.clone(), groups, selection));
-        });
-        if let Some((venue, groups, selection)) = opened {
-            self.open_fixture_picker(venue, groups, &selection, cx);
-        }
-    }
-
-    /// The open track editor, read-only.
-    fn track_editor_ref(&self) -> Option<&Editor> {
-        match self.workspace.active_body() {
-            Some(Body::TrackEditor(editor)) => Some(editor),
-            _ => None,
-        }
-    }
-
-    /// Arm (or re-arm) the trailing commit. Serialized under
-    /// [`Luma::commit_clips`]'s own in-flight discipline, so a burst that
-    /// outruns a slow write queues exactly one follow-up.
-    fn schedule_arg_flush(&mut self, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
+        let Some(host) = self.sheet_host() else {
             return;
         };
-        let target = editor.target();
-        editor.sheet.flush_gen += 1;
-        let generation = editor.sheet.flush_gen;
+        let groups = match &host.sheet().groups {
+            Groups::Ready(names) => names.as_ref().clone(),
+            Groups::NotAsked | Groups::Loading => Vec::new(),
+        };
+        let selection = host
+            .subject()
+            .map_or_else(Selection::all, |subject| subject.selection.clone());
+        let venue = host.venue().to_owned();
+        self.open_fixture_picker(venue, groups, &selection, cx);
+    }
+
+    /// Arm (or re-arm) the trailing commit. A track editor's is serialized
+    /// under [`Luma::commit_clips`]'s own in-flight discipline, so a burst
+    /// that outruns a slow write queues exactly one follow-up.
+    fn schedule_arg_flush(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.workspace.active().cloned() else {
+            return;
+        };
+        let Some(sheet) = self.sheet_at(&target) else {
+            return;
+        };
+        sheet.flush_gen += 1;
+        let generation = sheet.flush_gen;
         let pending = self.library.debounce(ARG_FLUSH);
         cx.spawn(async move |this, cx| {
             pending.await;
             this.update(cx, |this, cx| {
-                let mut flush = false;
-                let mut graph = false;
-                this.edit_track_tab(&target, cx, |editor| {
-                    if editor.sheet.flush_gen == generation {
-                        editor.sheet.burst = false;
-                        flush = true;
-                        graph = editor.graph_score.is_some();
+                let due = this.sheet_at(&target).is_some_and(|sheet| {
+                    let due = sheet.flush_gen == generation;
+                    if due {
+                        sheet.burst = false;
                     }
+                    due
                 });
-                if flush {
-                    if graph {
-                        this.commit_graph_score_for(target, cx);
-                    } else if this.workspace.active() == Some(&target) {
-                        this.commit_clips(cx);
-                    }
+                if due {
+                    cx.notify();
+                    this.flush_sheet(&target, cx);
                 }
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Write what the live edits of tab `target`'s sheet owe its host: the
+    /// score, or the Perform pattern.
+    pub(crate) fn flush_sheet(&mut self, target: &Target, cx: &mut Context<Self>) {
+        match self.parked.body_mut(&mut self.workspace, target) {
+            Some(Body::TrackEditor(editor)) => {
+                if editor.graph_score.is_some() {
+                    self.commit_graph_score_for(target.clone(), cx);
+                } else if self.workspace.active() == Some(target) {
+                    self.commit_clips(cx);
+                }
+            }
+            Some(Body::Perform(perform)) => {
+                // What the editor edits, onto the set's own copy: its place
+                // and exclusive set may have changed since the editor opened.
+                let pattern = perform
+                    .pattern_sheet
+                    .as_ref()
+                    .and_then(|open| open.pattern.as_ref())
+                    .map(|edited| {
+                        match perform
+                            .patterns
+                            .iter()
+                            .flatten()
+                            .find(|p| p.id == edited.id)
+                        {
+                            Some(current) => luma_lib::models::perform::PerformPattern {
+                                name: edited.name.clone(),
+                                selection: edited.selection.clone(),
+                                blend_mode: edited.blend_mode,
+                                graph: edited.graph.clone(),
+                                ..current.clone()
+                            },
+                            None => edited.clone(),
+                        }
+                    });
+                if let Some(pattern) = pattern {
+                    self.store_perform_pattern(target, pattern, cx);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -709,12 +1036,13 @@ pub(super) fn blend_modes(output: &str) -> &'static [BlendMode] {
 
 // -- rendering ----------------------------------------------------------------
 
-/// The inspector: the selected clip's controls, or the preset browser,
-/// filling the whole box it is given — Program's under the stage, or Direct's
-/// graph page. `lead` opens the header strip: the graph page's way back.
-pub(super) fn panel(state: &Editor, app: &Entity<Luma>, lead: Option<AnyElement>) -> AnyElement {
-    let (label, body) = match state.sheet.built.as_ref() {
-        Some(built) => ("Clip graph", body(state, built, app, lead)),
+/// The inspector: the subject's controls, or the preset browser, filling
+/// the whole box it is given — Program's under the stage, Direct's graph page
+/// or the Perform tab's. `lead` opens the header strip: a page's way back.
+pub(crate) fn panel(host: Host, app: &Entity<Luma>, lead: Option<AnyElement>) -> AnyElement {
+    let sheet = host.sheet();
+    let (label, body) = match sheet.built.as_ref() {
+        Some(built) => ("Pattern graph", body(sheet, built, app, lead)),
         None => (
             "Presets",
             div()
@@ -723,7 +1051,7 @@ pub(super) fn panel(state: &Editor, app: &Entity<Luma>, lead: Option<AnyElement>
                 .flex()
                 .flex_col()
                 .children(lead.map(|lead| strip().child(lead)))
-                .child(div().flex_1().min_h_0().child(browser::body(state, app)))
+                .child(div().flex_1().min_h_0().child(browser::body(host, app)))
                 .into_any_element(),
         ),
     };
@@ -735,6 +1063,27 @@ pub(super) fn panel(state: &Editor, app: &Entity<Luma>, lead: Option<AnyElement>
         .bg(ladder::background())
         .child(body)
         .agent_node(Role::Card, label)
+        .into_any_element()
+}
+
+/// A page's way back, at the head of its strip: a chevron and where it goes.
+pub(crate) fn back(
+    id: &'static str,
+    label: &'static str,
+    agent: &'static str,
+    app: &Entity<Luma>,
+    close: impl Fn(&mut Luma, &mut Context<Luma>) + 'static,
+) -> AnyElement {
+    let app = app.clone();
+    luma_ui::button("", Enabled::Yes)
+        .id(id)
+        .pl(px(6.))
+        .pr(px(10.))
+        .gap(px(4.))
+        .child(gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(14.)))
+        .child(label)
+        .on_click(move |_, _, cx| app.update(cx, |this, cx| close(this, cx)))
+        .agent_node(Role::Button, agent)
         .into_any_element()
 }
 
@@ -767,11 +1116,11 @@ fn strip() -> Div {
 
 /// The sheet's content: one header strip — the way back, the name, the
 /// selection and blend — then the graph canvas filling the rest.
-fn body(state: &Editor, built: &Built, app: &Entity<Luma>, lead: Option<AnyElement>) -> AnyElement {
+fn body(sheet: &State, built: &Built, app: &Entity<Luma>, lead: Option<AnyElement>) -> AnyElement {
     let header = strip()
         .children(lead)
         .when(built.count > 1, |header| {
-            let count = format!("{} clips", built.count);
+            let count = format!("{} patterns", built.count);
             header.child(
                 div()
                     .flex_none()
@@ -796,12 +1145,11 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>, lead: Option<AnyEleme
                         .min_w(px(SELECTION_MIN_W))
                         .max_w(px(SELECTION_MAX_W))
                 }))
-                .child(labelled("Blend", blend_select(state, built, app), |row| {
+                .child(labelled("Blend", blend_select(sheet, built, app), |row| {
                     row.flex_none()
                 }))
         });
-    let error = state
-        .sheet
+    let error = sheet
         .error
         .as_ref()
         .filter(|_| built.shape.is_some())
@@ -816,7 +1164,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>, lead: Option<AnyEleme
                 .agent_node(Role::Text, error.clone())
         });
     let graph = match (&built.shape, &built.controls, &built.graph) {
-        (Some(_), Some(controls), Some(shown)) => Some(graph::editor(state, controls, shown, app)),
+        (Some(_), Some(controls), Some(shown)) => Some(graph::editor(sheet, controls, shown, app)),
         _ => None,
     };
     div()
@@ -870,10 +1218,10 @@ fn selection_row(built: &Built, app: &Entity<Luma>) -> Div {
 
 /// The blend row: the modes the output takes, applied to the whole
 /// selection on pick.
-fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
+fn blend_select(sheet: &State, built: &Built, app: &Entity<Luma>) -> Div {
     let modes = blend_modes(built.output.map_or("color", Kind::name));
     let names: Vec<&str> = modes.iter().map(|mode| mode.label()).collect();
-    let open = menu_visibility(state, Menu::Blend);
+    let open = menu_visibility(sheet, Menu::Blend);
     let toggle = app.clone();
     let pick = app.clone();
     luma_arg_select(
@@ -883,8 +1231,8 @@ fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
         open,
         move |_, cx| {
             toggle.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.sheet.open = match editor.sheet.open {
+                this.with_sheet(cx, |sheet| {
+                    sheet.open = match sheet.open {
                         Some(Menu::Blend) => None,
                         _ => Some(Menu::Blend),
                     };
@@ -893,7 +1241,7 @@ fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
         },
         move |index, _, cx| {
             pick.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                this.with_sheet(cx, |sheet| sheet.open = None);
                 this.sheet_blend(modes[index], cx);
             });
         },

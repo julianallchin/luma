@@ -46,7 +46,11 @@ pub struct RenderEngine {
 pub(crate) enum SceneTarget {
     Active,
     Deck(u8),
+    /// The Perform set.
+    Live,
 }
+
+use crate::perform::live::{LiveClock, LiveSet};
 
 pub(crate) struct SceneUpdate {
     target: SceneTarget,
@@ -83,6 +87,8 @@ pub(crate) struct RenderEngineInner {
     perform_deck_states: Vec<PerformDeckInput>,
     /// Seconds added to every deck's position: positive lights lead the music.
     perform_latency: f32,
+    /// The Perform set, over the decks or the editor.
+    live: Option<LiveSet>,
     /// Fixture identify blink (highest priority)
     identify: Option<IdentifyState>,
     /// Reusable eval scratch arena, held across frames so the hot path stays warm.
@@ -99,6 +105,7 @@ impl Default for RenderEngine {
                 perform_layers: HashMap::new(),
                 perform_deck_states: Vec::new(),
                 perform_latency: 0.0,
+                live: None,
                 identify: None,
                 scratch: Arena::default(),
             })),
@@ -113,6 +120,7 @@ impl RenderEngine {
         guard.pending_scenes.clear();
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
+        guard.live = None;
         guard.identify = None;
         guard.scratch = Arena::default();
     }
@@ -156,12 +164,51 @@ impl RenderEngine {
             }
             guard.identify = None;
         }
-        if !guard.perform_deck_states.is_empty() {
-            return Some(render_perform_mix(&mut guard));
-        }
+        let base = if !guard.perform_deck_states.is_empty() {
+            Some(render_perform_mix(&mut guard))
+        } else {
+            let inner = &mut *guard;
+            inner
+                .active_scene
+                .as_ref()
+                .map(|scene| sample_scene(scene, t, &mut inner.scratch))
+        };
         let inner = &mut *guard;
-        let scene = inner.active_scene.as_ref()?;
-        Some(sample_scene(scene, t, &mut inner.scratch))
+        let Some(live) = inner.live.as_mut() else {
+            return base;
+        };
+        if !live.update_levels() {
+            return base;
+        }
+        let now = Instant::now();
+        let time = match live.clock() {
+            LiveClock::Deck(id) => inner
+                .perform_deck_states
+                .iter()
+                .find(|state| state.deck_id == id)
+                .map(|state| state.clock.position_at(now) as f32 + inner.perform_latency),
+            LiveClock::Tap => Some(live.tap_time(now)),
+        };
+        let Some(time) = time else {
+            // Its deck is gone; until live follow recompiles the set, it waits.
+            return base;
+        };
+        let base = base.unwrap_or_else(|| UniverseState {
+            primitives: HashMap::new(),
+            lasers: Vec::new(),
+        });
+        Some(live.render_onto(base, time, &mut inner.scratch))
+    }
+
+    /// Install a compiled Perform set, unless a newer build began since
+    /// `update` did. `None` clears it.
+    pub(crate) fn finish_live_update(&self, update: SceneUpdate, set: Option<LiveSet>) {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        if guard.pending_scenes.get(&update.target) != Some(&update.generation) {
+            return;
+        }
+        guard.pending_scenes.remove(&update.target);
+        guard.live = set;
     }
 
     pub fn set_active_scene(&self, scene: Option<Scene>) {
@@ -197,6 +244,8 @@ impl RenderEngine {
                     guard.perform_layers.insert(id, scene);
                 }
             }
+            // A live layer installs with `finish_live_update`.
+            SceneTarget::Live => {}
         }
     }
 
@@ -230,7 +279,7 @@ impl RenderEngine {
         guard.perform_layers.clear();
         guard
             .pending_scenes
-            .retain(|target, _| *target == SceneTarget::Active);
+            .retain(|target, _| matches!(target, SceneTarget::Active | SceneTarget::Live));
         guard.perform_deck_states.clear();
     }
 

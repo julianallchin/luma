@@ -22,6 +22,7 @@ use sqlx::SqlitePool;
 use crate::agent::transcript::Role;
 use crate::agent_execution::artifacts::{ArtifactEncoding, ArtifactKind};
 use crate::agent_execution::bindings::providers::{assemble_bindings, BindingScope};
+use crate::agent_execution::perform_host::PerformHost;
 use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::track_host::{TrackEditScope, TrackScope};
 use crate::agent_execution::venue_host::VenueHost;
@@ -69,6 +70,22 @@ fn cell_digest(domain: &[u8], parts: &[&str]) -> String {
     format!("sha256:{:x}", hash.finalize())
 }
 
+/// What is live in this process that a cell may play or bind: the Perform
+/// session and the input hub. Plain handles, like the pool beside them.
+pub struct LiveHandles {
+    pub(crate) perform: Arc<crate::perform::PerformSession>,
+    pub(crate) inputs: Arc<crate::inputs::InputHub>,
+}
+
+impl LiveHandles {
+    pub(crate) fn of(services: &crate::dispatch::AppServices) -> Self {
+        Self {
+            perform: Arc::clone(&services.perform),
+            inputs: Arc::clone(&services.inputs),
+        }
+    }
+}
+
 /// Interrupt the thread's in-flight cell. `false` when there is none.
 pub fn cancel_python_cell_inner(service: &PythonWorkspaceService, thread_id: &str) -> bool {
     service.cancel_cell(thread_id)
@@ -104,6 +121,9 @@ struct ResolvedScope {
     /// Present only when the durable thread scope and authenticated owner both
     /// authorize mutation. Python never supplies any field of this capability.
     track_edit: Option<TrackEditScope>,
+    /// The venue whose Perform set the cell may read and change: a Perform
+    /// thread's, and no other thread's.
+    perform: Option<String>,
 }
 
 async fn resolve_scope(
@@ -125,8 +145,9 @@ async fn resolve_scope(
             },
             track: None,
             track_edit: None,
+            perform: None,
         }),
-        ThreadRoute::Venue { venue_id } => {
+        ThreadRoute::Venue { venue_id } | ThreadRoute::Perform { venue_id } => {
             assert_pinned("venue", requested.venue_id.as_deref(), Some(venue_id))?;
             assert_pinned("track", requested.track_id.as_deref(), None)?;
             assert_pinned("score", requested.score_id.as_deref(), None)?;
@@ -142,6 +163,8 @@ async fn resolve_scope(
                 },
                 track: None,
                 track_edit: None,
+                perform: matches!(thread.route()?, ThreadRoute::Perform { .. })
+                    .then(|| venue_id.to_string()),
             })
         }
         ThreadRoute::Track {
@@ -196,6 +219,7 @@ async fn resolve_scope(
                     venue_id: venue_id.to_string(),
                 }),
                 track_edit,
+                perform: None,
             })
         }
     }
@@ -224,6 +248,7 @@ pub async fn run_python_cell_inner(
     storage: &StorageRoot,
     resource_root: &Path,
     service: &PythonWorkspaceService,
+    live: &LiveHandles,
     thread_id: String,
     code: String,
     requested_scope: PythonScopeInput,
@@ -332,7 +357,18 @@ pub async fn run_python_cell_inner(
             track.clone(),
         )
     });
-    let host = CellHost::new(track, venue);
+    let perform = resolved.perform.map(|venue_id| {
+        PerformHost::new(
+            tokio::runtime::Handle::current(),
+            pool.clone(),
+            resource_root.to_path_buf(),
+            venue_id,
+            thread.actor.clone(),
+            Arc::clone(&live.perform),
+            Arc::clone(&live.inputs),
+        )
+    });
+    let host = CellHost::new(track, venue, perform);
     // Stopping a turn drops this future, but not the blocking task below.
     // Interrupt the kernel then, so the cell does not run on unseen.
     let interrupt = CancelOnDrop(Some(cancel.clone()));

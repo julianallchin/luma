@@ -68,6 +68,11 @@ pub(crate) enum Action {
     DeleteFolder {
         folder_id: SharedString,
     },
+    /// Delete a pattern of a venue's Perform set, with its cell.
+    DeletePerformPattern {
+        venue_id: SharedString,
+        pattern_id: SharedString,
+    },
 }
 
 /// A question the user has to answer before something is destroyed.
@@ -126,6 +131,10 @@ impl Luma {
                 venue_id,
             } => self.delete_score(&track_id, &score_id, &venue_id, cx),
             Action::DeleteFolder { folder_id } => self.delete_folder(folder_id.to_string(), cx),
+            Action::DeletePerformPattern {
+                venue_id,
+                pattern_id,
+            } => self.delete_perform_pattern(&venue_id, &pattern_id, cx),
         }
     }
 }

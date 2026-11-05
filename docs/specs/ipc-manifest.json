@@ -1,7 +1,156 @@
 {
   "$schema": "https://luma.dev/schemas/ipc-manifest.v2.json",
+  "version": 2,
+  "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
+  "summary": {
+    "commandCount": 146,
+    "domainCount": 27,
+    "eventCount": 6
+  },
+  "domains": [
+    {
+      "domain": "agent_execution",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/agent_execution.rs"
+    },
+    {
+      "domain": "agent_threads",
+      "commandCount": 8,
+      "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
+    },
+    {
+      "domain": "auth",
+      "commandCount": 7,
+      "handlers": "backend/src/dispatch/handlers/auth.rs"
+    },
+    {
+      "domain": "composable_patterns",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
+    },
+    {
+      "domain": "compositor",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/compositor.rs"
+    },
+    {
+      "domain": "controls",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/controls.rs"
+    },
+    {
+      "domain": "distribute",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/distribute.rs"
+    },
+    {
+      "domain": "engine_dj",
+      "commandCount": 7,
+      "handlers": "backend/src/dispatch/handlers/engine_dj.rs"
+    },
+    {
+      "domain": "fixtures",
+      "commandCount": 13,
+      "handlers": "backend/src/dispatch/handlers/fixtures.rs"
+    },
+    {
+      "domain": "folders",
+      "commandCount": 5,
+      "handlers": "backend/src/dispatch/handlers/folders.rs"
+    },
+    {
+      "domain": "group_references",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/group_references.rs"
+    },
+    {
+      "domain": "groups",
+      "commandCount": 7,
+      "handlers": "backend/src/dispatch/handlers/groups.rs"
+    },
+    {
+      "domain": "host_audio",
+      "commandCount": 9,
+      "handlers": "backend/src/dispatch/handlers/host_audio.rs"
+    },
+    {
+      "domain": "inputs",
+      "commandCount": 6,
+      "handlers": "backend/src/dispatch/handlers/inputs.rs"
+    },
+    {
+      "domain": "lasers",
+      "commandCount": 6,
+      "handlers": "backend/src/dispatch/handlers/lasers.rs"
+    },
+    {
+      "domain": "output",
+      "commandCount": 4,
+      "handlers": "backend/src/dispatch/handlers/output.rs"
+    },
+    {
+      "domain": "perform",
+      "commandCount": 15,
+      "handlers": "backend/src/dispatch/handlers/perform.rs"
+    },
+    {
+      "domain": "rekordbox",
+      "commandCount": 6,
+      "handlers": "backend/src/dispatch/handlers/rekordbox.rs"
+    },
+    {
+      "domain": "render_engine",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/render_engine.rs"
+    },
+    {
+      "domain": "scores",
+      "commandCount": 11,
+      "handlers": "backend/src/dispatch/handlers/scores.rs"
+    },
+    {
+      "domain": "settings",
+      "commandCount": 2,
+      "handlers": "backend/src/dispatch/handlers/settings.rs"
+    },
+    {
+      "domain": "stage",
+      "commandCount": 11,
+      "handlers": "backend/src/dispatch/handlers/stage.rs"
+    },
+    {
+      "domain": "sync",
+      "commandCount": 1,
+      "handlers": "backend/src/dispatch/handlers/sync.rs"
+    },
+    {
+      "domain": "telemetry",
+      "commandCount": 1,
+      "handlers": "backend/src/dispatch/handlers/telemetry.rs"
+    },
+    {
+      "domain": "tracks",
+      "commandCount": 7,
+      "handlers": "backend/src/dispatch/handlers/tracks.rs"
+    },
+    {
+      "domain": "venues",
+      "commandCount": 5,
+      "handlers": "backend/src/dispatch/handlers/venues.rs"
+    },
+    {
+      "domain": "waveforms",
+      "commandCount": 1,
+      "handlers": "backend/src/dispatch/handlers/waveforms.rs"
+    }
+  ],
   "commands": [
     {
+      "name": "agent_thread_append_messages",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs"
+      },
       "args": [
         {
           "name": "threadId",
@@ -12,11 +161,7 @@
           "rust": "AppendAgentThreadMessagesInput"
         }
       ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "name": "agent_thread_append_messages",
+      "returns": "Vec<AgentThreadMessage>",
       "prose": {
         "callerUsage": "appendThreadMessages() diffs current messages against the persisted baseline (persisted must be an exact prefix), sends only the tail, sets expectedHeadMessageId = last baseline id ?? null, and reuses ONE in-flight operationId per thread (pendingTranscriptAppends) so a lost IPC response can be retried for the exact committed result. It then verifies returned rows are same-thread, id/role-matched, and contiguous with the previous seq.",
         "notes": "COMPARE-AND-SWAP: the Rust command COLLAPSES the typed AgentThreadAppendOutcome::HeadMoved variant into a plain Err string (\"Agent transcript changed before append (expected X, found Y); reload the conversation before retrying\"). SMELL: a structured, expected outcome is only distinguishable by parsing an error message over IPC — a port should consider surfacing the variant. `expectedHeadMessageId: null` explicitly asserts an empty transcript (not 'don't care'). Per-message `id` is optional (server generates a uuid) but the frontend always supplies the UIMessage id; `seq` is never caller-supplied. Never rebases implicitly — the caller must reload or fork.",
@@ -25,21 +170,21 @@
           "one SQLite transaction commits the message batch and its idempotent response record together",
           "bumps the thread's updatedAt / transcript head"
         ]
-      },
-      "returns": "Vec<AgentThreadMessage>"
+      }
     },
     {
+      "name": "agent_thread_create",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs"
+      },
       "args": [
         {
           "name": "input",
           "rust": "CreateAgentThreadInput"
         }
       ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "name": "agent_thread_create",
+      "returns": "AgentThread",
       "prose": {
         "callerUsage": "createThread(input) wraps it as `{ input }`; createScopedThread builds requestId=crypto.randomUUID(), never sends the principal, retries once with the SAME payload on failure (relying on requestId idempotency), then fail-closed validates the returned row with threadMatchesScope().",
         "notes": "Owner is derived from auth::admitted_principal(db) — the caller CANNOT set ownerUserId; `null` owner is the signed-out principal, a real value, not 'unknown'. agentKind/subjectKind are plain strings on the wire but the backend enforces a closed routing invariant (models/agent_threads.rs route): track_copilot requires subjectKind=\"track\" + non-empty subjectId/venueId/scoreId; venue_rig requires subjectKind=\"venue\" + subjectId equal to venueId and no scoreId; unbound has no subject. Anything else errors.",
@@ -49,21 +194,21 @@
           "idempotent on requestId — a retried identical payload returns the previously created thread instead of a duplicate",
           "when parentThreadId is set (a subagent), also allocates the child's authored workspace from the parent's current head, keyed by the same requestId; the child's turns then prepare and finalize against that private head instead of the live document"
         ]
-      },
-      "returns": "AgentThread"
+      }
     },
     {
+      "name": "agent_thread_delete",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs"
+      },
       "args": [
         {
           "name": "threadId",
           "rust": "String"
         }
       ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "name": "agent_thread_delete",
+      "returns": "()",
       "prose": {
         "callerUsage": "deleteThread() awaits the invoke then clears the thread's entry from the pendingTranscriptAppends idempotency map.",
         "notes": "Authored REVISION HISTORY survives deletion and remains restorable — this is not a cascade purge of authored state (consistent with the project's no-cascade-deletes rule). The retire-before-delete ordering is load-bearing: it closes admission so an in-flight host call can't write after the branch disappears. Needs four backend services wired (Db, AuthoredDocuments, PythonWorkspaceService, GraphRunStore).",
@@ -73,10 +218,14 @@
           "kills/drains sandboxed Python kernels and drops published graph runs",
           "deletes the thread row and its authored workspaces"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "agent_thread_list",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs"
+      },
       "args": [
         {
           "name": "agentKind",
@@ -91,11 +240,7 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "name": "agent_thread_list",
+      "returns": "Vec<AgentThread>",
       "prose": {
         "callerUsage": "listThreads() explicitly sends `?? null` for each filter (never omits them); listScopedThreads() then re-filters client-side on the full ExactThreadScope (principal, venueId, scoreId) because the command has no filter for those fields.",
         "notes": "Each filter is an independent AND; null = wildcard for that field. Backend orders newest-first but the frontend deliberately re-picks with newestThread() (updatedAt desc, createdAt tiebreak) so behavior doesn't depend on SQL ordering — a port should not rely on the server order. No pagination. Two of the six identity fields are NOT filterable server-side; that filtering must happen in the client.",
@@ -103,27 +248,31 @@
         "sideEffects": [
           "read-only SQLite query scoped to the admitted principal"
         ]
-      },
-      "returns": "Vec<AgentThread>"
+      }
     },
     {
+      "name": "agent_thread_record_usage",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs"
+      },
       "args": [
         {
           "name": "usage",
           "rust": "AgentThreadUsage"
         }
       ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
+      }
+    },
+    {
+      "name": "agent_thread_rename",
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs"
       },
-      "name": "agent_thread_record_usage",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "threadId",
@@ -134,11 +283,7 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "name": "agent_thread_rename",
+      "returns": "AgentThread",
       "prose": {
         "callerUsage": "renameThread(threadId, title) passes the title through unchanged; `null` is a real value meaning 'clear the title'.",
         "notes": "Title is display metadata and is deliberately NOT part of ExactThreadScope / thread identity. No idempotency key — last write wins.",
@@ -146,10 +291,14 @@
         "sideEffects": [
           "updates title (and updatedAt) on the thread row, scoped to the admitted principal"
         ]
-      },
-      "returns": "AgentThread"
+      }
     },
     {
+      "name": "agent_thread_set_actor",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs"
+      },
       "args": [
         {
           "name": "threadId",
@@ -160,17 +309,17 @@
           "rust": "String"
         }
       ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
+      }
+    },
+    {
+      "name": "agent_thread_set_model",
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs"
       },
-      "name": "agent_thread_set_actor",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "threadId",
@@ -181,25 +330,21 @@
           "rust": "crate::agent::engine::catalog::Selection"
         }
       ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs"
-      },
-      "name": "agent_thread_set_model",
       "returns": "AgentThread"
     },
     {
+      "name": "append_render_telemetry",
+      "domain": "telemetry",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/telemetry.rs"
+      },
       "args": [
         {
           "name": "entry",
           "rust": "Value"
         }
       ],
-      "domain": "telemetry",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/telemetry.rs"
-      },
-      "name": "append_render_telemetry",
+      "returns": "()",
       "prose": {
         "notes": "Schema-free by design — the frontend builds { event, route, data } where data carries a jsHeap snapshot (performance.memory, null on non-Chromium). Because it's a blocking sync command it runs on the IPC thread and does real disk IO per call; callers are expected to be low-frequency. Errors are swallowed by the TS side (console.error only). Only one rotation generation is kept.",
         "returns": "void",
@@ -208,10 +353,14 @@
           "rotates $APPCONFIG/render-telemetry.log → render-telemetry.log.1 when it exceeds 5 MiB (removing any prior .1)",
           "appends one JSON line: { ts: RFC3339 UTC, entry: <payload> }"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "attach",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -250,34 +399,34 @@
           "rust": "Option<BTreeMap<String, f64>>"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "attach",
+      "returns": "PlacementReport",
       "prose": {
         "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
+      }
     },
     {
+      "name": "auto_patch",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "auto_patch",
+      "returns": "AutoPatchReport",
       "prose": {
         "returns": "AutoPatchReport"
-      },
-      "returns": "AutoPatchReport"
+      }
     },
     {
+      "name": "bind_route",
+      "domain": "output",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/output.rs"
+      },
       "args": [
         {
           "name": "universe",
@@ -304,25 +453,21 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "output",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/output.rs"
-      },
-      "name": "bind_route",
       "returns": "()"
     },
     {
+      "name": "cancel_python_cell",
+      "domain": "agent_execution",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_execution.rs"
+      },
       "args": [
         {
           "name": "threadId",
           "rust": "String"
         }
       ],
-      "domain": "agent_execution",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_execution.rs"
-      },
-      "name": "cancel_python_cell",
+      "returns": "bool",
       "prose": {
         "notes": "Flat camelCase args, and the same thread-addressed kernel as run_python_cell. Fire-and-forget at the call site: bound to abortSignal's `abort` event with { once: true }, invoked with `void ... .catch(() => {})`, and the listener is removed in the run's finally block — the return boolean is discarded. Crucially, cancelling does NOT abandon the run: the caller still awaits run_python_cell so the transcript records whatever the cell emitted before interruption. If the turn is already aborted before the cell starts, the frontend short-circuits and never invokes either command.",
         "returns": "boolean — true if a cell was in flight and got interrupted, false if there was nothing to cancel",
@@ -331,28 +476,32 @@
           "Cancels the in-flight cell's cancel token — the worker gets the interrupt ladder; the running run_python_cell call still returns a terminal result with status \"interrupted\"",
           "No Tauri events emitted, nothing written"
         ]
-      },
-      "returns": "bool"
+      }
     },
     {
-      "args": [],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
       "name": "clip_graph_definitions",
-      "returns": "Value"
-    },
-    {
-      "args": [],
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs"
       },
-      "name": "clip_presets",
+      "args": [],
       "returns": "Value"
     },
     {
+      "name": "clip_presets",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "args": [],
+      "returns": "Value"
+    },
+    {
+      "name": "composite_track",
+      "domain": "compositor",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/compositor.rs"
+      },
       "args": [
         {
           "name": "scoreId",
@@ -363,11 +512,7 @@
           "rust": "Option<luma_patterns::Score>"
         }
       ],
-      "domain": "compositor",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/compositor.rs"
-      },
-      "name": "composite_track",
+      "returns": "()",
       "prose": {
         "notes": "annotations semantics are load-bearing: `null`/omitted ⇒ fall back to persisted scores (sorted z_index asc); `[]` ⇒ authoritative empty document, clears the scene (this is how deleting the last clip clears output). Callers always send the full live list (mid-drag args ahead of the DB). z_index and blend_mode are Scene metadata and deliberately excluded from the plan signature. The rAF-coalesced live path (store:499) fires per frame, so the command must be cheap and idempotent.",
         "returns": "void",
@@ -376,10 +521,14 @@
           "checks COMPOSITING_GENERATION before and after building; a concurrent leave_track/cancel_compositing makes the pass a no-op",
           "resolves fixtures root + StorageRoot from AppHandle"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "constrain",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -402,31 +551,31 @@
           "rust": "String"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "constrain",
+      "returns": "PlacementReport",
       "prose": {
         "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
+      }
     },
     {
+      "name": "control_list",
+      "domain": "controls",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/controls.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
+      "returns": "Vec<Control>"
+    },
+    {
+      "name": "control_set",
       "domain": "controls",
       "handler": {
         "file": "backend/src/dispatch/handlers/controls.rs"
       },
-      "name": "control_list",
-      "returns": "Vec<Control>"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -441,14 +590,14 @@
           "rust": "f64"
         }
       ],
-      "domain": "controls",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/controls.rs"
-      },
-      "name": "control_set",
       "returns": "()"
     },
     {
+      "name": "create_folder",
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -459,14 +608,14 @@
           "rust": "String"
         }
       ],
-      "domain": "folders",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/folders.rs"
-      },
-      "name": "create_folder",
       "returns": "Folder"
     },
     {
+      "name": "create_score",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "requestId",
@@ -485,11 +634,7 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "create_score",
+      "returns": "Score",
       "prose": {
         "notes": "requestId is REQUIRED and must be reused verbatim on retry — that is the whole idempotency mechanism. score-picker-dialog goes further and gates on a fingerprint of [userId, trackId, venueId, name] so a double-click reuses one requestId. Fails with 'track does not exist' if the track isn't in auth_visible_tracks. The bulk import path (track-browser:337) swallows all errors with `.catch(() => {})`.",
         "returns": "Score — { id; uid: string|null; trackId; venueId; name: string|null; createdAt; updatedAt }",
@@ -498,10 +643,14 @@
           "creates the score's git-backed authored document with an initial revision containing an empty score DSL file (SCORE_PATH)",
           "score id is deterministic from (principal, \"score\", requestId) — a replayed requestId returns the existing score after fingerprint verification instead of creating a second one"
         ]
-      },
-      "returns": "Score"
+      }
     },
     {
+      "name": "create_venue",
+      "domain": "venues",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/venues.rs"
+      },
       "args": [
         {
           "name": "name",
@@ -512,58 +661,54 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs"
-      },
-      "name": "create_venue",
+      "returns": "Venue",
       "prose": {
         "notes": "Unlike update/delete, this one does NOT go through VenueAccess — it takes the pool directly (no venue exists yet to lock). description is nullable: the TS store coerces empty string to null (`description || null`). Caller ignores the returned Venue's freshness and immediately re-invokes list_venues via refresh().",
         "returns": "Venue { id, uid, name, description, shareCode, role, controllerPort, mixerPort, mixerMappingJson, createdAt, updatedAt } (serde camelCase)",
         "sideEffects": [
           "inserts a local venue row (role='owner'), marked dirty for the sync pusher"
         ]
-      },
-      "returns": "Venue"
+      }
     },
     {
-      "args": [],
+      "name": "current_account",
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs"
       },
-      "name": "current_account",
+      "args": [],
+      "returns": "Option<crate::database::local::auth::AuthAccount>",
       "prose": {
         "returns": "Option<crate::database::local::auth::AuthAccount>"
-      },
-      "returns": "Option<crate::database::local::auth::AuthAccount>"
+      }
     },
     {
+      "name": "delete_folder",
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
       "args": [
         {
           "name": "folderId",
           "rust": "String"
         }
       ],
-      "domain": "folders",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/folders.rs"
-      },
-      "name": "delete_folder",
       "returns": "()"
     },
     {
+      "name": "delete_group",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "id",
           "rust": "String"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "delete_group",
+      "returns": "()",
       "prose": {
         "notes": "Caller optimistically removes the group and clears selectedGroupId, reverting to the captured previousGroups on error; returns boolean success to the UI. Deleting a group referenced by a saved selection expression is not checked — dangling name references stay dangling.",
         "returns": "void",
@@ -571,10 +716,14 @@
           "VenueAccess::<Write> on the group; require_changed -> 'Venue resource not found' if not exactly 1 row",
           "Membership rows go away with the group (FK cascade); invalidate_venue_fixture_cache()"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "delete_laser_zone",
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -585,25 +734,39 @@
           "rust": "String"
         }
       ],
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "name": "delete_laser_zone",
       "returns": "()"
     },
     {
+      "name": "delete_perform_pattern",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "patternId",
+          "rust": "String"
+        }
+      ],
+      "returns": "()"
+    },
+    {
+      "name": "delete_score",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "id",
           "rust": "String"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "delete_score",
+      "returns": "()",
       "prose": {
         "notes": "Ownership-gated: if the score's owner != current principal it errors with the deliberately opaque 'score does not exist'. Replay-safe — an already-archived score returns Ok via completed_score_archive_replay. Arg is `id`, not `scoreId` (inconsistent with every other score command). Caller must also reset the track-editor store if the deleted score is the open one; the backend emits no event for that.",
         "returns": "void",
@@ -612,10 +775,14 @@
           "under VenueAccess maintenance mode, DELETEs the score's track_scores rows then the scores row from the local projection",
           "notifies the sync engine push loop (engine.push_notify.notify_one())"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "delete_subtree",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -626,17 +793,17 @@
           "rust": "String"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "delete_subtree",
+      "returns": "ResolvedVenue",
       "prose": {
         "returns": "ResolvedVenue"
-      },
-      "returns": "ResolvedVenue"
+      }
     },
     {
+      "name": "distribute",
+      "domain": "distribute",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/distribute.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -671,17 +838,17 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "distribute",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/distribute.rs"
-      },
-      "name": "distribute",
+      "returns": "DistributeReport",
       "prose": {
         "returns": "DistributeReport"
-      },
-      "returns": "DistributeReport"
+      }
     },
     {
+      "name": "duplicate",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -704,17 +871,17 @@
           "rust": "Option<bool>"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "duplicate",
+      "returns": "PlacementReport",
       "prose": {
         "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
+      }
     },
     {
+      "name": "edit_score_document",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "scoreId",
@@ -725,28 +892,28 @@
           "rust": "luma_patterns::ScoreEdit"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "edit_score_document",
       "returns": "()"
     },
     {
-      "args": [],
+      "name": "engine_dj_default_library_path",
       "domain": "engine_dj",
       "handler": {
         "file": "backend/src/dispatch/handlers/engine_dj.rs"
       },
-      "name": "engine_dj_default_library_path",
+      "args": [],
+      "returns": "String",
       "prose": {
         "notes": "Pure path construction: dirs::audio_dir() (or ~/Music fallback) + 'Engine Library'. Does NOT check existence — always Ok — so callers probe with engine_dj_open_library and fall back to a directory picker seeded with this path. to_string_lossy means non-UTF8 paths are silently mangled rather than erroring.",
         "returns": "string (absolute path)",
         "sideEffects": []
-      },
-      "returns": "String"
+      }
     },
     {
+      "name": "engine_dj_get_playlist_tracks",
+      "domain": "engine_dj",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/engine_dj.rs"
+      },
       "args": [
         {
           "name": "libraryPath",
@@ -757,21 +924,21 @@
           "rust": "i64"
         }
       ],
-      "domain": "engine_dj",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/engine_dj.rs"
-      },
-      "name": "engine_dj_get_playlist_tracks",
+      "returns": "Vec<EngineDjTrack>",
       "prose": {
         "notes": "Joins Track to PlaylistEntity on listId, ordered by title — NOT by the DJ's manual playlist order (PlaylistEntity has ordering columns that are ignored). Non-recursive: child playlists' tracks are not included. The generic adapter carries playlist keys as strings and converts with Number(playlistKey); an unknown id returns [] rather than erroring.",
         "returns": "EngineDjTrack[]",
         "sideEffects": [
           "opens/closes a read-only pool"
         ]
-      },
-      "returns": "Vec<EngineDjTrack>"
+      }
     },
     {
+      "name": "engine_dj_import_tracks",
+      "domain": "engine_dj",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/engine_dj.rs"
+      },
       "args": [
         {
           "name": "libraryPath",
@@ -782,80 +949,80 @@
           "rust": "Vec<i64>"
         }
       ],
+      "returns": "TrackImportResult",
+      "prose": {
+        "returns": "TrackImportResult"
+      }
+    },
+    {
+      "name": "engine_dj_list_playlists",
       "domain": "engine_dj",
       "handler": {
         "file": "backend/src/dispatch/handlers/engine_dj.rs"
       },
-      "name": "engine_dj_import_tracks",
-      "prose": {
-        "returns": "TrackImportResult"
-      },
-      "returns": "TrackImportResult"
-    },
-    {
       "args": [
         {
           "name": "libraryPath",
           "rust": "String"
         }
       ],
-      "domain": "engine_dj",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/engine_dj.rs"
-      },
-      "name": "engine_dj_list_playlists",
+      "returns": "Vec<EngineDjPlaylist>",
       "prose": {
         "notes": "Flat list ordered by title, NOT a tree — parentId (Playlist.parentListId) must be assembled client-side. trackCount comes from a separate GROUP BY over PlaylistEntity, defaulting to 0 for playlists with no entries. i64 ids serialize as JS numbers (ts-rs override) — fine in practice for Engine's autoincrement ids. Issued in a Promise.all with engine_dj_list_tracks, so it opens a second concurrent pool on the same file.",
         "returns": "EngineDjPlaylist[] { id: number; title: string; parentId: number|null; trackCount: number }",
         "sideEffects": [
           "opens/closes a read-only pool"
         ]
-      },
-      "returns": "Vec<EngineDjPlaylist>"
+      }
     },
     {
+      "name": "engine_dj_list_tracks",
+      "domain": "engine_dj",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/engine_dj.rs"
+      },
       "args": [
         {
           "name": "libraryPath",
           "rust": "String"
         }
       ],
-      "domain": "engine_dj",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/engine_dj.rs"
-      },
-      "name": "engine_dj_list_tracks",
+      "returns": "Vec<EngineDjTrack>",
       "prose": {
         "notes": "Unbounded — returns the whole library in one shot (no limit/offset); the adapter maps every row through mapTrack. `path` is relative to the library root (typically '../../Music Library/x.mp3') and must go through engine_dj::resolve_engine_path, which joins then canonicalizes. length is CAST(length AS REAL) because Engine stores it inconsistently.",
         "returns": "EngineDjTrack[] { id: number; path: string; filename: string; title|artist|album: string|null; bpmAnalyzed: number|null; length: number|null; originDatabaseUuid: string|null; originTrackId: number|null }",
         "sideEffects": [
           "opens/closes a read-only pool"
         ]
-      },
-      "returns": "Vec<EngineDjTrack>"
+      }
     },
     {
+      "name": "engine_dj_open_library",
+      "domain": "engine_dj",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/engine_dj.rs"
+      },
       "args": [
         {
           "name": "libraryPath",
           "rust": "String"
         }
       ],
-      "domain": "engine_dj",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/engine_dj.rs"
-      },
-      "name": "engine_dj_open_library",
+      "returns": "EngineDjLibraryInfo",
       "prose": {
         "notes": "libraryPath is the Engine Library ROOT folder, not the .db file — the command appends Database2/m.db. Errors (string) when the file is missing, and both callers deliberately use that error as an existence probe before showing a folder picker. Pool is read-only, max_connections=1, opened and closed per call — no long-lived lock on the user's library. databaseUuid is the prefix of Luma's source_id ('<uuid>:<engineTrackId>').",
         "returns": "EngineDjLibraryInfo { databaseUuid: string; libraryPath: string; trackCount: number }",
         "sideEffects": [
           "opens and closes a read-only SQLite pool on <libraryPath>/Database2/m.db"
         ]
-      },
-      "returns": "EngineDjLibraryInfo"
+      }
     },
     {
+      "name": "engine_dj_search_tracks",
+      "domain": "engine_dj",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/engine_dj.rs"
+      },
       "args": [
         {
           "name": "libraryPath",
@@ -866,21 +1033,21 @@
           "rust": "String"
         }
       ],
-      "domain": "engine_dj",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/engine_dj.rs"
-      },
-      "name": "engine_dj_search_tracks",
+      "returns": "Vec<EngineDjTrack>",
       "prose": {
         "notes": "LIKE '%query%' across title/artist/filename, ORDER BY title, LIMIT 200 — the cap is silent, the UI shows no truncation indicator. Query is bound (no injection) but '%' and '_' in user input are NOT escaped and act as wildcards. Searches the whole library, ignoring the currently selected playlist; the store restores the playlist view when the query is blanked.",
         "returns": "EngineDjTrack[]",
         "sideEffects": [
           "opens/closes a read-only pool"
         ]
-      },
-      "returns": "Vec<EngineDjTrack>"
+      }
     },
     {
+      "name": "ensure_venue_score",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "requestId",
@@ -899,17 +1066,17 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "ensure_venue_score",
+      "returns": "Score",
       "prose": {
         "returns": "Score"
-      },
-      "returns": "Score"
+      }
     },
     {
+      "name": "extend",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -928,17 +1095,17 @@
           "rust": "Option<f64>"
         }
       ],
+      "returns": "PlacementReport",
+      "prose": {
+        "returns": "PlacementReport"
+      }
+    },
+    {
+      "name": "extend_reach",
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs"
       },
-      "name": "extend",
-      "prose": {
-        "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -953,97 +1120,93 @@
           "rust": "String"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "extend_reach",
+      "returns": "Option<Reach>",
       "prose": {
         "returns": "Option<Reach>"
-      },
-      "returns": "Option<Reach>"
+      }
     },
     {
+      "name": "generate_venue_groups",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "generate_venue_groups",
+      "returns": "()",
       "prose": {
         "returns": "()"
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "get_fixture_definition",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "path",
           "rust": "String"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "get_fixture_definition",
+      "returns": "FixtureDefinition",
       "prose": {
         "notes": "`path` is relative to the fixtures root and is joined without sanitization — a port should reject absolute/`..` paths. The serde/TS shape is the raw XML mapping (keys like \"@Name\", \"$value\") and is the ONE place that convention leaks into TS; everything else is camelCase. Frontend caches definitions in a Map keyed by path (definitionsCache) — two call sites, one for the cache and one for the selected-entry preview, both use the same command.",
         "returns": "FixtureDefinition — PascalCase-ish serde shape: { Manufacturer, Model, Type, Channel: Channel[], Mode: Mode[], Physical }",
         "sideEffects": [
           "Reads and parses a QLC+-style fixture XML file from disk each call (no server-side cache)"
         ]
-      },
-      "returns": "FixtureDefinition"
+      }
     },
     {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
+      "name": "get_fixture_facings",
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
       },
-      "name": "get_fixture_facings",
-      "prose": {
-        "returns": "Vec<FixtureFacing>"
-      },
-      "returns": "Vec<FixtureFacing>"
-    },
-    {
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
+      "returns": "Vec<FixtureFacing>",
+      "prose": {
+        "returns": "Vec<FixtureFacing>"
+      }
+    },
+    {
+      "name": "get_laser_rig",
       "domain": "lasers",
       "handler": {
         "file": "backend/src/dispatch/handlers/lasers.rs"
       },
-      "name": "get_laser_rig",
-      "returns": "crate::laser::LaserRig"
-    },
-    {
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
+      "returns": "crate::laser::LaserRig"
+    },
+    {
+      "name": "get_patched_fixtures",
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
       },
-      "name": "get_patched_fixtures",
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "Vec<PatchedFixture>",
       "prose": {
         "notes": "The workhorse refetch — every mutating fixture command in the store is followed by fetchPatchedFixtures(), which also prunes selection state to ids that still exist. Agent ask-venue-tool pairs it with get_grouped_hierarchy to build the venue dump. Because it side-effects the ArtNet patch, a port must not treat it as a cacheable GET.",
         "returns": "Vec<PatchedFixture>",
@@ -1051,55 +1214,69 @@
           "VenueAccess::<Read> on the venue",
           "Not a pure read: also pushes the loaded patch into ArtNetManager (clone of the fixture list) when that state exists"
         ]
-      },
-      "returns": "Vec<PatchedFixture>"
+      }
     },
     {
+      "name": "get_perform_layout",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
+      "returns": "Option<PerformLayout>"
+    },
+    {
+      "name": "get_resolved_venue",
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs"
       },
-      "name": "get_resolved_venue",
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "ResolvedVenue",
       "prose": {
         "returns": "ResolvedVenue"
-      },
-      "returns": "ResolvedVenue"
+      }
     },
     {
+      "name": "get_score_document",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "scoreId",
           "rust": "String"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "get_score_document",
+      "returns": "Option<luma_patterns::Score>",
       "prose": {
         "returns": "Option<crate::services::graph_scores::GraphScoreDocument>"
-      },
-      "returns": "Option<luma_patterns::Score>"
+      }
     },
     {
+      "name": "get_session_item",
+      "domain": "auth",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/auth.rs"
+      },
       "args": [
         {
           "name": "key",
           "rust": "String"
         }
       ],
-      "domain": "auth",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/auth.rs"
-      },
-      "name": "get_session_item",
+      "returns": "Option<String>",
       "prose": {
         "notes": "This is a GETTER with heavy write side effects — the whole identity-activation path hangs off it, because Supabase's storage adapter calls it on client construction. The storage adapter IGNORES its own `_key` argument and always sends SUPABASE_SESSION_KEY (\"supabase_session\"); the constant is duplicated in both TS and Rust (drift risk). Non-session keys ('display_name') take a trivial path. Can block on the sync lock and on a token-refresh network call — never assume it's fast.",
         "returns": "string | null",
@@ -1107,70 +1284,70 @@
           "for key == SUPABASE_SESSION_KEY only: takes engine.sync_lock, reserves the single StateDb connection, runs recover_committed_signout, may bootstrap legacy state and REFRESH an expiring token (network), begins an authored identity-switch barrier, arms write admission, and bootstraps authored live projections — rolling back write admission (leaving signed writes CLOSED) on failure",
           "for any other key: plain read"
         ]
-      },
-      "returns": "Option<String>"
+      }
     },
     {
-      "args": [],
+      "name": "get_settings",
       "domain": "settings",
       "handler": {
         "file": "backend/src/dispatch/handlers/settings.rs"
       },
-      "name": "get_settings",
+      "args": [],
+      "returns": "AppSettings",
       "prose": {
         "notes": "SNAKE_CASE over the wire — AppSettings has no serde(rename_all), unlike every other model in the app; the TS side reads settings.max_dimmer. Storage is a string k/v table; the command applies the typing and defaults: audio_output_enabled true, artnet_enabled false, artnet_interface \"0.0.0.0\", artnet_broadcast true, artnet_unicast_ip \"\", net/subnet 0, max_dimmer 100 clamped to ≤100. Unparseable values silently fall back to the default.",
         "returns": "AppSettings — { audio_output_enabled: bool, artnet_enabled: bool, artnet_interface: string, artnet_broadcast: bool, artnet_unicast_ip: string, artnet_net: u8, artnet_subnet: u8, max_dimmer: u8 }",
         "sideEffects": [
           "read-only"
         ]
-      },
-      "returns": "AppSettings"
+      }
     },
     {
+      "name": "get_track_beat_validation",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs"
+      },
       "args": [
         {
           "name": "trackId",
           "rust": "String"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "name": "get_track_beat_validation",
       "returns": "Option<BeatValidation>"
     },
     {
+      "name": "get_track_beats",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs"
+      },
       "args": [
         {
           "name": "trackId",
           "rust": "String"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "name": "get_track_beats",
+      "returns": "Option<BeatGrid>",
       "prose": {
         "notes": "Nullable: `null` when beat detection has not run for the track. Every caller treats null as a soft miss (catch → null, or `if (!beats) return null`). Times are absolute seconds from track start. Rust type is models::node_graph::BeatGrid, exported to src/bindings/schema.ts by ts-rs.",
         "returns": "BeatGrid | null — { beats: number[]; downbeats: number[]; bpm: number; downbeatOffset: number; beatsPerBar: number } (camelCase, seconds)",
         "sideEffects": []
-      },
-      "returns": "Option<BeatGrid>"
+      }
     },
     {
+      "name": "get_track_waveform",
+      "domain": "waveforms",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/waveforms.rs"
+      },
       "args": [
         {
           "name": "trackId",
           "rust": "String"
         }
       ],
-      "domain": "waveforms",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/waveforms.rs"
-      },
-      "name": "get_track_waveform",
+      "returns": "TrackWaveform",
       "prose": {
         "notes": "Read-through cache, not a pure read: first call for a track can take seconds and writes to the DB. Samples are interleaved min/max pairs per bucket (previewSamples.length = 2*buckets); bands/colors are the two generations of the same idea (colors is legacy interleaved RGB bytes). fullSamples/bands/colors are NOT cloud-synced — regenerated locally, so they can be null on a freshly pulled device. durationSeconds prefers decoded_duration and falls back to the tracks.duration_seconds metadata; callers (use-track-editor-store) use it as the timeline duration. All TS callers .catch(() => null) — treat failure as 'no waveform', not fatal.",
         "returns": "TrackWaveform { trackId, uid: string|null, previewSamples: number[], fullSamples: number[]|null, bands: BandEnvelopes|null, previewBands: BandEnvelopes|null, colors: number[]|null, previewColors: number[]|null, sampleRate: number, durationSeconds: number }",
@@ -1180,48 +1357,52 @@
           "Logs '[waveform] track {id} published in {ms}ms' to stderr",
           "Fails if the authenticated principal changes or track_hash changes mid-computation"
         ]
-      },
-      "returns": "TrackWaveform"
+      }
     },
     {
+      "name": "get_venue",
+      "domain": "venues",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/venues.rs"
+      },
       "args": [
         {
           "name": "id",
           "rust": "String"
         }
       ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs"
-      },
-      "name": "get_venue",
+      "returns": "Venue",
       "prose": {
         "notes": "Argument is `id`, not `venueId` (inconsistent with every other command in this fragment, which uses venueId). All three route wrappers re-fetch on every mount rather than reusing store state — deliberate, because `role` can change between sessions. The three call sites are literally the same effect copy-pasted three times (dedupe candidate).",
         "returns": "Venue — { id, uid: string|null, name, description: string|null, shareCode: string|null, role: \"owner\"|\"member\", controllerPort: string|null, mixerPort: string|null, mixerMappingJson: string|null, createdAt, updatedAt } (camelCase)",
         "sideEffects": [
           "read-only; VenueAccess::<Read> on VenueResource::Venue(id) — errors if the venue is not accessible to the current principal"
         ]
-      },
-      "returns": "Venue"
+      }
     },
     {
+      "name": "get_venue_graph",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "get_venue_graph",
+      "returns": "VenueGraphRows",
       "prose": {
         "returns": "VenueGraphRows"
-      },
-      "returns": "VenueGraphRows"
+      }
     },
     {
+      "name": "highlight_selection",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -1232,17 +1413,17 @@
           "rust": "Selection"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "highlight_selection",
+      "returns": "UniverseState",
       "prose": {
         "returns": "UniverseState"
-      },
-      "returns": "UniverseState"
+      }
     },
     {
+      "name": "host_load_segment",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "trackId",
@@ -1261,11 +1442,7 @@
           "rust": "f32"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_load_segment",
+      "returns": "()",
       "prose": {
         "notes": "Times are absolute track seconds on the way in; the host stores start_time as segment_start_abs, so every later host_seek/host_snapshot time is RELATIVE to the segment start. Errors on an empty range or empty decode. Re-checks that the authenticated principal did not change between the read and the operate access — a port must keep that check. beatGrid is passed through to LoadedSegment but the field is `#[allow(dead_code)]` — currently write-only.",
         "returns": "void",
@@ -1274,10 +1451,14 @@
           "replaces the loaded segment in the global HostAudioState — clobbers whatever host_load_track/host_load_segment loaded before",
           "takes VisibleTrackAccess Read then re-takes Operate and commits (audit/access trail)"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "host_load_track",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "trackId",
@@ -1288,11 +1469,7 @@
           "rust": "u64"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_load_track",
+      "returns": "()",
       "prose": {
         "notes": "Convenience wrapper for the track editor: segment start is 0.0, so snapshot times equal absolute track times. Same principal-changed guard as host_load_segment. Caller (loadTrackPlayback) discards the error if the store's trackId changed mid-flight — a load race is expected and must stay tolerated.",
         "returns": "void",
@@ -1302,31 +1479,35 @@
           "loads the beat grid from the DB itself (unlike host_load_segment, which takes it as an arg)",
           "VisibleTrackAccess Read → Operate → commit"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "host_pause",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "session",
           "rust": "u64"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_pause",
+      "returns": "()",
       "prose": {
         "notes": "Returns unit, so it can never reject for an audio reason (only for IPC failure). Pausing with nothing loaded is a no-op.",
         "returns": "void (infallible — Rust fn returns `()`, not Result)",
         "sideEffects": [
           "stops advancing the playhead; stream outputs silence"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "host_play",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "session",
@@ -1337,21 +1518,21 @@
           "rust": "f32"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_play",
+      "returns": "()",
       "prose": {
         "notes": "Synchronous (non-async) command returning Result. Errors if nothing is loaded. The track-editor caller always does `host_seek(playheadPosition)` immediately before `host_play` — play does not resume from the UI playhead by itself.",
         "returns": "void",
         "sideEffects": [
           "starts the CPAL output stream / unmutes the persistent stream for the loaded segment"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "host_seek",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "session",
@@ -1362,21 +1543,21 @@
           "rust": "f32"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_seek",
+      "returns": "()",
       "prose": {
         "notes": "`seconds` is segment-relative, NOT absolute track time — matters for pattern-editor segments loaded with a non-zero startTime. The store's `scrub` variant optimistically sets currentTime + snapshotAtMs before firing a floating (unawaited) invoke, and handleSnapshot ignores incoming snapshot times while isScrubbing, to stop pre-seek snapshots yanking the playhead backward. Any port must preserve that ordering rule.",
         "returns": "void",
         "sideEffects": [
           "moves the shared fixed-point frame index consumed by the audio thread"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "host_set_loop_region",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "session",
@@ -1391,11 +1572,7 @@
           "rust": "Option<f32>"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_set_loop_region",
+      "returns": "()",
       "prose": {
         "notes": "The implicit `set_loop(start.is_some() && end.is_some())` is the load-bearing behaviour: clearLoopRegion passes both nulls to turn looping off. A half-specified region (one null) also disables looping rather than erroring. Store updates its local loopRegion optimistically before awaiting.",
         "returns": "void (infallible)",
@@ -1403,10 +1580,14 @@
           "sets the loop region",
           "implicitly enables looping when BOTH bounds are Some, disables it otherwise"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "host_set_playback_range",
+      "domain": "host_audio",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/host_audio.rs"
+      },
       "args": [
         {
           "name": "session",
@@ -1425,14 +1606,14 @@
           "rust": "bool"
         }
       ],
+      "returns": "()"
+    },
+    {
+      "name": "host_set_playback_rate",
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs"
       },
-      "name": "host_set_playback_range",
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "session",
@@ -1443,60 +1624,56 @@
           "rust": "f32"
         }
       ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs"
-      },
-      "name": "host_set_playback_rate",
+      "returns": "()",
       "prose": {
         "notes": "The backend does NOT clamp — the caller clamps to [PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX] before invoking, and sets the store optimistically. A port that drops the frontend clamp will let a 0 or negative rate reach the audio thread. Rate changes pitch (no time-stretch).",
         "returns": "void (infallible)",
         "sideEffects": [
           "updates the fixed-point playback-rate atomic read by the audio thread (resampling ratio)"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
-      "args": [],
+      "name": "host_snapshot",
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs"
       },
-      "name": "host_snapshot",
+      "args": [],
+      "returns": "HostAudioSnapshot",
       "prose": {
         "notes": "This is a one-shot priming read only. The steady-state channel is the `host-audio://state` Tauri event, broadcast at ~15 fps (66 ms) by HostAudioState::spawn_broadcaster with the identical payload type. Both callers `listen()` first, then invoke host_snapshot once to fill the gap before the first broadcast. currentTime is segment-relative; the frontend extrapolates between snapshots using performance.now() (getExtrapolatedHostTime). A port must ship both the event and the command.",
         "returns": "HostAudioSnapshot — { isLoaded: boolean; isPlaying: boolean; currentTime: number; durationSeconds: number; loopEnabled: boolean }",
         "sideEffects": [
           "calls refresh_progress(), which pulls the atomic frame index into the mutex-guarded state before reading"
         ]
-      },
-      "returns": "HostAudioSnapshot"
+      }
     },
     {
+      "name": "import_tracks",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs"
+      },
       "args": [
         {
           "name": "filePaths",
           "rust": "Vec<String>"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "name": "import_tracks",
+      "returns": "TrackImportResult",
       "prose": {
         "returns": "TrackImportResult"
-      },
-      "returns": "TrackImportResult"
+      }
     },
     {
-      "args": [],
+      "name": "initialize_fixtures",
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
       },
-      "name": "initialize_fixtures",
+      "args": [],
+      "returns": "usize",
       "prose": {
         "notes": "No args at all — state comes from the AppHandle. Must run before search_fixtures (which errors 'Fixtures not initialized. Call initialize_fixtures first.'). Store ignores the returned count and immediately fires search('', true) then fetchPatchedFixtures(). Errors are swallowed by the caller.",
         "returns": "usize — number of fixture definitions indexed",
@@ -1504,19 +1681,23 @@
           "Walks the resolved fixtures root on disk (resolve_fixtures_root: bundled resource dir, else dev path) and builds a FixtureIndex",
           "Replaces the in-memory FixtureState (Mutex<Option<FixtureIndex>>) managed state"
         ]
-      },
-      "returns": "usize"
+      }
     },
     {
-      "args": [],
+      "name": "input_cancel_learn",
       "domain": "inputs",
       "handler": {
         "file": "backend/src/dispatch/handlers/inputs.rs"
       },
-      "name": "input_cancel_learn",
+      "args": [],
       "returns": "()"
     },
     {
+      "name": "input_learn",
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -1531,37 +1712,37 @@
           "rust": "Mode"
         }
       ],
+      "returns": "Binding"
+    },
+    {
+      "name": "input_open",
       "domain": "inputs",
       "handler": {
         "file": "backend/src/dispatch/handlers/inputs.rs"
       },
-      "name": "input_learn",
-      "returns": "Binding"
-    },
-    {
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "inputs",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/inputs.rs"
-      },
-      "name": "input_open",
       "returns": "InputState"
     },
     {
-      "args": [],
-      "domain": "inputs",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/inputs.rs"
-      },
       "name": "input_state",
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "args": [],
       "returns": "InputState"
     },
     {
+      "name": "input_unbind",
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -1572,14 +1753,14 @@
           "rust": "String"
         }
       ],
+      "returns": "()"
+    },
+    {
+      "name": "input_update_binding",
       "domain": "inputs",
       "handler": {
         "file": "backend/src/dispatch/handlers/inputs.rs"
       },
-      "name": "input_unbind",
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -1598,25 +1779,21 @@
           "rust": "bool"
         }
       ],
-      "domain": "inputs",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/inputs.rs"
-      },
-      "name": "input_update_binding",
       "returns": "()"
     },
     {
+      "name": "leave_track",
+      "domain": "compositor",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/compositor.rs"
+      },
       "args": [
         {
           "name": "scoreId",
           "rust": "String"
         }
       ],
-      "domain": "compositor",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/compositor.rs"
-      },
-      "name": "leave_track",
+      "returns": "()",
       "prose": {
         "notes": "Takes the SCORE id, not the track id — the track id is resolved host-side via `SELECT track_id FROM scores WHERE id = ?` under VenueAccess::<Read> on VenueResource::Score. Fails if the score row is gone, so a port must call it before deleting the score. Both call sites fire-and-forget (`.catch(console.error)`) and only invoke when trackId and scoreId are both non-null.",
         "returns": "void",
@@ -1627,126 +1804,144 @@
           "host.unload() — unloads decoded audio",
           "stem_cache.remove_track(track_id)"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
+      "name": "list_folders",
       "domain": "folders",
       "handler": {
         "file": "backend/src/dispatch/handlers/folders.rs"
       },
-      "name": "list_folders",
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
       "returns": "Vec<Folder>"
     },
     {
+      "name": "list_group_tree",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "list_group_tree",
+      "returns": "Vec<GroupTreeNode>",
       "prose": {
         "returns": "Vec<GroupTreeNode>"
-      },
-      "returns": "Vec<GroupTreeNode>"
+      }
     },
     {
+      "name": "list_groups",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "list_groups",
+      "returns": "Vec<FixtureGroup>",
       "prose": {
         "notes": "The flat sibling of get_grouped_hierarchy (which the group store uses). Two of the three callers only want `name` and filter out nulls (group names are nullable, so the selection-expression vocabulary is a filtered subset); group-expression-editor also dedupes and sorts. Ordering comes from the DB (displayOrder) and is relied on implicitly by perform-page's flat group list.",
         "returns": "Vec<FixtureGroup> (flat, no membership)",
         "sideEffects": [
           "VenueAccess::<Read> on the venue"
         ]
-      },
-      "returns": "Vec<FixtureGroup>"
+      }
     },
     {
+      "name": "list_laser_limits",
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "name": "list_laser_limits",
       "returns": "Vec<crate::models::lasers::LaserLimit>"
     },
     {
+      "name": "list_laser_zones",
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "name": "list_laser_zones",
       "returns": "Vec<crate::models::lasers::LaserZone>"
     },
     {
-      "args": [],
+      "name": "list_output_devices",
       "domain": "output",
       "handler": {
         "file": "backend/src/dispatch/handlers/output.rs"
       },
-      "name": "list_output_devices",
+      "args": [],
       "returns": "Vec<OutputDevice>"
     },
     {
-      "args": [],
+      "name": "list_perform_patterns",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "Vec<PerformPattern>"
+    },
+    {
+      "name": "list_routes",
       "domain": "output",
       "handler": {
         "file": "backend/src/dispatch/handlers/output.rs"
       },
-      "name": "list_routes",
+      "args": [],
       "returns": "Vec<DmxRoute>"
     },
     {
+      "name": "list_scores_across_venues",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "trackId",
           "rust": "String"
         }
       ],
+      "returns": "Vec<ScoreSummary>",
+      "prose": {
+        "notes": "Every score for a track that the current admission may see, in any venue, filtered in one statement by auth_write_admission — it never returns a sealed row from another principal. The gpui track editor's score rail reads this; the pattern editor uses it to find any venue's instance of a track. Replaced the empty-venueId overload on list_scores_for_track.",
+        "returns": "ScoreSummary[] — same shape as list_scores_for_track; `ordinal` is ranked within each (track, venue), so it repeats across venues."
+      }
+    },
+    {
+      "name": "list_scores_for_track",
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs"
       },
-      "name": "list_scores_across_venues",
-      "prose": {
-        "notes": "Every score for a track that the current admission may see, in any venue, filtered in one statement by auth_write_admission — it never returns a sealed row from another principal. The gpui track editor's score rail reads this; the pattern editor uses it to find any venue's instance of a track. Replaced the empty-venueId overload on list_scores_for_track.",
-        "returns": "ScoreSummary[] — same shape as list_scores_for_track; `ordinal` is ranked within each (track, venue), so it repeats across venues."
-      },
-      "returns": "Vec<ScoreSummary>"
-    },
-    {
       "args": [
         {
           "name": "trackId",
@@ -1757,87 +1952,87 @@
           "rust": "String"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "list_scores_for_track",
+      "returns": "Vec<ScoreSummary>",
       "prose": {
         "notes": "Scoped to one venue. `uid` is the owner user id — track-session-store uses `s.uid === userId` for ownership/read-only. `annotationCount` is a joined COUNT, used by generate-dsl-dialog to pick a non-empty exemplar score. `ordinal` is a read-time ROW_NUMBER() rank by createdAt within (track, venue) — a display handle, never an identity; `venueName` is joined in so a cross-venue picker needs no second lookup.",
         "returns": "ScoreSummary[] — { id; uid: string|null; venueId: string|null; venueName: string|null; name: string|null; ordinal: number; annotationCount: number; createdAt; updatedAt }",
         "sideEffects": []
-      },
-      "returns": "Vec<ScoreSummary>"
+      }
     },
     {
-      "args": [],
+      "name": "list_tracks",
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs"
       },
-      "name": "list_tracks",
+      "args": [],
+      "returns": "Vec<TrackSummary>",
       "prose": {
         "notes": "No venue scoping, no pagination, no album-art bytes — albumArtPath is a path on disk that the frontend must run through convertFileSrc (never base64-inline it, see CLAUDE.md). Almost every field except id/trackHash/filePath/timestamps is nullable. Both the pattern-editor and generate-dsl-dialog use it as the seed of an N+1 fan-out (per-track list_scores_for_track / annotation loads) — a real candidate for a purpose-built enriched query.",
         "returns": "TrackSummary[] (id, uid?, trackHash, title?, artist?, album?, trackNumber?, discNumber?, durationSeconds?, filePath, storagePath?, albumArtPath?, albumArtMime?, albumArtStoragePath?, sourceType?, sourceId?, sourceFilename?, createdAt, updatedAt)",
         "sideEffects": []
-      },
-      "returns": "Vec<TrackSummary>"
+      }
     },
     {
+      "name": "list_tracks_enriched",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "Option<String>"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "name": "list_tracks_enriched",
+      "returns": "Vec<TrackBrowserRow>",
       "prose": {
         "notes": "The `has*` booleans are version-aware EXISTS checks against current preprocessor versions (registry::current_artifact_versions); a missing registered preprocessor falls back to version 0, which matches ANY row — so `hasX` can read true for a stale artifact when the registry lacks that table. venueAnnotationCoverageSeconds is #[sqlx(skip)], computed in Rust with overlapping intervals merged, not selected from SQL. With venueId=null the venue* counts are zero. Album art is a path, not bytes (deliberate — see CLAUDE.md). Headless scripts pass `{}` (venueId undefined => None).",
         "returns": "TrackBrowserRow[] { id, uid?, title?, artist?, album?, durationSeconds?, albumArtPath?, albumArtMime?, sourceType?, filePath, createdAt, bpm?, annotationCount, venueAnnotationCount, venueAnnotationCoverageSeconds, hasStorage, hasBeats, hasStems, hasRoots, hasDrumOnsets, hasBarClassifications, hasGenres }",
         "sideEffects": [
           "with venueId: takes VenueAccess::<Read> on that venue (an auth gate the venueId=null path skips entirely)"
         ]
-      },
-      "returns": "Vec<TrackBrowserRow>"
+      }
     },
     {
-      "args": [],
+      "name": "list_venues",
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs"
       },
-      "name": "list_venues",
+      "args": [],
+      "returns": "Vec<Venue>",
       "prose": {
         "notes": "No VenueAccess wrapper — scoping lives in the SQL instead: it CROSS JOINs auth_write_admission and returns rows only while admission is armed/accepting/not-maintenance, matching venue.uid against admission.active_uid (guest ⇒ uid IS NULL AND role != 'member'). Consequence a port must keep: while write admission is closed (mid identity switch / sign-out) this returns an EMPTY list, not an error. `role` is COMPUTED per query from active_uid, not read from the stored column. Takes no arguments; the headless scripts still pass `{}`. Result order is unspecified — nothing re-sorts.",
         "returns": "Venue[]",
         "sideEffects": [
           "read-only"
         ]
-      },
-      "returns": "Vec<Venue>"
+      }
     },
     {
+      "name": "missing_venue_groups",
+      "domain": "group_references",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/group_references.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "group_references",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/group_references.rs"
-      },
-      "name": "missing_venue_groups",
+      "returns": "Vec<crate::models::groups::MissingGroup>",
       "prose": {
         "returns": "Vec<crate::models::groups::MissingGroup>"
-      },
-      "returns": "Vec<crate::models::groups::MissingGroup>"
+      }
     },
     {
+      "name": "perform_assign_track",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
       "args": [
         {
           "name": "deckId",
@@ -1848,28 +2043,96 @@
           "rust": "Option<String>"
         }
       ],
+      "returns": "()"
+    },
+    {
+      "name": "perform_control",
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "perform_assign_track",
+      "args": [
+        {
+          "name": "name",
+          "rust": "String"
+        },
+        {
+          "name": "value",
+          "rust": "f64"
+        }
+      ],
       "returns": "()"
     },
     {
+      "name": "perform_open_set",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "()"
+    },
+    {
+      "name": "perform_press",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "name",
+          "rust": "String"
+        },
+        {
+          "name": "down",
+          "rust": "bool"
+        }
+      ],
+      "returns": "()"
+    },
+    {
+      "name": "perform_set_bpm",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "bpm",
+          "rust": "f64"
+        }
+      ],
+      "returns": "()"
+    },
+    {
+      "name": "perform_set_latency",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
       "args": [
         {
           "name": "latencyMs",
           "rust": "f32"
         }
       ],
+      "returns": "()"
+    },
+    {
+      "name": "perform_start",
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "perform_set_latency",
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -1880,32 +2143,32 @@
           "rust": "PerformSource"
         }
       ],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs"
-      },
-      "name": "perform_start",
       "returns": "()"
     },
     {
-      "args": [],
+      "name": "perform_state",
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "perform_state",
+      "args": [],
       "returns": "PerformState"
     },
     {
-      "args": [],
+      "name": "perform_stop",
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "perform_stop",
+      "args": [],
       "returns": "()"
     },
     {
+      "name": "place_free",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -1956,34 +2219,34 @@
           "rust": "Option<BTreeMap<String, f64>>"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "place_free",
+      "returns": "PlacementReport",
       "prose": {
         "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
+      }
     },
     {
+      "name": "preview_composable_pattern",
+      "domain": "composable_patterns",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs"
+      },
       "args": [
         {
           "name": "request",
           "rust": "ComposablePreviewRequest"
         }
       ],
-      "domain": "composable_patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/composable_patterns.rs"
-      },
-      "name": "preview_composable_pattern",
+      "returns": "ComposablePreview",
       "prose": {
         "returns": "Value"
-      },
-      "returns": "ComposablePreview"
+      }
     },
     {
+      "name": "preview_score_clips",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "scoreId",
@@ -1998,14 +2261,14 @@
           "rust": "Option<luma_patterns::Score>"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "preview_score_clips",
       "returns": "Vec<crate::services::graph_scores::ClipStrip>"
     },
     {
+      "name": "preview_selection_query",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2020,27 +2283,23 @@
           "rust": "Option<u64>"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "preview_selection_query",
+      "returns": "Vec<PatchedFixture>",
       "prose": {
         "notes": "seed defaults to 12345 when absent — deterministic randomness for `random()` selectors, so a port MUST keep the same default or previews drift from evaluation. query is `.trim()`ed host-side. Store swallows errors and returns [] — invalid selection syntax is indistinguishable from an empty match at the call site (smell).",
         "returns": "PatchedFixture[] (the resolver's ResolvedFixture list mapped to .fixture, order = resolver order)",
         "sideEffects": [
           "read-only; VenueAccess::<Read> on the venue"
         ]
-      },
-      "returns": "Vec<PatchedFixture>"
+      }
     },
     {
-      "args": [],
+      "name": "prodjlink_discover",
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs"
       },
-      "name": "prodjlink_discover",
+      "args": [],
+      "returns": "Vec<DiscoveredDevice>",
       "prose": {
         "notes": "Returns Vec (never errors) — an empty list means 'nothing heard', not failure; if the socket can't bind, discover_cdjs also returns []. So a port cannot distinguish 'no CDJs' from 'networking broken'. The 3000ms timeout is not a parameter. TS mirrors the shape locally as `interface DiscoveredCDJ` in perform-page.tsx rather than using a generated binding — a hand-copied type that will drift.",
         "returns": "DiscoveredDevice[] { player: u8, name, ip } — snake/flat, no rename_all; unique, sorted by player number",
@@ -2048,10 +2307,14 @@
           "binds UDP port 50000 and passively listens for CDJ keepalives for a HARDCODED 3 seconds — the command blocks that long",
           "no device-number claim, so it is safe to call while not connected"
         ]
-      },
-      "returns": "Vec<DiscoveredDevice>"
+      }
     },
     {
+      "name": "redistribute",
+      "domain": "distribute",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/distribute.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2070,28 +2333,24 @@
           "rust": "DistributeLayout"
         }
       ],
-      "domain": "distribute",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/distribute.rs"
-      },
-      "name": "redistribute",
+      "returns": "DistributeReport",
       "prose": {
         "returns": "DistributeReport"
-      },
-      "returns": "DistributeReport"
+      }
     },
     {
+      "name": "rekordbox_get_playlist_tracks",
+      "domain": "rekordbox",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/rekordbox.rs"
+      },
       "args": [
         {
           "name": "playlistId",
           "rust": "String"
         }
       ],
-      "domain": "rekordbox",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/rekordbox.rs"
-      },
-      "name": "rekordbox_get_playlist_tracks",
+      "returns": "Vec<RekordboxTrack>",
       "prose": {
         "callerUsage": "invoke(\"rekordbox_get_playlist_tracks\", { playlistId: playlistKey }) — the adapter's first param `_libraryPath` is unused for Rekordbox.",
         "notes": "Arg name over IPC is camelCase `playlistId` (Tauri auto-converts the Rust snake_case `playlist_id`). Handler does a redundant `playlist_id.clone()` before the move closure — dead clone, harmless.",
@@ -2099,33 +2358,33 @@
         "sideEffects": [
           "reads Rekordbox master.db on spawn_blocking; no writes, no events"
         ]
-      },
-      "returns": "Vec<RekordboxTrack>"
+      }
     },
     {
+      "name": "rekordbox_import_tracks",
+      "domain": "rekordbox",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/rekordbox.rs"
+      },
       "args": [
         {
           "name": "trackUuids",
           "rust": "Vec<String>"
         }
       ],
-      "domain": "rekordbox",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/rekordbox.rs"
-      },
-      "name": "rekordbox_import_tracks",
+      "returns": "TrackImportResult",
       "prose": {
         "returns": "TrackImportResult"
-      },
-      "returns": "TrackImportResult"
+      }
     },
     {
-      "args": [],
+      "name": "rekordbox_list_playlists",
       "domain": "rekordbox",
       "handler": {
         "file": "backend/src/dispatch/handlers/rekordbox.rs"
       },
-      "name": "rekordbox_list_playlists",
+      "args": [],
+      "returns": "Vec<RekordboxPlaylist>",
       "prose": {
         "callerUsage": "mapPlaylist() maps id->key, name->title, parentId->parentKey and hardcodes `trackCount: 0` with a TODO.",
         "notes": "Flat list with parentId back-references — the tree is assembled client-side. SMELL: the backend already returns trackCount but the adapter throws it away (rekordbox.ts:31 `trackCount: 0, // TODO: populate from backend`). A port should just use the field.",
@@ -2133,16 +2392,16 @@
         "sideEffects": [
           "reads Rekordbox master.db on spawn_blocking; no writes, no events"
         ]
-      },
-      "returns": "Vec<RekordboxPlaylist>"
+      }
     },
     {
-      "args": [],
+      "name": "rekordbox_list_tracks",
       "domain": "rekordbox",
       "handler": {
         "file": "backend/src/dispatch/handlers/rekordbox.rs"
       },
-      "name": "rekordbox_list_tracks",
+      "args": [],
+      "returns": "Vec<RekordboxTrack>",
       "prose": {
         "callerUsage": "mapped through mapTrack() into the generic DjTrack shape: key=uuid, duration=durationSeconds; fileSize/sampleRate/id are dropped by the frontend.",
         "notes": "Returns the ENTIRE library unpaged (no limit/offset). RekordboxTrack: id, uuid, filePath?, filename?, title?, artist?, album?, bpm? (already /100 from the int*100 column), durationSeconds? (int seconds widened to f64), fileSize?, sampleRate? — everything except id/uuid is nullable. `uuid` is the stable source_id for Luma linking; `id` is the local content id and is NOT stable across exports.",
@@ -2150,16 +2409,16 @@
         "sideEffects": [
           "reads Rekordbox master.db on spawn_blocking; no writes, no events"
         ]
-      },
-      "returns": "Vec<RekordboxTrack>"
+      }
     },
     {
-      "args": [],
+      "name": "rekordbox_open_library",
       "domain": "rekordbox",
       "handler": {
         "file": "backend/src/dispatch/handlers/rekordbox.rs"
       },
-      "name": "rekordbox_open_library",
+      "args": [],
+      "returns": "RekordboxLibraryInfo",
       "prose": {
         "callerUsage": "rekordboxAdapter.openLibrary calls it with no payload, then in parallel lists playlists+tracks; only info.trackCount is surfaced and libraryPath is forced to null because Rekordbox auto-discovers its DB.",
         "notes": "No arguments at all — the DB path is not caller-selectable. Every rekordbox_* read command reopens the DB fresh (with_db in subprocess.rs); there is no cached handle, so a port must expect per-call open cost. Errors are stringified (`Failed to open Rekordbox DB: ...`) or `Task join error: ...` on panic.",
@@ -2168,21 +2427,21 @@
           "opens the Rekordbox master.db (auto-discovered path, SQLCipher decryption) on a spawn_blocking thread",
           "no writes, no events"
         ]
-      },
-      "returns": "RekordboxLibraryInfo"
+      }
     },
     {
+      "name": "rekordbox_search_tracks",
+      "domain": "rekordbox",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/rekordbox.rs"
+      },
       "args": [
         {
           "name": "query",
           "rust": "String"
         }
       ],
-      "domain": "rekordbox",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/rekordbox.rs"
-      },
-      "name": "rekordbox_search_tracks",
+      "returns": "Vec<RekordboxTrack>",
       "prose": {
         "callerUsage": "invoke(\"rekordbox_search_tracks\", { query }); `_libraryPath` ignored.",
         "notes": "Search is server-side over the Rekordbox DB; no result cap is applied at the command layer. Same redundant `query.clone()` as above.",
@@ -2190,10 +2449,14 @@
         "sideEffects": [
           "reads Rekordbox master.db on spawn_blocking; no writes, no events"
         ]
-      },
-      "returns": "Vec<RekordboxTrack>"
+      }
     },
     {
+      "name": "remove_patched_fixture",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2204,11 +2467,7 @@
           "rust": "String"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "remove_patched_fixture",
+      "returns": "()",
       "prose": {
         "notes": "Single-fixture only; bulk delete is a Promise.all fan-out in the store (:623). Caller drops the id from selectedPatchedIds/lastSelectedPatchedId before refetching.",
         "returns": "void",
@@ -2216,21 +2475,21 @@
           "VenueAccess::<Write> on the fixture + require_venue; require_changed (1 row or error)",
           "Deletes the fixture row (group membership rows presumably cascade); re-pushes patch to ArtNet; invalidate_venue_fixture_cache()"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "remove_session_item",
+      "domain": "auth",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/auth.rs"
+      },
       "args": [
         {
           "name": "key",
           "rust": "String"
         }
       ],
-      "domain": "auth",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/auth.rs"
-      },
-      "name": "remove_session_item",
+      "returns": "()",
       "prose": {
         "notes": "Session removal is the SIGN-OUT transition, not a cache delete — but note it does NOT reset host audio / render / devices / python the way set_session_item's identity-switch branch does. wipe_database is expected to have run first (use-auth-store calls wipe_database, then signOut() which drives this). Asymmetry between the two paths is worth flagging.",
         "returns": "void",
@@ -2238,10 +2497,14 @@
           "non-session key: plain delete",
           "session key: sync_lock + reserved StateDb connection, recover_committed_signout, capture auth + write-admission backups, authored identity barrier, suspend write admission, consume_signout_transition_and_clear_session, re-arm write admission for the anonymous principal (None), bootstrap authored live projections for None; staged rollback on any failure"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "rename_folder",
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
       "args": [
         {
           "name": "folderId",
@@ -2252,14 +2515,14 @@
           "rust": "String"
         }
       ],
-      "domain": "folders",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/folders.rs"
-      },
-      "name": "rename_folder",
       "returns": "()"
     },
     {
+      "name": "rename_patched_fixture",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2274,11 +2537,7 @@
           "rust": "String"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "rename_patched_fixture",
+      "returns": "()",
       "prose": {
         "notes": "label is non-optional String here even though the column is nullable — there's no way to clear a label back to null via this command. Frontend trims and refuses empty. After success the caller refetches fixtures AND useGroupStore.fetchGroups(venueId), because labels are denormalized into the group hierarchy.",
         "returns": "void",
@@ -2286,10 +2545,14 @@
           "VenueAccess::<Write> on the fixture + require_venue; require_changed",
           "Re-pushes patch to ArtNet; invalidate_venue_fixture_cache()"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "rename_score",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
       "args": [
         {
           "name": "scoreId",
@@ -2300,11 +2563,7 @@
           "rust": "String"
         }
       ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs"
-      },
-      "name": "rename_score",
+      "returns": "()",
       "prose": {
         "notes": "Trims the name and refuses an empty one. A name equal to the stored one writes nothing. The track sidebar re-reads list_scores_across_venues after success.",
         "returns": "void",
@@ -2312,69 +2571,73 @@
           "VenueAccess::<Write> on the score",
           "UPDATE scores.name; the writer connection's upload queue syncs it through PowerSync"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "render_clear_active_layer",
+      "domain": "render_engine",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/render_engine.rs"
+      },
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "render_engine",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/render_engine.rs"
-      },
-      "name": "render_clear_active_layer",
+      "returns": "()",
       "prose": {
         "notes": "Editor-side counterpart to render_clear_perform: only the active (track/pattern editor) scene, not deck layers. Universe designer pairs it with clearing the frontend universe + dmx stores so fixtures read as off.",
         "returns": "void",
         "sideEffects": [
           "sets RenderEngine.active_scene = None so the render loop emits nothing for the editor layer; takes VenueAccess<Read>"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "render_identify",
+      "domain": "render_engine",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/render_engine.rs"
+      },
       "args": [
         {
           "name": "targets",
           "rust": "Vec<String>"
         }
       ],
-      "domain": "render_engine",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/render_engine.rs"
-      },
-      "name": "render_identify",
+      "returns": "()",
       "prose": {
         "notes": "The only command in this fragment with NO venueId argument — the venue is derived from the fixture ids and every target must resolve to the same venue, otherwise it fails as one opaque not-found. Target grammar is `\"fixtureId\"` (whole fixture) or `\"fixtureId:headIndex\"`. Empty targets vector is an error at the authorize layer (\"Identify requires at least one fixture target\") but a no-op inside identify_targets — two contradictory guards. Callers fire-and-forget.",
         "returns": "void",
         "sideEffects": [
           "installs an IdentifyState { targets, start: Instant::now() } that drives a two-blink sequence in both the visualizer and ArtNet output"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "reprocess_track",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs"
+      },
       "args": [
         {
           "name": "trackId",
           "rust": "String"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "name": "reprocess_track",
+      "returns": "()",
       "prose": {
         "returns": "()"
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "resolve_venue_group",
+      "domain": "group_references",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/group_references.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2393,17 +2656,17 @@
           "rust": "Vec<String>"
         }
       ],
-      "domain": "group_references",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/group_references.rs"
-      },
-      "name": "resolve_venue_group",
+      "returns": "()",
       "prose": {
         "returns": "()"
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "restore_graph",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2418,17 +2681,17 @@
           "rust": "Vec<PatchedFixture>"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "restore_graph",
+      "returns": "ResolvedVenue",
       "prose": {
         "returns": "ResolvedVenue"
-      },
-      "returns": "ResolvedVenue"
+      }
     },
     {
+      "name": "run_python_cell",
+      "domain": "agent_execution",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_execution.rs"
+      },
       "args": [
         {
           "name": "threadId",
@@ -2447,11 +2710,7 @@
           "rust": "PythonScopeInput"
         }
       ],
-      "domain": "agent_execution",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_execution.rs"
-      },
-      "name": "run_python_cell",
+      "returns": "PythonCellResult",
       "prose": {
         "notes": "Args are FLAT camelCase (not wrapped in `input`) — unlike the authored_state_* commands. The command always addresses the thread's own kernel: a subagent's cell is issued by run_python_cell_inner from inside the Rust turn loop, never over IPC, so there is no execution or workspace id on the wire. `scope` must be fully explicit: the tool fills every unknown field with null (see the test at python-tool.test.ts:225) — a port that omits keys instead of nulling them changes the wire shape. Scope fields are asserted against the thread's pinned subject and rejected on mismatch; the thread, not the caller, is the authorization principal. turnMessageId must name a durable `user` message already persisted in the thread before the model call; editable cells hard-fail without it. Figure budget: 8 MB total PNG per cell, over-budget figures are dropped with a human-readable notice in `notices` rather than truncated; the frontend then drops any single figure over MAX_PERSISTED_FIGURE_BYTES when storing, keeping width/height. `status: \"error\"` = Python exception (kernel healthy), `\"failed\"` = infrastructure failure (worker died/timeout), reason always in `notices`. The caller serializes cells per thread (enqueueCell) and converts any IPC throw into a synthetic `failed` result, so the tool never rejects.",
         "returns": "PythonCellResult { status: \"ok\" | \"error\" | \"interrupted\" | \"failed\"; stdout: string; stderr: string; repr: string|null; traceback: string|null; figures: PythonCellFigure[] { artifactRel, width, height, base64Png }; notices: string[]; durationMs: number }",
@@ -2463,10 +2722,14 @@
           "Reads figure PNGs back off disk, registers them as outputs in the artifact store, and base64-encodes them into the response",
           "No Tauri events emitted; results are returned synchronously to the caller"
         ]
-      },
-      "returns": "PythonCellResult"
+      }
     },
     {
+      "name": "save_laser_zone",
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2489,14 +2752,50 @@
           "rust": "[f64; 2]"
         }
       ],
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "name": "save_laser_zone",
       "returns": "crate::models::lasers::LaserZone"
     },
     {
+      "name": "save_perform_layout",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "layout",
+          "rust": "PerformLayout"
+        }
+      ],
+      "returns": "()"
+    },
+    {
+      "name": "save_perform_pattern",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "pattern",
+          "rust": "PerformPattern"
+        }
+      ],
+      "returns": "PerformPattern"
+    },
+    {
+      "name": "save_venue_group",
+      "domain": "groups",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/groups.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2519,17 +2818,17 @@
           "rust": "Vec<String>"
         }
       ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs"
-      },
-      "name": "save_venue_group",
+      "returns": "()",
       "prose": {
         "returns": "()"
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "search_fixtures",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "query",
@@ -2544,21 +2843,21 @@
           "rust": "usize"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "search_fixtures",
+      "returns": "Vec<FixtureEntry>",
       "prose": {
         "notes": "Synchronous (non-async) command. Empty query = plain paging over the whole index; otherwise a lowercase substring match on manufacturer OR model — no fuzzy ranking, index order is preserved. Note skip(offset) is applied AFTER filtering, so offset is an offset into the filtered result set. Store pages with LIMIT=50-style constant, tracks pageOffset += results.length and infers hasMore = results.length === LIMIT. `path` is the key for get_fixture_definition and the fixturePath stored on a patched fixture.",
         "returns": "Vec<FixtureEntry> — { manufacturer: string, model: string, path: string }[]",
         "sideEffects": [
           "None (pure read of the in-memory index; locks the FixtureState mutex)"
         ]
-      },
-      "returns": "Vec<FixtureEntry>"
+      }
     },
     {
+      "name": "selection_cells",
+      "domain": "composable_patterns",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2577,31 +2876,31 @@
           "rust": "Option<usize>"
         }
       ],
-      "domain": "composable_patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/composable_patterns.rs"
-      },
-      "name": "selection_cells",
       "returns": "Vec<luma_patterns::Cell>"
     },
     {
+      "name": "send_login_code",
+      "domain": "auth",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/auth.rs"
+      },
       "args": [
         {
           "name": "email",
           "rust": "String"
         }
       ],
-      "domain": "auth",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/auth.rs"
-      },
-      "name": "send_login_code",
+      "returns": "()",
       "prose": {
         "returns": "()"
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "set_address_pinned",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2616,17 +2915,17 @@
           "rust": "bool"
         }
       ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
+      }
+    },
+    {
+      "name": "set_fixture_address",
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
       },
-      "name": "set_address_pinned",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -2645,17 +2944,17 @@
           "rust": "i64"
         }
       ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
+      }
+    },
+    {
+      "name": "set_fixture_mode",
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
       },
-      "name": "set_fixture_address",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -2674,17 +2973,17 @@
           "rust": "bool"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "set_fixture_mode",
+      "returns": "PatchedFixture",
       "prose": {
         "returns": "PatchedFixture"
-      },
-      "returns": "PatchedFixture"
+      }
     },
     {
+      "name": "set_folder_track",
+      "domain": "folders",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/folders.rs"
+      },
       "args": [
         {
           "name": "folderId",
@@ -2699,14 +2998,14 @@
           "rust": "bool"
         }
       ],
-      "domain": "folders",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/folders.rs"
-      },
-      "name": "set_folder_track",
       "returns": "()"
     },
     {
+      "name": "set_laser_limit",
+      "domain": "lasers",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/lasers.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2721,14 +3020,14 @@
           "rust": "Option<Vec<[f64; 2]>>"
         }
       ],
-      "domain": "lasers",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/lasers.rs"
-      },
-      "name": "set_laser_limit",
       "returns": "()"
     },
     {
+      "name": "set_params",
+      "domain": "stage",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/stage.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2747,17 +3046,17 @@
           "rust": "Option<String>"
         }
       ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs"
-      },
-      "name": "set_params",
+      "returns": "PlacementReport",
       "prose": {
         "returns": "PlacementReport"
-      },
-      "returns": "PlacementReport"
+      }
     },
     {
+      "name": "set_session_item",
+      "domain": "auth",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/auth.rs"
+      },
       "args": [
         {
           "name": "key",
@@ -2768,11 +3067,7 @@
           "rust": "String"
         }
       ],
-      "domain": "auth",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/auth.rs"
-      },
-      "name": "set_session_item",
+      "returns": "()",
       "prose": {
         "notes": "The single most side-effectful command in this fragment. Error strings are contractual: they distinguish 'previous session restored' from 'signed writes remain closed' and a port must preserve that distinction. Agent-thread cleanup failures are logged, never surfaced (the switch is already committed). Like the getter, the TS adapter always sends the fixed session key and ignores its own key argument.",
         "returns": "void",
@@ -2782,10 +3077,14 @@
           "CredentialRefresh (same principal): only replaces the session + re-bootstraps authored projections + recovers deleting agent threads — deliberately does NOT reset audio/render/device/python state",
           "identity switch: suspends write admission, suspends analysis + python workspace generations, clears GraphRunStore, host_audio.unload(), render_engine.reset_for_identity_switch(), controller.disconnect(), mixer.disconnect(), stem_cache.clear(), replaces the session, re-arms write admission, bootstraps authored projections — with staged rollback (rollback_auth_switch / rollback_activated_auth_switch)"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "set_setting",
+      "domain": "settings",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/settings.rs"
+      },
       "args": [
         {
           "name": "key",
@@ -2796,21 +3095,21 @@
           "rust": "String"
         }
       ],
-      "domain": "settings",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/settings.rs"
-      },
-      "name": "set_setting",
+      "returns": "()",
       "prose": {
         "notes": "Everything is a STRING: booleans are \"true\"/\"false\", numbers are String(n) (`updateSetting(\"max_dimmer\", String(clamped))`). Key names are untyped/open — the valid set exists only implicitly in get_all_settings's parser, so a typo writes a row nothing ever reads (smell: no shared key enum between get and set). The dialog always re-invokes get_settings after a write rather than trusting local state; max_dimmer writes are debounced client-side.",
         "returns": "void",
         "sideEffects": [
           "upserts one settings row; update_setting also applies the live effect for artnet/audio keys (rebind etc.)"
         ]
-      },
-      "returns": "()"
+      }
     },
     {
+      "name": "set_track_beat_validation",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs"
+      },
       "args": [
         {
           "name": "trackId",
@@ -2829,14 +3128,14 @@
           "rust": "Option<BeatValidationReason>"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs"
-      },
-      "name": "set_track_beat_validation",
       "returns": "()"
     },
     {
+      "name": "set_venue_environment",
+      "domain": "venues",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/venues.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2847,17 +3146,17 @@
           "rust": "VenueEnvironment"
         }
       ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
+      }
+    },
+    {
+      "name": "set_venue_haze",
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs"
       },
-      "name": "set_venue_environment",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -2868,26 +3167,26 @@
           "rust": "VenueHaze"
         }
       ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs"
-      },
-      "name": "set_venue_haze",
       "returns": "()"
     },
     {
-      "args": [],
+      "name": "sync_status",
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs"
       },
-      "name": "sync_status",
+      "args": [],
+      "returns": "SyncStatus",
       "prose": {
         "returns": "SyncStatus"
-      },
-      "returns": "SyncStatus"
+      }
     },
     {
+      "name": "unbind_route",
+      "domain": "output",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/output.rs"
+      },
       "args": [
         {
           "name": "universe",
@@ -2906,14 +3205,14 @@
           "rust": "i64"
         }
       ],
-      "domain": "output",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/output.rs"
-      },
-      "name": "unbind_route",
       "returns": "()"
     },
     {
+      "name": "universe_occupancy",
+      "domain": "fixtures",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/fixtures.rs"
+      },
       "args": [
         {
           "name": "venueId",
@@ -2924,34 +3223,34 @@
           "rust": "i64"
         }
       ],
+      "returns": "Vec<UniverseCell>",
+      "prose": {
+        "returns": "Vec<UniverseCell>"
+      }
+    },
+    {
+      "name": "universes_in_use",
       "domain": "fixtures",
       "handler": {
         "file": "backend/src/dispatch/handlers/fixtures.rs"
       },
-      "name": "universe_occupancy",
-      "prose": {
-        "returns": "Vec<UniverseCell>"
-      },
-      "returns": "Vec<UniverseCell>"
-    },
-    {
       "args": [
         {
           "name": "venueId",
           "rust": "String"
         }
       ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/fixtures.rs"
-      },
-      "name": "universes_in_use",
+      "returns": "Vec<u16>",
       "prose": {
         "returns": "Vec<u16>"
-      },
-      "returns": "Vec<u16>"
+      }
     },
     {
+      "name": "verify_login_code",
+      "domain": "auth",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/auth.rs"
+      },
       "args": [
         {
           "name": "email",
@@ -2962,23 +3261,19 @@
           "rust": "String"
         }
       ],
-      "domain": "auth",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/auth.rs"
-      },
-      "name": "verify_login_code",
+      "returns": "String",
       "prose": {
         "returns": "String"
-      },
-      "returns": "String"
+      }
     },
     {
-      "args": [],
+      "name": "wipe_database",
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs"
       },
-      "name": "wipe_database",
+      "args": [],
+      "returns": "()",
       "prose": {
         "notes": "Fail-closed sign-out boundary: the Supabase session stays installed until this succeeds, so the store MUST call wipe_database BEFORE signOut() (which triggers remove_session_item) — reversing the order would expose the previous account. Returns Ok(()) early and harmlessly if a committed sign-out was already recovered (idempotent-ish). Refuses with 'Refusing database wipe: N operation(s) are still pending remote sync'. Only deletes the signed-in projection for the current principal — never a blanket DB delete, and never a cascade (see the no-cascade-deletes rule).",
         "returns": "void (no TS arguments at all — `invoke(\"wipe_database\")`)",
@@ -2990,166 +3285,29 @@
           "BEGIN IMMEDIATE tx: closes signed write admission for the principal, audits every uid-bearing table plus undelivered rows and tombstones for durability, deletes the signed-in projection and this principal's push state, commits",
           "recover_committed_signout after commit; prints '[auth] Signed-in database projection wiped on sign-out'"
         ]
-      },
-      "returns": "()"
-    }
-  ],
-  "domains": [
-    {
-      "commandCount": 2,
-      "domain": "agent_execution",
-      "handlers": "backend/src/dispatch/handlers/agent_execution.rs"
-    },
-    {
-      "commandCount": 8,
-      "domain": "agent_threads",
-      "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
-    },
-    {
-      "commandCount": 7,
-      "domain": "auth",
-      "handlers": "backend/src/dispatch/handlers/auth.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "composable_patterns",
-      "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "compositor",
-      "handlers": "backend/src/dispatch/handlers/compositor.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "controls",
-      "handlers": "backend/src/dispatch/handlers/controls.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "distribute",
-      "handlers": "backend/src/dispatch/handlers/distribute.rs"
-    },
-    {
-      "commandCount": 7,
-      "domain": "engine_dj",
-      "handlers": "backend/src/dispatch/handlers/engine_dj.rs"
-    },
-    {
-      "commandCount": 13,
-      "domain": "fixtures",
-      "handlers": "backend/src/dispatch/handlers/fixtures.rs"
-    },
-    {
-      "commandCount": 5,
-      "domain": "folders",
-      "handlers": "backend/src/dispatch/handlers/folders.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "group_references",
-      "handlers": "backend/src/dispatch/handlers/group_references.rs"
-    },
-    {
-      "commandCount": 7,
-      "domain": "groups",
-      "handlers": "backend/src/dispatch/handlers/groups.rs"
-    },
-    {
-      "commandCount": 9,
-      "domain": "host_audio",
-      "handlers": "backend/src/dispatch/handlers/host_audio.rs"
-    },
-    {
-      "commandCount": 6,
-      "domain": "inputs",
-      "handlers": "backend/src/dispatch/handlers/inputs.rs"
-    },
-    {
-      "commandCount": 6,
-      "domain": "lasers",
-      "handlers": "backend/src/dispatch/handlers/lasers.rs"
-    },
-    {
-      "commandCount": 4,
-      "domain": "output",
-      "handlers": "backend/src/dispatch/handlers/output.rs"
-    },
-    {
-      "commandCount": 6,
-      "domain": "perform",
-      "handlers": "backend/src/dispatch/handlers/perform.rs"
-    },
-    {
-      "commandCount": 6,
-      "domain": "rekordbox",
-      "handlers": "backend/src/dispatch/handlers/rekordbox.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "render_engine",
-      "handlers": "backend/src/dispatch/handlers/render_engine.rs"
-    },
-    {
-      "commandCount": 11,
-      "domain": "scores",
-      "handlers": "backend/src/dispatch/handlers/scores.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "settings",
-      "handlers": "backend/src/dispatch/handlers/settings.rs"
-    },
-    {
-      "commandCount": 11,
-      "domain": "stage",
-      "handlers": "backend/src/dispatch/handlers/stage.rs"
-    },
-    {
-      "commandCount": 1,
-      "domain": "sync",
-      "handlers": "backend/src/dispatch/handlers/sync.rs"
-    },
-    {
-      "commandCount": 1,
-      "domain": "telemetry",
-      "handlers": "backend/src/dispatch/handlers/telemetry.rs"
-    },
-    {
-      "commandCount": 7,
-      "domain": "tracks",
-      "handlers": "backend/src/dispatch/handlers/tracks.rs"
-    },
-    {
-      "commandCount": 5,
-      "domain": "venues",
-      "handlers": "backend/src/dispatch/handlers/venues.rs"
-    },
-    {
-      "commandCount": 1,
-      "domain": "waveforms",
-      "handlers": "backend/src/dispatch/handlers/waveforms.rs"
+      }
     }
   ],
   "events": [
     {
+      "name": "library-changed",
       "emitters": [
         "backend/src/dispatch/handlers/tracks.rs",
         "backend/src/sync/media.rs"
       ],
       "listeners": [],
-      "name": "library-changed",
       "orphan": true
     },
     {
+      "name": "python-env-progress",
       "emitters": [
         "backend/src/python_env.rs"
       ],
       "listeners": [],
-      "name": "python-env-progress",
       "orphan": true
     },
     {
+      "name": "track-import-state",
       "emitters": [
         "backend/src/dispatch/handlers/tracks.rs",
         "backend/src/preprocessing/scheduler.rs"
@@ -3157,40 +3315,32 @@
       "listeners": [
         "gpui/crates/app/src/library.rs"
       ],
-      "name": "track-import-state",
-      "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose.",
-      "orphan": false
+      "orphan": false,
+      "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose."
     },
     {
+      "name": "track-status-changed",
       "emitters": [
         "backend/src/preprocessing/scheduler.rs"
       ],
       "listeners": [],
-      "name": "track-status-changed",
       "orphan": true
     },
     {
-      "emitters": [
-        "backend/src/sync/files.rs"
-      ],
-      "listeners": [],
       "name": "upload-progress-start",
-      "orphan": true
-    },
-    {
       "emitters": [
         "backend/src/sync/files.rs"
       ],
       "listeners": [],
+      "orphan": true
+    },
+    {
       "name": "upload-progress-tick",
+      "emitters": [
+        "backend/src/sync/files.rs"
+      ],
+      "listeners": [],
       "orphan": true
     }
-  ],
-  "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
-  "summary": {
-    "commandCount": 137,
-    "domainCount": 27,
-    "eventCount": 6
-  },
-  "version": 2
+  ]
 }

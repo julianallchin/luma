@@ -16,7 +16,7 @@ function open() {
   const s = app.snapshot();
   const find = (role, label) => s.find({ role, label }).bounds;
   return {
-    page: find("card", "Clip graph"),
+    page: find("card", "Pattern graph"),
     canvas: find("card", "Graph canvas"),
     controls: [
       find("button", "Back to timeline"),

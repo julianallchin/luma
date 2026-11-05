@@ -35,7 +35,7 @@ function assertDirect(shot) {
   const stage = box(shot, "slider", "Stage height");
   assert(timeline && stage, "Direct lost the timeline or the stage");
   assert(timeline.y >= stage.y, `the timeline is not under the stage: ${JSON.stringify({ stage, timeline })}`);
-  assert(!box(shot, "card", "Presets") && !box(shot, "card", "Clip graph"), "Direct shows an inspector");
+  assert(!box(shot, "card", "Presets") && !box(shot, "card", "Pattern graph"), "Direct shows an inspector");
 }
 
 test("the pill switches between Direct and Program, and remembers", () => {
@@ -81,7 +81,7 @@ test("the pill switches between Direct and Program, and remembers", () => {
   // A double-click in Program selects the clip into the inspector beside the
   // timeline; there is no page to go to.
   app.click(app.snapshot().find({ role: "card", label: "Chase" }), { count: 2 });
-  const picked = until("the clip in the inspector", (s) => box(s, "card", "Clip graph"));
+  const picked = until("the clip in the inspector", (s) => box(s, "card", "Pattern graph"));
   assert(box(picked, "card", "Waveform"), "a double-click in Program took the timeline away");
   expect(box(picked, "button", "Back to timeline")).toBe(undefined);
 
@@ -106,7 +106,7 @@ test("a double-click in Direct opens the clip's graph where the timeline was", (
   assert(!box(page, "card", "Waveform"), "the timeline is still up under the graph page");
   // In the timeline's place: the same column, under the same stage, with the
   // chat still beside it.
-  const graph = box(page, "card", "Clip graph");
+  const graph = box(page, "card", "Pattern graph");
   assert(Math.abs(graph.x - timeline.x) <= 2 && Math.abs(graph.width - timeline.width) <= 2,
     `the graph is not where the timeline was: ${JSON.stringify({ timeline, graph })}`);
   assert(box(page, "slider", "Stage height") && chatShown(page), "the graph page took the stage or the chat");
@@ -128,5 +128,5 @@ test("a double-click in Direct opens the clip's graph where the timeline was", (
   until("the timeline after Escape", (s) =>
     box(s, "card", "Waveform") && !box(s, "button", "Back to timeline"));
   nav.program();
-  until("the selected clip in Program's inspector", (s) => box(s, "card", "Clip graph"));
+  until("the selected clip in Program's inspector", (s) => box(s, "card", "Pattern graph"));
 });

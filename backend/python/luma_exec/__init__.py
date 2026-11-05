@@ -8,6 +8,7 @@ Modules:
     figures   Matplotlib figure capture into the workspace output area.
     clip      Clip graph builders (bare names in every cell) and the shipped presets.
     score     Staged, host-checked editing of the track's score of clips.
+    perform   A venue's Perform set: patterns, pages of cells, bindings, what plays.
     track     Errors, snapshots and window output shared by `score`.
 
 The worker and binding data plane remain domain-neutral. `score` is a small
@@ -15,4 +16,4 @@ Python domain facade over plain binding values and an injected host capability;
 it knows nothing about SQLite or process transport.
 """
 
-__all__ = ["bindings", "clip", "display", "figures", "music", "score", "track", "worker"]
+__all__ = ["bindings", "clip", "display", "figures", "music", "perform", "score", "track", "worker"]

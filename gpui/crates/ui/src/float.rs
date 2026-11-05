@@ -10,6 +10,7 @@
 //! and prose reads the same whatever plane it lands on. Nothing in this module
 //! writes a colour or a corner down.
 
+use crate::motion::FadeHover;
 use crate::icons::IconName;
 use crate::rpx;
 use gpui::prelude::*;
@@ -133,7 +134,7 @@ impl RowState {
 /// ring or glyph to fall back on, where Selected always has its ring. Retuning
 /// the ladder or a surface's lightness can collapse that step before anything
 /// else breaks; whoever touches those re-checks this pair.
-fn row_state_paint(row: Div, state: RowState, fade_key: impl Into<SharedString>) -> Div {
+fn row_state_paint(row: Div, state: RowState, _fade_key: impl Into<SharedString>) -> Div {
     match state {
         // Fill and ring, from the one selection recipe. Nothing paints behind
         // a glass chip — see [`glass::card_selected_shadows`].
@@ -142,19 +143,11 @@ fn row_state_paint(row: Div, state: RowState, fade_key: impl Into<SharedString>)
             .shadow(glass::card_selected_shadows()),
         // A plate, no ring: the cursor marks a position, not a state.
         RowState::Cursor => row.bg(glass::card_cursor_bg()),
-        RowState::Rest => {
-            let fade_key = fade_key.into();
-            let mut row = row.bg(motion::hover_blend(
-                &fade_key,
-                glass::wash(0.0),
-                glass::glass_hover(),
-            ));
-            // Imperative form: `.on_hover` needs the `Stateful` the caller's
-            // own `.id(…)` produces, which does not exist yet here.
-            row.interactivity()
-                .on_hover(motion::hover_listener(fade_key));
-            row
-        }
+        // The wash fades out on leave; it needs the `.id(…)` callers give.
+        RowState::Rest => row
+            .bg(glass::wash(0.0))
+            .hover(|style| style.bg(glass::glass_hover()))
+            .fade_hover(),
     }
 }
 
@@ -526,23 +519,17 @@ fn hint_row() -> Div {
 /// The quiet button on a floating surface: text only, hover lifts a wash.
 ///
 /// `fade_key` as in [`menu_row`]. The caller adds `.id()` and the click.
-pub fn btn(label: impl Into<SharedString>, fade_key: impl Into<SharedString>) -> Div {
-    let fade_key = fade_key.into();
-    let mut btn = btn_shape()
-        .text_color(motion::hover_blend(
-            &fade_key,
-            ladder::foreground_alpha(0.72),
-            ladder::foreground_alpha(1.0),
-        ))
-        .bg(motion::hover_blend(
-            &fade_key,
-            glass::wash(0.0),
-            glass::ink(0.06),
-        ))
-        .child(label.into());
-    btn.interactivity()
-        .on_hover(motion::hover_listener(fade_key));
-    btn
+pub fn btn(label: impl Into<SharedString>, _fade_key: impl Into<SharedString>) -> Div {
+    btn_shape()
+        .text_color(ladder::foreground_alpha(0.72))
+        .bg(glass::wash(0.0))
+        .hover(|style| {
+            style
+                .text_color(ladder::foreground_alpha(1.0))
+                .bg(glass::ink(0.06))
+        })
+        .fade_hover()
+        .child(label.into())
 }
 
 /// The one emphasised button: a near-white fill with near-black text — the

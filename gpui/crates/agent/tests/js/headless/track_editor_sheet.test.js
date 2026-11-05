@@ -50,7 +50,7 @@ function readSheet() {
   const rows = {};
   for (const node of shot.findAll({ role: "row" })) rows[node.label] = node.bounds;
   return {
-    sheet: shot.find({ role: "card", label: "Clip graph" })?.bounds ?? null,
+    sheet: shot.find({ role: "card", label: "Pattern graph" })?.bounds ?? null,
     waveform: shot.find({ role: "card", label: "Waveform" })?.bounds ?? null,
     inputs,
     rows,
@@ -61,7 +61,7 @@ function readSheet() {
 
 const untilInput = (name) =>
   until(`the sheet to show ${name}`, (s) => s.findAll({ role: "input" }).some((n) => n.label.startsWith(`${name} = `)));
-const untilGone = () => until("the sheet to leave", (s) => s.find({ role: "card", label: "Clip graph" }) === undefined);
+const untilGone = () => until("the sheet to leave", (s) => s.find({ role: "card", label: "Pattern graph" }) === undefined);
 const clip = (label, index) =>
   app.snapshot().findAll({ role: "card", label }).sort((a, b) => a.bounds.x - b.bounds.x)[index];
 const waveform = () => app.snapshot().find({ role: "card", label: "Waveform" });
@@ -136,7 +136,7 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
   app.click(clip(FORM, 0));
   untilInput(BRIGHTNESS);
   app.click(clip(FORM, 1), { modifiers: ["shift"] });
-  until("the batch count", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 clips"));
+  until("the batch count", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 patterns"));
   untilInput(BRIGHTNESS);
   const batch = String(Number(next) - 10);
   retype(BRIGHTNESS, batch);
@@ -148,7 +148,7 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
 
   // 7. Mixed: two graph shapes offer only the name. Escape clears it.
   app.click(clip("Random heads", 0), { modifiers: ["shift"] });
-  until("the mixed readout", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 clips") && !s.find({ role: "row", label: "Blend" }));
+  until("the mixed readout", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 patterns") && !s.find({ role: "row", label: "Blend" }));
   const mixed = readSheet();
   expect(app.snapshot().find({ role: "input", label: "Name" }) !== undefined).toBe(true);
   expect(mixed.inputs[BRIGHTNESS]).toBe(undefined);

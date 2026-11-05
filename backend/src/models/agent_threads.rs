@@ -15,7 +15,7 @@ pub struct AgentThread {
     /// other synced table's owner column; the wire name stays `ownerUserId`.
     #[sqlx(rename = "uid")]
     pub owner_user_id: Option<String>,
-    /// 'track_copilot' | 'venue_rig'
+    /// 'track_copilot' | 'venue_rig' | 'perform_set'
     pub agent_kind: String,
     /// 'track' | 'venue' | null
     pub subject_kind: Option<String>,
@@ -227,6 +227,11 @@ pub(crate) enum ThreadRoute<'a> {
     Venue {
         venue_id: &'a str,
     },
+    /// The venue's Perform set: the patterns it plays live, its layout and
+    /// its bindings. Relational rows, like the room, so no authored document.
+    Perform {
+        venue_id: &'a str,
+    },
 }
 
 impl CreateAgentThreadInput {
@@ -275,12 +280,21 @@ fn route<'a>(
         {
             Ok(ThreadRoute::Venue { venue_id })
         }
+        ("perform_set", Some("venue"), Some(venue_id), Some(subject_venue), None)
+            if !venue_id.is_empty() && subject_venue == venue_id =>
+        {
+            Ok(ThreadRoute::Perform { venue_id })
+        }
         ("unbound", None, None, None, None) => Ok(ThreadRoute::Unbound),
         ("track_copilot", ..) => {
             Err("track agent thread requires non-empty track, venue, and score IDs".into())
         }
         ("venue_rig", ..) => Err(
             "venue agent thread requires a non-empty venue ID as its subject and no track or score"
+                .into(),
+        ),
+        ("perform_set", ..) => Err(
+            "Perform agent thread requires a non-empty venue ID as its subject and no track or score"
                 .into(),
         ),
         _ => Err(format!("unsupported agent thread kind '{agent_kind}'")),

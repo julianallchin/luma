@@ -10,6 +10,7 @@
 //! under the row until the next edit on it — so "what did I type" and "what is
 //! stored" are never the same pixel telling two stories.
 
+use luma_ui::motion::FadeHover;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Div, Entity, Point, SharedString};
 
@@ -17,7 +18,7 @@ use luma_lib::models::fixtures::PatchedFixture;
 use luma_ui::ladder;
 use luma_ui::menu::ContextMenu;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::{float, glass, motion};
+use luma_ui::{float, glass};
 
 use super::{Column, Patch};
 use crate::Luma;
@@ -140,15 +141,8 @@ fn compact_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             glass::wash(0.0)
         })
         .when(!selected, |line| {
-            line.bg(luma_ui::motion::hover_blend(
-                &format!("venue-light-{}", row.id),
-                glass::wash(0.),
-                glass::glass_hover(),
-            ))
-            .on_hover(luma_ui::motion::hover_listener(format!(
-                "venue-light-{}",
-                row.id
-            )))
+            line.hover(|style| style.bg(glass::glass_hover()))
+                .fade_hover()
         })
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
             picked.update(cx, |this, cx| {
@@ -381,7 +375,11 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
         .bg(if selected {
             glass::card_selected_bg()
         } else {
-            motion::hover_blend(&fade_key, glass::wash(0.0), glass::glass_hover())
+            glass::wash(0.0)
+        })
+        .when(!selected, |line| {
+            line.hover(|style| style.bg(glass::glass_hover()))
+                .fade_hover()
         })
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
             let extend = event.modifiers.secondary() || event.modifiers.shift;
@@ -395,10 +393,6 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             let at = event.position;
             menued.update(cx, |this, cx| this.open_patch_menu(venue, id, at, cx));
         });
-    // The globally-keyed hover, not `.hover()`: a row that scrolls back into
-    // view is a remount, and a local hover would snap rather than fade.
-    line.interactivity()
-        .on_hover(motion::hover_listener(fade_key));
 
     line = line
         .child(label_cell(state, row, &name, editing, app))

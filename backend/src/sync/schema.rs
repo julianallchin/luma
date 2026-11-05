@@ -419,6 +419,37 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         ]
     ),
     table!(
+        "perform_patterns",
+        "@.id",
+        "uid",
+        [
+            "id",
+            "uid",
+            "venue_id",
+            "name",
+            "selection_json",
+            "z_index",
+            "blend_mode",
+            "seed",
+            "graph_json",
+            "created_at",
+            "updated_at"
+        ]
+    ),
+    table!(
+        "perform_layouts",
+        "@.id",
+        "uid",
+        [
+            "id",
+            "uid",
+            "venue_id",
+            "layout_json",
+            "created_at",
+            "updated_at"
+        ]
+    ),
+    table!(
         "laser_limits",
         "@.id",
         "uid",

@@ -114,7 +114,7 @@ pub(crate) mod picker;
 mod playback;
 mod playback_clock;
 mod playback_surface;
-mod sheet;
+pub(crate) mod sheet;
 pub(crate) use sheet::Audition;
 mod waveform;
 mod zoom_motion;
@@ -126,8 +126,6 @@ mod zoom_motion;
 pub struct Editor {
     track_id: String,
     track_name: String,
-    /// The track's audio file, which playback decodes from the top.
-    audio_path: std::path::PathBuf,
     /// The venue the score belongs to.
     venue_id: String,
     /// The score whose clips are on the timeline, and whether this host may
@@ -937,11 +935,17 @@ impl Editor {
     }
 
     /// What an export of the open score takes from the timeline: its name,
-    /// its length in seconds and its audio file. `None` before the track's
-    /// length is known.
-    pub(crate) fn export_source(&self) -> Option<(String, f32, std::path::PathBuf)> {
+    /// its length in seconds, and the score as the stage lights it — the
+    /// working copy, unsaved edits included. `None` before the track's length
+    /// is known.
+    pub(crate) fn export_source(&self) -> Option<crate::export_dialog::Source> {
         let duration = self.transport.duration;
-        (duration > 0.).then(|| (self.track_name.clone(), duration, self.audio_path.clone()))
+        (duration > 0.).then(|| crate::export_dialog::Source {
+            track_name: self.track_name.clone(),
+            duration,
+            score_id: self.score.id.clone(),
+            score: self.graph_candidate().ok(),
+        })
     }
 
     /// Whether an edit is allowed to land at all: a score this host owns, and
@@ -1928,7 +1932,6 @@ impl Luma {
         let state = Box::new(Editor {
             track_id: track.id.clone(),
             track_name: track_title(&track),
-            audio_path: track.file_path.clone().into(),
             venue_id: venue_id.clone(),
             score,
             chat,
@@ -2406,6 +2409,10 @@ impl Luma {
                     state.sheet.dismiss_menu()
                 }
             }
+            Some(Body::Perform(state)) => state
+                .pattern_sheet
+                .as_mut()
+                .is_some_and(|open| open.sheet.dismiss_menu()),
             _ => false,
         }
     }
@@ -3307,8 +3314,8 @@ pub(crate) fn inspector(
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> AnyElement {
-    sheet::sync(state, window, cx);
-    sheet::panel(state, app, None)
+    sheet::sync(sheet::HostMut::Track(state), window, cx);
+    sheet::panel(sheet::Host::Track(state), app, None)
 }
 
 /// Direct's graph page: the selected clip's inspector where the timeline was,
@@ -3327,28 +3334,22 @@ pub(crate) fn clip_graph_page(
     cx: &mut Context<Luma>,
 ) -> AnyElement {
     sync_composite(state, cx);
-    let close = app.clone();
-    let back = luma_ui::button("", Enabled::Yes)
-        .id("clip-graph-back")
-        .pl(px(6.))
-        .pr(px(10.))
-        .gap(px(4.))
-        .child(gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(14.)))
-        .child("Timeline")
-        .on_click(move |_, _, cx| {
-            close.update(cx, |this, cx| {
-                this.close_clip_graph(cx);
-            })
-        })
-        .agent_node(Role::Button, "Back to timeline")
-        .into_any_element();
-    sheet::sync(state, window, cx);
+    let back = sheet::back(
+        "clip-graph-back",
+        "Timeline",
+        "Back to timeline",
+        app,
+        |this, cx| {
+            this.close_clip_graph(cx);
+        },
+    );
+    sheet::sync(sheet::HostMut::Track(state), window, cx);
     div()
         .size_full()
         .flex()
         .bg(ladder::background())
         .text_color(ladder::foreground())
-        .child(sheet::panel(state, app, Some(back)))
+        .child(sheet::panel(sheet::Host::Track(state), app, Some(back)))
         .into_any_element()
 }
 
@@ -3462,6 +3463,10 @@ pub(crate) fn fullscreen_transport(
         .into_any_element()
 }
 
+/// Room the toolbar keeps for its edit readouts: a selection count and a
+/// cursor range.
+const EDIT_READOUTS_WIDTH: f32 = 190.;
+
 /// The way back, what is open, the transport, and whether a write is in the air.
 fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
     let transport = app.clone();
@@ -3521,7 +3526,10 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             clock(state.transport.position),
             clock(state.transport.duration)
         )))
-        .child(luma_ui::caption(format!("{} clips", state.clips.len())))
+        .child(luma_ui::caption(match state.clips.len() {
+            1 => "1 pattern".to_string(),
+            count => format!("{count} patterns"),
+        }))
         .when_some(state.beats.as_deref(), |el, grid| {
             el.child(luma_ui::caption(format!("{:.1} BPM", grid.bpm)))
         })
@@ -3645,25 +3653,36 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                     .agent_node(Role::Text, message),
             )
         })
-        .when(!state.selected.is_empty(), |el| {
-            el.child(luma_ui::caption(format!(
-                "{} selected",
-                state.selected.len()
-            )))
-        })
-        // The cursor's own readout: a point reads as one time, a range as the
-        // span it covers. It is the only text that says where an edit would
-        // land.
-        .when_some(state.cursor, |el, cursor| {
-            el.child(luma_ui::caption(match cursor.span() {
-                Some((from, to)) => format!("Cursor {from:.2}-{to:.2}"),
-                None => format!("Cursor {:.2}", cursor.start),
-            }))
-        })
-        .when_some(state.loop_region, |el, (from, to)| {
-            el.child(luma_ui::caption(format!("Loop {from:.2}-{to:.2}")))
-        })
-        .when(state.follow, |el| el.child(luma_ui::caption("Follow")))
+        // What the edit is on: the selection, the cursor, the loop, follow.
+        // One slot, its width held whether or not anything is selected, so
+        // selecting a pattern never reflows the toolbar and moves the
+        // timeline under the pointer.
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .min_w(px(EDIT_READOUTS_WIDTH))
+                .when(!state.selected.is_empty(), |el| {
+                    el.child(luma_ui::caption(format!(
+                        "{} selected",
+                        state.selected.len()
+                    )))
+                })
+                // The cursor's own readout: a point reads as one time, a range
+                // as the span it covers. It is the only text that says where an
+                // edit would land.
+                .when_some(state.cursor, |el, cursor| {
+                    el.child(luma_ui::caption(match cursor.span() {
+                        Some((from, to)) => format!("Cursor {from:.2}-{to:.2}"),
+                        None => format!("Cursor {:.2}", cursor.start),
+                    }))
+                })
+                .when_some(state.loop_region, |el, (from, to)| {
+                    el.child(luma_ui::caption(format!("Loop {from:.2}-{to:.2}")))
+                })
+                .when(state.follow, |el| el.child(luma_ui::caption("Follow"))),
+        )
         .child(div().flex_1())
         // Which score is on the timeline, by the handle the sidebar names it
         // by.

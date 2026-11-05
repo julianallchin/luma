@@ -270,12 +270,35 @@ fn node_shape(id: &str, node: &Node) -> Result<()> {
             ));
         }
     }
-    if node.kind == Kind::Control {
+    if node.kind.is_live() {
         let name = node.setting("name").unwrap_or_default();
         if !is_control_name(name) {
             return fail(format!(
-                "{id}.name: expected a control name in snake_case, such as drop or front_level; got \"{name}\". Example: name=\"fader\""
+                "{id}.name: expected a control name in snake_case, such as drop or front_level; got \"{name}\". Example: name=\"{}\"",
+                definition.setting("name").map_or("fader", |name| name.default)
             ));
+        }
+    }
+    if node.kind == Kind::Button {
+        for length in ["attack", "decay", "release", "sustain"] {
+            let value = node.setting(length).unwrap_or_default();
+            let most = if length == "sustain" { 1. } else { f64::MAX };
+            if !value
+                .parse::<f64>()
+                .is_ok_and(|value| (0. ..=most).contains(&value))
+            {
+                let expected = if length == "sustain" {
+                    "a level 0–1"
+                } else {
+                    "a length of 0 or more, in the button's unit"
+                };
+                return fail(format!(
+                    "{id}.{length}: expected {expected}; got \"{value}\". Example: {length}=\"{}\"",
+                    definition
+                        .setting(length)
+                        .map_or("0", |setting| setting.default)
+                ));
+            }
         }
     }
     Ok(())
@@ -1038,7 +1061,7 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
     if node.kind == Kind::Along {
         out.along = true;
     }
-    if node.kind == Kind::Control {
+    if node.kind.is_live() {
         out.live = true;
     }
     match definition.output {

@@ -5,7 +5,7 @@ for (const preset of ["Chase","Position","Circle"]) {
   test(`source editor: ${preset}`, {fixture:{clips:[{pattern:"source",name:preset,start:1,end:5,preset}]}},()=>{
     nav.trackEditor("Test Venue","Aurora");nav.program();nav.stageOff();
     nav.step("clip","card",preset);
-    until("inputs",s=>s.find({role:"card",label:"Clip graph"}));
+    until("inputs",s=>s.find({role:"card",label:"Pattern graph"}));
     nav.graphPage();
     if(preset==="Circle") {
       // The yaw's curve is a chip on the aim; open, its strip.
@@ -18,7 +18,7 @@ for (const preset of ["Chase","Position","Circle"]) {
       nav.inCard("Aim 1","row","High");
     }
     const shot=app.screenshot();image.keep(shot,`sources/${preset.toLowerCase()}`);
-    const content=image.stats(app.screenshot({node:app.snapshot().find({role:"card",label:"Clip graph"})}));
+    const content=image.stats(app.screenshot({node:app.snapshot().find({role:"card",label:"Pattern graph"})}));
     assert(content.max>content.min,"the source editor is drawn");
   });
 }

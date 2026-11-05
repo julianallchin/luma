@@ -118,7 +118,9 @@ use crate::models::folders::Folder;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::node_graph::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
-use crate::models::perform::{PerformSource, PerformState};
+use crate::models::perform::{
+    PerformLayout, PerformPattern, PerformSource, PerformState,
+};
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
 use crate::models::sync::SyncStatus;
@@ -386,6 +388,15 @@ commands! {
     perform::perform_set_latency(latency_ms: f32) -> ();
     perform::perform_assign_track(deck_id: u8, track_id: Option<String>) -> ();
     perform::prodjlink_discover() -> Vec<DiscoveredDevice>;
+    perform::list_perform_patterns(venue_id: String) -> Vec<PerformPattern>;
+    perform::save_perform_pattern(venue_id: String, pattern: PerformPattern) -> PerformPattern;
+    perform::delete_perform_pattern(venue_id: String, pattern_id: String) -> ();
+    perform::get_perform_layout(venue_id: String) -> Option<PerformLayout>;
+    perform::save_perform_layout(venue_id: String, layout: PerformLayout) -> ();
+    perform::perform_open_set(venue_id: String) -> ();
+    perform::perform_control(name: String, value: f64) -> ();
+    perform::perform_press(name: String, down: bool) -> ();
+    perform::perform_set_bpm(venue_id: String, bpm: f64) -> ();
 
     host_audio::host_load_track(track_id: String, session: u64) -> ();
     host_audio::host_load_segment(

@@ -1,6 +1,6 @@
 //! One small graph per clip (spec: `docs/specs/clip-graphs.md`).
 //!
-//! A clip graph has nodes of 18 kinds. Exactly one node is an output
+//! A clip graph has nodes of 19 kinds. Exactly one node is an output
 //! (`color`, `aim`, `strobe` or `laser`). Every node has one output wire. An input
 //! holds a value, a wire (`{"node": id}`), or nothing; nothing is the only
 //! default. A choice is a setting and is never wired.
@@ -51,6 +51,7 @@ pub enum Kind {
     Random,
     Audio,
     Control,
+    Button,
     Curve,
     Math,
     Value,
@@ -67,13 +68,14 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in menu order.
-    pub const ALL: [Kind; 18] = [
+    pub const ALL: [Kind; 19] = [
         Kind::Time,
         Kind::Space,
         Kind::Along,
         Kind::Random,
         Kind::Audio,
         Kind::Control,
+        Kind::Button,
         Kind::Curve,
         Kind::Math,
         Kind::Value,
@@ -97,6 +99,7 @@ impl Kind {
             Kind::Random => "random",
             Kind::Audio => "audio",
             Kind::Control => "control",
+            Kind::Button => "button",
             Kind::Curve => "curve",
             Kind::Math => "math",
             Kind::Value => "value",
@@ -112,7 +115,8 @@ impl Kind {
         }
     }
 
-    /// The kind in sentence case, as a card title shows it ("Curve").
+    /// The kind in sentence case, as a card title shows it ("Curve"). A
+    /// `control` node is a fader to the person playing it.
     pub fn label(self) -> &'static str {
         match self {
             Kind::Time => "Time",
@@ -120,7 +124,8 @@ impl Kind {
             Kind::Along => "Along",
             Kind::Random => "Random",
             Kind::Audio => "Audio",
-            Kind::Control => "Control",
+            Kind::Control => "Fader",
+            Kind::Button => "Button",
             Kind::Curve => "Curve",
             Kind::Math => "Math",
             Kind::Value => "Value",
@@ -140,6 +145,12 @@ impl Kind {
     /// `laser`.
     pub fn is_output(self) -> bool {
         matches!(self, Kind::Color | Kind::Aim | Kind::Strobe | Kind::Laser)
+    }
+
+    /// Whether a performer plays this kind: a `control` (a fader) or a
+    /// `button`. Its value comes from the host's [`crate::ControlSource`].
+    pub fn is_live(self) -> bool {
+        matches!(self, Kind::Control | Kind::Button)
     }
 
     pub fn from_name(name: &str) -> Option<Kind> {
@@ -310,6 +321,44 @@ impl Node {
             .map(|setting| setting.default)
     }
 
+    /// How a `button` node plays, from its settings; `None` for any other
+    /// node. A setting the checker would refuse reads as its default.
+    pub fn press(&self) -> Option<crate::press::Press> {
+        use crate::press::{Adsr, Press, PressMode, Shape, TimeUnit};
+        if self.kind != Kind::Button {
+            return None;
+        }
+        let plain = Adsr::default();
+        let length = |name: &str, default: f64| {
+            self.setting(name)
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.)
+                .unwrap_or(default)
+        };
+        Some(Press {
+            mode: match self.setting("mode") {
+                Some("toggle") => PressMode::Toggle,
+                _ => PressMode::Flash,
+            },
+            envelope: Adsr {
+                attack: length("attack", plain.attack),
+                decay: length("decay", plain.decay),
+                sustain: length("sustain", plain.sustain).min(1.),
+                release: length("release", plain.release),
+                unit: match self.setting("unit") {
+                    Some("seconds") => TimeUnit::Seconds,
+                    _ => TimeUnit::Beats,
+                },
+                shape: match self.setting("shape") {
+                    Some("linear") => Shape::Linear,
+                    Some("punchy") => Shape::Punchy,
+                    Some("snap") => Shape::Snap,
+                    _ => Shape::Smooth,
+                },
+            },
+        })
+    }
+
     /// The wires into this node, a list's one by one: (input, source node
     /// id).
     pub fn wires(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -474,14 +523,106 @@ impl ClipGraph {
             .map(|(id, node)| (id.as_str(), node))
     }
 
-    /// The output node's kind.
-    /// The live controls this graph reads, by name, sorted and each once.
-    /// A control node's index into them is its place here.
+    /// What a performer can play on this graph, in node order: each fader
+    /// and button node, by node id. A Perform pattern's cell shows one of
+    /// each, and a live input's place here is the index its kernel reads.
+    pub fn live_inputs(&self) -> Vec<LiveInput> {
+        self.nodes
+            .iter()
+            .filter_map(|(id, node)| {
+                let kind = match node.kind {
+                    Kind::Control => LiveInputKind::Fader,
+                    Kind::Button => LiveInputKind::Button(node.press()?),
+                    _ => return None,
+                };
+                Some(LiveInput {
+                    node: id.clone(),
+                    name: node.setting("name").unwrap_or(id).to_owned(),
+                    kind,
+                })
+            })
+            .collect()
+    }
+
+    /// The graph's pad, which turns a Perform pattern on and off: the button
+    /// node the output's `alpha` depends on, wired straight in or through
+    /// curves and math. With several, the first by id, as
+    /// [`ClipGraph::live_inputs`] orders them; the others stay buttons of
+    /// the pattern. `None` when no button feeds `alpha`.
+    pub fn pad(&self) -> Option<LiveInput> {
+        let (_, output) = self.output()?;
+        let mut feeding = std::collections::BTreeSet::new();
+        let mut wires: Vec<&str> = output
+            .inputs
+            .get("alpha")
+            .into_iter()
+            .flat_map(Input::sources)
+            .collect();
+        while let Some(id) = wires.pop() {
+            if feeding.insert(id) {
+                if let Some(node) = self.nodes.get(id) {
+                    wires.extend(node.wires().map(|(_, source)| source));
+                }
+            }
+        }
+        self.live_inputs().into_iter().find(|input| {
+            matches!(input.kind, LiveInputKind::Button(_)) && feeding.contains(input.node.as_str())
+        })
+    }
+
+    /// The graph with a pad ([`ClipGraph::pad`]), for a new Perform pattern:
+    /// a toggle button node named `pad`, through a ramp curve into the
+    /// output's `alpha`, times whatever `alpha` held before. A graph that has
+    /// a pad already, or no output, is unchanged.
+    #[must_use]
+    pub fn with_pad(mut self) -> Self {
+        let Some(output) = self.output().map(|(id, _)| id.to_owned()) else {
+            return self;
+        };
+        if self.pad().is_some() {
+            return self;
+        }
+        let button = self.next_id(Kind::Button);
+        self.nodes.insert(
+            button.clone(),
+            Node::new(Kind::Button)
+                .with_setting("name", "pad")
+                .with_setting("mode", "toggle"),
+        );
+        let curve = self.next_id(Kind::Curve);
+        self.nodes.insert(
+            curve.clone(),
+            Node::new(Kind::Curve).with_input("x", Input::wire(button)),
+        );
+        let held = self
+            .nodes
+            .get_mut(&output)
+            .and_then(|node| node.inputs.remove("alpha"));
+        let alpha = match held {
+            None => Input::wire(curve),
+            Some(held) => {
+                let math = self.next_id(Kind::Math);
+                self.nodes.insert(
+                    math.clone(),
+                    Node::new(Kind::Math)
+                        .with_input("values", Input::List(vec![Input::wire(curve), held])),
+                );
+                Input::wire(math)
+            }
+        };
+        if let Some(node) = self.nodes.get_mut(&output) {
+            node.inputs.insert("alpha".into(), alpha);
+        }
+        self
+    }
+
+    /// The names the graph's fader and button nodes go by, sorted and each
+    /// once: in a score, the venue controls the graph reads.
     pub fn controls(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self
             .nodes
             .values()
-            .filter(|node| node.kind == Kind::Control)
+            .filter(|node| node.kind.is_live())
             .filter_map(|node| node.setting("name"))
             .collect();
         names.sort_unstable();
@@ -489,6 +630,7 @@ impl ClipGraph {
         names
     }
 
+    /// The output node's kind.
     pub fn output_kind(&self) -> Option<Kind> {
         self.output().map(|(_, node)| node.kind)
     }
@@ -549,7 +691,7 @@ impl ClipGraph {
             &crate::standard_library(),
             &root,
             frame,
-            self.controls().into_iter().map(String::from).collect(),
+            self.live_inputs(),
         )?;
         let out = prepared.evaluate_batch(&[frame.beat])?;
         let x = out[lower::COORDINATE]
@@ -688,4 +830,22 @@ impl ClipGraph {
         });
         ids
     }
+}
+
+/// A fader or button node of a graph, as a performer sees it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveInput {
+    /// The node's id, which names its value for its pattern and so keeps a
+    /// binding through a rename.
+    pub node: String,
+    /// What the node is called, as the cell labels it.
+    pub name: String,
+    pub kind: LiveInputKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LiveInputKind {
+    Fader,
+    /// A button, played as its node says.
+    Button(crate::press::Press),
 }

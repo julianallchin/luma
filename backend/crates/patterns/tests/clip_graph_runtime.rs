@@ -2350,12 +2350,13 @@ fn a_period_over_beats_eases_the_random_each_beat_without_a_jump() {
     assert!(between > 4. * near, "between {between}, near {near}");
 }
 
-/// A fader the test moves by hand.
+/// A fader the test moves by hand: the node `fader`; every other node reads
+/// 0.25.
 #[derive(Debug, Default)]
 struct Fader(std::sync::Mutex<f64>);
 impl luma_patterns::ControlSource for Fader {
-    fn value(&self, name: &str) -> f64 {
-        if name == "drop" {
+    fn value(&self, input: &luma_patterns::clip_graph::LiveInput) -> f64 {
+        if input.node == "fader" {
             *self.0.lock().unwrap()
         } else {
             0.25
@@ -2383,7 +2384,12 @@ fn a_control_moves_the_light_without_preparing_again() {
         },
     )
     .unwrap();
-    assert_eq!(prepared.control_names(), ["drop"]);
+    let inputs: Vec<(&str, &str)> = prepared
+        .live_inputs()
+        .iter()
+        .map(|input| (input.node.as_str(), input.name.as_str()))
+        .collect();
+    assert_eq!(inputs, [("fader", "drop")]);
     let dimmer = |prepared: &PreparedGraph| {
         let out = prepared.evaluate_batch(&[3.]).unwrap();
         out[OUTPUT].lighting().unwrap().values()[[0, 0, DIMMER]]
@@ -2397,6 +2403,91 @@ fn a_control_moves_the_light_without_preparing_again() {
     let up = dimmer(&prepared);
     assert!(up > down, "raising the fader brightens the light");
     assert!((up - 0.8).abs() < 1e-9, "the curve sets the fader's range");
+}
+
+#[test]
+fn each_live_node_reads_its_own_value_by_node() {
+    // Two faders of one name and a button: the source tells them apart by
+    // node, so a Perform pattern can play each on its own.
+    let graph = graph(json!({
+        "fader": {"kind": "control", "settings": {"name": "drop"}},
+        "other": {"kind": "control", "settings": {"name": "drop"}},
+        "hit": {"kind": "button", "settings": {"name": "hit", "mode": "toggle",
+            "attack": "0.5", "decay": "0", "sustain": "1", "release": "2",
+            "unit": "seconds", "shape": "linear"}},
+        "math1": {"kind": "math", "inputs": {"values": [{"node": "c1"}, {"node": "c2"}, {"node": "c3"}]}},
+        "c1": {"kind": "curve", "inputs": {"x": {"node": "fader"}}},
+        "c2": {"kind": "curve", "inputs": {"x": {"node": "other"}}},
+        "c3": {"kind": "curve", "inputs": {"x": {"node": "hit"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "math1"}}}}));
+    let inputs = graph.live_inputs();
+    let nodes: Vec<&str> = inputs.iter().map(|input| input.node.as_str()).collect();
+    assert_eq!(nodes, ["fader", "hit", "other"], "in node order");
+    let luma_patterns::clip_graph::LiveInputKind::Button(press) = inputs[1].kind else {
+        panic!("hit is a button: {:?}", inputs[1].kind);
+    };
+    assert_eq!(press.mode, luma_patterns::press::PressMode::Toggle);
+    assert_eq!(press.envelope.release, 2.);
+    assert_eq!(press.envelope.unit, luma_patterns::press::TimeUnit::Seconds);
+    assert_eq!(
+        graph.controls(),
+        ["drop", "hit"],
+        "a score reads them by name"
+    );
+
+    let fader = Arc::new(Fader::default());
+    let prepared = PreparedGraph::new(
+        &standard_library(),
+        &graph,
+        Frame {
+            features: None,
+            cells: &line(),
+            beat: 0.,
+            clip_start: 0.,
+            clip_duration: 16.,
+            seed: 7,
+        },
+    )
+    .unwrap()
+    .with_controls(fader.clone());
+    let dimmer = || {
+        let out = prepared.evaluate_batch(&[3.]).unwrap();
+        out[OUTPUT].lighting().unwrap().values()[[0, 0, DIMMER]]
+    };
+    // fader × other × hit: 1 × 0.25 × 0.25 once the fader is up.
+    *fader.0.lock().unwrap() = 1.;
+    assert!((dimmer() - 0.0625).abs() < 1e-9, "{}", dimmer());
+}
+
+#[test]
+fn a_button_refuses_a_length_it_cannot_play() {
+    let button = |name: &str, value: &str| {
+        graph(json!({
+            "b": {"kind": "button", "settings": {name: value}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "b"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+        .check()
+    };
+    assert!(button("release", "1.5").is_ok());
+    for (name, value) in [("attack", "-1"), ("release", "soon"), ("sustain", "2")] {
+        let refused = button(name, value).expect_err(value);
+        assert!(refused.0.contains(&format!("b.{name}")), "{}", refused.0);
+    }
+    let refused = button("mode", "hold").expect_err("not a mode");
+    assert!(refused.0.contains("b.mode"), "{}", refused.0);
+}
+
+#[test]
+fn a_button_cannot_set_a_clock() {
+    let refused = graph(json!({
+        "b": {"kind": "button"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "b"}, "low": 1, "high": 4}},
+        "time1": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
+    .check()
+    .expect_err("a live every is refused");
+    assert!(refused.0.contains("time1.every"), "{}", refused.0);
 }
 
 #[test]

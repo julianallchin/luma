@@ -13,8 +13,10 @@
 //! and [`Transcript::unfinished`] reads the rest back. Steering joins at the
 //! engine's next step and is placed with [`TurnEvent::Steered`].
 //!
-//! The editor is told the score moved by comparing its `updated_at` across the
-//! turn, which is exactly what a save touches and nothing else does.
+//! The editor is told its document moved by comparing a stamp across the
+//! turn: the score's `updated_at`, or the Perform set's rows' (see
+//! [`Document::stamp`]), which is exactly what a save touches and nothing else
+//! does.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -70,7 +72,7 @@ pub(super) async fn run(
         native_session: None,
         claim: None,
         actual_model: None,
-        score: None,
+        document: None,
     };
     let outcome = match turn.drive(prompt).await {
         Ok(()) => TurnOutcome::Completed,
@@ -120,20 +122,55 @@ struct Turn {
     native_session: Option<engine::state::NativeSession>,
     claim: Option<engine::claim::Claim>,
     actual_model: Option<String>,
-    /// The score this thread edits and the `updated_at` this turn last saw on
-    /// it. A moved stamp is what tells the editor to re-read.
-    score: Option<(String, String)>,
+    /// What this thread edits that a tab shows, and the stamp this turn last
+    /// saw on it. A moved stamp is what tells the tab to re-read.
+    document: Option<(Document, String)>,
 }
 
-/// The score row's `updated_at`. `save_score` moves it when — and only when —
-/// something changed.
-async fn score_stamp(pool: &sqlx::SqlitePool, score_id: &str) -> Result<String, AgentError> {
-    sqlx::query_scalar("SELECT updated_at FROM scores WHERE id = ?")
-        .bind(score_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|error| AgentError::Storage(error.to_string()))
-        .map(|stamp| stamp.unwrap_or_default())
+/// What a thread's turn edits that a tab shows.
+#[derive(Clone)]
+enum Document {
+    Score(String),
+    /// A venue's Perform set, by venue.
+    PerformSet(String),
+}
+
+impl Document {
+    fn of(thread: &AgentThread) -> Result<Option<Self>, AgentError> {
+        Ok(match thread.route().map_err(AgentError::Invalid)? {
+            ThreadRoute::Track { score_id, .. } => Some(Self::Score(score_id.to_owned())),
+            ThreadRoute::Perform { venue_id } => Some(Self::PerformSet(venue_id.to_owned())),
+            ThreadRoute::Venue { .. } | ThreadRoute::Unbound => None,
+        })
+    }
+
+    /// What moves when — and only when — something is saved: the score row's
+    /// `updated_at` (`save_score` touches it only on a change), or how many
+    /// patterns the set has with the newest of their stamps and the layout's.
+    async fn stamp(&self, pool: &sqlx::SqlitePool) -> Result<String, AgentError> {
+        let stamp = match self {
+            Self::Score(score_id) => {
+                sqlx::query_scalar("SELECT updated_at FROM scores WHERE id = ?")
+                    .bind(score_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+            Self::PerformSet(venue_id) => {
+                sqlx::query_scalar(
+                    "SELECT (SELECT count(*) || ' ' || coalesce(max(updated_at), '')
+                             FROM perform_patterns WHERE venue_id = ?1)
+                         || ' ' || coalesce(
+                             (SELECT updated_at FROM perform_layouts WHERE id = ?1), '')",
+                )
+                .bind(venue_id)
+                .fetch_optional(pool)
+                .await
+            }
+        };
+        stamp
+            .map_err(|error| AgentError::Storage(error.to_string()))
+            .map(Option::unwrap_or_default)
+    }
 }
 
 /// What a turn resolves once and every assistant row in it then reuses. Only
@@ -243,10 +280,10 @@ impl Turn {
             }
             _ => None,
         };
-        self.score = match detail.thread.score_id.clone() {
-            Some(score_id) => {
-                let stamp = score_stamp(&pool, &score_id).await?;
-                Some((score_id, stamp))
+        self.document = match Document::of(&detail.thread)? {
+            Some(document) => {
+                let stamp = document.stamp(&pool).await?;
+                Some((document, stamp))
             }
             None => None,
         };
@@ -707,11 +744,11 @@ impl Turn {
     }
 
     /// Close one assistant row: record how it ended, commit it, then say
-    /// whether the score moved.
+    /// whether the thread's document moved.
     ///
-    /// `save_score` touches the score row exactly when something changed, so a
-    /// moved `updated_at` is the one honest signal that the editor should
-    /// re-read — and a turn that only talked emits nothing.
+    /// A save touches the document's stamp exactly when something changed, so
+    /// a moved stamp is the one honest signal that the tab should re-read —
+    /// and a turn that only talked emits nothing.
     async fn close_row(
         &mut self,
         setup: &TurnSetup<'_>,
@@ -728,11 +765,11 @@ impl Turn {
         // closed once it is.
         transcript::apply(&mut self.transcript, &ended);
         self.commit(setup, assistant_id, true).await?;
-        if let Some((score_id, stamp)) = self.score.clone() {
+        if let Some((document, stamp)) = self.document.clone() {
             let pool = self.service.services().db().0.clone();
-            let current = score_stamp(&pool, &score_id).await?;
+            let current = document.stamp(&pool).await?;
             if current != stamp {
-                self.score = Some((score_id, current));
+                self.document = Some((document, current));
                 self.emit(TurnEvent::DocumentChanged);
             }
         }

@@ -185,6 +185,15 @@ pub struct TrackAudio {
 }
 
 impl TrackAudio {
+    /// A whole track's decoded audio, from its top.
+    #[must_use]
+    pub fn whole(samples: Arc<Vec<f32>>) -> Self {
+        Self {
+            samples,
+            start: 0.0,
+        }
+    }
+
     /// How loud the bass is at track time `t`: the peak, in full scale, of
     /// the last 50 ms through a 100 Hz low-pass (two poles, 12 dB/oct).
     pub fn bass_at(&self, t: f32) -> f32 {

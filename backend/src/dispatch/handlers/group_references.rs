@@ -1,5 +1,6 @@
-//! Repair selector names across a venue's scores.
+//! Repair selector names across a venue's scores and its Perform set.
 use crate::database::local::{
+    perform_set,
     scores::rows,
     venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource, Write},
 };
@@ -56,26 +57,47 @@ pub async fn missing_venue_groups(
         .into_iter()
         .map(|g| g.name)
         .collect();
-    let mut missing = BTreeMap::<String, Vec<String>>::new();
+    let mut missing = BTreeMap::<String, MissingGroup>::new();
+    let mut note = |name: String, add: &mut dyn FnMut(&mut MissingGroup)| {
+        let entry = missing.entry(name.clone()).or_insert_with(|| MissingGroup {
+            name,
+            scores: Vec::new(),
+            perform_patterns: Vec::new(),
+        });
+        add(entry);
+    };
     for (score_id, _) in score_ids(&mut access).await? {
         let score = rows::load_score(access.connection(), &score_id).await?;
         let mut value = serde_json::to_value(&score).map_err(|e| e.to_string())?;
         selectors(&mut value, &mut |expression| {
             for name in groups::selection_names(expression)? {
                 if !known.contains(&name) {
-                    let scores = missing.entry(name).or_default();
-                    if !scores.contains(&score_id) {
-                        scores.push(score_id.clone());
-                    }
+                    note(name, &mut |group| {
+                        if !group.scores.contains(&score_id) {
+                            group.scores.push(score_id.clone());
+                        }
+                    });
                 }
             }
             Ok(())
         })?;
     }
-    Ok(missing
-        .into_iter()
-        .map(|(name, scores)| MissingGroup { name, scores })
-        .collect())
+    for pattern in perform_set::list(&mut access).await? {
+        let mut value = serde_json::to_value(&pattern).map_err(|e| e.to_string())?;
+        selectors(&mut value, &mut |expression| {
+            for name in groups::selection_names(expression)? {
+                if !known.contains(&name) {
+                    note(name, &mut |group| {
+                        if !group.perform_patterns.contains(&pattern.id) {
+                            group.perform_patterns.push(pattern.id.clone());
+                        }
+                    });
+                }
+            }
+            Ok(())
+        })?;
+    }
+    Ok(missing.into_values().collect())
 }
 
 pub async fn resolve_venue_group(
@@ -109,15 +131,9 @@ pub async fn resolve_venue_group(
             "The replacement group no longer exists".into(),
         ));
     }
-    let scores = score_ids(&mut access).await?;
-    drop(access);
-    for (score_id, uid) in scores {
-        let mut access =
-            VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
-        let score = rows::load_score(access.connection(), &score_id).await?;
-        let mut value = serde_json::to_value(&score).map_err(|e| e.to_string())?;
+    let rename = |value: &mut Value| -> Result<bool, String> {
         let mut changed = false;
-        selectors(&mut value, &mut |expression| {
+        selectors(value, &mut |expression| {
             if groups::selection_names(expression)?
                 .iter()
                 .any(|name| name == &missing)
@@ -127,7 +143,29 @@ pub async fn resolve_venue_group(
             }
             Ok(())
         })?;
-        if !changed {
+        Ok(changed)
+    };
+    let mut set_changed = false;
+    for pattern in perform_set::list(&mut access).await? {
+        let mut value = serde_json::to_value(&pattern).map_err(|e| e.to_string())?;
+        if rename(&mut value)? {
+            let pattern =
+                serde_json::from_value(value).map_err(|e| CommandError::Invalid(e.to_string()))?;
+            perform_set::save(&mut access, pattern).await?;
+            set_changed = true;
+        }
+    }
+    let scores = score_ids(&mut access).await?;
+    access.commit().await?;
+    if set_changed {
+        services.perform.set_changed(&venue_id).await;
+    }
+    for (score_id, uid) in scores {
+        let mut access =
+            VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
+        let score = rows::load_score(access.connection(), &score_id).await?;
+        let mut value = serde_json::to_value(&score).map_err(|e| e.to_string())?;
+        if !rename(&mut value)? {
             continue;
         }
         let candidate: luma_patterns::Score =

@@ -6,7 +6,7 @@
 //! {
 //!   "schema_version": 1,
 //!   "revision": "r-<uuid>",
-//!   "agent_kind": "track_copilot" | "venue_rig",
+//!   "agent_kind": "track_copilot" | "venue_rig" | "perform_set",
 //!   "scope": { "track_id": ..., "venue_id": ..., "score_id": ...,
 //!              "window": {"start_s":..,"end_s":..} | null },
 //!   "root": <BindingValue>,
@@ -107,6 +107,8 @@ pub enum AgentKind {
     TrackCopilot,
     /// A venue route without an authored score.
     VenueRig,
+    /// A venue's Perform set: its patterns, layout and bindings.
+    PerformSet,
 }
 
 impl AgentKind {
@@ -115,6 +117,7 @@ impl AgentKind {
         match self {
             AgentKind::TrackCopilot => "track_copilot",
             AgentKind::VenueRig => "venue_rig",
+            AgentKind::PerformSet => "perform_set",
         }
     }
 
@@ -125,6 +128,7 @@ impl AgentKind {
         match value {
             "track_copilot" => Ok(AgentKind::TrackCopilot),
             "venue_rig" => Ok(AgentKind::VenueRig),
+            "perform_set" => Ok(AgentKind::PerformSet),
             other => Err(format!("unknown agent kind '{other}'")),
         }
     }

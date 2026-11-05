@@ -242,7 +242,7 @@ impl Lowering<'_> {
             Kind::Space => self.space(id)?,
             Kind::Random => self.random(id)?,
             Kind::Audio => self.audio(id)?,
-            Kind::Control => self.control(id),
+            Kind::Control | Kind::Button => self.live(id),
             Kind::Curve => self.curve(id)?,
             Kind::Math => self.math(id)?,
             Kind::Value => match self.node(id).inputs.get("value") {
@@ -523,15 +523,16 @@ impl Lowering<'_> {
         })
     }
 
-    /// A live control's value, 0–1 and the same at every head.
-    fn control(&mut self, id: &str) -> Lowered {
-        let name = self.node(id).setting("name").unwrap_or_default();
+    /// A fader or button node's value, 0–1 and the same at every head: the
+    /// `control` kernel at the node's place among the graph's live inputs.
+    fn live(&mut self, id: &str) -> Lowered {
         let index = self
             .graph
-            .controls()
+            .nodes
             .iter()
-            .position(|known| *known == name)
-            .expect("every control node's name is among the graph's controls");
+            .filter(|(_, node)| node.kind.is_live())
+            .position(|(known, _)| known == id)
+            .expect("a live node is among the graph's live inputs");
         let value = self.library_node("control", vec![("index", number(index as f64))]);
         Lowered {
             parts: std::array::from_fn(|_| output(&value, "value")),

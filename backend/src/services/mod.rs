@@ -26,6 +26,7 @@ pub mod graph_scores;
 pub mod group_derivation;
 pub mod groups;
 pub mod patch;
+pub(crate) mod perform_set;
 pub mod stage_ops;
 pub mod tracks;
 pub mod waveforms;

@@ -210,6 +210,23 @@ impl VenueGeometry {
         (scene, definitions)
     }
 
+    /// [`Self::scene`] as a show: the look this device's stage uses, at full
+    /// quality, without the editor's grid and gizmos. What a recording draws.
+    #[must_use]
+    pub fn show_scene(
+        &self,
+        settings: &crate::settings::AppSettings,
+    ) -> (scene_desc::Scene, BTreeMap<String, scene_desc::Definition>) {
+        let (mut scene, definitions) = self.scene();
+        let render = &mut scene.render;
+        render.look = scene_desc::Look::stored(&settings.stage_look);
+        render.quality = scene_desc::Quality::High;
+        render.geometry_shadows = true;
+        render.show_grid = false;
+        render.show_gizmos = false;
+        (scene, definitions)
+    }
+
     /// World position of the DJ booth, if this room has one.
     ///
     /// A `cdj` beats a `mixer` because a booth with decks in it is where the
@@ -468,9 +485,12 @@ pub fn render_rgba(
         definitions,
         shot.lasers,
         meshes_root,
-        shot.view,
+        Aim::View(shot.view),
         shot.booth,
-        shot.size,
+        (
+            shot.size.0.clamp(1, MAX_DIMENSION),
+            shot.size.1.clamp(1, MAX_DIMENSION),
+        ),
     )?;
     let (width, height) = sequence.size();
     // A still is one moment; nothing before it is its predecessor.
@@ -500,14 +520,14 @@ pub enum Continuity {
 
 /// A venue installed on the render thread, ready to be lit repeatedly.
 ///
-/// One still is one install and one [`frame`](Self::frame); a recording is one
-/// install and nine thousand. The distinction matters because the scene
-/// description and the definition table are the large half of a frame request
-/// and neither depends on `t` — sending them per frame would clone the whole
-/// room nine thousand times.
+/// One still is one install and one [`frame`](Self::frame); an animated
+/// preview is one install and a frame per tick. The distinction matters
+/// because the scene description and the definition table are the large half
+/// of a frame request and neither depends on `t` — sending them per frame
+/// would clone the whole room every tick.
 ///
-/// The camera is fitted at install: framing is a function of the geometry and
-/// the aspect ratio, not of the clock.
+/// The camera is settled at install: a named view is fitted to the geometry at
+/// the aspect ratio, and neither depends on the clock.
 ///
 /// Dropping uninstalls. Several sequences may be installed at once, so an
 /// agent's still does not evict a recording in progress — though it does wait
@@ -517,10 +537,46 @@ pub struct Sequence {
     size: (u32, u32),
 }
 
+/// Where a sequence is seen from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Aim {
+    /// A named view, fitted to the rig at the frame's aspect ratio.
+    View(View),
+    /// A camera exactly as the stage holds it — what its "Export camera"
+    /// writes as `orbit`.
+    Camera(Camera),
+}
+
+impl Aim {
+    /// The camera this aim sees `scene` through in a `size` frame. `booth` is
+    /// where the DJ stands; only [`View::Dj`] reads it.
+    #[must_use]
+    pub fn camera(
+        self,
+        scene: &scene_desc::Scene,
+        definitions: &BTreeMap<String, scene_desc::Definition>,
+        booth: Option<Vec3>,
+        size: (u32, u32),
+    ) -> Camera {
+        match self {
+            Self::View(view) => {
+                // No chrome over a headless frame, so the fit gets the whole
+                // of it — except outdoors, where the top of the frame belongs
+                // to the sky.
+                let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1.max(1) as f32)
+                    .open_air(scene.render.sky.is_some());
+                Camera::for_view(view, &scene.framing(definitions), booth, &viewfinder)
+            }
+            Self::Camera(camera) => camera,
+        }
+    }
+}
+
 impl Sequence {
-    /// Install `scene` at a fixed size and view.
+    /// Install `scene` at a fixed size and aim. `booth` is where the DJ
+    /// stands; only [`View::Dj`] reads it.
     ///
-    /// Both sides of `size` are clamped to [`MAX_DIMENSION`]; the size actually
+    /// Both sides of `size` are at least one pixel; the size actually
     /// installed is [`Sequence::size`].
     ///
     /// # Errors
@@ -530,20 +586,12 @@ impl Sequence {
         definitions: BTreeMap<String, scene_desc::Definition>,
         lasers: crate::laser::LaserRig,
         meshes_root: PathBuf,
-        view: View,
+        aim: Aim,
         booth: Option<Vec3>,
         size: (u32, u32),
     ) -> Result<Self, String> {
-        let size = (
-            size.0.clamp(1, MAX_DIMENSION),
-            size.1.clamp(1, MAX_DIMENSION),
-        );
-        let framing = scene.framing(&definitions);
-        // No chrome over a headless frame, so the fit gets the whole of it —
-        // except outdoors, where the top of the frame belongs to the sky.
-        let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1 as f32)
-            .open_air(scene.render.sky.is_some());
-        let camera = Camera::for_view(view, &framing, booth, &viewfinder);
+        let size = (size.0.max(1), size.1.max(1));
+        let camera = aim.camera(&scene, &definitions, booth, size);
 
         let id = NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         jobs()
@@ -588,7 +636,7 @@ impl Sequence {
     }
 
     /// One frame of `state` drawn at `moment`, tightly packed sRGB RGBA8.
-    /// Blocks until it is back. The moment is what live and the show export
+    /// Blocks until it is back. The moment is what live and recordings
     /// draw a frame at ([`footage::moment`]): its strobes flash when a flash
     /// begins in its slice of the clock.
     ///

@@ -197,13 +197,13 @@ globalThis.nav = {
 	// graph page, which puts it where the timeline was. Once the inspector
 	// shows the clip.
 	graphPage() {
-		const shot = until("the graph canvas", (s) => s.find({ role: "card", label: "Clip graph" }));
-		const before = shot.find({ role: "card", label: "Clip graph" }).bounds.width;
+		const shot = until("the graph canvas", (s) => s.find({ role: "card", label: "Pattern graph" }));
+		const before = shot.find({ role: "card", label: "Pattern graph" }).bounds.width;
 		nav.direct();
 		app.action("luma::OpenClipGraph");
 		until("the graph page", (s) =>
 			s.find({ role: "button", label: "Back to timeline" })
-				&& s.find({ role: "card", label: "Clip graph" })?.bounds.width > before);
+				&& s.find({ role: "card", label: "Pattern graph" })?.bounds.width > before);
 		app.frames(4);
 	},
 

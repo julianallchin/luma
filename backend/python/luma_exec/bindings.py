@@ -8,7 +8,7 @@ Manifest shape (C1, abridged):
     {
       "schema_version": 1,
       "revision": "r-<uuid>",
-      "agent_kind": "track_copilot" | "venue_rig",
+      "agent_kind": "track_copilot" | "venue_rig" | "perform_set",
       "scope": {"track_id":..., "window": {"start_s":..,"end_s":..} | null, ...},
       "root": <BindingValue>,
       "artifacts": {"<id>": {"kind","encoding","rel_path","byte_len",...}}
@@ -48,7 +48,7 @@ from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 
-from .host_errors import VenueRefused
+from .host_errors import PerformRefused, VenueRefused
 
 # ---------------------------------------------------------------------------
 # constants
@@ -654,6 +654,8 @@ class LumaNamespace(LumaRecord):
     #: than a binding, so it is reachable on an empty namespace and does not
     #: show up in `catalog()` as a thing to read.
     VenueRefused = VenueRefused
+    #: The one exception a `luma.perform` verb raises, for the same reason.
+    PerformRefused = PerformRefused
 
     def __init__(
         self,
@@ -731,6 +733,8 @@ class LumaNamespace(LumaRecord):
             'Discover: luma.catalog("venue") or luma.catalog("features"); depth=None expands a full subtree.',
             "API: inspect.signature(verb), inspect.getdoc(verb). With a track open, luma.track.nodes() lists node definitions.",
         ])
+        if manifest.get("agent_kind") == "perform_set" and selected in ("luma", "luma.perform"):
+            out.append("Perform: describe() shows the pages and patterns; add(), update(), place(), move() change them; live() shows what plays.")
         if scope.get("venue_id") and selected in ("luma", "luma.venue"):
             out.append("Venue: describe()/nodes()/extent() measure live geometry; groups() lists exact selections; render() shows it.")
             out.append("Build: place(), cursor.add(), distribute(); catalog() lists pieces; fixture_library(query) finds lights.")
@@ -941,6 +945,13 @@ def build_namespace(
             workspace=workspace,
         )
 
+    # A Perform thread's set: the binding record plus the verbs that change it.
+    perform_values = items.get("perform")
+    if isinstance(perform_values, LumaRecord):
+        from .perform import Perform
+
+        items["perform"] = Perform(perform_values, host_call=host_call)
+
     # The manifest envelope is authoritative for meta/window: `revision`,
     # `schema_version` and `agent_kind` always come from the top level, and the
     # window always mirrors scope.window. Anything else the provider put under
@@ -978,7 +989,8 @@ def build_namespace(
 
 
 def reconcile_facades(namespace, previous):
-    """Refresh live score/venue facades without mutating cached snapshots."""
+    """Refresh live score/venue/Perform facades without mutating cached snapshots."""
+    from .perform import Perform
     from .score import GraphTrack
     from .venue import Venue
 
@@ -1017,6 +1029,18 @@ def reconcile_facades(namespace, previous):
         else:
             items["venue"] = Venue(snapshot._values, host_call=snapshot._host_call,
                                    figures=snapshot._figures, workspace=snapshot._workspace)
+    snapshot = namespace.get("perform")
+    before = previous.get("perform") if previous is not None else None
+    same_set = (isinstance(before, Perform) and before._active
+                and isinstance(snapshot, Perform) and before.id == snapshot.id)
+    if isinstance(before, Perform) and not same_set:
+        before._revoke()
+    if isinstance(snapshot, Perform):
+        if same_set:
+            before._refresh(snapshot)
+            items["perform"] = before
+        else:
+            items["perform"] = Perform(snapshot._values, host_call=snapshot._host_call)
     # Cache entries keep their original document/revision/records. Reinstalling
     # an earlier manifest after undo refreshes from it, never from a live alias.
     return LumaNamespace(items, namespace.manifest, namespace.store)

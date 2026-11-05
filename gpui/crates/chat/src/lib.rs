@@ -1269,6 +1269,7 @@ impl AgentChat {
             None => TurnContext {
                 scope: self.subject.clone(),
                 editor: None,
+                perform: None,
             },
         }
     }
