@@ -1754,10 +1754,36 @@ async fn relaunch(fixture: &Fixture) {
         .expect("recovered");
 }
 
+/// The script's first step, then a model that never answers: the quit lands
+/// while the second step waits on the network. A scripted second step would
+/// be ready in the same poll that emits `StepStarted`, and the turn could
+/// finish before the reader saw the event and dropped it.
+struct ThenSilent(ScriptedModel, std::sync::atomic::AtomicBool);
+
+impl super::model::ModelClient for ThenSilent {
+    fn stream(
+        &self,
+        request: super::model::ModelRequest,
+    ) -> futures_util::stream::BoxStream<'static, Result<ModelEvent, super::model::ModelError>>
+    {
+        if self.1.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            futures_util::stream::pending().boxed()
+        } else {
+            self.0.stream(request)
+        }
+    }
+}
+
 /// Run a turn until the step after the first tool result starts, then drop
 /// it — what a quit does. Nothing after the drop can write.
 async fn quit_after_the_tool_result(fixture: &Fixture) {
-    let service = agent(fixture, tool_then_reply());
+    let first = tool_then_reply().into_iter().take(1).collect();
+    let service = AgentService::new(fixture.services.clone())
+        .with_model(Arc::new(ThenSilent(
+            ScriptedModel::new(first),
+            std::sync::atomic::AtomicBool::new(false),
+        )))
+        .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
     let mut stream = service.turn(&fixture.thread_id, "make it dark".to_string().into());
     let mut ended = false;
     while let Some(event) = stream.next().await {
