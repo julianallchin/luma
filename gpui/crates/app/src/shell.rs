@@ -81,6 +81,9 @@ pub(crate) enum Overlay {
     /// see [`crate::confirm`]. Unboxed because it is a few strings and an
     /// enum, and it is the *smallest* variant here rather than the largest.
     Confirm(confirm::Confirm),
+    /// A downloaded update: relaunch into it now, or let the next launch run
+    /// it — see [`crate::update`].
+    UpdateReady(crate::update::Ready),
     GroupRepair(patch::groups::Repair),
     /// Rendering the open score to a video file. Boxed like the rest: it
     /// carries paths, names and the running export.
@@ -100,6 +103,7 @@ impl Overlay {
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
             Self::InsertPattern(_) => keymap::context::PATTERN_INSERT,
             Self::Confirm(_) => keymap::context::CONFIRM,
+            Self::UpdateReady(_) => keymap::context::UPDATE_READY,
             Self::GroupRepair(_) => keymap::context::ROOT,
             Self::ShowExport(_) => keymap::context::SHOW_EXPORT,
         }
@@ -1504,6 +1508,17 @@ fn overlay_layer(
                 app.dialog_last_focus.is_focused(window),
             ),
             "Confirm dialog",
+        ),
+        Overlay::UpdateReady(state) => (
+            crate::update::render(
+                state,
+                entity,
+                &app.dialog_first_focus,
+                app.dialog_first_focus.is_focused(window),
+                &app.dialog_last_focus,
+                app.dialog_last_focus.is_focused(window),
+            ),
+            "Update ready dialog",
         ),
     };
     // A running export is closed by its own Cancel, never by a stray click.

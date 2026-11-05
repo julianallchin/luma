@@ -72,6 +72,8 @@ pub(crate) mod context {
     pub const PATTERN_INSERT: &str = "PatternInsert";
     /// The one confirmation dialog — see [`crate::confirm`].
     pub const CONFIRM: &str = "Confirm";
+    /// "An update is ready" — see [`crate::update`].
+    pub const UPDATE_READY: &str = "UpdateReady";
     /// The "Export show" dialog — see [`crate::export_dialog`].
     pub const SHOW_EXPORT: &str = "ShowExport";
     /// The full-screen sign-in state. Not in [`DIALOGS`]: it is not a plane
@@ -86,7 +88,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 9] = [
+    pub const DIALOGS: [&str; 10] = [
         VENUES,
         SETTINGS,
         ADD_TRACKS,
@@ -95,6 +97,7 @@ pub(crate) mod context {
         FIXTURE_PICKER,
         PATTERN_INSERT,
         CONFIRM,
+        UPDATE_READY,
         SHOW_EXPORT,
     ];
     /// Declared by a focused field that is taking typed text. Any binding on

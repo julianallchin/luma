@@ -797,19 +797,17 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         channel => format!(" ({})", channel.label()),
     };
     let (button, status) = crate::update::about(shell, app);
-    vec![
-        field(
-            None,
-            luma_ui::caption(format!("Luma v{}{channel}", luma_lib::VERSION)).into_any_element(),
-            None,
-        ),
-        field(None, button, status.as_deref()),
-        field(
-            None,
-            checkbox(app, "auto_update", "Update automatically", values.auto_update),
-            Some("Checks for a new release every hour and installs it in the background. It takes effect after a restart."),
-        ),
-    ]
+    let version = luma_ui::caption(format!("Luma v{}{channel}", luma_lib::VERSION));
+    let mut rows = vec![field(None, version.into_any_element(), status.as_deref())];
+    if let Some(button) = button {
+        rows.push(field(None, button, None));
+    }
+    rows.push(field(
+        None,
+        checkbox(app, "auto_update", "Update automatically", values.auto_update),
+        Some("Checks for a new release every hour and downloads it in the background. When it is ready, Luma asks whether to relaunch now; otherwise it runs the next time you open Luma."),
+    ));
+    rows
 }
 
 // -- the pieces every section is built from -----------------------------------

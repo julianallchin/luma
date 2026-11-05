@@ -1,17 +1,21 @@
-//! Self-update in the window: the hourly poll, the sidebar's "Restart to
-//! update" row, and the About section's controls.
+//! Self-update in the window: the hourly poll, the "update ready" dialog, the
+//! sidebar's "Restart to update" row, and the About section's controls.
 //!
 //! The work is [`luma_update::Updater`]'s, on a thread of its own; this module
 //! mirrors its status onto [`Luma`] and draws it, the way Zed's title bar
-//! draws its `AutoUpdater`. A finished update waits on disk until the user
-//! restarts — the app is never restarted under someone mid-show.
+//! draws its `AutoUpdater`. Checking, downloading and installing are silent.
+//! Once the new version is on disk, one dialog says so: relaunch now, or
+//! later. The install has already replaced the old tree, so "later" means the
+//! next launch runs the new version. The app is never restarted under someone
+//! mid-show; only the button restarts it.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::float::{self, RowState};
+use luma_ui::glass;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::Enabled;
@@ -32,6 +36,14 @@ pub(crate) struct AutoUpdate {
     enabled: Option<bool>,
     /// Whether this app polls at all — see [`Luma::watch_updates`].
     polling: bool,
+    /// The version the ready dialog was raised for, so that a status the
+    /// updater reports twice raises it once.
+    announced: Option<String>,
+}
+
+/// The "update ready" dialog's state, in [`crate::shell::Overlay::UpdateReady`].
+pub(crate) struct Ready {
+    version: SharedString,
 }
 
 impl AutoUpdate {
@@ -42,6 +54,7 @@ impl AutoUpdate {
             updater,
             enabled: None,
             polling: false,
+            announced: None,
         }
     }
 }
@@ -61,6 +74,7 @@ impl Luma {
                 if this
                     .update(cx, |this, cx| {
                         this.update.status = status;
+                        this.announce_update(cx);
                         cx.notify();
                     })
                     .is_err()
@@ -104,9 +118,26 @@ impl Luma {
         }
     }
 
-    fn check_for_updates(&mut self, cx: &mut Context<Self>) {
-        self.update.updater.check(true);
+    /// Raise the ready dialog the first time a version is on disk. A dialog
+    /// already up is left alone: the sidebar's row still offers the restart.
+    fn announce_update(&mut self, cx: &mut Context<Self>) {
+        let Status::Updated { version, .. } = &self.update.status else {
+            return;
+        };
+        if self.update.announced.as_ref() == Some(version) || self.overlay.as_open().is_some() {
+            return;
+        }
+        self.update.announced = Some(version.clone());
+        let version = version.clone().into();
+        self.overlay
+            .open(crate::shell::Overlay::UpdateReady(Ready { version }));
         cx.notify();
+    }
+
+    /// The dialog's "Relaunch now".
+    fn relaunch_from_dialog(&mut self, cx: &mut Context<Self>) {
+        self.close_overlay(cx);
+        self.restart_to_update(cx);
     }
 
     /// Relaunch into the installed update. gpui waits for this process to
@@ -166,11 +197,12 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
     )
 }
 
-/// What the About section says about updates, and the button that fits it.
-pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (AnyElement, Option<String>) {
-    let updater = &shell.update.updater;
+/// What the About section says about updates, and the restart button once
+/// one is installed. There is no "Check for Updates": checking and downloading
+/// happen on their own.
+pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Option<String>) {
     let status = &shell.update.status;
-    let help = match (updater.unavailable(), status) {
+    let help = match (shell.update.updater.unavailable(), status) {
         (Some(reason), _) => Some(reason.to_string()),
         (None, Status::Checking) => Some("Checking for updates…".into()),
         (None, Status::Downloading { version }) => Some(format!("Downloading {version}…")),
@@ -182,24 +214,91 @@ pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (AnyElement, Option<Str
         (None, Status::Errored(error)) => Some(format!("Could not update: {error}")),
         (None, Status::Idle) => None,
     };
-    let button = if matches!(status, Status::Updated { .. }) {
+    let button = matches!(status, Status::Updated { .. }).then(|| {
         let restart = app.clone();
         luma_ui::button("Restart to Update", Enabled::Yes)
             .id("settings-restart-to-update")
             .on_click(move |_, _, cx| restart.update(cx, |this, cx| this.restart_to_update(cx)))
             .agent_node(Role::Button, "Restart to Update")
-    } else {
-        let pressable = updater.unavailable().is_none() && !status.busy();
-        let check = app.clone();
-        luma_ui::button("Check for Updates", Enabled::from(pressable))
-            .id("settings-check-for-updates")
-            .when(pressable, |button| {
-                button.on_click(move |_, _, cx| {
-                    check.update(cx, |this, cx| this.check_for_updates(cx))
-                })
-            })
-            .agent_node(Role::Button, "Check for Updates")
-            .agent_disabled(!pressable)
-    };
-    (button.into_any_element(), help)
+            .into_any_element()
+    });
+    (button, help)
+}
+
+/// The ready dialog: what is ready, and the two answers.
+pub(crate) fn render(
+    state: &Ready,
+    app: &Entity<Luma>,
+    later_focus: &FocusHandle,
+    later_focused: bool,
+    relaunch_focus: &FocusHandle,
+    relaunch_focused: bool,
+) -> AnyElement {
+    let title: SharedString = format!("Luma {} is ready", state.version).into();
+    let body: SharedString =
+        "The update has downloaded. Relaunch to use it now, or it starts the next time you open Luma."
+            .into();
+    let later = app.clone();
+    let relaunch = app.clone();
+    let card = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .justify_between()
+        .p(px(20.))
+        .gap(px(16.))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .text_color(glass::ink(0.95))
+                        .child(title.clone())
+                        .agent_node(Role::Text, title),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(glass::ink(0.6))
+                        .child(body.clone())
+                        .agent_node(Role::Text, body),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_end()
+                .gap(px(8.))
+                .child(
+                    float::btn("Later", "update-later")
+                        .id("update-later")
+                        .track_focus(later_focus)
+                        .tab_stop(true)
+                        .on_click(move |_, _, cx| {
+                            later.update(cx, |this, cx| this.close_overlay(cx));
+                        })
+                        .agent_node(Role::Button, "Later")
+                        .agent_focused(later_focused),
+                )
+                .child(
+                    float::btn_primary("Relaunch now")
+                        .id("update-relaunch")
+                        .track_focus(relaunch_focus)
+                        .tab_stop(true)
+                        .on_click(move |_, _, cx| {
+                            relaunch.update(cx, |this, cx| this.relaunch_from_dialog(cx));
+                        })
+                        .agent_node(Role::Button, "Relaunch now")
+                        .agent_focused(relaunch_focused),
+                ),
+        );
+    morph::fixed_card(
+        "Update ready dialog",
+        MorphSize::new(400.0, 176.0),
+        card.into_any_element(),
+    )
 }
