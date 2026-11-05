@@ -1,40 +1,83 @@
 ---
-title: Forms and Presets
-description: "What a clip plays: a shipped form, with a value for each input."
+title: Clips and Presets
+description: "What a clip plays: its own small graph of nodes, often started from a shipped preset."
 ---
 
-# Forms and Presets
+# Clips and Presets
 
-A clip plays one **form**. A form is a shipped graph with a fixed set of inputs. The clip holds a value for every input of its form. A named look, such as Chase or Rainbow, is a **preset**: saved input values of one form.
+Every clip owns one small **graph**. The graph says what the clip does to the lights: which color, which pattern across the lights, where moving heads point, how a strobe runs. A **preset** is a shipped graph with a name and a blend mode, such as Chase or Rainbow. Adding a preset copies its graph into the new clip. After that the clip's graph is its own: editing it never changes the preset or another clip.
 
-## Forms
+Live patterns on the [Perform](/docs/user-guide/performing) tab are graphs too, and edit the same way.
 
-| Form | What it does |
-|------|--------------|
-| `color@1` | One color. Color and brightness are fixed, over time, per hit, across space, or a stroke that travels across space (a chase) |
-| `color.sparkle@1` | Each event lights a random share of the heads |
-| `color.noise@1` | Soft brightness that wanders across space and time |
-| `strobe.constant@1` | Fixture shutter strobe at Rate × Alpha |
-| `aim@1` | Points moving heads: a base aim, a fan across the axis and a motion shape |
+## Add a Clip
 
-The id of a form never changes meaning. A new meaning is a new version.
+Click **Add pattern** in the track editor, or right-click the timeline. The **Insert pattern** dialog opens:
 
-Every form has an **Alpha** input. Alpha is how much the clip counts. For light it multiplies the clip's brightness. For aim in Replace blend it is the blend toward the clip's aim. For aim in Offset blend it scales the fan and motion degrees.
+- It lists the shipped presets, then three blank starts: **Color**, **Aim** and **Strobe**. A blank start is a graph with only its output node.
+- Type to search. Use ↑ and ↓ to move and ↵ to insert.
+- The right side plays a looping preview of the highlighted preset on the venue.
 
-## Input Values
+The new clip starts at the playhead and lasts one bar, or fills the span you selected on the timeline.
 
-An input takes a fixed value, or a **source** where the form allows it:
+When no clip is selected, the inspector shows the **preset browser** instead. It groups the presets by output: Color, Aim, Strobe and Laser. Each row has a strip of the preset: time across, heads down. Click a row to place the preset at the playhead on the selected lane, or drag it onto the timeline. While the pointer is over a row, the stage plays the preset alone as a two-bar loop. The score does not change. On the Perform tab, a click starts a new pattern from the preset.
 
-| Source | Meaning |
-|--------|---------|
-| Fixed | One value, on all heads, for the whole clip |
-| Over time | One curve over the whole clip, all heads equal |
-| Per hit | One curve over the life of each hit |
-| Random | A new value every few beats that jumps or glides there. Random gives a value, Shuffle gives an order |
-| Audio | The energy of one frequency range of the track's full mix |
-| Space | Values along an axis of the heads: a gradient for a color, a curve for brightness |
+The [preset reference](/docs/node-reference/presets) lists every shipped preset.
 
-On a color, Over time and Per hit can read a gradient. A curve gives the position in the gradient over the clip or over each hit. This is a color fade; with **Every** set, it repeats every few beats, as in Rainbow.
+## The Graph
+
+A graph has 1 to 64 nodes. Exactly one node is the **output**: color, aim, strobe or laser. The output decides what the clip drives and which blend modes it can use. The other nodes feed it:
+
+| Nodes | What they give |
+|-------|----------------|
+| Time, Space, Along, Random, Audio, Fader, Button | A raw coordinate at each head: a clock, a place on a ruler across the heads, a random value, the level of a frequency band, a live control |
+| Curve, Math, Value | A number, a vector or a color. A curve is the only node that turns a coordinate into a value |
+| Mirror, Shuffle, Group, Split | A changed set of heads: folded, in a random order, merged into units, or split into spans |
+| Figure | A laser figure, for a laser output |
+
+An input holds a value, a wire from another node, or nothing. An empty input has a meaning of its own, such as "once over the clip" or "best fit". A choice, such as a space's kind, is a setting on the node.
+
+The [node reference](/docs/node-reference) lists every node kind with its inputs, units, ranges and empty values.
+
+### Example: Chase
+
+The Chase preset has five nodes:
+
+1. `t`, a **Time** node with every 2: a clock that runs 0 to 1 every 2 beats.
+2. A **Curve** over `t` that ramps from −0.2 to 1.
+3. `place`, a **Space** node along the heads. The curve moves its `shift`, and its `scale` is 0.2, so a window a fifth of the heads wide slides across them.
+4. A **Curve** over `place` shaped as a pill: 1 inside 0–1, 0 outside.
+5. A **Color** output whose brightness is that curve.
+
+In Python it reads:
+
+```python
+t = time(every=2)
+place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
+color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))
+```
+
+## Edit a Graph
+
+Select a clip to open its graph. In **Program** view the inspector under the stage shows it. In **Direct** view a double-click on a clip shows its graph in place of the timeline. Above the graph are the clip's **Name**, **Selection** and **Blend**.
+
+The graph is a canvas of node cards. Sources are on the left and the output is on the right. The layout is automatic: the same graph always looks the same. Each card shows the node's settings and one row per input. A value input shows its control. A wired input shows a port, and the wire says where its value comes from. Each wire takes the color of what it carries.
+
+Each input row has a **source chip**. It reads **Value** when the input holds a value. Pick another source to wire one in:
+
+- A number, vector or color input offers **Value**, **Over time**, **Over space**, **Random**, **Audio**, **Fader** and **Button**. Picking one adds that node and a curve that maps it to the input's range. **Math** multiplies what the input holds by a new factor. A laser figure's inputs also offer **Along each element**.
+- A heads input offers **All**, **Mirror**, **Shuffle**, **Group** and **Split**.
+- **Link…** wires the input to a node already in the graph, so two inputs share it.
+
+On the canvas:
+
+- **Add node**, or a right-click on the canvas, adds a node. It joins the graph once its output is wired.
+- Drag from an output port onto an input port to wire them. An input that cannot take the wire refuses it with a message.
+- Drag a wire off an input and drop it on nothing to unwire it. The input goes back to a value.
+- Double-click a card's title, or right-click the card and pick **Rename**, to rename a node.
+- The card's ×, **Delete** in its menu, or the Delete key removes a node. Each input it fed goes back to a value.
+- The wheel, a pinch, or `+` and `-` zoom. A trackpad scroll or a drag on the ground pans. `0` is actual size, and **Fit** brings the whole graph back into view.
+
+A drag is one undo step. The timeline shows each clip as its name and a one-line summary of its graph, such as `line · every 2`. The clip's fade handles on the timeline edit its output's alpha.
 
 ## Colors
 
@@ -42,26 +85,9 @@ Luma keeps colors in Rec. 2020, a wider range than a screen's sRGB. LED fixtures
 
 A fixture or a screen that cannot make a color shows the nearest color it can make. That color has the same hue and lightness, with less saturation.
 
-## Space and chases
+## Agents
 
-A Space source has an **axis**: the source (X, Y, Z, order, radial, angle or random), the span (the selection, each fixture or each group), an optional mirror, and a plane for radial and angle. Each head reads the gradient or the curve at its position on the axis. The Gradient preset is a Space gradient on color.
-
-Brightness can also **move**. Then its curve is one stroke, from the tail (0) to the head (1), and the stroke travels along the axis once per hit of **Every**. Heads outside a stroke are dark. The movement sets:
-
-- **Path**: where the stroke is over its life. A backward path runs the other way.
-- **Travel**: beats for one stroke to cross the axis. 0 is the whole clip.
-- **Width**: the size of the stroke, a share of the axis or of the gap between strokes.
-- **Boundary**: Clip (a stroke enters and leaves fully) or Wrap.
-
-Chase, Wave, Ripple, Spin, Bounce, Alternating sides, Stepped chase and Grow are presets of a moving brightness. While brightness moves, Per hit sources on the other inputs follow each stroke.
-
-## Add a Clip
-
-Open the picker in the track editor. It lists the presets. Choose one. Luma copies its values into a new clip. Edit the inputs in the clip inspector.
-
-Layers combine forms. Often one clip is enough: for a rainbow that chases, give color a gradient over time and give brightness a moving Space source.
-
-The [node reference](/docs/node-reference/forms) shows the inputs of each form.
+The chat writes graphs as Python, with one builder per node kind: `time()`, `space()`, `curve()`, `color()` and so on. A node's name in the code is its name on the card. Ask the chat for a look, and it adds or changes clips with these graphs. The [node reference](/docs/node-reference#python) shows each builder.
 
 ## Next Steps
 
