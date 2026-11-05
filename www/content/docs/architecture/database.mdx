@@ -14,8 +14,8 @@ File: `backend/src/database/local/database.rs`
 - The database uses WAL journal mode and foreign keys.
 - `open_app_db_at` runs the migrations and opens the pool that the app writes
   through.
-- Every pooled connection gets TEMP triggers. One set writes the PowerSync
-  upload queue. One set writes the `changes` log.
+- Every pooled connection gets TEMP triggers that write the PowerSync upload
+  queue (`backend/src/sync/triggers.rs`).
 
 ## Migrations
 
@@ -48,15 +48,15 @@ The list is `SYNCED_TABLES` in `backend/src/sync/schema.rs`:
 | Venues | `venues`, `venue_members`, `venue_nodes`, `venue_node_params`, `venue_constraints` |
 | Fixtures and groups | `fixtures`, `fixture_groups`, `fixture_group_members` |
 | Tracks | `tracks`, `track_beats`, `track_roots`, `track_stems`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, `track_beat_validations` |
-| Scores | `scores`, `clips`, `drafts` |
-| MIDI | `midi_modifiers`, `midi_bindings` |
+| Scores | `scores`, `clips`, `drafts`, `folders`, `folder_tracks` |
+| Lasers | `laser_zones`, `laser_limits` |
+| Perform | `perform_patterns`, `perform_layouts` |
 | Agents | `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` |
-| History | `changes` |
 
-Local-only tables include `settings`, `dmx_routes`,
+Local-only tables include `settings`, `dmx_routes`, `control_bindings`
+(MIDI and OSC bindings belong to the computer),
 `preprocessing_failures`, `track_waveforms` and `track_mert`. Some
-columns of synced tables are also local, such as `tracks.file_path` and
-`venues.controller_port`.
+columns of synced tables are also local, such as `tracks.file_path`.
 
 ### Scores as rows
 
@@ -75,17 +75,12 @@ anything else is refused. Migration
 `implementations`, `cues` and `pattern_categories` tables. Migration
 `20260923200000_drop_score_definitions.sql` dropped `score_definitions`.
 
-## Change log
+## History
 
-The TEMP triggers add one row to `changes` for every insert, update and delete
-on a synced table:
-
-`changes(id, uid, table_name, row_id, op, before_json, after_json, actor, at, created_at, updated_at)`
-
-- `changes` itself is not logged.
-- An update that only changes `updated_at` is not logged.
-- Rows that sync downloads are not logged, because the sync connection has no
-  TEMP triggers.
+History is the server's. A Postgres trigger records each authored row as it
+arrives (`supabase/migrations/20260924000000_server_history.sql`), with its
+`actor`: `user:<uid>` for a person, or a model id for an agent. The client
+sends an agent's actor with the write. Devices keep no change log.
 
 ## Drafts
 

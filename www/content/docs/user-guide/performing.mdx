@@ -1,33 +1,55 @@
 ---
 title: Perform
-description: Live performance with DJ hardware and Art-Net output.
+description: Live performance with DJ software, live patterns, MIDI and OSC, and Art-Net output.
 ---
 
 # Perform
 
-<Callout type="warn">
-Perform is not yet available in the native app. The backend for live performance exists. The native Perform view will come in a later version.
-</Callout>
-
-This page describes the perform backend and the Art-Net output that is available now.
+Each venue has a **Perform** tab. Open it from the venue's row in the sidebar
+or from the new-tab box. Closing the tab does not stop anything: Luma keeps
+following the decks and keeps every value.
 
 ## Deck Sources
 
-The backend reads deck state from two protocols. Both can run at the same time as a MIDI mixer.
+Luma follows one DJ source at a time:
 
 | Source | Hardware | Notes |
 |--------|----------|-------|
+| **Rekordbox** | rekordbox on this computer | Read through [rkbx_link](https://github.com/grufkork/rkbx_link) over OSC. Turn on `osc.msg.n/time` in rkbx_link's config; it is off by default. Load tracks after Luma starts listening. |
+| **Pro DJ Link** | Pioneer CDJs | To connect, Luma claims a virtual player number. That number must not be the number of a real deck on the network. |
 | **StageLinQ** | Denon DJ / Engine DJ | Luma listens for devices and reads deck telemetry. |
-| **Pro DJ Link** | Pioneer CDJs | Discovery listens for CDJ keepalives for 3 seconds. To connect, Luma claims a virtual player number. That number must not be the number of a real deck on the network. |
 
-The backend matches the track that a deck loads against the library.
+Luma matches the track each deck loads against the library and plays that
+track's scores for the venue. Each deck renders its own layer at its own time,
+and the layers blend by deck volume. Between reports from the source, Luma
+runs each deck's clock forward, so the lights keep moving.
 
-## MIDI
+Without DJ gear, pick a library song to play on the tab's **virtual deck**: the
+app's own player becomes deck 1.
 
-- **Mixer.** A MIDI connection to a DJ mixer (for example DJM, Xone or Rane). Luma maps its CC messages to channel faders and the crossfader.
-- **Controller.** A MIDI controller. Its bindings set group intensity and turn the controller layer on and off.
+## The Perform set
 
-In perform mode, the render engine renders one layer for each deck and blends the layers by volume.
+Beside the decks, each venue has a set of live patterns. A pattern is a clip
+graph with no timeline: a selection, a blend mode and a graph. The set is laid
+out on pages of a grid, like a console's executor window. A cell holds a
+pattern, the master, tap tempo, or a fader that moves several things together.
+
+- A pattern's **pad** is a `button` node wired into its output's alpha. It plays
+  as **toggle** (on until the next press) or **flash** (on while held), and
+  fades with its own attack, decay, sustain and release.
+- A `control` node is a fader of that pattern, shown in its cell.
+- Every pattern plays at its level times the Perform master, over the decks.
+- In a page's one-at-a-time rows, turning one pattern on releases the others.
+
+The Perform tab has its own chat. Ask it to add, change or lay out patterns.
+
+## MIDI and OSC
+
+Any MIDI device and anything that sends OSC (to UDP port 8000) can drive a fader
+or a pad. Press **Learn** on a control, then move the fader or press the key.
+A binding says what the hardware sends: a fader's position, a pad's press and
+release, or a latching key. It can be inverted. Bindings belong to this
+computer, like the devices plugged into it.
 
 ## Art-Net Output
 

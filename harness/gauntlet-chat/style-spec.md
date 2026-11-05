@@ -523,7 +523,7 @@ pill uses 16 (`shell.rs:5258`).
 
 ## 7. Reference screenshots
 
-Copied into this directory as `comet-ref-*`:
+Copied into this directory as `comet-ref-*`, from these paths in the comet repository:
 
 | File | Source |
 | --- | --- |

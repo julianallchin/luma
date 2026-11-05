@@ -1,6 +1,6 @@
-# Live control: a proposal
+# Live control
 
-Status: proposal, not built. Covers busking on the Perform screen: faders, pads, MIDI, OSC and any future sensor.
+Status: built: controls and the `control` node, MIDI and OSC bindings (`backend/src/inputs/`), the Perform tab and the Perform set (`backend/src/perform/`, `gpui/crates/app/src/perform*`). Written as the proposal; where the code differs, the code is right. Covers busking on the Perform screen: faders, pads, MIDI, OSC and any future sensor.
 
 ## What consoles do, and what hurts
 
