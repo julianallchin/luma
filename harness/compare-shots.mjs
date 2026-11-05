@@ -14,7 +14,7 @@
 //
 // Decoding runs inside headless Chromium's canvas, so Playwright is the only
 // dependency.
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 
@@ -36,7 +36,11 @@ if (dirs.length !== 2) {
 	process.exit(1);
 }
 
-const [dirA, dirB] = dirs.map((d) => path.resolve(d, "scenes"));
+// A directory of frames, or one that holds them under `scenes/`.
+const [dirA, dirB] = dirs.map((d) => {
+	const scenes = path.resolve(d, "scenes");
+	return existsSync(scenes) ? scenes : path.resolve(d);
+});
 const names = readdirSync(dirA).filter((f) => f.endsWith(".png")).sort();
 const namesB = new Set(readdirSync(dirB).filter((f) => f.endsWith(".png")));
 

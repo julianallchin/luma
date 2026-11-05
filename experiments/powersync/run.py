@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Disposable Postgres, PostgREST and PowerSync for the row model.
 
-Starts the three services a Luma client talks to, applies the row model to an
-empty database, and runs whichever Rust tests were named against the live
-stack. Older migrations are not applied: the row-model migration is
-self-sufficient by design.
+Starts the three services a Luma client talks to, applies every migration
+from the row model on to an empty database, and runs whichever Rust tests were
+named against the live stack. Older migrations are not applied: the row-model
+migration is self-sufficient by design.
 """
 
 import argparse
@@ -22,12 +22,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent.parent
-MIGRATIONS = [
-    REPO / "supabase/migrations/20260912000000_row_model.sql",
-    REPO / "supabase/migrations/20260916000000_stage_child_venue_id.sql",
-    REPO / "supabase/migrations/20260918000000_cued_patterns.sql",
-    REPO / "supabase/migrations/20260923100000_drop_cues_and_pattern_library.sql",
-]
+# Every migration from the row model on, in order: the row model rebuilt the
+# schema from scratch, so nothing before it applies.
+MIGRATIONS = sorted(
+    path
+    for path in (REPO / "supabase/migrations").glob("*.sql")
+    if path.name >= "20260912000000_row_model.sql"
+)
 SYNC_RULES = REPO / "deploy/powersync/sync-config.yaml"
 
 PREFIX = "luma-rows-"
@@ -72,7 +73,7 @@ examples:
 
 --test runs, once per NAME, from the repo root:
 
-  cargo +1.97.1 test --manifest-path backend/Cargo.toml -p luma --lib NAME \\
+  cargo test --manifest-path backend/Cargo.toml -p luma --lib NAME \\
       -- --ignored --nocapture
 
 with the stack in the environment, which is how the Rust tests find it:
@@ -91,8 +92,9 @@ The runner refuses to start if a {PREFIX}* container already exists, and never
 removes one it did not create; after --keep, `docker rm -f` them yourself.
 """
 
-# A minimal stand-in for the Supabase auth schema: enough for `auth.uid()`
-# defaults, the `auth.users` foreign keys and PostgREST's role switching.
+# A minimal stand-in for the Supabase auth and storage schemas: enough for
+# `auth.uid()` defaults, the `auth.users` foreign keys, PostgREST's role
+# switching and the storage policies the migrations create.
 BOOTSTRAP = f"""
 create role anon nologin noinherit;
 create role authenticated nologin noinherit;
@@ -112,6 +114,10 @@ $$;
 grant usage on schema auth to anon, authenticated;
 grant select on auth.users to anon, authenticated;
 grant usage on schema public to anon, authenticated;
+
+create schema storage;
+create table storage.buckets (id text primary key, name text not null, public boolean);
+create table storage.objects (id uuid primary key, bucket_id text, name text);
 """
 
 # The migration creates powersync_role without a usable password, as the
@@ -248,7 +254,7 @@ def run_tests(names):
     for name in names:
         print(f"cargo test {name}", flush=True)
         result = subprocess.run(
-            ["cargo", "+1.97.1", "test", "--manifest-path", str(REPO / "backend/Cargo.toml"),
+            ["cargo", "test", "--manifest-path", str(REPO / "backend/Cargo.toml"),
              "-p", "luma", "--lib", name, "--", "--ignored", "--nocapture"],
             cwd=REPO, env={**os.environ, **ENVIRONMENT})
         if result.returncode:
