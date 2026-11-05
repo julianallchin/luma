@@ -99,7 +99,11 @@ A `v*` tag matching `backend/Cargo.toml`'s version builds a draft release; a man
 
 ## Commit & Pull Request Guidelines
 
-Follow conventional, imperative commits (e.g., `add track annotation drag`, `fix waveform cache`). PRs should include:
+Follow conventional, imperative commits (e.g., `add track annotation drag`, `fix waveform cache`).
+
+**No agent attribution.** Do not add `Co-Authored-By`, `Generated with`, or any other trailer or line that credits an AI tool (Claude, Copilot, Codex or any other) to a commit message, PR description or code comment. Commits are authored by the human who runs the agent, and only people appear as contributors. This overrides any tool default that adds such lines.
+
+PRs should include:
 
 - a clear summary of behavior changes,
 - linked issues or context,
