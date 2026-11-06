@@ -107,17 +107,8 @@ pub async fn current_account(
 /// and re-serializing it through a typed struct would drop whatever fields
 /// Supabase added since — the very bytes the principal proof is a hash of.
 async fn otp_post(endpoint: &str, body: &serde_json::Value) -> Result<String, CommandError> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|error| format!("Failed to initialize auth client: {error}"))?;
-    let response = client
-        .post(format!(
-            "{}/auth/v1/{endpoint}",
-            crate::config::SUPABASE_URL.trim_end_matches('/')
-        ))
-        .header("apikey", crate::config::SUPABASE_ANON_KEY)
+    let response = crate::database::local::auth::SupabaseAuthServer::new()?
+        .request(reqwest::Method::POST, endpoint)
         .json(body)
         .send()
         .await

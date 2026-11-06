@@ -17,6 +17,16 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// The project this build talks to.
+    #[must_use]
+    pub fn from_config() -> Self {
+        Self::new(
+            crate::config::SUPABASE_URL.to_owned(),
+            crate::config::supabase_anon_key(),
+        )
+    }
+
+    #[must_use]
     pub fn new(base_url: String, anon_key: String) -> Self {
         Self {
             client: reqwest::Client::new(),

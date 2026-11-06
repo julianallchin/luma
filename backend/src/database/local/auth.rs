@@ -260,12 +260,13 @@ trait AuthServer: Send + Sync {
     async fn refresh(&self, refresh_token: &str) -> Result<String, RefreshError>;
 }
 
-struct SupabaseAuthServer {
+/// Supabase Auth (GoTrue), as this build reaches it.
+pub(crate) struct SupabaseAuthServer {
     client: reqwest::Client,
 }
 
 impl SupabaseAuthServer {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))
@@ -273,18 +274,27 @@ impl SupabaseAuthServer {
             .map_err(|error| format!("Failed to initialize auth client: {error}"))?;
         Ok(Self { client })
     }
+
+    /// A request to `/auth/v1/<endpoint>`, carrying the anon key.
+    pub(crate) fn request(
+        &self,
+        method: reqwest::Method,
+        endpoint: &str,
+    ) -> reqwest::RequestBuilder {
+        self.client
+            .request(
+                method,
+                format!("{}/auth/v1/{endpoint}", SUPABASE_URL.trim_end_matches('/')),
+            )
+            .header("apikey", SUPABASE_ANON_KEY)
+    }
 }
 
 #[async_trait]
 impl AuthServer for SupabaseAuthServer {
     async fn authenticated_user_id(&self, access_token: &str) -> Result<String, String> {
         let response = self
-            .client
-            .get(format!(
-                "{}/auth/v1/user",
-                SUPABASE_URL.trim_end_matches('/')
-            ))
-            .header("apikey", SUPABASE_ANON_KEY)
+            .request(reqwest::Method::GET, "user")
             .bearer_auth(access_token)
             .send()
             .await
@@ -316,12 +326,7 @@ impl AuthServer for SupabaseAuthServer {
 
     async fn refresh(&self, refresh_token: &str) -> Result<String, RefreshError> {
         let response = self
-            .client
-            .post(format!(
-                "{}/auth/v1/token?grant_type=refresh_token",
-                SUPABASE_URL.trim_end_matches('/')
-            ))
-            .header("apikey", SUPABASE_ANON_KEY)
+            .request(reqwest::Method::POST, "token?grant_type=refresh_token")
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({ "refresh_token": refresh_token }))
             .send()

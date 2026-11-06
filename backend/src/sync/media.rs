@@ -38,10 +38,7 @@ impl Media {
         Self {
             pool,
             state_pool,
-            remote: Arc::new(Storage::new(
-                crate::config::SUPABASE_URL.to_owned(),
-                crate::config::supabase_anon_key(),
-            )),
+            remote: Arc::new(Storage::from_config()),
             progress: Arc::default(),
         }
     }

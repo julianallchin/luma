@@ -105,13 +105,10 @@ pub async fn load(
     let object = path
         .strip_prefix(&format!("{BUCKET}/"))
         .ok_or_else(|| format!("not a figure path: {path}"))?;
-    let bytes = Storage::new(
-        crate::config::SUPABASE_URL.to_owned(),
-        crate::config::supabase_anon_key(),
-    )
-    .download_file(BUCKET, object, &token)
-    .await
-    .map_err(|error| error.to_string())?;
+    let bytes = Storage::from_config()
+        .download_file(BUCKET, object, &token)
+        .await
+        .map_err(|error| error.to_string())?;
     write_atomic(&local, &bytes)?;
     Ok(bytes)
 }

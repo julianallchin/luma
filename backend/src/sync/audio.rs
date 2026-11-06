@@ -36,10 +36,7 @@ impl TrackAudio {
             pool,
             state_pool,
             storage,
-            remote: Storage::new(
-                crate::config::SUPABASE_URL.to_owned(),
-                crate::config::supabase_anon_key(),
-            ),
+            remote: Storage::from_config(),
             downloads: Mutex::default(),
         }
     }
