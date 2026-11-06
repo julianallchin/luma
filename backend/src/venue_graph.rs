@@ -44,7 +44,7 @@ pub fn sockets(fixtures_root: &Path) -> Result<&'static VenueSockets, String> {
     SOCKETS
         .get_or_init(|| {
             VenueSockets::load(
-                crate::stage_render::meshes_root(Some(fixtures_root)),
+                crate::resources::meshes_root(Some(fixtures_root)),
                 std::sync::Arc::new(BundledFixtures(fixtures_root.to_path_buf())),
             )
             .map_err(|e| format!("the stage catalog could not be resolved: {e}"))
@@ -65,7 +65,7 @@ pub struct BundledFixtures(pub std::path::PathBuf);
 
 impl FixtureDefinitions for BundledFixtures {
     fn definition(&self, fixture_path: &str) -> Option<luma_render::scene_desc::Definition> {
-        let relative = crate::stage_render::confined_path(fixture_path)?;
+        let relative = crate::resources::confined_path(fixture_path)?;
         crate::services::fixtures::get_fixture_definition(&self.0, relative)
             .ok()
             .map(|def| crate::stage_render::definition(&def))
@@ -190,7 +190,7 @@ mod tests {
     /// alone.
     fn golden_supply() -> VenueSockets {
         VenueSockets::load(
-            crate::stage_render::meshes_root(Some(Path::new(FIXTURES_ROOT))),
+            crate::resources::meshes_root(Some(Path::new(FIXTURES_ROOT))),
             std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
         )
         .expect("the catalog resolves")

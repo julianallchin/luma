@@ -30,7 +30,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use luma_lib::eval::{Arena, Scope};
-use luma_lib::stage_render::{meshes_root, primitive_state, VenueGeometry};
+use luma_lib::resources::meshes_root;
+use luma_lib::stage_render::{primitive_state, VenueGeometry};
 use luma_lib::storage::StorageRoot;
 use luma_render::camera_export::CameraExport;
 use luma_render::scene_desc::{Look, Quality};

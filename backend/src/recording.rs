@@ -643,7 +643,7 @@ impl Session {
             lighting,
             geometry,
             settings,
-            meshes_root: stage_render::meshes_root(Some(fixtures_root)),
+            meshes_root: crate::resources::meshes_root(Some(fixtures_root)),
             aim: spec.aim,
             size: (spec.size.0.max(1), spec.size.1.max(1)),
             audio,

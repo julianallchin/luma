@@ -187,7 +187,7 @@ impl VenueHost {
         }
         let booth = geometry.booth();
         let lasers = geometry.lasers.clone();
-        let meshes_root = stage_render::meshes_root(Some(&self.resource_root));
+        let meshes_root = crate::resources::meshes_root(Some(&self.resource_root));
 
         // The GPU render is a blocking submit-and-map. Running it on a blocking
         // thread is what keeps `supervise`'s cancellation poll alive across it.

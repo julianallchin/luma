@@ -90,7 +90,7 @@ pub async fn run(args: super::Args) -> Result<(), String> {
         position: luma_scene::coords::three_from_world(camera.position()).to_array(),
         target: luma_scene::coords::three_from_world(camera.target).to_array(),
     };
-    let mut library = Library::new(luma_lib::stage_render::meshes_root(Some(&fixtures)));
+    let mut library = Library::new(luma_lib::resources::meshes_root(Some(&fixtures)));
     if mode == "snapshot" {
         let mut scenes = Vec::new();
         let mut arena = Arena::default();

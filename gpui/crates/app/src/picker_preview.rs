@@ -46,7 +46,7 @@ pub(crate) fn install(
         scene,
         definitions,
         rig.lasers.clone(),
-        stage_render::meshes_root(None),
+        luma_lib::resources::meshes_root(None),
         stage_render::Aim::View(luma_scene::View::Front),
         None,
         size,

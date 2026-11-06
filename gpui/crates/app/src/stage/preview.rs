@@ -51,7 +51,7 @@ fn render_all() {
     let Ok(mut renderer) = luma_render::Renderer::new() else {
         return;
     };
-    let mut library = luma_render::assets::Library::new(luma_lib::stage_render::meshes_root(None));
+    let mut library = luma_render::assets::Library::new(luma_lib::resources::meshes_root(None));
     // Derived from `thumbnail_path` so the two cannot name different
     // directories.
     if let Some(out_dir) = thumbnail_path("probe").parent() {

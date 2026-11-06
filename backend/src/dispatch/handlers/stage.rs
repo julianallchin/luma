@@ -1046,7 +1046,7 @@ mod tests {
 
     /// A headless host over a temporary database. `fixtures_root` is the temp
     /// directory: the socket supply resolves against the repo's shipped meshes
-    /// either way (`stage_render::meshes_root`), and the catalog is what these
+    /// either way (`resources::meshes_root`), and the catalog is what these
     /// tests are about.
     /// The principal these fixtures write as. A venue is a synced row and a
     /// synced row has an owner; `VenueAccess` admits only that owner.

@@ -15,7 +15,7 @@ use crate::database::local::venue_access::{Read, VenueResource};
 
 const VENUE: &str = "venue-under-test";
 
-/// Where the meshes are. `stage_render::meshes_root` falls back to the repo's
+/// Where the meshes are. `resources::meshes_root` falls back to the repo's
 /// `resources/meshes` when this has no sibling of its own, which is what makes
 /// a unit test able to resolve the real catalog.
 fn fixtures_root() -> PathBuf {

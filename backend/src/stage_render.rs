@@ -18,7 +18,7 @@
 //! answer to "where is the booth" rather than two.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
@@ -131,7 +131,7 @@ impl VenueGeometry {
             .map(|fixture| fixture.fixture_path.clone())
             .collect::<std::collections::BTreeSet<_>>()
         {
-            let Some(relative) = confined(&path) else {
+            let Some(relative) = crate::resources::confined_path(&path) else {
                 continue;
             };
             if let Ok(definition) =
@@ -867,60 +867,6 @@ fn one_frame(
         Continuity::Cut => renderer.render(&frame, width, height, subframes),
     }
     .map_err(|error| format!("could not render the frame: {error}"))
-}
-
-/// Where the stage GLBs live.
-///
-/// `LUMA_MESHES_ROOT` wins, so a test or a fixture can supply its own tree.
-/// Otherwise the meshes are found *through* the fixtures root rather than by a
-/// second search: a fixtures root is always `<resources>/fixtures/<version>`,
-/// so its grandparent's `meshes/` is the sibling tree, in the repo and in a
-/// bundle alike: `resources/fixtures` and `resources/meshes` are siblings.
-/// A caller with no fixtures root (the desktop viewport) gets the installed
-/// bundle's copy, and the repo's own copy is the last resort.
-#[must_use]
-pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
-    if let Some(path) = std::env::var_os("LUMA_MESHES_ROOT") {
-        return PathBuf::from(path);
-    }
-    let sibling = fixtures_root
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .map(|resources| resources.join("meshes"));
-    let bundled = crate::resources::resource_dir().map(|root| root.join("resources/meshes"));
-    match [sibling, bundled]
-        .into_iter()
-        .flatten()
-        .find(|path| path.is_dir())
-    {
-        Some(path) => path,
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).parent().map_or_else(
-            || PathBuf::from("resources/meshes"),
-            |repo| repo.join("resources/meshes"),
-        ),
-    }
-}
-
-/// A fixture path that stays inside the fixtures root, or nothing.
-///
-/// Public as [`confined_path`] because the socket supply resolves a fixture's
-/// housing off the same path this guards, and two copies of "is this path
-/// safe" is one copy too many.
-#[must_use]
-pub fn confined_path(path: &str) -> Option<&Path> {
-    confined(path)
-}
-
-/// A fixture path that stays inside the fixtures root, or nothing.
-fn confined(path: &str) -> Option<&Path> {
-    let relative = Path::new(path);
-    let escapes = relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    });
-    (!escapes).then_some(relative)
 }
 
 /// Every projector's scan for `state`, in the renderer's world, at `clock`

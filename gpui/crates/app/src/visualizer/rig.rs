@@ -8,7 +8,7 @@ use super::*;
 fn load_sockets() -> Option<luma_render::catalog::VenueSockets> {
     let fixtures_root = crate::library::fixtures_root().ok();
     luma_render::catalog::VenueSockets::load(
-        stage_render::meshes_root(fixtures_root.as_deref()),
+        luma_lib::resources::meshes_root(fixtures_root.as_deref()),
         std::sync::Arc::new(luma_lib::venue_graph::BundledFixtures(
             fixtures_root.unwrap_or_default(),
         )),
@@ -251,7 +251,7 @@ impl Visualizer {
         let definitions = stage.definitions.clone();
         stage.assets = Some(Warming::Loading);
         Some(async move {
-            let mut assets = assets::Library::new(stage_render::meshes_root(None));
+            let mut assets = assets::Library::new(luma_lib::resources::meshes_root(None));
             // A frame that fails here fails the same way on the stage, which
             // says so; this one only loads.
             let _ = luma_render::build_frame(&scene, &definitions, 0.0, &mut assets);
@@ -382,7 +382,7 @@ impl Visualizer {
         let mut stage = self.stage.borrow_mut();
         let assets = match stage.assets.take() {
             Some(Warming::Ready(assets)) => assets,
-            _ => assets::Library::new(stage_render::meshes_root(None)),
+            _ => assets::Library::new(luma_lib::resources::meshes_root(None)),
         };
         stage.gpu = Some(Gpu {
             viewport: AsyncViewport::new(),
