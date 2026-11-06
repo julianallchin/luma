@@ -18,7 +18,7 @@ mod lower;
 mod random;
 mod summary;
 
-pub use check::{blend_modes, check, check_clip, is_control_name};
+pub use check::{blend_modes, check, check_clip, is_control_name, is_reserved, MAX_ID};
 pub use kernels::Kernel;
 pub(crate) use lower::lower;
 pub use random::sample_random;

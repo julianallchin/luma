@@ -28,7 +28,7 @@ use crate::preprocessing::workers::track_bar_boundaries;
 pub const DRUM_CLASSES: [&str; 4] = ["kick", "snare", "hat", "cymbal"];
 
 /// MERT-95M layer 7 runs at 75 frames per second.
-const MERT_FRAME_RATE_HZ: f64 = 75.0;
+pub(crate) const MERT_FRAME_RATE_HZ: f64 = 75.0;
 
 /// `hat` (drum onsets) and `hats` (bar tags) are different vocabularies from
 /// different models. Renaming either would break stored data, so the mismatch is

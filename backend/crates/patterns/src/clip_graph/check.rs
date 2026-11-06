@@ -110,7 +110,7 @@ fn structure(graph: &ClipGraph) -> Result<()> {
             r#"graph: expected node ids that are Python names of at most {MAX_ID} letters, digits and _, such as cut or curve2; got "{id}". Example: cut"#
         ));
     }
-    if let Some(id) = ids.iter().find(|id| RESERVED.contains(id)) {
+    if let Some(id) = ids.iter().find(|id| is_reserved(id)) {
         return fail(format!(
             r#"graph: expected node ids that are not a builder name or a Python keyword; got "{id}". Example: {id}_1"#
         ));
@@ -165,19 +165,22 @@ fn structure(graph: &ClipGraph) -> Result<()> {
 }
 
 /// The longest node id.
-const MAX_ID: usize = 32;
+pub const MAX_ID: usize = 32;
 
 /// Names a node id may not take: the Python builders, whose bare names a
 /// cell binds, and Python's keywords. `source()` assigns each node to a
-/// variable of its id.
-const RESERVED: &[&str] = &[
-    "time", "space", "along", "random", "audio", "curve", "math", "value", "max", "min", "mirror",
-    "shuffle", "group", "split", "figure", "color", "aim", "strobe", "laser", "preset", "False",
-    "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
-    "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
-    "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with",
-    "yield",
-];
+/// variable of its id. Every kind has a builder of its name except `math`,
+/// which is Python's operators; its name stays reserved all the same.
+pub fn is_reserved(id: &str) -> bool {
+    const OTHER_BUILDERS: &[&str] = &["preset", "max", "min"];
+    const KEYWORDS: &[&str] = &[
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+        "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
+        "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
+        "try", "while", "with", "yield",
+    ];
+    Kind::from_name(id).is_some() || OTHER_BUILDERS.contains(&id) || KEYWORDS.contains(&id)
+}
 
 /// An ASCII Python identifier of at most [`MAX_ID`] characters: `cut`,
 /// `curve2`, `bloom_far`.
