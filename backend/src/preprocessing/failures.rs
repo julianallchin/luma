@@ -111,7 +111,6 @@ pub async fn last_error(
 }
 
 /// Exponential backoff in seconds: `min(2^attempts * 60, MAX_BACKOFF_SECS)`.
-/// Public for tests; not used by callers.
 fn backoff_for(attempts: i64) -> i64 {
     let shift = attempts.clamp(0, 30);
     let raw = 60i64.saturating_mul(1i64 << shift);
@@ -123,11 +122,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backoff_grows_then_caps() {
-        assert_eq!(backoff_for(1), 120); // 2 min
-        assert_eq!(backoff_for(2), 240); // 4 min
-        assert_eq!(backoff_for(10), 60 * 1024); // ~17h, still under cap
-        assert_eq!(backoff_for(11), MAX_BACKOFF_SECS); // capped at 24h
-        assert_eq!(backoff_for(50), MAX_BACKOFF_SECS); // saturates safely
+    fn backoff_doubles_until_it_caps() {
+        let mut previous = backoff_for(1);
+        for attempts in 2..=64 {
+            let next = backoff_for(attempts);
+            assert!(
+                next <= MAX_BACKOFF_SECS,
+                "attempt {attempts} waits past the cap"
+            );
+            assert!(
+                next == 2 * previous || next == MAX_BACKOFF_SECS,
+                "attempt {attempts}: {previous}s then {next}s"
+            );
+            previous = next;
+        }
+        assert_eq!(
+            previous, MAX_BACKOFF_SECS,
+            "repeated failures reach the cap"
+        );
     }
 }
