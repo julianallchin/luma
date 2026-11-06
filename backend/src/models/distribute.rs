@@ -1,14 +1,12 @@
-//! The `distribute` command across the host boundary.
+//! The `distribute` command's argument and answer.
 //!
-//! [`crate::services::distribute`] owns the command; these are its argument and
-//! its answer in the shapes `serde` can carry. A projection, not a
-//! second declaration — nothing here computes.
+//! [`crate::services::distribute`] owns the command and builds these directly;
+//! they are the one declaration on both sides of the host boundary.
 
 use luma_scene::distribute::Layout;
 use serde::{Deserialize, Serialize};
 
-use crate::models::venue_graph::{warning_line, ResolvedDangling};
-use crate::services::distribute::{Occupied, Placed, Refusal, Report};
+use crate::models::venue_graph::ResolvedDangling;
 
 /// How the caller pinned the row's layout down.
 ///
@@ -65,22 +63,15 @@ pub struct DistributedFixture {
     pub universe: u16,
     pub address: u16,
     /// Metres along the host face from its middle, ascending across the row.
+    ///
+    /// Not the same axis as the address order: addresses run along the *run*,
+    /// and a face whose tangent opposes it counts the other way. Sorting a
+    /// venue's fixtures by this and reading their addresses is only monotone
+    /// on a face that agrees with its run.
     pub along_m: f64,
-    /// The deepest derived group it landed in, as a display path.
+    /// Suggested placement-derived path, not a saved selector group. Empty
+    /// when the derivation found no role; group authoring is explicit.
     pub group_path: Vec<String>,
-}
-
-impl From<&Placed> for DistributedFixture {
-    fn from(placed: &Placed) -> Self {
-        DistributedFixture {
-            id: placed.id.clone(),
-            label: placed.label.clone(),
-            universe: placed.universe,
-            address: placed.address,
-            along_m: placed.along_m,
-            group_path: placed.group_path.clone(),
-        }
-    }
 }
 
 /// Why a distribution wrote nothing.
@@ -108,7 +99,9 @@ pub enum DistributeRefusal {
         /// acting on it.
         suggestion: String,
     },
-    /// The row would sit on top of one already on this face.
+    /// The row would sit on top of one already on this face. The 1-D check
+    /// along the face, which is the only axis a distribution moves in; two
+    /// rows on *different* faces of the same truss never meet here.
     Overlap {
         /// The metres along the face the row would have claimed, from its
         /// middle.
@@ -129,50 +122,6 @@ pub struct DistributeOccupied {
     pub to_m: f64,
 }
 
-impl From<&Occupied> for DistributeOccupied {
-    fn from(held: &Occupied) -> Self {
-        DistributeOccupied {
-            label: held.label.clone(),
-            from_m: held.from_m,
-            to_m: held.to_m,
-        }
-    }
-}
-
-impl From<&Refusal> for DistributeRefusal {
-    fn from(refusal: &Refusal) -> Self {
-        match refusal {
-            Refusal::TooLong(fit) => DistributeRefusal::TooLong {
-                needed_m: fit.needed_m,
-                available_m: fit.available_m,
-                extend_node_id: fit.extend_node.clone(),
-                suggestion: format!(
-                    "needs {:.2} m, the face is {:.2} m — extend({}, to={:.2})",
-                    fit.needed_m, fit.available_m, fit.extend_node, fit.needed_m
-                ),
-            },
-            Refusal::Overlap {
-                from_m,
-                to_m,
-                held_by,
-            } => DistributeRefusal::Overlap {
-                from_m: *from_m,
-                to_m: *to_m,
-                held_by: held_by.iter().map(DistributeOccupied::from).collect(),
-                suggestion: format!(
-                    "{from_m:.2}..{to_m:.2} m of this face is already held by {} — \
-                     distribute into a span that clears it",
-                    held_by
-                        .iter()
-                        .map(|held| held.label.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
-        }
-    }
-}
-
 /// What one distribution did.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -183,31 +132,10 @@ pub struct DistributeReport {
     pub fixtures: Vec<DistributedFixture>,
     /// `null` is the whole of "it worked".
     pub refusal: Option<DistributeRefusal>,
+    /// Whatever the solve had to decide once the row was placed, then what
+    /// the layout decided for the caller: a window clipped to the face, ends
+    /// held half a body inside it.
     pub warnings: Vec<String>,
     /// Open structural sockets left in the venue.
     pub dangling: Vec<ResolvedDangling>,
-}
-
-impl From<Report> for DistributeReport {
-    fn from(report: Report) -> Self {
-        DistributeReport {
-            host_node_id: report.host_node,
-            host_socket: report.host_socket,
-            fixtures: report
-                .fixtures
-                .iter()
-                .map(DistributedFixture::from)
-                .collect(),
-            refusal: report.refusal.as_ref().map(DistributeRefusal::from),
-            // The layout's own adjustments read as warnings because that is
-            // what they are: something the call decided for the caller.
-            warnings: report
-                .warnings
-                .iter()
-                .map(warning_line)
-                .chain(report.announce.iter().cloned())
-                .collect(),
-            dangling: report.dangling.iter().map(ResolvedDangling::from).collect(),
-        }
-    }
 }

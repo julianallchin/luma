@@ -35,7 +35,7 @@
 //! # Refuse, never squeeze
 //!
 //! A distribution that will not go writes **nothing** and says why
-//! ([`Refusal`]): the face is too short, and how long it would have to be — a
+//! ([`DistributeRefusal`]): the face is too short, and how long it would have to be — a
 //! length the host can actually be built at, so feeding it back into the run's
 //! `span` and re-running the same call succeeds — or there is already a row
 //! where this one would sit, and which fixtures are in the way.
@@ -52,15 +52,16 @@ use std::path::Path;
 use luma_render::face::host_face;
 use luma_scene::distribute::{offsets, Fit, Layout};
 use luma_scene::patch::{allocate_run, next_addresses, Footprint};
-use luma_scene::venue::{
-    DanglingSocket, Edge, EdgeError, Node, NodeKind, NodeWarning, ResolvedVenue, VenueGraph,
-    FLOOR_SOCKET,
-};
+use luma_scene::venue::{Edge, EdgeError, Node, NodeKind, ResolvedVenue, VenueGraph, FLOOR_SOCKET};
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{VenueAccess, Write};
 use crate::database::local::venue_graph as venue_graph_db;
+use crate::models::distribute::{
+    DistributeOccupied, DistributeRefusal, DistributeReport, DistributedFixture,
+};
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
+use crate::models::venue_graph::{warning_line, ResolvedDangling};
 use crate::services::fixture_create::{self, Naming, NewFixture};
 use crate::services::group_derivation::derive_groups;
 use crate::services::patch;
@@ -90,101 +91,19 @@ pub struct Request<'a> {
     pub label_prefix: Option<&'a str>,
 }
 
-/// One fixture a distribution created.
-#[derive(Debug, Clone)]
-pub struct Placed {
-    /// The patch row id, which is also its venue-graph node id.
-    pub id: String,
-    pub label: String,
-    pub universe: u16,
-    pub address: u16,
-    /// Metres along the host face from its middle, ascending across the row.
-    ///
-    /// Not the same axis as the address order: addresses run along the *run*,
-    /// and a face whose tangent opposes it counts the other way. Sorting a
-    /// venue's fixtures by this and reading their addresses is only monotone
-    /// on a face that agrees with its run.
-    pub along_m: f64,
-    /// Suggested placement-derived path, not a saved selector group. Empty
-    /// when the derivation found no role; group authoring is explicit.
-    pub group_path: Vec<String>,
-}
-
-/// Why a row will not fit, and what to do about it.
-#[derive(Debug, Clone)]
-pub struct FitFailure {
-    /// How long the host face would have to be — already a length the host can
-    /// be built at, so it can be used verbatim.
-    pub needed_m: f64,
-    /// How long it is now.
-    pub available_m: f64,
-    /// The node whose length to change: the host itself.
-    pub extend_node: String,
-}
-
-/// A stretch of a host face a row of fixtures already holds.
-#[derive(Debug, Clone)]
-pub struct Occupied {
-    /// The fixture in the way, by its label.
-    pub label: String,
-    /// The metres along the face its body spans, from the face's middle.
-    pub from_m: f64,
-    pub to_m: f64,
-}
-
-/// Why a distribution wrote nothing.
-///
-/// One field rather than a nullable per reason: a distribution is refused for
-/// exactly one cause, and "too long *and* in the way" is not a report anybody
-/// can act on. `refusal.is_none()` is the whole of "it worked", so there is no
-/// second `ok` flag to disagree with it.
-#[derive(Debug, Clone)]
-pub enum Refusal {
-    /// The row is longer than the face.
-    TooLong(FitFailure),
-    /// The row would sit on top of one already on this face. The 1-D check
-    /// along the face, which is the only axis a distribution moves in; two rows
-    /// on *different* faces of the same truss never meet here.
-    Overlap {
-        /// The metres the new row would have claimed.
-        from_m: f64,
-        to_m: f64,
-        /// What is already there, in face order.
-        held_by: Vec<Occupied>,
-    },
-}
-
-/// What one distribution did.
-#[derive(Debug, Clone)]
-pub struct Report {
-    pub host_node: String,
-    pub host_socket: String,
-    /// Every fixture placed — all of them, or, when [`Self::refusal`] is set,
-    /// none: a distribution is all of its fixtures or nothing at all.
-    pub fixtures: Vec<Placed>,
-    pub refusal: Option<Refusal>,
-    /// Whatever the solve had to decide, once the row was placed.
-    pub warnings: Vec<NodeWarning>,
-    /// What the *layout* decided for the caller, in words: a window clipped to
-    /// the face, ends held half a body inside it. The row is placed either way
-    /// — this is the difference between what was asked and what hangs there.
-    pub announce: Vec<String>,
-    /// Open structural sockets left in the venue, as the resolver reports them.
-    pub dangling: Vec<DanglingSocket>,
-}
-
-impl Report {
-    /// A refusal: the reason, and nothing written.
-    fn refused(host_node: String, host_socket: String, refusal: Refusal) -> Report {
-        Report {
-            host_node,
-            host_socket,
-            fixtures: Vec::new(),
-            refusal: Some(refusal),
-            warnings: Vec::new(),
-            announce: Vec::new(),
-            dangling: Vec::new(),
-        }
+/// A refusal: the reason, and nothing written.
+fn refused(
+    host_node_id: String,
+    host_socket: String,
+    refusal: DistributeRefusal,
+) -> DistributeReport {
+    DistributeReport {
+        host_node_id,
+        host_socket,
+        fixtures: Vec::new(),
+        refusal: Some(refusal),
+        warnings: Vec::new(),
+        dangling: Vec::new(),
     }
 }
 
@@ -197,7 +116,7 @@ pub async fn distribute(
     access: &mut VenueAccess<'_, Write>,
     fixtures_root: &Path,
     request: Request<'_>,
-) -> Result<Report, String> {
+) -> Result<DistributeReport, String> {
     let sockets = crate::venue_graph::sockets(fixtures_root)?;
     let mut graph = crate::venue_graph::graph(access).await?;
     let host_id = match request.host_node {
@@ -242,32 +161,48 @@ pub async fn distribute(
             needed_m,
             available_m,
         }) => {
-            return Ok(Report::refused(
+            let suggestion = format!(
+                "needs {needed_m:.2} m, the face is {available_m:.2} m — extend({}, to={needed_m:.2})",
+                host.id
+            );
+            return Ok(refused(
                 host_id,
                 host_socket,
-                Refusal::TooLong(FitFailure {
+                DistributeRefusal::TooLong {
                     needed_m,
                     available_m,
-                    extend_node: host.id.clone(),
-                }),
+                    extend_node_id: host.id.clone(),
+                    suggestion,
+                },
             ));
         }
     };
 
     let rows = fixtures_db::get_patched_fixtures(access).await?;
     if let Some((from_m, to_m)) = band(&stations, width) {
-        let held_by: Vec<Occupied> = occupied(&graph, &rows, fixtures_root, &host_id, &host_socket)
-            .into_iter()
-            .filter(|held| held.from_m < to_m - TOUCHING_M && from_m < held.to_m - TOUCHING_M)
-            .collect();
+        let held_by: Vec<DistributeOccupied> =
+            occupied(&graph, &rows, fixtures_root, &host_id, &host_socket)
+                .into_iter()
+                .filter(|held| held.from_m < to_m - TOUCHING_M && from_m < held.to_m - TOUCHING_M)
+                .collect();
         if !held_by.is_empty() {
-            return Ok(Report::refused(
+            let suggestion = format!(
+                "{from_m:.2}..{to_m:.2} m of this face is already held by {} — \
+                 distribute into a span that clears it",
+                held_by
+                    .iter()
+                    .map(|held| held.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return Ok(refused(
                 host_id,
                 host_socket,
-                Refusal::Overlap {
+                DistributeRefusal::Overlap {
                     from_m,
                     to_m,
                     held_by,
+                    suggestion,
                 },
             ));
         }
@@ -357,14 +292,14 @@ pub async fn distribute(
     let addressed = fixtures_db::get_patched_fixtures(access).await?;
     let paths = group_paths(access, fixtures_root).await?;
 
-    Ok(Report {
-        host_node: host_id,
+    Ok(DistributeReport {
+        host_node_id: host_id,
         host_socket,
         fixtures: placed
             .into_iter()
             .map(|(id, label, footprint, along)| {
                 let row = addressed.iter().find(|row| row.id == id);
-                Placed {
+                DistributedFixture {
                     label,
                     universe: row
                         .and_then(|row| u16::try_from(row.universe).ok())
@@ -379,9 +314,19 @@ pub async fn distribute(
             })
             .collect(),
         refusal: None,
-        warnings: solved.warnings().to_vec(),
-        announce: laid_where(request.layout, &stations, width),
-        dangling: solved.dangling().to_vec(),
+        // The layout's own adjustments read as warnings because that is what
+        // they are: something the call decided for the caller.
+        warnings: solved
+            .warnings()
+            .iter()
+            .map(warning_line)
+            .chain(laid_where(request.layout, &stations, width))
+            .collect(),
+        dangling: solved
+            .dangling()
+            .iter()
+            .map(ResolvedDangling::from)
+            .collect(),
     })
 }
 
@@ -513,9 +458,9 @@ fn occupied(
     fixtures_root: &Path,
     host: &str,
     socket: &str,
-) -> Vec<Occupied> {
+) -> Vec<DistributeOccupied> {
     let mut widths: BTreeMap<&str, f64> = BTreeMap::new();
-    let mut held: Vec<Occupied> = graph
+    let mut held: Vec<DistributeOccupied> = graph
         .nodes()
         .filter(|node| node.kind == NodeKind::Fixture)
         .filter(|node| {
@@ -529,7 +474,7 @@ fn occupied(
                 .entry(row.fixture_path.as_str())
                 .or_insert_with(|| width_of(fixtures_root, &row.fixture_path));
             let u = node.params.get("u", 0.0);
-            Some(Occupied {
+            Some(DistributeOccupied {
                 label: row.label.clone().unwrap_or_else(|| node.id.clone()),
                 from_m: u - width / 2.0,
                 to_m: u + width / 2.0,

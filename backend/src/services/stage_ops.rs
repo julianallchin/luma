@@ -41,7 +41,7 @@ use sqlx::SqlitePool;
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::local::venue_graph as venue_graph_db;
-use crate::models::distribute::{DistributeLayout, DistributeReport};
+use crate::models::distribute::{DistributeLayout, DistributeRefusal, DistributeReport};
 use crate::models::fixtures::PatchedFixture;
 use crate::models::venue_graph::{
     PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
@@ -717,10 +717,7 @@ impl<'a> Stage<'a> {
         let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
         venue_graph::commit_graph(access).await?;
         crate::services::groups::invalidate_venue_fixture_cache();
-        Ok(Distributed {
-            report: report.into(),
-            patch,
-        })
+        Ok(Distributed { report, patch })
     }
 
     /// Re-lay an existing row of fixtures at a new count or layout.
@@ -797,11 +794,15 @@ impl<'a> Stage<'a> {
         // what rolls the transaction back to the row that fit.
         if let Some(refusal) = &report.refusal {
             return Err(StageError::Refused(match refusal {
-                distribute_service::Refusal::TooLong(fit) => format!(
-                    "{count} do not fit: the face would need {:.2} m and has {:.2} m",
-                    fit.needed_m, fit.available_m
+                DistributeRefusal::TooLong {
+                    needed_m,
+                    available_m,
+                    ..
+                } => format!(
+                    "{count} do not fit: the face would need {needed_m:.2} m and has \
+                     {available_m:.2} m"
                 ),
-                distribute_service::Refusal::Overlap { held_by, .. } => format!(
+                DistributeRefusal::Overlap { held_by, .. } => format!(
                     "the new row would overlap {}",
                     held_by
                         .iter()
@@ -814,10 +815,7 @@ impl<'a> Stage<'a> {
         let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
         venue_graph::commit_graph(access).await?;
         crate::services::groups::invalidate_venue_fixture_cache();
-        Ok(Distributed {
-            report: report.into(),
-            patch,
-        })
+        Ok(Distributed { report, patch })
     }
 
     /// Replace the venue's graph with a snapshot of itself — the undo stack's
