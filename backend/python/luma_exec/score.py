@@ -363,7 +363,7 @@ class Edit:
         try:
             result = self._track._call("track.clip_check", {"id": id, "clip": copy.deepcopy(value)})
         except LumaHostCallError as error:
-            if error.code in ("invalid_clip", "invalid_score", "invalid_request"):
+            if error.code == "invalid_request":
                 raise ClipError(_prefixed(label, id, str(error))) from None
             raise
         if isinstance(result, dict) and result.get("error"):

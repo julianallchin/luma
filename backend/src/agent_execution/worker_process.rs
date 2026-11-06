@@ -118,7 +118,7 @@ impl CancelToken {
 /// A structured rejection returned to Python as `LumaHostCallError`.
 ///
 /// Codes are deliberately strings: this transport is domain-agnostic, while a
-/// scoped handler may need precise errors such as `conflict` or `invalid_clip`.
+/// scoped handler may need precise errors such as `conflict` or `invalid_score`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostCallError {
     pub code: String,
