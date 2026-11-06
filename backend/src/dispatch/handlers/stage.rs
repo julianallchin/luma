@@ -277,11 +277,9 @@ impl From<StageError> for CommandError {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
 
     use serde_json::{json, Value};
 
-    use crate::database::local::{auth, database, state};
     use crate::dispatch::{dispatch, AppServices, CommandError};
 
     /// A deck: `bottom` mates the floor, `top` is a surface, `edge_*` are the
@@ -1048,24 +1046,8 @@ mod tests {
     /// directory: the socket supply resolves against the repo's shipped meshes
     /// either way (`resources::meshes_root`), and the catalog is what these
     /// tests are about.
-    /// The principal these fixtures write as. A venue is a synced row and a
-    /// synced row has an owner; `VenueAccess` admits only that owner.
-    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
     async fn seed(directory: &Path) -> AppServices {
-        let db = database::init_app_db_at(directory).await.unwrap();
-        let state_db = state::init_state_db_at(directory).await.unwrap();
-        auth::install_test_session(&state_db.0, OWNER).await;
-        auth::bootstrap_headless_admission(&db.0, &state_db.0)
-            .await
-            .unwrap();
-        let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
-        let workspaces = Arc::new(
-            crate::agent_execution::workspace::PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("no Python here".to_string())),
-            ),
-        );
-        AppServices::headless(db, state_db, storage, PathBuf::from(directory), workspaces)
+        crate::test_support::signed_in(directory, PathBuf::from(directory)).await
     }
 }

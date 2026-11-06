@@ -18,11 +18,11 @@ use crate::agent_execution::artifacts::codecs;
 use crate::agent_execution::artifacts::ArtifactStore;
 use crate::agent_execution::BindingManifest;
 use crate::storage::StorageRoot;
+use crate::test_support::TEST_OWNER;
 
 const TRACK_ID: &str = "trk-1";
 const TRACK_HASH: &str = "hash1";
 const SCORE_ID: &str = "sc-1";
-const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
 /// Temp-file pool built the way `init_app_db` builds the real one.
 async fn test_pool(dir: &Path) -> SqlitePool {
@@ -98,7 +98,7 @@ impl Fixture {
         f.seed_track().await;
         f.seed_venue().await;
         f.seed_score().await;
-        crate::database::local::auth::arm_write_admission(&f.pool, Some(OWNER))
+        crate::database::local::auth::arm_write_admission(&f.pool, Some(TEST_OWNER))
             .await
             .expect("arm test admission");
         f
@@ -144,7 +144,7 @@ impl Fixture {
              VALUES (?, ?, ?, 'Hex', 'Surgeon', 'Force + Form', 200.0, ?)",
         )
         .bind(TRACK_ID)
-        .bind(OWNER)
+        .bind(TEST_OWNER)
         .bind(TRACK_HASH)
         .bind(audio_path.to_string_lossy().to_string())
         .execute(&self.pool)
@@ -288,7 +288,7 @@ impl Fixture {
     async fn seed_venue(&self) {
         sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, 'Basement')")
             .bind(&self.venue_id)
-            .bind(OWNER)
+            .bind(TEST_OWNER)
             .execute(&self.pool)
             .await
             .unwrap();
@@ -302,7 +302,7 @@ impl Fixture {
                     'Chauvet/SlimPAR.qxf', ?)",
             )
             .bind(id)
-            .bind(OWNER)
+            .bind(TEST_OWNER)
             .bind(&self.venue_id)
             .bind(1 + i as i64 * 8)
             .bind(format!("PAR {}", i + 1))
@@ -373,7 +373,7 @@ impl Fixture {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
-        .bind(OWNER)
+        .bind(TEST_OWNER)
         .bind(&self.venue_id)
         .bind(kind)
         .bind(catalog_ref)
@@ -391,7 +391,7 @@ impl Fixture {
                  VALUES (?, ?, ?, ?, ?)",
             )
             .bind(id)
-            .bind(OWNER)
+            .bind(TEST_OWNER)
             .bind(&self.venue_id)
             .bind(key)
             .bind(value)
@@ -406,7 +406,7 @@ impl Fixture {
             "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, 'Main')",
         )
         .bind(SCORE_ID)
-        .bind(OWNER)
+        .bind(TEST_OWNER)
         .bind(TRACK_ID)
         .bind(&self.venue_id)
         .execute(&self.pool)
@@ -420,7 +420,7 @@ impl Fixture {
                      '{\"expression\":\"all\"}', 3, 'add')",
         )
         .bind(SCORE_ID)
-        .bind(OWNER)
+        .bind(TEST_OWNER)
         .bind(SCORE_ID)
         .execute(&self.pool)
         .await

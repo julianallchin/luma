@@ -81,31 +81,15 @@ fn folder_name(name: &str) -> Result<&str, CommandError> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     use serde_json::{json, Value};
 
-    use crate::database::local::{auth, database, state};
     use crate::dispatch::{dispatch, AppServices};
-
-    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
+    use crate::test_support::TEST_OWNER;
 
     async fn services(directory: &std::path::Path) -> AppServices {
-        let db = database::init_app_db_at(directory).await.unwrap();
-        let state_db = state::init_state_db_at(directory).await.unwrap();
-        auth::install_test_session(&state_db.0, OWNER).await;
-        auth::bootstrap_headless_admission(&db.0, &state_db.0)
-            .await
-            .unwrap();
-        let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
-        let workspaces = Arc::new(
-            crate::agent_execution::workspace::PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("no Python here".to_string())),
-            ),
-        );
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        AppServices::headless(db, state_db, storage, repo, workspaces)
+        crate::test_support::signed_in(directory, repo).await
     }
 
     async fn call(services: &AppServices, name: &str, args: Value) -> Value {
@@ -132,7 +116,7 @@ mod tests {
                 ('song-b', ?1, 'b', '/b.wav'),
                 ('elsewhere', ?1, 'c', '/c.wav')",
         )
-        .bind(OWNER)
+        .bind(TEST_OWNER)
         .execute(&services.db.0)
         .await
         .unwrap();

@@ -38,6 +38,8 @@ pub mod services;
 pub mod settings;
 pub mod stage_render;
 pub mod storage;
+#[cfg(test)]
+mod test_support;
 /// Record sync. `sync::service::Service` is the whole seam: a host hands it the
 /// PowerSync database and the state pool, and it connects, reports status and
 /// announces downloaded change. Public because the host that starts it lives

@@ -332,7 +332,7 @@ mod import_tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::database::local::{auth, database, state};
+    use crate::database::local::auth;
     use crate::dispatch::{EventSink, Events};
 
     struct ChannelEvents {
@@ -376,23 +376,10 @@ mod import_tests {
     /// Signed in for real rather than pinned with `with_fixture_principal`,
     /// because what is under test is the identity transition closing the gate,
     /// and that transition cross-checks the gate against the stored session.
-    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
     async fn services(directory: &Path, events: Events) -> crate::dispatch::SharedServices {
-        let db = database::init_app_db_at(directory).await.unwrap();
-        let state_db = state::init_state_db_at(directory).await.unwrap();
-        auth::install_test_session(&state_db.0, OWNER).await;
-        auth::bootstrap_headless_admission(&db.0, &state_db.0)
+        crate::test_support::signed_in(directory, directory.to_path_buf())
             .await
-            .unwrap();
-        let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
-        let workspaces = Arc::new(
-            crate::agent_execution::workspace::PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("no Python here".to_string())),
-            ),
-        );
-        AppServices::headless(db, state_db, storage, directory.to_path_buf(), workspaces)
             .with_events(events)
             .into_shared()
     }

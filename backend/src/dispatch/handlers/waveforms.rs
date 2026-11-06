@@ -39,11 +39,9 @@ pub async fn get_track_waveform_signal(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::sync::Arc;
 
     use serde_json::json;
 
-    use crate::database::local::{auth, database, state};
     use crate::dispatch::{dispatch, AppServices};
     use crate::models::waveforms::TrackWaveform;
     use crate::services::waveforms::FULL_WAVEFORM_SIZE;
@@ -110,29 +108,17 @@ mod tests {
         let audio = directory.join("gated.wav");
         std::fs::write(&audio, wav()).unwrap();
 
-        let db = database::init_app_db_at(directory).await.unwrap();
+        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path)
              VALUES ('track', NULL, 'gated-hash', 'Gated', ?, ?)",
         )
         .bind(f64::from(SECONDS))
         .bind(audio.to_string_lossy().to_string())
-        .execute(&db.0)
+        .execute(&services.db.0)
         .await
         .unwrap();
-
-        let state_db = state::init_state_db_at(directory).await.unwrap();
-        auth::bootstrap_headless_admission(&db.0, &state_db.0)
-            .await
-            .unwrap();
-        let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
-        let workspaces = Arc::new(
-            crate::agent_execution::workspace::PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("no Python here".to_string())),
-            ),
-        );
-        AppServices::headless(db, state_db, storage, directory.to_path_buf(), workspaces)
+        services
     }
 
     /// A steady 100 Hz tone under a gated 10 kHz carrier, as 16-bit stereo WAV

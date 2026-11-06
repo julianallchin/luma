@@ -1,34 +1,17 @@
 //! Bindings learned, kept, and applied for each kind of hardware.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
 use super::{Address, Event, Mode};
-use crate::database::local::{auth, database, state};
 use crate::dispatch::{dispatch, AppServices};
-
-const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
 async fn library() -> (tempfile::TempDir, AppServices, String) {
     let directory = tempfile::tempdir().unwrap();
-    let db = database::init_app_db_at(directory.path()).await.unwrap();
-    let state_db = state::init_state_db_at(directory.path()).await.unwrap();
-    auth::install_test_session(&state_db.0, OWNER).await;
-    auth::bootstrap_headless_admission(&db.0, &state_db.0)
-        .await
-        .unwrap();
-    let storage = crate::storage::StorageRoot::from_path(directory.path().to_path_buf());
-    let workspaces = Arc::new(
-        crate::agent_execution::workspace::PythonWorkspaceService::new(
-            storage.agent_workspaces_dir(),
-            Arc::new(|| Err("no Python here".to_string())),
-        ),
-    );
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let services = AppServices::headless(db, state_db, storage, repo, workspaces);
+    let services = crate::test_support::signed_in(directory.path(), repo).await;
     let venue = dispatch(
         &services,
         "create_venue",
@@ -108,7 +91,10 @@ async fn learning_an_input_again_changes_its_binding() {
     learn(&services, &venue, "drop", "momentary", cc(20, 1.0)).await;
     let bindings = services.inputs.state().bindings;
     assert_eq!(bindings.len(), 1, "{bindings:?}");
-    assert_eq!((bindings[0].id.as_str(), bindings[0].mode), (first.as_str(), Mode::Momentary));
+    assert_eq!(
+        (bindings[0].id.as_str(), bindings[0].mode),
+        (first.as_str(), Mode::Momentary)
+    );
 
     // Another control may share the input: one pad can drive two things.
     learn(&services, &venue, "rise", "fader", cc(20, 0.5)).await;

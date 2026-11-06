@@ -13,11 +13,7 @@ use super::model::{ModelEvent, StopReason, Usage};
 use super::tools::{Tool, ToolContext, ToolRegistry};
 use super::*;
 use crate::agent::model::scripted::ScriptedModel;
-use crate::agent_execution::workspace::PythonWorkspaceService;
-use crate::database::local::database::init_app_db_at;
-use crate::database::local::state::init_state_db_at;
-use crate::database::Db;
-use crate::storage::StorageRoot;
+use crate::test_support::TEST_OWNER;
 
 /// A tool that never leaves the process, so the loop can be exercised without
 /// a Python kernel.
@@ -54,30 +50,11 @@ impl Fixture {
     }
 }
 
-/// The principal these fixtures write as. Every synced row has an owner.
-const OWNER: &str = "11111111-2222-3333-4444-555555555555";
-
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
-    let storage = StorageRoot::from_path(dir.path().to_path_buf());
-    let db: Db = init_app_db_at(storage.path()).await.expect("app db");
-    let state_db = init_state_db_at(storage.path()).await.expect("state db");
-    crate::database::local::auth::install_test_session(&state_db.0, OWNER).await;
-    crate::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
+    let services = crate::test_support::signed_in(dir.path(), dir.path().join("fixtures"))
         .await
-        .expect("admission");
-    let workspaces = Arc::new(PythonWorkspaceService::new(
-        storage.agent_workspaces_dir(),
-        Arc::new(|| Err("no python worker in tests".to_string())),
-    ));
-    let services = crate::dispatch::AppServices::headless(
-        db,
-        state_db,
-        storage,
-        dir.path().join("fixtures"),
-        workspaces,
-    )
-    .into_shared();
+        .into_shared();
 
     // The thread's authored document is projected from real subject rows.
     sqlx::query(
@@ -87,7 +64,7 @@ async fn fixture() -> Fixture {
          INSERT INTO scores (id, uid, track_id, venue_id, name)
          VALUES ('score-1', ?1, 'track-1', 'venue-1', 'Score');",
     )
-    .bind(OWNER)
+    .bind(TEST_OWNER)
     .execute(&services.db().0)
     .await
     .expect("subject rows");
@@ -293,10 +270,13 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
         .await
         .try_into()
         .expect("exactly one child thread");
-    let child =
-        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, Some(OWNER))
-            .await
-            .expect("child thread");
+    let child = crate::database::local::agent_threads::get_thread(
+        fixture.pool(),
+        &child_id,
+        Some(TEST_OWNER),
+    )
+    .await
+    .expect("child thread");
     assert_eq!(child.thread.parent_call_id.as_deref(), Some("call_1"));
     assert_eq!(child.thread.agent_kind, "track_copilot");
     assert_eq!(child.thread.score_id.as_deref(), Some("score-1"));
@@ -334,7 +314,7 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -406,7 +386,7 @@ async fn the_last_used_chat_is_never_a_subagent_thread() {
     let parent = crate::database::local::agent_threads::get_thread_row(
         pool,
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("parent");
@@ -422,7 +402,7 @@ async fn the_last_used_chat_is_never_a_subagent_thread() {
             score_id: parent.score_id.clone(),
             ..Default::default()
         },
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("child");
@@ -501,7 +481,7 @@ async fn a_nested_subagent_merges_into_its_parent_and_a_grandchild_is_refused() 
     let grandchild = crate::database::local::agent_threads::get_thread(
         fixture.pool(),
         &grandchild_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("grandchild");
@@ -531,10 +511,13 @@ async fn a_nested_subagent_merges_into_its_parent_and_a_grandchild_is_refused() 
 
     // The nested child published into the *child's* workspace, not the live
     // document — one merge call, two shapes.
-    let child =
-        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, Some(OWNER))
-            .await
-            .expect("child thread");
+    let child = crate::database::local::agent_threads::get_thread(
+        fixture.pool(),
+        &child_id,
+        Some(TEST_OWNER),
+    )
+    .await
+    .expect("child thread");
     let nested = Transcript::from_rows(&child.messages)
         .expect("child transcript")
         .messages
@@ -596,7 +579,7 @@ async fn a_live_subagent_answers_its_parent() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -621,10 +604,13 @@ async fn a_live_subagent_answers_its_parent() {
 async fn cancelling_the_parent_turn_cancels_its_child() {
     let fixture = fixture().await;
     let child_id = cancelled_child(&fixture).await;
-    let child =
-        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, Some(OWNER))
-            .await
-            .expect("child thread");
+    let child = crate::database::local::agent_threads::get_thread(
+        fixture.pool(),
+        &child_id,
+        Some(TEST_OWNER),
+    )
+    .await
+    .expect("child thread");
     assert!(
         child.messages.iter().all(|row| row.role == "user"),
         "a cancelled child must not persist an assistant row: {:#?}",
@@ -735,7 +721,7 @@ async fn a_turn_with_one_tool_call_persists_its_assistant_row() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -763,7 +749,7 @@ async fn a_turn_with_one_tool_call_persists_its_assistant_row() {
     assert!(crate::database::local::agent_threads::open_message(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER)
+        Some(TEST_OWNER)
     )
     .await
     .expect("open row")
@@ -828,7 +814,7 @@ async fn steering_mid_turn_lands_between_tool_steps() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -1006,7 +992,7 @@ async fn a_live_turn_runs_a_tool_and_answers_from_its_result() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -1040,7 +1026,7 @@ async fn dropping_the_stream_stops_the_turn() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -1111,7 +1097,7 @@ async fn a_python_call_is_attributed_to_the_durable_user_turn() {
             .as_array()
             .is_some_and(|notices| notices.iter().any(|notice| notice
                 .as_str()
-                .is_some_and(|notice| notice.contains("no python worker in tests")))),
+                .is_some_and(|notice| notice.contains("this host runs no Python")))),
         "the cell stopped somewhere other than the worker: {value:#?}"
     );
 }
@@ -1612,7 +1598,7 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
     let snapshot = crate::database::local::agent_threads::get_thread(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .unwrap();
@@ -1739,7 +1725,7 @@ async fn rows_on_disk(fixture: &Fixture) -> Transcript {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .await
     .expect("messages");
@@ -1766,7 +1752,7 @@ async fn recovery_leaves_the_row_of_a_turn_still_running() {
     let live = super::engine::state::RunLease::acquire(
         fixture.services.storage().path(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .expect("lease");
 
@@ -1777,7 +1763,6 @@ async fn recovery_leaves_the_row_of_a_turn_still_running() {
     relaunch(&fixture).await;
     assert_eq!(rows_on_disk(&fixture).await.messages.len(), 2);
 }
-
 
 /// The script's first step, then a model that never answers: the quit lands
 /// while the second step waits on the network. A scripted second step would
@@ -1936,7 +1921,7 @@ async fn quit_during_a_tool(fixture: &Fixture) {
             let open = crate::database::local::agent_threads::open_message(
                 fixture.pool(),
                 &fixture.thread_id,
-                Some(OWNER),
+                Some(TEST_OWNER),
             )
             .await
             .expect("open row");
@@ -2161,7 +2146,7 @@ async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() 
     let lease = super::engine::state::RunLease::acquire(
         fixture.services.storage().path(),
         &fixture.thread_id,
-        Some(OWNER),
+        Some(TEST_OWNER),
     )
     .expect("lease");
     let resumed = lease

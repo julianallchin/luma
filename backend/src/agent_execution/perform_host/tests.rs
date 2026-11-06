@@ -2,37 +2,20 @@
 //! one stores, and what each refuses without storing anything.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use serde_json::{json, Value};
 
 use super::PerformHost;
 use crate::agent_execution::worker_process::HostCallError;
-use crate::database::local::{auth, database, state};
 use crate::dispatch::{dispatch, AppServices};
 use crate::models::perform::{CellContent, PerformLayout, PerformPattern};
-
-const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
 /// A signed-in library with one empty venue, and the host a Perform thread
 /// of that venue gets.
 async fn library() -> (tempfile::TempDir, AppServices, PerformHost) {
     let directory = tempfile::tempdir().unwrap();
-    let db = database::init_app_db_at(directory.path()).await.unwrap();
-    let state_db = state::init_state_db_at(directory.path()).await.unwrap();
-    auth::install_test_session(&state_db.0, OWNER).await;
-    auth::bootstrap_headless_admission(&db.0, &state_db.0)
-        .await
-        .unwrap();
-    let storage = crate::storage::StorageRoot::from_path(directory.path().to_path_buf());
-    let workspaces = Arc::new(
-        crate::agent_execution::workspace::PythonWorkspaceService::new(
-            storage.agent_workspaces_dir(),
-            Arc::new(|| Err("no Python here".to_string())),
-        ),
-    );
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let services = AppServices::headless(db, state_db, storage, repo.clone(), workspaces);
+    let services = crate::test_support::signed_in(directory.path(), repo.clone()).await;
     let venue = dispatch(
         &services,
         "create_venue",

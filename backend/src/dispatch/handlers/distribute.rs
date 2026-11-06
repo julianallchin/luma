@@ -80,12 +80,10 @@ pub async fn redistribute(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::sync::Arc;
 
     use serde_json::{json, Value};
 
     use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-    use crate::database::local::{auth, database, state};
     use crate::dispatch::{dispatch, AppServices, CommandError};
 
     /// A real definition, because the fit rule reads its QLC+ physical block:
@@ -1246,25 +1244,9 @@ mod tests {
     /// A headless host over a temporary database, pointed at the **real**
     /// fixtures root: the fit rule reads a definition's physical block, so a
     /// stub definition would pin half the answer with a number typed here.
-    /// The principal these fixtures write as. A venue is a synced row and a
-    /// synced row has an owner; `VenueAccess` admits only that owner.
-    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 
     async fn seed(directory: &Path) -> AppServices {
-        let db = database::init_app_db_at(directory).await.unwrap();
-        let state_db = state::init_state_db_at(directory).await.unwrap();
-        auth::install_test_session(&state_db.0, OWNER).await;
-        auth::bootstrap_headless_admission(&db.0, &state_db.0)
-            .await
-            .unwrap();
-        let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
-        let workspaces = Arc::new(
-            crate::agent_execution::workspace::PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("no Python here".to_string())),
-            ),
-        );
         let fixtures_root = crate::resources::source_fixtures_root().expect("the shipped bundle");
-        AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
+        crate::test_support::signed_in(directory, fixtures_root).await
     }
 }
