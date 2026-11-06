@@ -18,8 +18,9 @@
 //! with no root is one whose rows are still arriving from sync. Every reader
 //! sees it as empty; nothing here writes one in.
 
-use std::path::Path;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use luma_render::catalog::{FixtureDefinitions, VenueSockets};
 use luma_render::venue_tiles::TileMap;
@@ -31,26 +32,36 @@ use crate::database::local;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::VenueGraphRows;
 
-/// The catalog's geometry, resolved once per process.
+/// The catalog's geometry against `fixtures_root`, resolved once per root per
+/// process.
 ///
 /// Eager and shared because [`VenueSockets::load`] reads every GLB in the
 /// palette, and a venue is solved on every read: paying that per solve would be
-/// the one thing that makes the solve not free.
+/// the one thing that makes the solve not free. Keyed by the root because the
+/// root decides both the meshes and the fixture housings; a process sees one or
+/// two roots, so each is loaded once and kept.
 ///
 /// # Errors
 /// Fails if a catalog piece's GLB is missing, unreadable, or measures empty.
 pub fn sockets(fixtures_root: &Path) -> Result<&'static VenueSockets, String> {
-    static SOCKETS: OnceLock<Result<VenueSockets, String>> = OnceLock::new();
-    SOCKETS
-        .get_or_init(|| {
-            VenueSockets::load(
-                crate::resources::meshes_root(Some(fixtures_root)),
-                std::sync::Arc::new(BundledFixtures(fixtures_root.to_path_buf())),
-            )
-            .map_err(|e| format!("the stage catalog could not be resolved: {e}"))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+    type Loaded = &'static Result<VenueSockets, String>;
+    static SOCKETS: OnceLock<Mutex<HashMap<PathBuf, Loaded>>> = OnceLock::new();
+    let mut loaded = SOCKETS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entry = *loaded
+        .entry(fixtures_root.to_path_buf())
+        .or_insert_with(|| {
+            Box::leak(Box::new(
+                VenueSockets::load(
+                    crate::resources::meshes_root(Some(fixtures_root)),
+                    std::sync::Arc::new(BundledFixtures(fixtures_root.to_path_buf())),
+                )
+                .map_err(|e| format!("the stage catalog could not be resolved: {e}")),
+            ))
+        });
+    entry.as_ref().map_err(Clone::clone)
 }
 
 /// The shipped QLC+ bundle, as the socket supply's answer to "how tall is this
@@ -334,6 +345,39 @@ mod tests {
     /// Six decimals — a micrometre, as `venue_poses` rounds.
     fn round(v: f64) -> f64 {
         (v * 1e6).round() / 1e6
+    }
+
+    /// Each fixtures root answers with its own housings: a second root is not
+    /// served the first root's supply.
+    #[test]
+    fn each_fixtures_root_gets_its_own_sockets() {
+        use luma_scene::venue::NodeSockets;
+        let bundled = repo_root().join(FIXTURES_ROOT).join("2511260420");
+        let empty = tempfile::tempdir().expect("a temp dir");
+        let mover = Node {
+            id: "mover".into(),
+            kind: NodeKind::Fixture,
+            catalog_ref: Some("Chauvet/Chauvet-Rogue-R2-Spot.qxf".into()),
+            label: None,
+            params: Params::default(),
+        };
+        let clamp =
+            |root: &Path| sockets(root).expect("the catalog resolves").sockets(&mover)[0].position;
+
+        let real = clamp(&bundled);
+        let unknown = clamp(empty.path());
+        assert!(
+            real.length() > 0.01,
+            "a known moving head hangs off its housing's top"
+        );
+        assert!(
+            unknown.length() < 1e-9,
+            "a root without the fixture hangs it by its origin, not by another root's housing"
+        );
+        assert!(std::ptr::eq(
+            sockets(&bundled).unwrap(),
+            sockets(&bundled).unwrap()
+        ));
     }
 
     fn write_if_changed(path: &Path, contents: &[u8]) -> bool {
