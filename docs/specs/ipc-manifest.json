@@ -468,7 +468,7 @@
         "notes": "annotations semantics are load-bearing: `null`/omitted ⇒ fall back to persisted scores (sorted z_index asc); `[]` ⇒ authoritative empty document, clears the scene (this is how deleting the last clip clears output). Callers always send the full live list (mid-drag args ahead of the DB). z_index and blend_mode are Scene metadata and deliberately excluded from the plan signature. The rAF-coalesced live path (store:499) fires per frame, so the command must be cheap and idempotent.",
         "returns": "void",
         "sideEffects": [
-          "render_engine.set_active_scene(Some(scene)) — replaces the live render scene; set_active_scene(None) when annotations are empty or the built scene is empty",
+          "render_engine.finish_update(update, Built::Scene(scene)) — replaces the live render scene, or clears it when the built scene is empty",
           "checks COMPOSITING_GENERATION before and after building; a concurrent leave_track/cancel_compositing makes the pass a no-op",
           "resolves fixtures root + StorageRoot from AppHandle"
         ]
@@ -1622,7 +1622,7 @@
         "sideEffects": [
           "bumps COMPOSITING_GENERATION (aborts any in-flight composite_track)",
           "clear_plan_cache()",
-          "render_engine.set_active_scene(None)",
+          "render_engine.finish_update(update, Built::Scene(Scene::default())) — clears the live render scene and supersedes a build in flight",
           "host.unload() — unloads decoded audio",
           "stem_cache.remove_track(track_id)"
         ]

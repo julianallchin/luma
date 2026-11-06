@@ -24,7 +24,7 @@ use tokio::task::JoinHandle;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::host_audio::HostAudioState;
 use crate::models::perform::{DeckMatch, PerformClock, PerformDeck, PerformSource, PerformState};
-use crate::render_engine::{PerformDeckInput, RenderEngine, SceneTarget};
+use crate::render_engine::{Built, PerformDeckInput, RenderEngine, SceneTarget};
 use live::LiveClock;
 use crate::storage::StorageRoot;
 use clock::DeckFollower;
@@ -478,7 +478,7 @@ impl Shared {
             (state.set_venue.clone(), state.set_track.clone())
         };
         let Some(venue_id) = venue_id else {
-            shared.render.finish_live_update(update, None);
+            shared.render.finish_update(update, Built::Live(None));
             return;
         };
         match Self::compile_set(&shared, &venue_id, track.as_ref()).await {
@@ -487,12 +487,12 @@ impl Shared {
                 state.set_clock = Some(clock);
                 follow_tempo(&state);
                 drop(state);
-                shared.render.finish_live_update(update, set);
+                shared.render.finish_update(update, Built::Live(set));
             }
             Err(message) => {
                 log::warn!("the Perform set did not compile: {message}");
                 shared.lock().problem = Some(format!("Perform set: {message}"));
-                shared.render.finish_live_update(update, None);
+                shared.render.finish_update(update, Built::Live(None));
             }
         }
     }
@@ -862,9 +862,9 @@ async fn resolve(shared: Arc<Shared>, job: Job) {
     }
     // Installed under the state lock, so a track change cannot land between
     // the check and the install.
-    shared.render.finish_scene_update(
+    shared.render.finish_update(
         update,
-        scene.unwrap_or_else(|| crate::eval::Scene::new(Vec::new())),
+        Built::Scene(scene.unwrap_or_else(|| crate::eval::Scene::new(Vec::new()))),
     );
     if let Some(deck) = state.decks.get_mut(&job.deck) {
         deck.matched = matched;

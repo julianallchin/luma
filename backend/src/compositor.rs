@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::Scene;
 use crate::models::beat_grid::BeatGrid;
-use crate::render_engine::RenderEngine;
+use crate::render_engine::{Built, RenderEngine, SceneTarget};
 use crate::storage::StorageRoot;
 
 /// Cancel compositing, clear the render engine's active scene, and unload audio.
@@ -26,7 +26,8 @@ pub(crate) async fn leave_track(
     score_id: &str,
 ) -> Result<(), String> {
     score_scope(pool, score_id).await?;
-    render_engine.set_active_scene(None);
+    let update = render_engine.begin_scene_update(SceneTarget::Active);
+    render_engine.finish_update(update, Built::Scene(crate::eval::Scene::default()));
     host_audio.unload();
     Ok(())
 }
@@ -68,9 +69,9 @@ pub(crate) async fn install_score_scene(
     score_id: &str,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
-    let update = render_engine.begin_scene_update(crate::render_engine::SceneTarget::Active);
+    let update = render_engine.begin_scene_update(SceneTarget::Active);
     let scene = build_score_scene(pool, storage, resource_root, score_id, graph_score).await?;
-    render_engine.finish_scene_update(update, scene);
+    render_engine.finish_update(update, Built::Scene(scene));
     Ok(())
 }
 

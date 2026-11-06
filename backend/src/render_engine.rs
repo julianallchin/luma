@@ -56,6 +56,13 @@ pub(crate) struct SceneUpdate {
     generation: u64,
 }
 
+/// What a finished [`SceneUpdate`] installs: a compiled scene for the editor
+/// or a deck, or the Perform set. An empty scene or `None` clears the slot.
+pub(crate) enum Built {
+    Scene(Scene),
+    Live(Option<LiveSet>),
+}
+
 pub(crate) struct RenderEngineInner {
     scene_generation: u64,
     pending_scenes: HashMap<SceneTarget, u64>,
@@ -148,23 +155,6 @@ impl RenderEngine {
         Some(live.render_onto(base, time, &mut inner.scratch))
     }
 
-    /// Install a compiled Perform set, unless a newer build began since
-    /// `update` did. `None` clears it.
-    pub(crate) fn finish_live_update(&self, update: SceneUpdate, set: Option<LiveSet>) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        if guard.pending_scenes.get(&update.target) != Some(&update.generation) {
-            return;
-        }
-        guard.pending_scenes.remove(&update.target);
-        guard.live = set;
-    }
-
-    pub fn set_active_scene(&self, scene: Option<Scene>) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.pending_scenes.remove(&SceneTarget::Active);
-        guard.active_scene = scene;
-    }
-
     /// Updates belong to one engine and one render slot. Starting a newer
     /// update invalidates the previous one before its asynchronous reads begin.
     pub(crate) fn begin_scene_update(&self, target: SceneTarget) -> SceneUpdate {
@@ -175,25 +165,28 @@ impl RenderEngine {
         SceneUpdate { target, generation }
     }
 
-    /// Check and install under the same lock; a late result cannot resurrect a
+    /// Check and install under the same lock, unless a newer update for the
+    /// same slot began since `update` did: a late result cannot resurrect a
     /// closed score/deck or clear the editor while compiling performance output.
-    pub(crate) fn finish_scene_update(&self, update: SceneUpdate, scene: Scene) {
+    pub(crate) fn finish_update(&self, update: SceneUpdate, built: Built) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         if guard.pending_scenes.get(&update.target) != Some(&update.generation) {
             return;
         }
         guard.pending_scenes.remove(&update.target);
-        match update.target {
-            SceneTarget::Active => guard.active_scene = (!scene.is_empty()).then_some(scene),
-            SceneTarget::Deck(id) => {
+        match (update.target, built) {
+            (SceneTarget::Active, Built::Scene(scene)) => {
+                guard.active_scene = (!scene.is_empty()).then_some(scene);
+            }
+            (SceneTarget::Deck(id), Built::Scene(scene)) => {
                 if scene.is_empty() {
                     guard.perform_layers.remove(&id);
                 } else {
                     guard.perform_layers.insert(id, scene);
                 }
             }
-            // A live layer installs with `finish_live_update`.
-            SceneTarget::Live => {}
+            (SceneTarget::Live, Built::Live(set)) => guard.live = set,
+            (target, _) => debug_assert!(false, "{target:?} finished with another slot's output"),
         }
     }
 
@@ -360,32 +353,40 @@ fn score_mix(
 mod tests {
     #[test]
     fn scene_updates_cannot_overwrite_newer_scores_or_reopen_closed_slots() {
-        use super::{RenderEngine, SceneTarget};
+        use super::{Built, RenderEngine, SceneTarget};
         use crate::eval::Scene;
         let engine = RenderEngine::default();
+        engine.inner.lock().unwrap().active_scene = Some(Scene::default());
         let stale = engine.begin_scene_update(SceneTarget::Active);
         let current = engine.begin_scene_update(SceneTarget::Active);
-        engine.set_active_scene(Some(Scene::default()));
-        engine.finish_scene_update(stale, Scene::default());
-        engine.finish_scene_update(current, Scene::default());
+        engine.finish_update(stale, Built::Scene(Scene::default()));
         assert!(
             engine.sample(0.0).is_some(),
-            "direct scene replacement invalidates pending compilation"
+            "a superseded build installs nothing"
+        );
+        engine.finish_update(current, Built::Scene(Scene::default()));
+        assert!(
+            engine.sample(0.0).is_none(),
+            "an empty build clears the slot"
         );
 
+        // Leaving the editor is an update of its own, so it supersedes a build
+        // still compiling.
         let pending = engine.begin_scene_update(SceneTarget::Active);
-        engine.set_active_scene(None);
-        engine.finish_scene_update(pending, Scene::default());
-        assert!(engine.sample(0.0).is_none());
+        let leave = engine.begin_scene_update(SceneTarget::Active);
+        engine.finish_update(leave, Built::Scene(Scene::default()));
+        engine.inner.lock().unwrap().active_scene = Some(Scene::default());
+        engine.finish_update(pending, Built::Scene(Scene::default()));
+        assert!(engine.sample(0.0).is_some());
         assert!(engine.inner.lock().unwrap().pending_scenes.is_empty());
     }
 
     #[test]
     fn deck_scene_updates_are_independent_and_empty_results_clear_old_output() {
-        use super::{RenderEngine, SceneTarget};
+        use super::{Built, RenderEngine, SceneTarget};
         use crate::eval::Scene;
         let engine = RenderEngine::default();
-        engine.set_active_scene(Some(Scene::default()));
+        engine.inner.lock().unwrap().active_scene = Some(Scene::default());
         engine
             .inner
             .lock()
@@ -395,16 +396,16 @@ mod tests {
         let old = engine.begin_scene_update(SceneTarget::Deck(1));
         let current = engine.begin_scene_update(SceneTarget::Deck(1));
         let other = engine.begin_scene_update(SceneTarget::Deck(2));
-        engine.finish_scene_update(old, Scene::default());
+        engine.finish_update(old, Built::Scene(Scene::default()));
         assert!(engine.inner.lock().unwrap().perform_layers.contains_key(&1));
-        engine.finish_scene_update(current, Scene::default());
+        engine.finish_update(current, Built::Scene(Scene::default()));
         assert!(!engine.inner.lock().unwrap().perform_layers.contains_key(&1));
         assert!(
             engine.sample(0.0).is_some(),
             "deck changes preserve the editor"
         );
         engine.clear_perform();
-        engine.finish_scene_update(other, Scene::default());
+        engine.finish_update(other, Built::Scene(Scene::default()));
         assert!(engine.inner.lock().unwrap().pending_scenes.is_empty());
         assert!(engine.sample(0.0).is_some());
     }
