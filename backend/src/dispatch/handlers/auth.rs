@@ -206,11 +206,6 @@ pub async fn set_session_item(
 ) -> Result<(), CommandError> {
     let state = &services.state_db;
     let db = &services.db;
-    let workspaces = &services.workspaces;
-    let host_audio = &services.host_audio;
-    let render_engine = &services.render_engine;
-    let perform = &services.perform;
-    let inputs = &services.inputs;
     let analysis_tasks = &services.analysis_tasks;
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
         let validated = crate::database::local::auth::validate_supabase_session(&value).await?;
@@ -268,12 +263,7 @@ pub async fn set_session_item(
         // other admitted operation and prevents a later host effect from
         // racing in after process-global caches are cleared.
         crate::database::local::auth::suspend_write_admission(&db.0, &admission_backup).await?;
-        let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
-        host_audio.unload();
-        perform.stop().await;
-        inputs.close().await;
-        crate::controls::clear();
-        render_engine.reset_for_identity_switch();
+        let _workspace_barrier = services.reset_identity().await;
         if let Err(error) = crate::database::local::auth::replace_session_for_connection(
             &mut session_guard,
             &validated,
@@ -317,9 +307,8 @@ pub async fn set_session_item(
 /// transition, not a cache delete.
 ///
 /// SMELL: unlike [`set_session_item`]'s identity-switch branch, this path does
-/// not reset host audio / render / devices / Python. It relies on the caller
-/// running [`wipe_database`] first. The asymmetry is load-bearing only by
-/// convention.
+/// not call [`AppServices::reset_identity`]. It relies on the caller running
+/// [`wipe_database`] first. The asymmetry is load-bearing only by convention.
 pub async fn remove_session_item(services: &AppServices, key: String) -> Result<(), CommandError> {
     let state = &services.state_db;
     let db = &services.db;
@@ -410,11 +399,6 @@ async fn rollback_auth_switch(
 pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let db = &services.db;
     let state = &services.state_db;
-    let workspaces = &services.workspaces;
-    let host_audio = &services.host_audio;
-    let render_engine = &services.render_engine;
-    let perform = &services.perform;
-    let inputs = &services.inputs;
     let analysis_tasks = &services.analysis_tasks;
 
     {
@@ -458,12 +442,7 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     // BEGIN IMMEDIATE first waits out every admitted live operation. Keeping
     // that write fence through the reset prevents new host-audio/render/device
     // effects from completing after prior-principal capabilities are cleared.
-    let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
-    host_audio.unload();
-    perform.stop().await;
-    inputs.close().await;
-    crate::controls::clear();
-    render_engine.reset_for_identity_switch();
+    let _workspace_barrier = services.reset_identity().await;
 
     wipe_signed_in_projection(&mut transaction, &principal).await?;
     transaction

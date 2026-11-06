@@ -473,6 +473,27 @@ impl AppServices {
             .map_err(CommandError::Internal)
     }
 
+    /// Drop everything the previous identity left live in this process: its
+    /// Python workspaces, loaded audio, live follow, input ports, control
+    /// values, cached venue rigs and installed scenes. Every identity change
+    /// — a switch to another account and a sign-out — calls this, after
+    /// closing write admission, so no effect of the old identity lands after.
+    ///
+    /// The returned barrier keeps Python workspaces closed; hold it until the
+    /// next identity is admitted.
+    pub(crate) async fn reset_identity(
+        &self,
+    ) -> crate::agent_execution::workspace::WorkspaceIdentityBarrier<'_> {
+        let workspaces = self.workspaces.suspend_for_identity_switch().await;
+        self.host_audio.unload();
+        self.perform.stop().await;
+        self.inputs.close().await;
+        crate::controls::clear();
+        crate::services::groups::invalidate_venue_fixture_cache();
+        self.render_engine.reset_for_identity_switch();
+        workspaces
+    }
+
     /// The principal admitted for signed writes in the app database.
     ///
     /// # Errors

@@ -379,6 +379,30 @@ mod tests {
             "a repair is an edit, and the score says so"
         );
     }
+    /// What one identity left cached does not answer for the next: after a
+    /// reset the rig is read from the rows again, and the control values are
+    /// gone.
+    #[tokio::test]
+    async fn an_identity_reset_forgets_the_cached_rig_and_control_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = seed(directory.path()).await;
+        let venue = venue(&services).await;
+        let stage = place(&services, &venue, "stage", DECK, None, None, 0.0, 0.0).await;
+        hang(&services, &venue, &stage, 2.0).await;
+        assert_eq!(selection(&services, &venue, "all").await, 1);
+        crate::controls::venue(&venue).set("drop", 1.0);
+
+        // The rows change under the cache, as the next identity's would.
+        sqlx::query("DELETE FROM fixtures WHERE venue_id = ?")
+            .bind(&venue)
+            .execute(&services.db.0)
+            .await
+            .unwrap();
+        drop(services.reset_identity().await);
+
+        assert_eq!(selection(&services, &venue, "all").await, 0);
+        assert_eq!(crate::controls::venue(&venue).value("drop"), 0.0);
+    }
     async fn tree(services: &AppServices, venue: &str) -> Value {
         dispatch(services, "list_group_tree", &json!({"venueId":venue}))
             .await

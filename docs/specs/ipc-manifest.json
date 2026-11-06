@@ -2782,7 +2782,7 @@
           "non-session key: plain upsert into StateDb",
           "session key: validates the Supabase JWT, takes sync_lock + the reserved StateDb connection, classifies the write as CredentialRefresh vs identity switch",
           "CredentialRefresh (same principal): only replaces the session + re-bootstraps authored projections + recovers deleting agent threads — deliberately does NOT reset audio/render/device/python state",
-          "identity switch: suspends write admission, suspends analysis + python workspace generations, clears GraphRunStore, host_audio.unload(), render_engine.reset_for_identity_switch(), controller.disconnect(), mixer.disconnect(), stem_cache.clear(), replaces the session, re-arms write admission, bootstraps authored projections — with staged rollback (rollback_auth_switch / rollback_activated_auth_switch)"
+          "identity switch: suspends write admission, suspends analysis, AppServices::reset_identity() (python workspaces, host audio, perform, inputs, controls, venue fixture cache, render engine), replaces the session, re-arms write admission, bootstraps authored projections — with staged rollback (rollback_auth_switch / rollback_activated_auth_switch)"
         ]
       }
     },
@@ -2988,7 +2988,7 @@
           "holds engine.sync_lock for the whole boundary (blocks pull/push)",
           "NETWORK: sync_files_unlocked + push::flush_pending until it delivers nothing — offline or partial sync makes the command FAIL rather than delete",
           "re-verifies the frozen principal after network work; errors if the session changed",
-          "suspends analysis + python workspace generations; clears GraphRunStore; host_audio.unload(); render_engine.reset_for_identity_switch(); controller.disconnect(); mixer.disconnect(); stem_cache.clear()",
+          "suspends analysis; AppServices::reset_identity() (python workspaces, host audio, perform, inputs, controls, venue fixture cache, render engine)",
           "BEGIN IMMEDIATE tx: closes signed write admission for the principal, audits every uid-bearing table plus undelivered rows and tombstones for durability, deletes the signed-in projection and this principal's push state, commits",
           "recover_committed_signout after commit; prints '[auth] Signed-in database projection wiped on sign-out'"
         ]
