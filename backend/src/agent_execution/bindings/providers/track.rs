@@ -66,7 +66,7 @@ async fn provide_timeline(
     match &ctx.score_document {
         Ok(Some(score)) => {
             inline(b, "track.document", score)?;
-            let grid = crate::services::tracks::get_track_beats(ctx.pool, track_id).await?;
+            let grid = crate::database::local::tracks::get_track_beats(ctx.pool, track_id).await?;
             inline(
                 b,
                 "track.beat_origin_s",

@@ -18,7 +18,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
 use crate::services::stage_ops::{Stage, StageError};
@@ -280,7 +281,8 @@ mod tests {
 
     use serde_json::{json, Value};
 
-    use crate::dispatch::{dispatch, AppServices, CommandError};
+    use crate::dispatch::{dispatch, AppServices};
+    use crate::error::CommandError;
 
     /// A deck: `bottom` mates the floor, `top` is a surface, `edge_*` are the
     /// self-mating sides. Real geometry, because the socket supply is a

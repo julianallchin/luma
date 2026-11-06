@@ -8,7 +8,7 @@
 //!
 //! The one thing the table cannot know, the per-command prose (`prose`), is
 //! carried across by name from the previous file. Host events are not listed:
-//! they are the `dispatch::Event` enum, and every host matches it exhaustively.
+//! they are the `events::Event` enum, and every host matches it exhaustively.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

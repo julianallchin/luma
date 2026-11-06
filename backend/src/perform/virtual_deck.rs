@@ -40,7 +40,11 @@ pub(crate) fn follow(shared: Arc<Shared>, host: HostAudioState, run: u64) -> Joi
                 };
                 match &loaded {
                     Some((id, track)) => {
-                        shared.ingest(run, Some(reading(track, &host, snapshot.is_playing)), Instant::now());
+                        shared.ingest(
+                            run,
+                            Some(reading(track, &host, snapshot.is_playing)),
+                            Instant::now(),
+                        );
                         // Pinned, not matched: the player says which track
                         // this is, so a name lookup could only get it wrong.
                         let _ = Shared::pin(&shared, run, DECK, Some(id.clone()));
@@ -50,7 +54,11 @@ pub(crate) fn follow(shared: Arc<Shared>, host: HostAudioState, run: u64) -> Joi
                 continue;
             }
             if let Some((_, track)) = &loaded {
-                shared.ingest(run, Some(reading(track, &host, snapshot.is_playing)), Instant::now());
+                shared.ingest(
+                    run,
+                    Some(reading(track, &host, snapshot.is_playing)),
+                    Instant::now(),
+                );
             }
         }
     })
@@ -67,9 +75,7 @@ async fn describe(shared: &Shared, track_id: &str) -> LoadedTrack {
             .as_ref()
             .and_then(|track| track.title.clone())
             .unwrap_or_default(),
-        artist: summary
-            .and_then(|track| track.artist)
-            .unwrap_or_default(),
+        artist: summary.and_then(|track| track.artist).unwrap_or_default(),
         network_path: None,
         duration: None,
         bpm: None,

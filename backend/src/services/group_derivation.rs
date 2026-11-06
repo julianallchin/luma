@@ -80,7 +80,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use glam::{DMat4, DVec3};
@@ -88,82 +87,15 @@ use luma_scene::coords::data_pose_of_d;
 use luma_scene::venue::{NodeKind, NodeSockets, ResolvedVenue, VenueGraph};
 
 use crate::models::fixtures::{ChannelType, FixtureDefinition, Mode};
-use crate::models::groups::{normalize_group_name, GroupOrigin, GroupTreeNode};
+use crate::models::groups::{normalize_group_name, FixtureRole, GroupOrigin, GroupTreeNode};
 
 // ---------------------------------------------------------------------------
 // Role
 // ---------------------------------------------------------------------------
 
-/// What a fixture is *for*, which is what a group of them is named after.
-///
-/// Eight values, closed. This is the vocabulary a score speaks; a ninth would
-/// mean every venue's tree grew a branch nothing references.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FixtureRole {
-    /// Colour over an area: pars, wash movers, anything with mixing and no gobo.
-    Wash,
-    /// A shaped beam: a mover with a gobo wheel.
-    Spot,
-    /// A hard column: a mover with a prism and no gobo, or an LED beam bar.
-    Beam,
-    /// Shutter-first.
-    Strobe,
-    /// Intensity only, no colour: the slab you point at the crowd.
-    Blinder,
-    /// Addressable cells — a pixel bar, a matrix, a multi-head mode.
-    Pixel,
-    /// Atmospherics and lasers: haze, smoke, fans, flowers, effects.
-    Fx,
-    /// Everything the table cannot place.
-    Other,
-}
-
+/// [`FixtureRole`] is declared in [`crate::models::groups`]; how a fixture
+/// earns one is decided here.
 impl FixtureRole {
-    /// Every role, in the order the tree lists them.
-    pub const ALL: [FixtureRole; 8] = [
-        FixtureRole::Wash,
-        FixtureRole::Spot,
-        FixtureRole::Beam,
-        FixtureRole::Strobe,
-        FixtureRole::Blinder,
-        FixtureRole::Pixel,
-        FixtureRole::Fx,
-        FixtureRole::Other,
-    ];
-
-    /// The wire name, and the stem of every group name under this role.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FixtureRole::Wash => "wash",
-            FixtureRole::Spot => "spot",
-            FixtureRole::Beam => "beam",
-            FixtureRole::Strobe => "strobe",
-            FixtureRole::Blinder => "blinder",
-            FixtureRole::Pixel => "pixel",
-            FixtureRole::Fx => "fx",
-            FixtureRole::Other => "other",
-        }
-    }
-
-    /// What the role's node is called in the tree — a plural, because the node
-    /// is a set of fixtures rather than one fixture's type. `Pixel` reads as
-    /// `led bars` for the same reason: it is what the things in it are called.
-    #[must_use]
-    pub fn display_name(self) -> &'static str {
-        match self {
-            FixtureRole::Wash => "washes",
-            FixtureRole::Spot => "spots",
-            FixtureRole::Beam => "beams",
-            FixtureRole::Strobe => "strobes",
-            FixtureRole::Blinder => "blinders",
-            FixtureRole::Pixel => "led bars",
-            FixtureRole::Fx => "fx",
-            FixtureRole::Other => "other",
-        }
-    }
-
     /// The role of a fixture, from its definition and the mode it is patched in.
     ///
     /// The table, first match wins:

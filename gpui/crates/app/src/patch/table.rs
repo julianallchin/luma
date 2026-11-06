@@ -10,9 +10,9 @@
 //! under the row until the next edit on it — so "what did I type" and "what is
 //! stored" are never the same pixel telling two stories.
 
-use luma_ui::motion::FadeHover;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Div, Entity, Point, SharedString};
+use luma_ui::motion::FadeHover;
 
 use luma_lib::models::fixtures::PatchedFixture;
 use luma_ui::ladder;

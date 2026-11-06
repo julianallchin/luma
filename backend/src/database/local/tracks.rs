@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::database::local::deletes;
+use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{ChordSection, TrackBeats, TrackBrowserRow, TrackStem, TrackSummary};
 
 // Helper structs for internal queries
@@ -149,9 +150,7 @@ pub async fn list_tracks_enriched_for_connection(
         let mut clocks = HashMap::new();
         for (track_id, start, duration) in clips {
             if !clocks.contains_key(&track_id) {
-                let grid =
-                    crate::services::tracks::get_track_beats_for_connection(connection, &track_id)
-                        .await?;
+                let grid = get_track_beats_for_connection(connection, &track_id).await?;
                 clocks.insert(
                     track_id.clone(),
                     grid.map(|grid| grid.timeline())
@@ -866,7 +865,7 @@ pub async fn get_track_beats_raw(
     get_track_beats_raw_for_connection(&mut connection, track_id).await
 }
 
-pub(crate) async fn get_track_beats_raw_for_connection(
+async fn get_track_beats_raw_for_connection(
     connection: &mut SqliteConnection,
     track_id: &str,
 ) -> Result<Option<TrackBeats>, String> {
@@ -882,6 +881,78 @@ pub(crate) async fn get_track_beats_raw_for_connection(
     .fetch_optional(connection)
     .await
     .map_err(|e| format!("Failed to fetch beat data: {}", e))
+}
+
+/// A track's beat grid; `None` when beat detection has not run for it.
+pub async fn get_track_beats(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Option<BeatGrid>, String> {
+    get_track_beats_raw(pool, track_id)
+        .await?
+        .map(beat_grid)
+        .transpose()
+}
+
+/// [`get_track_beats`] through a connection the caller already holds.
+pub(crate) async fn get_track_beats_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> Result<Option<BeatGrid>, String> {
+    get_track_beats_raw_for_connection(connection, track_id)
+        .await?
+        .map(beat_grid)
+        .transpose()
+}
+
+/// The grid a row stores, with any metadata it lacks inferred from its beats.
+fn beat_grid(track_beats: TrackBeats) -> Result<BeatGrid, String> {
+    let beats: Vec<f32> = serde_json::from_str(&track_beats.beats_json)
+        .map_err(|e| format!("Failed to parse beats: {}", e))?;
+    let downbeats: Vec<f32> = serde_json::from_str(&track_beats.downbeats_json)
+        .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
+    let (fallback_bpm, fallback_offset, fallback_bpb) = infer_grid_metadata(&beats, &downbeats);
+    let bpm_value = track_beats.bpm.unwrap_or(fallback_bpm as f64) as f32;
+    let offset_value = track_beats
+        .downbeat_offset
+        .unwrap_or(fallback_offset as f64) as f32;
+    let bpb_value = track_beats.beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
+    Ok(BeatGrid {
+        beats,
+        downbeats,
+        bpm: bpm_value,
+        downbeat_offset: offset_value,
+        beats_per_bar: bpb_value,
+    })
+}
+
+fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
+    if beats.len() < 2 {
+        let offset = downbeats.first().cloned().unwrap_or(0.0);
+        return (0.0, offset, 4);
+    }
+    let mut intervals: Vec<f32> = beats.windows(2).map(|w| (w[1] - w[0]).max(1e-6)).collect();
+    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = intervals[intervals.len() / 2];
+    let bpm = if median > 0.0 { 60.0 / median } else { 0.0 };
+    let offset = downbeats
+        .first()
+        .copied()
+        .unwrap_or_else(|| beats.first().copied().unwrap_or(0.0));
+    let beats_per_bar = if downbeats.len() >= 2 && median > 0.0 {
+        let bar_intervals: Vec<f32> = downbeats
+            .windows(2)
+            .map(|w| (w[1] - w[0]).max(1e-6))
+            .collect();
+        let mut sorted = bar_intervals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let bar_med = sorted[sorted.len() / 2];
+        let est = (bar_med / median).round().clamp(1.0, 16.0);
+        est as i64
+    } else {
+        4
+    };
+    (bpm, offset, beats_per_bar)
 }
 
 pub async fn get_track_bar_classifications_raw(
@@ -1039,10 +1110,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let grid = crate::services::tracks::get_track_beats(&pool, "reviewed")
-            .await
-            .unwrap()
-            .unwrap();
+        let grid = get_track_beats(&pool, "reviewed").await.unwrap().unwrap();
         assert!(beat_validations::get(&pool, "reviewed")
             .await
             .unwrap()

@@ -1,9 +1,9 @@
 //! Groups are saved fixture collections. Generation only provides a starting set.
-use luma_ui::motion::FadeHover;
 use super::Patch;
 use crate::{shell::Body, Luma};
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Focusable, SharedString, Subscription, Window};
+use luma_ui::motion::FadeHover;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::text_input::TextInput;
 use luma_ui::{float, ladder};
@@ -503,11 +503,27 @@ pub(crate) fn repair_dialog(state: &Repair, app: &Entity<Luma>) -> AnyElement {
     let recreate = app.clone();
     let replace = app.clone();
     let close = app.clone();
-    let mut body = div().p(px(20.)).flex().flex_col().gap(px(12.))
-        .child(div().text_size(px(16.)).child(format!("Missing group: {}", missing.name)))
+    let mut body = div()
+        .p(px(20.))
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(
+            div()
+                .text_size(px(16.))
+                .child(format!("Missing group: {}", missing.name)),
+        )
         .child(div().text_size(px(12.)).child(missing_usage(missing)))
-        .child(float::btn(format!("Recreate with {} selected fixtures",state.fixtures.len()), "recreate-group").id("recreate-group")
-            .on_click(move |_,_,cx| recreate.update(cx, |this,cx| this.resolve_group(true,cx))).agent_node(Role::Button,"Recreate missing group").agent_disabled(state.busy))
+        .child(
+            float::btn(
+                format!("Recreate with {} selected fixtures", state.fixtures.len()),
+                "recreate-group",
+            )
+            .id("recreate-group")
+            .on_click(move |_, _, cx| recreate.update(cx, |this, cx| this.resolve_group(true, cx)))
+            .agent_node(Role::Button, "Recreate missing group")
+            .agent_disabled(state.busy),
+        )
         .child(float::label("Replace references with"));
     let mut choices = div()
         .id("replacement-groups")
@@ -585,7 +601,11 @@ fn missing_usage(missing: &luma_lib::models::groups::MissingGroup) -> String {
     };
     let users: Vec<String> = [
         count(missing.scores.len(), "saved score", "saved scores"),
-        count(missing.perform_patterns.len(), "Perform pattern", "Perform patterns"),
+        count(
+            missing.perform_patterns.len(),
+            "Perform pattern",
+            "Perform patterns",
+        ),
     ]
     .into_iter()
     .flatten()
@@ -593,6 +613,10 @@ fn missing_usage(missing: &luma_lib::models::groups::MissingGroup) -> String {
     format!(
         "{} {} this name. Recreate it, or change their selectors to an existing group.",
         users.join(" and "),
-        if missing.scores.len() + missing.perform_patterns.len() == 1 { "uses" } else { "use" },
+        if missing.scores.len() + missing.perform_patterns.len() == 1 {
+            "uses"
+        } else {
+            "use"
+        },
     )
 }

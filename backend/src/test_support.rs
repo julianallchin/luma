@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::boot::{Boot, Identity};
 use crate::database::local::{auth, state};
-use crate::dispatch::{AppServices, Events};
+use crate::dispatch::AppServices;
+use crate::events::Events;
 use crate::storage::StorageRoot;
 
 /// The principal a signed-in test library belongs to. Every synced row has an

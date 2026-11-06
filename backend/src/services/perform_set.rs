@@ -17,7 +17,7 @@ use crate::database::local::perform_set as db;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
-use crate::dispatch::CommandError;
+use crate::error::CommandError;
 use crate::models::perform::{CellContent, PerformLayout, PerformPattern};
 use crate::perform::PerformSession;
 

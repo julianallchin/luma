@@ -8,9 +8,10 @@ use std::future::Future;
 
 use sqlx::SqlitePool;
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
 use crate::engine_dj;
 use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
+use crate::error::CommandError;
 use crate::models::tracks::{TrackImportFailure, TrackImportResult};
 use crate::services::tracks::{ImportRequest, LibraryTrack};
 

@@ -3,7 +3,8 @@
 
 use std::future::Future;
 
-use luma_lib::dispatch::{handlers, CommandError};
+use luma_lib::dispatch::handlers;
+use luma_lib::error::CommandError;
 use luma_lib::models::beat_grid::BeatGrid;
 use luma_lib::models::scores::{Score, ScoreSummary};
 use luma_lib::services::graph_scores::ClipStrip;

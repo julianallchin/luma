@@ -77,15 +77,6 @@ pub struct LiveHandles {
     pub(crate) inputs: Arc<crate::inputs::InputHub>,
 }
 
-impl LiveHandles {
-    pub(crate) fn of(services: &crate::dispatch::AppServices) -> Self {
-        Self {
-            perform: Arc::clone(&services.perform),
-            inputs: Arc::clone(&services.inputs),
-        }
-    }
-}
-
 /// Interrupt the thread's in-flight cell. `false` when there is none.
 pub fn cancel_python_cell_inner(service: &PythonWorkspaceService, thread_id: &str) -> bool {
     service.cancel_cell(thread_id)

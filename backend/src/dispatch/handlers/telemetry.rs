@@ -6,7 +6,8 @@ use std::io::Write;
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 
 const RENDER_TELEMETRY_LOG: &str = "render-telemetry.log";
 const ROTATED_RENDER_TELEMETRY_LOG: &str = "render-telemetry.log.1";

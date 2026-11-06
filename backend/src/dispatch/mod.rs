@@ -4,7 +4,6 @@
 //! agent harness and its fixtures. The command table owns wire names and
 //! metadata.
 
-mod error;
 pub mod handlers;
 #[cfg(test)]
 mod manifest;
@@ -16,12 +15,13 @@ pub use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist};
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
 pub use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist};
 pub use crate::services::artwork::ArtworkRef;
-pub use error::CommandError;
 pub use services::system_track_sources;
-pub use services::{AppServices, Event, EventSink, Events, SharedServices, TrackSources};
+pub use services::{AppServices, SharedServices, TrackSources};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+
+use crate::error::CommandError;
 
 /// Declare a command once; get the JSON dispatch arm and
 /// the name registry from it.
@@ -111,12 +111,12 @@ use crate::models::agent_threads::{
     AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
     CreateAgentThreadInput,
 };
+use crate::models::beat_grid::BeatGrid;
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::folders::Folder;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
-use crate::models::beat_grid::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
 use crate::models::perform::{PerformLayout, PerformPattern, PerformSource, PerformState};
 use crate::models::scores::{Score, ScoreSummary};

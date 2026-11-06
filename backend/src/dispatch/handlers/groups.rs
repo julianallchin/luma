@@ -1,7 +1,8 @@
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::dispatch::handlers::fixtures::require_changed;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::selection::Selection;

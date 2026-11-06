@@ -1,5 +1,6 @@
 use crate::database::local::agent_threads as db;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::actor::Actor;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadMessage, AgentThreadUsage,

@@ -11,11 +11,10 @@
 //! no execution id or workspace id on the wire for a caller to get wrong.
 
 use crate::database::local::agent_threads as threads_db;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
-use crate::services::agent_execution::{
-    cancel_python_cell_inner, run_python_cell_inner, LiveHandles,
-};
+use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
 
 /// Run one cell in the durable thread's kernel. `turn_message_id` is required:
 /// a cell with edit authority must be attributable to a durable turn — a user
@@ -33,7 +32,7 @@ pub async fn run_python_cell(
         &services.storage,
         &services.fixtures_root,
         &services.workspaces,
-        &LiveHandles::of(services),
+        &services.live_handles(),
         thread_id,
         code,
         scope,

@@ -1,7 +1,8 @@
 //! MIDI and OSC inputs bound to a venue's live controls. See `crate::inputs`.
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 pub use crate::inputs::{Address, Binding, InputState, LastInput, Mode};
 
 async fn open(services: &AppServices, venue_id: &str) -> Result<(), CommandError> {

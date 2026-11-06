@@ -2,7 +2,8 @@ use crate::database::local::scores::{self as db, rows};
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::scores::{Score, ScoreSummary};
 use crate::services::catalog;
 

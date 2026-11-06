@@ -7,7 +7,7 @@ use lofty::picture::PictureType;
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use sha2::{Digest, Sha256};
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::SqlitePool;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
@@ -19,8 +19,7 @@ use crate::database::local::tracks::ArtifactVersions;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read as VenueRead, VenueAccess, VenueResource,
 };
-use crate::dispatch::{Event, Events};
-use crate::models::beat_grid::BeatGrid;
+use crate::events::{Event, Events};
 use crate::models::tracks::{
     StageOutcome, TrackBrowserRow, TrackImportFailure, TrackImportPhase, TrackImportProgress,
     TrackImportResult, TrackSummary,
@@ -790,51 +789,6 @@ async fn run_waveform_jobs(
     .await;
 }
 
-/// Get beat grid for a track.
-pub async fn get_track_beats(
-    pool: &SqlitePool,
-    track_id: &str,
-) -> Result<Option<BeatGrid>, String> {
-    let row = tracks_db::get_track_beats_raw(pool, track_id).await?;
-    parse_track_beats(row)
-}
-
-pub(crate) async fn get_track_beats_for_connection(
-    connection: &mut SqliteConnection,
-    track_id: &str,
-) -> Result<Option<BeatGrid>, String> {
-    let row = tracks_db::get_track_beats_raw_for_connection(connection, track_id).await?;
-    parse_track_beats(row)
-}
-
-fn parse_track_beats(
-    row: Option<crate::models::tracks::TrackBeats>,
-) -> Result<Option<BeatGrid>, String> {
-    match row {
-        Some(track_beats) => {
-            let beats: Vec<f32> = serde_json::from_str(&track_beats.beats_json)
-                .map_err(|e| format!("Failed to parse beats: {}", e))?;
-            let downbeats: Vec<f32> = serde_json::from_str(&track_beats.downbeats_json)
-                .map_err(|e| format!("Failed to parse downbeats: {}", e))?;
-            let (fallback_bpm, fallback_offset, fallback_bpb) =
-                infer_grid_metadata(&beats, &downbeats);
-            let bpm_value = track_beats.bpm.unwrap_or(fallback_bpm as f64) as f32;
-            let offset_value = track_beats
-                .downbeat_offset
-                .unwrap_or(fallback_offset as f64) as f32;
-            let bpb_value = track_beats.beats_per_bar.unwrap_or(fallback_bpb as i64) as i32;
-            Ok(Some(BeatGrid {
-                beats,
-                downbeats,
-                bpm: bpm_value,
-                downbeat_offset: offset_value,
-                beats_per_bar: bpb_value,
-            }))
-        }
-        None => Ok(None),
-    }
-}
-
 /// Delete a track and its derived data.
 pub async fn delete_track(
     pool: &SqlitePool,
@@ -1350,40 +1304,6 @@ fn deletion_stage_has_no_moved_artifacts(directory: &Path) -> Result<bool, Strin
         }
     }
     Ok(true)
-}
-
-// -----------------------------------------------------------------------------
-// Import orchestration — runs the preprocessing DAG plus waveform generation
-// for a single freshly-imported (or re-encountered) track.
-// -----------------------------------------------------------------------------
-
-fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
-    if beats.len() < 2 {
-        let offset = downbeats.first().cloned().unwrap_or(0.0);
-        return (0.0, offset, 4);
-    }
-    let mut intervals: Vec<f32> = beats.windows(2).map(|w| (w[1] - w[0]).max(1e-6)).collect();
-    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = intervals[intervals.len() / 2];
-    let bpm = if median > 0.0 { 60.0 / median } else { 0.0 };
-    let offset = downbeats
-        .first()
-        .copied()
-        .unwrap_or_else(|| beats.first().copied().unwrap_or(0.0));
-    let beats_per_bar = if downbeats.len() >= 2 && median > 0.0 {
-        let bar_intervals: Vec<f32> = downbeats
-            .windows(2)
-            .map(|w| (w[1] - w[0]).max(1e-6))
-            .collect();
-        let mut sorted = bar_intervals.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let bar_med = sorted[sorted.len() / 2];
-        let est = (bar_med / median).round().clamp(1.0, 16.0);
-        est as i64
-    } else {
-        4
-    };
-    (bpm, offset, beats_per_bar)
 }
 
 // -----------------------------------------------------------------------------

@@ -1,4 +1,5 @@
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::waveforms::{TrackWaveform, WaveformSignal};
 use crate::services::waveforms as waveform_service;
 

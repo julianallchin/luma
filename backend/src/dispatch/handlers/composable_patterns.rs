@@ -1,5 +1,6 @@
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::selection::Selection;
 use luma_patterns::Cell;

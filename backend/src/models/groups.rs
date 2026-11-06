@@ -1,6 +1,75 @@
 use serde::{Deserialize, Serialize};
 
-use crate::services::group_derivation::FixtureRole;
+/// What a fixture is *for*, which is what a group of them is named after.
+///
+/// Eight values, closed. This is the vocabulary a score speaks; a ninth would
+/// mean every venue's tree grew a branch nothing references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixtureRole {
+    /// Colour over an area: pars, wash movers, anything with mixing and no gobo.
+    Wash,
+    /// A shaped beam: a mover with a gobo wheel.
+    Spot,
+    /// A hard column: a mover with a prism and no gobo, or an LED beam bar.
+    Beam,
+    /// Shutter-first.
+    Strobe,
+    /// Intensity only, no colour: the slab you point at the crowd.
+    Blinder,
+    /// Addressable cells — a pixel bar, a matrix, a multi-head mode.
+    Pixel,
+    /// Atmospherics and lasers: haze, smoke, fans, flowers, effects.
+    Fx,
+    /// Everything the table cannot place.
+    Other,
+}
+
+impl FixtureRole {
+    /// Every role, in the order the tree lists them.
+    pub const ALL: [FixtureRole; 8] = [
+        FixtureRole::Wash,
+        FixtureRole::Spot,
+        FixtureRole::Beam,
+        FixtureRole::Strobe,
+        FixtureRole::Blinder,
+        FixtureRole::Pixel,
+        FixtureRole::Fx,
+        FixtureRole::Other,
+    ];
+
+    /// The wire name, and the stem of every group name under this role.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FixtureRole::Wash => "wash",
+            FixtureRole::Spot => "spot",
+            FixtureRole::Beam => "beam",
+            FixtureRole::Strobe => "strobe",
+            FixtureRole::Blinder => "blinder",
+            FixtureRole::Pixel => "pixel",
+            FixtureRole::Fx => "fx",
+            FixtureRole::Other => "other",
+        }
+    }
+
+    /// What the role's node is called in the tree — a plural, because the node
+    /// is a set of fixtures rather than one fixture's type. `Pixel` reads as
+    /// `led bars` for the same reason: it is what the things in it are called.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            FixtureRole::Wash => "washes",
+            FixtureRole::Spot => "spots",
+            FixtureRole::Beam => "beams",
+            FixtureRole::Strobe => "strobes",
+            FixtureRole::Blinder => "blinders",
+            FixtureRole::Pixel => "led bars",
+            FixtureRole::Fx => "fx",
+            FixtureRole::Other => "other",
+        }
+    }
+}
 
 /// Movement pyramid configuration for a fixture group.
 /// Defines the base aim direction and angular extents for UV perturbation.

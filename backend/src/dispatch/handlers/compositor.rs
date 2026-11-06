@@ -2,7 +2,8 @@
 //! render engine, and tear it down again.
 
 use crate::compositor;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 
 /// Compile **one score** into a scene and install it as the render engine's
 /// active scene.

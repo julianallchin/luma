@@ -3,7 +3,8 @@
 //! desktop host. Headless callers can still edit routing without opening a
 //! socket or a device.
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::patch::{DeviceKind, DmxRoute, OutputDevice};
 
 /// Every device any transport can see now: Art-Net nodes that answered a

@@ -6,9 +6,9 @@
 //! several ports, and a universe with none is sent nowhere, which the row says
 //! out loud.
 
-use luma_ui::motion::FadeHover;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, SharedString};
+use luma_ui::motion::FadeHover;
 
 use luma_lib::models::patch::{DeviceKind, DmxRoute, OutputDevice, OutputPort};
 use luma_ui::ladder;

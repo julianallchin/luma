@@ -29,7 +29,7 @@ use tokio::runtime::Handle;
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::dispatch::CommandError;
+use crate::error::CommandError;
 use crate::inputs::{InputHub, Mode};
 use crate::models::perform::{
     Cell, CellContent, ControlTarget, LayoutPage, PerformLayout, PerformPattern,

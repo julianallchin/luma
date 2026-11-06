@@ -196,7 +196,7 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
             name: mode.name.clone(),
             channels: mode.channels.len(),
             moves: group_derivation::aims(&definition, mode),
-            role: group_derivation::FixtureRole::of(&definition, mode)
+            role: crate::models::groups::FixtureRole::of(&definition, mode)
                 .as_str()
                 .to_string(),
         })

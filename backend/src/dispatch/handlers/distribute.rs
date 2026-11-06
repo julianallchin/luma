@@ -5,7 +5,8 @@
 //! addresses either all land or none do, which is what "never partial
 //! placement" means at this layer rather than a loop that tries to undo itself.
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::services::stage_ops::Stage;
 
@@ -84,7 +85,8 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-    use crate::dispatch::{dispatch, AppServices, CommandError};
+    use crate::dispatch::{dispatch, AppServices};
+    use crate::error::CommandError;
 
     /// A real definition, because the fit rule reads its QLC+ physical block:
     /// the Rogue R2 Spot is 343 mm across, so eight of them claim 2.744 m and a

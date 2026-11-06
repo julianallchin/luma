@@ -76,10 +76,12 @@ async fn prepare_scene_data(
             cells: Default::default(),
         });
     }
-    let grid =
-        crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
-            .await?
-            .ok_or("analyze the track before placing effects on its musical grid")?;
+    let grid = crate::database::local::tracks::get_track_beats_for_connection(
+        access.connection(),
+        track_id,
+    )
+    .await?
+    .ok_or("analyze the track before placing effects on its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
     let mut compiled = Vec::new();
     let mut clip_cells = std::collections::BTreeMap::new();
@@ -234,10 +236,12 @@ async fn prepare_single_clip(
         annotation.span
     } else {
         // Empty selections still have a real clip clock and can be scrubbed.
-        let grid =
-            crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
-                .await?
-                .ok_or("analyze the track before previewing its musical grid")?;
+        let grid = crate::database::local::tracks::get_track_beats_for_connection(
+            access.connection(),
+            track_id,
+        )
+        .await?
+        .ok_or("analyze the track before previewing its musical grid")?;
         let clock = grid.timeline().map_err(|error| error.to_string())?;
         (
             clock.seconds_at(clip.start).map_err(|e| e.to_string())? as f32,
@@ -274,10 +278,12 @@ pub(crate) async fn preview_clips(
 ) -> Result<Vec<ClipStrip>, String> {
     use rayon::prelude::*;
     let library = standard_library();
-    let grid =
-        crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
-            .await?
-            .ok_or("analyze the track before previewing its musical grid")?;
+    let grid = crate::database::local::tracks::get_track_beats_for_connection(
+        access.connection(),
+        track_id,
+    )
+    .await?
+    .ok_or("analyze the track before previewing its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
     let mut failed = Vec::new();
     let mut domains = std::collections::BTreeMap::new();

@@ -13,7 +13,8 @@
 use std::path::PathBuf;
 
 use crate::boot::{Boot, Identity};
-use crate::dispatch::{AppServices, Event, EventSink, Events};
+use crate::dispatch::AppServices;
+use crate::events::{Event, EventSink, Events};
 use crate::storage::StorageRoot;
 
 /// Emitted events land on stderr, alongside the host's other diagnostics.

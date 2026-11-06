@@ -3,7 +3,8 @@
 
 use std::future::Future;
 
-use luma_lib::dispatch::{handlers, CommandError, SharedServices};
+use luma_lib::dispatch::{handlers, SharedServices};
+use luma_lib::error::CommandError;
 use luma_lib::settings::AppSettings;
 
 use super::{refused, Cause, Library, LibraryError, SessionWrite};

@@ -2,7 +2,8 @@
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::database::local::venues as venues_db;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::venues::{Venue, VenueMember};
 use crate::services::venue_sharing;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};

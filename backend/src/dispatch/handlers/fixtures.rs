@@ -2,7 +2,8 @@ use std::path::{Component, Path};
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::patch::{AutoPatchReport, UniverseCell};
 use crate::services::fixture_create;

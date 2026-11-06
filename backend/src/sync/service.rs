@@ -15,7 +15,7 @@ use luma_sync::powersync::{sdk::SyncOptions, Connections, Database, HttpClient};
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 
-use crate::dispatch::{Event, Events};
+use crate::events::{Event, Events};
 use crate::models::sync::SyncStatus;
 
 use super::connector::Connector;

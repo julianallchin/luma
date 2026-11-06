@@ -4,7 +4,8 @@
 use crate::database::local::folders as db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::dispatch::handlers::fixtures::require_changed;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::folders::Folder;
 
 pub async fn list_folders(

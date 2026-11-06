@@ -18,7 +18,8 @@
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 
 /// Ask Supabase to email a six-digit login code.
 ///

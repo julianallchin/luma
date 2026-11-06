@@ -12,7 +12,8 @@ use crate::agent_execution::{headless_env, workspace::PythonWorkspaceService};
 use crate::database::local::auth;
 use crate::database::local::database::{init_app_db_at, open_app_db_at};
 use crate::database::local::state::init_state_db_at;
-use crate::dispatch::{AppServices, Events};
+use crate::dispatch::AppServices;
+use crate::events::Events;
 use crate::storage::StorageRoot;
 
 /// Whose library this process opens.

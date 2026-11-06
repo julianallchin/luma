@@ -2,7 +2,8 @@
 //! write has on the two subsystems that read it.
 
 use crate::database::local::settings as settings_db;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::settings::{load_settings, AppSettings};
 
 /// Every setting, typed and defaulted.

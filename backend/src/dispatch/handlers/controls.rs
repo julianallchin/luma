@@ -2,7 +2,8 @@
 
 use crate::controls::Control;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 
 /// Every control a clip of the venue names, and every one set, with its value.
 pub async fn control_list(

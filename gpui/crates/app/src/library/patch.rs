@@ -84,7 +84,7 @@ impl Library {
     }
 
     /// Put one fixture at a hand-chosen address, and pin it there. A collision
-    /// or a footprint past 512 comes back as [`CommandError::Invalid`](luma_lib::dispatch::CommandError::Invalid) naming
+    /// or a footprint past 512 comes back as [`CommandError::Invalid`](luma_lib::error::CommandError::Invalid) naming
     /// the conflict, with nothing written.
     pub fn set_fixture_address(
         &self,

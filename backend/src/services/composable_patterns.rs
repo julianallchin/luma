@@ -31,7 +31,7 @@ pub(crate) async fn preview(
     let mut access =
         VenueAccess::<Read>::read(pool, VenueResource::Venue(&request.venue_id)).await?;
     let principal = access.principal().map(str::to_owned);
-    let beat_grid = crate::services::tracks::get_track_beats_for_connection(
+    let beat_grid = crate::database::local::tracks::get_track_beats_for_connection(
         access.connection(),
         &request.track_id,
     )

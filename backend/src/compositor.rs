@@ -106,7 +106,7 @@ pub(crate) async fn load_beat_grid(
     pool: &sqlx::SqlitePool,
     track_id: &str,
 ) -> Result<Option<BeatGrid>, String> {
-    crate::services::tracks::get_track_beats(pool, track_id)
+    crate::database::local::tracks::get_track_beats(pool, track_id)
         .await
         .map_err(|e| format!("Failed to load beat grid: {}", e))
 }

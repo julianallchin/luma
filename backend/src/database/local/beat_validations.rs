@@ -53,10 +53,12 @@ pub async fn set(
     if !owns {
         return Err("Only the track owner can validate its beat grid".into());
     }
-    let current =
-        crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
-            .await?
-            .ok_or("This track has no beat grid to validate")?;
+    let current = crate::database::local::tracks::get_track_beats_for_connection(
+        access.connection(),
+        track_id,
+    )
+    .await?
+    .ok_or("This track has no beat grid to validate")?;
     if &current != reviewed {
         return Err("The beat grid changed. Reopen the track before validating it.".into());
     }

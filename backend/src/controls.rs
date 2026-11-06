@@ -656,19 +656,13 @@ mod tests {
         assert_eq!(controls.value_at(&on, start), 0.0, "never pressed");
         controls.press(&on, true, start);
         controls.press(&on, false, after(start, 0.1));
-        assert!(
-            lit(&controls, &on),
-            "a toggle holds after release"
-        );
+        assert!(lit(&controls, &on), "a toggle holds after release");
         let rising = controls.value_at(&on, after(start, 0.5));
         assert!(0.0 < rising && rising < 1.0, "halfway up: {rising}");
         assert_eq!(controls.value_at(&on, after(start, 1.5)), 1.0);
 
         controls.press(&on, true, after(start, 2.0));
-        assert!(
-            !lit(&controls, &on),
-            "the next press turns it off"
-        );
+        assert!(!lit(&controls, &on), "the next press turns it off");
         let falling = controls.value_at(&on, after(start, 3.0));
         assert!(0.0 < falling && falling < 1.0, "releasing: {falling}");
         assert_eq!(controls.value_at(&on, after(start, 4.5)), 0.0);

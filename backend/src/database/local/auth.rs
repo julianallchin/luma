@@ -64,6 +64,17 @@ impl From<AuthError> for String {
     }
 }
 
+/// A revoked session is the caller's to fix by signing in again; anything
+/// else is a failure.
+impl From<AuthError> for crate::error::CommandError {
+    fn from(error: AuthError) -> Self {
+        match error {
+            AuthError::SessionRevoked => Self::Unauthorized(error.to_string()),
+            AuthError::Other(message) => Self::Internal(message),
+        }
+    }
+}
+
 /// Why the auth server did not return a renewed session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RefreshError {
@@ -2313,7 +2324,7 @@ mod tests {
     async fn a_revoked_session_is_announced_to_the_host_once() {
         use std::sync::Arc;
 
-        use crate::dispatch::{Event, EventSink, Events};
+        use crate::events::{Event, EventSink, Events};
 
         struct Count(Arc<std::sync::atomic::AtomicUsize>);
         impl EventSink for Count {

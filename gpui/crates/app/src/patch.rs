@@ -1165,7 +1165,7 @@ pub(crate) fn refusal_message(error: &LibraryError) -> String {
 fn is_addressing_refusal(error: &LibraryError) -> bool {
     matches!(
         error.command(),
-        Some(luma_lib::dispatch::CommandError::Invalid(_))
+        Some(luma_lib::error::CommandError::Invalid(_))
     )
 }
 

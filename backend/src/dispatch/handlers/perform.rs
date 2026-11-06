@@ -3,7 +3,8 @@
 
 use crate::database::local::perform_set as db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::perform::{PerformLayout, PerformPattern, PerformSource, PerformState};
 use crate::services::perform_set::PerformSet;
 

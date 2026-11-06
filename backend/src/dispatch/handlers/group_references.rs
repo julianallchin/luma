@@ -4,7 +4,8 @@ use crate::database::local::{
     scores::rows,
     venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource, Write},
 };
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::groups::MissingGroup;
 use crate::services::groups;
 use serde_json::Value;

@@ -1,4 +1,5 @@
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
 use crate::services::tracks::{self as track_service, ImportRequest};
@@ -13,7 +14,7 @@ pub async fn get_track_beats(
     services: &AppServices,
     track_id: String,
 ) -> Result<Option<BeatGrid>, CommandError> {
-    Ok(track_service::get_track_beats(&services.db.0, &track_id).await?)
+    Ok(crate::database::local::tracks::get_track_beats(&services.db.0, &track_id).await?)
 }
 
 use crate::models::tracks::{BeatValidation, BeatValidationReason, BeatValidationVerdict};
@@ -96,7 +97,7 @@ mod import_tests {
 
     use super::*;
     use crate::database::local::auth;
-    use crate::dispatch::{Event, EventSink, Events};
+    use crate::events::{Event, EventSink, Events};
     use crate::models::tracks::{TrackImportPhase, TrackImportProgress};
 
     struct ChannelEvents {

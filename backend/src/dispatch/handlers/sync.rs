@@ -1,6 +1,7 @@
 //! Host control and the sync status the sidebar reads.
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::sync::SyncStatus;
 
 /// What replication is doing, off the PowerSync client's own state.

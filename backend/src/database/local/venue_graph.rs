@@ -5,9 +5,10 @@
 //! keeps the resolver testable without a database and this module testable
 //! without a GLB.
 //!
-//! One exception, deliberate: every write here tells the derived-group cache
-//! that the rig moved. The group tree is *derived from this graph*, and the
-//! cache that holds it is a read cache over these rows. Making each of the
+//! One exception, deliberate: every write here moves [`rig_generation`], which
+//! is how the derived-group cache learns the rig moved. The group tree is
+//! *derived from this graph*, and the cache that holds it is a read cache over
+//! these rows. Making each of the
 //! eight callers remember to invalidate is how six of them came to forget —
 //! moving a truss left every selection expression naming a derived group
 //! answering with the old split. The one place that can promise the cache is
@@ -16,6 +17,7 @@
 //! Twice, though: see [`graph_changed`] and [`graph_committed`].
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use uuid::Uuid;
 
@@ -32,7 +34,7 @@ use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows,
 ///
 /// Early is not enough on its own; see [`graph_committed`].
 fn graph_changed() {
-    crate::services::groups::invalidate_venue_fixture_cache();
+    rig_changed();
 }
 
 /// Tell it again, once the rows are visible.
@@ -46,7 +48,21 @@ fn graph_changed() {
 /// Called by whoever owns the transaction, because that is who knows when it
 /// committed — this module never commits.
 pub fn graph_committed() {
-    crate::services::groups::invalidate_venue_fixture_cache();
+    rig_changed();
+}
+
+static RIG_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// How many times this process has changed a venue's fixtures, groups or
+/// graph. Anything derived from those rows is current while this has not
+/// moved.
+pub fn rig_generation() -> u64 {
+    RIG_GENERATION.load(Ordering::SeqCst)
+}
+
+/// Mark every cache derived from the rig's rows stale.
+pub fn rig_changed() {
+    RIG_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
 /// One `venue_nodes` row as SQLite hands it over: the placement as four

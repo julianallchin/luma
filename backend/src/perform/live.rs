@@ -115,8 +115,11 @@ pub(crate) async fn compile(
     let library = luma_patterns::standard_library();
     let grid = match track {
         Some((_, track_id)) => {
-            crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
-                .await?
+            crate::database::local::tracks::get_track_beats_for_connection(
+                access.connection(),
+                track_id,
+            )
+            .await?
         }
         None => None,
     };

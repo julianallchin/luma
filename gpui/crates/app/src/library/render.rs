@@ -5,7 +5,8 @@ use std::future::Future;
 
 use serde_json::Value;
 
-use luma_lib::dispatch::{handlers, CommandError};
+use luma_lib::dispatch::handlers;
+use luma_lib::error::CommandError;
 use luma_lib::models::universe::UniverseState;
 
 use super::{Library, LibraryError};

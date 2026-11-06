@@ -12,7 +12,7 @@
 //! 4. [`transcript::apply`] to fold each event into a [`Transcript`]. Both
 //!    hosts call that one reducer; neither writes another.
 //!
-//! Turn deltas deliberately do **not** go through [`crate::dispatch::Events`].
+//! Turn deltas deliberately do **not** go through [`crate::events::Events`].
 //! That bus is a string-keyed, fire-and-forget, app-wide broadcast of
 //! `serde_json::Value`; turn deltas are per-turn, ordered, high-rate and typed.
 //!
@@ -582,11 +582,11 @@ pub enum AgentError {
     HeadMoved,
 }
 
-impl From<AgentError> for crate::dispatch::CommandError {
+impl From<AgentError> for crate::error::CommandError {
     fn from(error: AgentError) -> Self {
         match error {
-            AgentError::Invalid(message) => crate::dispatch::CommandError::Invalid(message),
-            other => crate::dispatch::CommandError::Internal(other.to_string()),
+            AgentError::Invalid(message) => crate::error::CommandError::Invalid(message),
+            other => crate::error::CommandError::Internal(other.to_string()),
         }
     }
 }

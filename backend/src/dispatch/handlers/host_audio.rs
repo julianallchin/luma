@@ -13,7 +13,8 @@ use std::path::Path;
 
 use crate::audio::SAMPLE_RATE;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::host_audio::{HostAudioControl, HostAudioSnapshot};
 
 /// Load a whole track for playback.

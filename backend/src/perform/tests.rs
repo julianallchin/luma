@@ -400,7 +400,7 @@ async fn save(
     services: &AppServices,
     venue: &str,
     pattern: &crate::models::perform::PerformPattern,
-) -> Result<serde_json::Value, crate::dispatch::CommandError> {
+) -> Result<serde_json::Value, crate::error::CommandError> {
     let args = json!({ "venueId": venue, "pattern": pattern });
     dispatch(services, "save_perform_pattern", &args).await
 }

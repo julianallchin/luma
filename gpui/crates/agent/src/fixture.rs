@@ -584,7 +584,7 @@ impl Fixture {
             storage: luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()),
             fixtures_root: config_dir.to_path_buf(),
             cache_dir: None,
-            events: luma_lib::dispatch::Events::discard(),
+            events: luma_lib::events::Events::discard(),
             identity: luma_lib::boot::Identity::Stored,
             sync: false,
             output: false,

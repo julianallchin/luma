@@ -29,7 +29,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::database::local::tracks as tracks_db;
-use crate::dispatch::{Event, Events};
+use crate::events::{Event, Events};
 use crate::models::tracks::{
     StageOutcome, TrackAnalysisEvent, TrackImportPhase, TrackImportProgress,
 };

@@ -2,8 +2,6 @@
 
 use thiserror::Error;
 
-use crate::services::patch::PatchError;
-
 /// Why a command did not produce a result.
 ///
 /// A closed vocabulary over a wire contract that is prose: each variant carries
@@ -53,34 +51,9 @@ pub enum CommandError {
     Internal(String),
 }
 
-/// Hand-written because `#[from]` cannot express it: `String` is not an
-/// `Error`, so thiserror will not derive the conversion.
-impl From<crate::database::local::auth::AuthError> for CommandError {
-    fn from(error: crate::database::local::auth::AuthError) -> Self {
-        use crate::database::local::auth::AuthError;
-        match error {
-            AuthError::SessionRevoked => Self::Unauthorized(error.to_string()),
-            AuthError::Other(message) => Self::Internal(message),
-        }
-    }
-}
-
 impl From<String> for CommandError {
     fn from(message: String) -> Self {
         Self::Internal(message)
-    }
-}
-
-/// A refused address is a precondition violation, not a failure: the caller
-/// asked for something the patch cannot hold, and the message already names
-/// the conflict.
-impl From<PatchError> for CommandError {
-    fn from(error: PatchError) -> Self {
-        let message = error.to_string();
-        match error {
-            PatchError::OutOfRange { .. } | PatchError::Collision { .. } => Self::Invalid(message),
-            PatchError::Database(_) => Self::Internal(message),
-        }
     }
 }
 

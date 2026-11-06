@@ -64,6 +64,19 @@ pub enum PatchError {
     Database(String),
 }
 
+/// A refused address is a precondition violation, not a failure: the caller
+/// asked for something the patch cannot hold, and the message already names
+/// the conflict.
+impl From<PatchError> for crate::error::CommandError {
+    fn from(error: PatchError) -> Self {
+        let message = error.to_string();
+        match error {
+            PatchError::OutOfRange { .. } | PatchError::Collision { .. } => Self::Invalid(message),
+            PatchError::Database(_) => Self::Internal(message),
+        }
+    }
+}
+
 impl From<String> for PatchError {
     fn from(message: String) -> Self {
         PatchError::Database(message)

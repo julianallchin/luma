@@ -1,7 +1,8 @@
 //! A venue's laser rig (`docs/design/lasers.md`).
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 
 /// The venue's projectors, posed, with their limits, and its zones: what
 /// the visualizer solves each frame's beams with, as a DAC would.

@@ -52,9 +52,11 @@ use std::time::Duration;
 use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::boot::{Boot, Booted, Identity};
-use luma_lib::dispatch::{handlers, CommandError, Event, EventSink, Events, SharedServices};
+use luma_lib::dispatch::{handlers, SharedServices};
 #[cfg(feature = "agent")]
 use luma_lib::dispatch::{system_track_sources, TrackSources};
+use luma_lib::error::CommandError;
+use luma_lib::events::{Event, EventSink, Events};
 use luma_lib::models::tracks::TrackImportProgress;
 use luma_lib::storage::StorageRoot;
 

@@ -25,9 +25,9 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::host_audio::HostAudioState;
 use crate::models::perform::{DeckMatch, PerformClock, PerformDeck, PerformSource, PerformState};
 use crate::render_engine::{Built, PerformDeckInput, RenderEngine, SceneTarget};
-use live::LiveClock;
 use crate::storage::StorageRoot;
 use clock::DeckFollower;
+use live::LiveClock;
 
 /// rkbx_link sends a new track's title and artist as separate messages, and
 /// its BPM just after: wait for the burst to finish before matching.
@@ -546,7 +546,11 @@ impl Shared {
         state.source = source;
         state.venue_id = venue_id;
         state.connected = false;
-        state.detail = if starting { "Starting".into() } else { String::new() };
+        state.detail = if starting {
+            "Starting".into()
+        } else {
+            String::new()
+        };
         state.problem = None;
         state.last_heard = None;
         state.saw_position = false;

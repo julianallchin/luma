@@ -14,15 +14,17 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
+use crate::database::local::venue_graph::{rig_changed, rig_generation};
 use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::fixtures::parser;
 use crate::models::fixtures::{FixtureDefinition, Mode, PatchedFixture};
 use crate::models::groups::{
-    normalize_group_name, FixtureGroupNode, GroupTreeNode, GroupedFixtureNode, HeadNode,
+    normalize_group_name, FixtureGroupNode, FixtureRole, GroupTreeNode, GroupedFixtureNode,
+    HeadNode,
 };
 use crate::models::selection::Selection;
 use crate::services::group_derivation::{
-    self, DerivedTree, FixtureIdentity, FixtureRole, ManualGroup, VenueFacts,
+    self, DerivedTree, FixtureIdentity, ManualGroup, VenueFacts,
 };
 use fixture_kinematics::rig_position;
 use luma_scene::venue::ResolvedVenue;
@@ -35,15 +37,31 @@ struct CachedVenueFixtures {
 }
 
 /// Per-venue cache with loading locks to prevent thundering herd.
-/// The `data` map holds completed results; `loading` holds per-key async mutexes
-/// so only one task loads for a given venue while others wait.
+/// The `data` map holds completed results, loaded at `generation` of the rig;
+/// `loading` holds per-key async mutexes so only one task loads for a given
+/// venue while others wait.
 struct VenueFixtureCacheInner {
+    generation: u64,
     data: HashMap<String, Arc<CachedVenueFixtures>>,
     loading: HashMap<String, Arc<TokioMutex<()>>>,
 }
 
+impl VenueFixtureCacheInner {
+    /// The results still current: none, once the rig has moved since they
+    /// were loaded.
+    fn data(&mut self) -> &mut HashMap<String, Arc<CachedVenueFixtures>> {
+        let generation = rig_generation();
+        if self.generation != generation {
+            self.data.clear();
+            self.generation = generation;
+        }
+        &mut self.data
+    }
+}
+
 static VENUE_FIXTURE_CACHE: Lazy<std::sync::Mutex<VenueFixtureCacheInner>> = Lazy::new(|| {
     std::sync::Mutex::new(VenueFixtureCacheInner {
+        generation: rig_generation(),
         data: HashMap::new(),
         loading: HashMap::new(),
     })
@@ -51,9 +69,7 @@ static VENUE_FIXTURE_CACHE: Lazy<std::sync::Mutex<VenueFixtureCacheInner>> = Laz
 
 /// Invalidate the venue fixture cache (call when fixtures/groups change).
 pub fn invalidate_venue_fixture_cache() {
-    if let Ok(mut inner) = VENUE_FIXTURE_CACHE.lock() {
-        inner.data.clear();
-    }
+    rig_changed();
 }
 
 /// This cache's identity for one venue: the library it lives in, and its id.
@@ -76,8 +92,8 @@ async fn get_cached_venue_fixtures(
     let key = venue_cache_key(resource_path, access.venue_id());
     // Fast path: check data cache (sync mutex, instant)
     {
-        let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        if let Some(cached) = inner.data.get(&key) {
+        let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
+        if let Some(cached) = inner.data().get(&key) {
             return Ok(cached.clone());
         }
     }
@@ -96,12 +112,13 @@ async fn get_cached_venue_fixtures(
     let _guard = lock.lock().await;
 
     // Check again — another task may have loaded while we waited
-    {
-        let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        if let Some(cached) = inner.data.get(&key) {
+    let generation = {
+        let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
+        if let Some(cached) = inner.data().get(&key) {
             return Ok(cached.clone());
         }
-    }
+        inner.generation
+    };
 
     // We're the loader. Always clean up the loading lock, even on error.
     let result = async {
@@ -145,12 +162,16 @@ async fn get_cached_venue_fixtures(
     }
     .await;
 
-    // Clean up loading lock regardless of success/failure
+    // Clean up loading lock regardless of success/failure. A result loaded
+    // while the rig moved is returned but not kept.
     {
         let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
         inner.loading.remove(&key);
         if let Ok(ref cached) = result {
-            inner.data.insert(key, cached.clone());
+            inner.data();
+            if inner.generation == generation {
+                inner.data.insert(key, cached.clone());
+            }
         }
     }
 

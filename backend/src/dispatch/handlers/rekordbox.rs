@@ -6,7 +6,8 @@
 //!
 use std::path::PathBuf;
 
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::AppServices;
+use crate::error::CommandError;
 use crate::models::tracks::{TrackImportFailure, TrackImportResult};
 use crate::rekordbox::subprocess;
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
