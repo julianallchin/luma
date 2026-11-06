@@ -323,7 +323,8 @@ pub fn span(spec: &MotionSpec) -> Duration {
 }
 
 /// Eased progress (0..=1) of an exit that began at `since`, read off the wall
-/// clock at render time.
+/// clock at render time — or of an entrance that must play once, when its
+/// owner was made, however often the element is unmounted and mounted again.
 ///
 /// The one correct source for an exit's `t`. A `with_animation` clock is keyed
 /// by element id and replays from 0 whenever the element remounts — mid-exit

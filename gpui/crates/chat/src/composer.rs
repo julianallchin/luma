@@ -23,6 +23,15 @@
 //! re-render into a repeated animation. The same reason `luma_ui::pane` drives
 //! its resize by hand.
 //!
+//! The pill's entrance is driven by hand for the same reason, and that one is
+//! not hypothetical. gpui keeps an element's state only while the element is
+//! painted, and a tab behind another paints nothing, so a `with_animation`
+//! fade forgot it had played the moment its tab went to the back and played
+//! again when the tab came forward — the one composer, draft and all, entering
+//! as if it had just been made. Its clock is the composer's own, which starts
+//! when the composer does: the fade belongs to the composer being created, not
+//! to it being shown.
+//!
 //! # How tall it gets
 //!
 //! The field grows with its content and then scrolls inside itself. The range
@@ -283,8 +292,9 @@ pub struct Composer {
     /// same amount.
     expanded_anchor: f32,
     morph: Option<FlipMorph>,
-    /// Monotonic origin for the morph timeline, in plain milliseconds — the
-    /// measurement knob is folded into [`FlipMorph::raw`]'s span, not here.
+    /// When the composer was made: the origin of its entrance, and of the
+    /// morph timeline in plain milliseconds — the measurement knob is folded
+    /// into [`FlipMorph::raw`]'s span, not here.
     clock: Instant,
     /// What the pill actually rendered at last frame — the start height a
     /// reverse flip hands off from.
@@ -498,8 +508,14 @@ pub fn composer(
 ) -> impl IntoElement {
     let reduced = motion::reduced_motion(cx);
     let layout = composer.settle_layout(reduced, cx);
-    if layout.morphing {
-        // Manual tween drive: keep frames coming while the height sweeps.
+    let entrance = if reduced {
+        1.0
+    } else {
+        motion::exit_progress(&motion::FADE_QUICK, composer.clock)
+    };
+    if layout.morphing || entrance < 1.0 {
+        // Manual tween drive: keep frames coming while the height sweeps or
+        // the pill fades in.
         window.request_animation_frame();
     }
     let input = composer.input.clone();
@@ -632,7 +648,7 @@ pub fn composer(
         .child(dialog::frosted(
             luma_ui::radius::PILL,
             theme::PILL_BLUR,
-            motion::fade_quick("composer-pill", body),
+            body.opacity(entrance),
         ))
 }
 
