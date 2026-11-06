@@ -924,6 +924,12 @@ pub fn config_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("luma-gpui-{name}-{}", std::process::id()))
 }
 
+/// The library database in a fixture's config directory.
+#[must_use]
+pub fn library_db(config_dir: &Path) -> PathBuf {
+    luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()).luma_db_path()
+}
+
 /// What a test script may read back from its library: `{"op": "query",
 /// "sql": …}` gives rows as objects (a blob as its length), `{"op": "score"}`
 /// the score that holds clips as the document the editor saved,
@@ -936,7 +942,7 @@ pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    let url = format!("sqlite:{}?mode=ro", dir.join("luma.db").display());
+    let url = format!("sqlite:{}?mode=ro", library_db(dir).display());
     runtime.block_on(async {
         let pool = SqlitePool::connect(&url)
             .await
@@ -1027,7 +1033,7 @@ fn migrated(runtime: &tokio::runtime::Runtime) -> &'static Path {
             }
         }
         let base = std::env::temp_dir().join(format!("luma-gpui-migrated-{:x}", key.finish()));
-        if base.join("luma.db").exists() {
+        if library_db(&base).exists() {
             return base;
         }
         // Built beside the final name and renamed into it, so a process that

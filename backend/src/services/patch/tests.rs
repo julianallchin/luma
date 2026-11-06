@@ -15,11 +15,9 @@ use crate::database::local::venue_access::{Read, VenueResource};
 
 const VENUE: &str = "venue-under-test";
 
-/// Where the meshes are. `resources::meshes_root` falls back to the repo's
-/// `resources/meshes` when this has no sibling of its own, which is what makes
-/// a unit test able to resolve the real catalog.
+/// The shipped fixture library; the real mesh catalog is its sibling.
 fn fixtures_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/fixtures")
+    crate::resources::source_fixtures_root().expect("the shipped bundle")
 }
 
 fn repo_root() -> PathBuf {
@@ -613,7 +611,7 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
             let request = Request {
                 host_node: Some(run),
                 host_socket: Some("face_-y"),
-                fixture_path: "2511260420/Chauvet/Chauvet-Rogue-R2-Spot.qxf",
+                fixture_path: "Chauvet/Chauvet-Rogue-R2-Spot.qxf",
                 mode_name: "18 Channel",
                 count: 2,
                 layout: Layout::At(if step < 2 { -2.0 } else { -3.0 }),

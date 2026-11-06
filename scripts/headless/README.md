@@ -21,8 +21,8 @@ use another build.
 | flag | env | default |
 |---|---|---|
 | `--config-dir` | `LUMA_CONFIG_DIR` | the app config directory (the real library) |
-| `--fixtures-root` | `LUMA_FIXTURES_ROOT` | `resources/fixtures` in the repository |
-| `--cache-dir` | — | the app cache directory, which holds the managed Python venv |
+| `--fixtures-root` | `LUMA_FIXTURES_ROOT` | `resources/fixtures` in the repository, else the installed bundle's |
+| `--cache-dir` | `LUMA_CACHE_DIR` | the app cache directory, which holds the managed Python venv |
 | `--fixture-principal` | — | the signed-in account |
 
 Migrations run on the given config directory at startup. An empty directory

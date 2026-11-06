@@ -45,7 +45,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -61,7 +61,6 @@ use luma_lib::dispatch::{handlers, AppServices, CommandError, EventSink, Events,
 #[cfg(feature = "agent")]
 use luma_lib::dispatch::{system_track_sources, TrackSources};
 use luma_lib::models::tracks::TrackImportProgress;
-use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::storage::StorageRoot;
 
 mod account;
@@ -381,7 +380,7 @@ impl Library {
             // Resolution is lazy: a machine with no venv yet still opens.
             let workspaces = Arc::new(headless_env::workspace_service(
                 &storage,
-                headless_env::cache_dir()?,
+                luma_lib::storage::cache_dir()?,
             ));
             let state_pool = state_db.0.clone();
             let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
@@ -463,7 +462,7 @@ impl Library {
         // a 401 backs it off, and the next sign-in's push wakes it.
         if desktop {
             let ready = luma_lib::runtime::python::setup_python_env_background(
-                headless_env::cache_dir()?,
+                luma_lib::storage::cache_dir()?,
                 luma_lib::resources::resource_dir(),
                 events.clone(),
             );
@@ -643,8 +642,7 @@ fn refused(command: &'static str) -> impl FnOnce(CommandError) -> LibraryError {
     move |error| LibraryError::at(command, Cause::Command(error))
 }
 
-/// The app config directory: the stable platform location, with
-/// the same escape hatch the headless harness has.
+/// The app config directory: the harness's, else the backend's resolution.
 pub(crate) fn config_dir() -> Result<StorageRoot, String> {
     match luma_ui::runtime::Runtime::with(|runtime| runtime.config_dir.clone()) {
         Some(path) => Ok(StorageRoot::from_path(path)),
@@ -652,30 +650,13 @@ pub(crate) fn config_dir() -> Result<StorageRoot, String> {
     }
 }
 
-/// Root of the bundled fixture definitions. Prefers the repo's newest bundle
-/// so a dev build sees today's fixtures, exactly as the headless harness does;
-/// an installed build has no repo and reads its own resource directory.
+/// Root of the bundled fixture definitions: the harness's, else the backend's
+/// resolution.
 pub(crate) fn fixtures_root() -> Result<PathBuf, String> {
-    if let Some(path) = luma_ui::runtime::Runtime::with(|runtime| runtime.fixtures_root.clone()) {
-        return Ok(path);
+    match luma_ui::runtime::Runtime::with(|runtime| runtime.fixtures_root.clone()) {
+        Some(path) => Ok(path),
+        None => luma_lib::resources::fixtures_root(),
     }
-    if let Some(path) = repo_fixtures_root() {
-        return Ok(path);
-    }
-    fixtures_service::resolve_fixtures_root_from(luma_lib::resources::resource_dir().as_deref())
-}
-
-fn repo_fixtures_root() -> Option<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)?
-        .join("resources/fixtures");
-    std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .max()
 }
 
 impl Drop for Library {

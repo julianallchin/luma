@@ -36,14 +36,10 @@ impl WorkerEnvironment {
     }
 
     pub fn from_env_default() -> Result<Self, String> {
-        let cache_dir = if let Some(path) = std::env::var_os("LUMA_CACHE_DIR") {
-            PathBuf::from(path)
-        } else {
-            dirs::cache_dir()
-                .map(|path| path.join("com.luma.luma"))
-                .ok_or_else(|| "could not locate a cache directory".to_string())?
-        };
-        Ok(Self::new(cache_dir, crate::resources::resource_dir()))
+        Ok(Self::new(
+            crate::storage::cache_dir()?,
+            crate::resources::resource_dir(),
+        ))
     }
 
     pub fn cache_dir(&self) -> &Path {
@@ -53,12 +49,7 @@ impl WorkerEnvironment {
     pub fn python(&self) -> Result<PathBuf, String> {
         let resolve = || {
             let path = python_env::find_existing_venv_python(&self.cache_dir)?;
-            if self.wait_for_setup
-                && !self
-                    .cache_dir
-                    .join("python-env/.requirements.hash")
-                    .exists()
-            {
+            if self.wait_for_setup && !python_env::setup_finished(&self.cache_dir) {
                 return None;
             }
             Some(path)
@@ -69,8 +60,7 @@ impl WorkerEnvironment {
         if self.wait_for_setup {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15 * 60);
             while std::time::Instant::now() < deadline {
-                if let Ok(error) = std::fs::read_to_string(self.cache_dir.join(".python-env-error"))
-                {
+                if let Some(error) = python_env::setup_failure(&self.cache_dir) {
                     return Err(format!("managed Python environment setup failed: {error}"));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(250));

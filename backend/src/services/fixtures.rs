@@ -3,7 +3,7 @@
 //! Database layer handles CRUD only. File/resource access, DMX output refresh, and
 //! in-memory fixture index live here.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use crate::database::local::fixtures as fixtures_db;
@@ -235,19 +235,3 @@ pub async fn get_patched_fixtures(
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
-
-/// Resolve fixture resources independently of the launch working directory.
-pub fn resolve_fixtures_root_from(resource_dir: Option<&Path>) -> Result<PathBuf, String> {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/fixtures/2511260420");
-    let bundled = resource_dir.map(|root| root.join("resources/fixtures/2511260420"));
-    let candidates = if cfg!(debug_assertions) {
-        vec![Some(source), bundled]
-    } else {
-        vec![bundled, Some(source)]
-    };
-    candidates
-        .into_iter()
-        .flatten()
-        .find(|path| path.is_dir())
-        .ok_or_else(|| "Could not find fixtures directory".to_string())
-}

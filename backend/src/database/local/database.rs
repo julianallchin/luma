@@ -32,7 +32,7 @@ async fn migrate_app_db_at(app_dir: &Path) -> Result<(std::path::PathBuf, Sqlite
             app_dir.display()
         )
     })?;
-    let db_path = app_dir.join("luma.db");
+    let db_path = crate::storage::StorageRoot::from_path(app_dir.to_path_buf()).luma_db_path();
     let migrate_pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(

@@ -12,14 +12,13 @@
 //! audio devices, and the loops. Events go to stderr, because these hosts put
 //! their protocol on stdout.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::Value;
 
 use crate::agent_execution::headless_env;
 use crate::database::local::{auth, database::init_app_db_at, state::init_state_db_at};
 use crate::dispatch::{AppServices, EventSink, Events};
-use crate::services::fixtures as fixtures_service;
 use crate::storage::StorageRoot;
 
 /// Emitted events land on stderr, alongside the host's other diagnostics.
@@ -87,51 +86,25 @@ impl HostConfig {
 
     /// The library directory this host will open.
     fn storage(&self) -> Result<StorageRoot, String> {
-        if let Some(path) = &self.config_dir {
-            return Ok(StorageRoot::from_path(path.clone()));
+        match &self.config_dir {
+            Some(path) => Ok(StorageRoot::from_path(path.clone())),
+            None => StorageRoot::from_env_default(),
         }
-        if let Some(path) = std::env::var_os("LUMA_CONFIG_DIR") {
-            return Ok(StorageRoot::from_path(PathBuf::from(path)));
-        }
-        StorageRoot::from_env_default()
     }
 
     fn cache_dir(&self) -> Result<PathBuf, String> {
         match &self.cache_dir {
             Some(path) => Ok(path.clone()),
-            None => headless_env::cache_dir(),
+            None => crate::storage::cache_dir(),
         }
     }
 
-    /// Resolve fixture assets without opening a library or starting a host.
-    pub fn fixtures_root(&self) -> Result<PathBuf, String> {
-        if let Some(path) = &self.fixtures_root {
-            return Ok(path.clone());
+    fn fixtures_root(&self) -> Result<PathBuf, String> {
+        match &self.fixtures_root {
+            Some(path) => Ok(path.clone()),
+            None => crate::resources::fixtures_root(),
         }
-        if let Some(path) = std::env::var_os("LUMA_FIXTURES_ROOT") {
-            return Ok(PathBuf::from(path));
-        }
-        if let Some(path) = repo_fixtures_root() {
-            return Ok(path);
-        }
-        fixtures_service::resolve_fixtures_root_from(crate::resources::resource_dir().as_deref())
     }
-}
-
-/// Repo-relative fixtures root, resolved against `CARGO_MANIFEST_DIR` rather
-/// than the CWD so a headless host works no matter where it was launched from.
-/// Picks the newest (lexicographically greatest) version directory, matching
-/// how `resolve_fixtures_root` hardcodes today's bundle.
-fn repo_fixtures_root() -> Option<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .join("resources/fixtures");
-    std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| entry.path())
-        .max()
 }
 
 /// Migrate the databases, arm write admission, and assemble the service graph.

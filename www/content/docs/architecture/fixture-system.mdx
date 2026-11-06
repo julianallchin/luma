@@ -81,6 +81,6 @@ resources/fixtures/2511260420/
     Generic-Generic-RGB.qxf
 ```
 
-`resolve_fixtures_root_from` in `backend/src/services/fixtures.rs` finds this
-directory. A debug build tries the source tree first. A release build tries the
-bundled resource directory first.
+`fixtures_root` in `backend/src/resources.rs` finds this directory: it takes
+`LUMA_FIXTURES_ROOT` if set, then the newest version directory in the source
+tree, then the one in the installed bundle's resource directory.

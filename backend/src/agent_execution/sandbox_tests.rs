@@ -61,12 +61,7 @@ const ALLOWED_ENV: &[&str] = &[
 const SELF_SET_ENV_PREFIX: &str = "KMP_";
 
 fn venv_python() -> Option<PathBuf> {
-    let path = dirs::cache_dir()?
-        .join("com.luma.luma")
-        .join("python-env")
-        .join("bin")
-        .join("python3");
-    path.exists().then_some(path)
+    crate::runtime::python::find_existing_venv_python(&crate::storage::cache_dir().ok()?)
 }
 
 fn worker_script() -> PathBuf {
@@ -88,7 +83,7 @@ struct Fixture {
 
 fn fixture(name: &str) -> Option<Fixture> {
     let Some(python_bin) = venv_python() else {
-        eprintln!("[skip] {name}: no managed python env at ~/Library/Caches/com.luma.luma");
+        eprintln!("[skip] {name}: no managed python env in the app cache directory");
         return None;
     };
     let tmp = tempfile::tempdir().unwrap();

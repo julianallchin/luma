@@ -24,10 +24,11 @@ use std::rc::Rc;
 /// The knobs an app resolves once at startup.
 #[derive(Debug, Clone)]
 pub struct Runtime {
-    /// App config directory, overriding `$APPCONFIG`. `None` means "wherever
-    /// the platform puts it", which is what a real install wants.
+    /// App config directory. `None` leaves it to the backend, which honours
+    /// `LUMA_CONFIG_DIR` and otherwise uses the platform directory.
     pub config_dir: Option<PathBuf>,
-    /// Root of the bundled fixture definitions, overriding the repo's copy.
+    /// Root of the fixture definitions. `None` leaves it to the backend, which
+    /// honours `LUMA_FIXTURES_ROOT`, then the repo's copy, then the bundle's.
     pub fixtures_root: Option<PathBuf>,
     /// Snap every animation to its end state. The harness sets this so a test
     /// reads final geometry the frame after it acts instead of racing a slide.
@@ -57,8 +58,8 @@ impl Default for Runtime {
     /// driven. Every variable here is a dev escape hatch: unset is production.
     fn default() -> Self {
         Self {
-            config_dir: std::env::var_os("LUMA_CONFIG_DIR").map(PathBuf::from),
-            fixtures_root: std::env::var_os("LUMA_FIXTURES_ROOT").map(PathBuf::from),
+            config_dir: None,
+            fixtures_root: None,
             reduced_motion: std::env::var("LUMA_MOTION").as_deref() == Ok("off"),
             motion_scale: std::env::var("LUMA_MOTION_SCALE")
                 .ok()

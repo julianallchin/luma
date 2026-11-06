@@ -68,11 +68,11 @@ fn main() -> Result<(), String> {
     let config_dir = PathBuf::from(
         std::env::var_os("LUMA_CONFIG_DIR").ok_or("LUMA_CONFIG_DIR must name a library copy")?,
     );
-    if StorageRoot::from_env_default().is_ok_and(|live| live.path() == config_dir) {
+    if StorageRoot::platform().is_ok_and(|live| live.path() == config_dir) {
         return Err("LUMA_CONFIG_DIR is the live library; point it at a copy".into());
     }
     let storage = StorageRoot::from_path(config_dir);
-    let fixtures = luma_lib::headless_host::HostConfig::default().fixtures_root()?;
+    let fixtures = luma_lib::resources::fixtures_root()?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

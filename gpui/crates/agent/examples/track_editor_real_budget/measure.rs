@@ -20,7 +20,9 @@ fn env(key: &str) -> String {
 fn harness() -> Harness {
     let config_dir = PathBuf::from(env("LUMA_REAL_CONFIG"));
     assert!(
-        config_dir.join("luma.db").is_file(),
+        luma_lib::storage::StorageRoot::from_path(config_dir.clone())
+            .luma_db_path()
+            .is_file(),
         "LUMA_REAL_CONFIG must be a library copy containing luma.db"
     );
     let fixtures_root = std::env::var("LUMA_REAL_FIXTURES").ok().map(PathBuf::from);

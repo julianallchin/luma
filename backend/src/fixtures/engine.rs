@@ -2110,8 +2110,9 @@ mod tests {
 
     #[test]
     fn a_mode_with_a_strobe_channel_strobes_on_its_own_clock() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../resources/fixtures/2511260420/Venue/Venue-Tetra-Bar.qxf");
+        let path = crate::resources::source_fixtures_root()
+            .unwrap()
+            .join("Venue/Venue-Tetra-Bar.qxf");
         let def = crate::fixtures::parser::parse_definition(&path).unwrap();
         assert!(strobes_on_own_clock(&def, "24-CH"));
         assert!(!strobes_on_own_clock(&def, "3-CH"));

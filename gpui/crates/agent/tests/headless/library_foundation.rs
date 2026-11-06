@@ -52,7 +52,7 @@ fn write_silent_wav(path: &std::path::Path, frames: u32) {
 fn install_slow_failing_python(cache: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
 
-    let bin = cache.join("python-env/bin");
+    let bin = luma_lib::runtime::python::venv_dir(cache).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let python = bin.join("python3");
     std::fs::write(

@@ -11,23 +11,6 @@ use super::workspace::{PythonWorkspaceService, WorkerEnv};
 use crate::runtime::python as python_env;
 use crate::storage::StorageRoot;
 
-/// The app cache directory: where the managed venv and the deployed
-/// `luma_exec` package live.
-///
-/// Every host uses the stable application identifier to share one environment.
-///
-/// # Errors
-///
-/// If the platform has no cache directory.
-pub fn cache_dir() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("LUMA_CACHE_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    dirs::cache_dir()
-        .map(|path| path.join("com.luma.luma"))
-        .ok_or_else(|| "could not locate a cache directory".to_string())
-}
-
 /// Locate the managed interpreter and the worker script under `cache_dir`.
 ///
 /// The worker script comes from the repository when there is one — a developer

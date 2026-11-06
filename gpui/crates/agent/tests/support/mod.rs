@@ -66,7 +66,7 @@ pub fn stub_genre_model(storage_root: &Path) {
 #[cfg(unix)]
 pub fn install_fake_analysis(cache: &Path, seconds: f32) {
     use std::os::unix::fs::PermissionsExt;
-    let bin = cache.join("python-env/bin");
+    let bin = luma_lib::runtime::python::venv_dir(cache).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let python = bin.join("python3");
     std::fs::write(
@@ -110,9 +110,12 @@ pub fn score(clips: Value) -> Value {
 /// what those rows load into — so this is the one place that knows the
 /// difference, rather than eighteen copies of a `SELECT`.
 pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-        .await
-        .expect("open the fixture library");
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite:{}",
+        gpui_agent::fixture::library_db(dir).display()
+    ))
+    .await
+    .expect("open the fixture library");
     let id: String = sqlx::query_scalar("SELECT score_id FROM clips LIMIT 1")
         .fetch_one(&pool)
         .await

@@ -52,10 +52,7 @@ pub async fn run(args: super::Args) -> Result<(), String> {
             "snapshot requires 1..64 finite, nonnegative, strictly increasing times".into(),
         );
     }
-    let storage = match std::env::var_os("LUMA_CONFIG_DIR") {
-        Some(path) => StorageRoot::from_path(path.into()),
-        None => StorageRoot::from_env_default()?,
-    };
+    let storage = StorageRoot::from_env_default()?;
     let pool = SqlitePoolOptions::new()
         .max_connections(2)
         .connect_with(
@@ -66,7 +63,7 @@ pub async fn run(args: super::Args) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     let (venue_id, title, venue_name): (String,String,String) = sqlx::query_as("SELECT s.venue_id,t.title,v.name FROM scores s JOIN tracks t ON t.id=s.track_id JOIN venues v ON v.id=s.venue_id WHERE s.id=?").bind(score).fetch_one(&pool).await.map_err(|e| e.to_string())?;
-    let fixtures = luma_lib::headless_host::HostConfig::default().fixtures_root()?;
+    let fixtures = luma_lib::resources::fixtures_root()?;
     let program = luma_lib::build_score_scene(&pool, &storage, &fixtures, score, None).await?;
     let geometry = VenueGeometry::load(&pool, &fixtures, &venue_id).await?;
     let (mut scene, definitions) = geometry.scene();

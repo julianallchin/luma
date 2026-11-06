@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn each_fixtures_root_gets_its_own_sockets() {
         use luma_scene::venue::NodeSockets;
-        let bundled = repo_root().join(FIXTURES_ROOT).join("2511260420");
+        let bundled = crate::resources::source_fixtures_root().expect("the shipped bundle");
         let empty = tempfile::tempdir().expect("a temp dir");
         let mover = Node {
             id: "mover".into(),

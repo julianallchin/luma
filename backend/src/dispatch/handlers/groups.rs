@@ -98,7 +98,7 @@ pub async fn list_group_tree(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::Arc;
 
     use serde_json::{json, Value};
@@ -111,7 +111,7 @@ mod tests {
     const DECK: &str = "stage_lab/stage_praticavel_1x1.glb";
     /// A shipped mover, so the tree's roles come out of the role table rather
     /// than out of the test.
-    const MOVER: &str = "resources/fixtures/2511260420/Chauvet/Chauvet-Rogue-R2-Spot.qxf";
+    const MOVER: &str = "Chauvet/Chauvet-Rogue-R2-Spot.qxf";
 
     #[tokio::test]
     async fn named_group_replacement_promotes_heads_and_preserves_membership_identity() {
@@ -557,8 +557,8 @@ mod tests {
                 Arc::new(|| Err("no Python here".to_string())),
             ),
         );
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        AppServices::headless(db, state_db, storage, repo, workspaces)
+        let fixtures_root = crate::resources::source_fixtures_root().expect("the shipped bundle");
+        AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
     }
 }
 

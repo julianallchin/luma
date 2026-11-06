@@ -270,7 +270,7 @@ pub fn setup_python_env_background(
     crate::runtime::ffmpeg::init_headless();
     let (ready, receiver) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        let error_path = cache_dir.join(".python-env-error");
+        let error_path = setup_error_path(&cache_dir);
         let _ = fs::remove_file(&error_path);
         let result =
             ensure_python_env(&cache_dir, resource_dir.as_deref(), &events).and_then(|python| {
@@ -330,7 +330,7 @@ fn ensure_python_env(
     // Serialize setup, but never cache a path from a different host's directory.
     static SETUP: Mutex<()> = Mutex::new(());
     let _guard = SETUP.lock().map_err(|_| "Python setup lock poisoned")?;
-    let env_dir = cache_dir.join("python-env");
+    let env_dir = venv_dir(cache_dir);
     let mut did_work = false;
 
     let mut python_path = find_venv_python(&env_dir);
@@ -383,7 +383,7 @@ fn install_requirements(
 ) -> Result<bool, String> {
     let torch_plan = resolve_torch_install();
     let hash = requirements_hash(&torch_plan);
-    let marker = env_dir.join(".requirements.hash");
+    let marker = env_dir.join(REQUIREMENTS_MARKER);
     if let Ok(existing) = fs::read_to_string(&marker) {
         if existing.trim() == hash {
             if python_path.exists() {
@@ -626,12 +626,39 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// `<cache>/python-env`: the managed virtualenv.
+#[must_use]
+pub fn venv_dir(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("python-env")
+}
+
+/// Written into the venv once its packages match this build's requirements;
+/// holds their hash.
+const REQUIREMENTS_MARKER: &str = ".requirements.hash";
+
+/// Where a failed setup leaves its error, for a worker waiting on it.
+fn setup_error_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join(".python-env-error")
+}
+
+/// Whether setup under `cache_dir` has installed this build's packages.
+#[must_use]
+pub fn setup_finished(cache_dir: &Path) -> bool {
+    venv_dir(cache_dir).join(REQUIREMENTS_MARKER).exists()
+}
+
+/// The error the last setup under `cache_dir` failed with, if it failed.
+#[must_use]
+pub fn setup_failure(cache_dir: &Path) -> Option<String> {
+    fs::read_to_string(setup_error_path(cache_dir)).ok()
+}
+
 /// The managed interpreter, if it already exists under `cache_dir`.
 ///
 /// This never creates, validates or memoizes anything —
 /// it answers "is there a venv here right now?".
 pub fn find_existing_venv_python(cache_dir: &Path) -> Option<PathBuf> {
-    find_venv_python(&cache_dir.join("python-env"))
+    find_venv_python(&venv_dir(cache_dir))
 }
 
 fn find_venv_python(env_dir: &Path) -> Option<PathBuf> {

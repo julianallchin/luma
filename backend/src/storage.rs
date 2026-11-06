@@ -22,8 +22,19 @@ impl StorageRoot {
         Self(p)
     }
 
-    /// Resolve the existing per-platform application config directory.
+    /// The library this process opens: `LUMA_CONFIG_DIR` when it is set, so a
+    /// disposable copy can be pointed at without touching the real one, and
+    /// the [platform directory](Self::platform) otherwise.
     pub fn from_env_default() -> Result<Self, String> {
+        match std::env::var_os("LUMA_CONFIG_DIR") {
+            Some(path) => Ok(Self(PathBuf::from(path))),
+            None => Self::platform(),
+        }
+    }
+
+    /// The per-platform application config directory, whatever the
+    /// environment says.
+    pub fn platform() -> Result<Self, String> {
         let base = dirs::config_dir()
             .ok_or_else(|| "Failed to locate the user config directory".to_string())?;
         Ok(Self(base.join(APP_IDENTIFIER)))
@@ -174,6 +185,21 @@ impl StorageRoot {
     }
 }
 
+/// The app cache directory: where the managed venv and the deployed Python
+/// workers live. `LUMA_CACHE_DIR` overrides the platform location.
+///
+/// # Errors
+///
+/// If the platform has no cache directory.
+pub fn cache_dir() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("LUMA_CACHE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    dirs::cache_dir()
+        .map(|path| path.join(APP_IDENTIFIER))
+        .ok_or_else(|| "could not locate a cache directory".to_string())
+}
+
 /// Find a stem file by name under `stems_dir`, checking `.ogg` first then
 /// `.flac` / `.wav` for backwards compatibility with older runs.
 pub fn find_stem_file(stems_dir: &Path, stem_name: &str) -> Option<PathBuf> {
@@ -263,8 +289,8 @@ mod tests {
     }
 
     #[test]
-    fn from_env_default_ends_in_the_bundle_identifier() {
-        let r = StorageRoot::from_env_default().unwrap();
+    fn the_platform_root_ends_in_the_bundle_identifier() {
+        let r = StorageRoot::platform().unwrap();
         assert_eq!(
             r.path().file_name().and_then(|s| s.to_str()),
             Some("com.luma.luma")

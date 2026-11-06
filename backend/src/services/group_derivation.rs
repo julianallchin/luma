@@ -2026,8 +2026,8 @@ mod goldens {
         if let Some(hit) = cache.lock().unwrap().get(&key) {
             return hit.clone();
         }
-        let path = repo_root()
-            .join("resources/fixtures/2511260420")
+        let path = crate::resources::source_fixtures_root()
+            .unwrap()
             .join(definition.0);
         let def = parse_definition(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let mode = def

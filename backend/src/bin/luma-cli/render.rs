@@ -51,7 +51,7 @@ pub async fn run(mut args: super::Args) -> Result<(), String> {
         .connect_with(SqliteConnectOptions::new().filename(&db).read_only(true))
         .await
         .map_err(|e| format!("{}: {e}", db.display()))?;
-    let fixtures_root = luma_lib::headless_host::HostConfig::default().fixtures_root()?;
+    let fixtures_root = luma_lib::resources::fixtures_root()?;
     let geometry = VenueGeometry::load(&pool, &fixtures_root, &venue).await?;
     let (scene, definitions) = geometry.scene();
     if format == "catalogue" {

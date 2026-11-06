@@ -46,6 +46,46 @@ fn packaged(exe: &Path) -> Option<PathBuf> {
     .find(|candidate| candidate.join("resources/fixtures").is_dir())
 }
 
+/// Where the fixture definitions live.
+///
+/// `LUMA_FIXTURES_ROOT` wins, so a test or a one-off run can supply its own
+/// library. Otherwise the repository's copy, so a developer build sees today's
+/// fixtures, and then the installed bundle's.
+///
+/// # Errors
+///
+/// If neither the repository nor a bundle has a fixture library.
+pub fn fixtures_root() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("LUMA_FIXTURES_ROOT") {
+        return Ok(PathBuf::from(path));
+    }
+    source_fixtures_root()
+        .or_else(|| newest_library(&resource_dir()?.join("resources/fixtures")))
+        .ok_or_else(|| "Could not find fixtures directory".to_string())
+}
+
+/// The repository's fixture library, when this binary was built from a tree
+/// that is still there.
+#[must_use]
+pub fn source_fixtures_root() -> Option<PathBuf> {
+    newest_library(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .join("resources/fixtures"),
+    )
+}
+
+/// The newest (lexicographically greatest) version directory under `dir`: the
+/// library is shipped as `fixtures/<version>/<manufacturer>/…`.
+fn newest_library(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .max()
+}
+
 /// Where the stage GLBs live.
 ///
 /// `LUMA_MESHES_ROOT` wins, so a test or a fixture can supply its own tree.

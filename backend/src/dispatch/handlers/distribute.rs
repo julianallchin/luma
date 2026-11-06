@@ -79,7 +79,7 @@ pub async fn redistribute(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::Arc;
 
     use serde_json::{json, Value};
@@ -1264,10 +1264,7 @@ mod tests {
                 Arc::new(|| Err("no Python here".to_string())),
             ),
         );
-        AppServices::headless(db, state_db, storage, fixtures_root(), workspaces)
-    }
-
-    fn fixtures_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/fixtures/2511260420")
+        let fixtures_root = crate::resources::source_fixtures_root().expect("the shipped bundle");
+        AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
     }
 }
