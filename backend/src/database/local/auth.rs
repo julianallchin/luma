@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,8 +23,10 @@ const REFRESH_WINDOW_SECONDS: i64 = 60;
 /// session bytes — so once one refresh has been refused, every later gate
 /// hit answers from here instead of presenting the spent token again. Held
 /// per process because that is the reach of a `SupabaseAuthServer`; another
-/// process learns the same answer on its own first attempt.
-static REVOKED_SESSION: Mutex<Option<String>> = Mutex::new(None);
+/// process learns the same answer on its own first attempt. Every refused
+/// session is kept, by hash: a revocation never lapses, and a later one must
+/// not make an earlier session presentable again.
+static REVOKED_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// Why [`get_current_auth`] could not hand out a token.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1344,15 +1347,15 @@ pub async fn session_revoked(pool: &SqlitePool) -> Result<bool, String> {
 }
 
 fn is_revoked(snapshot: &VerifiedSnapshot) -> bool {
-    REVOKED_SESSION
+    REVOKED_SESSIONS
         .lock()
-        .map(|revoked| revoked.as_deref() == Some(snapshot.proof.session_sha256.as_str()))
+        .map(|revoked| revoked.contains(&snapshot.proof.session_sha256))
         .unwrap_or(false)
 }
 
 fn remember_revoked(snapshot: &VerifiedSnapshot) {
-    if let Ok(mut revoked) = REVOKED_SESSION.lock() {
-        *revoked = Some(snapshot.proof.session_sha256.clone());
+    if let Ok(mut revoked) = REVOKED_SESSIONS.lock() {
+        revoked.insert(snapshot.proof.session_sha256.clone());
     }
 }
 
