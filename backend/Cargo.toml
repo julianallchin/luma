@@ -2,7 +2,6 @@
 members = [
     ".",
     "crates/stagelinq",
-    "crates/rekordbox",
     "crates/prodjlink",
     "crates/fixture-kinematics",
     "crates/patterns",
@@ -76,7 +75,8 @@ quick-xml = { version = "0.38.4", features = ["serialize"] }
 rand = "0.8"
 walkdir = "2.5.0"
 stagelinq = { path = "crates/stagelinq" }
-rekordbox = { path = "crates/rekordbox" }
+# Rekordbox's encrypted master database (`src/rekordbox`).
+rbox = "0.1.7"
 prodjlink = { path = "crates/prodjlink" }
 # The offscreen renderer, so `luma.venue.render(...)` in an agent's Python
 # workspace produces a PNG of the stage from the same renderer the desktop

@@ -1,4 +1,4 @@
-use rekordbox::rbox::MasterDb;
+use rbox::MasterDb;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -26,7 +26,7 @@ fn build_album_map(db: &mut MasterDb) -> HashMap<String, String> {
 }
 
 fn content_to_track(
-    c: &rekordbox::rbox::masterdb::models::DjmdContent,
+    c: &rbox::masterdb::models::DjmdContent,
     artist_map: &HashMap<String, String>,
     album_map: &HashMap<String, String>,
     share: Option<&Path>,
