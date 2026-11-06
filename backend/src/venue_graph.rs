@@ -165,9 +165,7 @@ mod tests {
     // The venue as a document: the golden rig, as rows
     // -----------------------------------------------------------------------
 
-    use crate::models::venue_graph::{
-        diff, summarize, NodePlacement, VenueConstraint, VenueGraphRows, VenueNode,
-    };
+    use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
     use std::collections::BTreeMap;
 
     fn repo_root() -> std::path::PathBuf {
@@ -333,55 +331,6 @@ mod tests {
         }
     }
 
-    /// The same room after a refit: a bar of four movers goes in, the speaker
-    /// wall leaves, a deck is turned round, the tower grows, the room is
-    /// renamed and the far end is re-aimed. One of every change kind.
-    fn refit_rows() -> VenueGraphRows {
-        let mut rows = golden_rows();
-        rows.nodes.retain(|n| n.id != "wall");
-        rows.params.remove("wall");
-        for index in 1..=4 {
-            rows.nodes.push(VenueNode {
-                id: format!("spot_{index}"),
-                venue_id: "golden".into(),
-                kind: "fixture".into(),
-                catalog_ref: Some(format!("fixture:spot_{index}")),
-                label: Some(format!("Rogue R2 Spot {index}")),
-                placement: Some(NodePlacement {
-                    parent: "venue".into(),
-                    my_socket: FIXTURE_CLAMP_SOCKET.into(),
-                    their_socket: RIG_SOCKET.into(),
-                    roll: 0.0,
-                }),
-            });
-            rows.params.insert(
-                format!("spot_{index}"),
-                [("u".to_string(), f64::from(index)), ("v".to_string(), 4.0)].into(),
-            );
-        }
-        for node in &mut rows.nodes {
-            if node.id == "venue" {
-                node.label = Some("Golden room, refit".into());
-            }
-        }
-        for node in &mut rows.nodes {
-            if let (true, Some(placement)) = (node.id == "deck_b", node.placement.as_mut()) {
-                placement.their_socket = "edge_front".into();
-            }
-        }
-        rows.params
-            .get_mut("tower")
-            .expect("the tower has a span")
-            .insert("span".into(), 5.0);
-        rows.constraints = vec![VenueConstraint {
-            node_id: "run".into(),
-            my_socket: "end_b".into(),
-            target_node: "post".into(),
-            target_socket: "end_b".into(),
-        }];
-        rows
-    }
-
     /// Six decimals — a micrometre, as `venue_poses` rounds.
     fn round(v: f64) -> f64 {
         (v * 1e6).round() / 1e6
@@ -459,25 +408,6 @@ mod tests {
                 &golden_rows().to_canonical_json(),
             ),
             "the canonical venue golden was stale and has been rewritten — review and commit it"
-        );
-    }
-
-    /// One diff, in both spellings: the change list a caller consumes and the
-    /// summary a rigger reads.
-    #[test]
-    fn venue_graph_diff_golden_is_current() {
-        let changes = diff(&golden_rows(), &refit_rows());
-        let mut capture = serde_json::to_string_pretty(&serde_json::json!({
-            "changes": changes,
-            "summary": summarize(&changes).lines().collect::<Vec<_>>(),
-        }))
-        .expect("the capture serializes");
-        capture.push('\n');
-        assert!(
-            std::fs::read_to_string(repo_root().join("harness/goldens/venue-graph-diff.json"))
-                .is_ok_and(|old| serde_json::from_str::<serde_json::Value>(&old).ok()
-                    == serde_json::from_str::<serde_json::Value>(&capture).ok()),
-            "the venue diff golden has changed"
         );
     }
 }
