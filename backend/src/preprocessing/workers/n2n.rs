@@ -120,8 +120,6 @@ mod tests {
 
     use super::N2NPreprocessor;
     use crate::preprocessing::preprocessor::Preprocessor;
-    use crate::preprocessing::registry;
-    use crate::preprocessing::scheduler::topo_layers;
 
     /// Spin up an in-memory pool with just enough schema to back the
     /// `is_complete` / `list_pending` defaults.
@@ -222,25 +220,5 @@ mod tests {
         let p = N2NPreprocessor;
         let pending = p.list_pending(&pool).await.unwrap();
         assert_eq!(pending, vec!["t1".to_string()]);
-    }
-
-    #[test]
-    fn n2n_lands_after_mert() {
-        // n2n declares Mert as an input, so the scheduler must place it in a
-        // strictly later topo layer than `mert`. (Pre-v3 it landed alongside
-        // `roots` because both depended on `Stems`; the dependency moved.)
-        let layered = topo_layers(&registry::registered_preprocessors());
-        let layer_of = |name: &str| -> Option<usize> {
-            layered
-                .layers()
-                .iter()
-                .position(|layer| layer.iter().any(|p| p.name() == name))
-        };
-        let mert_layer = layer_of("mert").expect("mert in registry");
-        let n2n_layer = layer_of("n2n").expect("n2n in registry");
-        assert!(
-            mert_layer < n2n_layer,
-            "mert layer {mert_layer} must precede n2n layer {n2n_layer}",
-        );
     }
 }

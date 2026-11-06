@@ -1,9 +1,9 @@
 //! Topological scheduler + parallel dispatcher for the preprocessing DAG.
 //!
 //! Responsibilities:
-//! 1. Topo-sort the registered preprocessors into layers — preprocessors in
-//!    the same layer have no dependencies on each other and can run in
-//!    parallel for a given track. Cycles panic at startup (programming error).
+//! 1. Run the layers of [`registry::dag`] in order — preprocessors in the
+//!    same layer have no dependencies on each other and can run in parallel
+//!    for a given track.
 //! 2. Per-track planning — given a registry, return only the subset of
 //!    preprocessors whose outputs are missing or stale for that track.
 //! 3. Per-track execution — run the planned set in topological order,
@@ -40,7 +40,6 @@ use crate::preprocessing::registry;
 use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
 use crate::services::tracks::analysis_worker_count;
 use crate::storage::StorageRoot;
-use crate::topo;
 
 #[derive(Clone, Debug)]
 pub struct ImportEventContext {
@@ -150,63 +149,6 @@ impl StageReport {
             self.settle(stage, outcome.clone());
         }
     }
-}
-
-// -----------------------------------------------------------------------------
-// Topological sort
-// -----------------------------------------------------------------------------
-
-/// A layered topological ordering — `layers[i]` may run in parallel; layer
-/// `i+1` depends only on outputs from layers `0..=i`.
-#[derive(Clone)]
-pub struct Layered {
-    layers: Vec<Vec<PreprocessorRef>>,
-}
-
-impl Layered {
-    pub fn layers(&self) -> &[Vec<PreprocessorRef>] {
-        &self.layers
-    }
-}
-
-/// Topo-sort `preprocessors` into layers via the shared [`topo::layers`].
-/// A preprocessor's "parents" are the preprocessors that produce its input
-/// artifacts. `Artifact::Audio` has no producer and is filtered out.
-pub fn topo_layers(preprocessors: &[PreprocessorRef]) -> Layered {
-    // Map each non-audio artifact to its sole producer.
-    let mut producer_of: HashMap<Artifact, &'static str> = HashMap::new();
-    for p in preprocessors {
-        if let Some(prev) = producer_of.insert(p.output(), p.name()) {
-            panic!(
-                "Two preprocessors produce the same artifact {:?}: {} and {}",
-                p.output(),
-                prev,
-                p.name()
-            );
-        }
-    }
-
-    let parents_of = |p: &PreprocessorRef| -> Vec<&'static str> {
-        p.inputs()
-            .iter()
-            .filter(|a| !matches!(a, Artifact::Audio))
-            .map(|a| {
-                *producer_of.get(a).unwrap_or_else(|| {
-                    panic!(
-                        "Preprocessor {} depends on artifact {:?} which has no producer",
-                        p.name(),
-                        a
-                    )
-                })
-            })
-            .collect()
-    };
-
-    let layers = topo::layers(preprocessors, |p| p.name(), parents_of)
-        .into_iter()
-        .map(|layer| layer.into_iter().cloned().collect())
-        .collect();
-    Layered { layers }
 }
 
 // -----------------------------------------------------------------------------
@@ -329,31 +271,19 @@ fn is_blocked(p: &dyn Preprocessor, failed_artifacts: &HashSet<Artifact>) -> boo
 /// Under an import, every preprocessor settles on `report` before this
 /// returns — the ones a path out of here never reached included — unless the
 /// run was cancelled, which publishes nothing.
-#[allow(clippy::too_many_arguments)]
 pub async fn run_for_track(
     pool: &SqlitePool,
     storage: &StorageRoot,
     workers: &WorkerEnvironment,
     events: &Events,
     track_id: &str,
-    preprocessors: &[PreprocessorRef],
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
 ) -> Result<(), String> {
-    let result = run_track_layers(
-        pool,
-        storage,
-        workers,
-        events,
-        track_id,
-        preprocessors,
-        analysis,
-        report,
-    )
-    .await;
+    let result = run_track_layers(pool, storage, workers, events, track_id, analysis, report).await;
     if let Some(report) = report.filter(|_| !analysis.is_cancelled()) {
         report.settle_rest(
-            preprocessors.iter().map(|p| p.name()),
+            registry::dag().preprocessors().map(|p| p.name()),
             match &result {
                 Ok(()) => StageOutcome::Skipped,
                 Err(error) => StageOutcome::Failed(error.clone()),
@@ -363,14 +293,12 @@ pub async fn run_for_track(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_track_layers(
     pool: &SqlitePool,
     storage: &StorageRoot,
     workers: &WorkerEnvironment,
     events: &Events,
     track_id: &str,
-    preprocessors: &[PreprocessorRef],
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
 ) -> Result<(), String> {
@@ -383,13 +311,11 @@ async fn run_track_layers(
     storage.ensure_track_storage()?;
     let stems_dir = storage.stems_root();
 
-    let layered = topo_layers(preprocessors);
-
     // Track which artifacts failed in this run so we can skip dependents.
     let mut failed_artifacts: HashSet<Artifact> = HashSet::new();
     let mut track_errors = Vec::new();
 
-    for layer in layered.layers() {
+    for layer in registry::dag().layers() {
         // Filter layer: skip preprocessors whose inputs failed, or whose
         // output is already complete.
         let mut to_run: Vec<PreprocessorRef> = Vec::new();
@@ -550,9 +476,6 @@ pub async fn run_for_tracks(
     import: Option<ImportEventContext>,
 ) -> AnalysisSummary {
     let analyzable_total = track_ids.len();
-    let preprocessors = registry::registered_preprocessors();
-    // Validate the DAG once up front — panics on cycle.
-    let _ = topo_layers(&preprocessors);
     let max_parallel = analysis_worker_count();
     let semaphore = Arc::new(Semaphore::new(max_parallel));
     let completed = Arc::new(std::sync::atomic::AtomicUsize::new(
@@ -565,7 +488,6 @@ pub async fn run_for_tracks(
         let storage = storage.clone();
         let workers = workers.clone();
         let events = events.clone();
-        let preprocessors = preprocessors.clone();
         let sem = semaphore.clone();
         let completed = completed.clone();
         let analysis = analysis.clone();
@@ -587,7 +509,6 @@ pub async fn run_for_tracks(
                 &workers,
                 &events,
                 &track_id,
-                &preprocessors,
                 &analysis,
                 report.as_ref(),
             )
@@ -633,12 +554,8 @@ pub async fn reconcile_on_startup(
     analysis: AnalysisGuard,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
-    let preprocessors = registry::registered_preprocessors();
-    // Validate DAG (panics on cycle).
-    let _ = topo_layers(&preprocessors);
-
     let mut needs: HashSet<String> = HashSet::new();
-    for p in &preprocessors {
+    for p in registry::dag().preprocessors() {
         for id in p.list_pending(&pool).await? {
             needs.insert(id);
         }
@@ -696,34 +613,6 @@ mod tests {
         }
     }
 
-    fn registered_three() -> Vec<PreprocessorRef> {
-        registry::registered_preprocessors()
-    }
-
-    #[test]
-    fn topo_layers_orders_real_registry() {
-        let layered = topo_layers(&registered_three());
-        // Expect three layers (mert now reads drums.ogg so it sits behind
-        // stems instead of alongside it):
-        //   layer 0 = depends only on Audio
-        //             { beat_grid, stems }
-        //   layer 1 = depends on Audio+Stems
-        //             { mert (Audio + Stems), roots (Stems) }
-        //   layer 2 = depends on Mert
-        //             { n2n (Stems + Mert), classifier (BeatGrid + Mert) }
-        assert_eq!(layered.layers().len(), 3);
-        let layer0_names: HashSet<_> = layered.layers()[0].iter().map(|p| p.name()).collect();
-        assert!(layer0_names.contains("beat_grid"));
-        assert!(layer0_names.contains("stems"));
-        assert_eq!(layer0_names.len(), 2);
-        let layer1_names: HashSet<_> = layered.layers()[1].iter().map(|p| p.name()).collect();
-        assert!(layer1_names.contains("mert"));
-        assert!(layer1_names.contains("roots"));
-        let layer2_names: HashSet<_> = layered.layers()[2].iter().map(|p| p.name()).collect();
-        assert!(layer2_names.contains("n2n"));
-        assert!(layer2_names.contains("classifier"));
-    }
-
     #[tokio::test]
     async fn owned_inflight_claim_releases_on_early_error() {
         const PROCESSOR: &str = "inflight_release_regression";
@@ -746,28 +635,6 @@ mod tests {
         .expect("claim was not wedged by the early return")
         .expect("claim is available again");
         drop(reclaimed);
-    }
-
-    #[test]
-    #[should_panic(expected = "Cycle")]
-    fn topo_layers_panics_on_cycle() {
-        // Synthetic registry where two preprocessors depend on each other's
-        // outputs — should panic with "Cycle detected".
-        let cyclic: Vec<PreprocessorRef> = vec![
-            Arc::new(StubProc {
-                name: "a",
-                version: 1,
-                inputs: &[Artifact::Roots],
-                output: Artifact::BeatGrid,
-            }),
-            Arc::new(StubProc {
-                name: "b",
-                version: 1,
-                inputs: &[Artifact::BeatGrid],
-                output: Artifact::Roots,
-            }),
-        ];
-        let _ = topo_layers(&cyclic);
     }
 
     #[tokio::test]

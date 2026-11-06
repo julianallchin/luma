@@ -117,8 +117,6 @@ mod tests {
 
     use super::MertPreprocessor;
     use crate::preprocessing::preprocessor::Preprocessor;
-    use crate::preprocessing::registry;
-    use crate::preprocessing::scheduler::topo_layers;
 
     async fn test_pool() -> SqlitePool {
         let opts = SqliteConnectOptions::new()
@@ -191,35 +189,5 @@ mod tests {
         .unwrap();
         let pending = p.list_pending(&pool).await.unwrap();
         assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn mert_lands_after_stems_and_before_classifier_and_n2n() {
-        // mert reads drums.ogg, so it must come after `stems`; both
-        // `classifier` and `n2n` declare Mert as an input, so they must come
-        // after `mert`.
-        let layered = topo_layers(&registry::registered_preprocessors());
-        let layer_of = |name: &str| -> Option<usize> {
-            layered
-                .layers()
-                .iter()
-                .position(|layer| layer.iter().any(|p| p.name() == name))
-        };
-        let stems_layer = layer_of("stems").expect("stems in registry");
-        let mert_layer = layer_of("mert").expect("mert in registry");
-        let classifier_layer = layer_of("classifier").expect("classifier in registry");
-        let n2n_layer = layer_of("n2n").expect("n2n in registry");
-        assert!(
-            stems_layer < mert_layer,
-            "stems layer {stems_layer} must precede mert layer {mert_layer}",
-        );
-        assert!(
-            mert_layer < classifier_layer,
-            "mert layer {mert_layer} must precede classifier layer {classifier_layer}",
-        );
-        assert!(
-            mert_layer < n2n_layer,
-            "mert layer {mert_layer} must precede n2n layer {n2n_layer}",
-        );
     }
 }

@@ -110,8 +110,6 @@ mod tests {
 
     use super::GenrePreprocessor;
     use crate::preprocessing::preprocessor::Preprocessor;
-    use crate::preprocessing::registry;
-    use crate::preprocessing::scheduler::topo_layers;
 
     async fn test_pool() -> SqlitePool {
         let opts = SqliteConnectOptions::new()
@@ -249,22 +247,5 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
-    }
-
-    #[test]
-    fn genre_lands_after_beat_grid() {
-        let layered = topo_layers(&registry::registered_preprocessors());
-        let layer_of = |name: &str| -> Option<usize> {
-            layered
-                .layers()
-                .iter()
-                .position(|layer| layer.iter().any(|p| p.name() == name))
-        };
-        let beat = layer_of("beat_grid").expect("beat_grid in registry");
-        let genre = layer_of("genre").expect("genre in registry");
-        assert!(
-            genre > beat,
-            "genre ({genre}) must come after beat_grid ({beat})"
-        );
     }
 }

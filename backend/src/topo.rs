@@ -1,6 +1,6 @@
 //! Generic topological sort over an arbitrary node type.
 //!
-//! One caller: `preprocessing::scheduler` orders DAG nodes for layered
+//! One caller: `preprocessing::registry` orders DAG nodes for layered
 //! execution, peeling layers via Kahn's algorithm.
 //!
 //! Cycles or unknown parents panic with the offending nodes named. Both are

@@ -463,8 +463,8 @@ pub const WAVEFORM_STAGE: &str = "waveform";
 /// Every stage an imported track reports, in no particular order: each
 /// registered preprocessor, and the waveform branch beside them.
 fn analysis_stages() -> Vec<String> {
-    crate::preprocessing::registry::registered_preprocessors()
-        .iter()
+    crate::preprocessing::registry::dag()
+        .preprocessors()
         .map(|p| p.name().to_string())
         .chain(std::iter::once(WAVEFORM_STAGE.to_string()))
         .collect()

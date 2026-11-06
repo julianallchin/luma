@@ -40,8 +40,9 @@ See [`registry.rs`](registry.rs). Adding a node is literally one line:
 Arc::new(workers::n2n::N2NPreprocessor),
 ```
 
-The scheduler topo-sorts this list at startup; cycles or unknown artifacts
-panic at that point.
+`registry::dag()` layers this list once, on first use (startup
+reconciliation), and checks it there: two producers of one artifact, an input
+nobody produces, or a cycle panics. The scheduler only runs the layers.
 
 ## Version-bump backfill
 
@@ -142,11 +143,11 @@ reproduction of Yeung et al., Sony AI 2025). Five steps:
    Arc::new(workers::n2n::N2NPreprocessor),
    ```
 
-6. **Test.** `workers/n2n.rs::tests` constructs an in-memory pool with the
-   migration applied, asserts `is_complete` returns false initially / true
-   after a manual insert, asserts that v1 (ADTOF-era) rows are flagged stale
-   under the bumped version, and asserts the topo position lands strictly
-   after `mert` (the new dependency).
+6. **Test.** `workers/n2n.rs::tests` builds an in-memory pool with the
+   table, asserts `list_pending` returns the track until a current-version
+   row exists, and that v1 (ADTOF-era) rows are flagged stale under the
+   bumped version. The registry's own test already checks that every node
+   runs after the producers of its inputs.
 
 ## Shared MERT cache
 
@@ -194,7 +195,8 @@ anything new; this is an exception forced by licensing, not a pattern to copy.
 ## Pointers
 
 - Trait + context: [`preprocessor.rs`](preprocessor.rs)
-- Scheduler + topo + dedup: [`scheduler.rs`](scheduler.rs)
+- DAG construction + validation: [`registry.rs`](registry.rs)
+- Scheduler + dedup: [`scheduler.rs`](scheduler.rs)
 - Failure backoff: [`failures.rs`](failures.rs)
 - Generic Kahn's: [`../topo.rs`](../topo.rs)
 - Python bootstrap (venv, requirements, weight downloads): [`../runtime/python.rs`](../runtime/python.rs)

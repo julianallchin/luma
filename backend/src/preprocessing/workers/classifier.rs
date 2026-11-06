@@ -136,8 +136,6 @@ mod tests {
     use super::process::{self, ClassifierAnalysis, StoredBarClassifications};
     use super::ClassifierPreprocessor;
     use crate::preprocessing::preprocessor::Preprocessor;
-    use crate::preprocessing::registry;
-    use crate::preprocessing::scheduler::topo_layers;
 
     async fn test_pool() -> SqlitePool {
         let opts = SqliteConnectOptions::new()
@@ -365,25 +363,6 @@ mod tests {
                 "intensity": [1.988, null, 3.0],
                 "scores": [[0.9, 0.123], null, [0.0, 0.5]],
             })
-        );
-    }
-
-    #[test]
-    fn classifier_lands_in_layer_after_beat_grid() {
-        // Classifier depends on Audio + BeatGrid, so it must land strictly
-        // after `beat_grid` in the topo order.
-        let layered = topo_layers(&registry::registered_preprocessors());
-        let layer_of = |name: &str| -> Option<usize> {
-            layered
-                .layers()
-                .iter()
-                .position(|layer| layer.iter().any(|p| p.name() == name))
-        };
-        let beat = layer_of("beat_grid").expect("beat_grid in registry");
-        let cls = layer_of("classifier").expect("classifier in registry");
-        assert!(
-            cls > beat,
-            "classifier ({cls}) must come after beat_grid ({beat})"
         );
     }
 
