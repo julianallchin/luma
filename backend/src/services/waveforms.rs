@@ -347,27 +347,6 @@ pub fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
     result
 }
 
-/// Compute 3-band envelopes (low, mid, high) for rekordbox-style waveform,
-/// normalised against this call's own audio.
-///
-/// Standalone: it derives its own [`BandGains`], so two calls over different
-/// audio are in different units. The pipeline instead derives gains once per
-/// track and compresses every resolution against them — that is what makes the
-/// stored envelope and a measured window the same picture.
-pub fn compute_band_envelopes(
-    samples: &[f32],
-    sample_rate: u32,
-    num_buckets: usize,
-) -> BandEnvelopes {
-    if samples.is_empty() || num_buckets == 0 {
-        return BandPeaks::silent(num_buckets).into_envelopes();
-    }
-
-    let filtered = filter_3band(samples, sample_rate as f32);
-    let peaks = bucketize_band_peaks(&filtered, 0..samples.len(), num_buckets);
-    BandGains::from_peaks(&peaks).compress(&peaks)
-}
-
 /// Per-bucket band peaks in the audio's own units, before any normalisation.
 ///
 /// Distinct from [`BandEnvelopes`] on purpose: these two are the same three
@@ -385,16 +364,6 @@ impl BandPeaks {
             low: vec![0.0; buckets],
             mid: vec![0.0; buckets],
             high: vec![0.0; buckets],
-        }
-    }
-
-    /// Reinterpret as envelopes without compressing — only valid for all-zero
-    /// peaks, where every gain maps to zero anyway.
-    fn into_envelopes(self) -> BandEnvelopes {
-        BandEnvelopes {
-            low: self.low,
-            mid: self.mid,
-            high: self.high,
         }
     }
 }

@@ -15,17 +15,6 @@ impl Curve<f64> {
         Self::with_eases(points.into_iter().map(|[x, y]| (x, y)), eases)
     }
 
-    pub fn soft_edges(softness: f64) -> Self {
-        let edge = softness.clamp(0., 1.) * 0.5;
-        Self::linear(if edge <= 0. {
-            vec![[0., 1.], [1., 1.]]
-        } else if edge >= 0.5 {
-            vec![[0., 0.], [0.5, 1.], [1., 0.]]
-        } else {
-            vec![[0., 0.], [edge, 1.], [1. - edge, 1.], [1., 0.]]
-        })
-    }
-
     pub fn validate(&self) -> Result<()> {
         self.check(|v| {
             (!v.is_finite() || !(0. ..=1.).contains(v))

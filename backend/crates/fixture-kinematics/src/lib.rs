@@ -410,17 +410,6 @@ pub struct Ray {
     pub direction: Vec3,
 }
 
-/// The pan/tilt pivot of a mounted fixture, in data space.
-///
-/// Exposed as a named point because a caller that genuinely wants the pivot —
-/// drawing a yoke, say — must ask for it, rather than calling [`rig_position`]
-/// and subtracting terms back off. Subtraction at a call site is how the three
-/// implementations this crate replaced drifted apart in the first place.
-#[must_use]
-pub fn pivot_point(geom: &FixtureGeometry, mount: &Mount) -> Vec3 {
-    mount.position + mount.rotation * geom.pivot_offset
-}
-
 /// The static rig position of one cell: where that emitter *is*, with the head
 /// parked.
 ///
@@ -662,14 +651,6 @@ mod tests {
             rig_position(&geom, &Mount::from_stored(Vec3::ZERO, [0.0; 3]), 0),
             Vec3::ZERO
         );
-    }
-
-    #[test]
-    fn pivot_point_is_the_rig_position_of_a_bare_pivot() {
-        let pivot = Vec3::new(0.0, 0.03, -0.1);
-        let mount = Mount::from_stored(Vec3::new(2.0, 1.0, 4.0), [0.2, 0.4, -0.9]);
-        let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]).with_pivot_offset(pivot);
-        close(pivot_point(&geom, &mount), rig_position(&geom, &mount, 0));
     }
 
     #[test]

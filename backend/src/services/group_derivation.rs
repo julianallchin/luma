@@ -1162,12 +1162,8 @@ pub fn merge_tree(tree: &DerivedTree, manual: &[ManualGroup]) -> Vec<GroupTreeNo
 
 /// Separate the names of a merged tree that two rules spelled the same way.
 ///
-/// The second half of [`merge_tree`], and a step of its own because the tree
-/// *before* it is the one a typed name is checked against: after this there is
-/// no collision left to find, which is the whole point of it. A name someone
-/// typed is refused ([`super::groups::GroupSources::clash_for`]); a name nobody
-/// typed — a piece labelled `Truss-1` beside one labelled `Truss 1` — is
-/// suffixed here.
+/// The second half of [`merge_tree`]. A name nobody typed — a piece labelled
+/// `Truss-1` beside one labelled `Truss 1` — is suffixed here.
 ///
 /// Authored groups claim first. A score holds those words, and they are the
 /// tail of a merged tree, which is what `role: None` marks.

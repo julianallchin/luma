@@ -150,34 +150,10 @@ impl StorageRoot {
         self.0.join("agent-workspaces")
     }
 
-    /// One agent thread's workspace.
-    pub fn agent_workspace_dir(&self, thread_id: &str) -> PathBuf {
-        self.agent_workspaces_dir().join(thread_id)
-    }
-
     /// `<root>/agent-figures/<sha>.png` — a python figure's bytes, by the
     /// SHA-256 of the PNG. See [`crate::agent::figures`].
     pub fn agent_figure_path(&self, sha: &str) -> PathBuf {
         self.0.join("agent-figures").join(format!("{sha}.png"))
-    }
-
-    // -- isolated authored-document workspaces ------------------------------
-
-    /// `<root>/authored-workspaces` — disposable plain-file snapshots used by
-    /// subagents. Durable authored state and history live in SQLite.
-    pub fn authored_workspaces_dir(&self) -> PathBuf {
-        self.0.join("authored-workspaces")
-    }
-
-    /// `<root>/authored-workspaces/<document-id>`.
-    pub fn authored_document_workspaces_dir(&self, document_id: &str) -> PathBuf {
-        self.authored_workspaces_dir().join(document_id)
-    }
-
-    /// `<root>/authored-workspaces/<document-id>/<workspace-id>`.
-    pub fn authored_workspace_dir(&self, document_id: &str, workspace_id: &str) -> PathBuf {
-        self.authored_document_workspaces_dir(document_id)
-            .join(workspace_id)
     }
 
     // -- creation -------------------------------------------------------------
@@ -255,14 +231,6 @@ mod tests {
         assert_eq!(
             r.agent_workspaces_dir(),
             PathBuf::from("/fake/com.luma.luma/agent-workspaces")
-        );
-        assert_eq!(
-            r.agent_workspace_dir("t-1"),
-            PathBuf::from("/fake/com.luma.luma/agent-workspaces/t-1")
-        );
-        assert_eq!(
-            r.authored_workspace_dir("d-abc", "w-1"),
-            PathBuf::from("/fake/com.luma.luma/authored-workspaces/d-abc/w-1")
         );
         assert_eq!(
             r.luma_db_path(),

@@ -132,14 +132,6 @@ pub fn build_service_announcement(token: &[u8; 16], service_name: &str, port: u1
     buf
 }
 
-/// Parsed service announcement from the device's main TCP connection.
-#[derive(Debug, Clone)]
-pub struct ServiceAnnouncement {
-    pub token: [u8; 16],
-    pub service_name: String,
-    pub port: u16,
-}
-
 /// Parse a TCP message from the main device connection.
 /// Returns (message_id, remaining payload bytes).
 pub fn parse_device_message(data: &[u8]) -> io::Result<(u32, [u8; 16], Vec<u8>)> {

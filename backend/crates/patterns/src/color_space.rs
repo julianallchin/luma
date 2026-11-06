@@ -149,18 +149,6 @@ pub fn from_linear_srgb(linear: [f64; 3]) -> [f64; 3] {
     apply(&SRGB_TO_REC2020, linear).map(|v| v.clamp(0., 1.))
 }
 
-/// `#rrggbb` (the `#` optional, sRGB) to linear Rec. 2020.
-pub fn from_hex(hex: &str) -> Option<[f64; 3]> {
-    let digits = hex.trim().trim_start_matches('#');
-    if digits.len() != 6 || !digits.is_ascii() {
-        return None;
-    }
-    let byte = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
-    Some(from_srgb(
-        [byte(0)?, byte(2)?, byte(4)?].map(|v| f64::from(v) / 255.),
-    ))
-}
-
 /// Whether sRGB can show `color` (linear Rec. 2020) exactly.
 pub fn in_srgb(color: [f64; 3]) -> bool {
     Gamut::SRGB.contains(color)
@@ -334,8 +322,6 @@ mod tests {
             let back = to_display_srgb(color);
             assert!(close(back, srgb, 1e-9), "{srgb:?} came back as {back:?}");
         }
-        assert_eq!(from_hex("#ff8000"), Some(from_srgb([1., 128. / 255., 0.])));
-        assert_eq!(from_hex("ff80"), None);
     }
 
     #[test]
