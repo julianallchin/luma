@@ -41,12 +41,6 @@ pub struct Plan {
 pub struct Arena {
     pub(crate) values: BTreeMap<String, luma_patterns::EvaluatedValue>,
 }
-pub fn eval(plan: &Plan, times: &[f32], scratch: &mut Arena) -> Vec<UniverseState> {
-    try_eval(plan, times, scratch).unwrap_or_else(|error| {
-        log::error!("Graph evaluation: {error}");
-        times.iter().map(|_| composite::blank_frame()).collect()
-    })
-}
 /// One clip alone over no light: its light and strobe at its opacity, or
 /// its laser elements at their alpha.
 pub fn try_eval(
