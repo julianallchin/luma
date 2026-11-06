@@ -14,7 +14,7 @@ use luma_sync::powersync::{sdk::SyncOptions, Connections, Database, HttpClient};
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 
-use crate::dispatch::Events;
+use crate::dispatch::{Event, Events};
 use crate::models::sync::SyncStatus;
 
 use super::connector::Connector;
@@ -400,10 +400,8 @@ async fn replicas(database: Arc<Database>, events: Events, mut shutdown: watch::
                     .filter(|table| schema::table(table).is_some()),
             );
         }
-        events.emit(
-            "replica-changed",
-            serde_json::json!({ "tables": changed.iter().collect::<Vec<_>>() }),
-        );
-        changed.clear();
+        events.emit(Event::ReplicaChanged {
+            tables: std::mem::take(&mut changed).into_iter().collect(),
+        });
     }
 }

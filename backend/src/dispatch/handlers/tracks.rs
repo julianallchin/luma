@@ -1,5 +1,5 @@
 use crate::database::local::tracks as tracks_db;
-use crate::dispatch::{AppServices, CommandError};
+use crate::dispatch::{AppServices, CommandError, Event};
 use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{
     TrackBrowserRow, TrackImportFailure, TrackImportPhase, TrackImportProgress, TrackImportResult,
@@ -197,9 +197,9 @@ pub(crate) fn emit_import_progress(
     current_track: Option<String>,
     error: Option<String>,
 ) {
-    services.events.emit(
-        "track-import-state",
-        TrackImportProgress {
+    services
+        .events
+        .emit(Event::TrackImportState(TrackImportProgress {
             import_id: import_id.to_string(),
             source: source.to_string(),
             phase,
@@ -209,8 +209,7 @@ pub(crate) fn emit_import_progress(
             current_track,
             analysis: None,
             error,
-        },
-    );
+        }));
 }
 
 pub(crate) fn push_unique(tracks: &mut Vec<TrackSummary>, track: TrackSummary) {
@@ -244,7 +243,6 @@ pub(crate) async fn finish_fast_import(
         None,
         None,
     );
-    services.events.emit("library-changed", ());
     if new_ids.is_empty() {
         drop(lease);
         emit_import_progress(
@@ -280,9 +278,7 @@ pub(crate) async fn finish_fast_import(
             .await;
         })
     {
-        let error = rollback_after_failure(services, &rollback_ids, principal, error).await;
-        services.events.emit("library-changed", ());
-        return Err(error);
+        return Err(rollback_after_failure(services, &rollback_ids, principal, error).await);
     }
     drop(lease);
     Ok(())
@@ -329,22 +325,22 @@ mod import_tests {
     use std::path::Path;
     use std::sync::{Arc, Barrier};
 
-    use serde_json::Value;
-
     use super::*;
     use crate::database::local::auth;
     use crate::dispatch::{EventSink, Events};
 
     struct ChannelEvents {
-        tx: tokio::sync::mpsc::UnboundedSender<(String, Value)>,
+        tx: tokio::sync::mpsc::UnboundedSender<TrackImportProgress>,
         inserted: Arc<Barrier>,
     }
 
     impl EventSink for ChannelEvents {
-        fn emit(&self, event: &str, payload: Value) {
-            let inserted = event == "track-import-state"
-                && payload.get("trackId").is_some_and(|value| !value.is_null());
-            let _ = self.tx.send((event.to_string(), payload));
+        fn emit(&self, event: Event) {
+            let Event::TrackImportState(progress) = event else {
+                return;
+            };
+            let inserted = progress.track_id.is_some();
+            let _ = self.tx.send(progress);
             if inserted {
                 self.inserted.wait();
             }
@@ -406,10 +402,9 @@ mod import_tests {
 
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
-                let (name, payload) = events_rx.recv().await.unwrap();
-                if name == "track-import-state"
-                    && payload.get("phase").and_then(Value::as_str) == Some("importing")
-                    && payload.get("trackId").is_some_and(|value| !value.is_null())
+                let progress = events_rx.recv().await.unwrap();
+                if matches!(progress.phase, TrackImportPhase::Importing)
+                    && progress.track_id.is_some()
                 {
                     break;
                 }

@@ -18,7 +18,7 @@ pub use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist};
 pub use crate::services::artwork::ArtworkRef;
 pub use error::CommandError;
 pub use services::system_track_sources;
-pub use services::{AppServices, EventSink, Events, SharedServices, TrackSources};
+pub use services::{AppServices, Event, EventSink, Events, SharedServices, TrackSources};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;

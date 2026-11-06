@@ -12,18 +12,19 @@
 
 use std::path::PathBuf;
 
-use serde_json::Value;
-
 use crate::boot::{Boot, Identity};
-use crate::dispatch::{AppServices, EventSink, Events};
+use crate::dispatch::{AppServices, Event, EventSink, Events};
 use crate::storage::StorageRoot;
 
 /// Emitted events land on stderr, alongside the host's other diagnostics.
 struct StderrEvents;
 
 impl EventSink for StderrEvents {
-    fn emit(&self, event: &str, payload: Value) {
-        eprintln!("[event] {event} {payload}");
+    fn emit(&self, event: Event) {
+        match serde_json::to_string(&event) {
+            Ok(json) => eprintln!("[event] {json}"),
+            Err(error) => eprintln!("[event] {event:?} (not serializable: {error})"),
+        }
     }
 }
 

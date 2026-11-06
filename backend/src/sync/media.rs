@@ -14,10 +14,10 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 
+use crate::storage::StorageRoot;
 use crate::sync::supabase::Storage;
 
 use super::files::{self, FileSyncStats};
-use super::host::SyncHost;
 use super::progress::Progress;
 
 /// How often the loop looks for work. Media is bulk, not interactive.
@@ -30,16 +30,19 @@ pub struct Media {
     state_pool: SqlitePool,
     remote: Arc<Storage>,
     progress: Arc<Progress>,
+    /// Where downloaded stems and album art land, and figures are read from.
+    storage: StorageRoot,
 }
 
 impl Media {
     #[must_use]
-    pub fn new(pool: SqlitePool, state_pool: SqlitePool) -> Self {
+    pub fn new(pool: SqlitePool, state_pool: SqlitePool, storage: StorageRoot) -> Self {
         Self {
             pool,
             state_pool,
             remote: Arc::new(Storage::from_config()),
             progress: Arc::default(),
+            storage,
         }
     }
 
@@ -51,7 +54,7 @@ impl Media {
 
     /// Transfer until `shutdown`. One pass per [`INTERVAL`], skipped while
     /// signed out — there is no bucket to talk to without a token.
-    pub async fn run(self, host: SyncHost, mut shutdown: watch::Receiver<bool>) {
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         loop {
             tokio::select! {
                 _ = shutdown.changed() => break,
@@ -60,7 +63,7 @@ impl Media {
             if *shutdown.borrow() {
                 break;
             }
-            match self.pass(&host).await {
+            match self.pass().await {
                 Ok(stats) if !stats.errors.is_empty() => {
                     for error in &stats.errors {
                         log::warn!("[media] {error}");
@@ -79,7 +82,7 @@ impl Media {
     /// If there is no session, or a database read fails. A per-file failure is
     /// collected into [`FileSyncStats::errors`] instead — one unreadable stem
     /// must not stop the rest.
-    pub async fn pass(&self, host: &SyncHost) -> Result<FileSyncStats, super::error::SyncError> {
+    pub async fn pass(&self) -> Result<FileSyncStats, super::error::SyncError> {
         let auth = crate::database::local::auth::get_current_auth(&self.state_pool)
             .await?
             .ok_or(super::error::SyncError::AuthRequired)?;
@@ -87,33 +90,16 @@ impl Media {
         let _activity = self.progress.start(&uid);
         let mut stats = FileSyncStats::default();
         let remote = self.remote.as_ref();
-        files::upload_pending_audio(
-            &self.pool,
-            remote,
-            &uid,
-            &token,
-            &mut stats,
-            host,
-            &self.progress,
-        )
-        .await?;
-        files::upload_pending_stems(
-            &self.pool,
-            remote,
-            &uid,
-            &token,
-            &mut stats,
-            host,
-            &self.progress,
-        )
-        .await?;
+        files::upload_pending_audio(&self.pool, remote, &uid, &token, &mut stats, &self.progress)
+            .await?;
+        files::upload_pending_stems(&self.pool, remote, &uid, &token, &mut stats, &self.progress)
+            .await?;
         files::upload_pending_album_art(
             &self.pool,
             remote,
             &uid,
             &token,
             &mut stats,
-            host,
             &self.progress,
         )
         .await?;
@@ -123,24 +109,28 @@ impl Media {
             &uid,
             &token,
             &mut stats,
-            host,
+            &self.storage,
             &self.progress,
         )
         .await?;
-        files::download_pending_stems(&self.pool, remote, host, &token, &mut stats, &self.progress)
-            .await?;
-        files::download_pending_album_art(
+        files::download_pending_stems(
             &self.pool,
             remote,
-            host,
+            &self.storage,
             &token,
             &mut stats,
             &self.progress,
         )
         .await?;
-        if stats.stems_downloaded + stats.art_downloaded > 0 {
-            host.events.emit("library-changed", ());
-        }
+        files::download_pending_album_art(
+            &self.pool,
+            remote,
+            &self.storage,
+            &token,
+            &mut stats,
+            &self.progress,
+        )
+        .await?;
         Ok(stats)
     }
 }

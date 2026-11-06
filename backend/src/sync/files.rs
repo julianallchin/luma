@@ -8,25 +8,8 @@
 use sqlx::SqlitePool;
 
 use super::error::SyncError;
-use super::host::SyncHost;
+use crate::storage::StorageRoot;
 use crate::sync::supabase::Storage;
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UploadProgressStart {
-    count: usize,
-}
-
-fn emit_upload_start(host: &SyncHost, count: usize) {
-    if count > 0 {
-        host.events
-            .emit("upload-progress-start", UploadProgressStart { count });
-    }
-}
-
-fn emit_upload_tick(host: &SyncHost) {
-    host.events.emit("upload-progress-tick", ());
-}
 
 /// Stats from a file sync operation.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -121,7 +104,6 @@ pub async fn upload_pending_audio(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    host: &SyncHost,
     progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingAudioUpload>(
@@ -131,8 +113,6 @@ pub async fn upload_pending_audio(
     .bind(uid)
     .fetch_all(pool)
     .await?;
-
-    emit_upload_start(host, rows.len());
 
     progress.phase("Uploading audio", Some(rows.len()), "files");
     for row in &rows {
@@ -187,7 +167,6 @@ pub async fn upload_pending_audio(
                     continue;
                 }
                 stats.audio_uploaded += 1;
-                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload audio {}: {e}", row.id);
@@ -215,7 +194,6 @@ pub async fn upload_pending_stems(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    host: &SyncHost,
     progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingStemUpload>(
@@ -227,8 +205,6 @@ pub async fn upload_pending_stems(
     .bind(uid)
     .fetch_all(pool)
     .await?;
-
-    emit_upload_start(host, rows.len());
 
     progress.phase("Uploading stems", Some(rows.len()), "files");
     for row in &rows {
@@ -276,7 +252,6 @@ pub async fn upload_pending_stems(
                     continue;
                 }
                 stats.stems_uploaded += 1;
-                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload stem {}/{}: {e}", row.track_id, row.stem_name);
@@ -308,7 +283,6 @@ pub async fn upload_pending_album_art(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    host: &SyncHost,
     progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingArtUpload>(
@@ -319,8 +293,6 @@ pub async fn upload_pending_album_art(
     .bind(uid)
     .fetch_all(pool)
     .await?;
-
-    emit_upload_start(host, rows.len());
 
     progress.phase("Uploading cover art", Some(rows.len()), "files");
     for row in &rows {
@@ -367,7 +339,6 @@ pub async fn upload_pending_album_art(
                     continue;
                 }
                 stats.art_uploaded += 1;
-                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload art {}: {e}", row.id);
@@ -393,7 +364,7 @@ pub async fn upload_pending_agent_figures(
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
-    host: &SyncHost,
+    storage: &StorageRoot,
     progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     use crate::agent::figures;
@@ -404,13 +375,11 @@ pub async fn upload_pending_agent_figures(
             .fetch_all(pool)
             .await?;
 
-    emit_upload_start(host, paths.len());
-
     progress.phase("Uploading figures", Some(paths.len()), "files");
     for path in &paths {
         let _item = progress.item();
         let object = &path[figures::BUCKET.len() + 1..];
-        let bytes = match std::fs::read(figures::cached(&host.storage, path)) {
+        let bytes = match std::fs::read(figures::cached(&storage, path)) {
             Ok(bytes) => bytes,
             Err(e) => {
                 // A cache file that is gone can never be uploaded from here.
@@ -438,7 +407,6 @@ pub async fn upload_pending_agent_figures(
                     continue;
                 }
                 stats.figures_uploaded += 1;
-                emit_upload_tick(host);
             }
             Err(e) => {
                 let msg = format!("upload figure {path}: {e}");
@@ -489,7 +457,7 @@ struct PendingStemDownload {
 pub async fn download_pending_stems(
     pool: &SqlitePool,
     remote: &Storage,
-    host: &SyncHost,
+    storage: &StorageRoot,
     token: &str,
     stats: &mut FileSyncStats,
     progress: &super::progress::Progress,
@@ -522,7 +490,7 @@ pub async fn download_pending_stems(
                 continue;
             }
         };
-        let stems_dir = host.storage.stems_root().join(&row.track_hash);
+        let stems_dir = storage.stems_root().join(&row.track_hash);
         if let Err(error) = std::fs::create_dir_all(&stems_dir) {
             stats
                 .errors
@@ -578,7 +546,7 @@ struct PendingArtDownload {
 pub async fn download_pending_album_art(
     pool: &SqlitePool,
     remote: &Storage,
-    host: &SyncHost,
+    storage: &StorageRoot,
     token: &str,
     stats: &mut FileSyncStats,
     progress: &super::progress::Progress,
@@ -591,7 +559,7 @@ pub async fn download_pending_album_art(
     .fetch_all(pool)
     .await?;
 
-    let art_dir = host.storage.art_dir();
+    let art_dir = storage.art_dir();
 
     progress.phase("Downloading cover art", Some(rows.len()), "files");
     for row in &rows {

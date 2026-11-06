@@ -4,8 +4,7 @@
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
     "commandCount": 133,
-    "domainCount": 26,
-    "eventCount": 6
+    "domainCount": 26
   },
   "domains": [
     {
@@ -2994,61 +2993,6 @@
           "recover_committed_signout after commit; prints '[auth] Signed-in database projection wiped on sign-out'"
         ]
       }
-    }
-  ],
-  "events": [
-    {
-      "name": "library-changed",
-      "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs",
-        "backend/src/sync/media.rs"
-      ],
-      "listeners": [],
-      "orphan": true
-    },
-    {
-      "name": "python-env-progress",
-      "emitters": [
-        "backend/src/runtime/python.rs"
-      ],
-      "listeners": [],
-      "orphan": true
-    },
-    {
-      "name": "track-import-state",
-      "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs",
-        "backend/src/preprocessing/scheduler.rs"
-      ],
-      "listeners": [
-        "gpui/crates/app/src/library.rs"
-      ],
-      "orphan": false,
-      "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose."
-    },
-    {
-      "name": "track-status-changed",
-      "emitters": [
-        "backend/src/preprocessing/scheduler.rs"
-      ],
-      "listeners": [],
-      "orphan": true
-    },
-    {
-      "name": "upload-progress-start",
-      "emitters": [
-        "backend/src/sync/files.rs"
-      ],
-      "listeners": [],
-      "orphan": true
-    },
-    {
-      "name": "upload-progress-tick",
-      "emitters": [
-        "backend/src/sync/files.rs"
-      ],
-      "listeners": [],
-      "orphan": true
     }
   ]
 }

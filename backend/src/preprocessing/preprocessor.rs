@@ -13,7 +13,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::dispatch::Events;
 use crate::models::tracks::TrackSummary;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
@@ -30,7 +29,6 @@ pub struct PreprocessorContext<'a> {
     pool: &'a SqlitePool,
     storage: &'a StorageRoot,
     workers: &'a WorkerEnvironment,
-    events: &'a Events,
     track: &'a TrackSummary,
     analysis: AnalysisGuard,
     /// Directory where stem files are written (per-track subdirs are derived
@@ -43,7 +41,6 @@ impl<'a> PreprocessorContext<'a> {
         pool: &'a SqlitePool,
         storage: &'a StorageRoot,
         workers: &'a WorkerEnvironment,
-        events: &'a Events,
         track: &'a TrackSummary,
         stems_dir: PathBuf,
         analysis: AnalysisGuard,
@@ -52,7 +49,6 @@ impl<'a> PreprocessorContext<'a> {
             pool,
             storage,
             workers,
-            events,
             track,
             stems_dir,
             analysis,
@@ -69,10 +65,6 @@ impl<'a> PreprocessorContext<'a> {
 
     pub fn workers(&self) -> &WorkerEnvironment {
         self.workers
-    }
-
-    pub fn events(&self) -> &Events {
-        self.events
     }
 
     pub fn track(&self) -> &TrackSummary {

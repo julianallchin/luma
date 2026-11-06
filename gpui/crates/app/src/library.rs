@@ -49,12 +49,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::Value;
-
 use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::boot::{Boot, Booted, Identity};
-use luma_lib::dispatch::{handlers, CommandError, EventSink, Events, SharedServices};
+use luma_lib::dispatch::{handlers, CommandError, Event, EventSink, Events, SharedServices};
 #[cfg(feature = "agent")]
 use luma_lib::dispatch::{system_track_sources, TrackSources};
 use luma_lib::models::tracks::TrackImportProgress;
@@ -97,34 +95,18 @@ struct LibraryEvents {
 }
 
 impl EventSink for LibraryEvents {
-    fn emit(&self, event: &str, payload: Value) {
-        if event == "session-revoked" {
-            let _ = self.session_revoked.send(());
-            return;
-        }
-        if event == "replica-changed" {
-            let tables = payload
-                .get("tables")
-                .and_then(Value::as_array)
-                .map(|tables| {
-                    tables
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
-            let _ = self.replica_changed.send(tables);
-            return;
-        }
-        if event != "track-import-state" {
-            return;
-        }
-        match serde_json::from_value(payload) {
-            Ok(progress) => {
+    /// A send fails only while nobody is subscribed, which drops the event.
+    fn emit(&self, event: Event) {
+        match event {
+            Event::TrackImportState(progress) => {
                 let _ = self.import_progress.send(progress);
             }
-            Err(error) => eprintln!("invalid structured track-import-state event: {error}"),
+            Event::ReplicaChanged { tables } => {
+                let _ = self.replica_changed.send(tables);
+            }
+            Event::SessionRevoked => {
+                let _ = self.session_revoked.send(());
+            }
         }
     }
 }
@@ -384,7 +366,6 @@ impl Library {
             let ready = luma_lib::runtime::python::setup_python_env_background(
                 luma_lib::storage::cache_dir()?,
                 luma_lib::resources::resource_dir(),
-                events.clone(),
             );
             let analysis_services = services.clone();
             runtime.spawn(async move {
@@ -414,13 +395,13 @@ impl Library {
         // Supabase Storage, not through the row protocol, and a 40 MB stem has
         // nothing to do with a checkpoint.
         if syncing {
-            let host = services.sync_host();
             let media = luma_lib::sync::media::Media::new(
                 services.db().0.clone(),
                 services.state_pool().clone(),
+                services.storage().clone(),
             );
             let media_shutdown = shutdown_rx.clone();
-            runtime.spawn(async move { media.run(host, media_shutdown).await });
+            runtime.spawn(async move { media.run(media_shutdown).await });
         }
         drop(shutdown_rx);
         let (session_writes, mut session_write_rx) =

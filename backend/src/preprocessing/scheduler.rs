@@ -29,7 +29,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::database::local::tracks as tracks_db;
-use crate::dispatch::Events;
+use crate::dispatch::{Event, Events};
 use crate::models::tracks::{
     StageOutcome, TrackAnalysisEvent, TrackImportPhase, TrackImportProgress,
 };
@@ -51,7 +51,7 @@ pub struct ImportEventContext {
 
 impl ImportEventContext {
     fn emit(&self, events: &Events, progress: TrackImportProgress) {
-        events.emit("track-import-state", progress);
+        events.emit(Event::TrackImportState(progress));
     }
 
     fn progress(&self, phase: TrackImportPhase) -> TrackImportProgress {
@@ -275,12 +275,11 @@ pub async fn run_for_track(
     pool: &SqlitePool,
     storage: &StorageRoot,
     workers: &WorkerEnvironment,
-    events: &Events,
     track_id: &str,
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
 ) -> Result<(), String> {
-    let result = run_track_layers(pool, storage, workers, events, track_id, analysis, report).await;
+    let result = run_track_layers(pool, storage, workers, track_id, analysis, report).await;
     if let Some(report) = report.filter(|_| !analysis.is_cancelled()) {
         report.settle_rest(
             registry::dag().preprocessors().map(|p| p.name()),
@@ -297,7 +296,6 @@ async fn run_track_layers(
     pool: &SqlitePool,
     storage: &StorageRoot,
     workers: &WorkerEnvironment,
-    events: &Events,
     track_id: &str,
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
@@ -323,7 +321,6 @@ async fn run_track_layers(
             pool,
             storage,
             workers,
-            events,
             &track,
             stems_dir.clone(),
             analysis.clone(),
@@ -361,7 +358,6 @@ async fn run_track_layers(
             let pool = pool.clone();
             let storage = storage.clone();
             let workers = workers.clone();
-            let events = events.clone();
             let track = track.clone();
             let stems_dir = stems_dir.clone();
             let track_id_owned = track_id.to_string();
@@ -369,7 +365,7 @@ async fn run_track_layers(
             let report = report.cloned();
             set.spawn(async move {
                 let ctx = PreprocessorContext::new(
-                    &pool, &storage, &workers, &events, &track, stems_dir, analysis,
+                    &pool, &storage, &workers, &track, stems_dir, analysis,
                 );
                 let res = run_one(&ctx, &track_id_owned, p.as_ref(), report.as_ref()).await;
                 (p.name(), p.output(), res)
@@ -442,7 +438,6 @@ async fn run_one(
     match result {
         Ok(()) => {
             failures::clear(ctx.pool(), track_id, p.name()).await?;
-            ctx.events().emit("track-status-changed", track_id);
             settle(StageOutcome::Done);
             Ok(())
         }
@@ -507,7 +502,6 @@ pub async fn run_for_tracks(
                 &pool,
                 &storage,
                 &workers,
-                &events,
                 &track_id,
                 &analysis,
                 report.as_ref(),

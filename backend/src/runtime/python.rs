@@ -1,4 +1,3 @@
-use crate::dispatch::Events;
 use crate::runtime::command::command;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -256,7 +255,6 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<
 }
 
 /// Kick off Python environment setup on a background thread at app startup.
-/// Emits `python-env-progress` events so a host can show progress.
 /// After the env is ready, also pre-fetches model weights to the HF cache
 /// so the classifier preprocessor doesn't pay a ~400 MB download on first
 /// track import. The preload is silent (folded under the dependency-setup
@@ -265,26 +263,23 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<
 pub fn setup_python_env_background(
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
-    events: Events,
 ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
     crate::runtime::ffmpeg::init_headless();
     let (ready, receiver) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let error_path = setup_error_path(&cache_dir);
         let _ = fs::remove_file(&error_path);
-        let result =
-            ensure_python_env(&cache_dir, resource_dir.as_deref(), &events).and_then(|python| {
-                ensure_python_resource_dir_at(&cache_dir, resource_dir.as_deref(), "luma_exec")?;
-                if let Err(error) = preload_model_weights(&cache_dir, &python) {
-                    log::warn!("model-weights preload failed: {error}");
-                }
-                Ok(())
-            });
+        let result = ensure_python_env(&cache_dir, resource_dir.as_deref()).and_then(|python| {
+            ensure_python_resource_dir_at(&cache_dir, resource_dir.as_deref(), "luma_exec")?;
+            if let Err(error) = preload_model_weights(&cache_dir, &python) {
+                log::warn!("model-weights preload failed: {error}");
+            }
+            Ok(())
+        });
         if let Err(error) = &result {
             log::error!("Python setup failed: {error}");
             let _ = fs::create_dir_all(&cache_dir);
             let _ = fs::write(error_path, error);
-            events.emit("python-env-progress", ("error", &error));
         }
         let _ = ready.send(result);
     });
@@ -295,11 +290,8 @@ const MERT_PRELOAD_SOURCE: &str = include_str!("../../python/mert_preload.py");
 const MERT_PRELOAD_SCRIPT_NAME: &str = "mert_preload.py";
 
 /// Pre-fetch model weights into the HuggingFace cache so the classifier
-/// worker doesn't pay the download on first track import. Silent — folded
-/// into the general dependency setup step. Logs to stderr for dev visibility
-/// but no user-facing toast: subsequent launches hit the HF cache and return
-/// in seconds, and the user already saw "Python environment ready" from
-/// `install_requirements`.
+/// worker doesn't pay the download on first track import. Logs to stderr for
+/// dev visibility; subsequent launches hit the HF cache and return in seconds.
 fn preload_model_weights(cache_dir: &Path, python_path: &Path) -> Result<(), String> {
     let script_path =
         ensure_worker_script_at(cache_dir, MERT_PRELOAD_SCRIPT_NAME, MERT_PRELOAD_SOURCE)?;
@@ -322,16 +314,11 @@ fn preload_model_weights(cache_dir: &Path, python_path: &Path) -> Result<(), Str
     Ok(())
 }
 
-fn ensure_python_env(
-    cache_dir: &Path,
-    resource_dir: Option<&Path>,
-    events: &Events,
-) -> Result<PathBuf, String> {
+fn ensure_python_env(cache_dir: &Path, resource_dir: Option<&Path>) -> Result<PathBuf, String> {
     // Serialize setup, but never cache a path from a different host's directory.
     static SETUP: Mutex<()> = Mutex::new(());
     let _guard = SETUP.lock().map_err(|_| "Python setup lock poisoned")?;
     let env_dir = venv_dir(cache_dir);
-    let mut did_work = false;
 
     let mut python_path = find_venv_python(&env_dir);
 
@@ -349,11 +336,6 @@ fn ensure_python_env(
     }
 
     if python_path.is_none() {
-        events.emit(
-            "python-env-progress",
-            ("setup", "Creating Python environment\u{2026}"),
-        );
-        did_work = true;
         create_virtual_env(resource_dir, &env_dir)?;
         python_path = find_venv_python(&env_dir);
     }
@@ -365,37 +347,22 @@ fn ensure_python_env(
         )
     })?;
 
-    let installed = install_requirements(events, &python_path, &env_dir)?;
-    did_work = did_work || installed;
-
-    if did_work {
-        events.emit("python-env-progress", ("ready", "Python environment ready"));
-    }
-
+    install_requirements(&python_path, &env_dir)?;
     Ok(python_path)
 }
 
-/// Returns `Ok(true)` when packages were installed, `Ok(false)` when already up-to-date.
-fn install_requirements(
-    events: &Events,
-    python_path: &Path,
-    env_dir: &Path,
-) -> Result<bool, String> {
+/// Install the pinned packages, unless the marker says they already are.
+fn install_requirements(python_path: &Path, env_dir: &Path) -> Result<(), String> {
     let torch_plan = resolve_torch_install();
     let hash = requirements_hash(&torch_plan);
     let marker = env_dir.join(REQUIREMENTS_MARKER);
     if let Ok(existing) = fs::read_to_string(&marker) {
         if existing.trim() == hash {
             if python_path.exists() {
-                return Ok(false);
+                return Ok(());
             }
         }
     }
-
-    events.emit(
-        "python-env-progress",
-        ("setup", "Installing Python packages\u{2026}"),
-    );
 
     if let Some(parent) = marker.parent() {
         fs::create_dir_all(parent)
@@ -446,13 +413,6 @@ fn install_requirements(
 
         if let Some(index_url) = &torch_plan.index_url {
             eprintln!("[python-env] Installing PyTorch ({})…", torch_plan.label);
-            events.emit(
-                "python-env-progress",
-                (
-                    "setup",
-                    &format!("Installing PyTorch ({})…", torch_plan.label),
-                ),
-            );
 
             let result = run_command(
                 command(python_path)
@@ -498,7 +458,7 @@ fn install_requirements(
     }
 
     fs::write(&marker, hash).map_err(|e| format!("Failed to write requirements marker: {}", e))?;
-    Ok(true)
+    Ok(())
 }
 
 fn requirements_hash(torch: &TorchInstall) -> String {

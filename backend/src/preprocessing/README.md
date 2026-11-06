@@ -89,9 +89,9 @@ On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The
 backoff record carries the track to a later retry.
 
-Frontend events emitted: typed `track-import-state` payloads throughout an
-import and `track-status-changed` per completed node. Consumers branch on the
-structured phase/step/error fields, never human-readable status labels.
+Host events emitted: `Event::TrackImportState` throughout an import, one per
+stage start and settle included. Consumers branch on the structured
+phase/step/error fields, never human-readable status labels.
 
 ## Worked example: adding the n2n drum-onset node
 

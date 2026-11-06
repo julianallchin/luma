@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use serde_json::Value;
 
 use super::CommandError;
 use crate::agent_execution::workspace::PythonWorkspaceService;
@@ -13,12 +12,12 @@ use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
+use crate::models::tracks::TrackImportProgress;
 use crate::output::OutputHub;
 use crate::preprocessing::{AnalysisTaskGroup, WorkerEnvironment};
 use crate::render_engine::RenderEngine;
 use crate::services::fixtures::FixtureState;
 use crate::storage::StorageRoot;
-use crate::sync::host::SyncHost;
 
 /// External DJ catalog reads needed by import handlers.
 ///
@@ -104,6 +103,24 @@ impl TrackSources for SystemTrackSources {
 // Event emission
 // -----------------------------------------------------------------------------
 
+/// Everything the backend pushes to a host — the only push channel; there is
+/// no subscription command. A host matches it exhaustively, so an event no
+/// host handles, or a host listening for one nothing sends, does not compile.
+///
+/// The serde names are what a windowless host prints on stderr.
+#[derive(Debug, Serialize)]
+#[serde(tag = "event", content = "payload", rename_all = "kebab-case")]
+pub enum Event {
+    /// Phase-one and background-analysis progress of one import. Consumers
+    /// branch on its typed fields, never on status prose.
+    TrackImportState(TrackImportProgress),
+    /// Downloaded writes landed in these synced tables.
+    ReplicaChanged { tables: Vec<String> },
+    /// The server refused the stored session for good. Nothing retried can
+    /// change that; only a new sign-in replaces it.
+    SessionRevoked,
+}
+
 /// Where a command's push notifications go. The desktop adapter forwards to
 /// the native event sink; a headless host records or discards them.
 ///
@@ -116,7 +133,7 @@ impl TrackSources for SystemTrackSources {
 /// outlive the call that created it.
 pub trait EventSink: Send + Sync + 'static {
     /// Deliver one event. Implementations must not block and must not panic.
-    fn emit(&self, event: &str, payload: Value);
+    fn emit(&self, event: Event);
 }
 
 /// Cloneable handle to an [`EventSink`].
@@ -135,14 +152,9 @@ impl Events {
         Self::new(DiscardSink)
     }
 
-    /// Emit one event. Infallible by design — see [`EventSink`]. A payload that
-    /// cannot serialize is logged and dropped: that is a bug in the caller, not
-    /// a condition the caller can handle.
-    pub fn emit<T: Serialize>(&self, event: &str, payload: T) {
-        match serde_json::to_value(payload) {
-            Ok(value) => self.0.emit(event, value),
-            Err(error) => log::warn!("[events] `{event}` payload was not serializable: {error}"),
-        }
+    /// Emit one event. Infallible by design — see [`EventSink`].
+    pub fn emit(&self, event: Event) {
+        self.0.emit(event);
     }
 }
 
@@ -155,7 +167,7 @@ impl std::fmt::Debug for Events {
 struct DiscardSink;
 
 impl EventSink for DiscardSink {
-    fn emit(&self, _event: &str, _payload: Value) {}
+    fn emit(&self, _event: Event) {}
 }
 
 // -----------------------------------------------------------------------------
@@ -461,15 +473,6 @@ impl AppServices {
             .map_err(CommandError::Internal)
     }
 
-    /// What media transfer reaches outside its own handles. Derived from these
-    /// fields rather than stored, so the two cannot drift.
-    pub fn sync_host(&self) -> SyncHost {
-        SyncHost {
-            storage: self.storage.clone(),
-            events: self.events.clone(),
-        }
-    }
-
     /// The principal admitted for signed writes in the app database.
     ///
     /// # Errors
@@ -543,51 +546,5 @@ impl AppServices {
     /// Root of the bundled fixture definitions.
     pub fn fixtures_root(&self) -> &Path {
         &self.fixtures_root
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    struct Recorder(Arc<Mutex<Vec<(String, Value)>>>);
-
-    impl EventSink for Recorder {
-        fn emit(&self, event: &str, payload: Value) {
-            self.0
-                .lock()
-                .expect("poisoned")
-                .push((event.into(), payload));
-        }
-    }
-
-    /// The import commands clone their emitter into a spawned task; the sink
-    /// has to survive the call that made it.
-    #[tokio::test]
-    async fn events_survive_a_spawned_task() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let events = Events::new(Recorder(Arc::clone(&log)));
-
-        let background = events.clone();
-        tokio::spawn(async move {
-            background.emit("spawned-test-event", serde_json::json!({ "done": 1 }));
-        })
-        .await
-        .expect("spawned emit panicked");
-
-        let recorded = log.lock().expect("poisoned");
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, "spawned-test-event");
-    }
-
-    /// A payload that cannot serialize must not take the caller down. A map
-    /// with non-string keys is the cheapest way to make `to_value` fail.
-    #[test]
-    fn unserializable_payload_is_dropped_not_propagated() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let events = Events::new(Recorder(Arc::clone(&log)));
-        events.emit("bad", std::collections::HashMap::from([((1, 2), "v")]));
-        assert!(log.lock().expect("poisoned").is_empty());
     }
 }

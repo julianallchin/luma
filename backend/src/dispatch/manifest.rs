@@ -6,12 +6,9 @@
 //! documentation of it: [`check`] rebuilds both files and fails if what is on
 //! disk differs, having written the new version first.
 //!
-//! Two things the table cannot know are carried across by name from the
-//! previous file: the per-command prose (`prose`), and the whole `events`
-//! block — Host events have no registry to read. Everything else is
-//! regenerated, including each event's emit/listen sites, which are found by
-//! searching the tree for the event's literal name: the Rust core emits, every
-//! host listens.
+//! The one thing the table cannot know, the per-command prose (`prose`), is
+//! carried across by name from the previous file. Host events are not listed:
+//! they are the `dispatch::Event` enum, and every host matches it exhaustively.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -52,9 +49,8 @@ pub(super) fn check(table: &[Command]) -> Result<(), String> {
     )
     .expect("ipc-manifest.json is valid JSON");
 
-    let events = regenerate_events(&root, &previous);
-    let json = render_json(table, &root, &previous, &events);
-    let markdown = render_markdown(table, &events);
+    let json = render_json(table, &root, &previous);
+    let markdown = render_markdown(table);
 
     // Check-only unless asked, so a first run on a clean tree never rewrites
     // a tracked file and then fails.
@@ -108,84 +104,6 @@ fn handler_file_checked(root: &Path, domain: &str, name: &str) -> String {
     handler_file(domain)
 }
 
-fn regenerate_events(root: &Path, previous: &Value) -> Vec<Value> {
-    let repo = root.parent().expect("repo root");
-    let mut sources = Vec::new();
-    for (directory, extensions) in [("backend/src", &["rs"][..]), ("gpui/crates", &["rs"][..])] {
-        collect_sources(&repo.join(directory), extensions, &mut sources);
-    }
-    sources.sort();
-
-    let indexed: Vec<(String, String)> = sources
-        .iter()
-        .map(|path| {
-            (
-                path.strip_prefix(repo)
-                    .unwrap_or(path)
-                    .display()
-                    .to_string()
-                    .replace('\\', "/"),
-                fs::read_to_string(path).unwrap_or_default(),
-            )
-        })
-        .collect();
-
-    previous["events"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|event| {
-            let name = event["name"].as_str().expect("event name").to_owned();
-            let needle = format!("\"{name}\"");
-            let mut emitters = Vec::new();
-            let mut listeners = Vec::new();
-            for (path, source) in &indexed {
-                if !source.contains(&needle) {
-                    continue;
-                }
-                if path.starts_with("backend/") {
-                    emitters.push(path.clone());
-                } else {
-                    listeners.push(path.clone());
-                }
-            }
-            let orphan = emitters.is_empty() || listeners.is_empty();
-            let mut out = json!({
-                "name": name,
-                "emitters": emitters,
-                "listeners": listeners,
-                "orphan": orphan,
-            });
-            if let Some(note) = event.get("note").filter(|note| !note.is_null()) {
-                out["note"] = note.clone();
-            }
-            out
-        })
-        .collect()
-}
-
-fn collect_sources(directory: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        let name = entry.file_name();
-        if name == "target" || name == "node_modules" || name == "dist" {
-            continue;
-        }
-        if path.is_dir() {
-            collect_sources(&path, extensions, out);
-        } else if path
-            .extension()
-            .is_some_and(|ext| extensions.iter().any(|wanted| ext == *wanted))
-        {
-            out.push(path);
-        }
-    }
-}
-
 /// Hand-written prose from the previous manifest, keyed by command name. A
 /// renamed command loses its prose, which is the intended cost: the note was
 /// about the old name.
@@ -219,7 +137,7 @@ fn domains(table: &[Command]) -> Vec<(&'static str, usize)> {
     counts
 }
 
-fn render_json(table: &[Command], root: &Path, previous: &Value, events: &[Value]) -> String {
+fn render_json(table: &[Command], root: &Path, previous: &Value) -> String {
     let prose = prose_by_command(previous);
     let mut commands: Vec<Value> = table
         .iter()
@@ -260,18 +178,16 @@ fn render_json(table: &[Command], root: &Path, previous: &Value, events: &[Value
         "summary": {
             "commandCount": table.len(),
             "domainCount": domains.len(),
-            "eventCount": events.len(),
         },
         "domains": domains,
         "commands": commands,
-        "events": events,
     });
     let mut out = serde_json::to_string_pretty(&manifest).expect("serialize manifest");
     out.push('\n');
     out
 }
 
-fn render_markdown(table: &[Command], events: &[Value]) -> String {
+fn render_markdown(table: &[Command]) -> String {
     let domains = domains(table);
     let mut out = String::new();
     out.push_str(concat!(
@@ -280,15 +196,13 @@ fn render_markdown(table: &[Command], events: &[Value]) -> String {
         "`backend/src/dispatch/mod.rs`. **Do not edit this file** — run\n",
         "`cargo test --manifest-path backend/Cargo.toml ipc_manifest` and it rewrites itself.\n",
         "The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command\n",
-        "prose and the event names in it are the only hand-written parts and are carried across by\n",
-        "name.\n\n",
+        "prose in it is the only hand-written part and is carried across by name.\n\n",
     ));
     let _ = writeln!(
         out,
-        "**{} commands** across **{} domains** · **{} events**\n",
+        "**{} commands** across **{} domains**\n",
         table.len(),
         domains.len(),
-        events.len(),
     );
 
     out.push_str("## Domains\n\n| Domain | Commands | Handlers |\n| --- | ---: | --- |\n");
@@ -320,27 +234,10 @@ fn render_markdown(table: &[Command], events: &[Value]) -> String {
         }
     }
 
-    out.push_str("\n## Events\n\nHost events are the only push channel; there is no subscription command. Every long-running\ncommand reports progress here, not in its return value. The event *names* are hand-maintained —\nnothing enumerates them — but the sites below are found by searching the tree for each name, so a\nmoved emitter cannot leave a stale row. An event with no emitter or no listener is an orphan.\n\n");
-    out.push_str("| Event | Emitters | Listeners | Note |\n| --- | ---: | ---: | --- |\n");
-    for event in events {
-        let count = |key: &str| event[key].as_array().map_or(0, Vec::len);
-        let name = event["name"].as_str().unwrap_or_default();
-        let mut note = String::new();
-        if event["orphan"] == json!(true) {
-            note.push_str("**orphan**");
-        }
-        if let Some(text) = event["note"].as_str().filter(|text| !text.is_empty()) {
-            if !note.is_empty() {
-                note.push_str(" — ");
-            }
-            note.push_str(text);
-        }
-        let _ = writeln!(
-            out,
-            "| `{name}` | {} | {} | {note} |",
-            count("emitters"),
-            count("listeners"),
-        );
-    }
+    out.push_str(concat!(
+        "\n## Events\n\n",
+        "Host events are the only push channel; there is no subscription command. They are the\n",
+        "`Event` enum in `backend/src/dispatch/services.rs`, which every host matches exhaustively.\n",
+    ));
     out
 }
