@@ -1015,7 +1015,8 @@ impl VenueHost {
         };
         let mut arena = Arena::default();
         Ok(scene
-            .render(&[time], Scope::Composite, &mut arena)
+            .try_render(&[time], Scope::Composite, &mut arena)
+            .map_err(|error| HostCallError::new("evaluation_error", error))?
             .into_iter()
             .next())
     }

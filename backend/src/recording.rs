@@ -716,7 +716,10 @@ impl Session {
             let score = time as f32;
             let state = self
                 .lighting
-                .render(&[score], Scope::Composite, &mut arena)
+                .try_render(&[score], Scope::Composite, &mut arena)
+                .map_err(|error| {
+                    RecordError::Library(format!("could not evaluate the score: {error}"))
+                })?
                 .into_iter()
                 .next();
             let universe = motors.step(time, score, state);

@@ -188,9 +188,13 @@ mod tests {
         let mut t = from;
         while t <= to {
             // Warm the frame once so the number is steady-state, then measure.
-            let _ = scene.render(&[t], Scope::Composite, &mut scratch);
+            scene
+                .try_render(&[t], Scope::Composite, &mut scratch)
+                .expect("evaluate the frame");
             let at = Instant::now();
-            let out = scene.render(&[t], Scope::Composite, &mut scratch);
+            let out = scene
+                .try_render(&[t], Scope::Composite, &mut scratch)
+                .expect("evaluate the frame");
             let ms = at.elapsed().as_secs_f64() * 1e3;
             let frame = out.first();
             let total = frame.map_or(0, |f| f.primitives.len());

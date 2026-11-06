@@ -131,7 +131,9 @@ impl TrackHost {
         // rather than nearby f64 values that only existed before conversion.
         let times: Vec<f64> = render_times.iter().map(|time| f64::from(*time)).collect();
         let mut arena = Arena::default();
-        let frames = scene.render(&render_times, Scope::Composite, &mut arena);
+        let frames = scene
+            .try_render(&render_times, Scope::Composite, &mut arena)
+            .map_err(|error| HostCallError::new("evaluation_error", error))?;
         let values = lighting_tensor(&frames, &primitive_ids);
 
         let descriptor = {

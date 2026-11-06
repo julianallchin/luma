@@ -89,8 +89,10 @@ impl Scene {
         self.annotations.is_empty()
     }
 
-    /// Evaluate over `times`, one [`UniverseState`] per sample. `times.len() == 1`
-    /// is a realtime / scrub frame; a dense grid is a bake.
+    /// [`Self::try_render`] for the live output, where a dark frame is the
+    /// right answer to a failed evaluation: the error is logged and every
+    /// sample comes back blank. Anything that reports to a caller — an agent
+    /// tool, an export — uses `try_render` and surfaces the error instead.
     pub fn render(&self, times: &[f32], scope: Scope, scratch: &mut Arena) -> Vec<UniverseState> {
         self.try_render(times, scope, scratch)
             .unwrap_or_else(|error| {
@@ -99,6 +101,8 @@ impl Scene {
             })
     }
 
+    /// Evaluate over `times`, one [`UniverseState`] per sample. `times.len() == 1`
+    /// is a realtime / scrub frame; a dense grid is a bake.
     pub fn try_render(
         &self,
         times: &[f32],

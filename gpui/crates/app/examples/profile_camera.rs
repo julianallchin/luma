@@ -123,7 +123,7 @@ fn main() -> Result<(), String> {
     let state = match &program {
         Some(program) => Some(
             program
-                .render(&[playhead], Scope::Composite, &mut Arena::default())
+                .try_render(&[playhead], Scope::Composite, &mut Arena::default())?
                 .pop()
                 .ok_or("the score produced no frame")?,
         ),

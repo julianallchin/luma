@@ -96,7 +96,7 @@ pub async fn run(args: super::Args) -> Result<(), String> {
         let mut arena = Arena::default();
         for time in snapshot_times {
             let state = program
-                .render(&[time], Scope::Composite, &mut arena)
+                .try_render(&[time], Scope::Composite, &mut arena)?
                 .pop()
                 .ok_or("missing score frame")?;
             // Record precisely the head keys requested by the production frame
@@ -137,7 +137,7 @@ pub async fn run(args: super::Args) -> Result<(), String> {
         let time = i.saturating_sub(60) as f32 / 144.0;
         let start = Instant::now();
         let state = program
-            .render(&[time], Scope::Composite, &mut arena)
+            .try_render(&[time], Scope::Composite, &mut arena)?
             .pop()
             .ok_or("missing score frame")?;
         let eval_ms = start.elapsed().as_secs_f64() * 1000.0;
