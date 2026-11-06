@@ -165,34 +165,47 @@ pub trait Preprocessor: Send + Sync {
     }
 
     /// Bulk reconcile query: track IDs that need this preprocessor to run
-    /// because the artifact is missing or stale. Excludes tracks currently
-    /// in failure backoff. Default: tracks with eligible local audio whose
-    /// artifact-row count at the current version is below `rows_per_track`.
+    /// because the artifact is missing or stale. Default: see
+    /// [`pending_tracks`] with no extra staleness condition.
     async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
-        let sql = format!(
-            "SELECT t.id FROM tracks t
-             WHERE t.file_path IS NOT NULL
-               AND t.file_path != ''
-               AND t.file_path NOT LIKE '%.stub'
-               AND (
-                   SELECT COUNT(*) FROM {table} a
-                    WHERE a.track_id = t.id AND a.processor_version >= ?
-               ) < ?
-               AND NOT EXISTS (
-                   SELECT 1 FROM preprocessing_failures f
-                    WHERE f.track_id = t.id AND f.preprocessor = ?
-                      AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
-               )",
-            table = self.artifact_table()
-        );
-        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-            .bind(self.version() as i64)
-            .bind(self.rows_per_track())
-            .bind(self.name())
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("{} list_pending: {e}", self.name()))
+        pending_tracks(pool, self, "0").await
     }
+}
+
+/// Track IDs `p` should run for: tracks with local audio, not in failure
+/// backoff for `p`, whose artifact has fewer than `rows_per_track` rows at the
+/// current version — or for which `stale` holds. `stale` is an SQL condition
+/// over the outer track `t`; the caller passes a `&'static`-built fragment,
+/// never user input.
+pub async fn pending_tracks<P: Preprocessor + ?Sized>(
+    pool: &SqlitePool,
+    p: &P,
+    stale: &str,
+) -> Result<Vec<String>, String> {
+    let sql = format!(
+        "SELECT t.id FROM tracks t
+          WHERE t.file_path IS NOT NULL
+            AND t.file_path != ''
+            AND t.file_path NOT LIKE '%.stub'
+            AND NOT EXISTS (
+                SELECT 1 FROM preprocessing_failures f
+                 WHERE f.track_id = t.id AND f.preprocessor = ?1
+                   AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
+            )
+            AND (
+                (SELECT COUNT(*) FROM {table} a
+                  WHERE a.track_id = t.id AND a.processor_version >= ?2) < ?3
+                OR ({stale})
+            )",
+        table = p.artifact_table()
+    );
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(p.name())
+        .bind(p.version() as i64)
+        .bind(p.rows_per_track())
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("{} list_pending: {e}", p.name()))
 }
 
 /// Convenience alias used throughout the scheduler.

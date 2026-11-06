@@ -56,9 +56,7 @@ impl Preprocessor for GenrePreprocessor {
     async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
         list_pending_bar_aligned(
             pool,
-            self.name(),
-            self.version(),
-            self.artifact_table(),
+            self,
             "genres_json",
             "$.bars[0].start",
             "$.bars[0].end",

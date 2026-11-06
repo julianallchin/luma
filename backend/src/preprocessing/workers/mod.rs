@@ -17,6 +17,8 @@ pub mod stems;
 
 use sqlx::SqlitePool;
 
+use crate::preprocessing::preprocessor::{pending_tracks, Preprocessor};
+
 /// Tolerance (seconds) for "first-bar duration matches current beat grid"
 /// staleness detection in [`list_pending_bar_aligned`]. A real re-detection
 /// that flips BPM (e.g. 120 → 70) shifts the bar duration by >1s, well above
@@ -68,55 +70,32 @@ pub fn build_bar_boundaries(
 /// `first_bar_start` / `first_bar_end` are SQLite JSON paths into `json_column`
 /// (e.g. `$.first_bar[0]`, `$.bars[0].start`), which keeps the parse out of
 /// Rust so the bulk reconcile query stays a single round-trip.
-pub async fn list_pending_bar_aligned(
+pub async fn list_pending_bar_aligned<P: Preprocessor + ?Sized>(
     pool: &SqlitePool,
-    preprocessor: &str,
-    version: u32,
-    table: &str,
+    p: &P,
     json_column: &str,
     first_bar_start: &str,
     first_bar_end: &str,
 ) -> Result<Vec<String>, String> {
     // Every interpolated fragment is a `&'static str` from the calling
     // preprocessor — never user input.
-    let sql = format!(
-        "SELECT t.id FROM tracks t
-          WHERE t.file_path IS NOT NULL
-            AND t.file_path != ''
-            AND t.file_path NOT LIKE '%.stub'
-            AND NOT EXISTS (
-                SELECT 1 FROM preprocessing_failures f
-                 WHERE f.track_id = t.id AND f.preprocessor = ?1
-                   AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
-            )
-            AND (
-                -- Missing or older-version row: the default condition.
-                (SELECT COUNT(*) FROM {table} a
-                  WHERE a.track_id = t.id AND a.processor_version >= ?2) < 1
-                OR
-                -- Stale row: bar boundaries no longer match the current grid.
-                EXISTS (
-                    SELECT 1
-                      FROM {table} a
-                      JOIN track_beats b ON b.track_id = a.track_id
-                     WHERE a.track_id = t.id
-                       AND b.bpm IS NOT NULL AND b.bpm > 0
-                       AND b.beats_per_bar IS NOT NULL
-                       AND ABS(
-                             (CAST(json_extract(a.{json_column}, '{first_bar_end}')   AS REAL)
-                            - CAST(json_extract(a.{json_column}, '{first_bar_start}') AS REAL))
-                           - (60.0 / b.bpm * b.beats_per_bar)
-                           ) > ?3
-                )
-            )"
+    let stale = format!(
+        "EXISTS (
+            SELECT 1
+              FROM {table} a
+              JOIN track_beats b ON b.track_id = a.track_id
+             WHERE a.track_id = t.id
+               AND b.bpm IS NOT NULL AND b.bpm > 0
+               AND b.beats_per_bar IS NOT NULL
+               AND ABS(
+                     (CAST(json_extract(a.{json_column}, '{first_bar_end}')   AS REAL)
+                    - CAST(json_extract(a.{json_column}, '{first_bar_start}') AS REAL))
+                   - (60.0 / b.bpm * b.beats_per_bar)
+                   ) > {ALIGNED_BAR_TOLERANCE_SECS:?}
+        )",
+        table = p.artifact_table()
     );
-    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .bind(preprocessor)
-        .bind(version as i64)
-        .bind(ALIGNED_BAR_TOLERANCE_SECS)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("{preprocessor} list_pending: {e}"))
+    pending_tracks(pool, p, &stale).await
 }
 
 #[cfg(test)]

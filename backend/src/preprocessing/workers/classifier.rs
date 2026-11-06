@@ -78,9 +78,7 @@ impl Preprocessor for ClassifierPreprocessor {
     async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
         list_pending_bar_aligned(
             pool,
-            self.name(),
-            self.version(),
-            self.artifact_table(),
+            self,
             "classifications_json",
             "$.first_bar[0]",
             "$.first_bar[1]",
