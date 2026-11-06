@@ -38,30 +38,32 @@ use crate::models::venue_graph::VenueGraphRows;
 /// Eager and shared because [`VenueSockets::load`] reads every GLB in the
 /// palette, and a venue is solved on every read: paying that per solve would be
 /// the one thing that makes the solve not free. Keyed by the root because the
-/// root decides both the meshes and the fixture housings; a process sees one or
-/// two roots, so each is loaded once and kept.
+/// root decides both the meshes and the fixture housings. The app sees one
+/// root; the script-test runner sees one per test, all in one process, so a
+/// load (a few hundred milliseconds) must not stall every other root's solve.
 ///
 /// # Errors
 /// Fails if a catalog piece's GLB is missing, unreadable, or measures empty.
 pub fn sockets(fixtures_root: &Path) -> Result<&'static VenueSockets, String> {
-    type Loaded = &'static Result<VenueSockets, String>;
-    static SOCKETS: OnceLock<Mutex<HashMap<PathBuf, Loaded>>> = OnceLock::new();
-    let mut loaded = SOCKETS
+    type Loaded = OnceLock<Result<VenueSockets, String>>;
+    static SOCKETS: OnceLock<Mutex<HashMap<PathBuf, &'static Loaded>>> = OnceLock::new();
+    // The map's lock only finds the root's cell; the load runs outside it, so
+    // a root being loaded holds up only its own callers, never another root's.
+    let cell: &'static Loaded = *SOCKETS
         .get_or_init(Mutex::default)
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let entry = *loaded
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .entry(fixtures_root.to_path_buf())
-        .or_insert_with(|| {
-            Box::leak(Box::new(
-                VenueSockets::load(
-                    crate::resources::meshes_root(Some(fixtures_root)),
-                    std::sync::Arc::new(BundledFixtures(fixtures_root.to_path_buf())),
-                )
-                .map_err(|e| format!("the stage catalog could not be resolved: {e}")),
-            ))
-        });
-    entry.as_ref().map_err(Clone::clone)
+        .or_insert_with(|| Box::leak(Box::default()));
+    cell.get_or_init(|| {
+        VenueSockets::load(
+            crate::resources::meshes_root(Some(fixtures_root)),
+            std::sync::Arc::new(BundledFixtures(fixtures_root.to_path_buf())),
+        )
+        .map_err(|e| format!("the stage catalog could not be resolved: {e}"))
+    })
+    .as_ref()
+    .map_err(Clone::clone)
 }
 
 /// The shipped QLC+ bundle, as the socket supply's answer to "how tall is this
