@@ -62,8 +62,8 @@ pub(crate) fn sample_band(
     Ok(band_energy(&spectrum, &[range], sample_rate))
 }
 
-/// Mean bin magnitude across the FFT bins covered by `ranges`, scaled to match
-/// legacy `calculate_frequency_amplitude`. `spectrum` is raw `.norm()` magnitudes.
+/// Mean bin magnitude across the FFT bins covered by `ranges`, scaled by
+/// `4 / FFT_SIZE`. `spectrum` is raw `.norm()` magnitudes.
 pub(crate) fn band_energy(spectrum: &[f32], ranges: &[[f32; 2]], sample_rate: u32) -> f32 {
     if ranges.is_empty() || spectrum.is_empty() || sample_rate == 0 {
         return 0.0;
