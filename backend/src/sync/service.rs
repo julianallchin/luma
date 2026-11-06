@@ -2,8 +2,9 @@
 //!
 //! Three long-lived tasks over one `PowerSyncDatabase`: the session watcher
 //! (credentials are valid for one account, so an identity change is a
-//! reconnect, not a token swap), the status watcher, and the table watcher that
-//! coalesces downloaded writes into one `replica-changed` event.
+//! reconnect, not a token swap, and a revoked session is announced), the
+//! status watcher, and the table watcher that coalesces downloaded writes into
+//! one `replica-changed` event.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -92,6 +93,7 @@ impl Service {
         tokio::spawn(sessions(
             Arc::clone(&database),
             state_pool,
+            events.clone(),
             shutdown.subscribe(),
         ));
         tokio::spawn(statuses(
@@ -153,13 +155,16 @@ impl Drop for Service {
     }
 }
 
-/// Connect while a session exists, disconnect when it does not.
+/// Connect while a session exists, disconnect when it does not, and say so
+/// once when the server revokes it.
 async fn sessions(
     database: Arc<Database>,
     state_pool: SqlitePool,
+    events: Events,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut current: Option<String> = None;
+    let mut revoked = false;
     loop {
         let signed_in = match crate::database::local::auth::get_current_user_id(&state_pool).await {
             Ok(user) => user,
@@ -186,6 +191,7 @@ async fn sessions(
                 }
             }
         }
+        announce_revocation(&state_pool, &events, &mut revoked).await;
         tokio::select! {
             _ = shutdown.changed() => break,
             () = tokio::time::sleep(SESSION_POLL) => {}
@@ -195,6 +201,30 @@ async fn sessions(
         }
     }
     database.sync.disconnect().await;
+}
+
+/// Emit [`Event::SessionRevoked`] when the stored session turns out revoked,
+/// once per revocation: `announced` remembers it until a sign-in replaces the
+/// session.
+///
+/// The connector's credential fetch is what refreshes the token and so finds
+/// out; this loop is where the host hears about it.
+pub(crate) async fn announce_revocation(
+    state_pool: &SqlitePool,
+    events: &Events,
+    announced: &mut bool,
+) {
+    let revoked = match crate::database::local::auth::session_revoked(state_pool).await {
+        Ok(revoked) => revoked,
+        Err(error) => {
+            log::warn!("[sync] could not read the session: {error}");
+            return;
+        }
+    };
+    if revoked && !*announced {
+        events.emit(Event::SessionRevoked);
+    }
+    *announced = revoked;
 }
 
 /// Mirror the SDK's status into the shape the UI reads.

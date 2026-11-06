@@ -1329,6 +1329,20 @@ async fn get_current_auth_with(
     }))
 }
 
+/// Whether a refresh found the stored session revoked. Reads the snapshot and
+/// nothing else, so asking costs no request; only a refresh finds out.
+pub async fn session_revoked(pool: &SqlitePool) -> Result<bool, String> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to read authenticated session: {error}"))?;
+    Ok(
+        load_verified_snapshot_for_connection(&mut connection, unix_now(), true)
+            .await?
+            .is_some_and(|snapshot| is_revoked(&snapshot)),
+    )
+}
+
 fn is_revoked(snapshot: &VerifiedSnapshot) -> bool {
     REVOKED_SESSION
         .lock()
@@ -2288,6 +2302,48 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored, session);
+    }
+
+    /// The sync loop tells the host — once — when a refresh finds the session
+    /// revoked, which is what signs the app out.
+    #[tokio::test]
+    async fn a_revoked_session_is_announced_to_the_host_once() {
+        use std::sync::Arc;
+
+        use crate::dispatch::{Event, EventSink, Events};
+
+        struct Count(Arc<std::sync::atomic::AtomicUsize>);
+        impl EventSink for Count {
+            fn emit(&self, event: Event) {
+                if matches!(event, Event::SessionRevoked) {
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+        let announced = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = Events::new(Count(Arc::clone(&announced)));
+        let count = || announced.load(std::sync::atomic::Ordering::SeqCst);
+
+        let pool = test_pool().await;
+        let server = FakeAuthServer::new();
+        let token = jwt("real", NOW + 30);
+        server.accept(&token, "real");
+        server.refuse_refresh("revoked-refresh");
+        install_with(&pool, &server, &session("real", &token, "revoked-refresh"))
+            .await
+            .unwrap();
+
+        let mut seen = false;
+        crate::sync::service::announce_revocation(&pool, &events, &mut seen).await;
+        assert_eq!(count(), 0, "a live session is not announced");
+
+        assert_eq!(
+            get_current_auth_with(&pool, &server, NOW).await,
+            Err(AuthError::SessionRevoked)
+        );
+        crate::sync::service::announce_revocation(&pool, &events, &mut seen).await;
+        crate::sync::service::announce_revocation(&pool, &events, &mut seen).await;
+        assert_eq!(count(), 1, "a revocation is announced exactly once");
     }
 
     #[tokio::test]
