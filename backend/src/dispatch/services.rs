@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use super::CommandError;
 use crate::agent_execution::workspace::PythonWorkspaceService;
-use crate::audio::FftService;
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
 use crate::database::Db;
@@ -187,8 +186,6 @@ pub struct AppServices {
     /// Where a venue's share code is redeemed. The server, unless a host with
     /// none installs a stand-in — see [`AppServices::with_share_codes`].
     pub(crate) share_codes: Arc<dyn crate::services::venue_sharing::ShareCodeServer>,
-    pub(crate) fft: FftService,
-    /// Decoded stem samples, shared so a track's stems are decoded once.
     pub(crate) render_engine: RenderEngine,
     /// MIDI and OSC inputs bound to live controls. `Arc` because it owns
     /// the open ports — a clone would fork them.
@@ -285,7 +282,6 @@ impl AppServices {
                 .expect("headless worker environment paths must resolve"),
             track_sources: system_track_sources(),
             share_codes,
-            fft: FftService::new(),
             render_engine: render_engine.clone(),
             inputs,
             perform,
@@ -501,11 +497,6 @@ impl AppServices {
 /// [`super::dispatch`] and nothing else. They exist so a host that does can
 /// reach these singletons rather than keep a second, forkable copy.
 impl AppServices {
-    /// Where this host's push notifications go.
-    pub fn events(&self) -> &Events {
-        &self.events
-    }
-
     /// The app database.
     pub fn db(&self) -> &Db {
         &self.db
@@ -533,16 +524,6 @@ impl AppServices {
         &self.host_audio
     }
 
-    /// One Python kernel per agent thread.
-    pub fn workspaces(&self) -> &PythonWorkspaceService {
-        &self.workspaces
-    }
-
-    /// Shared FFT service for audio analysis.
-    pub fn fft(&self) -> &FftService {
-        &self.fft
-    }
-
     /// Root of Luma's durable on-disk data.
     pub fn storage(&self) -> &StorageRoot {
         &self.storage
@@ -551,11 +532,6 @@ impl AppServices {
     /// Root of the bundled fixture definitions.
     pub fn fixtures_root(&self) -> &Path {
         &self.fixtures_root
-    }
-
-    /// In-memory index of the bundled fixture definitions.
-    pub fn fixtures(&self) -> &Arc<FixtureState> {
-        &self.fixtures
     }
 }
 
