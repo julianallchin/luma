@@ -18,14 +18,6 @@ use crate::eval::{BlendMode, OutputBinding};
 use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
 use luma_patterns::{blend_aim, blend_light_alpha, blend_value_alpha, offset_aim, Turn};
 
-/// A fresh, empty base frame: no head holds light yet.
-pub fn blank_frame() -> UniverseState {
-    UniverseState {
-        primitives: std::collections::HashMap::new(),
-        lasers: Vec::new(),
-    }
-}
-
 /// A head that no layer has written: no light, no strobe, speed fast.
 pub(crate) fn nothing() -> PrimitiveState {
     PrimitiveState {

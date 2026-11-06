@@ -148,10 +148,7 @@ impl RenderEngine {
             // Its deck is gone; until live follow recompiles the set, it waits.
             return base;
         };
-        let base = base.unwrap_or_else(|| UniverseState {
-            primitives: HashMap::new(),
-            lasers: Vec::new(),
-        });
+        let base = base.unwrap_or_default();
         Some(live.render_onto(base, time, &mut inner.scratch))
     }
 
@@ -261,10 +258,7 @@ fn score_mix(
     }
 
     if frames.is_empty() {
-        return UniverseState {
-            primitives: HashMap::new(),
-            lasers: Vec::new(),
-        };
+        return UniverseState::default();
     }
 
     if frames.len() == 1 {
@@ -273,10 +267,7 @@ fn score_mix(
 
     let total_volume: f32 = frames.iter().map(|(_, v)| *v).sum();
     if total_volume <= 0.0 {
-        return UniverseState {
-            primitives: HashMap::new(),
-            lasers: Vec::new(),
-        };
+        return UniverseState::default();
     }
 
     let mut all_keys = std::collections::HashSet::new();

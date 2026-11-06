@@ -365,7 +365,7 @@ impl AppServices {
                         output.publish(&frame);
                         had_output = true;
                     } else if had_output {
-                        output.publish(&crate::models::universe::UniverseState { primitives: Default::default(), lasers: Vec::new() });
+                        output.publish(&crate::models::universe::UniverseState::default());
                         had_output = false;
                     }
                 }
@@ -375,10 +375,7 @@ impl AppServices {
             }
         }
         if had_output {
-            output.publish(&crate::models::universe::UniverseState {
-                primitives: Default::default(),
-                lasers: Vec::new(),
-            });
+            output.publish(&crate::models::universe::UniverseState::default());
         }
     }
 

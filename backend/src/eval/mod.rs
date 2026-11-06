@@ -5,8 +5,8 @@ pub mod context;
 pub mod lighting;
 pub mod scene;
 pub(crate) mod track_features;
-pub use luma_patterns::BlendMode;
 use crate::models::universe::UniverseState;
+pub use luma_patterns::BlendMode;
 pub use scene::{CompiledAnnotation, Scene, Scope};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -53,7 +53,7 @@ pub fn try_eval(
             .into_iter()
             .map(|lasers| UniverseState {
                 lasers,
-                ..composite::blank_frame()
+                ..UniverseState::default()
             })
             .collect());
     }
@@ -74,7 +74,7 @@ pub(crate) fn try_layers(
         None => Ok(times
             .iter()
             .map(|_| lighting::Layer {
-                frame: composite::blank_frame(),
+                frame: UniverseState::default(),
                 alpha: Default::default(),
             })
             .collect()),

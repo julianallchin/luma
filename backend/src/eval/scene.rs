@@ -14,7 +14,7 @@
 //! loop / emitter), never here.
 
 use crate::eval::aim::{Aiming, Rig};
-use crate::eval::composite::{blank_frame, composite_frame, offset_frame};
+use crate::eval::composite::{composite_frame, offset_frame};
 use crate::eval::{try_elements, try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
 use std::sync::Arc;
@@ -95,7 +95,7 @@ impl Scene {
         self.try_render(times, scope, scratch)
             .unwrap_or_else(|error| {
                 log::error!("Graph evaluation: {error}");
-                times.iter().map(|_| blank_frame()).collect()
+                times.iter().map(|_| UniverseState::default()).collect()
             })
     }
 
@@ -110,7 +110,7 @@ impl Scene {
             // validated. No span mask: the caller chose the times.
             Scope::Single(idx) => match self.annotations.get(idx) {
                 Some(ann) => try_eval(ann.plan.as_ref(), times, scratch),
-                None => Ok(times.iter().map(|_| blank_frame()).collect()),
+                None => Ok(times.iter().map(|_| UniverseState::default()).collect()),
             },
             Scope::Composite => {
                 let mut frames = composite(&self.annotations, times, scratch, self.rig())?;
@@ -172,7 +172,7 @@ pub(crate) fn composite(
     scratch: &mut Arena,
     rig: Option<&Rig>,
 ) -> Result<Vec<UniverseState>, String> {
-    let frames = times.iter().map(|_| blank_frame()).collect();
+    let frames = times.iter().map(|_| UniverseState::default()).collect();
     composite_from(annotations, times, frames, None, scratch, rig)
 }
 
