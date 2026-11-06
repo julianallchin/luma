@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Command;
 use symphonia::core::{
     audio::SampleBuffer, codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream,
     probe::Hint,
@@ -119,9 +118,7 @@ pub(super) fn decode_track_samples(path: &Path) -> Result<Vec<f32>, String> {
 
 fn decode_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
     let ffmpeg = crate::runtime::ffmpeg::ffmpeg_path();
-    let mut cmd = Command::new(&ffmpeg);
-    crate::runtime::command::no_window(&mut cmd);
-    let output = cmd
+    let output = crate::runtime::command::command(&ffmpeg)
         .args([
             "-i",
             path.to_str().unwrap(),

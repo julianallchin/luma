@@ -113,8 +113,7 @@ impl WorkerEnvironment {
             .ok_or_else(|| format!("worker script {} has no parent directory", script.display()))?
             .to_path_buf();
 
-        let mut cmd = Command::new(python);
-        crate::runtime::command::no_window(&mut cmd);
+        let mut cmd = crate::runtime::command::command(python);
         cmd.env("PYTHONUNBUFFERED", "1")
             .current_dir(workdir)
             .arg(script);

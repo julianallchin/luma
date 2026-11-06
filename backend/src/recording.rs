@@ -11,10 +11,11 @@
 //! Scene assembly happens *once*: the venue, the score and the audio are read
 //! before frame zero, and each frame carries only its light state and moment.
 
+use crate::runtime::command::command;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -340,7 +341,7 @@ fn pick_encoder() -> (PathBuf, Codec) {
         return (bundled, Codec::VideoToolbox);
     }
     let nvenc = |ffmpeg: &Path| {
-        Command::new(ffmpeg)
+        command(ffmpeg)
             .args([
                 "-hide_banner",
                 "-loglevel",
@@ -467,7 +468,7 @@ impl Encoder {
     /// ffmpeg could not be started.
     pub fn start(encode: &Encode) -> Result<Self, RecordError> {
         let (ffmpeg, codec) = pick_encoder();
-        let mut child = Command::new(ffmpeg)
+        let mut child = command(ffmpeg)
             .args(ffmpeg_argv(encode, codec))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -964,7 +965,7 @@ mod tests {
         };
         let word = colour[0] | colour[1] << 10 | colour[2] << 20 | 3 << 30;
         let frame = word.to_le_bytes().repeat((width * height) as usize);
-        let mut child = Command::new(ffmpeg)
+        let mut child = command(ffmpeg)
             .args(ffmpeg_argv(&encode, codec))
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
@@ -981,7 +982,7 @@ mod tests {
             "{codec:?}: {}",
             String::from_utf8_lossy(&encoded.stderr)
         );
-        let decoded = Command::new(ffmpeg)
+        let decoded = command(ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-i"])
             .arg(&output)
             .args([

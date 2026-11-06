@@ -155,7 +155,7 @@ pub(super) fn command(name: &str, cwd: &std::path::Path) -> Command {
                 .filter(|path| path.is_file())
         })
         .unwrap_or_else(|| name.into());
-    let mut command = Command::new(executable);
+    let mut command = crate::runtime::command::async_command(executable);
     command.current_dir(cwd);
     command
 }

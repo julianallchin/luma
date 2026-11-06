@@ -1,14 +1,23 @@
+use std::ffi::OsStr;
 use std::process::Command;
 
-/// Hide the console window that Windows shows for child processes.
-/// No-op on non-Windows platforms.
-pub fn no_window(cmd: &mut Command) -> &mut Command {
-    #[cfg(target_os = "windows")]
+/// A `Command` for a child tool (ffmpeg, Python, an agent CLI). Every spawn
+/// goes through here so that Windows never flashes a console window for it.
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
+}
+
+/// [`command`] for a child driven from async code.
+pub fn async_command(program: impl AsRef<OsStr>) -> tokio::process::Command {
+    tokio::process::Command::from(command(program))
 }
 
 /// Put the child in its own process group so the host can signal the child and

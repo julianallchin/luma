@@ -6,7 +6,6 @@
 //! renamed atomically, for the same reason.
 
 use sqlx::SqlitePool;
-use std::process::Command;
 
 use super::error::SyncError;
 use super::host::SyncHost;
@@ -81,9 +80,7 @@ fn transcode_to_ogg_opus(source: &std::path::Path) -> Option<Vec<u8>> {
     let tmp_path = tmp.path().to_path_buf();
 
     let ffmpeg = crate::runtime::ffmpeg::ffmpeg_path();
-    let mut cmd = Command::new(&ffmpeg);
-    crate::runtime::command::no_window(&mut cmd);
-    let output = cmd
+    let output = crate::runtime::command::command(&ffmpeg)
         .args([
             "-i",
             source.to_str()?,

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use crate::agent_execution::artifacts::SCRATCH_DIR;
-use crate::runtime::command::new_process_group;
+use crate::runtime::command::{command, new_process_group};
 
 /// The filesystem and environment authority one worker gets.
 ///
@@ -90,7 +90,7 @@ pub fn base_command(
         Some((program, rest)) => (Path::new(program), rest),
         None => (python_bin, &[]),
     };
-    let mut cmd = Command::new(program);
+    let mut cmd = command(program);
     if !prefix.is_empty() {
         cmd.args(wrapper_args).arg(python_bin);
     }

@@ -1,4 +1,5 @@
 use crate::dispatch::Events;
+use crate::runtime::command::command;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -302,9 +303,7 @@ const MERT_PRELOAD_SCRIPT_NAME: &str = "mert_preload.py";
 fn preload_model_weights(cache_dir: &Path, python_path: &Path) -> Result<(), String> {
     let script_path =
         ensure_worker_script_at(cache_dir, MERT_PRELOAD_SCRIPT_NAME, MERT_PRELOAD_SOURCE)?;
-    let mut cmd = Command::new(python_path);
-    crate::runtime::command::no_window(&mut cmd);
-    let output = cmd
+    let output = command(python_path)
         .env("PYTHONUNBUFFERED", "1")
         .arg(&script_path)
         .output()
@@ -435,7 +434,7 @@ fn install_requirements(
     }
 
     run_command(
-        Command::new(python_path).args(["-m", "pip", "install", "--upgrade", "pip"]),
+        command(python_path).args(["-m", "pip", "install", "--upgrade", "pip"]),
         "upgrade pip",
     )?;
 
@@ -456,7 +455,7 @@ fn install_requirements(
             );
 
             let result = run_command(
-                Command::new(python_path)
+                command(python_path)
                     .args(["-m", "pip", "install"])
                     .args(&pkg_args)
                     .args(["--index-url", index_url]),
@@ -469,7 +468,7 @@ fn install_requirements(
                     err
                 );
                 run_command(
-                    Command::new(python_path)
+                    command(python_path)
                         .args(["-m", "pip", "install"])
                         .args(&pkg_args),
                     "install PyTorch (CPU fallback)",
@@ -477,7 +476,7 @@ fn install_requirements(
             }
         } else {
             run_command(
-                Command::new(python_path)
+                command(python_path)
                     .args(["-m", "pip", "install"])
                     .args(&pkg_args),
                 "install PyTorch",
@@ -488,7 +487,7 @@ fn install_requirements(
     // Step 2: Install everything else from the requirements files.
     for requirements_path in &requirement_paths {
         run_command(
-            Command::new(python_path)
+            command(python_path)
                 .args(["-m", "pip", "install", "-r"])
                 .arg(requirements_path),
             &format!(
@@ -562,9 +561,7 @@ fn resolve_torch_install() -> TorchInstall {
 /// Returns `None` if nvidia-smi is absent or fails.
 fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     // 1. Driver CUDA version from the standard nvidia-smi header
-    let header = crate::runtime::command::no_window(&mut Command::new("nvidia-smi"))
-        .output()
-        .ok()?;
+    let header = command("nvidia-smi").output().ok()?;
     if !header.status.success() {
         return None;
     }
@@ -572,11 +569,10 @@ fn query_nvidia_gpu_info() -> Option<((u32, u32), u32)> {
     let driver_cuda = parse_nvidia_smi_cuda_version(&header_text)?;
 
     // 2. Compute capability via the structured query interface
-    let query = crate::runtime::command::no_window(
-        Command::new("nvidia-smi").args(["--query-gpu=compute_cap", "--format=csv,noheader"]),
-    )
-    .output()
-    .ok()?;
+    let query = command("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .output()
+        .ok()?;
     if !query.status.success() {
         return None;
     }
@@ -667,13 +663,11 @@ fn create_virtual_env(resource_dir: Option<&Path>, env_dir: &Path) -> Result<(),
     let system_python = resolve_bundled_python(resource_dir)
         .ok_or_else(|| "Unable to locate supported python interpreter".to_string())?;
 
-    let output = crate::runtime::command::no_window(
-        Command::new(&system_python)
-            .args(["-m", "venv"])
-            .arg(env_dir),
-    )
-    .output()
-    .map_err(|e| format!("Failed to create virtualenv: {}", e))?;
+    let output = command(&system_python)
+        .args(["-m", "venv"])
+        .arg(env_dir)
+        .output()
+        .map_err(|e| format!("Failed to create virtualenv: {}", e))?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -688,7 +682,6 @@ fn create_virtual_env(resource_dir: Option<&Path>, env_dir: &Path) -> Result<(),
 }
 
 fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
-    crate::runtime::command::no_window(cmd);
     let output = cmd
         .output()
         .map_err(|e| format!("Failed to {}: {}", action, e))?;
@@ -765,15 +758,13 @@ fn interpreter_supported(path: &Path) -> Result<bool, String> {
 }
 
 fn interpreter_version_path(path: &Path) -> Result<(u32, u32), String> {
-    let output = crate::runtime::command::no_window(Command::new(path).arg("--version"))
-        .output()
-        .map_err(|e| {
-            format!(
-                "Failed to query python version at {}: {}",
-                path.display(),
-                e
-            )
-        })?;
+    let output = command(path).arg("--version").output().map_err(|e| {
+        format!(
+            "Failed to query python version at {}: {}",
+            path.display(),
+            e
+        )
+    })?;
     parse_python_version(output).ok_or_else(|| {
         format!(
             "Could not parse python version output for {}",
