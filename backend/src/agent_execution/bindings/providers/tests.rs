@@ -233,22 +233,25 @@ impl Fixture {
             0.5, 0.6, 0.7, 0.8, // mid
             0.9, 1.0, 0.0, 0.05, // high
         ];
-        let blob = crate::services::waveforms::f32_slice_to_bytes(&bands);
-        let preview = crate::services::waveforms::f32_slice_to_bytes(&[0.0, 0.0]);
         crate::database::local::waveforms::upsert_track_waveform(
             &self.pool,
-            TRACK_ID,
-            &crate::database::local::waveforms::StoredWaveform {
-                preview_samples_blob: &preview,
-                full_samples_blob: &[],
-                bands_blob: &blob,
-                preview_bands_blob: &[],
-                band_gains: crate::models::waveforms::BandGains {
-                    low: 1.0,
-                    mid: 1.0,
-                    high: 1.0,
-                },
-                decoded_duration: 8.0,
+            &crate::models::waveforms::TrackWaveform {
+                track_id: TRACK_ID.to_string(),
+                uid: None,
+                preview_samples: vec![0.0, 0.0],
+                full_samples: None,
+                bands: Some(crate::models::waveforms::BandEnvelopes {
+                    low: bands[0..4].to_vec(),
+                    mid: bands[4..8].to_vec(),
+                    high: bands[8..12].to_vec(),
+                }),
+                preview_bands: None,
+                duration_seconds: 8.0,
+            },
+            crate::models::waveforms::BandGains {
+                low: 1.0,
+                mid: 1.0,
+                high: 1.0,
             },
         )
         .await

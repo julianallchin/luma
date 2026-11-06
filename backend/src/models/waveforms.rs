@@ -1,6 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{FromRow, Row};
 
 /// 3-band envelope data for rekordbox-style waveform rendering.
 ///
@@ -63,47 +61,4 @@ pub struct WaveformSignal {
     pub gains: BandGains,
     /// Display ceilings shared with stored waveform normalization.
     pub ceilings: [f32; 3],
-}
-
-impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
-    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
-        use crate::services::waveforms::{bytes_to_band_envelopes, bytes_to_f32_vec};
-
-        let track_id: String = row.try_get("track_id")?;
-        let uid: Option<String> = row.try_get("uid")?;
-
-        // Deserialize binary blobs to typed fields
-        let preview_samples_blob: Vec<u8> = row.try_get("preview_samples_blob")?;
-        let preview_samples = bytes_to_f32_vec(&preview_samples_blob);
-
-        let full_samples: Option<Vec<f32>> = row
-            .try_get::<Option<Vec<u8>>, _>("full_samples_blob")?
-            .map(|b| bytes_to_f32_vec(&b));
-
-        let bands: Option<BandEnvelopes> = row
-            .try_get::<Option<Vec<u8>>, _>("bands_blob")?
-            .and_then(|b| bytes_to_band_envelopes(&b));
-
-        let preview_bands: Option<BandEnvelopes> = row
-            .try_get::<Option<Vec<u8>>, _>("preview_bands_blob")?
-            .and_then(|b| bytes_to_band_envelopes(&b));
-
-        // Prefer decoded_duration (true audio length) over metadata duration
-        let duration_seconds: f64 = row
-            .try_get::<Option<f64>, _>("decoded_duration")
-            .ok()
-            .flatten()
-            .or_else(|| row.try_get("duration_seconds").ok())
-            .unwrap_or(0.0);
-
-        Ok(TrackWaveform {
-            track_id,
-            uid,
-            preview_samples,
-            full_samples,
-            bands,
-            preview_bands,
-            duration_seconds,
-        })
-    }
 }

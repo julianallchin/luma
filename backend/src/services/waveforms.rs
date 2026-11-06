@@ -13,7 +13,6 @@ use std::time::Instant;
 use crate::audio::{filter_3band, stereo_to_mono, FilteredBands, SAMPLE_RATE};
 use crate::database::local;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
-use crate::database::local::waveforms::StoredWaveform;
 use crate::models::waveforms::{BandEnvelopes, BandGains, TrackWaveform, WaveformSignal};
 use crate::preprocessing::{AnalysisGuard, AnalysisTaskGroup};
 
@@ -22,16 +21,6 @@ pub const PREVIEW_WAVEFORM_SIZE: usize = 1000;
 
 /// Number of samples in full waveform (high resolution for zoomed view)
 pub const FULL_WAVEFORM_SIZE: usize = 30000;
-
-struct ComputedWaveform {
-    preview_samples: Vec<f32>,
-    full_samples: Vec<f32>,
-    bands: BandEnvelopes,
-    preview_bands: BandEnvelopes,
-    /// The units `bands` and `preview_bands` are both in.
-    gains: BandGains,
-    duration_seconds: f64,
-}
 
 /// Compute and atomically publish waveform data for the exact visible track
 /// snapshot admitted at the start of this analysis generation.
@@ -55,7 +44,8 @@ pub(crate) async fn ensure_track_waveform(
             .map_err(|error| format!("Failed to load waveform source: {error}"))?;
     drop(initial);
 
-    let computed = compute_waveform_payload(file_path, &track_hash, track_id, analysis).await?;
+    let (mut waveform, gains) =
+        compute_waveform_payload(file_path, &track_hash, track_id, analysis).await?;
     analysis.checkpoint()?;
 
     // Publication and the identity transition use the same SQLite write lock.
@@ -76,41 +66,19 @@ pub(crate) async fn ensure_track_waveform(
     }
     analysis.checkpoint()?;
 
-    let preview_samples_blob = f32_slice_to_bytes(&computed.preview_samples);
-    let full_samples_blob = f32_slice_to_bytes(&computed.full_samples);
-    let bands_blob = band_envelopes_to_bytes(&computed.bands);
-    let preview_bands_blob = band_envelopes_to_bytes(&computed.preview_bands);
+    waveform.uid = uid;
     let db_started = Instant::now();
     local::waveforms::upsert_track_waveform_for_connection(
         publication.connection(),
-        track_id,
-        uid.as_deref(),
-        &StoredWaveform {
-            preview_samples_blob: &preview_samples_blob,
-            full_samples_blob: &full_samples_blob,
-            bands_blob: &bands_blob,
-            preview_bands_blob: &preview_bands_blob,
-            band_gains: computed.gains,
-            decoded_duration: computed.duration_seconds,
-        },
+        &waveform,
+        gains,
     )
     .await?;
     let db_ms = db_started.elapsed().as_millis();
     publication.commit().await?;
 
     eprintln!("[waveform] track {track_id} published in {db_ms}ms");
-    Ok((
-        TrackWaveform {
-            track_id: track_id.to_owned(),
-            uid,
-            preview_samples: computed.preview_samples,
-            full_samples: Some(computed.full_samples),
-            bands: Some(computed.bands),
-            preview_bands: Some(computed.preview_bands),
-            duration_seconds: computed.duration_seconds,
-        },
-        computed.gains,
-    ))
+    Ok((waveform, gains))
 }
 
 async fn compute_waveform_payload(
@@ -118,7 +86,7 @@ async fn compute_waveform_payload(
     track_hash: &str,
     track_id: &str,
     analysis: &AnalysisGuard,
-) -> Result<ComputedWaveform, String> {
+) -> Result<(TrackWaveform, BandGains), String> {
     let t_total = Instant::now();
 
     eprintln!("[waveform] computing waveforms for track {}", track_id);
@@ -178,14 +146,16 @@ async fn compute_waveform_payload(
         bands_ms,
     );
 
-    Ok(ComputedWaveform {
+    let waveform = TrackWaveform {
+        track_id: track_id.to_owned(),
+        uid: None,
         preview_samples,
-        full_samples,
-        bands,
-        preview_bands,
-        gains,
+        full_samples: Some(full_samples),
+        bands: Some(bands),
+        preview_bands: Some(preview_bands),
         duration_seconds: decoded_duration,
-    })
+    };
+    Ok((waveform, gains))
 }
 
 /// Get waveform for a track, computing this device's cache if it is missing.
@@ -478,52 +448,6 @@ pub fn bucketize_band_peaks(
 // -----------------------------------------------------------------------------
 // Binary blob serialization helpers
 // -----------------------------------------------------------------------------
-
-/// Serialize a slice of f32 values to raw little-endian bytes
-pub fn f32_slice_to_bytes(data: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(data.len() * 4);
-    for &val in data {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    bytes
-}
-
-/// Deserialize raw little-endian bytes back to Vec<f32>
-pub fn bytes_to_f32_vec(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
-/// Serialize BandEnvelopes to a single blob: [low..., mid..., high...]
-/// Each band has the same length, so we can split evenly on decode.
-fn band_envelopes_to_bytes(bands: &BandEnvelopes) -> Vec<u8> {
-    let total = (bands.low.len() + bands.mid.len() + bands.high.len()) * 4;
-    let mut bytes = Vec::with_capacity(total);
-    for &val in bands
-        .low
-        .iter()
-        .chain(bands.mid.iter())
-        .chain(bands.high.iter())
-    {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    bytes
-}
-
-/// Deserialize a blob back to BandEnvelopes (3 equal-length bands)
-pub fn bytes_to_band_envelopes(data: &[u8]) -> Option<BandEnvelopes> {
-    let floats = bytes_to_f32_vec(data);
-    if !floats.len().is_multiple_of(3) {
-        return None;
-    }
-    let band_len = floats.len() / 3;
-    Some(BandEnvelopes {
-        low: floats[..band_len].to_vec(),
-        mid: floats[band_len..band_len * 2].to_vec(),
-        high: floats[band_len * 2..].to_vec(),
-    })
-}
 
 #[cfg(test)]
 #[path = "waveforms_bench.rs"]
