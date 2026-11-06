@@ -4,18 +4,24 @@ name: Release
 # a maintainer publishes it, because publishing is what moves
 # `releases/latest/download/latest.json` — the URL every install polls.
 #
-# A manual run builds the current commit into the rolling `nightly`
-# prerelease, which only nightly builds poll.
+# Every green CI run on `main` builds that commit into the rolling `nightly`
+# prerelease, which only nightly builds poll; so does a manual run, from the
+# commit it is run on.
 #
 # See RELEASING.md for the secrets and the steps around a release.
 on:
   push:
     tags: ["v*"]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
+# A newer nightly supersedes one still building; a stable tag never waits.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-${{ github.event_name == 'push' && github.ref || 'nightly' }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -23,9 +29,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.97.1"
+  # The commit to build: the one CI passed, not the default branch's tip.
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   prepare:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.meta.outputs.channel }}
@@ -33,6 +42,8 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
       - id: meta
         name: Resolve channel and version
         run: |
@@ -50,7 +61,7 @@ jobs:
           else
             {
               echo "channel=nightly"
-              echo "version=$crate_version-nightly.$(date -u +%Y%m%d)+${GITHUB_SHA::7}"
+              echo "version=$crate_version-nightly.$(date -u +%Y%m%d)+${SHA::7}"
               echo "tag=nightly"
             } >> "$GITHUB_OUTPUT"
           fi
@@ -63,10 +74,11 @@ jobs:
     timeout-minutes: 120
     env:
       LUMA_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
-      LUMA_COMMIT_SHA: ${{ github.sha }}
+      LUMA_COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.SHA }}
           submodules: recursive
           lfs: true
       - uses: dtolnay/rust-toolchain@master
@@ -102,10 +114,11 @@ jobs:
     timeout-minutes: 120
     env:
       LUMA_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
-      LUMA_COMMIT_SHA: ${{ github.sha }}
+      LUMA_COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.SHA }}
           submodules: recursive
           lfs: true
       - uses: dtolnay/rust-toolchain@master
@@ -141,6 +154,8 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -171,7 +186,7 @@ jobs:
           fi
           python3 scripts/release/manifest.py \
             --version "$VERSION" \
-            --commit "$GITHUB_SHA" \
+            --commit "$SHA" \
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
             aarch64-apple-darwin=dist/Luma-aarch64.app.tar.gz \
@@ -192,9 +207,9 @@ jobs:
         if: env.CHANNEL == 'nightly'
         run: |
           gh release delete nightly --cleanup-tag --yes || true
-          gh release create nightly --prerelease --latest=false --target "$GITHUB_SHA" \
+          gh release create nightly --prerelease --latest=false --target "$SHA" \
             --title "Nightly $VERSION" \
-            --notes "Built from $GITHUB_SHA. Nightly builds update to each newer nightly." \
+            --notes "Built from $SHA. Nightly builds update to each newer nightly." \
             dist/Luma-aarch64.dmg dist/Luma-aarch64.app.tar.gz dist/Luma-aarch64.app.tar.gz.sig \
             dist/luma-linux-x86_64.tar.gz dist/luma-linux-x86_64.tar.gz.sig \
             dist/latest.json dist/install.sh

@@ -27,8 +27,10 @@ Windows build yet.
 
 ## Nightly
 
-Run the workflow by hand (Actions → Release → Run workflow) on any branch. It
-replaces the `nightly` prerelease with a build of that commit. Nightly builds
+Every push to `main` whose CI passes replaces the `nightly` prerelease with a
+build of that commit; a newer push cancels a nightly still building. To build
+another commit, run the workflow by hand (Actions → Release → Run workflow) on
+its branch. A red CI run on `main` ships nothing. Nightly builds
 poll `releases/download/nightly/latest.json` and update whenever its commit
 differs from their own. Install one on Linux with
 `LUMA_CHANNEL=nightly sh install.sh`.

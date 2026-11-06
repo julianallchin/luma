@@ -1012,6 +1012,9 @@ mod tests {
         // Dark, a different value per channel, and off the 8-bit grid (a
         // multiple of four would survive an 8-bit path unchanged).
         const COLOUR: [u32; 3] = [201, 90, 42];
+        // The bundled ffmpeg the build downloads, as every host uses; a
+        // runner need not have one on PATH.
+        crate::runtime::ffmpeg::init_headless();
         let (ffmpeg, codec) = pick_encoder();
         // x264 is 8-bit: the colour survives, its two low bits do not.
         let mut codecs = vec![(Codec::X264, 2.0 * 1023.0 / 255.0)];
