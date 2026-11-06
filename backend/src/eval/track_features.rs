@@ -55,7 +55,7 @@ pub(crate) async fn prepare(
     access: &mut impl AuthorizedVenue,
     storage: &StorageRoot,
     track_id: &str,
-    grid: &crate::models::node_graph::BeatGrid,
+    grid: &crate::models::beat_grid::BeatGrid,
     requests: &[FeatureRequest],
 ) -> Result<std::sync::Arc<TrackFeatures>, String> {
     let path = crate::database::local::tracks::get_track_path_and_hash_for_connection(

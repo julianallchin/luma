@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use luma_lib::dispatch::handlers;
-use luma_lib::models::node_graph::BeatGrid;
+use luma_lib::models::beat_grid::BeatGrid;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
 

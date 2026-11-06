@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::Scene;
-use crate::models::node_graph::BeatGrid;
+use crate::models::beat_grid::BeatGrid;
 use crate::render_engine::RenderEngine;
 use crate::storage::StorageRoot;
 

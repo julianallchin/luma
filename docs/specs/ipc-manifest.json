@@ -1224,7 +1224,7 @@
       ],
       "returns": "Option<BeatGrid>",
       "prose": {
-        "notes": "Nullable: `null` when beat detection has not run for the track. Every caller treats null as a soft miss (catch → null, or `if (!beats) return null`). Times are absolute seconds from track start. Rust type is models::node_graph::BeatGrid, exported to src/bindings/schema.ts by ts-rs.",
+        "notes": "Nullable: `null` when beat detection has not run for the track. Every caller treats null as a soft miss (catch → null, or `if (!beats) return null`). Times are absolute seconds from track start. Rust type is models::beat_grid::BeatGrid, exported to src/bindings/schema.ts by ts-rs.",
         "returns": "BeatGrid | null — { beats: number[]; downbeats: number[]; bpm: number; downbeatOffset: number; beatsPerBar: number } (camelCase, seconds)",
         "sideEffects": []
       }

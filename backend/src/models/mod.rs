@@ -1,13 +1,13 @@
 pub mod actor;
 pub mod agent_execution;
 pub mod agent_threads;
+pub mod beat_grid;
 pub mod composable_patterns;
 pub mod distribute;
 pub mod fixtures;
 pub mod folders;
 pub mod groups;
 pub mod lasers;
-pub mod node_graph;
 pub mod patch;
 pub mod patterns;
 pub mod perform;

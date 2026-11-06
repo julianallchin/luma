@@ -1,6 +1,6 @@
 use crate::database::local::tracks as tracks_db;
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::node_graph::BeatGrid;
+use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{
     TrackBrowserRow, TrackImportFailure, TrackImportPhase, TrackImportProgress, TrackImportResult,
     TrackSummary,

@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{canvas, div, fill, point, px, size, Bounds, Hsla, Pixels, Window};
-use luma_lib::models::node_graph::BeatGrid;
+use luma_lib::models::beat_grid::BeatGrid;
 use luma_lib::models::perform::{DeckMatch, PerformDeck};
 use luma_lib::models::waveforms::{BandEnvelopes, TrackWaveform};
 use luma_ui::node::{Instrument as _, Role};

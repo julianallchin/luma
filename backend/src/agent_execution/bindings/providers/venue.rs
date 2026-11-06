@@ -22,7 +22,7 @@ use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
 use crate::models::groups::{FixtureGroupNode, GroupOrigin};
-use crate::node_graph::geometry::rig_uv;
+use crate::rig_uv::rig_uv;
 use crate::services::group_derivation::FixtureRole;
 use fixture_kinematics::StageDirection;
 use glam::DVec3;

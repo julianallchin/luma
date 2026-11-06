@@ -2,7 +2,7 @@
 use sqlx::SqlitePool;
 
 use super::track_access::{Operate, Read, VisibleTrackAccess};
-use crate::models::node_graph::BeatGrid;
+use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{BeatValidation, BeatValidationReason, BeatValidationVerdict};
 
 pub async fn get(pool: &SqlitePool, track_id: &str) -> Result<Option<BeatValidation>, String> {

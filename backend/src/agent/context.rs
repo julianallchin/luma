@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 
 use crate::controls::perform as names;
 use crate::models::agent_threads::AgentThread;
-use crate::models::node_graph::BeatGrid;
+use crate::models::beat_grid::BeatGrid;
 use crate::models::perform::{
     Cell, CellContent, PerformClock, PerformLayout, PerformPattern, PerformSource, PerformState,
 };

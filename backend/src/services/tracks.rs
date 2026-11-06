@@ -21,8 +21,8 @@ use crate::database::local::venue_access::{
 };
 use crate::dispatch::Events;
 use crate::engine_dj::types::EngineDjTrack;
+use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{StageOutcome, TrackBrowserRow, TrackSummary};
-use crate::node_graph::BeatGrid;
 use crate::preprocessing::{registry, scheduler, AnalysisGuard, WorkerEnvironment};
 use crate::storage::StorageRoot;
 

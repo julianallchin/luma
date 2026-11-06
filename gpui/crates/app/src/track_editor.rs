@@ -94,7 +94,8 @@ use luma_ui::Enabled;
 use luma_ui::{float, ladder, paint};
 
 use luma_lib::host_audio::HostAudioSnapshot;
-use luma_lib::models::node_graph::{BeatGrid, BlendMode};
+use luma_lib::models::beat_grid::BeatGrid;
+use luma_patterns::BlendMode;
 use luma_lib::models::patterns::{AimCurves, AnnotationPreview};
 use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
 use luma_lib::models::waveforms::TrackWaveform;

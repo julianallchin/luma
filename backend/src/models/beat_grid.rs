@@ -25,5 +25,3 @@ impl BeatGrid {
         )
     }
 }
-
-pub use luma_patterns::BlendMode;

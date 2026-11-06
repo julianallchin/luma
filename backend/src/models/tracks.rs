@@ -226,7 +226,7 @@ pub enum BeatValidationReason {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BeatValidation {
-    pub grid: crate::models::node_graph::BeatGrid,
+    pub grid: crate::models::beat_grid::BeatGrid,
     pub verdict: BeatValidationVerdict,
     pub reason: Option<BeatValidationReason>,
 }

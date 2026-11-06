@@ -116,7 +116,7 @@ use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::folders::Folder;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
-use crate::models::node_graph::BeatGrid;
+use crate::models::beat_grid::BeatGrid;
 use crate::models::patch::{AutoPatchReport, DeviceKind, DmxRoute, OutputDevice, UniverseCell};
 use crate::models::perform::{PerformLayout, PerformPattern, PerformSource, PerformState};
 use crate::models::scores::{Score, ScoreSummary};

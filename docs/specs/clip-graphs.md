@@ -881,7 +881,7 @@ for each head and time:
 | | | `clip_graph/summary.rs` (7.6) |
 
 `backend/src/`: delete `node_graph/lighting.rs` and the `models::node_graph`
-arg types the sheet used; keep `node_graph/geometry.rs` (venue binding).
+arg types the sheet used; keep `rig_uv.rs` (venue binding).
 Adapt `services/graph_scores.rs`, `services/composable_patterns.rs::preview`
 (previews a preset graph), `eval/lighting.rs::compile_clip`,
 `database/local/scores/rows.rs`, `sync/schema.rs`,
