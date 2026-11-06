@@ -352,7 +352,7 @@ of a bake actually exists.
 8. **Verify §2 before committing to the dials.** The numbers in the throughput table
    are extrapolated from the volumetrics goldens, not measured. The instruments already
    exist: `compositor.rs::profile_a_real_score_across_a_window` for the eval side,
-   `gpui/crates/render/tests/render/stall_probe.rs` for the GPU side. A `bench_record` bin that
+   `gpui/crates/render/examples/stall_probe.rs` for the GPU side. A `bench_record` bin that
    renders 300 frames of a real score at both resolutions and both subframe counts
    settles it in an afternoon, and should exist before the quality presets are named.
 
@@ -457,8 +457,8 @@ K = 4 shutter.
 
 Averaging is in linear light, not on the sRGB bytes the renderer returns: a
 half-duty strobe averaged as bytes lands at code value 128 instead of 188, about
-a stop and a half dark. `luma_render::coords` gained the `linear_to_srgb` that
-sat there as only half a pair.
+a stop and a half dark. The average goes through the
+`srgb_to_linear` / `linear_to_srgb` pair in `luma_render::colour`.
 
 Measured on a real `bass_strobe` clip (score `f9effb89`, 61–63.2 s, 480×270),
 per-frame mean luminance:

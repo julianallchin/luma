@@ -425,7 +425,7 @@ pub fn beam_direction(def: Option<&Definition>, rot: [f32; 3], position: Option<
     } else {
         return Vec3::ZERO;
     };
-    crate::coords::world_from_data(aim(&Mount::from_stored(Vec3::ZERO, rot), &articulation))
+    luma_scene::coords::world_from_data(aim(&Mount::from_stored(Vec3::ZERO, rot), &articulation))
 }
 
 /// LED bars and matrices are drawn from their layout rather than from a mesh.

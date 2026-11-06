@@ -80,7 +80,7 @@ pub struct FrameTimings {
     /// The whole frame on the GPU timeline: first render pass start through
     /// composite completion, the composite pass being the sink every other
     /// pass feeds. Within ~10% of the wall clock around submit → queue drained
-    /// on the workloads in `tests/timestamp_lie.rs`.
+    /// on the workloads in `examples/timestamp_lie.rs`.
     pub gpu_total_ms: f64,
     /// Scene completion through the last haze pass's completion. Zero when haze did not run — and also when it
     /// ran entirely alongside the scene pass and finished first, in which case

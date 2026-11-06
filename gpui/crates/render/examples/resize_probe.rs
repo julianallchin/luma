@@ -1,11 +1,11 @@
 //! What a *moving* viewport size costs, against a still one.
 //!
 //! ```sh
-//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p luma-render --release \
-//!     --test render resize_probe:: -- --nocapture
+//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo run -p luma-render --release \
+//!     --example resize_probe
 //! ```
 //!
-//! Scratch instrument, not a gate. The reported symptom is that ⌘B — which
+//! A measuring instrument, not a gate. The reported symptom is that ⌘B — which
 //! slides the sidebar over `luma_ui::motion::SWEEP` and narrows the workspace
 //! panel with it — drops the stage far below display rate for the length of
 //! the slide. Every frame of that slide hands the renderer a width nobody has
@@ -77,7 +77,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize) -> Frame {
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::repo_root().join("resources/meshes");
     let mut library = Library::new(meshes);
     let scene = scene();
     let mut frame = build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library)
@@ -153,7 +153,6 @@ fn sweep(label: &str, lights: usize, widths: impl Fn(u32) -> u32) {
     );
 }
 
-#[test]
 fn a_moving_viewport_size_reports_what_it_costs() {
     for lights in [0usize, 30] {
         let (wide, _) = size();
@@ -170,4 +169,8 @@ fn a_moving_viewport_size_reports_what_it_costs() {
         // at a size the renderer has already seen.
         sweep("snapped", lights, move |_| wide - DELTA);
     }
+}
+
+fn main() {
+    a_moving_viewport_size_reports_what_it_costs();
 }

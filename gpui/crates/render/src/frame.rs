@@ -10,13 +10,13 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 
 use crate::assets::{HdrImage, Image, Library, Material, Vertex};
-use crate::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use crate::luminaire::{
-    Lens, ModelKind, PIXEL, beam_direction, cone_from_opening, is_procedural, lens_for,
-    luminaire_for, model_kind, pixel_lens,
+    beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
+    pixel_lens, Lens, ModelKind, PIXEL,
 };
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
+use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 
 /// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
 pub type Definitions = std::collections::BTreeMap<String, Definition>;
@@ -275,10 +275,6 @@ pub struct Frame {
     pub fixture_shadow_capacity_hint: usize,
     /// Whether fixture cones illuminate opaque surfaces as well as haze.
     pub fixture_surface_lighting: bool,
-    /// Whether beams draw through per-cone proxy geometry instead of the
-    /// full-screen tiled march. Same integrand either way — see
-    /// `shaders/beam_transport.wgsl`; this only changes which pixels run it.
-    pub beam_proxy: bool,
     /// Whether opaque venue geometry casts into fixture cones and haze.
     pub fixture_shadows: bool,
     /// Retained shadow maps for every fixture, beyond the 16-map budget.
@@ -1277,7 +1273,6 @@ pub fn build_at(
         lasers: Vec::new(),
         fixture_shadow_capacity_hint,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
-        beam_proxy: false,
         fixture_shadows: scene.render.fixture_shadows,
         geometry_shadows: scene.render.geometry_shadows,
         cluster_debug: scene.render.cluster_debug,

@@ -1,10 +1,15 @@
-//! Scratch probe, not a gate: reproduce the "GPU busy 4 ms, until_signalled
-//! 42 ms" stall from a live lit stage, headless, and localize it.
+//! A measuring instrument, not a gate: reproduce the "GPU busy 4 ms,
+//! until_signalled 42 ms" stall from a live lit stage, headless, and localize
+//! it.
 //!
 //! Pipelines frames the way the app does — a new submit every ~8 ms while
 //! deliveries are taken as they land — and prints delivered interval,
 //! draw_time (submit → observed completion) and until_signalled per light
-//! count. Delete once the stall is understood.
+//! count.
+//!
+//! ```sh
+//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo run -p luma-render --release --example stall_probe
+//! ```
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -47,7 +52,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::repo_root().join("resources/meshes");
     let mut library = Library::new(meshes);
     let mut scene = scene();
     scene.render.haze.enabled = haze;
@@ -76,7 +81,6 @@ fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
     frame
 }
 
-#[test]
 fn lone_lit_frames_report_their_latency() {
     // No pipelining: submit one frame, wait for it, measure. Separates a
     // genuine per-frame stall from queueing behind the previous frame.
@@ -108,7 +112,6 @@ fn lone_lit_frames_report_their_latency() {
     }
 }
 
-#[test]
 fn pipelined_lit_frames_report_their_latency() {
     for (label, lights, moving, haze) in [
         ("unlit", 0usize, false, true),
@@ -183,4 +186,9 @@ fn pipelined_lit_frames_report_their_latency() {
             pct(&intervals, 0.95),
         );
     }
+}
+
+fn main() {
+    lone_lit_frames_report_their_latency();
+    pipelined_lit_frames_report_their_latency();
 }

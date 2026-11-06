@@ -27,7 +27,8 @@ use crate::host_audio::TrackAudio;
 use crate::motors::Motors;
 use crate::stage_render::{self, Aim, VenueGeometry};
 use luma_render::frame::Moment;
-use luma_render::{assets, build_frame_at, coords, footage, Recorder};
+use luma_render::{assets, build_frame_at, footage, Recorder};
+use luma_scene::coords;
 
 /// Frames drawn and discarded before the span starts.
 ///

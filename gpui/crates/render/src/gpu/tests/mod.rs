@@ -9,7 +9,7 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 
 use crate::assets::{Material, Vertex};
-use crate::coords::hex_srgb;
+use crate::colour::hex_srgb;
 use crate::frame::{
     Camera, DirectionalLight, Draw, FixtureCone, Frame, MaterialTextures, MeshData,
 };
@@ -549,7 +549,6 @@ fn fixture_surface_frame(count: usize) -> Frame {
         lasers: Vec::new(),
         fixture_shadow_capacity_hint: 0,
         fixture_surface_lighting: true,
-        beam_proxy: false,
         fixture_shadows: true,
         geometry_shadows: false,
         cluster_debug: false,
@@ -652,7 +651,6 @@ fn overlay_test_frame(
         lasers: Vec::new(),
         fixture_shadow_capacity_hint: 0,
         fixture_surface_lighting: false,
-        beam_proxy: false,
         fixture_shadows: true,
         geometry_shadows: false,
         cluster_debug: false,

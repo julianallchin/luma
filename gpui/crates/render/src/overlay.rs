@@ -13,10 +13,11 @@
 //! worse than none.
 
 use glam::{Mat3, Mat4, Vec3};
+use luma_scene::coords::{euler_xyz, three_from_data, three_from_world, three_pose_from_data};
 use luma_scene::{gizmo_scale, Axis, GizmoHandle, GizmoMode, RING_RADIUS};
 
 use crate::assets::Library;
-use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_from_world, three_pose_from_data};
+use crate::colour::hex_srgb;
 use crate::frame::{Camera, Definitions, MeshData};
 use crate::scene_desc::{Geometry, Scene, SocketMarkState};
 

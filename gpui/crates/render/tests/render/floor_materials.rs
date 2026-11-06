@@ -425,6 +425,7 @@ fn as_before(frame: &mut Frame) {
 }
 
 #[test]
+#[ignore = "capture, not a gate: set LUMA_FLOOR_CAPTURE_DIR to save the orbit view of every floor"]
 fn the_orbit_view_shows_the_ground() {
     let mut renderer = Renderer::new().unwrap();
     for floor in [Floor::Grass, Floor::Dirt, Floor::Concrete, Floor::Beach] {

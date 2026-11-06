@@ -7,7 +7,7 @@
 //! only once the frame has completed, because `resolve_query_set` runs
 //! alongside the render stream and otherwise reads it before it has settled —
 //! is not pinned here: a synthetic workload reproduces it only intermittently.
-//! `timestamp_lie.rs` covers it instead, at a viewport size where the renderer
+//! The `timestamp_lie` example checks it by hand instead, at a viewport size where the renderer
 //! drops tail samples deterministically without it.
 //!
 //! Run: cargo test -p luma-render --release --test render timestamp_query_contract::

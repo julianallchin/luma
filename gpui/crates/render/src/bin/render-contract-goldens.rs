@@ -5,12 +5,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use luma_render::coords::data_pose_of;
 use luma_render::scene_desc::{
     CameraPose, DirectionalLight, Environment, Geometry, Piece, Procedural, RenderSettings, Scene,
 };
 use luma_render::truss::{Face, FaceSet};
 use luma_render::{assets, build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
+use luma_scene::coords::data_pose_of;
 
 const TIME: f32 = 1.37;
 

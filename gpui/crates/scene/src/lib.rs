@@ -48,8 +48,7 @@ pub use framing::{Beam, Framing, Insets, Viewfinder};
 pub use gesture::{ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Marquee, ScreenRect};
 pub use gizmo::{
     apply_rotation, apply_translation, gizmo_scale, hit_test_gizmo, selection_pivot, snap_angle_15,
-    Axis, DragFrame, DragTarget, GizmoHandle, GizmoHit, GizmoMode, GizmoState, PivotMode,
-    TransformTarget, RING_RADIUS,
+    Axis, GizmoHandle, GizmoHit, GizmoMode, PivotMode, TransformTarget, RING_RADIUS,
 };
 pub use graph::{
     MaterialHandle, MeshHandle, Node, NodeContent, NodeFlags, NodeId, SceneGraph, Transform,

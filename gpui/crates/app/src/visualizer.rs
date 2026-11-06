@@ -98,16 +98,15 @@ use gpui::{
 use luma_lib::models::universe::UniverseState;
 use luma_lib::stage_render;
 use luma_render::{
-    assets, build_frame_at, coords, frame::EditorObject, house, scene_desc,
-    scene_desc::VenueEnvironment, strobe::FixtureClock, AsyncViewport, FrameTimings, MetricSummary,
-    Moment, SubmitOutcome,
+    assets, build_frame_at, frame::EditorObject, house, scene_desc, scene_desc::VenueEnvironment,
+    strobe::FixtureClock, AsyncViewport, FrameTimings, MetricSummary, Moment, SubmitOutcome,
 };
 use luma_scene::{
-    apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, navigate, Aabb, Camera,
-    ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, FlyKeys, Framing, GizmoHandle, GizmoMode,
-    Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph,
-    Selection, Surface, SurfaceHit, Transform, TransformTarget, TriMesh, View, Viewfinder,
-    ZoomLimits,
+    apply_rotation, apply_translation, bvh::MeshSource, coords, gizmo_scale, navigate, Aabb,
+    Camera, ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, FlyKeys, Framing, GizmoHandle,
+    GizmoMode, Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode,
+    SceneGraph, Selection, Surface, SurfaceHit, Transform, TransformTarget, TriMesh, View,
+    Viewfinder, ZoomLimits,
 };
 use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, Instrument, Role};

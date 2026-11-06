@@ -1,11 +1,5 @@
-//! Colour transfer functions, and the re-export of the space bridge.
-//!
-//! The Z-up/Y-up conversion moved to [`luma_scene::coords`] when the venue
-//! resolver — which is GPU-free and cannot depend on this crate — had to speak
-//! it too. Every name is re-exported here, so `crate::coords::world_from_data`
-//! still resolves.
-
-pub use luma_scene::coords::*;
+//! sRGB transfer functions. The Z-up/Y-up space bridge is
+//! [`luma_scene::coords`].
 
 use glam::Vec3;
 

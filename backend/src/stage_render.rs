@@ -25,7 +25,8 @@ use std::sync::{mpsc, OnceLock};
 use glam::Vec3;
 use luma_render::frame::Moment;
 use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment, VenueHaze};
-use luma_render::{assets, build_frame_at, coords, footage, Renderer, DEFAULT_SUBFRAMES};
+use luma_render::{assets, build_frame_at, footage, Renderer, DEFAULT_SUBFRAMES};
+use luma_scene::coords;
 use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
 

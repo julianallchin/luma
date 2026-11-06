@@ -11,9 +11,11 @@
 //!    profiler machinery (`Renderer::profile_live_frame`) on a heavy lit
 //!    frame, gating `gpu_total_ms` against the wall clock. It fails if the
 //!    timestamps start lying again, but a busy machine inflates the wall clock
-//!    and fails it too, so it is ignored by default: run it on an idle machine.
+//!    and fails it too, so run it on an idle machine.
 //!
-//! Run: cargo test -p luma-render --release --test render timestamp_lie:: -- --include-ignored --nocapture
+//! ```sh
+//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo run -p luma-render --release --example timestamp_lie
+//! ```
 
 use std::collections::BTreeMap;
 use std::sync::mpsc;
@@ -63,7 +65,6 @@ fn fs_trivial(@builtin(position) p: vec4f) -> @location(0) vec4f {
 ///   q2 = end_of_pass of the heavy pass
 /// "luma-style" time for the heavy pass is q1 - q0; the same-pass bracket is
 /// q2 - q0; ground truth is the wall clock around submit → queue drained.
-#[test]
 fn begin_only_timestamps_undercount_fragment_time() {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -269,7 +270,7 @@ fn begin_only_timestamps_undercount_fragment_time() {
 }
 
 // --- production machinery -------------------------------------------------
-// Scene construction lifted from tests/render/stall_probe.rs: a lit stage with haze,
+// Scene construction lifted from examples/stall_probe.rs: a lit stage with haze,
 // the workload whose live numbers prompted this probe.
 
 fn scene() -> Scene {
@@ -300,7 +301,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize) -> Frame {
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::repo_root().join("resources/meshes");
     let mut library = Library::new(meshes);
     let scene = scene();
     let mut frame = build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library)
@@ -331,8 +332,6 @@ fn lit_frame(lights: usize) -> Frame {
 /// Gate: the profiler's `gpu_total_ms` must track the wall clock on a frame
 /// heavy enough that scheduling spacing and shader time are far apart. The
 /// begin-to-begin scheme this replaced reported 0.30 ms for a 42 ms frame.
-#[test]
-#[ignore = "compares GPU time with wall-clock time, which a busy machine inflates; run on an idle machine"]
 fn production_profiler_matches_wall_on_lit_frame() {
     // Both sizes, because which samples a too-early query resolve drops turns
     // out to depend on the viewport: 1920x1080 loses the composite pass's end
@@ -393,4 +392,9 @@ fn production_profiler_matches_wall_on_lit_frame() {
             );
         }
     }
+}
+
+fn main() {
+    begin_only_timestamps_undercount_fragment_time();
+    production_profiler_matches_wall_on_lit_frame();
 }

@@ -219,31 +219,6 @@ pub struct GizmoHit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DragFrame {
-    pub plane_point: Vec3,
-    pub plane_normal: Vec3,
-    pub grab_offset: Vec3,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DragTarget {
-    pub start_position: Vec3,
-    pub start_rotation: Quat,
-    pub anchor: Vec3,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GizmoState {
-    Idle,
-    Hover(GizmoHandle),
-    Dragging {
-        handle: GizmoHandle,
-        frame: DragFrame,
-        targets: Vec<DragTarget>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TransformTarget {
     pub position: Vec3,
     pub rotation: Quat,

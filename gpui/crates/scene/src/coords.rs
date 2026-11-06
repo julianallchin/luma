@@ -3,8 +3,6 @@
 //! This is the **single copy** of the convention. It lives here rather than in
 //! the renderer because the venue resolver ([`crate::venue`]) is the other
 //! thing that has to speak it, and the resolver must stay GPU-free.
-//! `luma_render::coords` re-exports every item below, so a caller's path is
-//! unchanged.
 //!
 //! Spec §2.1: the renderer is Z-up, right-handed, matching the database and the
 //! eval engine. Two other spaces show up at the boundary and neither survives

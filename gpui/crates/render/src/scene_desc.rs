@@ -2170,7 +2170,7 @@ impl Scene {
     pub fn framing(&self, definitions: &BTreeMap<String, Definition>) -> luma_scene::Framing {
         luma_scene::Framing::of(
             self.fixtures.iter().map(|f| luma_scene::Beam {
-                origin: crate::coords::world_from_data(glam::Vec3::from(f.pos)),
+                origin: luma_scene::coords::world_from_data(glam::Vec3::from(f.pos)),
                 direction: crate::luminaire::beam_direction(
                     definitions.get(&f.fixture_path),
                     f.rot,
@@ -2194,7 +2194,7 @@ impl Scene {
         let mut bounds = luma_scene::Aabb::from_points(
             self.fixtures
                 .iter()
-                .map(|f| crate::coords::world_from_data(glam::Vec3::from(f.pos))),
+                .map(|f| luma_scene::coords::world_from_data(glam::Vec3::from(f.pos))),
         );
         for piece in self.pieces.iter().filter(|p| p.is_rig_bearing()) {
             bounds.union(&piece_box(piece));
@@ -2227,8 +2227,8 @@ impl Scene {
 fn piece_box(piece: &Piece) -> luma_scene::Aabb {
     if let Geometry::Procedural(params) = piece.geometry {
         let local = crate::catalog::procedural_bounds(params);
-        let transform = glam::Mat4::from_mat3(crate::coords::three_to_world_basis())
-            * crate::coords::three_pose_from_data(piece.pos, piece.rot)
+        let transform = glam::Mat4::from_mat3(luma_scene::coords::three_to_world_basis())
+            * luma_scene::coords::three_pose_from_data(piece.pos, piece.rot)
             * glam::Mat4::from_scale(glam::Vec3::splat(piece.scale));
         return luma_scene::Aabb::from_points(
             luma_scene::Aabb::new(local.min.as_vec3(), local.max.as_vec3())
@@ -2236,7 +2236,7 @@ fn piece_box(piece: &Piece) -> luma_scene::Aabb {
                 .map(|point| transform.transform_point3(point)),
         );
     }
-    let base = crate::coords::world_from_data(glam::Vec3::from(piece.pos));
+    let base = luma_scene::coords::world_from_data(glam::Vec3::from(piece.pos));
     let half = piece.framing_half_extent();
     luma_scene::Aabb::new(
         base - glam::Vec3::new(half, half, 0.0),
@@ -2440,9 +2440,8 @@ mod tests {
         let render = RenderSettings::room(VenueEnvironment::default(), haze, 50.0, 0.5);
         assert_eq!(render.haze.density, 0.11);
         assert!(render.haze.enabled);
-        // The cost knobs are the caller's, not the venue's.
+        // The cost knob is the caller's, not the venue's.
         assert_eq!(render.haze.resolution, 0.5);
-        assert_eq!(render.haze.steps, 8);
     }
 
     /// The catalogue the test rig is patched from: one moving head.

@@ -347,7 +347,7 @@ mod tests {
             let mut sum = [0.0f64; 3];
             for pixel in image.pixels() {
                 for c in 0..3 {
-                    sum[c] += f64::from(crate::coords::srgb_to_linear(f32::from(pixel[c]) / 255.0));
+                    sum[c] += f64::from(crate::colour::srgb_to_linear(f32::from(pixel[c]) / 255.0));
                 }
             }
             let n = f64::from(image.width() * image.height());

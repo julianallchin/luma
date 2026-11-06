@@ -409,7 +409,7 @@ impl Build {
         let bounds = self.room.bounds_of(node)?;
         Some(luma_scene::Aabb::from_points(
             bounds.as_aabb().corners().map(|corner| {
-                luma_render::coords::world_from_three(
+                luma_scene::coords::world_from_three(
                     pose.transform_point3(corner.as_dvec3()).as_vec3(),
                 )
             }),

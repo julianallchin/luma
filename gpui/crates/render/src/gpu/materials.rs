@@ -173,13 +173,13 @@ fn downsample(w: u32, h: u32, pixels: &[u8], encoding: TextureEncoding) -> (u32,
                 let at = |px: u32, py: u32| pixels[((py * w + px) * 4 + c) as usize];
                 if encoding == TextureEncoding::Srgb && c < 3 {
                     let linear =
-                        |value: u8| crate::coords::srgb_to_linear(f32::from(value) / 255.0);
+                        |value: u8| crate::colour::srgb_to_linear(f32::from(value) / 255.0);
                     let mean = (linear(at(x0, y0))
                         + linear(at(x1, y0))
                         + linear(at(x0, y1))
                         + linear(at(x1, y1)))
                         * 0.25;
-                    let encoded = crate::coords::linear_to_srgb(mean);
+                    let encoded = crate::colour::linear_to_srgb(mean);
                     out.push((encoded * 255.0).round().clamp(0.0, 255.0) as u8);
                 } else {
                     let mean = u32::from(at(x0, y0))

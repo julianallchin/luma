@@ -18,12 +18,12 @@ use std::collections::BTreeMap;
 
 use glam::{Mat3, Mat4, Vec3};
 use luma_render::assets::Library;
-use luma_render::coords::world_from_data;
 use luma_render::scene_desc::{
     CameraPose, Definition, Dimensions, Fixture, Lens, Mode, Physical, PrimitiveState,
     RenderSettings, Scene,
 };
 use luma_render::{build_frame, Frame};
+use luma_scene::coords::world_from_data;
 
 #[path = "../../../../../backend/crates/fixture-kinematics/contract_vectors.rs"]
 mod contract_vectors;

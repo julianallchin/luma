@@ -21,10 +21,10 @@ use std::path::PathBuf;
 
 use glam::{Mat4, Vec3};
 use luma_render::build_frame_with;
-use luma_render::coords;
 use luma_render::scene_desc::{
     CameraPose, Editor, Fixture, Geometry, Piece, RenderSettings, Scene,
 };
+use luma_scene::coords;
 
 use crate::common::library;
 

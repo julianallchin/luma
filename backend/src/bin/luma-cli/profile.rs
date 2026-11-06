@@ -87,8 +87,8 @@ pub async fn run(args: super::Args) -> Result<(), String> {
         .open_air(scene.render.sky.is_some());
     let camera = luma_scene::Camera::for_view(luma_scene::View::Front, &framing, None, &finder);
     scene.camera = luma_render::scene_desc::CameraPose {
-        position: luma_render::coords::three_from_world(camera.position()).to_array(),
-        target: luma_render::coords::three_from_world(camera.target).to_array(),
+        position: luma_scene::coords::three_from_world(camera.position()).to_array(),
+        target: luma_scene::coords::three_from_world(camera.target).to_array(),
     };
     let mut library = Library::new(luma_lib::stage_render::meshes_root(Some(&fixtures)));
     if mode == "snapshot" {

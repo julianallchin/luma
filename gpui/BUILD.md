@@ -179,6 +179,11 @@ second).
 `luma-render` has one binary, `--test render`, plus four that change
 process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
 `shared_presentation` and `waveform`. `luma-ui` has one, `--test ui`.
+The `luma-render` GPU timing instruments are examples, not tests, because a
+timing on a shared machine is not a gate: `--example stall_probe` (frame latency on a lit, hazed stage),
+`--example timestamp_lie` (pass timestamps against the wall clock; run on an
+idle machine) and `--example resize_probe` (what a per-frame viewport size
+change costs). Run them with `cargo run -p luma-render --release`.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,
