@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::common::SyncError;
+use crate::sync::error::SyncError;
 
 /// The PostgREST endpoint and the key it wants beside a user's token.
 pub struct Postgrest {
@@ -43,8 +43,8 @@ impl Postgrest {
     ///
     /// # Errors
     ///
-    /// [`SyncError::RequestFailed`] when the server could not be reached, and
-    /// [`SyncError::ApiError`] with PostgREST's JSON body when it answered with
+    /// [`SyncError::Network`] when the server could not be reached, and
+    /// [`SyncError::Api`] with PostgREST's JSON body when it answered with
     /// anything but success.
     pub async fn rpc<T: DeserializeOwned>(
         &self,
@@ -60,19 +60,19 @@ impl Postgrest {
             .json(args)
             .send()
             .await
-            .map_err(|error| SyncError::RequestFailed(error.to_string()))?;
+            .map_err(|error| SyncError::Network(error.to_string()))?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| SyncError::RequestFailed(error.to_string()))?;
+            .map_err(|error| SyncError::Network(error.to_string()))?;
         if !status.is_success() {
-            return Err(SyncError::ApiError {
+            return Err(SyncError::Api {
                 status: status.as_u16(),
                 message: body,
             });
         }
-        serde_json::from_str(body.trim()).map_err(|error| SyncError::ApiError {
+        serde_json::from_str(body.trim()).map_err(|error| SyncError::Api {
             status: status.as_u16(),
             message: format!("unexpected {function} response {body:?}: {error}"),
         })

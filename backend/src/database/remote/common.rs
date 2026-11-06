@@ -1,29 +1,8 @@
 // Shared types and utilities for remote Supabase operations
 
 use reqwest::Client;
-use std::fmt;
 
-/// Error type for Supabase sync operations
-#[derive(Debug)]
-pub enum SyncError {
-    /// HTTP request failed
-    RequestFailed(String),
-    /// Supabase API returned an error
-    ApiError { status: u16, message: String },
-}
-
-impl fmt::Display for SyncError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SyncError::RequestFailed(msg) => write!(f, "Request failed: {}", msg),
-            SyncError::ApiError { status, message } => {
-                write!(f, "Supabase API error {}: {}", status, message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for SyncError {}
+use crate::sync::error::SyncError;
 
 /// Supabase client configuration
 pub struct SupabaseClient {
@@ -63,12 +42,12 @@ impl SupabaseClient {
             .body(file_bytes)
             .send()
             .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+            .map_err(|e| SyncError::Network(e.to_string()))?;
 
         if !res.status().is_success() {
             let status = res.status().as_u16();
             let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
+            return Err(SyncError::Api {
                 status,
                 message: text,
             });
@@ -93,12 +72,12 @@ impl SupabaseClient {
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))?;
+            .map_err(|e| SyncError::Network(e.to_string()))?;
 
         if !res.status().is_success() {
             let status = res.status().as_u16();
             let text = res.text().await.unwrap_or_default();
-            return Err(SyncError::ApiError {
+            return Err(SyncError::Api {
                 status,
                 message: text,
             });
@@ -107,6 +86,6 @@ impl SupabaseClient {
         res.bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| SyncError::RequestFailed(e.to_string()))
+            .map_err(|e| SyncError::Network(e.to_string()))
     }
 }

@@ -1,7 +1,8 @@
 use std::fmt;
 
-/// What media transfer can fail with. Record replication has its own error
-/// type in the SDK; this is only the bytes.
+/// What a Supabase request outside record replication can fail with: media
+/// transfer and PostgREST calls. Record replication has its own error type in
+/// the SDK.
 #[derive(Debug)]
 pub enum SyncError {
     /// Audio availability or local media file failure.
@@ -46,16 +47,6 @@ impl From<crate::database::local::auth::AuthError> for SyncError {
         match error {
             AuthError::SessionRevoked => SyncError::SessionRevoked,
             AuthError::Other(message) => SyncError::Local(message),
-        }
-    }
-}
-
-impl From<crate::database::remote::common::SyncError> for SyncError {
-    fn from(error: crate::database::remote::common::SyncError) -> Self {
-        use crate::database::remote::common::SyncError as Remote;
-        match error {
-            Remote::RequestFailed(message) => SyncError::Network(message),
-            Remote::ApiError { status, message } => SyncError::Api { status, message },
         }
     }
 }

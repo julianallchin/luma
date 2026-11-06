@@ -21,13 +21,13 @@ use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
 use crate::database::local::venues as venues_db;
-use crate::database::remote::common::SyncError;
 use crate::database::remote::postgrest::Postgrest;
 use crate::dispatch::CommandError;
 use crate::models::venues::{
     display_share_code, normalize_share_code, Venue, VenueMember, SHARE_CODE_ALPHABET,
     SHARE_CODE_LEN,
 };
+use crate::sync::error::SyncError;
 
 /// How long a join waits for the venue it redeemed to download. Generous: the
 /// alternative is telling someone the join failed when it did not.
@@ -115,18 +115,18 @@ pub async fn redeem_with_token(
 
 fn refusal(error: SyncError) -> Refusal {
     match error {
-        SyncError::RequestFailed(message) => Refusal::Offline(message),
-        SyncError::ApiError { message, .. } if message.contains("no venue for share code") => {
+        SyncError::Network(message) => Refusal::Offline(message),
+        SyncError::Api { message, .. } if message.contains("no venue for share code") => {
             Refusal::UnknownCode
         }
-        SyncError::ApiError {
+        SyncError::Api {
             status: 401,
             message,
         } => Refusal::SignedOut(message),
-        SyncError::ApiError { status, .. } if status >= 500 || status == 408 || status == 429 => {
+        SyncError::Api { status, .. } if status >= 500 || status == 408 || status == 429 => {
             Refusal::Offline(error.to_string())
         }
-        SyncError::ApiError { .. } => Refusal::Failed(error.to_string()),
+        _ => Refusal::Failed(error.to_string()),
     }
 }
 
@@ -678,7 +678,7 @@ mod tests {
     #[async_trait::async_trait]
     impl ShareCodeServer for Down {
         async fn redeem(&self, _code: &str) -> Result<String, Refusal> {
-            Err(refusal(SyncError::RequestFailed(
+            Err(refusal(SyncError::Network(
                 "error sending request: connection refused".into(),
             )))
         }
@@ -699,28 +699,28 @@ mod tests {
 
     #[test]
     fn the_server_s_answers_become_refusals() {
-        let unknown = SyncError::ApiError {
+        let unknown = SyncError::Api {
             status: 400,
             message: r#"{"code":"P0001","message":"no venue for share code","details":null}"#
                 .into(),
         };
         assert_eq!(refusal(unknown), Refusal::UnknownCode);
         assert!(matches!(
-            refusal(SyncError::ApiError {
+            refusal(SyncError::Api {
                 status: 401,
                 message: "JWT expired".into()
             }),
             Refusal::SignedOut(_)
         ));
         assert!(matches!(
-            refusal(SyncError::ApiError {
+            refusal(SyncError::Api {
                 status: 503,
                 message: String::new()
             }),
             Refusal::Offline(_)
         ));
         assert!(matches!(
-            refusal(SyncError::ApiError {
+            refusal(SyncError::Api {
                 status: 403,
                 message: "denied".into()
             }),
