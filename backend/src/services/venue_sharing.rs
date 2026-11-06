@@ -21,13 +21,13 @@ use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
 use crate::database::local::venues as venues_db;
-use crate::database::remote::postgrest::Postgrest;
 use crate::dispatch::CommandError;
 use crate::models::venues::{
     display_share_code, normalize_share_code, Venue, VenueMember, SHARE_CODE_ALPHABET,
     SHARE_CODE_LEN,
 };
 use crate::sync::error::SyncError;
+use crate::sync::supabase::Postgrest;
 
 /// How long a join waits for the venue it redeemed to download. Generous: the
 /// alternative is telling someone the join failed when it did not.

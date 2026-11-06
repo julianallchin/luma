@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 
 use super::error::SyncError;
 use super::host::SyncHost;
-use crate::database::remote::common::SupabaseClient;
+use crate::sync::supabase::Storage;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,7 +117,7 @@ struct PendingAudioUpload {
 /// Audio is transcoded to OGG Opus before upload to reduce storage/bandwidth.
 pub async fn upload_pending_audio(
     pool: &SqlitePool,
-    remote: &SupabaseClient,
+    remote: &Storage,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -211,7 +211,7 @@ struct PendingStemUpload {
 /// Upload stem files that have a local file but no storage_path.
 pub async fn upload_pending_stems(
     pool: &SqlitePool,
-    remote: &SupabaseClient,
+    remote: &Storage,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -304,7 +304,7 @@ struct PendingArtUpload {
 /// Upload album art that has a local file but no album_art_storage_path.
 pub async fn upload_pending_album_art(
     pool: &SqlitePool,
-    remote: &SupabaseClient,
+    remote: &Storage,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -389,7 +389,7 @@ pub async fn upload_pending_album_art(
 /// object is there.
 pub async fn upload_pending_agent_figures(
     pool: &SqlitePool,
-    remote: &SupabaseClient,
+    remote: &Storage,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -488,7 +488,7 @@ struct PendingStemDownload {
 /// Only download missing stem files for tracks whose main audio is local.
 pub async fn download_pending_stems(
     pool: &SqlitePool,
-    remote: &SupabaseClient,
+    remote: &Storage,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
@@ -577,7 +577,7 @@ struct PendingArtDownload {
 /// Download album art for tracks that have a storage path but no local file.
 pub async fn download_pending_album_art(
     pool: &SqlitePool,
-    remote: &SupabaseClient,
+    remote: &Storage,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,

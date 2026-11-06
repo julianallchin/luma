@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
-use crate::database::remote::common::SupabaseClient;
 use crate::storage::StorageRoot;
+use crate::sync::supabase::Storage;
 
 /// The Storage bucket, and the first segment of every figure `path`.
 pub const BUCKET: &str = "agent-figures";
@@ -105,7 +105,7 @@ pub async fn load(
     let object = path
         .strip_prefix(&format!("{BUCKET}/"))
         .ok_or_else(|| format!("not a figure path: {path}"))?;
-    let bytes = SupabaseClient::new(
+    let bytes = Storage::new(
         crate::config::SUPABASE_URL.to_owned(),
         crate::config::supabase_anon_key(),
     )

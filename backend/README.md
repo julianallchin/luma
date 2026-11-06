@@ -5,11 +5,8 @@ headless tools.
 
 - `src/models/`: shared data schemas.
 - `src/database/local/`: local SQLite access.
-- `src/database/remote/`: direct Supabase PostgREST calls for share codes
-  (join a venue, publish a share code, leave a venue), and the HTTP client that
-  sync media transfer uses.
-- `src/sync/`: PowerSync row sync, the `changes` log triggers and media
-  transfer. See [docs/design/sync.md](../docs/design/sync.md).
+- `src/sync/`: PowerSync row sync, the `changes` log triggers, media
+  transfer, and the Supabase Storage and PostgREST clients (`sync/supabase.rs`). See [docs/design/sync.md](../docs/design/sync.md).
 - `src/services/`: domain logic, persistence and audio analysis.
 - `src/preprocessing/`: the track analysis DAG. See its `README.md`.
 - `src/eval/`: score evaluation for playback and previews.

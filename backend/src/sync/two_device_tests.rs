@@ -643,7 +643,7 @@ async fn the_sharing_service_admits_with_a_code_and_revoking_it_admits_nobody() 
 
     /// The production redemption with a minted token in place of the state
     /// database's session.
-    struct Minted(crate::database::remote::postgrest::Postgrest, String);
+    struct Minted(crate::sync::supabase::Postgrest, String);
 
     #[async_trait::async_trait]
     impl ShareCodeServer for Minted {
@@ -659,10 +659,7 @@ async fn the_sharing_service_admits_with_a_code_and_revoking_it_admits_nobody() 
     let server = |user: &str| {
         let token = mint_jwt(&containers.secret, user);
         Minted(
-            crate::database::remote::postgrest::Postgrest::new(
-                containers.postgrest.clone(),
-                token.clone(),
-            ),
+            crate::sync::supabase::Postgrest::new(containers.postgrest.clone(), token.clone()),
             token,
         )
     };

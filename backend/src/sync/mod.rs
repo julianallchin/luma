@@ -3,7 +3,8 @@
 //! [`schema`] names the synced tables once and [`triggers`] installs the upload
 //! queue from that list. [`connector`] talks to PowerSync
 //! Cloud and Supabase PostgREST; [`service`] owns the connection lifecycle.
-//! [`media`], [`files`] and [`progress`] move bytes on their own clock.
+//! [`media`], [`files`] and [`progress`] move bytes on their own clock, through
+//! the Storage client in [`supabase`].
 
 pub(crate) mod audio;
 pub mod connector;
@@ -14,6 +15,7 @@ pub mod media;
 pub mod progress;
 pub mod schema;
 pub mod service;
+pub mod supabase;
 pub mod triggers;
 
 #[cfg(test)]

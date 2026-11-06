@@ -12,14 +12,14 @@ use super::error::SyncError;
 use crate::database::local::auth;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::database::local::write_admission::{enter_remote_writes, leave_remote_writes};
-use crate::database::remote::common::SupabaseClient;
 use crate::storage::StorageRoot;
+use crate::sync::supabase::Storage;
 
 pub(crate) struct TrackAudio {
     pool: SqlitePool,
     state_pool: SqlitePool,
     storage: StorageRoot,
-    remote: SupabaseClient,
+    remote: Storage,
     downloads: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 
@@ -36,7 +36,7 @@ impl TrackAudio {
             pool,
             state_pool,
             storage,
-            remote: SupabaseClient::new(
+            remote: Storage::new(
                 crate::config::SUPABASE_URL.to_owned(),
                 crate::config::supabase_anon_key(),
             ),
@@ -222,7 +222,7 @@ mod tests {
             state_pool,
             StorageRoot::from_path(directory.to_owned()),
         );
-        audio.remote = SupabaseClient::new(server.url.clone(), "test-key".into());
+        audio.remote = Storage::new(server.url.clone(), "test-key".into());
         audio
     }
 
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(path(&audio).await, "hash.stub");
         assert!(!audio.storage.tracks_dir().join("hash.ogg").exists());
         let success = server(200).await;
-        audio.remote = SupabaseClient::new(success.url.clone(), "test-key".into());
+        audio.remote = Storage::new(success.url.clone(), "test-key".into());
         audio.ensure("track").await.unwrap();
         assert_eq!(std::fs::read(path(&audio).await).unwrap(), b"audio");
     }
@@ -322,7 +322,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut audio = fixture(directory.path(), &server).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        audio.remote = SupabaseClient::new(
+        audio.remote = Storage::new(
             format!("http://{}", listener.local_addr().unwrap()),
             "test-key".into(),
         );

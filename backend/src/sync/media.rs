@@ -14,7 +14,7 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 
-use crate::database::remote::common::SupabaseClient;
+use crate::sync::supabase::Storage;
 
 use super::files::{self, FileSyncStats};
 use super::host::SyncHost;
@@ -28,7 +28,7 @@ const INTERVAL: Duration = Duration::from_secs(60);
 pub struct Media {
     pool: SqlitePool,
     state_pool: SqlitePool,
-    remote: Arc<SupabaseClient>,
+    remote: Arc<Storage>,
     progress: Arc<Progress>,
 }
 
@@ -38,7 +38,7 @@ impl Media {
         Self {
             pool,
             state_pool,
-            remote: Arc::new(SupabaseClient::new(
+            remote: Arc::new(Storage::new(
                 crate::config::SUPABASE_URL.to_owned(),
                 crate::config::supabase_anon_key(),
             )),
