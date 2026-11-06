@@ -276,9 +276,13 @@ async fn refused(pool: &SqlitePool) -> String {
         Ok(connection) => connection,
         Err(error) => return format!("could not replay the download: {error}"),
     };
-    let _ = sqlx::query("SAVEPOINT diagnose")
+    // Without the savepoint the replay below would commit what it writes.
+    if let Err(error) = sqlx::query("SAVEPOINT diagnose")
         .execute(&mut *connection)
-        .await;
+        .await
+    {
+        return format!("could not open a transaction to replay the download in: {error}");
+    }
     let mut verdict = "the waiting download applies; the refusal is elsewhere".to_owned();
     for (name, data) in rows {
         let Some(table) = schema::table(&name) else {
@@ -316,29 +320,42 @@ async fn refused(pool: &SqlitePool) -> String {
     }
     // Foreign keys are deferred, so a parent the sync rules do not ship shows
     // up at the commit the SDK makes and nowhere in the replay above.
-    let violations = violations(&mut connection).await;
-    if !violations.is_empty() {
-        verdict = format!("the waiting download has no parent for {violations}");
+    match violations(&mut connection).await {
+        Ok(violations) if !violations.is_empty() => {
+            verdict = format!("the waiting download has no parent for {violations}");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            verdict = format!("{verdict}; the foreign keys could not be checked: {error}")
+        }
     }
-    let _ = sqlx::query("ROLLBACK TO diagnose; RELEASE diagnose")
+    if let Err(error) = sqlx::query("ROLLBACK TO diagnose; RELEASE diagnose")
         .execute(&mut *connection)
-        .await;
+        .await
+    {
+        // The replayed rows are still pending on this connection; closing it
+        // rather than returning it to the pool is what throws them away.
+        drop(connection.detach());
+        verdict = format!("{verdict}; the replay could not be rolled back: {error}");
+    }
     verdict
 }
 
 /// The rows in this connection's transaction whose parent is missing, as
 /// `child -> parent` pairs. Empty when every foreign key holds.
-pub(super) async fn violations(connection: &mut sqlx::SqliteConnection) -> String {
+pub(super) async fn violations(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<String, sqlx::Error> {
     let rows: Vec<(String, Option<i64>, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check")
         .fetch_all(&mut *connection)
-        .await
-        .unwrap_or_default();
-    rows.iter()
+        .await?;
+    Ok(rows
+        .iter()
         .map(|(child, _, parent, _)| format!("{child} -> {parent}"))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", "))
 }
 
 /// Say what a transport failure means, where the wire says it in codes.

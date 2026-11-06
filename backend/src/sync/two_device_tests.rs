@@ -318,7 +318,9 @@ async fn refused(pool: &SqlitePool) -> String {
         }
     }
     if let Err(error) = sqlx::query("COMMIT").execute(&mut *connection).await {
-        let violations = super::service::violations(&mut connection).await;
+        let violations = super::service::violations(&mut connection)
+            .await
+            .unwrap_or_else(|error| format!("unchecked: {error}"));
         let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
         return format!("refused at commit: {error} ({violations})");
     }
