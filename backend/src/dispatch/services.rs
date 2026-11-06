@@ -196,6 +196,9 @@ pub struct AppServices {
     /// Physical DMX output is installed only by the desktop host.
     pub(crate) output: Option<Arc<OutputHub>>,
     pub(crate) host_audio: HostAudioState,
+    /// Whether the persisted audio setting may open the machine's audio
+    /// device. Off on a windowless host, which must never probe it.
+    pub(crate) audio_device: bool,
     pub(crate) track_audio: crate::sync::audio::TrackAudio,
     pub(crate) storage: StorageRoot,
     pub(crate) fixtures_root: PathBuf,
@@ -238,16 +241,16 @@ impl AppServices {
     /// Assemble services without physical output or background loops.
     ///
     /// Everything constructible without a window is constructed here rather
-    /// than by the caller, so the two adapters cannot drift on how a singleton
-    /// is configured. Events are discarded unless overridden with
-    /// [`AppServices::with_events`].
+    /// than by a host, so hosts cannot drift on how a singleton is
+    /// configured; a host gets services from [`crate::boot::open`]. Events
+    /// are discarded unless overridden with [`AppServices::with_events`].
     ///
     /// The deliberate absences are DMX output
     /// and the loops: nothing spawns a render loop, a sync loop, or an audio
     /// broadcaster, so a `RenderEngine` and a `HostAudioState` exist here but
     /// drive nothing.
     #[must_use]
-    pub fn headless(
+    pub(crate) fn headless(
         db: Db,
         state_db: StateDb,
         storage: StorageRoot,
@@ -256,8 +259,9 @@ impl AppServices {
     ) -> Self {
         let render_engine = RenderEngine::default();
         let host_audio = HostAudioState::default();
-        // A host with no window or broadcaster must never probe or open the
-        // machine's audio device. It still advances transport from wall time.
+        // Until a host opts in with `with_audio_device`, the machine's audio
+        // device is never probed or opened. Transport still advances from
+        // wall time.
         host_audio.set_audio_output_enabled(false);
         let track_audio =
             crate::sync::audio::TrackAudio::new(db.0.clone(), state_db.0.clone(), storage.clone());
@@ -287,6 +291,7 @@ impl AppServices {
             perform,
             output: None,
             host_audio,
+            audio_device: false,
             storage,
             fixtures_root,
             fixtures: Arc::new(FixtureState::empty()),
@@ -308,10 +313,10 @@ impl AppServices {
         self
     }
 
-    /// Attach the running record replication. The host starts it, because the
-    /// host owns the reactor the SDK's tasks live on.
+    /// Attach the running record replication, started on the booting host's
+    /// reactor, which the SDK's tasks live on.
     #[must_use]
-    pub fn with_sync(mut self, sync: crate::sync::service::Service) -> Self {
+    pub(crate) fn with_sync(mut self, sync: crate::sync::service::Service) -> Self {
         self.sync = Some(sync);
         self
     }
@@ -340,11 +345,19 @@ impl AppServices {
     /// Enable physical output, and MIDI and OSC inputs, for the native
     /// desktop host. Harnesses retain the headless service set and never
     /// bind sockets or open devices.
-    pub async fn with_output(mut self) -> Result<Self, String> {
+    pub(crate) async fn with_output(mut self) -> Result<Self, String> {
         let output = Arc::new(OutputHub::new(&self.db.0, self.fixtures_root.clone()).await?);
         self.inputs = Arc::new(crate::inputs::InputHub::new(self.db.0.clone(), true));
         self.output = Some(output);
         Ok(self)
+    }
+
+    /// Let the persisted audio setting open the machine's audio device, for
+    /// a host with a window to play to.
+    #[must_use]
+    pub(crate) fn with_audio_device(mut self) -> Self {
+        self.audio_device = true;
+        self
     }
 
     /// Render the desktop's DMX at wire rate until its owning library shuts
@@ -405,7 +418,7 @@ impl AppServices {
     /// Trust `principal` as the caller's identity instead of resolving it from
     /// the verified session. For a disposable headless fixture only.
     #[must_use]
-    pub fn with_fixture_principal(mut self, principal: Option<String>) -> Self {
+    pub(crate) fn with_fixture_principal(mut self, principal: Option<String>) -> Self {
         self.fixture_principal = principal;
         self
     }
@@ -415,36 +428,37 @@ impl AppServices {
     /// Settings live in a table, but two subsystems hold their own copy of the
     /// ones they care about: the DMX output hub and the audio host. A write goes
     /// through `set_setting`, which calls this — but a freshly built
-    /// `AppServices` has never been told, so a host must call it once at
-    /// startup or it runs the whole session on the defaults. Output is skipped
-    /// on a host with no hub (see [`AppServices::output`]).
+    /// `AppServices` has never been told, so [`crate::boot::open`] calls it
+    /// once or the session runs on the defaults. Output is skipped
+    /// on a host with no hub, and audio on a host without
+    /// [`AppServices::with_audio_device`].
     ///
     /// # Errors
     ///
     /// If the settings cannot be read, or a subsystem refuses what they say.
-    pub async fn apply_persisted_settings(&self) -> Result<(), CommandError> {
+    pub(crate) async fn apply_persisted_settings(&self) -> Result<(), CommandError> {
         let pool = &self.db.0;
         if let Some(output) = &self.output {
             crate::output::reload_settings(output, pool).await?;
         }
-        crate::host_audio::reload_settings(&self.host_audio, pool).await?;
+        if self.audio_device {
+            crate::host_audio::reload_settings(&self.host_audio, pool).await?;
+        }
         Ok(())
     }
 
-    /// Write the agent rows a quit left in progress to their synced rows.
-    /// A launch calls this once, before any turn can run.
+    /// Write the agent rows a quit left in progress to their synced rows,
+    /// leaving those a live turn in another process is still writing.
+    /// [`crate::boot::open`] calls this, before any turn here can run.
     ///
     /// # Errors
     ///
     /// If the admission or the open rows cannot be read.
-    pub async fn recover_open_agent_messages(&self) -> Result<(), CommandError> {
+    pub(crate) async fn recover_open_agent_messages(&self) -> Result<(), CommandError> {
         let principal = self.admitted_principal().await?;
-        crate::database::local::agent_threads::recover_open_messages(
-            &self.db.0,
-            principal.as_deref(),
-        )
-        .await
-        .map_err(CommandError::Internal)
+        crate::agent::recover_open_rows(self, principal.as_deref())
+            .await
+            .map_err(CommandError::Internal)
     }
 
     /// What media transfer reaches outside its own handles. Derived from these

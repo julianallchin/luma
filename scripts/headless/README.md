@@ -26,7 +26,9 @@ use another build.
 | `--fixture-principal` | — | the signed-in account |
 
 Migrations run on the given config directory at startup. An empty directory
-gives a new library.
+gives a new library. Startup applies the persisted settings and writes agent
+rows a quit left in progress to their threads, as the app's does; a row a turn
+in the running app is still writing is left alone.
 
 `--fixture-principal` sets a trusted owner without a Supabase session. It
 requires `--config-dir`. Use it only with a disposable library.

@@ -863,35 +863,40 @@ pub async fn close_message(
     Ok(true)
 }
 
-/// Write every row in progress that `owner_user_id`'s turns left behind — a
-/// quit cut them off — to the synced transcript, as far as each got. Called
-/// at launch, before any turn runs. A row that can no longer be placed (its
-/// thread moved on or went) is dropped with a warning.
-pub async fn recover_open_messages(
+/// The threads `owner_user_id`'s turns left a row in progress on.
+pub async fn open_message_threads(
     pool: &SqlitePool,
     owner_user_id: Option<&str>,
+) -> Result<Vec<String>, String> {
+    sqlx::query_scalar("SELECT thread_id FROM agent_open_messages WHERE uid IS ?")
+        .bind(owner_user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list open agent messages: {e}"))
+}
+
+/// Write the row in progress a cut-off turn left on `thread_id` to the synced
+/// transcript, as far as it got. A row that can no longer be placed (its
+/// thread moved on or went) is dropped with a warning. The caller makes sure
+/// no turn is still writing it.
+pub async fn recover_open_message(
+    pool: &SqlitePool,
+    thread_id: &str,
+    owner_user_id: Option<&str>,
 ) -> Result<(), String> {
-    let threads: Vec<String> =
-        sqlx::query_scalar("SELECT thread_id FROM agent_open_messages WHERE uid IS ?")
-            .bind(owner_user_id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("Failed to list open agent messages: {e}"))?;
-    for thread_id in threads {
-        let Some(open) = open_message(pool, &thread_id, owner_user_id).await? else {
-            continue;
-        };
-        match close_message(pool, &thread_id, open, owner_user_id).await {
-            Ok(true) => continue,
-            Ok(false) => log::warn!("[agent] thread {thread_id} moved on; dropped its open row"),
-            Err(error) => log::warn!("[agent] dropped thread {thread_id}'s open row: {error}"),
-        }
-        sqlx::query("DELETE FROM agent_open_messages WHERE thread_id = ?")
-            .bind(&thread_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to drop open agent message: {e}"))?;
+    let Some(open) = open_message(pool, thread_id, owner_user_id).await? else {
+        return Ok(());
+    };
+    match close_message(pool, thread_id, open, owner_user_id).await {
+        Ok(true) => return Ok(()),
+        Ok(false) => log::warn!("[agent] thread {thread_id} moved on; dropped its open row"),
+        Err(error) => log::warn!("[agent] dropped thread {thread_id}'s open row: {error}"),
     }
+    sqlx::query("DELETE FROM agent_open_messages WHERE thread_id = ?")
+        .bind(thread_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to drop open agent message: {e}"))?;
     Ok(())
 }
 

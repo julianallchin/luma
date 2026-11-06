@@ -1749,10 +1749,35 @@ async fn rows_on_disk(fixture: &Fixture) -> Transcript {
 /// What a launch does after a quit: write the rows a turn left in progress to
 /// the synced transcript.
 async fn relaunch(fixture: &Fixture) {
-    crate::database::local::agent_threads::recover_open_messages(fixture.pool(), Some(OWNER))
+    fixture
+        .services
+        .recover_open_agent_messages()
         .await
         .expect("recovered");
 }
+
+/// A second process opening the library while a turn runs — `luma-cli mcp`
+/// beside the app — must leave that turn's row in progress alone. The turn's
+/// lease stands in for the live turn; the same lock is held across processes.
+#[tokio::test]
+async fn recovery_leaves_the_row_of_a_turn_still_running() {
+    let fixture = fixture().await;
+    quit_after_the_tool_result(&fixture).await;
+    let live = super::engine::state::RunLease::acquire(
+        fixture.services.storage().path(),
+        &fixture.thread_id,
+        Some(OWNER),
+    )
+    .expect("lease");
+
+    relaunch(&fixture).await;
+    assert_eq!(rows_on_disk(&fixture).await.messages.len(), 1);
+
+    drop(live);
+    relaunch(&fixture).await;
+    assert_eq!(rows_on_disk(&fixture).await.messages.len(), 2);
+}
+
 
 /// The script's first step, then a model that never answers: the quit lands
 /// while the second step waits on the network. A scripted second step would

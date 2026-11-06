@@ -576,28 +576,23 @@ impl Fixture {
             .unwrap_or_else(|error| panic!("fixture sql failed: {error}\n{statement}"));
         }
 
+        db.0.close().await;
+
         // Then the score, through the seam.
         session::signed_in(config_dir).await;
-        let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
-            .await
-            .expect("failed to open the fixture state database");
-        luma_lib::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
-            .await
-            .expect("failed to arm admission");
-        let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
-        let workspaces = Arc::new(
-            luma_lib::agent_execution::workspace::PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("the fixture does not run Python workspaces".to_string())),
-            ),
-        );
-        let services = luma_lib::dispatch::AppServices::headless(
-            db,
-            state_db,
-            storage,
-            config_dir.to_path_buf(),
-            workspaces,
-        );
+        let services = luma_lib::boot::open(luma_lib::boot::Boot {
+            storage: luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()),
+            fixtures_root: config_dir.to_path_buf(),
+            cache_dir: None,
+            events: luma_lib::dispatch::Events::discard(),
+            identity: luma_lib::boot::Identity::Stored,
+            sync: false,
+            output: false,
+            audio: false,
+        })
+        .await
+        .expect("failed to open the fixture library")
+        .services;
 
         call(
             &services,

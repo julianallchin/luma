@@ -53,11 +53,8 @@ use serde_json::Value;
 
 use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
-use luma_lib::agent_execution::headless_env;
-use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_admission};
-use luma_lib::database::local::database::{init_app_db_at, open_app_db_at};
-use luma_lib::database::local::state::init_state_db_at;
-use luma_lib::dispatch::{handlers, AppServices, CommandError, EventSink, Events, SharedServices};
+use luma_lib::boot::{Boot, Booted, Identity};
+use luma_lib::dispatch::{handlers, CommandError, EventSink, Events, SharedServices};
 #[cfg(feature = "agent")]
 use luma_lib::dispatch::{system_track_sources, TrackSources};
 use luma_lib::models::tracks::TrackImportProgress;
@@ -327,93 +324,30 @@ impl Library {
             fallback: system_track_sources(),
         });
         let (services, account, lapsed) = runtime.block_on(async {
-            let (db, connections) = if syncing {
-                let (db, connections) = open_app_db_at(storage.path()).await?;
-                (db, Some(connections))
-            } else {
-                (init_app_db_at(storage.path()).await?, None)
-            };
-            let state_db = init_state_db_at(storage.path()).await?;
-            // Admission is host bootstrap, not a command: until it is armed
-            // every `auth_visible_*` view is empty, so a host that skipped
-            // this would show an empty library and no error to explain it.
+            // Auth is never a reason not to open: anything short of a proven
+            // principal is the guest namespace, a working library, and the
+            // shell shows sign-in over it (see `crate::signin`). Boot is
+            // offline — a dead token or an airport is not a launch failure.
             //
-            // Offline, and deliberately: `bootstrap_headless_admission`
-            // proves the stored session against the host proof beside it and
-            // never spends the single-use refresh token. Whether Supabase
-            // still honours that token is a question for the network, and a
-            // question the network can refuse to answer — asking it here is
-            // what made a dead token, or an airport, into a launch failure.
-            //
-            // So auth is never a reason not to open. Anything short of a
-            // proven principal is the guest namespace, which is a *working*
-            // library: guest rows carry no `uid` and the admission triggers
-            // admit those unconditionally. The shell shows sign-in over it
-            // (see `crate::signin`); the user can also just work offline.
-            //
-            // Arming guest explicitly rather than trusting the bootstrap's
-            // own arming covers the one state it deliberately leaves closed —
-            // a committed sign-out still waiting for a renderer to consume its
-            // journal. That journal outlives this and is consumed by the next
-            // sign-in's identity switch; leaving admission shut instead would
-            // fail every read with "App database admission is closed".
-            let (user_id, lapsed) = match bootstrap_headless_admission(&db.0, &state_db.0).await {
-                Ok(Some(user_id)) => (Some(user_id), None),
-                // Nothing stored, or a sign-out that already committed. The
-                // guest namespace on purpose, so nothing is owed the user.
-                Ok(None) => {
-                    arm_write_admission(&db.0, None).await?;
-                    (None, None)
-                }
-                // Credentials are on this machine and cannot be turned into a
-                // principal. Only signing in again repairs that, which is the
-                // one state that owes the user the gate.
-                Err(error) => {
-                    eprintln!("[luma] the stored session no longer proves anyone: {error}");
-                    arm_write_admission(&db.0, None).await?;
-                    (None, Some(error))
-                }
-            };
-            // This host runs the agent, and the agent's only tool is Python —
-            // so it resolves the managed environment through the same
-            // path-based resolver as backend tools.
-            // Resolution is lazy: a machine with no venv yet still opens.
-            let workspaces = Arc::new(headless_env::workspace_service(
-                &storage,
-                luma_lib::storage::cache_dir()?,
-            ));
-            let state_pool = state_db.0.clone();
-            let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
-                .with_events(events.clone());
-            // Record replication, on this library's reactor. Off when the
-            // process may not talk to the cloud (a harness) or when no
-            // PowerSync instance is configured — the app is then exactly what
-            // it was before sync existed, a local SQLite library.
-            let services = match connections {
-                Some(connections) => {
-                    match luma_lib::sync::service::Service::open(
-                        connections,
-                        state_pool.clone(),
-                        events.clone(),
-                    )
-                    .await
-                    {
-                        Ok(sync) => services.with_sync(sync),
-                        // Not a launch failure: a library that cannot reach the
-                        // cloud is still a library.
-                        Err(error) => {
-                            eprintln!("[luma] record sync did not start: {error}");
-                            services
-                        }
-                    }
-                }
-                None => services,
-            };
-            let services = if desktop {
-                services.with_output().await?
-            } else {
-                services
-            };
+            // This host runs the agent, whose only tool is Python, so it
+            // resolves the managed environment the way backend tools do.
+            let Booted {
+                services,
+                principal: user_id,
+                lapsed,
+            } = luma_lib::boot::open(Boot {
+                storage,
+                fixtures_root,
+                cache_dir: Some(luma_lib::storage::cache_dir()?),
+                events: events.clone(),
+                identity: Identity::StoredOrGuest,
+                sync: syncing,
+                output: desktop,
+                // A window to play to. The harness's fixtures turn the
+                // setting off rather than the host refusing the device.
+                audio: true,
+            })
+            .await?;
             #[cfg(feature = "agent")]
             let services = services.with_track_sources(import_sources);
             // The harness has no server, so a code is redeemed against this
@@ -425,20 +359,6 @@ impl Library {
                     luma_lib::services::venue_sharing::LocalShareCodes::new(pool),
                 ))
             };
-            // The audio host keeps its own copy of the settings it reads, and
-            // is only ever told by a write. A host that skipped this would run
-            // the whole session on the defaults and ignore what the user last
-            // chose — audible the first time a track is loaded.
-            services
-                .apply_persisted_settings()
-                .await
-                .map_err(|error| error.to_string())?;
-            // Before any turn runs: a turn cut off by a quit left its last
-            // row local, and the thread reads unfinished once it is written.
-            // Not a launch failure: the rows wait for the next launch.
-            if let Err(error) = services.recover_open_agent_messages().await {
-                eprintln!("[luma] agent rows in progress were not recovered: {error}");
-            }
             // The address to name the principal by, out of the same stored
             // snapshot the admission above was proven from. `current_account`
             // makes no request — see its handler — which is the property this

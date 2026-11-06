@@ -918,6 +918,33 @@ impl AgentService {
     }
 }
 
+/// Write the rows in progress that turns no longer running left behind — a
+/// quit cut them off — to the synced transcript.
+///
+/// A running turn holds its thread's lease, in whichever process runs it, for
+/// as long as it writes the thread's open row. A thread whose lease is held is
+/// skipped: its row belongs to a live turn — the app's, while a second process
+/// opens the same library — and closing it would fork that turn's transcript.
+/// Holding the lease while closing keeps a turn from starting on the row.
+pub(crate) async fn recover_open_rows(
+    services: &AppServices,
+    principal: Option<&str>,
+) -> Result<(), String> {
+    let pool = &services.db().0;
+    for thread_id in
+        crate::database::local::agent_threads::open_message_threads(pool, principal).await?
+    {
+        let Ok(_lease) =
+            engine::state::RunLease::acquire(services.storage().path(), &thread_id, principal)
+        else {
+            continue;
+        };
+        crate::database::local::agent_threads::recover_open_message(pool, &thread_id, principal)
+            .await?;
+    }
+    Ok(())
+}
+
 /// One turn's events. `Stream<Item = TurnEvent>`; dropping it cancels the turn.
 ///
 /// The turn's work is driven by whoever polls the stream — there is no detached

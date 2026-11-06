@@ -22,10 +22,13 @@ headless tools.
   needs a file in `supabase/migrations/`.
 
 The desktop entry point is `gpui/crates/app/src/main.rs`. Its library owns the
-Tokio runtime and services. Desktop startup prepares Python in the background,
-resumes pending analysis, and enables Art-Net output. The headless hosts
-(`src/headless_host.rs`) start without Art-Net, audio devices or the playback
-loops.
+Tokio runtime and services. Every host opens a library through `src/boot.rs`,
+which owns the startup order: migrations, write admission, services,
+replication and devices as asked, persisted settings, and recovery of agent
+rows a quit left in progress. Desktop startup then prepares Python in the
+background, resumes pending analysis, and runs Art-Net output. The headless
+hosts (`src/headless_host.rs`) boot without replication, Art-Net, audio
+devices or the playback loops.
 
 `luma.db` is in the `com.luma.luma` platform config directory.
 

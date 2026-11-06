@@ -2,6 +2,8 @@ pub mod agent;
 pub mod agent_execution;
 pub mod annotation_preview;
 pub mod audio;
+/// Opening a library, in the one order every host follows.
+pub mod boot;
 mod canonical_json;
 mod compositor;
 pub mod controls;

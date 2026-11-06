@@ -3,21 +3,18 @@
 //! Three binaries serve Luma's backend without a renderer — the JSON-RPC
 //! `luma-cli rpc`, the MCP `luma-cli mcp` server, and the `luma-cli record` encoder —
 //! and none has an `AppHandle`, a WebView, or an NSApplication. What they share
-//! is everything up to the first request: the same flags, the same database migrations, the same
-//! write-admission gate, the same managed-venv workspace service, and the same
-//! startup recovery of half-deleted agent threads. Only the wire protocol
-//! differs, so only the wire protocol lives in the bins.
+//! is everything up to the first request: the same flags and the same
+//! [`crate::boot::open`] the app opens its library with. Only the wire
+//! protocol differs, so only the wire protocol lives in the bins.
 //!
-//! Deliberately absent, exactly as [`AppServices::headless`] describes: DMX output,
-//! audio devices, and the loops. Events go to stderr, because these hosts put
-//! their protocol on stdout.
+//! Deliberately absent: DMX output, audio devices, replication and the loops.
+//! Events go to stderr, because these hosts put their protocol on stdout.
 
 use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::agent_execution::headless_env;
-use crate::database::local::{auth, database::init_app_db_at, state::init_state_db_at};
+use crate::boot::{Boot, Identity};
 use crate::dispatch::{AppServices, EventSink, Events};
 use crate::storage::StorageRoot;
 
@@ -107,50 +104,30 @@ impl HostConfig {
     }
 }
 
-/// Migrate the databases, arm write admission, and assemble the service graph.
+/// Open the library this host was pointed at, through [`crate::boot::open`].
 ///
 /// Migrations run against whatever config dir this is given, exactly as the app
 /// does — pointing a host at an empty directory produces a fresh, fully
-/// migrated `luma.db` + `state.db`.
-///
-/// Boot never touches the network. The principal comes from the session the app
-/// already verified — see [`auth::bootstrap_headless_admission`] for why
-/// refreshing it here would sign the app out — or from `--fixture-principal`.
+/// migrated `luma.db` + `state.db`. No replication, no devices: the persisted
+/// audio setting never opens the audio device here.
 ///
 /// # Errors
 ///
-/// If a path cannot be resolved, a migration fails, or write admission cannot
-/// be armed.
+/// If a path cannot be resolved, or the boot fails.
 pub async fn boot(config: &HostConfig) -> Result<AppServices, String> {
-    let storage = config.storage()?;
-    let fixtures_root = config.fixtures_root()?;
-    let cache_dir = config.cache_dir()?;
-
-    // No `AppHandle` here, so the bundled binary is found from the executable's
-    // own location instead of a packaged resource directory. Without this a headless
-    // host falls through to system PATH and fails at spawn time.
-    crate::runtime::ffmpeg::init_headless();
-
-    let db = init_app_db_at(storage.path()).await?;
-    let state_db = init_state_db_at(storage.path()).await?;
-    if let Some(principal) = config.fixture_principal.as_deref() {
-        // The caller explicitly owns this disposable fixture. Avoid creating
-        // or copying a Supabase token merely to exercise authenticated command
-        // plumbing; arm the same app-database admission gate startup normally
-        // derives from the verified host session.
-        auth::arm_write_admission(&db.0, Some(principal)).await?;
-    } else {
-        // Offline: the app's stored proof names the principal, and the same
-        // machine's headless bins are the same user. Never spend the refresh
-        // token here — it is single-use and the app owns rotation.
-        auth::bootstrap_headless_admission(&db.0, &state_db.0).await?;
-    }
-
-    let workspaces = std::sync::Arc::new(headless_env::workspace_service(&storage, cache_dir));
-
-    let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
-        .with_events(Events::new(StderrEvents))
-        .with_fixture_principal(config.fixture_principal.clone());
-
-    Ok(services)
+    let booted = crate::boot::open(Boot {
+        storage: config.storage()?,
+        fixtures_root: config.fixtures_root()?,
+        cache_dir: Some(config.cache_dir()?),
+        events: Events::new(StderrEvents),
+        identity: match &config.fixture_principal {
+            Some(principal) => Identity::Fixture(principal.clone()),
+            None => Identity::Stored,
+        },
+        sync: false,
+        output: false,
+        audio: false,
+    })
+    .await?;
+    Ok(booted.services)
 }
