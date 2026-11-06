@@ -10,13 +10,15 @@ connects to DJ equipment.
 
 File: `backend/src/services/tracks.rs`
 
-There are three import paths:
+Every import goes through `Importer::import`. It inserts the requested
+tracks one by one, reports progress, and hands the new rows to background
+analysis. An identity change mid-batch rolls back every row it inserted.
+A request is one of two kinds:
 
-| Path | Function | Behavior |
-|------|----------|----------|
-| Audio file | `file_fast_import` | Copies the file into the managed tracks directory with a new UUID name. Reads tags with `lofty`. Extracts album art. |
-| Engine DJ | `engine_dj_fast_import` | Imports a track from an Engine DJ library. |
-| rekordbox | `dj_fast_import` | Imports a track from a rekordbox library. |
+| Request | Behavior |
+|---------|----------|
+| `ImportRequest::File` | Copies the file into the managed tracks directory with a new UUID name. Reads tags with `lofty`. Extracts album art. |
+| `ImportRequest::Library` | Imports an Engine DJ or rekordbox row with the library's metadata, reading the audio where the library keeps it. |
 
 - A file import rejects tracks longer than 10 minutes.
 - Every path computes a content hash of the audio file.

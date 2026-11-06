@@ -4,17 +4,15 @@
 //! blocking thread — `rekordbox::subprocess` keeps no cached handle — so they
 //! are all `spawn_blocking` wrappers and nothing more.
 //!
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::tracks::{TrackImportFailure, TrackImportPhase, TrackImportResult};
+use crate::models::tracks::{TrackImportFailure, TrackImportResult};
 use crate::rekordbox::subprocess;
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
-use crate::services::tracks as track_service;
+use crate::services::tracks::{ImportRequest, LibraryTrack};
 
-use super::tracks::{
-    emit_import_progress, finish_fast_import, push_unique, rollback_after_failure,
-};
+use super::tracks::importer;
 
 /// Run a Rekordbox DB read off the async runtime.
 ///
@@ -73,128 +71,30 @@ pub async fn rekordbox_import_tracks(
     services: &AppServices,
     track_uuids: Vec<String>,
 ) -> Result<TrackImportResult, CommandError> {
-    let import_id = uuid::Uuid::new_v4().to_string();
-    let source = "rekordbox";
-    let principal = Some(services.require_session().await?);
-    let epoch = services.analysis_tasks.current_epoch()?;
-    let lease = services.analysis_tasks.lease(epoch)?;
-    let guard = lease.guard();
-    let source_tracks = services.track_sources.rekordbox_tracks().await?;
-    let total = track_uuids.len();
-    let mut tracks = Vec::new();
-    let mut failures = Vec::new();
-    let mut new_ids = Vec::new();
-
-    for (done, source_id) in track_uuids.into_iter().enumerate() {
-        if let Err(error) = guard.checkpoint() {
-            return Err(
-                rollback_after_failure(services, &new_ids, principal.as_deref(), error).await,
-            );
-        }
-        let Some(row) = source_tracks.iter().find(|track| track.uuid == source_id) else {
-            failures.push(TrackImportFailure {
-                source_id: source_id.clone(),
-                message: format!("Rekordbox track with UUID {source_id} not found"),
+    let principal = services.require_session().await?;
+    let rows = services.track_sources.rekordbox_tracks().await?;
+    let requests = track_uuids.into_iter().map(|uuid| {
+        let Some(row) = rows.iter().find(|row| row.uuid == uuid) else {
+            return Err(TrackImportFailure {
+                message: format!("Rekordbox track with UUID {uuid} not found"),
+                source_id: uuid,
             });
-            continue;
         };
-        emit_import_progress(
-            services,
-            &import_id,
-            source,
-            TrackImportPhase::Importing,
-            done,
-            total,
-            None,
-            row.title.clone().or_else(|| row.filename.clone()),
-            None,
-        );
-        let imported = match row.file_path.as_deref() {
-            Some(path) if Path::new(path).exists() => {
-                track_service::dj_fast_import(
-                    &services.db.0,
-                    &services.storage,
-                    source,
-                    &source_id,
-                    &row.title,
-                    &row.artist,
-                    &row.album,
-                    row.duration_seconds,
-                    row.filename.as_deref(),
-                    Path::new(path),
-                    principal.clone(),
-                )
-                .await
-            }
-            Some(path) => Err(format!("Audio file not found: {path}")),
-            None => Err(format!("No file path for Rekordbox track {source_id}")),
-        };
-        match imported {
-            Ok((track_id, is_new)) => {
-                if let Err(error) = guard.checkpoint() {
-                    if is_new {
-                        new_ids.push(track_id);
-                    }
-                    return Err(rollback_after_failure(
-                        services,
-                        &new_ids,
-                        principal.as_deref(),
-                        error,
-                    )
-                    .await);
-                }
-                if is_new {
-                    new_ids.push(track_id.clone());
-                }
-                if let Some(track) =
-                    crate::database::local::tracks::get_track_by_id(&services.db.0, &track_id)
-                        .await?
-                {
-                    push_unique(&mut tracks, track);
-                }
-                emit_import_progress(
-                    services,
-                    &import_id,
-                    source,
-                    TrackImportPhase::Importing,
-                    done + 1,
-                    total,
-                    Some(track_id),
-                    None,
-                    None,
-                );
-            }
-            Err(message) => {
-                emit_import_progress(
-                    services,
-                    &import_id,
-                    source,
-                    TrackImportPhase::Importing,
-                    done + 1,
-                    total,
-                    None,
-                    None,
-                    Some(message.clone()),
-                );
-                failures.push(TrackImportFailure { source_id, message });
-            }
-        }
-    }
-    finish_fast_import(
-        services,
-        epoch,
-        guard,
-        lease,
-        &import_id,
-        source,
-        total,
-        new_ids,
-        principal.as_deref(),
-    )
-    .await?;
-    Ok(TrackImportResult {
-        import_id,
-        tracks,
-        failures,
-    })
+        Ok(ImportRequest::Library(LibraryTrack {
+            audio_path: row
+                .file_path
+                .as_ref()
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("No file path for Rekordbox track {uuid}")),
+            source_id: uuid,
+            title: row.title.clone(),
+            artist: row.artist.clone(),
+            album: row.album.clone(),
+            duration_seconds: row.duration_seconds,
+            filename: row.filename.clone(),
+        }))
+    });
+    Ok(importer(services)
+        .import(principal, "rekordbox", requests.collect())
+        .await?)
 }

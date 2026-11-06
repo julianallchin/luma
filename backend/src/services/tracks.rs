@@ -19,11 +19,15 @@ use crate::database::local::tracks::ArtifactVersions;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read as VenueRead, VenueAccess, VenueResource,
 };
-use crate::dispatch::Events;
-use crate::engine_dj::types::EngineDjTrack;
+use crate::dispatch::{Event, Events};
 use crate::models::beat_grid::BeatGrid;
-use crate::models::tracks::{StageOutcome, TrackBrowserRow, TrackSummary};
-use crate::preprocessing::{registry, scheduler, AnalysisGuard, WorkerEnvironment};
+use crate::models::tracks::{
+    StageOutcome, TrackBrowserRow, TrackImportFailure, TrackImportPhase, TrackImportProgress,
+    TrackImportResult, TrackSummary,
+};
+use crate::preprocessing::{
+    registry, scheduler, AnalysisGuard, AnalysisTaskGroup, WorkerEnvironment,
+};
 use crate::storage::StorageRoot;
 
 /// Maximum track duration allowed for import (10 minutes).
@@ -253,79 +257,227 @@ fn extract_album_art(
     }
 }
 
-/// Fast import for Engine DJ tracks — inserts DB record using Engine DJ metadata directly.
-/// Computes real hash but skips analysis workers (those run in background).
-/// Deduplicates by source_id first, then by content hash. Returns (id, is_new).
-pub async fn engine_dj_fast_import(
-    pool: &SqlitePool,
-    storage: &StorageRoot,
-    engine_track: &EngineDjTrack,
-    audio_path: &Path,
-    source_id: &str,
-    uid: Option<String>,
-) -> Result<(String, bool), String> {
-    if let Some(dur) = engine_track.length {
-        if dur > MAX_TRACK_DURATION_SECS {
-            return Err(format!(
-                "Track is too long ({} min). Maximum duration is {} minutes.",
-                (dur / 60.0).ceil() as u32,
-                (MAX_TRACK_DURATION_SECS / 60.0) as u32
-            ));
-        }
-    }
-
-    storage.ensure_track_storage()?;
-
-    let track_hash = compute_track_hash(audio_path)?;
-
-    // Extract album art (only file I/O — reads just the tag header)
-    let (album_art_path, album_art_mime) = extract_album_art(storage, audio_path)?;
-    let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
-
-    let (id, is_new) = tracks_db::insert_track_record(
-        pool,
-        &track_hash,
-        &engine_track.title,
-        &engine_track.artist,
-        &engine_track.album,
-        None, // track_number
-        None, // disc_number
-        engine_track.length,
-        &audio_path.to_string_lossy(),
-        &album_art_path,
-        &album_art_mime,
-        uid,
-        Some("engine_dj"),
-        Some(source_id),
-        Some(&engine_track.filename),
-    )
-    .await?;
-    if is_new {
-        if let Some(art) = &mut pending_art {
-            art.keep();
-        }
-    }
-
-    Ok((id, is_new))
+/// A DJ-library row to import: the library's own metadata, and the audio
+/// wherever the library keeps it.
+pub struct LibraryTrack {
+    pub source_id: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub filename: Option<String>,
+    /// The audio's path, or why the library cannot give one.
+    pub audio_path: Result<PathBuf, String>,
 }
 
-/// Generic fast import for any DJ library source (Rekordbox, Engine DJ, etc.).
-/// Inserts DB record using metadata directly — computes real hash, no analysis.
-/// Deduplicates by source_id first, then by content hash. Returns (id, is_new).
-pub async fn dj_fast_import(
+/// One item an import was asked for.
+pub enum ImportRequest {
+    /// An audio file on disk, tagged from its own metadata.
+    File(String),
+    /// A DJ-library row; `source` on [`Importer::import`] names the library.
+    Library(LibraryTrack),
+}
+
+impl ImportRequest {
+    fn source_id(&self) -> &str {
+        match self {
+            Self::File(path) => path,
+            Self::Library(track) => &track.source_id,
+        }
+    }
+
+    fn name(&self) -> Option<String> {
+        match self {
+            Self::File(path) => Some(
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("track")
+                    .to_string(),
+            ),
+            Self::Library(track) => track.title.clone().or_else(|| track.filename.clone()),
+        }
+    }
+}
+
+/// What an import writes to and reports through.
+pub struct Importer<'a> {
+    pub pool: &'a SqlitePool,
+    pub storage: &'a StorageRoot,
+    pub workers: &'a WorkerEnvironment,
+    pub events: &'a Events,
+    pub tasks: &'a AnalysisTaskGroup,
+}
+
+impl Importer<'_> {
+    /// Import in two phases: this call owns durable insertion — hash, copy,
+    /// metadata, catalog row — and the analysis task group owns analysis after
+    /// it returns. An `Err` request is a row its library does not have,
+    /// recorded as a failure without progress.
+    ///
+    /// An identity transition mid-batch rolls back every row this call
+    /// inserted.
+    pub async fn import(
+        &self,
+        principal: String,
+        source: &str,
+        requests: Vec<Result<ImportRequest, TrackImportFailure>>,
+    ) -> Result<TrackImportResult, String> {
+        let mut import = scheduler::ImportEventContext {
+            import_id: Uuid::new_v4().to_string(),
+            source: source.to_string(),
+            done: 0,
+            total: requests.len(),
+        };
+        let epoch = self.tasks.current_epoch()?;
+        let lease = self.tasks.lease(epoch)?;
+        let guard = lease.guard();
+        let mut tracks: Vec<TrackSummary> = Vec::new();
+        let mut failures = Vec::new();
+        let mut new_ids = Vec::new();
+
+        for (done, request) in requests.into_iter().enumerate() {
+            if let Err(cause) = guard.checkpoint() {
+                return Err(self.rollback(&new_ids, &principal, cause).await);
+            }
+            let request = match request {
+                Ok(request) => request,
+                Err(failure) => {
+                    failures.push(failure);
+                    continue;
+                }
+            };
+            let name = request.name();
+            self.progress(&import, done, None, name.clone(), None);
+            let imported = match &request {
+                ImportRequest::File(path) => {
+                    file_fast_import(self.pool, self.storage, path, Some(principal.clone())).await
+                }
+                ImportRequest::Library(track) => {
+                    library_fast_import(self.pool, self.storage, source, track, &principal).await
+                }
+            };
+            match imported {
+                Ok((track_id, is_new)) => {
+                    if is_new {
+                        new_ids.push(track_id.clone());
+                    }
+                    if let Err(cause) = guard.checkpoint() {
+                        return Err(self.rollback(&new_ids, &principal, cause).await);
+                    }
+                    if let Some(track) = tracks_db::get_track_by_id(self.pool, &track_id).await? {
+                        if tracks.iter().all(|existing| existing.id != track.id) {
+                            tracks.push(track);
+                        }
+                    }
+                    self.progress(&import, done + 1, Some(track_id), None, None);
+                }
+                Err(message) => {
+                    self.progress(&import, done + 1, None, name, Some(message.clone()));
+                    failures.push(TrackImportFailure {
+                        source_id: request.source_id().to_string(),
+                        message,
+                    });
+                }
+            }
+        }
+
+        if let Err(cause) = guard.checkpoint() {
+            return Err(self.rollback(&new_ids, &principal, cause).await);
+        }
+        let total = import.total;
+        self.progress(&import, total, None, None, None);
+        let import_id = import.import_id.clone();
+        if new_ids.is_empty() {
+            drop(lease);
+            let summary = scheduler::AnalysisSummary {
+                done: total,
+                errors: Vec::new(),
+            };
+            import.complete(self.events, summary);
+        } else {
+            import.done = total - new_ids.len();
+            let pool = self.pool.clone();
+            let storage = self.storage.clone();
+            let workers = self.workers.clone();
+            let events = self.events.clone();
+            let analysed = new_ids.clone();
+            let spawned = self.tasks.spawn(epoch, move |analysis| async move {
+                run_background_analysis(pool, storage, workers, events, analysed, analysis, import)
+                    .await;
+            });
+            if let Err(cause) = spawned {
+                return Err(self.rollback(&new_ids, &principal, cause).await);
+            }
+            drop(lease);
+        }
+        Ok(TrackImportResult {
+            import_id,
+            tracks,
+            failures,
+        })
+    }
+
+    fn progress(
+        &self,
+        import: &scheduler::ImportEventContext,
+        done: usize,
+        track_id: Option<String>,
+        current_track: Option<String>,
+        error: Option<String>,
+    ) {
+        self.events
+            .emit(Event::TrackImportState(TrackImportProgress {
+                import_id: import.import_id.clone(),
+                source: import.source.clone(),
+                phase: TrackImportPhase::Importing,
+                done,
+                total: import.total,
+                track_id,
+                current_track,
+                analysis: None,
+                error,
+            }));
+    }
+
+    /// Delete what this import inserted, newest first, and report `cause`
+    /// with whatever could not be undone.
+    async fn rollback(&self, track_ids: &[String], principal: &str, cause: String) -> String {
+        let mut failures = Vec::new();
+        for track_id in track_ids.iter().rev() {
+            if let Err(error) =
+                delete_track(self.pool, self.storage, track_id, Some(principal)).await
+            {
+                failures.push(format!("{track_id}: {error}"));
+            }
+        }
+        if failures.is_empty() {
+            cause
+        } else {
+            format!(
+                "{cause}; failed to roll back cancelled import: {}",
+                failures.join("; ")
+            )
+        }
+    }
+}
+
+/// Insert a DJ-library row from the library's metadata. Hashes the audio but
+/// runs no analysis. Deduplicates by source id, then by content hash.
+/// Returns `(id, is_new)`.
+async fn library_fast_import(
     pool: &SqlitePool,
     storage: &StorageRoot,
     source_type: &str,
-    source_id: &str,
-    title: &Option<String>,
-    artist: &Option<String>,
-    album: &Option<String>,
-    duration_seconds: Option<f64>,
-    filename: Option<&str>,
-    audio_path: &Path,
-    uid: Option<String>,
+    track: &LibraryTrack,
+    uid: &str,
 ) -> Result<(String, bool), String> {
-    if let Some(dur) = duration_seconds {
+    let audio_path = match &track.audio_path {
+        Ok(path) if path.exists() => path,
+        Ok(path) => return Err(format!("Audio file not found: {}", path.display())),
+        Err(message) => return Err(message.clone()),
+    };
+    if let Some(dur) = track.duration_seconds {
         if dur > MAX_TRACK_DURATION_SECS {
             return Err(format!(
                 "Track is too long ({} min). Maximum duration is {} minutes.",
@@ -346,19 +498,19 @@ pub async fn dj_fast_import(
     let (id, is_new) = tracks_db::insert_track_record(
         pool,
         &track_hash,
-        title,
-        artist,
-        album,
+        &track.title,
+        &track.artist,
+        &track.album,
         None, // track_number
         None, // disc_number
-        duration_seconds,
+        track.duration_seconds,
         &audio_path.to_string_lossy(),
         &album_art_path,
         &album_art_mime,
-        uid,
+        Some(uid.to_string()),
         Some(source_type),
-        Some(source_id),
-        filename,
+        Some(&track.source_id),
+        track.filename.as_deref(),
     )
     .await?;
     if is_new {
@@ -474,7 +626,7 @@ fn analysis_stages() -> Vec<String> {
 /// the waveform branch beside it, then the import's terminal event once both
 /// have drained — a track is not analysed while its waveform is still being
 /// drawn, so neither is the import.
-pub async fn run_background_analysis(
+async fn run_background_analysis(
     pool: SqlitePool,
     storage: StorageRoot,
     workers: WorkerEnvironment,

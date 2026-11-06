@@ -1,12 +1,7 @@
-use crate::database::local::tracks as tracks_db;
-use crate::dispatch::{AppServices, CommandError, Event};
+use crate::dispatch::{AppServices, CommandError};
 use crate::models::beat_grid::BeatGrid;
-use crate::models::tracks::{
-    TrackBrowserRow, TrackImportFailure, TrackImportPhase, TrackImportProgress, TrackImportResult,
-    TrackSummary,
-};
-use crate::preprocessing::scheduler::ImportEventContext;
-use crate::services::tracks as track_service;
+use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
+use crate::services::tracks::{self as track_service, ImportRequest};
 
 /// The whole library, unscoped and without album-art bytes.
 pub async fn list_tracks(services: &AppServices) -> Result<Vec<TrackSummary>, CommandError> {
@@ -60,121 +55,29 @@ pub async fn list_tracks_enriched(
     Ok(track_service::list_tracks_enriched(&services.db.0, venue_id.as_deref()).await?)
 }
 
-/// Import local files in two phases: this command owns only durable insertion;
-/// the task group owns analysis after the result future is gone.
+/// Import local files; see [`track_service::Importer::import`].
 pub async fn import_tracks(
     services: &AppServices,
     file_paths: Vec<String>,
 ) -> Result<TrackImportResult, CommandError> {
-    let import_id = uuid::Uuid::new_v4().to_string();
-    let source = "file";
-    let total = file_paths.len();
-    let principal = Some(services.require_session().await?);
-    let epoch = services.analysis_tasks.current_epoch()?;
-    let lease = services.analysis_tasks.lease(epoch)?;
-    let guard = lease.guard();
-    let mut tracks = Vec::new();
-    let mut failures = Vec::new();
-    let mut new_ids = Vec::new();
+    let principal = services.require_session().await?;
+    let requests = file_paths
+        .into_iter()
+        .map(|path| Ok(ImportRequest::File(path)));
+    Ok(importer(services)
+        .import(principal, "file", requests.collect())
+        .await?)
+}
 
-    for (done, path) in file_paths.iter().enumerate() {
-        if let Err(error) = guard.checkpoint() {
-            return Err(
-                rollback_after_failure(services, &new_ids, principal.as_deref(), error).await,
-            );
-        }
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("track")
-            .to_string();
-        emit_import_progress(
-            services,
-            &import_id,
-            source,
-            TrackImportPhase::Importing,
-            done,
-            total,
-            None,
-            Some(name.clone()),
-            None,
-        );
-        match track_service::file_fast_import(
-            &services.db.0,
-            &services.storage,
-            path,
-            principal.clone(),
-        )
-        .await
-        {
-            Ok((track_id, is_new)) => {
-                if let Err(error) = guard.checkpoint() {
-                    if is_new {
-                        new_ids.push(track_id);
-                    }
-                    return Err(rollback_after_failure(
-                        services,
-                        &new_ids,
-                        principal.as_deref(),
-                        error,
-                    )
-                    .await);
-                }
-                if is_new {
-                    new_ids.push(track_id.clone());
-                }
-                if let Some(track) = tracks_db::get_track_by_id(&services.db.0, &track_id).await? {
-                    push_unique(&mut tracks, track);
-                }
-                emit_import_progress(
-                    services,
-                    &import_id,
-                    source,
-                    TrackImportPhase::Importing,
-                    done + 1,
-                    total,
-                    Some(track_id),
-                    None,
-                    None,
-                );
-            }
-            Err(message) => {
-                emit_import_progress(
-                    services,
-                    &import_id,
-                    source,
-                    TrackImportPhase::Importing,
-                    done + 1,
-                    total,
-                    None,
-                    Some(name),
-                    Some(message.clone()),
-                );
-                failures.push(TrackImportFailure {
-                    source_id: path.clone(),
-                    message,
-                });
-            }
-        }
+/// The import driver over this host's catalog, storage and analysis tasks.
+pub(crate) fn importer(services: &AppServices) -> track_service::Importer<'_> {
+    track_service::Importer {
+        pool: &services.db.0,
+        storage: &services.storage,
+        workers: &services.workers,
+        events: &services.events,
+        tasks: &services.analysis_tasks,
     }
-
-    finish_fast_import(
-        services,
-        epoch,
-        guard,
-        lease,
-        &import_id,
-        source,
-        total,
-        new_ids,
-        principal.as_deref(),
-    )
-    .await?;
-    Ok(TrackImportResult {
-        import_id,
-        tracks,
-        failures,
-    })
 }
 
 /// A DJ library row's cover, as encoded image bytes — see
@@ -186,140 +89,6 @@ pub async fn source_track_artwork(
     Ok(crate::services::artwork::artwork_bytes(art, audio_path).await?)
 }
 
-pub(crate) fn emit_import_progress(
-    services: &AppServices,
-    import_id: &str,
-    source: &str,
-    phase: TrackImportPhase,
-    done: usize,
-    total: usize,
-    track_id: Option<String>,
-    current_track: Option<String>,
-    error: Option<String>,
-) {
-    services
-        .events
-        .emit(Event::TrackImportState(TrackImportProgress {
-            import_id: import_id.to_string(),
-            source: source.to_string(),
-            phase,
-            done,
-            total,
-            track_id,
-            current_track,
-            analysis: None,
-            error,
-        }));
-}
-
-pub(crate) fn push_unique(tracks: &mut Vec<TrackSummary>, track: TrackSummary) {
-    if tracks.iter().all(|existing| existing.id != track.id) {
-        tracks.push(track);
-    }
-}
-
-pub(crate) async fn finish_fast_import(
-    services: &AppServices,
-    epoch: crate::preprocessing::task_group::AnalysisEpoch,
-    guard: crate::preprocessing::AnalysisGuard,
-    lease: crate::preprocessing::task_group::AnalysisLease,
-    import_id: &str,
-    source: &str,
-    total: usize,
-    new_ids: Vec<String>,
-    principal: Option<&str>,
-) -> Result<(), CommandError> {
-    if let Err(error) = guard.checkpoint() {
-        return Err(rollback_after_failure(services, &new_ids, principal, error).await);
-    }
-    emit_import_progress(
-        services,
-        import_id,
-        source,
-        TrackImportPhase::Importing,
-        total,
-        total,
-        None,
-        None,
-        None,
-    );
-    if new_ids.is_empty() {
-        drop(lease);
-        emit_import_progress(
-            services,
-            import_id,
-            source,
-            TrackImportPhase::Complete,
-            total,
-            total,
-            None,
-            None,
-            None,
-        );
-        return Ok(());
-    }
-    let pool = services.db.0.clone();
-    let storage = services.storage.clone();
-    let workers = services.workers.clone();
-    let events = services.events.clone();
-    let context = ImportEventContext {
-        import_id: import_id.to_string(),
-        source: source.to_string(),
-        done: total.saturating_sub(new_ids.len()),
-        total,
-    };
-    let rollback_ids = new_ids.clone();
-    if let Err(error) = services
-        .analysis_tasks
-        .spawn(epoch, move |analysis| async move {
-            track_service::run_background_analysis(
-                pool, storage, workers, events, new_ids, analysis, context,
-            )
-            .await;
-        })
-    {
-        return Err(rollback_after_failure(services, &rollback_ids, principal, error).await);
-    }
-    drop(lease);
-    Ok(())
-}
-
-pub(crate) async fn rollback_imports(
-    services: &AppServices,
-    track_ids: &[String],
-    principal: Option<&str>,
-) -> Result<(), String> {
-    let mut failures = Vec::new();
-    for track_id in track_ids.iter().rev() {
-        if let Err(error) =
-            track_service::delete_track(&services.db.0, &services.storage, track_id, principal)
-                .await
-        {
-            failures.push(format!("{track_id}: {error}"));
-        }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "failed to roll back cancelled import: {}",
-            failures.join("; ")
-        ))
-    }
-}
-
-pub(crate) async fn rollback_after_failure(
-    services: &AppServices,
-    track_ids: &[String],
-    principal: Option<&str>,
-    cause: String,
-) -> CommandError {
-    match rollback_imports(services, track_ids, principal).await {
-        Ok(()) => cause.into(),
-        Err(rollback) => CommandError::Internal(format!("{cause}; {rollback}")),
-    }
-}
-
 #[cfg(test)]
 mod import_tests {
     use std::path::Path;
@@ -327,7 +96,8 @@ mod import_tests {
 
     use super::*;
     use crate::database::local::auth;
-    use crate::dispatch::{EventSink, Events};
+    use crate::dispatch::{Event, EventSink, Events};
+    use crate::models::tracks::{TrackImportPhase, TrackImportProgress};
 
     struct ChannelEvents {
         tx: tokio::sync::mpsc::UnboundedSender<TrackImportProgress>,
