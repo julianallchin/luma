@@ -31,11 +31,12 @@ use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
 
 use crate::database::local;
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
+use crate::models::selection::Selection;
 use crate::models::universe::{PrimitiveState, UniverseState};
 use crate::models::venue_graph::ResolvedNode;
-use crate::services::groups::ResolvedFixture;
+use crate::services::groups::{self, ResolvedFixture};
 
 /// Vertical field of view every derived camera uses. Matches the desktop
 /// viewport, so `view="front"` offscreen is the pose the operator would see.
@@ -402,6 +403,25 @@ pub fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
     }
 }
 
+/// `selection` resolved in the venue behind `access` and drawn as a highlight
+/// ([`highlight_state`]). The one way a highlight is made, so the fixture
+/// picker and the agent's `venue.render` light the same heads for the same
+/// expression: both resolve with [`groups::PREVIEW_SEED`].
+pub async fn highlight(
+    resource_path: &Path,
+    access: &mut impl AuthorizedVenue,
+    selection: &Selection,
+) -> Result<UniverseState, String> {
+    let resolved = groups::resolve_selection_expression_with_path(
+        resource_path,
+        access,
+        selection,
+        groups::PREVIEW_SEED,
+    )
+    .await?;
+    Ok(highlight_state(&resolved))
+}
+
 /// A head lit for a highlight: open white, pointed home, not strobing.
 const MARKED: PrimitiveState = PrimitiveState {
     dimmer: 1.0,
@@ -425,7 +445,7 @@ const MARKED: PrimitiveState = PrimitiveState {
 /// needed to expand one. An unmatched head has no entry at all, and a head with
 /// no state is drawn dark.
 #[must_use]
-pub fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
+fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
     let mut primitives = HashMap::new();
     for entry in resolved {
         match &entry.heads {

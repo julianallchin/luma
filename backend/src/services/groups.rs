@@ -642,6 +642,12 @@ pub struct ResolvedFixture {
     pub heads: Option<Vec<usize>>,
 }
 
+/// The seed a selection preview and a highlight resolve with when nothing
+/// supplies one: a picture of *one* answer, so the random selectors have to give
+/// the same answer on every call, and the picker and the agent's `venue.render`
+/// have to draw the same heads for the same expression.
+pub const PREVIEW_SEED: u64 = 12345;
+
 /// Resolve a selection to matching fixtures/heads, in venue fixture order.
 ///
 /// # Determinism
@@ -650,8 +656,8 @@ pub struct ResolvedFixture {
 /// `^` takes — so one seed always lights the same rig. Callers own that
 /// contract: a clip seeds from its own stored seed, so one clip renders the same
 /// lights on every run while the same graph placed twice can draw two different
-/// sides. The IPC preview passes a fixed seed so the picker does not flicker
-/// between calls.
+/// sides. Previews and highlights pass [`PREVIEW_SEED`] so the picker does not
+/// flicker between calls.
 pub async fn resolve_selection_expression_with_path(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,

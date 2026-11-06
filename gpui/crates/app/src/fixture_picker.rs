@@ -18,7 +18,7 @@
 //!
 //! # Why the picture is pulled, not pumped
 //!
-//! A highlight does not move: [`luma_lib::stage_render::highlight_state`] opens
+//! A highlight does not move: [`luma_lib::stage_render::highlight`] opens
 //! the matched heads white and leaves everything else dark, with no strobe, no
 //! motion and no clock. So the preview is one still per selection, drawn
 //! through [`Sequence`] — the process-wide offscreen renderer, on the same

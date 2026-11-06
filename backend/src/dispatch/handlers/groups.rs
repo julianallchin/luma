@@ -10,11 +10,6 @@ use crate::services::groups as groups_service;
 use crate::services::groups::{invalidate_venue_fixture_cache, GroupSources};
 use crate::stage_render;
 
-/// Seed used when a selection preview does not supply one. Previews must resolve
-/// `random()` selectors the same way evaluation does, so this default is part of
-/// the contract, not a convenience.
-const DEFAULT_PREVIEW_SEED: u64 = 12345;
-
 // -----------------------------------------------------------------------------
 // Group CRUD
 // -----------------------------------------------------------------------------
@@ -56,24 +51,19 @@ pub async fn preview_selection_query(
         &services.fixtures_root,
         &mut access,
         &Selection::new(query.trim()),
-        seed.unwrap_or(DEFAULT_PREVIEW_SEED),
+        seed.unwrap_or(groups_service::PREVIEW_SEED),
     )
     .await?;
     Ok(resolved.into_iter().map(|r| r.fixture).collect())
 }
 
 /// The frame that answers "which heads is this?": every head the selection
-/// matches open and white, the rest of the rig dark.
+/// matches open and white, the rest of the rig dark — see
+/// [`stage_render::highlight`].
 ///
 /// A [`UniverseState`] rather than a fixture list because the answer is
 /// head-accurate — [`preview_selection_query`] above collapses a match to whole
-/// fixtures and so cannot picture a group that owns half a bar. The caller
-/// installs it on a scene and renders; there is no second way to draw a
-/// highlight.
-///
-/// The seed is fixed for the same reason the agent's `venue.render` fixes it:
-/// a highlight is a picture of *one* answer, and a picker that redrew a
-/// different half on every hover would be lying about what applying does.
+/// fixtures and so cannot picture a group that owns half a bar.
 pub async fn highlight_selection(
     services: &AppServices,
     venue_id: String,
@@ -81,14 +71,7 @@ pub async fn highlight_selection(
 ) -> Result<UniverseState, CommandError> {
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let resolved = groups_service::resolve_selection_expression_with_path(
-        &services.fixtures_root,
-        &mut access,
-        &selection,
-        DEFAULT_PREVIEW_SEED,
-    )
-    .await?;
-    Ok(stage_render::highlight_state(&resolved))
+    Ok(stage_render::highlight(&services.fixtures_root, &mut access, &selection).await?)
 }
 
 // -----------------------------------------------------------------------------

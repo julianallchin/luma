@@ -135,18 +135,15 @@ impl VenueHost {
                     .tree();
                 groups::validate_selection_names(expression, &tree)
                     .map_err(|error| HostCallError::new("invalid_selection", error))?;
-                Some(stage_render::highlight_state(
-                    &groups::resolve_selection_expression_with_path(
+                Some(
+                    stage_render::highlight(
                         &self.resource_root,
                         &mut access,
                         &Selection::new(expression),
-                        // A highlight is a picture of one answer, so the random
-                        // selectors have to give the same answer twice.
-                        0,
                     )
                     .await
                     .map_err(|error| HostCallError::new("invalid_selection", error))?,
-                ))
+                )
             }
         };
         drop(access);
