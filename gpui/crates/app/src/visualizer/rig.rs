@@ -72,16 +72,7 @@ impl Visualizer {
                     };
                     state.composite_landed(installed);
                     state.rig_loaded(loaded, sockets);
-                    state.render_controls.grid_enabled = settings.stage_grid;
-                    state.render_controls.gizmos_enabled = settings.stage_gizmos;
-                    state.render_controls.render_scale_percent =
-                        clamp_render_scale(i64::from(settings.render_scale));
-                    state.render_controls.look = scene_desc::Look::stored(&settings.stage_look);
-                    state.render_controls.quality = if settings.stage_low_quality {
-                        scene_desc::Quality::Low
-                    } else {
-                        scene_desc::Quality::High
-                    };
+                    state.render_controls.apply_settings(&settings);
                     cx.notify();
                     state.warm_assets()
                 })

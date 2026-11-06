@@ -34,6 +34,37 @@ pub const DEFAULT_AGENT_PROVIDER: &str = crate::agent::model::Provider::DEFAULT.
 /// The track agent's model when nothing has been chosen.
 pub const DEFAULT_AGENT_MODEL: &str = crate::agent::model::DEFAULT_MODEL;
 
+/// The `settings` row behind each [`AppSettings`] field. A writer names the
+/// row it writes through these; the stored spellings are persisted data and
+/// must not change.
+pub mod key {
+    pub const AUDIO_OUTPUT_ENABLED: &str = "audio_output_enabled";
+    pub const DMX_OUTPUT_ENABLED: &str = "dmx_output_enabled";
+    pub const ARTNET_INTERFACE: &str = "artnet_interface";
+    pub const MAX_DIMMER: &str = "max_dimmer";
+    pub const STAGE_GRID: &str = "stage_grid";
+    pub const STAGE_GIZMOS: &str = "stage_gizmos";
+    pub const RENDER_SCALE: &str = "render_scale";
+    pub const HDR_OUTPUT: &str = "hdr_output";
+    pub const STAGE_LOOK: &str = "stage_look";
+    pub const STAGE_LOW_QUALITY: &str = "stage_low_quality";
+    pub const VIEW_MODE: &str = "view_mode";
+    pub const AGENT_ENGINE: &str = "agent_engine";
+    pub const AGENT_PROVIDER: &str = "agent_provider";
+    pub const AGENT_MODEL: &str = "agent_model";
+    pub const AUTO_UPDATE: &str = "auto_update";
+}
+
+/// The retired checkbox [`ViewMode`] falls back to. Read, never written.
+const SPLIT_VIEW: &str = "split_view";
+
+/// The values `max_dimmer` may hold, as a percentage of full output.
+pub const MAX_DIMMER_RANGE: std::ops::RangeInclusive<u8> = 0..=100;
+
+/// The values `render_scale` may hold, as a percentage of native resolution.
+/// Past a quarter of the pixels the upscale is mush.
+pub const RENDER_SCALE_RANGE: std::ops::RangeInclusive<u8> = 25..=100;
+
 /// Wire shape of `get_settings`. Deliberately **not** `rename_all`: the keys
 /// are `snake_case` on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,10 +143,10 @@ impl ViewMode {
     /// checkbox, and its layout is what Program is, so a library that only
     /// has that row opens in the layout it was left in.
     fn configured(map: &std::collections::HashMap<String, String>) -> Self {
-        match map.get("view_mode").map(String::as_str) {
+        match map.get(key::VIEW_MODE).map(String::as_str) {
             Some("direct") => Self::Direct,
             Some("program") => Self::Program,
-            _ if map.get("split_view").is_some_and(|v| v == "true") => Self::Program,
+            _ if map.get(SPLIT_VIEW).is_some_and(|v| v == "true") => Self::Program,
             _ => Self::Direct,
         }
     }
@@ -174,10 +205,10 @@ impl Default for AppSettings {
             audio_output_enabled: true,
             dmx_output_enabled: false,
             artnet_interface: "0.0.0.0".to_string(),
-            max_dimmer: 100,
+            max_dimmer: *MAX_DIMMER_RANGE.end(),
             stage_grid: true,
             stage_gizmos: true,
-            render_scale: 100,
+            render_scale: *RENDER_SCALE_RANGE.end(),
             hdr_output: true,
             stage_look: String::new(),
             stage_low_quality: false,
@@ -207,41 +238,38 @@ fn one_of(options: &[(&str, &str)], stored: Option<&String>, default: &str) -> S
 pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
     let map = db::get_all_settings(pool).await?;
 
+    let defaults = AppSettings::default();
+    let flag = |key: &str, default: bool| map.get(key).map_or(default, |v| v == "true");
+    // The write path validates nothing, so this read is the only place a row
+    // outside its range gets caught.
+    let percent = |key: &str, range: std::ops::RangeInclusive<u8>, default: u8| {
+        map.get(key)
+            .and_then(|v| v.parse::<u8>().ok())
+            .map_or(default, |v| v.clamp(*range.start(), *range.end()))
+    };
+
     Ok(AppSettings {
-        audio_output_enabled: map
-            .get("audio_output_enabled")
-            .map(|v| v == "true")
-            .unwrap_or(true),
-        dmx_output_enabled: map
-            .get("dmx_output_enabled")
-            .map(|v| v == "true")
-            .unwrap_or(false),
+        audio_output_enabled: flag(key::AUDIO_OUTPUT_ENABLED, defaults.audio_output_enabled),
+        dmx_output_enabled: flag(key::DMX_OUTPUT_ENABLED, defaults.dmx_output_enabled),
         artnet_interface: map
-            .get("artnet_interface")
+            .get(key::ARTNET_INTERFACE)
             .cloned()
-            .unwrap_or("0.0.0.0".to_string()),
-        max_dimmer: map
-            .get("max_dimmer")
-            .and_then(|v| v.parse::<u8>().ok())
-            .map(|v| v.min(100))
-            .unwrap_or(100),
-        stage_grid: map.get("stage_grid").map(|v| v == "true").unwrap_or(true),
-        stage_gizmos: map.get("stage_gizmos").map(|v| v == "true").unwrap_or(true),
-        // The write path validates nothing, so this read is the only place a
-        // row outside the supported range gets caught.
-        render_scale: map
-            .get("render_scale")
-            .and_then(|v| v.parse::<u8>().ok())
-            .map(|v| v.clamp(25, 100))
-            .unwrap_or(100),
-        hdr_output: map.get("hdr_output").map(|v| v == "true").unwrap_or(true),
-        stage_look: map.get("stage_look").cloned().unwrap_or_default(),
-        stage_low_quality: map.get("stage_low_quality").is_some_and(|v| v == "true"),
+            .unwrap_or(defaults.artnet_interface),
+        max_dimmer: percent(key::MAX_DIMMER, MAX_DIMMER_RANGE, defaults.max_dimmer),
+        stage_grid: flag(key::STAGE_GRID, defaults.stage_grid),
+        stage_gizmos: flag(key::STAGE_GIZMOS, defaults.stage_gizmos),
+        render_scale: percent(key::RENDER_SCALE, RENDER_SCALE_RANGE, defaults.render_scale),
+        hdr_output: flag(key::HDR_OUTPUT, defaults.hdr_output),
+        stage_look: map
+            .get(key::STAGE_LOOK)
+            .cloned()
+            .unwrap_or(defaults.stage_look),
+        stage_low_quality: flag(key::STAGE_LOW_QUALITY, defaults.stage_low_quality),
         view_mode: ViewMode::configured(&map),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
-            map.get("agent_provider"),
+            map.get(key::AGENT_PROVIDER),
             DEFAULT_AGENT_PROVIDER,
         ),
         agent_model: crate::agent::model::configured(&map)
@@ -249,7 +277,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .key()
             .into(),
         agent_api_keys: api_key_statuses(&map),
-        auto_update: map.get("auto_update").map_or(true, |v| v == "true"),
+        auto_update: flag(key::AUTO_UPDATE, defaults.auto_update),
     })
 }
 

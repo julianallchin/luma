@@ -602,7 +602,7 @@ impl Fixture {
         call(
             &services,
             "set_setting",
-            json!({ "key": "audio_output_enabled", "value": "false" }),
+            json!({ "key": luma_lib::settings::key::AUDIO_OUTPUT_ENABLED, "value": "false" }),
         )
         .await;
 

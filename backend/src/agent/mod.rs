@@ -656,7 +656,10 @@ impl AgentService {
                 .await
                 .map_err(AgentError::Storage)?;
         settings.remove("agent_selection");
-        settings.insert("agent_engine".into(), engine.key().into());
+        settings.insert(
+            crate::settings::key::AGENT_ENGINE.into(),
+            engine.key().into(),
+        );
         self.set_thread_selection(
             thread_id,
             engine::catalog::Selection::configured(&settings)?,

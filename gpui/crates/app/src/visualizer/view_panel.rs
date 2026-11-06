@@ -1,6 +1,7 @@
 //! The rows of the view-settings popover: haze, camera look, footage and
 //! viewport controls, and the toggle, scrub and choice rows they are built from.
 use super::*;
+use luma_lib::settings::RENDER_SCALE_RANGE;
 
 /// The room's haze: venue truth, set on the venue page.
 pub(super) fn haze_rows(state: &Visualizer, app: &Entity<Luma>) -> Div {

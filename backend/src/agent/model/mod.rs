@@ -370,10 +370,10 @@ pub fn configured(
     settings: &std::collections::HashMap<String, String>,
 ) -> Result<ModelId, ModelError> {
     let requested = settings
-        .get("agent_model")
+        .get(crate::settings::key::AGENT_MODEL)
         .map_or(DEFAULT_MODEL, String::as_str);
     let provider = settings
-        .get("agent_provider")
+        .get(crate::settings::key::AGENT_PROVIDER)
         .map(String::as_str)
         .and_then(Provider::parse)
         .unwrap_or(Provider::DEFAULT);
@@ -398,7 +398,7 @@ pub async fn configured_client(
 ) -> Result<(std::sync::Arc<dyn ModelClient>, ModelId, ReasoningLevel), ModelError> {
     let id = configured(settings)?;
     let preferred = settings
-        .get("agent_provider")
+        .get(crate::settings::key::AGENT_PROVIDER)
         .map(String::as_str)
         .and_then(Provider::parse)
         .unwrap_or(Provider::DEFAULT);

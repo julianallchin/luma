@@ -826,12 +826,15 @@ impl Turn {
                 .map_err(AgentError::Storage)?;
         let engine = Engine::parse(&thread.engine)?;
         if let Some(provider) = &thread.provider {
-            settings.insert("agent_provider".into(), provider.clone());
+            settings.insert(
+                crate::settings::key::AGENT_PROVIDER.into(),
+                provider.clone(),
+            );
         }
         if let Some(model) = self.service.model_name.as_ref().or(thread.model.as_ref()) {
             if engine == Engine::Api {
                 let provider = settings
-                    .get("agent_provider")
+                    .get(crate::settings::key::AGENT_PROVIDER)
                     .map(String::as_str)
                     .and_then(model::Provider::parse)
                     .unwrap_or(model::Provider::DEFAULT);
@@ -845,7 +848,7 @@ impl Turn {
                     .map_err(|_| AgentError::Invalid(format!("unknown API model '{model}'")))?;
             }
             let key = match engine {
-                Engine::Api => "agent_model".to_string(),
+                Engine::Api => crate::settings::key::AGENT_MODEL.to_string(),
                 _ => format!("agent_{}_model", engine.key()),
             };
             settings.insert(key, model.clone());

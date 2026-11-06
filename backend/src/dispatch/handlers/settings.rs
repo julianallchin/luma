@@ -12,8 +12,9 @@ pub async fn get_settings(services: &AppServices) -> Result<AppSettings, Command
 
 /// Write one setting and apply it immediately.
 ///
-/// Keys are open strings: the valid set exists only in [`load_settings`]'s
-/// parser, so a typo writes a row nothing ever reads. Applying is
+/// Keys are open strings: the rows anything reads are
+/// [`crate::settings::key`] and each provider's API-key row, and a key
+/// outside them writes a row nothing ever reads. Applying is
 /// [`AppServices::apply_persisted_settings`] — the same call a host makes at
 /// startup, so a write and a fresh process put the subsystems in the same
 /// state.

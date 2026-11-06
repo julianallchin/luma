@@ -1,6 +1,7 @@
 //! The viewport's runtime renderer dials — sun, environment, haze, camera
 //! look, chrome — and how they resolve into one frame's render settings.
 use super::*;
+use luma_lib::settings::{AppSettings, RENDER_SCALE_RANGE};
 
 /// Runtime renderer controls. They belong to the viewport, not persisted venue
 /// data, so experimentation cannot silently rewrite a show.
@@ -167,15 +168,31 @@ impl RenderControls {
             haze: scene_desc::VenueHaze::default(),
             haze_steps: 8,
             haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
-            grid_enabled: true,
-            gizmos_enabled: true,
-            render_scale_percent: 100,
+            // Written by `apply_settings` below, from the settings table's
+            // defaults until the stored rows arrive.
+            grid_enabled: false,
+            gizmos_enabled: false,
+            render_scale_percent: 0,
             look: scene_desc::Look::STAGE,
             quality: scene_desc::Quality::High,
             probes: scene_desc::ProbeView::default(),
         };
         controls.set_environment(environment);
+        controls.apply_settings(&AppSettings::default());
         controls
+    }
+
+    /// Take this machine's view preferences from the settings table.
+    pub(super) fn apply_settings(&mut self, settings: &AppSettings) {
+        self.grid_enabled = settings.stage_grid;
+        self.gizmos_enabled = settings.stage_gizmos;
+        self.render_scale_percent = settings.render_scale;
+        self.look = scene_desc::Look::stored(&settings.stage_look);
+        self.quality = if settings.stage_low_quality {
+            scene_desc::Quality::Low
+        } else {
+            scene_desc::Quality::High
+        };
     }
 
     /// Re-derive the lighting from the environment the room is now drawn
@@ -266,11 +283,6 @@ impl ViewValue {
         )
     }
 }
-
-/// The percent slider's travel. The floor is [`RenderScale::Fixed`]'s own floor
-/// — past a quarter of the pixels the upscale is mush — and the ceiling is
-/// native, which is what 100 has always meant.
-pub(super) const RENDER_SCALE_RANGE: std::ops::RangeInclusive<u8> = 25..=100;
 
 impl RenderControls {
     pub(super) fn toggle(&mut self, control: ViewToggle) {

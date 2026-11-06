@@ -1,5 +1,6 @@
 //! Compact environment dock shared by every visualizer.
 use super::*;
+use luma_lib::settings::key;
 use luma_ui::node::AgentNode as _;
 use luma_ui::{float, glass};
 
@@ -541,8 +542,10 @@ impl Luma {
             // Straight through `set_setting`: it is already FIFO-ordered, and a
             // toggle cannot emit faster than a hand can click, so the
             // coalescing the scrubs need would buy nothing here.
-            ViewToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
-            ViewToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
+            ViewToggle::Grid => self.write_view_setting(key::STAGE_GRID, grid.to_string(), cx),
+            ViewToggle::Gizmos => {
+                self.write_view_setting(key::STAGE_GIZMOS, gizmos.to_string(), cx)
+            }
             ViewToggle::AutoExposure | ViewToggle::Footage => self.save_look(cx),
             // Session dials: they outlive nothing.
             ViewToggle::FixtureShadows | ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
@@ -564,7 +567,7 @@ impl Luma {
         match control {
             ViewValue::RenderScale => {
                 let percent = state.render_controls.render_scale_percent;
-                self.save_view_setting("render_scale", percent.to_string(), cx);
+                self.save_view_setting(key::RENDER_SCALE, percent.to_string(), cx);
             }
             control if control.is_look() => self.save_look(cx),
             _ => self.save_venue_haze(cx),
@@ -603,7 +606,7 @@ impl Luma {
             return;
         };
         match serde_json::to_string(&state.render_controls.look) {
-            Ok(json) => self.save_view_setting("stage_look", json, cx),
+            Ok(json) => self.save_view_setting(key::STAGE_LOOK, json, cx),
             Err(error) => {
                 state.view_setting_error = Some(format!("Could not save stage_look: {error}"))
             }
@@ -627,7 +630,7 @@ impl Luma {
         // A new level starts from its whole pixel budget.
         state.stage.borrow_mut().dynamic = super::DynamicBudget::default();
         let low = quality == scene_desc::Quality::Low;
-        self.write_view_setting("stage_low_quality", low.to_string(), cx);
+        self.write_view_setting(key::STAGE_LOW_QUALITY, low.to_string(), cx);
         cx.notify();
     }
 

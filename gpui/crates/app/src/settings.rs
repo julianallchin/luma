@@ -15,7 +15,9 @@ use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::Enabled;
 
-use luma_lib::settings::{agent_models, ApiKeyStatus, AppSettings, ViewMode, AGENT_PROVIDERS};
+use luma_lib::settings::{
+    agent_models, key, ApiKeyStatus, AppSettings, ViewMode, AGENT_PROVIDERS, MAX_DIMMER_RANGE,
+};
 
 use crate::Luma;
 
@@ -407,7 +409,7 @@ impl Luma {
         }
         self.view_mode = mode;
         cx.notify();
-        let pending = self.library.set_setting("view_mode", mode.key());
+        let pending = self.library.set_setting(key::VIEW_MODE, mode.key());
         cx.spawn(async move |_, _| {
             if let Err(error) = pending.await {
                 eprintln!("[luma] the view mode was not saved: {error}");
@@ -560,7 +562,7 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             None,
             checkbox(
                 app,
-                "audio_output_enabled",
+                key::AUDIO_OUTPUT_ENABLED,
                 "Enable Audio Output",
                 values.audio_output_enabled,
             ),
@@ -568,7 +570,7 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         ),
         field(
             None,
-            checkbox(app, "hdr_output", "HDR output", values.hdr_output),
+            checkbox(app, key::HDR_OUTPUT, "HDR output", values.hdr_output),
             Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
         ),
     ]
@@ -581,7 +583,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         select(
             state,
             app,
-            "agent_engine",
+            key::AGENT_ENGINE,
             Engine::CHOICES,
             values.agent_engine.key(),
         ),
@@ -597,7 +599,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             select(
                 state,
                 app,
-                "agent_provider",
+                key::AGENT_PROVIDER,
                 AGENT_PROVIDERS,
                 &values.agent_provider,
             ),
@@ -608,7 +610,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             select(
                 state,
                 app,
-                "agent_model",
+                key::AGENT_MODEL,
                 &agent_models(),
                 &values.agent_model,
             ),
@@ -688,20 +690,30 @@ fn key_placeholder(status: &ApiKeyStatus) -> String {
 }
 
 fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+    let (dimmer_low, dimmer_high) = (
+        f32::from(*MAX_DIMMER_RANGE.start()),
+        f32::from(*MAX_DIMMER_RANGE.end()),
+    );
     vec![
         field(
             Some("Max Brightness"),
             // Whole percent: the setting is stored as a `u8` and read back as
             // one, so a slider handing over 61.4 would show 61 on the next
             // reload and disagree with itself in between.
-            luma_ui::luma_slider("max_dimmer", values.max_dimmer as f32, 0., 100., 240., {
+            luma_ui::luma_slider(
+                key::MAX_DIMMER,
+                values.max_dimmer as f32,
+                dimmer_low,
+                dimmer_high,
+                240.,
+                {
                 let app = app.clone();
                 let current = values.max_dimmer;
                 move |value, _, cx| {
-                    let level = value.round().clamp(0., 100.) as u8;
+                    let level = value.round().clamp(dimmer_low, dimmer_high) as u8;
                     if level != current {
                         app.update(cx, |this, cx| {
-                            this.write_setting("max_dimmer", level.to_string(), cx);
+                            this.write_setting(key::MAX_DIMMER, level.to_string(), cx);
                         });
                     }
                 }
@@ -717,7 +729,7 @@ fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             None,
             checkbox(
                 app,
-                "dmx_output_enabled",
+                key::DMX_OUTPUT_ENABLED,
                 "Enable DMX Output",
                 values.dmx_output_enabled,
             ),
@@ -804,7 +816,7 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     }
     rows.push(field(
         None,
-        checkbox(app, "auto_update", "Update automatically", values.auto_update),
+        checkbox(app, key::AUTO_UPDATE, "Update automatically", values.auto_update),
         Some("Checks for a new release every hour and downloads it in the background. When it is ready, Luma asks whether to relaunch now; otherwise it runs the next time you open Luma."),
     ));
     rows

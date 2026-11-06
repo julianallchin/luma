@@ -54,7 +54,11 @@ impl Engine {
     }
 
     pub fn configured(settings: &HashMap<String, String>) -> Result<Self, AgentError> {
-        Self::parse(settings.get("agent_engine").map_or("api", String::as_str))
+        Self::parse(
+            settings
+                .get(crate::settings::key::AGENT_ENGINE)
+                .map_or("api", String::as_str),
+        )
     }
 
     pub fn key(self) -> &'static str {

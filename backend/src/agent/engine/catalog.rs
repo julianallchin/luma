@@ -91,7 +91,12 @@ impl Selection {
             return Ok(selection);
         }
         let engine = Engine::configured(settings)?;
-        let mut service = Service::of(engine, settings.get("agent_provider").map(String::as_str));
+        let mut service = Service::of(
+            engine,
+            settings
+                .get(crate::settings::key::AGENT_PROVIDER)
+                .map(String::as_str),
+        );
         let model = if engine == Engine::Api {
             let model = model::configured(settings)?;
             let provider = model.route(service.provider().expect("API provider"))?.0;

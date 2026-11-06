@@ -7,7 +7,7 @@
 //! let library = Library::open()?;
 //! let venues: Vec<Venue> = library.venues().await?;
 //! let tracks: Vec<TrackBrowserRow> = library.tracks(&venue.id).await?;
-//! library.set_setting("audio_output_enabled", "false").await?;
+//! library.set_setting(settings::key::AUDIO_OUTPUT_ENABLED, "false").await?;
 //! ```
 //!
 //! Everything a screen knows about data access is those methods. It never
