@@ -168,7 +168,7 @@ track for it. Progress events reach the UI without UI changes.
 ## Shared bar axis
 
 `classifier` and `genre` both key their rows by `bar_idx`, and both derive
-bars from `workers::build_bar_boundaries` — consecutive downbeat pairs plus a
+bars from `workers::track_bar_boundaries` — consecutive downbeat pairs plus a
 synthetic final bar. That shared definition is what lets the agent index
 `features.bars` and `features.genres` with the same integer, so keep new
 bar-indexed nodes on it rather than re-deriving boundaries.

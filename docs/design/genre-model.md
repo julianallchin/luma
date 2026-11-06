@@ -66,7 +66,7 @@ top-8; `labels_json` holds the compacted list of style names the track actually
 uses, which every `label_index` resolves against. See
 `src/preprocessing/workers/genre.rs` and `python/genre_worker.py`.
 
-Bars come from `workers::build_bar_boundaries` — the same function the bar
+Bars come from `workers::track_bar_boundaries` — the same function the bar
 classifier uses — so `features.bars[i]` and `features.genres[i]` describe the
 same audio.
 

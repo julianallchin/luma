@@ -21,8 +21,8 @@ use crate::agent_execution::artifacts::{
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::{AxisSpec, Provenance, TensorRef};
 use crate::database::local;
-use crate::preprocessing::workers::build_bar_boundaries;
 use crate::preprocessing::workers::classifier::process::StoredBarClassifications;
+use crate::preprocessing::workers::track_bar_boundaries;
 
 /// Drum-onset classes the n2n worker emits.
 pub const DRUM_CLASSES: [&str; 4] = ["kick", "snare", "hat", "cymbal"];
@@ -236,13 +236,15 @@ async fn bars(
     let tags: Vec<String> = serde_json::from_str(&tag_order_json).unwrap_or_default();
 
     // Bar i is bar i of the beat grid, which is where its start and end live.
-    let bounds = match local::tracks::get_track_beats_raw(ctx.pool, track_id).await? {
-        Some(beats) => {
-            let downbeats: Vec<f64> =
-                serde_json::from_str(&beats.downbeats_json).unwrap_or_default();
-            build_bar_boundaries(&downbeats, beats.bpm, beats.beats_per_bar)
+    let bounds = match track_bar_boundaries(ctx.pool, track_id).await {
+        Ok(bounds) => bounds,
+        Err(e) => {
+            return unavailable(
+                b,
+                "features.bars",
+                format!("the beat grid could not be read: {e}"),
+            )
         }
-        None => Vec::new(),
     };
     let n_bars = parsed.scores.len();
     if bounds.len() < n_bars {
@@ -372,7 +374,7 @@ struct StoredGenres {
 
 /// Per-bar Discogs style activations, on the **same bar axis as
 /// `features.bars`** — index `i` of either is the same slice of audio, because
-/// both derive their bars from `workers::build_bar_boundaries`.
+/// both derive their bars from `workers::track_bar_boundaries`.
 ///
 /// The model emits 400 styles but the stored artifact is sparse (top-8 per
 /// bar), so the dense tensor spans only the labels this track actually uses.

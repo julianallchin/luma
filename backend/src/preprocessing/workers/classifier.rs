@@ -47,7 +47,7 @@ use self::process::StoredBarClassifications;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::preprocessing::workers::{build_bar_boundaries, list_pending_bar_aligned};
+use crate::preprocessing::workers::{list_pending_bar_aligned, track_bar_boundaries};
 
 pub struct ClassifierPreprocessor;
 
@@ -93,19 +93,12 @@ impl Preprocessor for ClassifierPreprocessor {
         // Classifier scores the full mix — drum stem cache is for n2n only.
         let mert_path: std::path::PathBuf = fullmix_path.into();
 
-        // Bar boundaries derive from the beat grid: consecutive downbeat
-        // pairs plus a synthetic final bar of length (60/bpm * beats_per_bar).
-        // Mirrors TANGO's `_bar_boundaries_from_grid` so MERT segments here
-        // match what the classifier was trained against.
-        let beats = tracks_db::get_track_beats_raw(ctx.pool(), track_id)
-            .await?
-            .ok_or_else(|| format!("Missing beat grid for track {track_id}"))?;
-        let downbeats: Vec<f64> = serde_json::from_str(&beats.downbeats_json)
-            .map_err(|e| format!("Failed to parse downbeats_json: {e}"))?;
-        let bar_boundaries = build_bar_boundaries(&downbeats, beats.bpm, beats.beats_per_bar);
+        // The bar axis mirrors TANGO's `_bar_boundaries_from_grid`, so MERT
+        // segments here match what the classifier was trained against.
+        let bar_boundaries = track_bar_boundaries(ctx.pool(), track_id).await?;
         if bar_boundaries.is_empty() {
             return Err(format!(
-                "No bar boundaries derivable from track {track_id} (need ≥ 2 downbeats)"
+                "No bar boundaries derivable from track {track_id} (need a beat grid with ≥ 2 downbeats)"
             ));
         }
 

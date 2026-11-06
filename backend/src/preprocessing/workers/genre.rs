@@ -6,7 +6,7 @@
 //! inference logic lives in `python/genre_worker.py`; see
 //! [`crate::preprocessing::workers::genre::process`] for the process bridge.
 //!
-//! Bar boundaries come from [`super::build_bar_boundaries`] — the same
+//! Bar boundaries come from [`super::track_bar_boundaries`] — the same
 //! function the bar classifier uses — so `features.bars[i]` and
 //! `features.genres[i]` describe the same slice of audio.
 //!
@@ -28,7 +28,7 @@ use sqlx::SqlitePool;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::preprocessing::workers::{build_bar_boundaries, list_pending_bar_aligned};
+use crate::preprocessing::workers::{list_pending_bar_aligned, track_bar_boundaries};
 
 pub struct GenrePreprocessor;
 
@@ -65,15 +65,10 @@ impl Preprocessor for GenrePreprocessor {
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
-        let beats = tracks_db::get_track_beats_raw(ctx.pool(), track_id)
-            .await?
-            .ok_or_else(|| format!("Missing beat grid for track {track_id}"))?;
-        let downbeats: Vec<f64> = serde_json::from_str(&beats.downbeats_json)
-            .map_err(|e| format!("Failed to parse downbeats_json: {e}"))?;
-        let bar_boundaries = build_bar_boundaries(&downbeats, beats.bpm, beats.beats_per_bar);
+        let bar_boundaries = track_bar_boundaries(ctx.pool(), track_id).await?;
         if bar_boundaries.is_empty() {
             return Err(format!(
-                "No bar boundaries derivable from track {track_id} (need ≥ 2 downbeats)"
+                "No bar boundaries derivable from track {track_id} (need a beat grid with ≥ 2 downbeats)"
             ));
         }
 

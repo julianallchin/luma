@@ -17,6 +17,7 @@ pub mod stems;
 
 use sqlx::SqlitePool;
 
+use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::preprocessor::{pending_tracks, Preprocessor};
 
 /// Tolerance (seconds) for "first-bar duration matches current beat grid"
@@ -34,7 +35,7 @@ const ALIGNED_BAR_TOLERANCE_SECS: f64 = 0.1;
 /// `features.bars` and `features.genres` with the same integer.
 ///
 /// Returns an empty Vec when the grid has fewer than two downbeats.
-pub fn build_bar_boundaries(
+fn build_bar_boundaries(
     downbeats: &[f64],
     bpm: Option<f64>,
     beats_per_bar: Option<i64>,
@@ -51,6 +52,25 @@ pub fn build_bar_boundaries(
         out.push((last, last + bar_secs));
     }
     out
+}
+
+/// The bar boundaries of a track's current beat grid (see
+/// [`build_bar_boundaries`]). Empty when the track has no grid or fewer than
+/// two downbeats.
+pub async fn track_bar_boundaries(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> Result<Vec<(f64, f64)>, String> {
+    let Some(beats) = tracks_db::get_track_beats_raw(pool, track_id).await? else {
+        return Ok(Vec::new());
+    };
+    let downbeats: Vec<f64> = serde_json::from_str(&beats.downbeats_json)
+        .map_err(|e| format!("Failed to parse downbeats_json: {e}"))?;
+    Ok(build_bar_boundaries(
+        &downbeats,
+        beats.bpm,
+        beats.beats_per_bar,
+    ))
 }
 
 /// Self-correcting `list_pending` for artifacts whose rows are indexed by bar.
