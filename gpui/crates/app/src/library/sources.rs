@@ -4,8 +4,7 @@
 use std::future::Future;
 
 use luma_lib::dispatch::{
-    handlers, ArtworkRef, EngineDjPlaylist, ImportedEngineDjTrack as EngineDjTrack,
-    ImportedRekordboxTrack as RekordboxTrack, RekordboxPlaylist,
+    handlers, ArtworkRef, EngineDjPlaylist, EngineDjTrack, RekordboxPlaylist, RekordboxTrack,
 };
 
 #[cfg(feature = "agent")]
@@ -88,7 +87,7 @@ fn engine_root(source: &TrackSource) -> String {
 /// rather than by every consumer that wants to open the file — a preview,
 /// a cover read.
 pub(super) fn engine_source_track(library_path: &str, row: EngineDjTrack) -> SourceTrack {
-    let file_path = luma_lib::dispatch::resolve_engine_track_path(library_path, &row.path);
+    let file_path = luma_lib::dispatch::resolve_engine_path(library_path, &row.path);
     SourceTrack {
         id: row.id.to_string(),
         file_path: Some(file_path.to_string_lossy().into_owned()),

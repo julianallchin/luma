@@ -29,9 +29,8 @@ pub trait TrackSources: Send + Sync + 'static {
         library_path: &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<(String, Vec<super::ImportedEngineDjTrack>), String>,
-                > + Send
+            dyn std::future::Future<Output = Result<(String, Vec<super::EngineDjTrack>), String>>
+                + Send
                 + 'a,
         >,
     >;
@@ -41,7 +40,7 @@ pub trait TrackSources: Send + Sync + 'static {
         &self,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<Vec<super::ImportedRekordboxTrack>, String>>
+            dyn std::future::Future<Output = Result<Vec<super::RekordboxTrack>, String>>
                 + Send
                 + '_,
         >,
@@ -62,9 +61,8 @@ impl TrackSources for SystemTrackSources {
         library_path: &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<(String, Vec<super::ImportedEngineDjTrack>), String>,
-                > + Send
+            dyn std::future::Future<Output = Result<(String, Vec<super::EngineDjTrack>), String>>
+                + Send
                 + 'a,
         >,
     > {
@@ -85,7 +83,7 @@ impl TrackSources for SystemTrackSources {
         &self,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<Vec<super::ImportedRekordboxTrack>, String>>
+            dyn std::future::Future<Output = Result<Vec<super::RekordboxTrack>, String>>
                 + Send
                 + '_,
         >,
