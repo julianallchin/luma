@@ -340,30 +340,17 @@ impl Luma {
     ///
     /// The close waits [`DOUBLE_CLICK`]: the click that lands here may be the
     /// first of a rename double-click, and the second click has to find its
-    /// row. A rename in that time cancels the close. A score that is already
-    /// the open one closes the list at once.
+    /// row. A rename in that time cancels the close.
     pub(crate) fn open_listed_score(
         &mut self,
         track_id: SharedString,
         score: crate::track_editor::Score,
         cx: &mut Context<Self>,
     ) {
-        let Some(songs) = &self.songs else {
-            return;
-        };
-        let target = Target::Score {
-            venue: songs.venue_id().to_string(),
-            track: track_id.to_string(),
-            score: score.id.clone(),
-        };
-        let already = self.workspace.body(&target).is_some();
-        self.open_score(&track_id, score, None, cx);
-        if already {
-            self.song_list = false;
-            self.song_list_close = None;
-            cx.notify();
+        if self.songs.is_none() {
             return;
         }
+        self.open_score(&track_id, score, None, cx);
         let wait = self.library.debounce(DOUBLE_CLICK);
         self.song_list_close = Some(cx.spawn(async move |this, cx| {
             wait.await;

@@ -94,9 +94,8 @@ test("a code joins a venue, and a bad one says why inline", () => {
   until("already in", (s) => s.find({ role: "text", label: "You already have access to Warehouse." }) !== undefined);
 });
 
-// The venue picker marked a joined venue "shared with you"; the title bar's
-// venue menu, which lists the venues once one is open, does not.
-test.skip("bug: the venue menu does not mark a joined venue as shared with you", () => {
+// The venue menu marks a joined venue "shared with you", as the picker does.
+test("the venue menu marks a joined venue as shared with you", () => {
   until("the picker", (s) => s.find({ role: "card", label: "Test Venue" }) !== undefined);
   nav.step("Join", "button", "Join a venue");
   const focusedInput = (s) => s.find((n) => n.role === "input" && n.focused === true);

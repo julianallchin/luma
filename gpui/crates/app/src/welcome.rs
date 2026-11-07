@@ -1215,6 +1215,19 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
                             .get(&venue.id)
                             .map(|status| crate::agent::status_dot(*status, &venue.name)),
                     )
+                    // A venue someone shared says so, as the picker does.
+                    .when(venue.is_member(), |row| {
+                        row.child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(glass::ink(glass::TEXT_TERTIARY))
+                                .child("Shared with you")
+                                .agent_node(
+                                    Role::Text,
+                                    format!("{} is shared with you", venue.name),
+                                ),
+                        )
+                    })
                     .child(float::check(here))
                     .agent_node(Role::Row, venue.name.clone()),
                 );

@@ -114,7 +114,7 @@ test("the agent panel toggles both ways and the seam resizes it", () => {
 // titlebar strip, whose window controls keep their corner. On macOS the
 // corner is AppKit's and holds no node of ours; elsewhere the painted lights
 // are in it and keep their hit targets.
-test.skip("bug: dialog::TITLEBAR_CLEARANCE is 38 px but the title bar is 44, so a compact dialog covers the window controls", { fixture: { window: [640, 480] } }, () => {
+test("a compact window clamps the settings dialog below the titlebar", { fixture: { window: [640, 480] } }, () => {
   open();
   app.action("luma::OpenSettings");
   const shot = until("the compact dialog", dialog);

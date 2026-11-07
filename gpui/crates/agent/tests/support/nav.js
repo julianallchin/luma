@@ -84,16 +84,30 @@ globalThis.nav = {
 				&& s.find({ role: "input", label: "Search tracks" }) !== undefined);
 	},
 
-	// One song's scores, expanded under its row on the song list.
+	// One song's scores, expanded under its row on the song list. Other
+	// songs may be expanded too, so what is in this one's card is
+	// `nav.inScores`.
 	scores(track) {
 		nav.songs();
-		const expanded = (s) => s.find({ role: "card", label: `Scores of ${track}` });
-		if (expanded(app.snapshot()) === undefined) {
+		if (app.snapshot().find({ role: "card", label: `Scores of ${track}` }) === undefined) {
 			nav.step(`the track ${track}`, "row", track);
 		}
-		until("the scores", (s) =>
-			expanded(s) !== undefined
-				&& s.find({ role: "button", label: "New score" }) !== undefined);
+		until("the scores", (s) => nav.inScores(s, track, "button", "New score")[0] !== undefined);
+	},
+
+	// The `role` nodes (labelled `label`, when given) inside `track`'s
+	// expanded scores, top to bottom.
+	inScores(snapshot, track, role, label) {
+		const card = snapshot.find({ role: "card", label: `Scores of ${track}` })?.bounds;
+		if (card === undefined) return [];
+		return snapshot.findAll(label === undefined ? { role } : { role, label })
+			.filter((n) => n.bounds.y >= card.y - 0.5 && n.bounds.y + n.bounds.height <= card.y + card.height + 0.5)
+			.sort((a, b) => a.bounds.y - b.bounds.y);
+	},
+
+	// `track`'s score rows, top to bottom.
+	scoreRows(snapshot, track) {
+		return nav.inScores(snapshot, track, "row").filter((n) => n.label.startsWith("#"));
 	},
 
 	// A song's timeline: its scores, then the newest one (the listing leads
@@ -109,8 +123,7 @@ globalThis.nav = {
 		}
 		nav.scores(name);
 		const level = app.snapshot();
-		const score = level.findAll({ role: "row" }).find((n) => n.label.startsWith("#"));
-		app.click(score ?? level.find({ role: "button", label: "New score" }));
+		app.click(nav.scoreRows(level, name)[0] ?? nav.inScores(level, name, "button", "New score")[0]);
 		until("the timeline", (s) =>
 			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined
 				&& s.find({ role: "card", label: "Song list" }) === undefined);
@@ -125,15 +138,14 @@ globalThis.nav = {
 		const open = title(app.snapshot());
 		if (open === undefined) throw new Error(`no score of ${track} is open`);
 		const ordinal = open.slice(`${track} · `.length);
-		const row = (s, mine) => s.findAll({ role: "row" })
-			.find((n) => n.label.startsWith("#") && n.label.startsWith(`${ordinal} `) === mine);
+		const row = (s, mine) => nav.scoreRows(s, track).find((n) => n.label.startsWith(`${ordinal} `) === mine);
 		nav.scores(track);
-		app.click(row(app.snapshot(), false) ?? app.snapshot().find({ role: "button", label: "New score" }));
+		const level = app.snapshot();
+		app.click(row(level, false) ?? nav.inScores(level, track, "button", "New score")[0]);
 		until("another score", (s) => title(s) !== undefined && title(s) !== open
 			&& s.find({ role: "card", label: "Song list" }) === undefined);
 		nav.scores(track);
-		app.click(until(`the score ${ordinal}`, (s) => row(s, true) ? s : undefined).findAll({ role: "row" })
-			.find((n) => n.label.startsWith(`${ordinal} `)));
+		app.click(row(until(`the score ${ordinal}`, (s) => row(s, true) ? s : undefined), true));
 		until(`the score ${ordinal} again`, (s) => title(s) === open
 			&& s.find({ role: "card", label: "Song list" }) === undefined
 			&& s.find({ role: "card", label: "Waveform" }) !== undefined);

@@ -50,7 +50,7 @@ test("the row unfolds a song's scores, and they switch, mint and fold", () => {
   expect(app.snapshot().find({ role: "row", label: "Aurora" }) !== undefined).toBe(true);
 });
 
-test.skip("bug: a double-click on a score's name opens the score and closes the list instead of renaming (tracks/scores.rs open_listed_score)", () => {
+test("double-clicking a score's name renames it in place", () => {
   const names = () => app.snapshot().findAll({ role: "text" }).filter((n) => n.label.startsWith("Score name #"));
   const nameOf = (ordinal) => names().find((n) => n.label.startsWith(`Score name ${ordinal} = `));
   const field = (ordinal) => app.snapshot().find({ role: "input", label: `Score name ${ordinal}` });

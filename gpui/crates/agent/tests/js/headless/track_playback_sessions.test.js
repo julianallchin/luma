@@ -3,7 +3,7 @@
 
 fixture({ seconds: 20, second_track_seconds: 8, equal_timestamp_track: true, seeded_threads: true });
 
-test.skip("bug: opening another score while one plays starts the new one playing", () => {
+test("returning to a parked song plays its own audio", () => {
   const time = () => app.snapshot().findAll({ role: "text" }).find((n) => /^\d+:\d+ \/ \d+:\d+$/.test(n.label))?.label;
   // The player reads `elapsed / duration`; each song's duration is its own.
   function play(duration) {

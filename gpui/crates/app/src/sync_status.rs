@@ -117,7 +117,7 @@ pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
     } else if state.show_activity && state.busy() {
         "Syncing…".to_owned()
     } else {
-        "Synced".to_owned()
+        "Up to date".to_owned()
     };
     let mut item = crate::status_bar::Item::new("sync-status", label);
     item.danger = error.is_some();

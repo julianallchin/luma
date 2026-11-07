@@ -30,7 +30,9 @@ use crate::{glass, motion, node::AgentNode as _, node::Instrument as _, radius};
 
 /// Keep cards clear of both viewport edges and the titlebar controls.
 pub const VIEWPORT_GUTTER: f32 = 16.0;
-pub const TITLEBAR_CLEARANCE: f32 = 38.0;
+/// The window's title bar: the shell's band and the chat's header are this
+/// tall, and a dialog keeps its card below it.
+pub const TITLEBAR_CLEARANCE: f32 = 44.0;
 /// Backdrop-blur sigma behind a dialog card, and the only blur the modal plane
 /// paints.
 ///
