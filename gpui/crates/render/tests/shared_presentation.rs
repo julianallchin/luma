@@ -14,7 +14,6 @@
 //! process would see it flip underneath its own renderer.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
@@ -31,7 +30,7 @@ const HEIGHT: u32 = 120;
 const WITHHOLD: &str = "LUMA_WITHHOLD_SHARED_SURFACES";
 
 fn frame() -> Frame {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::dark_stage(48.0, 0.5);
     render.environment = Environment::DARK;

@@ -1,6 +1,6 @@
 //! Finite surface transport through the actual outdoor rendering path.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
@@ -10,6 +10,8 @@ use luma_render::{
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 600;
 const HEIGHT: u32 = 360;
@@ -98,26 +100,17 @@ fn center(pixels: &[u8], card: usize) -> Vec3 {
     )
 }
 
-fn capture(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_AERIAL_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
-}
-
 #[test]
 fn distant_surfaces_gain_airlight_and_retain_their_radiance() {
     let mut renderer = Renderer::new().unwrap();
     let mut frame = cards();
     let black = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-    capture("black-cards-20m-1km-10km", &black);
+    capture("black-cards-20m-1km-10km", &black, WIDTH, HEIGHT);
     for draw in &mut frame.draws {
         draw.material.emissive = Vec3::ONE;
     }
     let white = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-    capture("white-cards-20m-1km-10km", &white);
+    capture("white-cards-20m-1km-10km", &white, WIDTH, HEIGHT);
     let mut previous = f32::INFINITY;
     for card in 0..3 {
         let dark = center(&black, card);

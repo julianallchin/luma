@@ -1,5 +1,5 @@
 //! A shallow fixture wash must not turn an unobstructed floor into shadow bands.
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use glam::Vec3;
 use luma_render::{
@@ -9,6 +9,8 @@ use luma_render::{
     scene_desc::{CameraPose, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 640;
@@ -64,15 +66,6 @@ fn floor() -> Frame {
     frame
 }
 
-fn capture(label: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_FLOOR_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{label}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
-}
-
 #[test]
 fn grazing_fixture_washes_do_not_make_the_floor_shadow_itself() {
     let mut renderer = Renderer::new().unwrap();
@@ -87,11 +80,11 @@ fn grazing_fixture_washes_do_not_make_the_floor_shadow_itself() {
         frame.fixture_shadows = true;
         frame.geometry_shadows = true;
         let shadowed = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("{label}-shadows"), &shadowed);
+        capture(&format!("{label}-shadows"), &shadowed, WIDTH, HEIGHT);
         frame.fixture_shadows = false;
         frame.geometry_shadows = false;
         let unshadowed = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("{label}-unshadowed"), &unshadowed);
+        capture(&format!("{label}-unshadowed"), &unshadowed, WIDTH, HEIGHT);
         // Exclude the white compass by requiring a visibly magenta light pool.
         let lit_pixels = unshadowed
             .chunks_exact(4)

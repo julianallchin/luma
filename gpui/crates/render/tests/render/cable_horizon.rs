@@ -1,6 +1,6 @@
 //! Hanging cables retain their own coverage across the distant floor's fade.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use luma_render::{
     assets::Library,
@@ -10,6 +10,8 @@ use luma_render::{
     },
     Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 480;
 const HEIGHT: u32 = 320;
@@ -51,15 +53,6 @@ fn scene() -> Scene {
     }
 }
 
-fn capture(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_CABLE_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
-}
-
 #[test]
 fn foreground_cables_remain_visible_across_the_horizon() {
     check_foreground_cables(false);
@@ -83,10 +76,20 @@ fn check_foreground_cables(haze: bool) {
         renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap()
     };
     let cables = render(&scene);
-    capture(if haze { "fog-cables" } else { "horizon-cables" }, &cables);
+    capture(
+        if haze { "fog-cables" } else { "horizon-cables" },
+        &cables,
+        WIDTH,
+        HEIGHT,
+    );
     scene.render.show_cables = false;
     let bare = render(&scene);
-    capture(if haze { "fog-bare" } else { "horizon-bare" }, &bare);
+    capture(
+        if haze { "fog-bare" } else { "horizon-bare" },
+        &bare,
+        WIDTH,
+        HEIGHT,
+    );
 
     // Find cable pixels against the sky, then follow those same drops across
     // the distant floor and into the foreground. Measuring the

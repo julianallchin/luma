@@ -337,8 +337,7 @@ mod tests {
     fn every_set_records_its_albedo_mean_colour() {
         // `mean_rgb` is the packed map's own mean, so the sky's ground and
         // the ambient bounce take the colour the floor is drawn with.
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+        let root = crate::meshes_root();
         let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
         for (name, set) in manifest() {
             let image = image::open(root.join("floors").join(name).join("albedo.jpg"))

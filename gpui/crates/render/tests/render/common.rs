@@ -1,19 +1,31 @@
 //! Helpers more than one file in this suite needs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use glam::Vec3;
 use luma_render::assets::{Library, Vertex};
 use luma_render::frame::MeshData;
 
-/// The repository's mesh directory.
-pub fn meshes() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes")
+/// A mesh library over the repository's meshes.
+pub fn library() -> Library {
+    Library::new(luma_render::meshes_root())
 }
 
-/// A mesh library over [`meshes`].
-pub fn library() -> Library {
-    Library::new(meshes())
+/// With `LUMA_RENDER_CAPTURE_DIR` set, saves an RGBA8 picture a test looked
+/// at as `<dir>/<test file>/<name>.png`, so a run can be inspected by eye.
+/// Otherwise does nothing.
+#[track_caller]
+pub fn capture(name: &str, pixels: &[u8], width: u32, height: u32) {
+    let Some(dir) = std::env::var_os("LUMA_RENDER_CAPTURE_DIR") else {
+        return;
+    };
+    let file = Path::new(std::panic::Location::caller().file())
+        .file_stem()
+        .expect("a test file has a name");
+    let dir = PathBuf::from(dir).join(file);
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, width, height)
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
 }
 
 /// A unit cube centred on the origin, as a mesh named `key`.

@@ -1,5 +1,5 @@
 //! Outdoor venue haze must scatter the light it removes from the environment.
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
@@ -9,6 +9,8 @@ use luma_render::{
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 300;
@@ -69,15 +71,6 @@ fn centre_brightness(pixels: &[u8]) -> u32 {
         }
     }
     sum / (20 * 20 * 3)
-}
-
-fn capture(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_OUTDOOR_HAZE_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
 }
 
 fn add_near_opaque_surface(frame: &mut Frame) {
@@ -144,7 +137,7 @@ fn outdoor_surface_and_atmosphere_ignore_noncontributing_fixture_bounds() {
     empty.fixture_shadows = true;
     add_near_opaque_surface(&mut empty);
     let expected = renderer.render(&empty, WIDTH, HEIGHT, 1).unwrap();
-    capture("fixture-bounds-empty", &expected);
+    capture("fixture-bounds-empty", &expected, WIDTH, HEIGHT);
 
     for (label, position, range, color, intensity, tolerance) in [
         // The card is at world y=-110 and the camera at y=-120. This volume
@@ -185,7 +178,7 @@ fn outdoor_surface_and_atmosphere_ignore_noncontributing_fixture_bounds() {
             .fixture_cones
             .push(noncontributing_cone(position, range, color, intensity));
         let actual = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("fixture-bounds-{label}"), &actual);
+        capture(&format!("fixture-bounds-{label}"), &actual, WIDTH, HEIGHT);
         let max_delta = expected
             .iter()
             .zip(&actual)
@@ -206,13 +199,13 @@ fn daylight_and_twilight_illuminate_haze_without_stage_lights() {
         let mut frame = venue(elevation);
         frame.haze_density = 0.0;
         let clear = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("{label}-clear"), &clear);
+        capture(&format!("{label}-clear"), &clear, WIDTH, HEIGHT);
         frame.haze_density = 0.65;
         let hazy = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("{label}-haze"), &hazy);
+        capture(&format!("{label}-haze"), &hazy, WIDTH, HEIGHT);
         frame.debug_view = DebugView::VolumetricAccumulation;
         let scattering = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("{label}-scattering"), &scattering);
+        capture(&format!("{label}-scattering"), &scattering, WIDTH, HEIGHT);
         assert!(
             centre_brightness(&scattering) > centre_brightness(&clear) / 8,
             "{label}: outdoor haze has no environment illumination"
@@ -273,7 +266,7 @@ fn daylight_scattering_stops_at_opaque_geometry() {
         editor_object: None,
     });
     let front = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-    capture("near-black-surface", &front);
+    capture("near-black-surface", &front, WIDTH, HEIGHT);
     assert!(
         centre_brightness(&front) < 15,
         "haze behind an opaque card leaked through it: {}",
@@ -285,7 +278,12 @@ fn daylight_scattering_stops_at_opaque_geometry() {
         centre_brightness(&behind) > 30,
         "a black surface must receive light scattered in front of it"
     );
-    capture("black-surface-through-daylight-haze", &behind);
+    capture(
+        "black-surface-through-daylight-haze",
+        &behind,
+        WIDTH,
+        HEIGHT,
+    );
 }
 
 #[test]
@@ -294,7 +292,7 @@ fn outdoor_haze_has_no_venue_box_and_is_uniform_across_the_horizon() {
     let mut frame = venue(30.0);
     frame.haze_appearance.cloudiness = 0.0;
     let original = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-    capture("global-haze", &original);
+    capture("global-haze", &original, WIDTH, HEIGHT);
     frame.haze_bounds = luma_scene::Aabb::new(Vec3::splat(2000.0), Vec3::splat(2010.0));
     assert!(
         original == renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
@@ -406,7 +404,7 @@ fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
     let reference = renderer
         .render_reference(&frame, WIDTH, HEIGHT, 32)
         .unwrap();
-    capture("global-fixture-haze", &live);
+    capture("global-fixture-haze", &live, WIDTH, HEIGHT);
     let energy = |pixels: &[u8]| -> f64 {
         pixels
             .chunks_exact(4)

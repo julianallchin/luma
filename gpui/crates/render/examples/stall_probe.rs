@@ -52,7 +52,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
-    let meshes = luma_render::repo_root().join("resources/meshes");
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let mut scene = scene();
     scene.render.haze.enabled = haze;

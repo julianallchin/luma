@@ -5,7 +5,7 @@
 //! the sun still casts a hard shadow, whether a cloud's shadow falls on the
 //! stage, whether the clouds move with the camera, and whether a clear sky
 //! is exactly the sky the renderer drew before clouds existed.
-use std::{collections::BTreeMap, path::PathBuf, time::Instant};
+use std::{collections::BTreeMap, time::Instant};
 
 use glam::{Mat4, Vec3};
 use luma_render::{
@@ -19,6 +19,8 @@ use luma_render::{
     },
     Frame, Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
@@ -139,15 +141,6 @@ fn survey_view(environment: VenueEnvironment) -> Frame {
         0.0,
         Quality::High,
     )
-}
-
-fn capture(name: &str, pixels: &[u8], width: u32, height: u32) {
-    if let Some(dir) = std::env::var_os("LUMA_SKY_CLOUDS_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, width, height)
-            .unwrap();
-    }
 }
 
 fn rgb(pixels: &[u8], x: u32, y: u32) -> [f32; 3] {

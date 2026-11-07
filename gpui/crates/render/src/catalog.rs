@@ -859,9 +859,7 @@ pub const FIXTURE_CLAMP_SOCKET: &str = "clamp";
 mod tests {
     use super::*;
 
-    fn meshes_root() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes")
-    }
+    use crate::meshes_root;
 
     /// The load-bearing one: every piece in the catalog resolves every socket
     /// it declares, against the asset that actually ships.

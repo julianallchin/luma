@@ -34,7 +34,7 @@ const KNEE: f32 = 0.6;
 /// A dark stage with one bright hazy beam, so the frame has both a range the
 /// two transforms share and highlights AgX compresses into white.
 fn frame() -> Frame {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::dark_stage(48.0, 0.5);
     render.environment = Environment::DARK;
@@ -97,9 +97,8 @@ fn adopt_a_compositor_device() -> bool {
             max_buffer_size: adapter.limits().max_buffer_size,
             max_storage_buffers_per_shader_stage:
                 adapter.limits().max_storage_buffers_per_shader_stage,
-            max_sampled_textures_per_shader_stage: adapter
-                .limits()
-                .max_sampled_textures_per_shader_stage,
+            max_sampled_textures_per_shader_stage:
+                adapter.limits().max_sampled_textures_per_shader_stage,
             ..wgpu::Limits::default().using_resolution(adapter.limits())
         },
         ..Default::default()

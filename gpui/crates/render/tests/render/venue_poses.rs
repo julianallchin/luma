@@ -283,7 +283,7 @@ fn catalog() -> &'static Sockets {
     SOCKETS.get_or_init(|| {
         Sockets(
             VenueSockets::load(
-                luma_render::repo_root().join("resources/meshes"),
+                luma_render::meshes_root(),
                 std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
             )
             .expect("the catalog resolves against the shipped meshes"),

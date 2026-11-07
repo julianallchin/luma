@@ -9,6 +9,8 @@ use luma_render::{
 };
 use std::{collections::BTreeMap, path::PathBuf};
 
+use crate::common::capture;
+
 fn frame() -> Frame {
     let mut render = RenderSettings::dark_stage(48.0, 1.0);
     render.haze.density = 0.65;
@@ -74,13 +76,6 @@ fn brightness(p: &[u8]) -> u64 {
     p.chunks_exact(4)
         .map(|v| u64::from(v[0]) + u64::from(v[1]) + u64::from(v[2]))
         .sum()
-}
-fn capture(name: &str, pixels: &[u8], width: u32, height: u32) {
-    if let Some(dir) = std::env::var_os("LUMA_HAZE_CAPTURE_DIR") {
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = PathBuf::from(dir).join(format!("{name}.png"));
-        luma_render::image_out::write(&path, pixels, width, height).unwrap();
-    }
 }
 #[test]
 fn unlit_haze_does_not_glow_and_density_attenuates_the_background() {
@@ -216,7 +211,7 @@ fn narrow_beams_retain_bright_origins_at_viewport_resolution() {
         state.dimmer = 1.0;
         state.strobe = 0.0;
     }
-    let mut library = Library::new(root.join("../../../resources/meshes"));
+    let mut library = Library::new(luma_render::meshes_root());
     let mut f = luma_render::build_frame(scene, &catalogue.definitions, 0.0, &mut library).unwrap();
     let mut renderer = Renderer::new().unwrap();
     for resolution in [0.5, 1.0] {

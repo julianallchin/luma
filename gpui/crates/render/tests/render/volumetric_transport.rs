@@ -14,6 +14,8 @@ use luma_render::{
 };
 use serde::Deserialize;
 
+use crate::common::capture;
+
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 120;
 
@@ -62,7 +64,7 @@ fn light(gobo: u32) -> FixtureCone {
 }
 
 fn frame(pieces: Vec<Piece>, lights: Vec<FixtureCone>) -> Frame {
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let mut frame = build_frame_with(
         &scene(pieces),
@@ -184,7 +186,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
         pieces: Vec::new(),
         state: BTreeMap::new(),
     };
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let mut frame =
         build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library).unwrap();
@@ -224,19 +226,6 @@ fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
     let info = reader.next_frame(&mut bytes).unwrap();
     bytes.truncate(info.buffer_size());
     (info.width, info.height, bytes)
-}
-
-fn capture_transport(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_HAZE_CAPTURE_DIR") {
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(
-            &PathBuf::from(dir).join(format!("{name}.png")),
-            pixels,
-            WIDTH,
-            HEIGHT,
-        )
-        .unwrap();
-    }
 }
 
 /// How long [`wait_for_serial`] waits before calling the renderer worker stuck.
@@ -331,7 +320,7 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
         .render(&frame(Vec::new(), vec![light(1)]), WIDTH, HEIGHT, 4)
         .unwrap();
     for (name, pixels) in [("one", &one), ("overlap", &overlap), ("gobo", &gobo)] {
-        capture_transport(name, pixels);
+        capture(name, pixels, WIDTH, HEIGHT);
     }
     assert!(crate::common::mean_rgb(&overlap) > crate::common::mean_rgb(&one));
     assert!(crate::common::mean_rgb(&gobo) < crate::common::mean_rgb(&one));
@@ -354,8 +343,8 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
     let blocked = renderer
         .render(&frame(vec![blocker()], vec![light(0)]), WIDTH, HEIGHT, 2)
         .unwrap();
-    capture_transport("open", &open);
-    capture_transport("blocked", &blocked);
+    capture("open", &open, WIDTH, HEIGHT);
+    capture("blocked", &blocked, WIDTH, HEIGHT);
     assert!(crate::common::mean_rgb(&blocked) < crate::common::mean_rgb(&open));
 
     let mut invalid = light(7);
@@ -437,7 +426,10 @@ fn live_frames_after_camera_and_time_jumps_match_a_fresh_renderer() {
     let mut input = frame(Vec::new(), vec![light(0)]);
     let first = live.draw(&input, WIDTH, HEIGHT).unwrap().pixels.to_vec();
     let stabilized = live.draw(&input, WIDTH, HEIGHT).unwrap().pixels.to_vec();
-    assert_eq!(first, stabilized, "a still ungoboed frame must repeat exactly");
+    assert_eq!(
+        first, stabilized,
+        "a still ungoboed frame must repeat exactly"
+    );
 
     input.camera.eye.x += 0.25;
     let camera_reset = live.draw(&input, WIDTH, HEIGHT).unwrap().pixels.to_vec();
@@ -762,7 +754,7 @@ fn live_shadow_intervals_agree_with_converged_transport() {
         File::open(root.join("tests/fixtures/haze-shadow-suite.json")).unwrap(),
     )
     .unwrap();
-    let mut library = Library::new(root.join("../../../resources/meshes"));
+    let mut library = Library::new(luma_render::meshes_root());
     let mut renderer = Renderer::new().unwrap();
     for pose in suite["cases"].as_array().unwrap() {
         let scene = catalogue

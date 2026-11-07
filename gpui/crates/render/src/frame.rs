@@ -1384,7 +1384,7 @@ fn layout_of(def: &Definition, head_count: usize) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::PathBuf};
+    use std::collections::BTreeMap;
 
     use super::*;
     use crate::scene_desc::{
@@ -1436,7 +1436,7 @@ mod tests {
     }
 
     fn library() -> Library {
-        Library::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"))
+        Library::new(crate::meshes_root())
     }
 
     fn lit() -> PrimitiveState {

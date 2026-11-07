@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use luma_render::scene_desc::{Definition, Scene};
-use luma_render::{assets, build_frame, Renderer};
+use luma_render::{build_frame, Renderer};
 use serde::Deserialize;
 
 const CASES: &[&str] = &[
@@ -45,9 +45,8 @@ struct Descriptor {
 #[test]
 fn tracked_contract_frames_match_their_canonical_descriptors() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo = crate_root.ancestors().nth(3).unwrap();
     let golden_root = crate_root.join("goldens/contracts");
-    let mut library = assets::Library::new(repo.join("resources/meshes"));
+    let mut library = crate::common::library();
     let mut renderer = Renderer::new().unwrap();
     let mut captured = BTreeMap::new();
 

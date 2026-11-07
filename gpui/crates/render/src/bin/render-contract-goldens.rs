@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let output = repo.join("gpui/crates/render/goldens/contracts");
     std::fs::create_dir_all(&output)?;
     let mut renderer = Renderer::new()?;
-    let mut library = assets::Library::new(repo.join("resources/meshes"));
+    let mut library = assets::Library::new(luma_render::meshes_root());
     let requested = std::env::args().skip(1).collect::<Vec<_>>();
 
     for scene in material_scenes() {

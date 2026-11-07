@@ -8,7 +8,6 @@
 //! same frame under two looks and compares the pictures.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use glam::Vec3;
 use luma_render::assets::Library;
@@ -31,7 +30,7 @@ fn frame(intensity: f32, aim: f32, look: Look) -> Frame {
 }
 
 fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
@@ -84,19 +83,16 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
 
 fn render(renderer: &mut Renderer, frame: &Frame) -> Vec<u8> {
     let pixels = renderer.render(frame, WIDTH, HEIGHT, 1).unwrap();
-    dump(&pixels);
+    capture_numbered(&pixels);
     pixels
 }
 
-/// `POST_LOOK_DUMP=dir` writes every rendered picture there, numbered.
-fn dump(pixels: &[u8]) {
+/// Every rendered picture, numbered in render order.
+fn capture_numbered(pixels: &[u8]) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static N: AtomicUsize = AtomicUsize::new(0);
-    if let Some(dir) = std::env::var_os("POST_LOOK_DUMP") {
-        let n = N.fetch_add(1, Ordering::Relaxed);
-        let path = PathBuf::from(dir).join(format!("{n:02}.png"));
-        luma_render::image_out::write(&path, pixels, WIDTH, HEIGHT).unwrap();
-    }
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    crate::common::capture(&format!("{n:02}"), pixels, WIDTH, HEIGHT);
 }
 
 /// Where the lens is on screen: the brightest pixel of a frame with it in.
@@ -383,7 +379,7 @@ fn sun_frame(away_deg: f32, look: Look) -> Frame {
         pieces: Vec::<Piece>::new(),
         state: BTreeMap::new(),
     };
-    let meshes = crate::common::meshes();
+    let meshes = luma_render::meshes_root();
     let mut frame = build_frame_with(
         &scene,
         &BTreeMap::new(),

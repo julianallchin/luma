@@ -2,9 +2,9 @@
 //!
 //! The haze column and the lit floor pool are one cone, lens-wide at the lens
 //! and opening at the field angle from there; nothing scatters between the
-//! cone's virtual apex and the lens. Set `LUMA_LENS_CAPTURE_DIR` to write the
+//! cone's virtual apex and the lens. Set `LUMA_RENDER_CAPTURE_DIR` to write the
 //! renders beside the assertions.
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use glam::Vec3;
 use luma_render::{
@@ -15,6 +15,8 @@ use luma_render::{
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
@@ -87,15 +89,6 @@ fn frame(eye: Vec3, target: Vec3, haze: bool, debug_view: DebugView) -> Frame {
     frame
 }
 
-fn capture(label: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_LENS_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{label}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
-}
-
 fn luminance(pixels: &[u8], x: u32, y: u32) -> u8 {
     let i = ((y * WIDTH + x) * 4) as usize;
     pixels[i].max(pixels[i + 1]).max(pixels[i + 2])
@@ -132,7 +125,7 @@ fn the_lit_pool_is_the_beam_footprint() {
     for (label, lens) in [("point", Lens::POINT), ("lens", LENS)] {
         frame.fixture_cones = vec![narrow(Vec3::new(0.0, 0.0, HEIGHT_M), Vec3::NEG_Z, lens)];
         let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("floor-pool-{label}"), &pixels);
+        capture(&format!("floor-pool-{label}"), &pixels, WIDTH, HEIGHT);
         let run = lit_run(&pixels, HEIGHT / 2, 8);
         assert!(run > 10, "{label}: no visible pool");
         runs.push(run as f32);
@@ -180,7 +173,7 @@ fn the_haze_beam_starts_lens_wide_at_the_lens() {
     for (label, lens) in [("point", Lens::POINT), ("lens", LENS)] {
         frame.fixture_cones = vec![narrow(lens_at, Vec3::X, lens)];
         let pixels = renderer.render(&frame, WIDTH, HEIGHT, 4).unwrap();
-        capture(&format!("haze-root-{label}"), &pixels);
+        capture(&format!("haze-root-{label}"), &pixels, WIDTH, HEIGHT);
         let rows = |x_m: f32| {
             (0..HEIGHT)
                 .filter(|&y| luminance(&pixels, column(x_m), y) > 4)

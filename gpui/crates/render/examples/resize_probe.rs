@@ -77,7 +77,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize) -> Frame {
-    let meshes = luma_render::repo_root().join("resources/meshes");
+    let meshes = luma_render::meshes_root();
     let mut library = Library::new(meshes);
     let scene = scene();
     let mut frame = build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library)

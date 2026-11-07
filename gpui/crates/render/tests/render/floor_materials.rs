@@ -1,8 +1,8 @@
 //! Floor materials: each floor is its own ground, it does not repeat in a
 //! grid, and a laptop draws it without parallax.
 //!
-//! `LUMA_FLOOR_CAPTURE_DIR` saves every frame these tests look at.
-use std::{collections::BTreeMap, path::PathBuf};
+//! `LUMA_RENDER_CAPTURE_DIR` saves every frame these tests look at.
+use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
@@ -18,6 +18,8 @@ use luma_render::{
 };
 
 use crate::common::library;
+
+use crate::common::capture;
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
@@ -175,15 +177,6 @@ fn standing(floor: Floor) -> Frame {
     )
 }
 
-fn capture(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_FLOOR_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
-}
-
 fn rgb(pixels: &[u8], x: u32, y: u32) -> [f32; 3] {
     let o = ((y * WIDTH + x) * 4) as usize;
     [0, 1, 2].map(|c| f32::from(pixels[o + c]) / 255.0)
@@ -277,7 +270,7 @@ fn each_floor_is_its_own_ground() {
             "{floor:?} did not load"
         );
         let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("floor-{}", floor.set()), &pixels);
+        capture(&format!("floor-{}", floor.set()), &pixels, WIDTH, HEIGHT);
         colours.push((*floor, floor_colour(&pixels)));
         images.push((*floor, pixels));
     }
@@ -331,7 +324,12 @@ fn anti_tiling_hides_the_tile() {
             );
             above.floor.as_mut().unwrap().anti_tiling = anti_tiling;
             let pixels = renderer.render(&above, WIDTH, HEIGHT, 1).unwrap();
-            capture(&format!("above-{}-{name}", floor.set()), &pixels);
+            capture(
+                &format!("above-{}-{name}", floor.set()),
+                &pixels,
+                WIDTH,
+                HEIGHT,
+            );
             measured.push(periodicity(&pixels, tile * focal / height));
             if floor == Floor::Gravel {
                 // The far view: a few metres up, over 20 to 100 m of grass.
@@ -345,6 +343,8 @@ fn anti_tiling_hides_the_tile() {
                 capture(
                     &format!("across-{name}"),
                     &renderer.render(&across, WIDTH, HEIGHT, 1).unwrap(),
+                    WIDTH,
+                    HEIGHT,
                 );
             }
         }
@@ -389,8 +389,8 @@ fn low_quality_draws_no_parallax() {
     let mut renderer = Renderer::new().unwrap();
     let marched = renderer.render(&marched, WIDTH, HEIGHT, 1).unwrap();
     let plain = renderer.render(&flat, WIDTH, HEIGHT, 1).unwrap();
-    capture("parallax-high", &marched);
-    capture("parallax-off", &plain);
+    capture("parallax-high", &marched, WIDTH, HEIGHT);
+    capture("parallax-off", &plain, WIDTH, HEIGHT);
     let moved = (HEIGHT / 2..HEIGHT)
         .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
         .filter(|&(x, y)| {
@@ -425,14 +425,14 @@ fn as_before(frame: &mut Frame) {
 }
 
 #[test]
-#[ignore = "capture, not a gate: set LUMA_FLOOR_CAPTURE_DIR to save the orbit view of every floor"]
+#[ignore = "capture, not a gate: set LUMA_RENDER_CAPTURE_DIR to save the orbit view of every floor"]
 fn the_orbit_view_shows_the_ground() {
     let mut renderer = Renderer::new().unwrap();
     for floor in [Floor::Grass, Floor::Dirt, Floor::Concrete, Floor::Beach] {
         let mut frame = orbit(floor);
         as_before(&mut frame);
         let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("orbit-{}", floor.set()), &pixels);
+        capture(&format!("orbit-{}", floor.set()), &pixels, WIDTH, HEIGHT);
     }
 }
 
@@ -498,7 +498,7 @@ fn every_floor_is_as_rough_as_its_set_says() {
         };
         let mirror = lit(&mut renderer, Vec3::new(0.0, 10.0, 6.0));
         let side = lit(&mut renderer, Vec3::new(10.0, 0.0, 6.0));
-        capture(&format!("mirror-{}", floor.set()), &mirror);
+        capture(&format!("mirror-{}", floor.set()), &mirror, WIDTH, HEIGHT);
         let gloss = luminance(&mirror, 440..520, 230..310) / luminance(&side, 440..520, 230..310);
         // The mirrored light's excess, in the floor's own albedo: the
         // specular reflectance toward the camera. A dark floor shows its
@@ -585,6 +585,8 @@ fn every_floor_repeats_at_its_real_size() {
         capture(
             &format!("metre-{}", floor.set()),
             &renderer.render(&view, WIDTH, HEIGHT, 1).unwrap(),
+            WIDTH,
+            HEIGHT,
         );
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -627,7 +629,12 @@ fn a_grey_box_takes_the_floors_colour_from_below() {
             },
         );
         let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("underside-{}", floor.set()), &pixels);
+        capture(
+            &format!("underside-{}", floor.set()),
+            &pixels,
+            WIDTH,
+            HEIGHT,
+        );
         // The underside's middle, where the camera sees it.
         let view_proj = Mat4::perspective_rh(
             frame.camera.fov_y_deg.to_radians(),
@@ -691,6 +698,8 @@ fn a_grey_box_takes_the_floors_colour_from_below() {
         capture(
             &format!("barriers-{}", floor.set()),
             &renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
+            WIDTH,
+            HEIGHT,
         );
     }
     assert!(

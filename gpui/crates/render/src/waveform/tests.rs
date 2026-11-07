@@ -49,8 +49,7 @@ fn shared_device_stage_and_waveform() -> anyhow::Result<()> {
         .iter()
         .find(|s| s.id == case["scene"].as_str().unwrap())
         .unwrap();
-    let mut library =
-        Library::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"));
+    let mut library = Library::new(crate::meshes_root());
     let mut frame = build_frame(scene, &catalogue.definitions, 3.0, &mut library)?;
     frame.haze_resolution = crate::LIVE_HAZE_RESOLUTION;
     frame.camera = Camera {

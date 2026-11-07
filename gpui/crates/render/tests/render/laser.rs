@@ -5,10 +5,9 @@
 //! ```
 //!
 //! One projector at stage left scanning across in front of the camera, over
-//! a dark stage. `LUMA_LASER_CAPTURE_DIR` writes each picture as a PNG.
+//! a dark stage. `LUMA_RENDER_CAPTURE_DIR` writes each picture as a PNG.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use glam::Vec3;
 use luma_render::assets::Library;
@@ -28,7 +27,7 @@ fn frame(haze: f32) -> Frame {
 
 /// [`frame`], with `settings` changed last.
 fn frame_with(haze: f32, settings: impl FnOnce(&mut RenderSettings)) -> Frame {
-    let mut library = Library::new(crate::common::meshes());
+    let mut library = Library::new(luma_render::meshes_root());
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
     render.sun = None;
@@ -96,11 +95,7 @@ fn fan(count: usize, dwell: usize) -> Vec<LaserPoint> {
 
 fn render(renderer: &mut Renderer, frame: &Frame, name: &str) -> Vec<u8> {
     let pixels = renderer.render(frame, WIDTH, HEIGHT, 1).unwrap();
-    if let Some(dir) = std::env::var_os("LUMA_LASER_CAPTURE_DIR") {
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = PathBuf::from(dir).join(format!("{name}.png"));
-        luma_render::image_out::write(&path, &pixels, WIDTH, HEIGHT).unwrap();
-    }
+    crate::common::capture(name, &pixels, WIDTH, HEIGHT);
     pixels
 }
 
@@ -336,7 +331,7 @@ fn piece(id: &str, mesh: &str, pos: [f32; 3], scale: f32) -> Piece {
 
 /// A dark stage with `pieces` on it, seen from `camera`.
 fn staged(haze: f32, camera: CameraPose, pieces: Vec<Piece>, lasers: Vec<LaserScan>) -> Frame {
-    let mut library = Library::new(crate::common::meshes());
+    let mut library = Library::new(luma_render::meshes_root());
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
     render.sun = None;

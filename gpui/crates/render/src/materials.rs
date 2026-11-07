@@ -312,28 +312,26 @@ fn mean_linear(image: &Image) -> Vec3 {
         sum += Vec3::new(decode(pixel[0]), decode(pixel[1]), decode(pixel[2]));
         count += 1.0;
     }
-    if count > 0.0 { sum / count } else { Vec3::ONE }
+    if count > 0.0 {
+        sum / count
+    } else {
+        Vec3::ONE
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use glam::Vec3;
 
-    use super::{ALUMINIUM, CARPET, FIXTURE_MESHES, MESHES, POWDER_COAT, mean_linear};
+    use super::{mean_linear, ALUMINIUM, CARPET, FIXTURE_MESHES, MESHES, POWDER_COAT};
     use crate::assets::Library;
-
-    fn meshes() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes")
-    }
 
     /// A renamed material in a re-exported mesh would otherwise fall back to
     /// its authored constants without anyone noticing.
     #[test]
     fn every_listed_material_exists() {
         for (asset, parts) in MESHES {
-            let glb = gltf::Gltf::open(meshes().join(asset)).expect(asset);
+            let glb = gltf::Gltf::open(crate::meshes_root().join(asset)).expect(asset);
             let names: Vec<_> = glb.materials().filter_map(|m| m.name()).collect();
             for (name, _) in *parts {
                 assert!(names.contains(name), "{asset} has no material {name:?}");
@@ -344,8 +342,8 @@ mod tests {
     /// Every fixture housing is powder coat, whatever its authored material.
     #[test]
     fn fixture_housings_are_powder_coat() {
-        let mut library = Library::new(meshes());
-        let dir = meshes().join(FIXTURE_MESHES);
+        let mut library = Library::new(crate::meshes_root());
+        let dir = crate::meshes_root().join(FIXTURE_MESHES);
         for entry in std::fs::read_dir(&dir).unwrap() {
             let file = entry.unwrap().file_name().into_string().unwrap();
             let glb = library.get(&format!("{FIXTURE_MESHES}{file}")).unwrap();
@@ -363,7 +361,7 @@ mod tests {
     /// preset: the carpet is a black deck with a weave, not a grey one.
     #[test]
     fn textured_parts_average_to_their_preset() {
-        let mut library = Library::new(meshes());
+        let mut library = Library::new(crate::meshes_root());
         let glb = library.get("stage_lab/stage_praticavel_2x1x1.glb").unwrap();
         let mut seen = 0;
         for primitive in &glb.primitives {
@@ -390,7 +388,7 @@ mod tests {
     /// A CDJ's screen glows with its own picture; its housing does not glow.
     #[test]
     fn screens_emit_their_print() {
-        let mut library = Library::new(meshes());
+        let mut library = Library::new(crate::meshes_root());
         let glb = library.get("stage_lab/cdj_3000x.glb").unwrap();
         for primitive in &glb.primitives {
             let screen = primitive.material_name.as_deref() == Some("Screenshot_104");
@@ -404,7 +402,7 @@ mod tests {
     /// The deck carpet's weave is compressed toward its mean.
     #[test]
     fn carpet_detail_is_flattened() {
-        let mut library = Library::new(meshes());
+        let mut library = Library::new(crate::meshes_root());
         let glb = library.get("stage_lab/stage_praticavel_2x1x1.glb").unwrap();
         let carpet = glb
             .primitives

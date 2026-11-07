@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
 
     let (width, height) = catalogue.frame_size();
     let mut renderer = Renderer::new()?;
-    let mut library = luma_render::assets::Library::new(repo.join("resources/meshes"));
+    let mut library = luma_render::assets::Library::new(luma_render::meshes_root());
 
     let mut drifted = 0usize;
     for scene in &catalogue.scenes {

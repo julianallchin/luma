@@ -106,4 +106,11 @@ pub fn repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+/// The repository's mesh catalog, `resources/meshes`, for the bins and tests
+/// that draw tracked assets.
+#[must_use]
+pub fn meshes_root() -> std::path::PathBuf {
+    repo_root().join("resources/meshes")
+}
+
 mod visibility;

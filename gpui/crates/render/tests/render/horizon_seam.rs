@@ -15,6 +15,8 @@ use luma_render::{
     Frame, Renderer,
 };
 
+use crate::common::capture;
+
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 
@@ -54,7 +56,7 @@ fn frame_in(environment: VenueEnvironment, haze: Option<VenueHaze>, eye_y: f32) 
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(crate::common::meshes()),
+        &mut Library::new(luma_render::meshes_root()),
     )
     .unwrap()
 }
@@ -78,15 +80,6 @@ fn row_luma(pixels: &[u8], y: u32) -> f32 {
             + 0.0722 * f32::from(pixels[o + 2]);
     }
     sum / WIDTH as f32
-}
-
-fn capture(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_HORIZON_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
 }
 
 /// The strongest line within 25 rows of the horizon, in 8-bit levels: how
@@ -152,7 +145,7 @@ fn the_ground_meets_the_sky_without_a_line() {
                     }
                     for (path, pixels) in [("still", still), ("live", live)] {
                         let label = format!("{name} haze={haze} eye={eye_y} {path}");
-                        capture(&label.replace([' ', '='], "-"), &pixels);
+                        capture(&label.replace([' ', '='], "-"), &pixels, WIDTH, HEIGHT);
                         let (line, row) = worst_line(&pixels, horizon_row(eye_y));
                         if line > set.0 {
                             *set = (line, format!("{label}, row {row}"));
@@ -229,7 +222,7 @@ fn low_sun(clouds: CloudCover, haze: Option<f32>, fov: f32) -> Frame {
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(crate::common::meshes()),
+        &mut Library::new(luma_render::meshes_root()),
     )
     .unwrap()
 }
@@ -299,8 +292,18 @@ fn the_last_row_is_what_a_long_lens_sees_there() {
                 .render(&low_sun(clouds, haze, 45.0 / 16.0), WIDTH, HEIGHT, 1)
                 .unwrap();
             let label = format!("{} haze={haze:?}", clouds.label());
-            capture(&format!("{label} wide").replace([' ', '='], "-"), &wide);
-            capture(&format!("{label} long").replace([' ', '='], "-"), &long);
+            capture(
+                &format!("{label} wide").replace([' ', '='], "-"),
+                &wide,
+                WIDTH,
+                HEIGHT,
+            );
+            capture(
+                &format!("{label} long").replace([' ', '='], "-"),
+                &long,
+                WIDTH,
+                HEIGHT,
+            );
             // The wide view's middle sixteenth of columns is the long view's
             // width; its row `y` is the long view's rows 16 (y - 180) on.
             let horizon = horizon_row(1.7);
@@ -384,7 +387,7 @@ fn gasworks() -> (Frame, u32, u32) {
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(crate::common::meshes()),
+        &mut Library::new(luma_render::meshes_root()),
     )
     .unwrap();
     export.apply(&mut frame);
@@ -422,11 +425,7 @@ fn the_exported_gasworks_view_has_no_line_at_the_horizon() {
         .unwrap()
         .render(&frame, width, height, 1)
         .unwrap();
-    if let Some(dir) = std::env::var_os("LUMA_HORIZON_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join("gasworks.png"), &pixels, width, height).unwrap();
-    }
+    capture("gasworks", &pixels, width, height);
     // The horizon's row, from the exported matrices: a level ray far out.
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gasworks-horizon-line.json");

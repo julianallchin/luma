@@ -9,16 +9,11 @@
 //!
 //! Run `cargo test -p luma-render --test render venue_build::`.
 
-use std::path::{Path, PathBuf};
-
 use glam::DVec3;
 use luma_render::catalog::VenueSockets;
+use luma_render::meshes_root;
 use luma_scene::build::{compile, Refusal, Request, Scene, Tip};
 use luma_scene::venue::{resolve, Node, NodeKind, Params, ResolvedVenue, VenueGraph};
-
-fn meshes_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes")
-}
 
 fn supply() -> VenueSockets {
     VenueSockets::load(

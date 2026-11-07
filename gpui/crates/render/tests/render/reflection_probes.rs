@@ -1,14 +1,13 @@
 //! Local reflection probes (`probes.rs`): shiny and matte things take their
 //! surroundings from the stage around them, relit every frame.
 //!
-//! `LUMA_PROBE_CAPTURE_DIR` saves every frame these tests look at, with the
+//! `LUMA_RENDER_CAPTURE_DIR` saves every frame these tests look at, with the
 //! probes on and off. The timing test is ignored by default; run it with
 //! `LUMA_PROFILE_DETAIL=1` so the renderer records each pass.
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
-    Frame, Renderer,
     assets::{Library, Material, Vertex},
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures, MeshData},
@@ -18,13 +17,16 @@ use luma_render::{
         CameraPose, CloudCover, Floor, Geometry, Piece, Procedural, Quality, RenderSettings, Scene,
         VenueEnvironment, VenueHaze,
     },
+    Frame, Renderer,
 };
+
+use crate::common::capture;
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
 
 fn library() -> Library {
-    Library::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"))
+    Library::new(luma_render::meshes_root())
 }
 
 /// A frame of `pieces` in `environment`, from `eye` toward `target` (world
@@ -166,15 +168,6 @@ fn settled(renderer: &mut Renderer, frame: &Frame) -> Vec<u8> {
     renderer.render(frame, WIDTH, HEIGHT, 1).unwrap()
 }
 
-fn capture(name: &str, pixels: &[u8]) {
-    if let Some(dir) = std::env::var_os("LUMA_PROBE_CAPTURE_DIR") {
-        let dir = PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), pixels, WIDTH, HEIGHT)
-            .unwrap();
-    }
-}
-
 /// Where `world` lands in `frame`'s picture, pixels.
 fn project(frame: &Frame, world: Vec3) -> (u32, u32) {
     let view_proj = Mat4::perspective_rh(
@@ -273,6 +266,8 @@ fn a_galvanised_barrier_on_dirt_reflects_the_warm_ground() {
                 if probes { "on" } else { "off" }
             ),
             &pixels,
+            WIDTH,
+            HEIGHT,
         );
         let face = mean(&pixels, project(&frame, centre - Vec3::Y * 0.05), 10);
         // Red over blue: the dirt is warm, the concrete near neutral.
@@ -310,6 +305,8 @@ fn a_galvanised_barrier_on_dirt_reflects_the_warm_ground() {
         capture(
             &format!("barriers-view-probes-{}", if probes { "on" } else { "off" }),
             &settled(&mut renderer, &frame),
+            WIDTH,
+            HEIGHT,
         );
     }
 
@@ -369,8 +366,8 @@ fn a_truss_reflects_a_red_pool_in_the_frame_it_turns_red() {
         // One frame: the probes' captures are unchanged, their relight is not.
         let after = renderer.render(&red, WIDTH, HEIGHT, 1).unwrap();
         let tag = if probes { "on" } else { "off" };
-        capture(&format!("truss-white-probes-{tag}"), &before);
-        capture(&format!("truss-red-probes-{tag}"), &after);
+        capture(&format!("truss-white-probes-{tag}"), &before, WIDTH, HEIGHT);
+        capture(&format!("truss-red-probes-{tag}"), &after, WIDTH, HEIGHT);
         red_over_green(&after) - red_over_green(&before)
     };
     let with = shift(true, &mut renderer);
@@ -396,6 +393,8 @@ fn a_truss_reflects_a_red_pool_in_the_frame_it_turns_red() {
         capture(
             &format!("truss-wash-probes-{}", if probes { "on" } else { "off" }),
             &settled(&mut renderer, &wide),
+            WIDTH,
+            HEIGHT,
         );
     }
     eprintln!(
@@ -467,6 +466,8 @@ fn indoors_a_shiny_box_reflects_the_rooms_walls() {
         capture(
             &format!("indoor-{name}-probes-{}", if probes { "on" } else { "off" }),
             &pixels,
+            WIDTH,
+            HEIGHT,
         );
         mean(&pixels, at, 20)
     };
@@ -531,6 +532,8 @@ fn the_ground_under_a_deck_stays_dark_with_probes() {
         capture(
             &format!("under-deck-probes-{}", if probes { "on" } else { "off" }),
             &pixels,
+            WIDTH,
+            HEIGHT,
         );
         let luminance = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
         luminance(mean(&pixels, project(&frame, under), 6))
@@ -563,6 +566,8 @@ fn the_ground_under_a_deck_stays_dark_with_probes() {
         capture(
             &format!("deck-view-probes-{}", if probes { "on" } else { "off" }),
             &settled(&mut renderer, &frame),
+            WIDTH,
+            HEIGHT,
         );
     }
     assert!(
@@ -631,6 +636,8 @@ fn open_ground_has_no_edge_at_the_probe_grid() {
                     if probes { "on" } else { "off" }
                 ),
                 &pixels,
+                WIDTH,
+                HEIGHT,
             );
             [inside, outside, under].map(|p| mean(&pixels, project(&frame, p), 6))
         };
@@ -727,8 +734,8 @@ fn the_towers_carry_no_bright_band_at_the_horizon() {
     let off = mean(&with_towers, &tower);
     let probes = settled(&mut renderer, &view(true, true));
     let on = mean(&probes, &tower);
-    capture("horizon-towers-probes-off", &with_towers);
-    capture("horizon-towers-probes-on", &probes);
+    capture("horizon-towers-probes-off", &with_towers, WIDTH, HEIGHT);
+    capture("horizon-towers-probes-on", &probes, WIDTH, HEIGHT);
     eprintln!(
         "tower band at the horizon: probes on {on:.3}, off {off:.3}; \
          sky above {sky:.3}, ground below {ground:.3}"
@@ -797,7 +804,7 @@ fn a_reflection_changes_smoothly_across_the_probe_grid() {
         add_boxes(&mut frame, &[(centre, Vec3::splat(0.4), chrome)]);
         let pixels = settled(&mut renderer, &frame);
         if step % 6 == 0 {
-            capture(&format!("seams-{step:02}"), &pixels);
+            capture(&format!("seams-{step:02}"), &pixels, WIDTH, HEIGHT);
         }
         colours.push(mean(&pixels, project(&frame, centre - Vec3::Y * 0.2), 8));
     }
@@ -951,7 +958,7 @@ fn reflection_probe_timings() {
 
 /// Diagnosis: dump the probe nearest the barrier on dirt: its captured
 /// albedo, normal and distance, and its change to the sky probe (black
-/// where negative) at every prefiltered mip, to `LUMA_PROBE_CAPTURE_DIR`, and the stage with the probes drawn as balls.
+/// where negative) at every prefiltered mip, to `LUMA_RENDER_CAPTURE_DIR`, and the stage with the probes drawn as balls.
 #[test]
 #[ignore = "diagnosis"]
 fn dump_probe_textures() {
@@ -964,7 +971,7 @@ fn dump_probe_textures() {
         &[(centre, Vec3::new(2.4, 0.08, 1.1), materials::STEEL)],
     );
     let pixels = settled(&mut renderer, &frame);
-    capture("dump-view", &pixels);
+    capture("dump-view", &pixels, WIDTH, HEIGHT);
     // The stage with a coloured wash, for the debug balls.
     let mut stage_view = frame_with(
         outdoor(Floor::Dirt),
@@ -981,7 +988,12 @@ fn dump_probe_textures() {
         ));
     }
     stage_view.probes.debug = true;
-    capture("dump-stage", &settled(&mut renderer, &stage_view));
+    capture(
+        "dump-stage",
+        &settled(&mut renderer, &stage_view),
+        WIDTH,
+        HEIGHT,
+    );
     let _ = settled(&mut renderer, &frame);
     let positions = renderer.reflection_probe_positions();
     eprintln!("probes: {positions:.2?}");
@@ -995,7 +1007,6 @@ fn dump_probe_textures() {
         })
         .unwrap()
         .0 as u32;
-    let dir = std::env::var_os("LUMA_PROBE_CAPTURE_DIR").map(PathBuf::from);
     let save = |name: &str,
                 (w, h, texels): (u32, u32, Vec<[f32; 4]>),
                 scale: f32,
@@ -1014,8 +1025,6 @@ fn dump_probe_textures() {
             sum[2] / n,
             sum[3] / n
         );
-        let Some(dir) = &dir else { return };
-        std::fs::create_dir_all(dir).unwrap();
         let rgba: Vec<u8> = texels
             .iter()
             .flat_map(|t| {
@@ -1024,7 +1033,7 @@ fn dump_probe_textures() {
                 [e(c[0]), e(c[1]), e(c[2]), 255]
             })
             .collect();
-        luma_render::image_out::write(&dir.join(format!("{name}.png")), &rgba, w, h).unwrap();
+        capture(name, &rgba, w, h);
     };
     let rgb = |t: [f32; 4]| [t[0], t[1], t[2]];
     for what in 0..3 {
