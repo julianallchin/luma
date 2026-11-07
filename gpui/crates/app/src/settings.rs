@@ -513,7 +513,17 @@ fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
                 .child("Back")
                 .agent_node(Role::Button, "Back"),
         )
-        .child(div().h(px(8.)))
+        .child(
+            div()
+                .px(px(8.))
+                .pt(px(12.))
+                .pb(px(4.))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(glass::ink(glass::TEXT_TERTIARY))
+                .child("Settings")
+                .agent_node(Role::Text, "Settings"),
+        )
         .children(Tab::ALL.into_iter().map(|tab| {
             let app = app.clone();
             luma_ui::float::nav_row(RowState::of(tab == state.tab, false), tab.label())

@@ -373,10 +373,12 @@ test("procedural haze controls are editable and survive environment switches", (
   const names = ["Haze density", "Cloudiness", "Cloud size (m)", "Turbulence", "Wind speed (m/s)", "Wind direction (°)"];
   const read = () => names.map((n) => field(n).label);
   const before = read();
-  // The panel is shorter than its rows: wheel it until the slider is on
-  // screen (a clipped node has no height).
+  // The panel is shorter than its rows: wheel it until the slider is wholly
+  // on screen (a clipped node is as tall as what shows of it), so the scrub's
+  // press lands on it.
+  const whole = field(names[0]).bounds.height;
   const reveal = (name) => {
-    for (let i = 0; i < 12 && field(name).bounds.height === 0; i++) {
+    for (let i = 0; i < 12 && field(name).bounds.height < whole; i++) {
       app.scroll(app.snapshot().find({ role: "card", label: "Venue environment" }), { dy: -60, steps: 2 });
       app.frames(2);
     }
