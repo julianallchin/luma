@@ -26,7 +26,9 @@ function read() {
   };
 }
 
-const transport = (label) => until(`the transport's ${label}`, (s) => s.find({ role: "button", label }));
+// Arrange shows the transport only as its playhead: running or held.
+const running = () => until("the playhead running", () => nav.moving());
+const held = () => until("the playhead held", () => !nav.moving());
 
 function openEditor() {
   nav.track("Aurora");
@@ -50,33 +52,37 @@ test("keys and actions route to the focused screen and a text field keeps its ow
   nav.venue("Test Venue");
   app.frames(8);
   const opened = openEditor();
-  expect(opened.buttons).toContain("Play");
+  expect(nav.moving()).toBe(false);
 
   // 1. Space plays. Nothing was clicked, so this is focus routing a binding.
+  //    The player loads behind the timeline, so start it by name first and
+  //    stop it, which proves it is ready for the key.
+  nav.play();
+  nav.pause();
+  const before = read().playhead;
   app.key("space");
-  transport("Pause");
-  app.frames(4, { waitMs: 60 });
-  expect(read().playhead).toBeGreaterThan(opened.playhead);
+  running();
+  expect(read().playhead).toBeGreaterThan(before);
 
   // 2. Space again stops it, and a stopped playhead stays put.
   app.key("space");
-  transport("Play");
+  held();
   const paused = read();
   app.frames(6, { waitMs: 60 });
   expect(read().playhead).toBe(paused.playhead);
 
   // 3. The same verb by name.
   app.action("luma::PlayPause");
-  transport("Pause");
+  running();
   app.key("space");
-  transport("Play");
+  held();
 
   // 4. With nothing to back out of, Escape leaves the editor be; ⌘P is the
   //    way to the song list.
   app.key("escape");
   app.frames(6);
   const stayed = read();
-  assert(!stayed.onVenuePicker && stayed.search === null && stayed.buttons.includes("Play"),
+  assert(!stayed.onVenuePicker && stayed.search === null && stayed.playhead !== null,
     `escape left the editor: ${JSON.stringify(stayed.search)}`);
   app.key("secondary-p");
   app.frames(6);
@@ -100,7 +106,8 @@ test("keys and actions route to the focused screen and a text field keeps its ow
   assert(!typed.onVenuePicker && !cleared.onVenuePicker, "a key meant for the search field navigated instead");
 
   // 6. Nothing the search field was sent reached the transport.
-  expect(openEditor().buttons).toContain("Play");
+  openEditor();
+  expect(nav.moving()).toBe(false);
 
   // 7. ⌘, over whatever is showing, and out again.
   app.key("secondary-,");

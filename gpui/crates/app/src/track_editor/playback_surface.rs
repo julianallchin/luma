@@ -27,18 +27,7 @@ impl Render for Surface {
             .flex()
             .flex_col()
             .child(minimap::element(editor, &app))
-            // The audio lane's header rides over the canvas it heads, and
-            // repaints with it, so its clock runs with the playhead.
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .child(canvas_element(editor, &app))
-                    .child(toolbar::audio_header(editor, &app)),
-            );
+            .child(canvas_element(editor, &app));
         if (editor.transport.playing || editor.zoom_motion.is_some()) && !self.scheduled {
             self.scheduled = true;
             let this = cx.entity().downgrade();

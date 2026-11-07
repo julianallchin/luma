@@ -23,8 +23,7 @@ test(
     const selected = () => app.snapshot().find({ role: "text", label: "1 selected" });
     until("the selection", selected);
     const before = cards(LAYOUT);
-    app.click(node("button", "Play"));
-    until("playing", () => node("button", "Pause"));
+    nav.play();
 
     app.click(node("button", "Fullscreen visualizer"));
     until("fullscreen", () => !node("card", "Waveform"));
@@ -55,7 +54,8 @@ test(
     app.key("escape");
     until("the editor restored", () => node("card", "Waveform"));
     expect(cards(LAYOUT)).toEqual(before);
-    expect(node("button", "Pause") !== undefined).toBe(true);
+    // Back in the editor the transport is still running: the playhead moves.
+    until("the playhead still running", () => nav.moving());
     expect(node("card", CLIP) !== undefined).toBe(true);
     assert(selected(), "leaving fullscreen dropped the selection");
 

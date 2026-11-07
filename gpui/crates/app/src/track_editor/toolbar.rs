@@ -1,5 +1,5 @@
-//! The strip above the timeline — add and export, readouts, and the beat-grid
-//! vote — and the audio lane's header, which holds the transport.
+//! The strip above the timeline: add and export, readouts, and the beat-grid
+//! vote.
 
 use super::*;
 
@@ -226,81 +226,6 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .when(state.score.read_only, |el| {
             el.child(luma_ui::caption("Read only"))
         })
-}
-
-/// Where the audio lane's header sits: its left edge, inset from the
-/// timeline's.
-const AUDIO_HEADER_INSET: f32 = 8.;
-
-/// The audio lane's header: play, where the song is, and its tempo, over the
-/// waveform's leading edge.
-///
-/// A panel of its own rather than a strip above the timeline, so the
-/// transport sits with the lane it plays. It takes the presses that land on
-/// it and no others — the waveform around it still clears the selection.
-pub(super) fn audio_header(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
-    let transport = app.clone();
-    let playing = state.transport.playing;
-    let label = if playing { "Pause" } else { "Play" };
-    let ready = state.transport.ready && state.transport.session.is_some();
-    let position = format!(
-        "{} / {}",
-        clock(state.transport.position),
-        clock(state.transport.duration)
-    );
-    div()
-        .absolute()
-        .left(px(AUDIO_HEADER_INSET))
-        .top(px(HEADER_HEIGHT))
-        .h(px(WAVEFORM_HEIGHT))
-        .flex()
-        .items_center()
-        .child(
-            div()
-                .id("audio-lane-header")
-                .occlude()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .p(px(4.))
-                .rounded(px(luma_ui::radius::CONTROL))
-                .bg(luma_ui::glass::panel_opaque())
-                .border_1()
-                .border_color(luma_ui::glass::inner_rule())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .child(
-                            luma_ui::icon_button(
-                                if playing {
-                                    luma_ui::icons::IconName::Pause
-                                } else {
-                                    luma_ui::icons::IconName::Play
-                                },
-                                ready.into(),
-                            )
-                            .id("transport")
-                            // One button, two labels — the label *is* the
-                            // state, so a script reads what the transport is
-                            // doing from the same place a person does.
-                            .on_click(move |_, _, cx| {
-                                transport.update(cx, |this, cx| this.toggle_playback(cx))
-                            })
-                            .agent_node(Role::Button, label),
-                        )
-                        .child(luma_ui::caption(position)),
-                )
-                .when_some(state.beats.as_deref(), |el, grid| {
-                    el.child(
-                        div()
-                            .px(px(4.))
-                            .child(luma_ui::caption(format!("{:.1} BPM", grid.bpm))),
-                    )
-                })
-                .agent_node(Role::Card, "Audio lane header"),
-        )
 }
 
 /// `M:SS`, the same clock the browser's TIME column reads in.

@@ -152,6 +152,42 @@ globalThis.nav = {
 		app.frames(2);
 	},
 
+	// The timeline's transport, which Arrange shows only as its playhead: a
+	// moving playhead is a playing song. Space and `luma::PlayPause` are the
+	// verbs.
+	playhead(s = app.snapshot()) {
+		return s.find({ role: "slider", label: "Playhead" })?.bounds.x;
+	},
+
+	// Whether the playhead moves on its own over a few polls.
+	moving() {
+		const from = nav.playhead();
+		app.frames(6, { waitMs: 60 });
+		return nav.playhead() !== from;
+	},
+
+	// Start the open score playing and wait for the playhead to run. Nothing
+	// on screen says the player has loaded, and the verb does nothing until
+	// it has, so a press that moved nothing is pressed again.
+	play() {
+		for (let attempt = 0; attempt < 8; attempt++) {
+			app.action("luma::PlayPause");
+			try {
+				until("the playhead running", () => nav.moving(), { timeoutMs: 1500 });
+				return;
+			} catch (_) {
+				// Not loaded yet: the press was dropped.
+			}
+		}
+		throw new Error("the playhead never ran");
+	},
+
+	// Stop it, and wait for the playhead to hold still.
+	pause() {
+		app.action("luma::PlayPause");
+		until("the playhead stopped", () => !nav.moving());
+	},
+
 	// Both halves of the commonest walk in the suite.
 	trackEditor(venue, track) {
 		nav.venue(venue);

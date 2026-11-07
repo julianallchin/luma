@@ -50,7 +50,7 @@ test("the rig is lit by the playing track", () => {
 
   // The pattern has a two-second period, so a second of playback is half a
   // cycle: a sample pinned to one time, or a cached frame, cannot move.
-  nav.step("the Play button", "button", "Play");
+  nav.play();
   app.frames(20, { waitMs: 55 });
   expect(image.diff(first, stageShot())).toBeGreaterThan(0.01);
 });
@@ -69,7 +69,7 @@ test("the footage look still draws the rig lit and moving with the track", () =>
   const first = stageShot();
   expect(chroma(first)).toBeGreaterThan(2);
 
-  nav.step("the Play button", "button", "Play");
+  nav.play();
   app.frames(20, { waitMs: 55 });
   expect(image.diff(first, stageShot())).toBeGreaterThan(0.01);
 });

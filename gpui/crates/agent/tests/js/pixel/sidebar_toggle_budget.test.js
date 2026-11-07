@@ -42,7 +42,7 @@ test.skip("bug: the Fullscreen button covers the Frame stats toggle", { timeoutM
   nav.agentOff();
   app.frames(10, { waitMs: 60 });
   nav.step("the frame-stats panel", "toggle", "Frame stats");
-  nav.step("the Play button", "button", "Play");
+  nav.play();
   app.frames(20, { waitMs: 55 });
   assert(stage() !== undefined, "the viewport is not on screen");
 

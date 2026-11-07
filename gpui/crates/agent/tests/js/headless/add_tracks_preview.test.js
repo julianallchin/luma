@@ -135,10 +135,7 @@ test("space types a space while a query is being typed", () => {
 test("closing the dialog stops the preview and gives the song its player back", () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  const time = () => app.snapshot().findAll({ role: "text" })
-    .find((n) => /^\d+:\d+ \/ \d+:\d+$/.test(n.label))?.label;
-  nav.step("a ready player", "button", "Play");
-  until("Aurora playing", (s) => button(s, "Pause"));
+  nav.play();
 
   // The add-track affordance is the song list's.
   nav.songs();
@@ -150,14 +147,12 @@ test("closing the dialog stops the preview and gives the song its player back", 
 
   app.click(app.snapshot().find({ role: "button", label: "Close" }));
   until("the dialog gone", (s) => !s.find({ role: "button", label: "Close" }));
-  // The song let go of the player for the preview, and has it back: it plays
-  // its own 20 s audio, not the 40 s preview's.
+  // The song let go of the player for the preview, and has it back. The
+  // playhead only runs on a player reading that names this song, so a
+  // running playhead is the song's own audio, not the preview's.
   app.action("luma::ToggleSongList");
   until("the score again", (s) => !s.find({ role: "card", label: "Song list" }));
-  nav.step("the song's player", "button", "Play");
-  until("Aurora playing again", (s) => button(s, "Pause"));
-  app.frames(4, { waitMs: 60 });
-  expect(time()).toMatch(/ \/ 0:20$/);
+  nav.play();
 });
 
 test("leaving the source stops its preview", () => {
