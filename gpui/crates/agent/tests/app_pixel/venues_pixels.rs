@@ -321,7 +321,10 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         "venue error geometry: card=({card_x:.0},{card_y:.0}) {card_width:.0}x{card_height:.0}; viewport=({viewport_x:.0},{viewport_y:.0}) {viewport_width:.0}x{viewport_height:.0}; text=({text_x:.0},{text_y:.0}) {text_width:.0}x{text_height:.0}"
     );
 
-    let loading = preserve(launch_shots["loading"].as_str().unwrap(), "venue-loading.png");
+    let loading = preserve(
+        launch_shots["loading"].as_str().unwrap(),
+        "venue-loading.png",
+    );
     let base = preserve(shots["base"].as_str().unwrap(), "venue-shell-base.png");
     let browse = preserve(launch_shots["browse"].as_str().unwrap(), "venue-browse.png");
     let create = preserve(shots["create"].as_str().unwrap(), "venue-create.png");

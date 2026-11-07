@@ -2,7 +2,7 @@
 // is that it is a *state* and not a dialog: one centred column on the app's
 // own ground, with no card, band or box drawn around it.
 //
-// Reached by signing out from the account foot: the fixture launches signed
+// Reached by signing out from the venue menu: the fixture launches signed
 // in, and the gate is where a sign-out lands. Only the Email route is driven:
 // the Code route would send a real login code.
 
@@ -10,7 +10,7 @@ fixture({ window: [900, 650] });
 
 test("the sign-in screen is one centred column on bare ground", () => {
   nav.venue("Test Venue");
-  nav.step("the account foot", "button", "Account");
+  nav.venueMenu();
   nav.step("the sign-out row", "row", "Sign out");
   const gate = until("the sign-in screen", (s) =>
     s.find({ role: "text", label: "Sign in to Luma" }) !== undefined, { timeoutMs: 15000 });

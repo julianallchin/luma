@@ -53,9 +53,8 @@ test("fullscreen keeps the live camera and restores its pose", () => {
   app.frames(4, { waitMs: 60 });
   expect(camera()).toBe(orbited);
 
-  // In a venue tab, fullscreen hides the authoring shortcuts and exit restores them.
-  app.action("luma::NewTab");
-  nav.step("venue tab", "row", "Venue");
+  // In Rig, fullscreen hides the authoring shortcuts and exit restores them.
+  nav.venuePage("Test Venue");
   until("venue controls", () => node("toggle", "Stage objects"));
   app.click(node("card", "Stage"));
   app.key("shift-f");
