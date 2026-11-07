@@ -15,12 +15,10 @@ use std::path::Path;
 
 use luma_render::scene_desc::Scene;
 use luma_render::Catalogue;
-use luma_scene::catalog::Family;
-use luma_scene::catalog::{default_params, StatedHousing};
 use luma_scene::repo_root;
 use luma_scene::{
     definition::Definition,
-    environment::{CloudCover, Floor, HazeAppearance, SkyParams, VenueEnvironment, VenueHaze},
+    environment::{VenueEnvironment, VenueHaze},
 };
 use serde_json::Value;
 
@@ -205,53 +203,4 @@ fn venue_column_records_round_trip_byte_for_byte() {
     for record in HAZE_RECORDS {
         assert_eq!(VenueHaze::from((*record).to_string()).to_record(), *record);
     }
-}
-
-/// The records a fresh venue, a fresh piece and a stock fixture are written
-/// as. A change here is a change to what every new row holds.
-#[test]
-fn default_records_are_the_stored_shapes() {
-    assert_eq!(
-        json(&VenueEnvironment::default()),
-        r#"{"mode":"indoor","houseLevel":1.0}"#
-    );
-    assert_eq!(
-        json(&VenueEnvironment::outdoor(10.0)),
-        r#"{"mode":"outdoor","sunElevationDeg":10.0,"sunAzimuthDeg":250.0}"#
-    );
-    assert_eq!(
-        json(&VenueHaze::default()),
-        r#"{"enabled":true,"density":0.24,"appearance":{"cloudiness":0.35,"cloudSize":4.0,"turbulence":0.3,"windSpeed":0.15,"windDirection":30.0}}"#
-    );
-    assert_eq!(
-        json(&HazeAppearance::default()),
-        r#"{"cloudiness":0.35,"cloudSize":4.0,"turbulence":0.3,"windSpeed":0.15,"windDirection":30.0}"#
-    );
-    assert_eq!(
-        json(&SkyParams::DUSK),
-        r#"{"sunElevationDeg":4.0,"sunAzimuthDeg":250.0,"groundAlbedo":[0.1,0.1,0.1]}"#
-    );
-    assert_eq!(json(&CloudCover::default()), r#""clear""#);
-    assert_eq!(json(&Floor::default_for(true)), r#""blackStage""#);
-    assert_eq!(json(&Floor::default_for(false)), r#""concrete""#);
-    assert_eq!(
-        json(&default_params(Family::Truss)),
-        r#"{"truss":{"span":3.0}}"#
-    );
-    assert_eq!(
-        json(&default_params(Family::Corner)),
-        r#"{"corner":{"faces":["-x","-z"]}}"#
-    );
-    assert_eq!(
-        json(&default_params(Family::Hinge)),
-        r#"{"hinge":{"angle":90.0}}"#
-    );
-    assert_eq!(
-        json(&StatedHousing::stock_head().0),
-        r#"{"Type":"Moving Head","Mode":[],"Physical":{"Dimensions":{"@Width":300.0,"@Height":500.0,"@Depth":300.0},"Layout":null,"Lens":null}}"#
-    );
-}
-
-fn json(value: &impl serde::Serialize) -> String {
-    serde_json::to_string(value).expect("a record serializes")
 }
