@@ -4,15 +4,22 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# No GPU, no gpui, no windowing. This crate is the renderer's math and editor
-# logic, and it must stay testable with nothing but `cargo test`.
+# No GPU, no gpui, no windowing. This crate is the venue model and the
+# renderer's math and editor logic: the stage catalog and the sockets it
+# resolves, the stored venue and fixture records, the GLB decoder the catalog
+# measures with, the camera and the solvers. The backend's models, database and
+# DMX output reach venue types through here rather than through `luma-render`,
+# so nothing here may link a GPU, and it must stay testable with nothing but
+# `cargo test`.
 [dependencies]
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
 glam = "0.30"
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Glam-only, and the owner of the pan/tilt convention. The resolver bakes a
 # fixture's rest aim into its mount frame, and that frame must be the one the
 # beam math would have produced — so the two factors are read from there rather
 # than restated here.
 fixture-kinematics = { path = "../../../backend/crates/fixture-kinematics" }
-
-[dev-dependencies]
-serde_json = "1"

@@ -18,8 +18,9 @@ use std::sync::{Arc, OnceLock};
 
 use serde::Deserialize;
 
-use crate::assets::{Image, Library};
+use crate::assets::Library;
 use crate::scene_desc::{Floor, Quality};
+use luma_scene::mesh::Image;
 
 /// One set, as `floors.json` spells it. The source fields are the script's.
 #[derive(Debug, Deserialize)]

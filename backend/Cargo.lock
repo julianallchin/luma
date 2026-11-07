@@ -2425,8 +2425,13 @@ dependencies = [
 name = "luma-scene"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bytemuck",
  "fixture-kinematics",
  "glam",
+ "gltf",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

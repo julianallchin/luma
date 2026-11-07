@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 
-use crate::assets::Material;
 use crate::frame::{Draw, MaterialTextures};
+use luma_scene::mesh::Material;
 
 use super::fixture_surface_frame;
 use crate::gpu::{Gpu, Renderer};

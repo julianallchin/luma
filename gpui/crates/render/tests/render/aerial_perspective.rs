@@ -4,12 +4,13 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
-    assets::{Library, Material, Vertex},
+    assets::Library,
     build_frame_with,
-    frame::{Draw, Frame, MaterialTextures, MeshData},
+    frame::{Draw, Frame, MaterialTextures},
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Renderer,
 };
+use luma_scene::mesh::{Material, MeshData, Vertex};
 
 use crate::common::capture;
 

@@ -1,8 +1,8 @@
 //! Material maps: cache keys by source and colour-space role, mip-chained
 //! uploads, and the per-draw material bind group.
 
-use crate::assets::Image;
 use crate::frame::{Draw, Frame};
+use luma_scene::mesh::Image;
 
 use super::descriptors::binding;
 

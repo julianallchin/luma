@@ -2,9 +2,9 @@
 
 use glam::{Mat4, Vec3};
 
-use crate::assets::Material;
-use crate::frame::{Camera, DirectionalLight, Draw, MaterialTextures, MeshData};
+use crate::frame::{Camera, DirectionalLight, Draw, MaterialTextures};
 use crate::light_index::cone_reaches_sphere;
+use luma_scene::mesh::{Material, MeshData};
 
 use super::fixture_surface_frame;
 use crate::gpu::Renderer;

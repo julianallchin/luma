@@ -46,8 +46,7 @@
 
 use glam::Vec3;
 
-use crate::assets::Vertex;
-use crate::frame::MeshData;
+use luma_scene::mesh::{MeshData, Vertex};
 
 /// Chord centre-to-centre spacing, both across and vertically. The number the
 /// product name carries: "F34" is this in millimetres.

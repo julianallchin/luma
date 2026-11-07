@@ -3,13 +3,14 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
-    assets::{Library, Material, Vertex},
+    assets::Library,
     build_frame_with,
     camera_export::{CameraExport, Context, Orbit, SceneIdentity, Viewport},
-    frame::{Draw, MaterialTextures, MeshData},
+    frame::{Draw, MaterialTextures},
     scene_desc::{CameraPose, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame,
 };
+use luma_scene::mesh::{Material, MeshData, Vertex};
 
 fn frame(eye: Vec3, target: Vec3) -> Frame {
     let render = RenderSettings::room(

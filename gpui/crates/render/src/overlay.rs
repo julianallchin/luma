@@ -18,8 +18,9 @@ use luma_scene::{gizmo_scale, Axis, GizmoHandle, GizmoMode, RING_RADIUS};
 
 use crate::assets::Library;
 use crate::colour::hex_srgb;
-use crate::frame::{Camera, Definitions, MeshData};
+use crate::frame::{Camera, Definitions};
 use crate::scene_desc::{Geometry, Scene, SocketMarkState};
+use luma_scene::mesh::{MeshData, Vertex};
 
 /// How an overlay sits against the scene it is drawn over. The two variants are
 /// the two material configurations the goldens use, not a free combination:
@@ -914,8 +915,8 @@ fn tick_cross() -> MeshData {
     }
 }
 
-fn vertex(p: Vec3) -> crate::assets::Vertex {
-    crate::assets::Vertex {
+fn vertex(p: Vec3) -> Vertex {
+    Vertex {
         position: p.to_array(),
         normal: [0.0; 3],
         uv: [0.0; 2],

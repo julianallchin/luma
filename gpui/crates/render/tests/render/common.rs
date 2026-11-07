@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use glam::Vec3;
-use luma_render::assets::{Library, Vertex};
-use luma_render::frame::MeshData;
+use luma_render::assets::Library;
+use luma_scene::mesh::{MeshData, Vertex};
 
 /// A mesh library over the repository's meshes.
 pub fn library() -> Library {

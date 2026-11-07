@@ -144,7 +144,7 @@ impl Renderer {
 /// Centred on the midpoint of the extent rather than the centroid: a mesh with
 /// most of its vertices clustered at one end would otherwise get a sphere that
 /// has to reach much further to cover the rest.
-pub(crate) fn local_bounding_sphere(vertices: &[crate::assets::Vertex]) -> (Vec3, f32) {
+pub(crate) fn local_bounding_sphere(vertices: &[luma_scene::mesh::Vertex]) -> (Vec3, f32) {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for vertex in vertices {

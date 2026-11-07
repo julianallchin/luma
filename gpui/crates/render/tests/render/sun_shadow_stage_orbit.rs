@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3, Vec4};
 use luma_render::{
-    assets::{Library, Material},
+    assets::Library,
     build_frame_with,
     frame::{Draw, MaterialTextures},
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
+use luma_scene::mesh::Material;
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 
-use crate::assets::{HdrImage, Image, Library, Material, Vertex};
+use crate::assets::{HdrImage, Library};
 use crate::luminaire::{
     beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
     pixel_lens, Lens, ModelKind, PIXEL,
@@ -17,6 +17,7 @@ use crate::luminaire::{
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
 use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
+use luma_scene::mesh::{Glb, Image, Material, MeshData, Vertex};
 
 /// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
 pub type Definitions = std::collections::BTreeMap<String, Definition>;
@@ -45,24 +46,6 @@ fn warn_floor_once(floor: crate::scene_desc::Floor, error: &anyhow::Error) {
 /// receives: everything it could shade stands on it.
 pub(crate) fn is_ground(mesh_key: &str) -> bool {
     matches!(mesh_key, "::floor" | "::outdoor-floor")
-}
-
-/// One uploadable triangle list.
-///
-/// Cloning shares the data: both buffers are `Arc`s, so a cached mesh is
-/// handed to a frame for the price of two refcounts.
-#[derive(Clone)]
-pub struct MeshData {
-    /// Stable identity of this immutable mesh inside the asset/procedural bank.
-    ///
-    /// The live renderer uses this to retain GPU buffers across resolved
-    /// frames. Geometry with one key must never change during a renderer's
-    /// lifetime; a changed asset therefore needs a changed key.
-    pub key: String,
-    /// Interleaved vertex data.
-    pub vertices: Arc<[Vertex]>,
-    /// Triangle list into `vertices`.
-    pub indices: Arc<[u32]>,
 }
 
 /// One mesh instance: what to draw, where, and with which material.
@@ -531,7 +514,7 @@ pub(crate) fn housing_draws(
 /// (`S⁻¹ · R · S` on the node's local transform): the pivots land where the
 /// scaled mesh puts them and the head turns rigidly instead of shearing.
 fn housing_worlds(
-    glb: &crate::assets::Glb,
+    glb: &Glb,
     def: &Definition,
     kind: ModelKind,
     base: Mat4,
@@ -574,13 +557,7 @@ fn housing_worlds(
 /// moves relative to it. A spec-sheet `Physical.Lens@OffsetM` (pivot to lens
 /// along the beam) wins over the mesh's face. A mesh with no head uses its
 /// bottom face below the origin, the mount normal side.
-fn lens_centre(
-    glb: &crate::assets::Glb,
-    worlds: &[Mat4],
-    def: &Definition,
-    base: Mat4,
-    direction: Vec3,
-) -> Vec3 {
+fn lens_centre(glb: &Glb, worlds: &[Mat4], def: &Definition, base: Mat4, direction: Vec3) -> Vec3 {
     let measured = def
         .physical
         .as_ref()
@@ -610,7 +587,7 @@ fn lens_centre(
 fn glb_draw(
     bank: &mut Bank,
     asset: &str,
-    glb: &crate::assets::Glb,
+    glb: &Glb,
     p: usize,
     model: Mat4,
     editor_object: Option<EditorObject>,
@@ -941,7 +918,7 @@ pub fn build_at(
     let floor_textures = floor_maps.map_or_else(MaterialTextures::default, |(own, transition)| {
         let name = floor_surface.map_or("", |s| s.floor.set());
         let size = own.albedo.width;
-        let mut image = |role: &str, set: &str, map: crate::assets::Image| {
+        let mut image = |role: &str, set: &str, map: Image| {
             bank.insert_image(format!("::floor:{set}:{size}:{role}"), || map)
         };
         let transition_name = floor_surface.and_then(|s| s.transition()).unwrap_or("");

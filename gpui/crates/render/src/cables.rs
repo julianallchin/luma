@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 
-use crate::assets::Vertex;
-use crate::frame::{Draw, MeshData};
+use crate::frame::Draw;
+use luma_scene::mesh::{MeshData, Vertex};
 
 /// How close a piece's underside comes to the floor before it counts as
 /// standing on it.

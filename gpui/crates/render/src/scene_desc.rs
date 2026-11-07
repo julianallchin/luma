@@ -1851,7 +1851,7 @@ impl Procedural {
 
     /// The piece as one uploadable triangle list, in piece-local space.
     #[must_use]
-    pub fn mesh(self) -> crate::frame::MeshData {
+    pub fn mesh(self) -> luma_scene::mesh::MeshData {
         match self.part() {
             Part::Truss(t) => t.mesh(),
             Part::Corner(c) => c.mesh(),

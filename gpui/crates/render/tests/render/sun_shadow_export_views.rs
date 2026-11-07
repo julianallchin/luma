@@ -14,13 +14,14 @@ use std::path::Path;
 
 use glam::{Mat4, Vec3, Vec4};
 use luma_render::{
-    assets::{Library, Material},
+    assets::Library,
     build_frame_with,
     camera_export::CameraExport,
     frame::{Draw, MaterialTextures},
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
+use luma_scene::mesh::Material;
 
 /// `(centre, size)` boxes for the exported casters the test rebuilds: the
 /// deck's 2x1x1 m platforms, the subs and the barriers.

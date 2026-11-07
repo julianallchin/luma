@@ -37,7 +37,7 @@
 
 use glam::Vec3;
 
-use crate::assets::{Glb, Image, Material};
+use luma_scene::mesh::{Glb, Image, Material};
 
 /// Mill-finish aluminium: truss and deck frames. The base colour is
 /// aluminium's measured reflectance; the roughness is hire-stock truss,
@@ -435,7 +435,7 @@ mod tests {
             }
         }
         assert_eq!(
-            mean_linear(&crate::assets::Image {
+            mean_linear(&luma_scene::mesh::Image {
                 width: 1,
                 height: 1,
                 rgba: std::sync::Arc::from([255u8, 255, 255, 255]),

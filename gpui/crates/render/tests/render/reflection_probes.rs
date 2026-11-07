@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
-    assets::{Library, Material, Vertex},
+    assets::Library,
     build_frame_with,
-    frame::{Draw, FixtureCone, MaterialTextures, MeshData},
+    frame::{Draw, FixtureCone, MaterialTextures},
     luminaire::Lens,
     materials,
     scene_desc::{
@@ -19,6 +19,7 @@ use luma_render::{
     },
     Frame, Renderer,
 };
+use luma_scene::mesh::{Material, MeshData, Vertex};
 
 use crate::common::capture;
 

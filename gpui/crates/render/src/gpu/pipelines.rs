@@ -5,12 +5,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::assets::Image;
 use crate::atmosphere::AtmospherePipelines;
 use crate::environment::EnvironmentPipelines;
 use crate::haze_field::HazeField;
 use crate::light_index::LightIndexPipelines;
 use crate::overlay::{Overlay, OverlayDepth};
+use luma_scene::mesh::Image;
 
 use super::descriptors::{
     depth_array_entry, depth_state, rw_storage_entry, storage_entry, texture_entry, uniform_entry,

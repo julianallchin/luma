@@ -33,6 +33,7 @@ pub mod gesture;
 pub mod gizmo;
 pub mod golden;
 pub mod graph;
+pub mod mesh;
 pub mod navigate;
 pub mod patch;
 pub mod selection;

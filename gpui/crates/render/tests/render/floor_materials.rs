@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3};
 use luma_render::{
-    assets::Material,
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures},
     luminaire::Lens,
@@ -16,6 +15,7 @@ use luma_render::{
     },
     Frame, Renderer,
 };
+use luma_scene::mesh::Material;
 
 use crate::common::library;
 

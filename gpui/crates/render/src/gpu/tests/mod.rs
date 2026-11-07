@@ -8,13 +8,11 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 
-use crate::assets::{Material, Vertex};
 use crate::colour::hex_srgb;
-use crate::frame::{
-    Camera, DirectionalLight, Draw, FixtureCone, Frame, MaterialTextures, MeshData,
-};
+use crate::frame::{Camera, DirectionalLight, Draw, FixtureCone, Frame, MaterialTextures};
 use crate::overlay::{Overlay, OverlayDepth};
 use crate::scene_desc::DebugView;
+use luma_scene::mesh::{Material, MeshData, Vertex};
 
 use super::{Channels, Renderer};
 
