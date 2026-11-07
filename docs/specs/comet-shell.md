@@ -16,9 +16,10 @@ side. The page holds everything else — the agent panel beside the mode's
 stage and body:
 
 ```text
- ●●● ◧  Venue ▾             Aurora #1 ▾            [Rig|Arrange|Live]
+ ●●● ◧  Venue ▾                                     [Rig|Arrange|Live]
  ╭────────────┬─────────────────────────────────────────────────────╮
  │         ↶+ │  stage (the venue lit by the mode's body)           │
+ │            │           [ Aurora / #1 ▾ ]  (Arrange)              │
  │  agent     ├─────────────────────────────────────────────────────┤
  │  panel     │  the mode's body: the venue page, the score,        │
  │  (the      │  or the Perform set — or the song list over Arrange │
@@ -36,7 +37,7 @@ another mode is up, and each venue keeps its modes while another venue is up.
 | Region | What it is | Code |
 |---|---|---|
 | Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it; stands aside while the song list is up | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
-| Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, venue menu, the mode's subject, the mode switch | `shell::title_bar`, `chrome` |
+| Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, venue menu, the mode switch; nothing in the middle | `shell::title_bar`, `chrome` |
 | Page | the inset card on the trim, rounded `PAGE_RADIUS` (12), `WINDOW_TRIM` (8) from the window's sides; holds the agent panel and the content | `shell::regions`, `glass::window_trim` |
 | Stage | the venue, lit by the mode's body; collapsible, height-resizable. In Live a deck panel sits at its left, drag-resizable, its width kept per device (`deck-panel-width`) | `shell::stage_body`, `perform::deck_panel` |
 | Body | the mode's body, or the song list in Arrange | `shell::content` |
@@ -79,8 +80,8 @@ chat is working, or finished unseen, carries a status dot on its toggle.
 Today's track browser as a page over Arrange: search, Mine/All, folders, add
 and import. A row expands in place to its scores in this venue and "New
 score"; choosing a score opens it and closes the page a double-click interval
-later (so a double-click on a score's name renames it instead). The title
-bar's song title opens and closes the page; Escape closes it. The list takes
+later (so a double-click on a score's name renames it instead). ⌘P and the
+stage's song / score menu open it; ⌘P and Escape close it. The list takes
 the window's width: the agent panel stands aside while it is up and comes
 back when it closes, unless it had been hidden by hand; ⌘B over the list
 shows it for that visit only.
@@ -117,27 +118,42 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
   "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
   Sign out / Sign in. The venue dialog is still what a window with no venue
   shows (browse, create, join).
-- **Subject** (title bar, centre): in Arrange the song title, which opens the
-  song list; in Live the follow line.
+- **The title bar's middle is empty** in every mode. What a mode is working
+  on is the page's to say: in Arrange the stage's song / score menu, in Live
+  the deck panel and the status bar.
+- **Song / score menu** (Arrange, over the stage's top edge, centred between
+  the frame-stats chip and the fullscreen button; `score_switcher`): the
+  song's album art, its title and `/ #n`. Its menu holds "Song list" (⌘P),
+  then every score of the song — this venue's, then each other venue's under
+  the venue's name — the open one checked. A score here opens on the spot;
+  one in another venue asks "Switch to <venue>?" (`confirm`), and on Switch
+  the window switches venue and opens that score in Arrange, in place of the
+  score saved for that venue.
 - **Mode switch** (title bar, trailing): Rig / Arrange / Live. The keys 1 / 2 / 3 are named in each cell's tooltip, not drawn.
 - **Arrange** keeps today's timeline and the strip above it. The strip leads
   with the transport — play / pause, `0:00 / 3:32`, the tempo — then add,
   export and the readouts. Space (`PlayPause`) plays and pauses too, and the
   ruler scrubs. A double-click on a clip opens its graph where the timeline
   was.
-- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button, and
-  Edit layout arranges the grid only. The decks followed (or the tapped
+- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button at the
+  end of the page tabs' row, after the page's line (or what is wrong with the
+  source followed), and Edit layout arranges the grid only. The decks followed (or the tapped
   tempo) sit in the deck panel beside the stage, and under them the DJ
   source: "Add source" opens the sources and the latency inline; a followed
   source can be changed or disconnected, back to the tapped tempo. The MIDI
-  and OSC status sits under it. What is followed is the title bar's line.
-- **Settings** is zeron's settings page inside the dialog: a nav, then a 640
-  column with a title and description over sections of 52-high rows, each
-  control at its row's end in a 240 slot.
+  and OSC status sits under it. What is followed is the status bar's line.
+- **Settings** is a page, not a dialog: zeron's settings page in place of the
+  page's content — the agent panel stands aside, as for the song list, and
+  the title bar stays. A 200 nav (Back, then the sections), then a 640 column
+  with a title and description over sections, each a small title over a card
+  of 52-high rows with hairlines between, each control at its row's end in a
+  240 slot; titles and row words share one 17px inset. Back, Escape or a mode
+  from the mode switch returns to what was there.
 
 ## 7. Escape
 
-One ladder (`shell` `dismiss_overlay`), first match wins: the venue menu,
-score and song menus, subagents, visualizer settings, patch rungs, the stage's
+One ladder (`shell` `dismiss_overlay`), first match wins: the venue menu, the
+stage's song / score menu, score and song menus, subagents, the settings page
+(an open select first), visualizer settings, patch rungs, the stage's
 own state, an open dialog, then the song list, a sheet menu, the clip graph,
 the pattern sheet, and finally the selection.
