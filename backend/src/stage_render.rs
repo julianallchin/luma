@@ -354,13 +354,8 @@ pub async fn highlight(
     access: &mut impl AuthorizedVenue,
     selection: &Selection,
 ) -> Result<UniverseState, String> {
-    let resolved = groups::resolve_selection_expression_with_path(
-        resource_path,
-        access,
-        selection,
-        groups::PREVIEW_SEED,
-    )
-    .await?;
+    let resolved =
+        groups::resolve_selection(resource_path, access, selection, groups::PREVIEW_SEED).await?;
     Ok(highlight_state(&resolved))
 }
 

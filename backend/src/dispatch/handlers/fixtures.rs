@@ -17,7 +17,7 @@ pub async fn get_patched_fixtures(
 ) -> Result<Vec<PatchedFixture>, CommandError> {
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let fixtures = fixture_service::get_patched_fixtures(&mut access).await?;
+    let fixtures = fixtures_db::get_patched_fixtures(&mut access).await?;
     publish_patch(services, fixtures.clone());
     Ok(fixtures)
 }

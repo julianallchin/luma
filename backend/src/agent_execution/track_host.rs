@@ -118,9 +118,12 @@ impl TrackHost {
             ));
         }
 
-        let beat_grid = crate::compositor::load_beat_grid(&self.pool, &self.scope.track_id)
-            .await
-            .map_err(|message| HostCallError::new("internal", message))?;
+        let beat_grid =
+            crate::database::local::tracks::get_track_beats(&self.pool, &self.scope.track_id)
+                .await
+                .map_err(|e| {
+                    HostCallError::new("internal", format!("Failed to load beat grid: {e}"))
+                })?;
         let requested_times = sample_times(
             start,
             end,

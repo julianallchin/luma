@@ -6,10 +6,8 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::database::local::fixtures as fixtures_db;
-use crate::database::local::venue_access::AuthorizedVenue;
 use crate::fixtures::parser::{self, FixtureIndex};
-use crate::models::fixtures::{FixtureEntry, PatchedFixture};
+use crate::models::fixtures::FixtureEntry;
 use crate::services::group_derivation;
 
 /// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
@@ -216,13 +214,6 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
             .filter(|(min, max)| *max > 0.0 && max >= min),
         modes,
     })
-}
-
-/// Get all patched fixtures for a venue
-pub async fn get_patched_fixtures(
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<PatchedFixture>, String> {
-    fixtures_db::get_patched_fixtures(access).await
 }
 
 // -----------------------------------------------------------------------------

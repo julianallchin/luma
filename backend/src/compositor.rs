@@ -9,7 +9,6 @@ use std::path::Path;
 
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::Scene;
-use crate::models::beat_grid::BeatGrid;
 use crate::render_engine::{Built, RenderEngine, SceneTarget};
 use crate::storage::StorageRoot;
 
@@ -99,16 +98,6 @@ pub async fn build_score_scene(
         &score,
     )
     .await
-}
-
-/// Load beat grid for a track.
-pub(crate) async fn load_beat_grid(
-    pool: &sqlx::SqlitePool,
-    track_id: &str,
-) -> Result<Option<BeatGrid>, String> {
-    crate::database::local::tracks::get_track_beats(pool, track_id)
-        .await
-        .map_err(|e| format!("Failed to load beat grid: {}", e))
 }
 
 #[cfg(test)]

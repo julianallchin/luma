@@ -1050,7 +1050,7 @@ mod tests {
         let resolved = crate::venue_graph::resolved(&mut access, &services.fixtures_root)
             .await
             .unwrap();
-        crate::services::fixtures::get_patched_fixtures(&mut access)
+        crate::database::local::fixtures::get_patched_fixtures(&mut access)
             .await
             .unwrap()
             .into_iter()

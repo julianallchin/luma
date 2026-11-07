@@ -644,7 +644,7 @@ pub const PREVIEW_SEED: u64 = 12345;
 /// lights on every run while the same graph placed twice can draw two different
 /// sides. Previews and highlights pass [`PREVIEW_SEED`] so the picker does not
 /// flicker between calls.
-pub async fn resolve_selection_expression_with_path(
+pub async fn resolve_selection(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
     selection: &Selection,
@@ -953,7 +953,7 @@ pub async fn solve(
         .map(|fixture| FixtureIdentity {
             id: fixture.id.clone(),
             model: fixture.model.clone(),
-            role: role_with_path(resource_path, fixture),
+            role: role_and_aim(resource_path, fixture).0,
         })
         .collect();
 
@@ -963,11 +963,6 @@ pub async fn solve(
         facts,
         fixtures,
     })
-}
-
-/// A fixture's role, from its definition and the mode it is patched in.
-pub fn role_with_path(resource_path: &Path, fixture: &PatchedFixture) -> FixtureRole {
-    role_and_aim(resource_path, fixture).0
 }
 
 #[cfg(test)]

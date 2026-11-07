@@ -74,14 +74,9 @@ impl Drop for PendingImportFile {
 // Public API
 // -----------------------------------------------------------------------------
 
-/// List all tracks. Album art is not inlined — callers load it from
-/// `album_art_path` so payloads stay small and GPUI can decode images lazily.
-pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
-    tracks_db::list_tracks(pool).await
-}
-
-/// List all tracks with enriched metadata for the browser view. See
-/// [`list_tracks`] for why album art bytes aren't inlined.
+/// List all tracks with enriched metadata for the browser view. Album art is
+/// not inlined — callers load it from `album_art_path` so payloads stay small
+/// and GPUI can decode images lazily.
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,

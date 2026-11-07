@@ -127,10 +127,8 @@ pub(crate) async fn resolve_selection_primitives_with_access(
     let venue = crate::venue_graph::resolved(access, resource_root).await?;
 
     let root_buf = resource_root.to_path_buf();
-    let fixtures = crate::services::groups::resolve_selection_expression_with_path(
-        &root_buf, access, selection, seed,
-    )
-    .await?;
+    let fixtures =
+        crate::services::groups::resolve_selection(&root_buf, access, selection, seed).await?;
 
     let mut out = Vec::new();
     for resolved in &fixtures {

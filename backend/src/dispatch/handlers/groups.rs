@@ -49,7 +49,7 @@ pub async fn preview_selection_query(
 ) -> Result<Vec<PatchedFixture>, CommandError> {
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let resolved = groups_service::resolve_selection_expression_with_path(
+    let resolved = groups_service::resolve_selection(
         &services.fixtures_root,
         &mut access,
         &Selection::new(query.trim()),

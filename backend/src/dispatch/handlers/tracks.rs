@@ -6,7 +6,7 @@ use crate::services::tracks::{self as track_service, ImportRequest};
 
 /// The whole library, unscoped and without album-art bytes.
 pub async fn list_tracks(services: &AppServices) -> Result<Vec<TrackSummary>, CommandError> {
-    Ok(track_service::list_tracks(&services.db.0).await?)
+    Ok(crate::database::local::tracks::list_tracks(&services.db.0).await?)
 }
 
 /// `None` when beat detection has not run for this track.
