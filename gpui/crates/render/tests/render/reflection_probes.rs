@@ -11,15 +11,16 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures},
-    luminaire::Lens,
     materials,
-    scene_desc::{
-        CameraPose, CloudCover, Floor, Geometry, Piece, Procedural, Quality, RenderSettings, Scene,
-        VenueEnvironment, VenueHaze,
-    },
+    scene_desc::{CameraPose, Geometry, Piece, Quality, RenderSettings, Scene},
     Frame, Renderer,
 };
 use luma_scene::mesh::{Material, MeshData, Vertex};
+use luma_scene::{
+    environment::{CloudCover, Floor, VenueEnvironment, VenueHaze},
+    luminaire::Lens,
+    truss::Procedural,
+};
 
 use crate::common::capture;
 

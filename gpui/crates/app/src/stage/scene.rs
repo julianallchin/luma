@@ -244,7 +244,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                 // the design's red case: a length past the measured gap is one
                 // of the two hard errors, and the ghost is where it is said.
                 #[allow(clippy::cast_possible_truncation)]
-                let params = luma_render::scene_desc::Procedural::Truss {
+                let params = luma_scene::truss::Procedural::Truss {
                     span: run.length_m as f32,
                 };
                 let held = luma_render::catalog::procedural_sockets(params);

@@ -6,7 +6,7 @@ use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::venues::{Venue, VenueMember};
 use crate::services::venue_sharing;
-use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 /// Every venue in the local library, owned and joined alike. Read-only and
 /// unscoped — the per-venue authorization gate (`VenueAccess`) guards the

@@ -14,9 +14,10 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::{Draw, MaterialTextures},
-    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, DebugView, RenderSettings, Scene},
     Frame, Renderer,
 };
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 use luma_scene::mesh::Material;
 
 const WIDTH: u32 = 480;

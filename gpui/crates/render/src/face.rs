@@ -25,8 +25,8 @@ use luma_scene::sockets::ResolvedSocket;
 use luma_scene::venue::{root_socket, Node, NodeKind, NodeSockets};
 
 use crate::catalog::{node_params, VenueSockets};
-use crate::scene_desc::Procedural;
-use crate::truss::{Truss, OUTER_M, PANEL_PITCH_M};
+use luma_scene::truss::Procedural;
+use luma_scene::truss::{Truss, OUTER_M, PANEL_PITCH_M};
 
 /// A host face, ready to lay a row of fixtures along.
 #[derive(Clone, Debug)]

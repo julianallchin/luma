@@ -41,8 +41,8 @@ use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
-use luma_render::scene_desc::{HazeAppearance, SkyParams, VenueEnvironment, VenueHaze};
 use luma_render::venue_tiles::TileMap;
+use luma_scene::environment::{HazeAppearance, SkyParams, VenueEnvironment, VenueHaze};
 use luma_scene::View;
 
 /// One cell's venue capability table. Construct only from host-resolved scope.
@@ -947,9 +947,9 @@ impl VenueHost {
             definitions: std::collections::HashMap::new(),
             // A draft is a component being looked at for its shape, not a room.
             // The house at full is the light that shows one.
-            environment: luma_render::scene_desc::VenueEnvironment::default(),
+            environment: luma_scene::environment::VenueEnvironment::default(),
             // Likewise: a shape is read off a clear picture of it.
-            haze: luma_render::scene_desc::VenueHaze::default(),
+            haze: luma_scene::environment::VenueHaze::default(),
             lasers: Default::default(),
         };
         self.shoot(

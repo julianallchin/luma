@@ -8,7 +8,7 @@
 //!   from real models. Their sockets are *authored*, against the mesh's
 //!   measured bounding box (see [`crate::sockets`]), so they survive whatever
 //!   pivot the modeller chose.
-//! - **A generator.** The truss family (`luma_render::truss`) is parametric,
+//! - **A generator.** The truss family (`crate::truss`) is parametric,
 //!   and every one of its open faces is already a full frame. Authoring
 //!   sockets for it would be transcribing geometry the generator knows, so
 //!   procedural pieces carry **no** [`SocketDef`]s: `luma_render::catalog`
@@ -121,7 +121,7 @@ pub enum Geometry {
     Mesh { path: &'static str },
     /// A generated family. **No parameters here**: the span of a truss, the
     /// open faces of a corner and the angle of a hinge are the generator's
-    /// vocabulary (`luma_render::scene_desc::Procedural`), quantized by its
+    /// vocabulary (`crate::truss::Procedural`), quantized by its
     /// constructors, and a copy of them in the palette would be a second thing
     /// to keep in step. The catalog names the family; `luma_render::catalog`
     /// supplies the palette default and the geometry.
@@ -132,7 +132,7 @@ pub enum Geometry {
 }
 
 /// The generated piece families. Every one is truss today, and every one mates
-/// with every other — see `luma_render::truss`.
+/// with every other — see `crate::truss`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     /// A continuous lattice of a given span.

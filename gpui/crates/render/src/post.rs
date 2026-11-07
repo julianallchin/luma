@@ -808,7 +808,9 @@ impl Post {
                     position: cone
                         .position
                         .extend(if cone.lens.radius > 0.0 {
-                            cone.lens.radius.min(crate::luminaire::Lens::MAX_RADIUS_M)
+                            cone.lens
+                                .radius
+                                .min(luma_scene::luminaire::Lens::MAX_RADIUS_M)
                         } else {
                             LENS_RADIUS_BEAM_M
                                 + (LENS_RADIUS_WASH_M - LENS_RADIUS_BEAM_M) * cone.wash

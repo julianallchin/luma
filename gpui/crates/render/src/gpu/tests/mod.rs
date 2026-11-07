@@ -521,7 +521,7 @@ fn fixture_surface_frame(count: usize) -> Frame {
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
-                lens: crate::luminaire::Lens::POINT,
+                lens: luma_scene::luminaire::Lens::POINT,
             }
         })
         .collect();

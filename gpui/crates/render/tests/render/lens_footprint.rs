@@ -11,9 +11,12 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::FixtureCone,
-    luminaire::Lens,
-    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, DebugView, RenderSettings, Scene},
     Frame, Renderer,
+};
+use luma_scene::{
+    environment::{VenueEnvironment, VenueHaze},
+    luminaire::Lens,
 };
 
 use crate::common::capture;

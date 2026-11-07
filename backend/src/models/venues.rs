@@ -1,4 +1,4 @@
-use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 

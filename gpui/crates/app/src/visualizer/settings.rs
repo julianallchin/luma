@@ -816,7 +816,7 @@ fn cloud_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Option<Div> 
         .h_auto()
         .flex_col()
         .items_stretch();
-    for clouds in scene_desc::CloudCover::ALL {
+    for clouds in luma_scene::environment::CloudCover::ALL {
         let app = app.clone();
         let label = clouds.label();
         track = track.child(
@@ -858,7 +858,7 @@ fn floor_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Div {
         .h_auto()
         .flex_col()
         .items_stretch();
-    for &floor in scene_desc::Floor::options(indoor) {
+    for &floor in luma_scene::environment::Floor::options(indoor) {
         let app = app.clone();
         let label = floor.label();
         track = track.child(

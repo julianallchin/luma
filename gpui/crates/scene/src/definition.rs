@@ -1,0 +1,114 @@
+//! The QLC+ fixture definition, as far as the stage reads it: type, modes,
+//! and the physical block — housing size, pixel layout and lens.
+//!
+//! The field names are QLC+'s own (`@Width`, `Mode`, …), because the bundle's
+//! `.qxf` XML is converted to JSON with its attribute and element names kept.
+
+use serde::{Deserialize, Serialize};
+
+/// The QLC+ `.qxf` subset the renderer reads.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Definition {
+    /// QLC+ fixture type; selects the mesh and the fallback cone.
+    #[serde(rename = "Type")]
+    pub kind: String,
+    /// Patchable modes; the head count comes from the patched one.
+    #[serde(rename = "Mode")]
+    pub modes: Vec<Mode>,
+    /// Physical block: dimensions, pixel layout, lens.
+    #[serde(rename = "Physical")]
+    pub physical: Option<Physical>,
+}
+
+/// A patchable mode. Only its head count matters here — the visualizer patches
+/// DMX, not pixels.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Mode {
+    /// Mode name, matched against `Fixture::mode_name`.
+    #[serde(rename = "@Name")]
+    pub name: String,
+    /// Heads, kept opaque: only the length is read.
+    #[serde(rename = "Head", default)]
+    pub heads: Vec<serde_json::Value>,
+}
+
+/// QLC+ `Physical`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Physical {
+    /// Housing size.
+    #[serde(rename = "Dimensions")]
+    pub dimensions: Option<Dimensions>,
+    /// Pixel grid, for procedural bars and matrices.
+    #[serde(rename = "Layout")]
+    pub layout: Option<Layout>,
+    /// Lens block — the source of cone geometry.
+    #[serde(rename = "Lens")]
+    pub lens: Option<Lens>,
+}
+
+/// Millimetres, as QLC+ writes them.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Dimensions {
+    /// Width, mm.
+    #[serde(rename = "@Width")]
+    pub width: f32,
+    /// Height, mm.
+    #[serde(rename = "@Height")]
+    pub height: f32,
+    /// Depth, mm.
+    #[serde(rename = "@Depth")]
+    pub depth: f32,
+}
+
+/// Pixel grid of a procedural fixture.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Layout {
+    /// Pixels per row.
+    #[serde(rename = "@Width")]
+    pub width: u32,
+    /// Rows.
+    #[serde(rename = "@Height")]
+    pub height: u32,
+}
+
+/// Lens block. A fixed lens repeats one value; a zoom lens gives a range and,
+/// with no zoom channel in the state model, the renderer sits at mid-zoom.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Lens {
+    /// Narrow end of the beam angle, degrees. Zero means "unknown".
+    #[serde(rename = "@DegreesMin")]
+    pub degrees_min: f32,
+    /// Wide end of the beam angle, degrees. Zero means "unknown".
+    #[serde(rename = "@DegreesMax")]
+    pub degrees_max: f32,
+    /// Measured front-lens radius in metres, from a spec sheet. QLC+ has no
+    /// such attribute; when present it wins over the per-class stand-in in
+    /// [`crate::luminaire::lens_for`].
+    #[serde(rename = "@RadiusM", default, skip_serializing_if = "Option::is_none")]
+    pub radius_m: Option<f32>,
+    /// Measured distance in metres from the head's tilt pivot forward along
+    /// the beam axis to the lens centre (GDTF's `Beam` position). When present
+    /// it wins over the head mesh's front face in `frame::lens_centre`.
+    #[serde(rename = "@OffsetM", default, skip_serializing_if = "Option::is_none")]
+    pub offset_m: Option<f32>,
+}
+
+impl Definition {
+    /// Heads in the named mode, or zero when the mode is absent.
+    #[must_use]
+    pub fn head_count(&self, mode_name: &str) -> usize {
+        self.modes
+            .iter()
+            .find(|m| m.name == mode_name)
+            .map_or(0, |m| m.heads.len())
+    }
+
+    /// Physical size in metres, defaulting each missing axis to 300 mm the way
+    /// `extractPhysicalDimensions` does.
+    #[must_use]
+    pub fn dimensions_m(&self) -> [f32; 3] {
+        let d = self.physical.as_ref().and_then(|p| p.dimensions.as_ref());
+        let axis = |v: f32| if v > 0.0 { v / 1000.0 } else { 0.3 };
+        d.map_or([0.3; 3], |d| [axis(d.width), axis(d.height), axis(d.depth)])
+    }
+}

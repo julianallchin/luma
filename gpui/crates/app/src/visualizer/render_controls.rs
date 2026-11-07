@@ -38,9 +38,9 @@ pub(super) struct RenderControls {
     /// The room's atmosphere — **venue truth**, saved on the venue row and
     /// synced with it, unlike every other dial here. Adopted from the rig and
     /// written back by [`Luma::set_visualizer_haze`].
-    pub(super) haze: scene_desc::VenueHaze,
+    pub(super) haze: luma_scene::environment::VenueHaze,
     /// The march's cost, not the room's look: local, unsynced, and deliberately
-    /// absent from [`scene_desc::VenueHaze`] — see its doc comment.
+    /// absent from [`luma_scene::environment::VenueHaze`] — see its doc comment.
     haze_steps: u32,
     haze_resolution: f32,
     /// Editor chrome, not the room. Local device settings (`stage_grid` /
@@ -165,7 +165,7 @@ impl RenderControls {
             fixture_shadows: true,
             // The venue's own haze arrives with its rig; until then the haze
             // this app has always drawn, which is exactly `Default`.
-            haze: scene_desc::VenueHaze::default(),
+            haze: luma_scene::environment::VenueHaze::default(),
             haze_steps: 8,
             haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
             // Written by `apply_settings` below, from the settings table's
@@ -355,7 +355,7 @@ impl RenderControls {
             | ViewValue::BassShake => unreachable!(),
         }
         // The whole value, not just the appearance: `sanitized` is what keeps a
-        // swept density inside [`scene_desc::VenueHaze::MAX_DENSITY`], which is
+        // swept density inside [`luma_scene::environment::VenueHaze::MAX_DENSITY`], which is
         // now the single answer to how dense a room may be.
         self.haze = self.haze.sanitized();
     }
@@ -385,7 +385,10 @@ mod view_tests {
         let mut controls = RenderControls::new(VenueEnvironment::default());
         let house = controls.house;
         controls.set(ViewValue::HazeDensity, 9.0);
-        assert_eq!(controls.haze.density, scene_desc::VenueHaze::MAX_DENSITY);
+        assert_eq!(
+            controls.haze.density,
+            luma_scene::environment::VenueHaze::MAX_DENSITY
+        );
         controls.toggle(ViewToggle::FixtureShadows);
         assert!(!controls.fixture_shadows);
         assert_eq!(controls.house, house);
@@ -394,11 +397,11 @@ mod view_tests {
     #[test]
     fn a_fresh_lab_draws_the_default_room_atmosphere() {
         let controls = RenderControls::new(VenueEnvironment::default());
-        assert_eq!(controls.haze, scene_desc::VenueHaze::default());
+        assert_eq!(controls.haze, luma_scene::environment::VenueHaze::default());
         // The venue's haze, not the default, reaches the renderer — and the two
         // cost knobs the venue deliberately does not carry still do.
         let mut controls = controls;
-        controls.haze = scene_desc::VenueHaze {
+        controls.haze = luma_scene::environment::VenueHaze {
             enabled: true,
             density: 0.4,
             ..Default::default()

@@ -7,9 +7,10 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::{Draw, Frame, MaterialTextures},
-    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, DebugView, RenderSettings, Scene},
     Renderer,
 };
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 use luma_scene::mesh::{Material, MeshData, Vertex};
 
 use crate::common::capture;

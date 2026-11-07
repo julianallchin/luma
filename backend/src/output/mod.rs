@@ -207,7 +207,7 @@ impl OutputHub {
             &render.fixture_definitions,
             Some(&render.last_universe_buffers),
             f32::from(self.max_dimmer.load(Ordering::Relaxed)) / 100.0,
-            luma_render::strobe::clock(),
+            luma_scene::strobe::clock(),
         );
         if universes.is_empty() {
             return;

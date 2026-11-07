@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venues::{Venue, VenueMember};
-use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 /// `role` is not read off the row: it is derived per reader — see
 /// [`get_venue`] — so a venue the admitted principal does not own reads as a
@@ -150,7 +150,7 @@ pub async fn set_environment(
 /// a density onto a room whose haze is off and wonder why nothing changed.
 ///
 /// The march's cost knobs are not here and never will be — see
-/// `luma_render::scene_desc::VenueHaze`.
+/// `luma_scene::environment::VenueHaze`.
 ///
 /// The ordinary venue dirtiness trigger schedules delivery of this edit.
 pub async fn set_haze(access: &mut VenueAccess<'_, Write>, haze: VenueHaze) -> Result<(), String> {

@@ -8,24 +8,24 @@
 //! two meet, and it is the only place that knows both.
 //!
 //! Everything here is in the socket layer's frame — glTF Y-up, piece-local —
-//! which is also `crate::truss`'s local space, so an end frame is already a
+//! which is also `luma_scene::truss`'s local space, so an end frame is already a
 //! socket frame and needs no conversion.
 
 use crate::assets::Library;
-use crate::luminaire::{is_procedural, model_kind, ModelKind};
-use crate::scene_desc::{Definition, Procedural};
-use crate::truss::{Face, FaceSet};
 use glam::{DVec3, Mat4, Vec3};
 use luma_scene::aabb::DAabb;
 use luma_scene::catalog::{pieces, Family, Geometry, Part, Piece, Rest};
+use luma_scene::luminaire::{is_procedural, model_kind, ModelKind};
 use luma_scene::snap::SocketLookup;
 use luma_scene::sockets::{resolve_socket, ResolvedSocket, SocketType};
+use luma_scene::truss::{Face, FaceSet};
 use luma_scene::venue::{Node, NodeKind, NodeSockets, Params};
+use luma_scene::{definition::Definition, truss::Procedural};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 /// Palette default span for the straight truss, in metres. Quantized to whole
-/// panels by [`crate::truss::Truss::new`].
+/// panels by [`luma_scene::truss::Truss::new`].
 pub const DEFAULT_TRUSS_SPAN_M: f32 = 3.0;
 
 /// Palette default deflection for a hinge, in degrees.
@@ -65,7 +65,7 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
     // Name and frame together: which faces a family offers and where they are
     // is one decision per face, and splitting it into two parallel lists is
     // how the two came to disagree.
-    let ends: Vec<(String, crate::truss::EndFrame)> = match params {
+    let ends: Vec<(String, luma_scene::truss::EndFrame)> = match params {
         // **Every plate, not only the ways.** All six faces of a block are
         // plated (`Corner::plates`) — an open one merely adds a coupler — and a
         // plate is exactly what a stick bolts to. Naming only the ways left a
@@ -115,8 +115,8 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
 /// (Y-up, a truss's span along X, origin at the centre).
 #[must_use]
 pub fn procedural_bounds(params: Procedural) -> DAabb {
-    use crate::truss::{Corner, Truss, OUTER_M};
     use glam::DVec3;
+    use luma_scene::truss::{Corner, Truss, OUTER_M};
     let outer = f64::from(OUTER_M);
     match params {
         Procedural::Truss { span } => {
@@ -136,7 +136,7 @@ pub fn procedural_bounds(params: Procedural) -> DAabb {
             // about the pin at the `-Z` edge). The angle changes the
             // envelope, so the envelope is computed from it — the old
             // fixed-size box was wrong at every angle but 90°.
-            let angle = f64::from(crate::truss::Hinge::new(angle).angle_deg()).to_radians();
+            let angle = f64::from(luma_scene::truss::Hinge::new(angle).angle_deg()).to_radians();
             let pin = glam::DVec3::new(0.0, 0.0, -outer);
             let turn = glam::DMat4::from_translation(pin)
                 * glam::DMat4::from_rotation_y(angle)
@@ -182,7 +182,7 @@ fn footings(params: Procedural) -> Vec<ResolvedSocket> {
     let seat = ResolvedSocket::from_frame(
         SEAT_SOCKET,
         SocketType::BottomMount,
-        DVec3::new(0.0, f64::from(-crate::truss::OUTER_M), 0.0),
+        DVec3::new(0.0, f64::from(-luma_scene::truss::OUTER_M), 0.0),
         DVec3::NEG_Y,
         DVec3::X,
     );
@@ -224,7 +224,7 @@ fn mount_faces(params: Procedural) -> Vec<ResolvedSocket> {
             ResolvedSocket::from_frame(
                 &face_socket_name(face),
                 SocketType::TrussFace,
-                (face.normal() * crate::truss::OUTER_M).as_dvec3(),
+                (face.normal() * luma_scene::truss::OUTER_M).as_dvec3(),
                 face.normal().as_dvec3(),
                 DVec3::X,
             )
@@ -631,8 +631,8 @@ impl StatedHousing {
         Self(Definition {
             kind: "Moving Head".into(),
             modes: Vec::new(),
-            physical: Some(crate::scene_desc::Physical {
-                dimensions: Some(crate::scene_desc::Dimensions {
+            physical: Some(luma_scene::definition::Physical {
+                dimensions: Some(luma_scene::definition::Dimensions {
                     width: 300.0,
                     height: 500.0,
                     depth: 300.0,

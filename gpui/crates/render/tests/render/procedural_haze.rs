@@ -4,9 +4,10 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::FixtureCone,
-    scene_desc::{CameraPose, HazeAppearance, RenderSettings, Scene},
+    scene_desc::{CameraPose, RenderSettings, Scene},
     Frame, Renderer,
 };
+use luma_scene::environment::HazeAppearance;
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::common::capture;
@@ -68,7 +69,7 @@ fn lights(frame: &mut Frame, count: usize) {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: luma_render::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         })
         .collect();
 }

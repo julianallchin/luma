@@ -324,7 +324,7 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: crate::luminaire::Lens { radius: 0.15 },
+            lens: luma_scene::luminaire::Lens { radius: 0.15 },
         };
         let lens = light.lens_distance();
         let (near, far) = fixture_shadow_planes(&light);
@@ -356,7 +356,7 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: crate::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         };
         let (near, far) = fixture_shadow_planes(&light);
         assert!(near > 0.0 && near < far, "near {near} far {far}");
@@ -410,7 +410,7 @@ mod tests {
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
-                lens: crate::luminaire::Lens::POINT,
+                lens: luma_scene::luminaire::Lens::POINT,
             })
             .collect();
 
@@ -450,7 +450,7 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: crate::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         };
         let eye = Vec3::new(0.0, -12.0, 0.0);
 
@@ -506,7 +506,7 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: crate::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         }
     }
 

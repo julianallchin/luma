@@ -11,7 +11,7 @@ use glam::{Mat3, Vec3};
 
 use crate::frame::{Camera, Moment};
 use crate::scene_desc::Footage;
-use crate::strobe::Slice;
+use luma_scene::strobe::Slice;
 
 /// The frame interval a caller without a display assumes: 60 frames a second.
 pub const FRAME_S: f64 = 1.0 / 60.0;

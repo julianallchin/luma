@@ -399,9 +399,9 @@ impl Visualizer {
 /// render settings, never in where anything is.
 pub(crate) fn scene(
     rig: &Rig,
-    definitions: &BTreeMap<String, scene_desc::Definition>,
+    definitions: &BTreeMap<String, luma_scene::definition::Definition>,
     environment: VenueEnvironment,
-    haze: scene_desc::VenueHaze,
+    haze: luma_scene::environment::VenueHaze,
 ) -> scene_desc::Scene {
     // A fixture node's id *is* its `fixtures` row id, which is what makes the
     // patch and the placement two halves of one fixture without either half

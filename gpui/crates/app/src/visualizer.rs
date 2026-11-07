@@ -98,8 +98,8 @@ use gpui::{
 use luma_lib::models::universe::UniverseState;
 use luma_lib::stage_render;
 use luma_render::{
-    assets, build_frame_at, frame::EditorObject, house, scene_desc, scene_desc::VenueEnvironment,
-    strobe::FixtureClock, AsyncViewport, FrameTimings, MetricSummary, Moment, SubmitOutcome,
+    assets, build_frame_at, frame::EditorObject, house, scene_desc, AsyncViewport, FrameTimings,
+    MetricSummary, Moment, SubmitOutcome,
 };
 use luma_scene::{
     apply_rotation, apply_translation, bvh::MeshSource, coords, gizmo_scale, navigate, Aabb,
@@ -108,6 +108,7 @@ use luma_scene::{
     SceneGraph, Selection, Surface, SurfaceHit, Transform, TransformTarget, TriMesh, View,
     Viewfinder, ZoomLimits,
 };
+use luma_scene::{environment::VenueEnvironment, strobe::FixtureClock};
 use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 
@@ -248,7 +249,7 @@ pub(crate) struct Visualizer {
     haze_error: Option<String>,
     haze_saving: bool,
     haze_edited: bool,
-    haze_pending: Rc<RefCell<Option<scene_desc::VenueHaze>>>,
+    haze_pending: Rc<RefCell<Option<luma_scene::environment::VenueHaze>>>,
     /// Whichever of the three local device settings last failed to save. One
     /// field for all three because they are one tier and one message: the stage
     /// already shows the value, so the only news is that the database does not.
@@ -286,7 +287,7 @@ enum Warming {
 struct Stage {
     /// The rig. `None` until the load lands.
     scene: Option<scene_desc::Scene>,
-    definitions: BTreeMap<String, scene_desc::Definition>,
+    definitions: BTreeMap<String, luma_scene::definition::Definition>,
     /// The rig's fixtures that strobe on their own clock, and that clock.
     strobes: FixtureStrobes,
     /// The rig's laser projectors and zones, solved each frame.

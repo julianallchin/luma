@@ -12,14 +12,14 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures},
-    luminaire::Lens,
-    scene_desc::{
-        CameraPose, CloudCover, Glare, Look, Quality, RenderSettings, Scene, VenueEnvironment,
-        VenueHaze,
-    },
+    scene_desc::{CameraPose, Glare, Look, Quality, RenderSettings, Scene},
     Frame, Renderer,
 };
 use luma_scene::mesh::Material;
+use luma_scene::{
+    environment::{CloudCover, VenueEnvironment, VenueHaze},
+    luminaire::Lens,
+};
 
 use crate::common::capture;
 

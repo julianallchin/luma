@@ -22,7 +22,8 @@ use std::sync::OnceLock;
 
 use glam::Vec2;
 
-use crate::scene_desc::{CloudCover, Quality};
+use crate::scene_desc::Quality;
+use luma_scene::environment::CloudCover;
 
 /// Texels per side of the weather map.
 pub(crate) const WEATHER_SIZE: u32 = 512;

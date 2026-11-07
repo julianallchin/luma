@@ -77,7 +77,7 @@ pub fn sockets(fixtures_root: &Path) -> Result<&'static VenueSockets, String> {
 pub struct BundledFixtures(pub std::path::PathBuf);
 
 impl FixtureDefinitions for BundledFixtures {
-    fn definition(&self, fixture_path: &str) -> Option<luma_render::scene_desc::Definition> {
+    fn definition(&self, fixture_path: &str) -> Option<luma_scene::definition::Definition> {
         let relative = crate::resources::confined_path(fixture_path)?;
         crate::services::fixtures::get_fixture_definition(&self.0, relative)
             .ok()

@@ -9,7 +9,7 @@ use luma_lib::dispatch::handlers;
 use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
 use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use luma_lib::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
-use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 use super::{refused, Library, LibraryError};
 

@@ -63,7 +63,7 @@ impl FixtureStrobes {
         id: &str,
         head: usize,
         mut state: scene_desc::PrimitiveState,
-        slice: luma_render::strobe::Slice,
+        slice: luma_scene::strobe::Slice,
     ) -> scene_desc::PrimitiveState {
         if self.own_clock.contains(id) {
             let clock = self.clocks.entry((id.to_string(), head)).or_default();
@@ -74,7 +74,7 @@ impl FixtureStrobes {
     }
 }
 
-/// The stage's free-running clock: [`luma_render::strobe::clock`], whether
+/// The stage's free-running clock: [`luma_scene::strobe::clock`], whether
 /// or not the show is playing. The air drifts and the strobes flash on it,
 /// and the DMX engine gates its strobes on the same clock, so the screen
 /// flashes in phase with the rig.
@@ -91,7 +91,7 @@ impl StageClock {
 
     /// The clock now, and the seconds since the last submitted frame.
     pub(super) fn now(&self) -> (f64, f64) {
-        let now = luma_render::strobe::clock();
+        let now = luma_scene::strobe::clock();
         let interval = self
             .submitted
             .map_or(luma_render::footage::FRAME_S, |last| {
@@ -150,7 +150,7 @@ pub(super) struct Submission {
 
 pub(super) struct LiveFrameInputs<'a> {
     pub(super) scene: &'a scene_desc::Scene,
-    pub(super) definitions: &'a BTreeMap<String, scene_desc::Definition>,
+    pub(super) definitions: &'a BTreeMap<String, luma_scene::definition::Definition>,
     /// Fixtures that strobe on their own clock, advanced by this frame.
     pub(super) strobes: &'a mut FixtureStrobes,
     /// The frame's moment on the stage clock.

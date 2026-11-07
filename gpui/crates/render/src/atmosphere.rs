@@ -43,7 +43,8 @@ use half::f16;
 use wgpu::util::DeviceExt;
 
 use crate::environment::{EnvironmentPipelines, CUBE_SIZE};
-use crate::scene_desc::{CloudCover, Quality, SkyParams};
+use crate::scene_desc::Quality;
+use luma_scene::environment::{CloudCover, SkyParams};
 
 /// Ground sphere, kilometres.
 const GROUND_RADIUS_KM: f32 = 6360.0;
@@ -319,12 +320,7 @@ impl SkyUniform {
             },
             |sky| Self {
                 sun: sky.sun_direction.extend(1.0).to_array(),
-                params: [
-                    sky.exposure,
-                    0.0,
-                    VIEW_HEIGHT_KM,
-                    SUN_ANGULAR_RADIUS.cos(),
-                ],
+                params: [sky.exposure, 0.0, VIEW_HEIGHT_KM, SUN_ANGULAR_RADIUS.cos()],
                 clouds: clouds::Layer::of(sky.clouds).map_or([0.0, 1.0, 0.0, 0.0], |layer| {
                     [
                         layer.base_km,

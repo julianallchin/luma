@@ -133,7 +133,7 @@ use crate::models::waveforms::TrackWaveform;
 
 use crate::rekordbox::types::RekordboxTrack;
 use crate::settings::AppSettings;
-use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 commands! {
     composable_patterns::preview_composable_pattern(request: ComposablePreviewRequest) -> ComposablePreview;

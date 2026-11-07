@@ -6,9 +6,10 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures},
-    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, DebugView, RenderSettings, Scene},
     Frame, Renderer,
 };
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 use luma_scene::mesh::{Material, MeshData, Vertex};
 
 use crate::common::capture;
@@ -126,7 +127,7 @@ fn noncontributing_cone(position: Vec3, range: f32, color: Vec3, intensity: f32)
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 0.0,
-        lens: luma_render::luminaire::Lens::POINT,
+        lens: luma_scene::luminaire::Lens::POINT,
     }
 }
 
@@ -399,7 +400,7 @@ fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
-        lens: luma_render::luminaire::Lens::POINT,
+        lens: luma_scene::luminaire::Lens::POINT,
     });
     let live = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     let reference = renderer

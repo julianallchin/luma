@@ -152,7 +152,7 @@ pub struct Sky {
     pub exposure: f32,
     /// Ground albedo of the sky table, linear RGB: the floor's mean colour.
     /// Files written before it was a colour hold one number, read as grey.
-    #[serde(deserialize_with = "crate::scene_desc::albedo_rgb")]
+    #[serde(deserialize_with = "luma_scene::environment::albedo_rgb")]
     pub ground_albedo: [f32; 3],
 }
 
@@ -199,7 +199,7 @@ pub struct Haze {
     /// Mean density; zero is off.
     pub density: f32,
     /// Procedural density and drift.
-    pub appearance: crate::scene_desc::HazeAppearance,
+    pub appearance: luma_scene::environment::HazeAppearance,
     /// Indoor support of the haze.
     pub bounds: Bounds,
     /// Samples per beam.

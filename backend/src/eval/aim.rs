@@ -539,7 +539,7 @@ mod tests {
     /// renderer's own `beam_direction`, from the pose's stored triple.
     fn drawn(pose: &NodePose, definition: &FixtureDefinition, position: [f32; 2]) -> [f64; 3] {
         let (_, rot) = pose.data_pose();
-        luma_render::luminaire::beam_direction(
+        luma_scene::luminaire::beam_direction(
             Some(&crate::stage_render::definition(definition)),
             rot.map(|v| v as f32),
             Some(position),

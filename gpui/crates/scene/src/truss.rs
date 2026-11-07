@@ -46,7 +46,8 @@
 
 use glam::Vec3;
 
-use luma_scene::mesh::{MeshData, Vertex};
+use crate::mesh::{MeshData, Vertex};
+use serde::{Deserialize, Serialize};
 
 /// Chord centre-to-centre spacing, both across and vertically. The number the
 /// product name carries: "F34" is this in millimetres.
@@ -211,7 +212,7 @@ impl Member {
 /// [`Self::mating`] a single answer instead of a family of them.
 ///
 /// This is the geometric half of a truss-end socket. Wiring it into
-/// [`luma_scene::snap`] is the venue graph's business, not the renderer's.
+/// [`crate::snap`] is the venue graph's business, not the renderer's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EndFrame {
     /// Centre of the end face, in piece-local space.
@@ -1170,6 +1171,103 @@ fn push_tube(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, member: Member)
             }
         }
     }
+}
+
+/// The generated piece families. A closed vocabulary: a new set object is an
+/// authored mesh unless its shape is genuinely parametric.
+///
+/// Every variant is a truss piece today, and every one of them mates with every
+/// other — see the module docs. Parameters here are *requests*: each is
+/// quantized or clamped by the generator's constructor, so an unbuildable value
+/// is not an error, it is the nearest buildable one.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Procedural {
+    /// A continuous F34 lattice.
+    Truss {
+        /// Requested span in metres, before snapping to whole panels.
+        span: f32,
+    },
+    /// A box corner, open on two to six faces.
+    Corner {
+        /// Which faces are open; fewer than two widens to straight-through.
+        faces: FaceSet,
+    },
+    /// Two half-boxes on a vertical pin.
+    Hinge {
+        /// Deflection in degrees, before clamping to `0..=180` and rounding.
+        angle: f32,
+    },
+}
+
+impl Procedural {
+    /// The generated piece this describes, with its parameters made buildable.
+    ///
+    /// One place converts a scene file's requests into geometry, so the frame
+    /// builder, the camera framing, and any future collision box all see the
+    /// same clamped piece rather than each re-deriving it.
+    fn part(self) -> Part {
+        match self {
+            Self::Truss { span } => Part::Truss(Truss::new(span)),
+            Self::Corner { faces } => Part::Corner(Corner::new(faces)),
+            Self::Hinge { angle } => Part::Hinge(Hinge::new(angle)),
+        }
+    }
+
+    /// Stable identity of this piece's geometry in the frame's mesh bank.
+    ///
+    /// Every parameter that changes a vertex is in the key, and every key is
+    /// drawn from a finite set — spans are whole panels, corners are one of 64
+    /// face sets, hinges are whole degrees — so a venue of generated pieces
+    /// interns a bounded number of meshes.
+    #[must_use]
+    pub fn mesh_key(self) -> String {
+        match self.part() {
+            Part::Truss(t) => t.mesh_key(),
+            Part::Corner(c) => c.mesh_key(),
+            Part::Hinge(h) => h.mesh_key(),
+        }
+    }
+
+    /// The piece as one uploadable triangle list, in piece-local space.
+    #[must_use]
+    pub fn mesh(self) -> MeshData {
+        match self.part() {
+            Part::Truss(t) => t.mesh(),
+            Part::Corner(c) => c.mesh(),
+            Part::Hinge(h) => h.mesh(),
+        }
+    }
+
+    /// Every face another piece can bolt onto, in piece-local space.
+    #[must_use]
+    pub fn end_frames(self) -> Vec<EndFrame> {
+        match self.part() {
+            Part::Truss(t) => t.end_frames().to_vec(),
+            Part::Corner(c) => c.end_frames().collect(),
+            Part::Hinge(h) => h.end_frames().to_vec(),
+        }
+    }
+
+    /// Half-width of the box a camera framing stands on this piece's origin.
+    #[must_use]
+    pub fn half_extent_m(self) -> f32 {
+        match self.part() {
+            Part::Truss(t) => t.span_m() / 2.0,
+            // A block is the same size whatever its ways, and a hinge is one
+            // block long in the worst case.
+            Part::Corner(_) | Part::Hinge(_) => OUTER_M,
+        }
+    }
+}
+
+/// A [`Procedural`]'s parameters, made buildable. Private: the vocabulary the
+/// wire and the callers share is [`Procedural`], and a second public enum over
+/// the same three shapes would be a list to keep in sync.
+enum Part {
+    Truss(Truss),
+    Corner(Corner),
+    Hinge(Hinge),
 }
 
 #[cfg(test)]

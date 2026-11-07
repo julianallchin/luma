@@ -22,7 +22,7 @@ pub(super) fn haze_rows(state: &Visualizer, app: &Entity<Luma>) -> Div {
             "Haze density",
             controls.haze.density,
             0.,
-            scene_desc::VenueHaze::MAX_DENSITY,
+            luma_scene::environment::VenueHaze::MAX_DENSITY,
             ViewValue::HazeDensity,
         ))
         .child(view_value(

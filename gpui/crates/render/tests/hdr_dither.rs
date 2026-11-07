@@ -22,8 +22,9 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
-use luma_render::scene_desc::{CameraPose, RenderSettings, Scene, VenueEnvironment, VenueHaze};
+use luma_render::scene_desc::{CameraPose, RenderSettings, Scene};
 use luma_render::{build_frame_with, AsyncPresentation, AsyncViewport, DisplayRange, Frame};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 160;
@@ -71,7 +72,7 @@ fn frame() -> Frame {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
-        lens: luma_render::luminaire::Lens::POINT,
+        lens: luma_scene::luminaire::Lens::POINT,
     }];
     frame
 }

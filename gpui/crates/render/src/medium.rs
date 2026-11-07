@@ -1,6 +1,7 @@
 //! Procedural medium uniforms and a bounded light-path optical-depth cache.
-use crate::{frame::Frame, scene_desc::HazeAppearance};
+use crate::frame::Frame;
 use bytemuck::{Pod, Zeroable};
+use luma_scene::environment::HazeAppearance;
 
 /// Outdoor haze falls by e every fifty metres of altitude, without an XY edge.
 const OUTDOOR_SCALE_HEIGHT_M: f32 = 50.0;

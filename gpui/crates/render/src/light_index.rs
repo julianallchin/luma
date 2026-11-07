@@ -1500,7 +1500,7 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: crate::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         }
     }
 
@@ -1630,7 +1630,7 @@ mod tests {
     #[test]
     fn a_lens_beam_is_conservatively_indexed_to_the_rim() {
         let lensed = |position, direction: Vec3, range, half_deg: f32, radius| FixtureCone {
-            lens: crate::luminaire::Lens { radius },
+            lens: luma_scene::luminaire::Lens { radius },
             ..cone(
                 position,
                 direction.normalize(),
@@ -1703,7 +1703,7 @@ mod tests {
     #[test]
     fn cone_reaches_sphere_from_the_virtual_apex_keeps_the_lens_rim() {
         let light = FixtureCone {
-            lens: crate::luminaire::Lens { radius: 0.15 },
+            lens: luma_scene::luminaire::Lens { radius: 0.15 },
             ..cone(
                 Vec3::new(0.0, 0.0, 5.0),
                 Vec3::NEG_Z,

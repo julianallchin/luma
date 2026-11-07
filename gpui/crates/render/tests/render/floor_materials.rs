@@ -8,14 +8,15 @@ use glam::{Mat4, Vec3};
 use luma_render::{
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures},
-    luminaire::Lens,
-    scene_desc::{
-        CameraPose, CloudCover, Floor, Geometry, Piece, Procedural, Quality, RenderSettings, Scene,
-        VenueEnvironment, VenueHaze,
-    },
+    scene_desc::{CameraPose, Geometry, Piece, Quality, RenderSettings, Scene},
     Frame, Renderer,
 };
 use luma_scene::mesh::Material;
+use luma_scene::{
+    environment::{CloudCover, Floor, VenueEnvironment, VenueHaze},
+    luminaire::Lens,
+    truss::Procedural,
+};
 
 use crate::common::library;
 

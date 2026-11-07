@@ -13,9 +13,10 @@ use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::laser::{LaserPoint, LaserScan};
 use luma_render::scene_desc::{
-    CameraPose, DebugView, Environment, HazeAppearance, Look, Piece, RenderSettings, Scene,
+    CameraPose, DebugView, Environment, Look, Piece, RenderSettings, Scene,
 };
 use luma_render::{build_frame_with, Frame, Renderer};
+use luma_scene::environment::HazeAppearance;
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 160;

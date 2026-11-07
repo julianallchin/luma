@@ -10,13 +10,14 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 
 use crate::assets::{HdrImage, Library};
-use crate::luminaire::{
+use crate::overlay::Overlay;
+use crate::scene_desc::{Geometry, PrimitiveState, Scene};
+use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
+use luma_scene::definition::Definition;
+use luma_scene::luminaire::{
     beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
     pixel_lens, Lens, ModelKind, PIXEL,
 };
-use crate::overlay::Overlay;
-use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
-use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use luma_scene::mesh::{Glb, Image, Material, MeshData, Vertex};
 
 /// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
@@ -30,8 +31,8 @@ const FLOOR_EXTENT_M: f32 = 2000.0;
 
 /// Say once per floor that its maps would not load. The frame falls back to
 /// the plain ground, so this is the only trace of it.
-fn warn_floor_once(floor: crate::scene_desc::Floor, error: &anyhow::Error) {
-    static WARNED: std::sync::Mutex<Vec<crate::scene_desc::Floor>> =
+fn warn_floor_once(floor: luma_scene::environment::Floor, error: &anyhow::Error) {
+    static WARNED: std::sync::Mutex<Vec<luma_scene::environment::Floor>> =
         std::sync::Mutex::new(Vec::new());
     let mut warned = WARNED
         .lock()
@@ -295,7 +296,7 @@ pub struct Frame {
     /// Authored mean density; zero disables the pass.
     pub haze_density: f32,
     /// Authored procedural density and drift.
-    pub haze_appearance: crate::scene_desc::HazeAppearance,
+    pub haze_appearance: luma_scene::environment::HazeAppearance,
     /// Physical support for indoor haze. Outdoors the density field is global.
     pub haze_bounds: luma_scene::Aabb,
     /// Equiangular samples per beam.
@@ -641,7 +642,7 @@ fn pixel_positions(def: &Definition, head_count: usize) -> Vec<Vec3> {
     let phys = def.physical.as_ref();
     // 200 mm here vs `extractPhysicalDimensions`'s 300 mm: two defaults for one
     // concept, ported as-is because the goldens pin real dimensions anyway.
-    let dim = |get: fn(&crate::scene_desc::Dimensions) -> f32| {
+    let dim = |get: fn(&luma_scene::definition::Dimensions) -> f32| {
         phys.and_then(|p| p.dimensions.as_ref())
             .map_or(0.2, |d| get(d).max(1.0) / 1000.0)
     };
@@ -792,7 +793,7 @@ pub struct Moment {
     pub time: f64,
     /// The frame's share of the free-running clock: a strobe shows the
     /// fraction of it during which its gate is on.
-    pub slice: crate::strobe::Slice,
+    pub slice: luma_scene::strobe::Slice,
     /// The playing track's low-band envelope at `time`, 0..=1, for the bass
     /// shake. Zero without a track.
     pub bass: f32,
@@ -807,7 +808,7 @@ impl Moment {
         let length = crate::footage::FRAME_S;
         Self {
             time,
-            slice: crate::strobe::Slice {
+            slice: luma_scene::strobe::Slice {
                 open: time - length,
                 length,
             },
@@ -868,7 +869,7 @@ pub fn build_at(
 ) -> anyhow::Result<Frame> {
     let time = moment.time as f32;
     let exposed = |head_state: PrimitiveState| {
-        head_state.dimmer * crate::strobe::gain(head_state.strobe, moment.slice)
+        head_state.dimmer * luma_scene::strobe::gain(head_state.strobe, moment.slice)
     };
     let r = three_to_world_basis();
     let mut bank = Bank::default();
@@ -1121,10 +1122,12 @@ pub fn build_at(
         let bounds = scene.room_bounds();
         if matches!(
             environment,
-            crate::scene_desc::VenueEnvironment::Indoor { .. }
+            luma_scene::environment::VenueEnvironment::Indoor { .. }
         ) {
-            let potential =
-                crate::house::lamps(crate::scene_desc::VenueEnvironment::indoor(1.0), bounds);
+            let potential = crate::house::lamps(
+                luma_scene::environment::VenueEnvironment::indoor(1.0),
+                bounds,
+            );
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(potential.len())
                 .min(MAX_FIXTURE_CONES);
@@ -1364,8 +1367,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::scene_desc::{
-        CameraPose, Fixture, Mode, RenderSettings, VenueEnvironment, VenueHaze,
+    use crate::scene_desc::{CameraPose, Fixture, RenderSettings};
+    use luma_scene::{
+        definition::Mode,
+        environment::{VenueEnvironment, VenueHaze},
     };
 
     fn definition(kind: &str, mode: &str, heads: usize) -> Definition {
@@ -1555,8 +1560,8 @@ mod tests {
     #[test]
     fn the_drawn_head_turns_with_its_beam_and_carries_the_lens() {
         let mut def = definition("Moving Head", "One", 1);
-        def.physical = Some(crate::scene_desc::Physical {
-            dimensions: Some(crate::scene_desc::Dimensions {
+        def.physical = Some(luma_scene::definition::Physical {
+            dimensions: Some(luma_scene::definition::Dimensions {
                 width: 405.0,
                 height: 450.0,
                 depth: 330.0,
@@ -1597,7 +1602,7 @@ mod tests {
         assert!(offsets[0] > 0.1 && offsets[0] < 0.2, "{offsets:?}");
 
         // A spec-sheet offset wins.
-        def.physical.as_mut().unwrap().lens = Some(crate::scene_desc::Lens {
+        def.physical.as_mut().unwrap().lens = Some(luma_scene::definition::Lens {
             degrees_min: 3.8,
             degrees_max: 3.8,
             radius_m: None,

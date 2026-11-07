@@ -22,7 +22,8 @@ use glam::{Vec2, Vec3};
 use luma_scene::Aabb;
 
 use crate::frame::FixtureCone;
-use crate::scene_desc::{DirectionalLight, Environment, SkyParams, VenueEnvironment};
+use crate::scene_desc::{DirectionalLight, Environment};
+use luma_scene::environment::{SkyParams, VenueEnvironment};
 
 /// Metres between house lamps. At the minimum six-metre mounting height,
 /// neighbouring 60-degree beams overlap at their half-intensity shoulders.
@@ -115,7 +116,7 @@ impl Lamp {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
-            lens: crate::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         }
     }
 }
@@ -473,7 +474,7 @@ mod tests {
         assert_eq!(
             VenueEnvironment::Indoor {
                 house_level: 9.0,
-                floor: crate::scene_desc::Floor::BlackStage,
+                floor: luma_scene::environment::Floor::BlackStage,
             }
             .house_level(),
             1.0
@@ -481,7 +482,7 @@ mod tests {
         assert_eq!(
             VenueEnvironment::Indoor {
                 house_level: f32::NAN,
-                floor: crate::scene_desc::Floor::BlackStage,
+                floor: luma_scene::environment::Floor::BlackStage,
             }
             .house_level(),
             0.0

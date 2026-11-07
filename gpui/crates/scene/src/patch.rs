@@ -350,7 +350,7 @@ pub struct Cell {
 /// along.
 ///
 /// `along` is metres along the run's own span axis — the truss family is
-/// authored with its span on local `+X` (`luma_render::truss`, "Local space"),
+/// authored with its span on local `+X` (`crate::truss`, "Local space"),
 /// so a fixture's position in its run's frame *is* `along(t)` in metres, for a
 /// run of one segment or of four.
 #[derive(Clone, Debug, PartialEq)]

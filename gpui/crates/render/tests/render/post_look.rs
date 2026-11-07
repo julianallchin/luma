@@ -14,9 +14,10 @@ use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
 use luma_render::scene_desc::{
     CameraPose, DebugView, Environment, Exposure, Glare, GlareStyle, Look, Piece, Quality,
-    RenderSettings, Scene, ToneCurve, VenueEnvironment, VenueHaze,
+    RenderSettings, Scene, ToneCurve,
 };
 use luma_render::{build_frame_with, Frame, Renderer};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 const WIDTH: u32 = 192;
 const HEIGHT: u32 = 128;
@@ -76,7 +77,7 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
-        lens: luma_render::luminaire::Lens { radius: 0.05 },
+        lens: luma_scene::luminaire::Lens { radius: 0.05 },
     }];
     frame
 }

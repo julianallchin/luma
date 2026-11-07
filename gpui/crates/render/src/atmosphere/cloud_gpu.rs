@@ -12,7 +12,8 @@ use super::{
     binding, buffer, compute, layout, prelude, sampled_2d, sampler_entry, storage_2d,
     uniform_entry, SkyFrame, FORMAT,
 };
-use crate::scene_desc::{CloudCover, Quality};
+use crate::scene_desc::Quality;
+use luma_scene::environment::CloudCover;
 
 const SHAPE_SIZE: u32 = 128;
 const DETAIL_SIZE: u32 = 32;

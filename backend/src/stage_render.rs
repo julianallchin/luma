@@ -24,9 +24,10 @@ use std::sync::{mpsc, OnceLock};
 
 use glam::Vec3;
 use luma_render::frame::Moment;
-use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment, VenueHaze};
+use luma_render::scene_desc::{self, RenderSettings};
 use luma_render::{assets, build_frame_at, footage, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::coords;
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
 
@@ -169,9 +170,14 @@ impl VenueGeometry {
     ///
     /// The room is lit by [`Self::environment`] — see [`offscreen_render`].
     #[must_use]
-    pub fn scene(&self) -> (scene_desc::Scene, BTreeMap<String, scene_desc::Definition>) {
+    pub fn scene(
+        &self,
+    ) -> (
+        scene_desc::Scene,
+        BTreeMap<String, luma_scene::definition::Definition>,
+    ) {
         let render = offscreen_render(self.environment, self.haze);
-        let definitions: BTreeMap<String, scene_desc::Definition> = self
+        let definitions: BTreeMap<String, luma_scene::definition::Definition> = self
             .definitions
             .iter()
             .map(|(path, def)| (path.clone(), definition(def)))
@@ -218,7 +224,10 @@ impl VenueGeometry {
     pub fn show_scene(
         &self,
         settings: &crate::settings::AppSettings,
-    ) -> (scene_desc::Scene, BTreeMap<String, scene_desc::Definition>) {
+    ) -> (
+        scene_desc::Scene,
+        BTreeMap<String, luma_scene::definition::Definition>,
+    ) {
         let (mut scene, definitions) = self.scene();
         let render = &mut scene.render;
         render.look = scene_desc::Look::stored(&settings.stage_look);
@@ -348,40 +357,46 @@ pub fn primitive_state(
 /// that. It should collapse to one set of types that the golden JSON also
 /// deserialises into.
 #[must_use]
-pub fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
-    scene_desc::Definition {
+pub fn definition(def: &FixtureDefinition) -> luma_scene::definition::Definition {
+    luma_scene::definition::Definition {
         kind: def.type_.clone(),
         modes: def
             .modes
             .iter()
-            .map(|mode| scene_desc::Mode {
+            .map(|mode| luma_scene::definition::Mode {
                 name: mode.name.clone(),
                 // Only the length is read (`Definition::head_count`); the
                 // renderer's head is deliberately opaque.
                 heads: mode.heads.iter().map(|_| serde_json::Value::Null).collect(),
             })
             .collect(),
-        physical: def.physical.as_ref().map(|p| scene_desc::Physical {
-            dimensions: p.dimensions.as_ref().map(|d| scene_desc::Dimensions {
-                width: d.width,
-                height: d.height,
-                depth: d.depth,
+        physical: def
+            .physical
+            .as_ref()
+            .map(|p| luma_scene::definition::Physical {
+                dimensions: p
+                    .dimensions
+                    .as_ref()
+                    .map(|d| luma_scene::definition::Dimensions {
+                        width: d.width,
+                        height: d.height,
+                        depth: d.depth,
+                    }),
+                layout: p.layout.as_ref().map(|l| luma_scene::definition::Layout {
+                    width: l.width,
+                    height: l.height,
+                }),
+                // Zero is the renderer's "unknown", which is what an absent QLC+
+                // attribute means.
+                lens: p.lens.as_ref().map(|l| luma_scene::definition::Lens {
+                    degrees_min: l.degrees_min.unwrap_or(0.0),
+                    degrees_max: l.degrees_max.unwrap_or(0.0),
+                    // QLC+ has no lens size or position; spec-sheet values
+                    // go here when the library carries them.
+                    radius_m: None,
+                    offset_m: None,
+                }),
             }),
-            layout: p.layout.as_ref().map(|l| scene_desc::Layout {
-                width: l.width,
-                height: l.height,
-            }),
-            // Zero is the renderer's "unknown", which is what an absent QLC+
-            // attribute means.
-            lens: p.lens.as_ref().map(|l| scene_desc::Lens {
-                degrees_min: l.degrees_min.unwrap_or(0.0),
-                degrees_max: l.degrees_max.unwrap_or(0.0),
-                // QLC+ has no lens size or position; spec-sheet values
-                // go here when the library carries them.
-                radius_m: None,
-                offset_m: None,
-            }),
-        }),
     }
 }
 
@@ -479,7 +494,7 @@ pub struct Shot {
 /// from `meshes_root`, or if the frame cannot be read back.
 pub fn render_rgba(
     scene: scene_desc::Scene,
-    definitions: BTreeMap<String, scene_desc::Definition>,
+    definitions: BTreeMap<String, luma_scene::definition::Definition>,
     shot: Shot,
     meshes_root: PathBuf,
 ) -> Result<(Vec<u8>, u32, u32), String> {
@@ -557,7 +572,7 @@ impl Aim {
     pub fn camera(
         self,
         scene: &scene_desc::Scene,
-        definitions: &BTreeMap<String, scene_desc::Definition>,
+        definitions: &BTreeMap<String, luma_scene::definition::Definition>,
         booth: Option<Vec3>,
         size: (u32, u32),
     ) -> Camera {
@@ -586,7 +601,7 @@ impl Sequence {
     /// Fails if the render thread has stopped.
     pub fn install(
         scene: scene_desc::Scene,
-        definitions: BTreeMap<String, scene_desc::Definition>,
+        definitions: BTreeMap<String, luma_scene::definition::Definition>,
         lasers: crate::laser::LaserRig,
         meshes_root: PathBuf,
         aim: Aim,
@@ -693,7 +708,7 @@ impl Drop for Sequence {
 /// As [`render_rgba`], plus a frame the encoder rejects.
 pub fn render_png(
     scene: scene_desc::Scene,
-    definitions: BTreeMap<String, scene_desc::Definition>,
+    definitions: BTreeMap<String, luma_scene::definition::Definition>,
     shot: Shot,
     meshes_root: PathBuf,
 ) -> Result<Vec<u8>, String> {
@@ -718,7 +733,7 @@ struct Installed {
     /// golden catalogue is written in, and a derived camera has no business
     /// making a round trip through a mirror space to say where it is.
     camera: Camera,
-    definitions: BTreeMap<String, scene_desc::Definition>,
+    definitions: BTreeMap<String, luma_scene::definition::Definition>,
     lasers: crate::laser::LaserRig,
     size: (u32, u32),
     meshes_root: PathBuf,

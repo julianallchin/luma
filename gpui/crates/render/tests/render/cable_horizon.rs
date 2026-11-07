@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 use luma_render::{
     assets::Library,
     build_frame_with,
-    scene_desc::{
-        CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, VenueEnvironment, VenueHaze,
-    },
+    scene_desc::{CameraPose, Geometry, Piece, RenderSettings, Scene},
     Renderer,
+};
+use luma_scene::{
+    environment::{VenueEnvironment, VenueHaze},
+    truss::Procedural,
 };
 
 use crate::common::capture;

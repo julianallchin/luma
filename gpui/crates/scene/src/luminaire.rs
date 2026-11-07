@@ -6,7 +6,7 @@
 //! comes from the definition's `Physical.Lens`; the per-kind table is a
 //! fallback for definitions that omit it, and it is the only such table.
 
-use crate::scene_desc::Definition;
+use crate::definition::Definition;
 use fixture_kinematics::{aim, Articulation, Mount};
 use glam::Vec3;
 
@@ -397,7 +397,7 @@ impl ModelKind {
 /// fixture that has no beam.
 ///
 /// The one definition of "where is this pointing", shared by the frame builder
-/// that draws the cone and by [`Scene::framing`](crate::scene_desc::Scene::framing)
+/// that draws the cone and by `luma_render::scene_desc::Scene::framing`
 /// that frames it — two answers here would be a camera fitted to a beam the
 /// renderer does not draw, which is how a pixel bar aimed along its own length
 /// pulled a club's extent six metres sideways.
@@ -425,7 +425,7 @@ pub fn beam_direction(def: Option<&Definition>, rot: [f32; 3], position: Option<
     } else {
         return Vec3::ZERO;
     };
-    luma_scene::coords::world_from_data(aim(&Mount::from_stored(Vec3::ZERO, rot), &articulation))
+    crate::coords::world_from_data(aim(&Mount::from_stored(Vec3::ZERO, rot), &articulation))
 }
 
 /// LED bars and matrices are drawn from their layout rather than from a mesh.
@@ -574,14 +574,14 @@ mod tests {
         Definition {
             kind: kind.into(),
             modes: Vec::new(),
-            physical: Some(crate::scene_desc::Physical {
-                dimensions: Some(crate::scene_desc::Dimensions {
+            physical: Some(crate::definition::Physical {
+                dimensions: Some(crate::definition::Dimensions {
                     width: w,
                     height: h,
                     depth: 300.0,
                 }),
                 layout: None,
-                lens: Some(crate::scene_desc::Lens {
+                lens: Some(crate::definition::Lens {
                     degrees_min: beam_deg,
                     degrees_max: beam_deg,
                     radius_m: None,

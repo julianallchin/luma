@@ -7,9 +7,10 @@ use luma_render::{
     build_frame_with,
     camera_export::{CameraExport, Context, Orbit, SceneIdentity, Viewport},
     frame::{Draw, MaterialTextures},
-    scene_desc::{CameraPose, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, RenderSettings, Scene},
     Frame,
 };
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 use luma_scene::mesh::{Material, MeshData, Vertex};
 
 fn frame(eye: Vec3, target: Vec3) -> Frame {

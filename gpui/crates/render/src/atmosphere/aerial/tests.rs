@@ -2,9 +2,9 @@ use super::*;
 use crate::{
     atmosphere::{extinction, resolve, GROUND_RADIUS_KM},
     device::DeviceContext,
-    scene_desc::SkyParams,
 };
 use glam::Vec3;
+use luma_scene::environment::SkyParams;
 
 fn read(context: &DeviceContext, view: &wgpu::TextureView) -> Vec<Vec3> {
     let texture = view.texture();

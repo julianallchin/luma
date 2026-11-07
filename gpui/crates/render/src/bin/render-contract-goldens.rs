@@ -6,11 +6,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use luma_render::scene_desc::{
-    CameraPose, DirectionalLight, Environment, Geometry, Piece, Procedural, RenderSettings, Scene,
+    CameraPose, DirectionalLight, Environment, Geometry, Piece, RenderSettings, Scene,
 };
-use luma_render::truss::{Face, FaceSet};
 use luma_render::{assets, build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::coords::data_pose_of;
+use luma_scene::truss::Procedural;
+use luma_scene::truss::{Face, FaceSet};
 
 const TIME: f32 = 1.37;
 
@@ -587,7 +588,7 @@ fn copy_scene(scene: &Scene) -> Scene {
 
 fn copy_definitions(
     catalogue: &Catalogue,
-) -> anyhow::Result<BTreeMap<String, luma_render::scene_desc::Definition>> {
+) -> anyhow::Result<BTreeMap<String, luma_scene::definition::Definition>> {
     Ok(serde_json::from_value(serde_json::to_value(
         &catalogue.definitions,
     )?)?)

@@ -11,9 +11,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 use luma_render::{
     assets::Library,
     build_frame_with,
-    scene_desc::{CameraPose, CloudCover, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, RenderSettings, Scene},
     Frame, Renderer,
 };
+use luma_scene::environment::{CloudCover, VenueEnvironment, VenueHaze};
 
 use crate::common::capture;
 
@@ -343,7 +344,7 @@ fn the_last_row_is_what_a_long_lens_sees_there() {
 /// floor are its own settings, set here as the venue had them.
 fn gasworks() -> (Frame, u32, u32) {
     use luma_render::camera_export::CameraExport;
-    use luma_render::scene_desc::Floor;
+    use luma_scene::environment::Floor;
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gasworks-horizon-line.json");
     let export = CameraExport::read(&path).unwrap();

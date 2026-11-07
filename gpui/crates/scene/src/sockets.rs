@@ -545,7 +545,7 @@ impl ResolvedSocket {
     /// and the vector fixing its roll — rather than from a bbox anchor.
     ///
     /// This is how the procedural truss family gets its sockets: an open face
-    /// already *is* a frame (`luma_render::truss::EndFrame`), so authoring one
+    /// already *is* a frame (`crate::truss::EndFrame`), so authoring one
     /// would be transcribing geometry that the generator already knows. The
     /// piece's origin is its centre, which is what makes `outward` derivable.
     pub fn from_frame(

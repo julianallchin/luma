@@ -59,7 +59,7 @@ fn light(gobo: u32) -> FixtureCone {
         gobo,
         gobo_rotation: 0.31,
         haze_gain: 1.0,
-        lens: luma_render::luminaire::Lens::POINT,
+        lens: luma_scene::luminaire::Lens::POINT,
     }
 }
 
@@ -119,7 +119,7 @@ struct StressRender {
     stage_size: f32,
     haze_density: f32,
     #[serde(default)]
-    haze_appearance: luma_render::scene_desc::HazeAppearance,
+    haze_appearance: luma_scene::environment::HazeAppearance,
     haze_resolution: f32,
     haze_steps: u32,
     debug_view: String,
@@ -211,7 +211,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
             gobo: (index as u32) % descriptor.light.gobo_modulus,
             gobo_rotation: descriptor.light.gobo_rotation,
             haze_gain: 1.0,
-            lens: luma_render::luminaire::Lens::POINT,
+            lens: luma_scene::luminaire::Lens::POINT,
         });
     }
     frame
@@ -286,7 +286,7 @@ fn draw_async(
 fn house_lights_illuminate_haze_as_the_level_rises() {
     let mut renderer = Renderer::new().unwrap();
     let lamp = luma_render::house::lamps(
-        luma_render::scene_desc::VenueEnvironment::indoor(1.0),
+        luma_scene::environment::VenueEnvironment::indoor(1.0),
         luma_scene::Aabb::EMPTY,
     )[0];
     let mut brightness = Vec::new();

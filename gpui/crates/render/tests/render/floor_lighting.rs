@@ -6,9 +6,10 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     frame::FixtureCone,
-    scene_desc::{CameraPose, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    scene_desc::{CameraPose, RenderSettings, Scene},
     Frame, Renderer,
 };
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 use crate::common::capture;
 
@@ -61,7 +62,7 @@ fn floor() -> Frame {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
-        lens: luma_render::luminaire::Lens::POINT,
+        lens: luma_scene::luminaire::Lens::POINT,
     });
     frame
 }

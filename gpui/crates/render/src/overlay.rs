@@ -219,7 +219,7 @@ pub(crate) fn build(
         // A procedural bar's body is drawn a quarter turn onto the mount
         // normal (see the bar branch in `build_frame_with`); its cage turns
         // with it or it wears a box for a body it does not have.
-        let turned = if crate::luminaire::is_procedural(def) {
+        let turned = if luma_scene::luminaire::is_procedural(def) {
             Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
         } else {
             Mat4::IDENTITY
@@ -545,7 +545,7 @@ fn handle_hovered(handle: &Handle, hover: GizmoHandle) -> bool {
 /// One arrow per emitting fixture, from its mount point along the beam it
 /// leaves at rest.
 ///
-/// The direction is [`crate::luminaire::beam_direction`] with no pinned
+/// The direction is [`luma_scene::luminaire::beam_direction`] with no pinned
 /// position — the one answer to "which way is this pointing", so an arrow can
 /// never disagree with the cone drawn under it. A fixture that answers with the
 /// zero vector has no beam (a hazer, a definition the catalogue lost) and gets
@@ -567,7 +567,7 @@ fn aim_arrows(
     let mut out = Vec::new();
     let color = hex_srgb(ACCENT);
     for fixture in &scene.fixtures {
-        let direction = crate::luminaire::beam_direction(
+        let direction = luma_scene::luminaire::beam_direction(
             definitions.get(&fixture.fixture_path),
             fixture.rot,
             None,

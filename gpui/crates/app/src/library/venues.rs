@@ -8,7 +8,7 @@ use std::time::Duration;
 use luma_lib::dispatch::handlers;
 use luma_lib::models::folders::Folder;
 use luma_lib::models::venues::{Venue, VenueMember};
-use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
+use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
 use super::{Cause, Library, LibraryError};
 

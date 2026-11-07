@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use luma_render::scene_desc::{Definition, Scene};
+use luma_render::scene_desc::Scene;
 use luma_render::{build_frame, Renderer};
+use luma_scene::definition::Definition;
 use serde::Deserialize;
 
 const CASES: &[&str] = &[
