@@ -174,7 +174,7 @@ mod tests {
             "{}{}{}{}{}",
             crate::haze_field::prelude(),
             include_str!("../shaders/fixture_light.wgsl"),
-            include_str!("../shaders/light_index.wgsl"),
+            crate::light_index::prelude(),
             include_str!("../shaders/visibility.wgsl")
                 .replace("@group(3) @binding(11)", "@group(0) @binding(8)"),
             crate::gpu::wgsl::beam_transport_wgsl()

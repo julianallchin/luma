@@ -33,9 +33,9 @@ struct Lens {
 
 /// Fraction of the lens's glass lit from the side.
 const SIDE: f32 = 0.02;
-/// Small broadband leak, as the beam transport has: a white source behind a
-/// filter. At full a lens goes white-hot through any tone curve.
-const WHITE_LEAK: f32 = 0.03;
+// WHITE_LEAK, injected from `Transport::WHITE_LEAK`: the beam transport's
+// broadband leak, a white source behind a filter. At full a lens goes
+// white-hot through any tone curve.
 /// Smallest drawn radius in pixels. A smaller lens is drawn this size with
 /// the same total energy, so a distant fixture does not shimmer.
 const MIN_RADIUS_PX: f32 = 1.5;

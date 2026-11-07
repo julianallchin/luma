@@ -64,8 +64,7 @@ impl SlotKey {
 /// generation they were written under so a stale entry can never be replayed.
 pub(crate) type SlotEntry = [u32; 4];
 
-/// Intervals stored per payload entry; must match `CACHE_K` in
-/// `beam_transport.wgsl`.
+/// Intervals stored per payload entry; `CACHE_K` in the transport WGSL.
 pub(crate) const CACHE_K: u32 = 8;
 
 /// log2 of the payload table's entry count: 2^21 entries (144 MiB), or the

@@ -400,7 +400,11 @@ impl Pipelines {
         let lens_module = module(
             device,
             "post-lens",
-            include_str!("shaders/post_lens.wgsl").to_owned(),
+            format!(
+                "const WHITE_LEAK: f32 = {:?};\n{}",
+                crate::gpu::Transport::WHITE_LEAK,
+                include_str!("shaders/post_lens.wgsl")
+            ),
         );
         let lens = render_pipeline(
             "post-lens",

@@ -340,7 +340,7 @@ impl Gpu {
         // The light-index prelude is authored against group 1 (the haze
         // pass's slot); the surface pass carries the same bindings inside its
         // group 3, so its copy is rebound by this one documented replace.
-        let light_index_prelude = include_str!("../shaders/light_index.wgsl");
+        let light_index_prelude = crate::light_index::prelude();
         let scene_wgsl = scene_wgsl();
         let scene_module = shader(&device, "scene", &scene_wgsl);
         // The transport (ray reconstruction + per-light integral + group-0

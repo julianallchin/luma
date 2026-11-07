@@ -299,6 +299,28 @@ impl CpuLightIndex {
 /// Number of 8 px tiles along one edge of a 64 px prepass big tile.
 const BIG_FACTOR: u32 = 8;
 
+/// The constants and bindings every light-index consumer opens with
+/// (`shaders/light_index.wgsl`).
+pub(crate) fn prelude() -> String {
+    format!(
+        "const LIGHT_INDEX_TILE: u32 = {TILE_SIZE}u;\n\
+         const LIGHT_INDEX_WORDS: u32 = {MASK_WORDS}u;\n\
+         const LIGHT_INDEX_ZBINS: u32 = {Z_BINS}u;\n{}",
+        include_str!("shaders/light_index.wgsl")
+    )
+}
+
+/// The build kernels' source, opened with the constants they share with the
+/// CPU reference builder.
+fn build_wgsl() -> String {
+    format!(
+        "const NARROW_PHASE: bool = {NARROW_PHASE};\n\
+         const MASK_WORDS: u32 = {MASK_WORDS}u;\n\
+         const BIG_FACTOR: u32 = {BIG_FACTOR}u;\n{}",
+        include_str!("shaders/light_index_build.wgsl")
+    )
+}
+
 /// Hot half of a fixture cone's shading SoA — position and reach, all a
 /// culling or distance test needs. Mirrored in `scene_bindings.wgsl` and
 /// `beam_transport.wgsl`; this module owns the upload so the buffer order and
@@ -537,13 +559,7 @@ impl LightIndexPipelines {
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("light-index-build"),
-            source: wgpu::ShaderSource::Wgsl(
-                format!(
-                    "const NARROW_PHASE: bool = {NARROW_PHASE};\n{}",
-                    include_str!("shaders/light_index_build.wgsl")
-                )
-                .into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(build_wgsl().into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("light-index-build"),
@@ -592,13 +608,10 @@ impl LightIndexPipelines {
                 single = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("light-index-build-single"),
                     source: wgpu::ShaderSource::Wgsl(
-                        format!(
-                            "const NARROW_PHASE: bool = {NARROW_PHASE};\n{}",
-                            include_str!("shaders/light_index_build.wgsl")
-                                .replace("texture_multisampled_2d<f32>", "texture_2d<f32>")
-                                .replace("textureNumSamples(surface_depth)", "1u")
-                        )
-                        .into(),
+                        build_wgsl()
+                            .replace("texture_multisampled_2d<f32>", "texture_2d<f32>")
+                            .replace("textureNumSamples(surface_depth)", "1u")
+                            .into(),
                     ),
                 });
                 &single
@@ -645,7 +658,7 @@ impl LightIndexPipelines {
             source: wgpu::ShaderSource::Wgsl(
                 format!(
                     "{}{}",
-                    include_str!("shaders/light_index.wgsl"),
+                    prelude(),
                     include_str!("shaders/light_index_count.wgsl")
                 )
                 .into(),

@@ -29,9 +29,8 @@ struct LightIndexParams {
 @group(1) @binding(9) var<storage, read> light_index_masks: array<u32>;
 @group(1) @binding(10) var<storage, read> light_index_zbins: array<u32>;
 
-const LIGHT_INDEX_TILE: u32 = 8u;
-const LIGHT_INDEX_WORDS: u32 = 16u;
-const LIGHT_INDEX_ZBINS: u32 = 4096u;
+// LIGHT_INDEX_TILE, LIGHT_INDEX_WORDS and LIGHT_INDEX_ZBINS are injected from
+// `light_index.rs` (`light_index::prelude`).
 
 struct LightCursor {
     base: u32,

@@ -22,9 +22,8 @@
 // The masks are order-independent, so the parallel build has no ordering
 // discipline to get right.
 
-const MASK_WORDS: u32 = 16u;
-// 64 px big tile = 8 × 8 px tiles.
-const BIG_FACTOR: u32 = 8u;
+// `MASK_WORDS` and `BIG_FACTOR` (8 px tiles per 64 px big tile) are
+// injected from `light_index.rs` with `NARROW_PHASE`.
 
 struct IndexParams {
     // columns, rows, big_columns, big_rows (8 px tile grid and 64 px big-tile grid)

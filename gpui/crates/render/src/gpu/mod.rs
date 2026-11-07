@@ -106,7 +106,7 @@ const CAMERA_FAR: f32 = 2000.0;
 pub(crate) struct Transport;
 impl Transport {
     const BEAM_GAIN: f32 = 180.0;
-    const WHITE_LEAK: f32 = 0.03;
+    pub(crate) const WHITE_LEAK: f32 = 0.03;
     pub(crate) const PHASE_G: f32 = 0.6;
     const NEAR_CLAMP: f32 = 0.06;
     /// Extinction per unit haze density, in 1/metres. One σ serves the whole

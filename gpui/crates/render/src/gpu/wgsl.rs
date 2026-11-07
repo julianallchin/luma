@@ -24,9 +24,10 @@ pub(super) fn scene_bindings_wgsl() -> String {
 /// group-0 layout) that both volumetric passes prepend.
 pub(super) fn beam_transport_wgsl() -> String {
     format!(
-        "{}{}{}",
+        "{}{}const CACHE_K: u32 = {}u;\n{}",
         include_str!("../shaders/medium.wgsl"),
         crate::fog_grid::prelude(),
+        crate::interval_cache::CACHE_K,
         include_str!("../shaders/beam_transport.wgsl")
     )
 }
@@ -60,7 +61,7 @@ pub(super) fn scene_wgsl() -> String {
         scene_bindings_wgsl(),
         crate::probes::prelude(),
         include_str!("../shaders/probe_sample.wgsl"),
-        include_str!("../shaders/light_index.wgsl").replace("@group(1)", "@group(3)"),
+        crate::light_index::prelude().replace("@group(1)", "@group(3)"),
         include_str!("../shaders/fixture_light.wgsl"),
         include_str!("../shaders/visibility.wgsl"),
         include_str!("../shaders/scene.wgsl"),

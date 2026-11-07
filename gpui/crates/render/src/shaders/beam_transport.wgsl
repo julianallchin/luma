@@ -18,7 +18,7 @@ override GRID_FOG: bool = false;
 // traversal's call list without integrating anything; so does the fused
 // kernel while `cache_record_only` is set, deciding what to share first.
 override FILL_ONLY: bool = false;
-const CACHE_K: u32 = 8u;
+// CACHE_K is injected from `interval_cache.rs`.
 // Every call, empty tails included: the replay must add the same terms in
 // the same expression shape, or float contraction rounds differently.
 var<private> cache_count: u32;
