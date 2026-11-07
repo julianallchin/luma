@@ -1,63 +1,60 @@
-//! Pixel-diff arithmetic shared by the pixel suites.
-//!
-//! One definition, so two suites cannot disagree about what "these frames
-//! differ" means — five per-file copies had already split into two silently
-//! different per-channel thresholds (`>= 3` vs `> 8`), and an assertion tuned
-//! against one was wrong when read against the other.
+//! Reading the frames a pixel suite keeps. The diff arithmetic and the noise
+//! floor are `gpui_agent::shots`', shared with `image.diff` in a script.
 
-/// Per-channel delta below which a pixel is noise, not change: antialiasing,
-/// compositor rounding, GPU dithering. The one documented threshold; a caller
-/// that genuinely needs a different sensitivity passes its own and says why.
-pub const CHANNEL_NOISE: u8 = 3;
-
-/// Fraction of pixels whose RGB differs by at least `threshold` on any
-/// channel. Alpha is ignored — screenshots are opaque.
-pub fn differing_fraction(left: &image::RgbaImage, right: &image::RgbaImage, threshold: u8) -> f32 {
-    assert_eq!(
-        left.dimensions(),
-        right.dimensions(),
-        "frames must be the same size to be differenced"
-    );
-    let changed = left
-        .pixels()
-        .zip(right.pixels())
-        .filter(|(left, right)| (0..3).any(|c| left[c].abs_diff(right[c]) >= threshold))
-        .count();
-    changed as f32 / (left.width() * left.height()) as f32
-}
-
-/// `<shots>/<drawer>`, made: where a suite keeps the shots a person looks at.
-/// `drawer` keeps one suite's shots from overwriting another's when both like
-/// the same name, and `LUMA_SHOTS` moves the whole tree (see
-/// [`gpui_agent::shots_root`]).
-pub fn shots_dir(drawer: &str) -> std::path::PathBuf {
-    let directory = gpui_agent::shots_root().join(drawer);
-    std::fs::create_dir_all(&directory).expect("failed to create the shot directory");
-    directory
-}
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 /// A PNG on disk, decoded.
-pub fn decode(path: impl AsRef<std::path::Path>) -> image::RgbaImage {
+pub fn decode(path: impl AsRef<Path>) -> image::RgbaImage {
     let path = path.as_ref();
     image::open(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
         .to_rgba8()
 }
 
-/// Copy a screenshot out of the harness's own directory — which it deletes —
-/// into `<shots>/<drawer>/<name>.png`, and decode it.
-///
-/// Two things at once, because they are always wanted together: a failing
-/// assertion has to name a path that still exists when a person goes to look,
-/// and the same assertion has to compare the pixels.
-pub fn keep_in(
-    drawer: &str,
-    shot: &serde_json::Value,
-    name: &str,
-) -> (std::path::PathBuf, image::RgbaImage) {
-    let source = shot["path"].as_str().expect("a shot has a path");
-    let kept = shots_dir(drawer).join(format!("{name}.png"));
-    std::fs::copy(source, &kept).expect("failed to keep the shot");
+/// Copy a screenshot out of the harness's own directory, which it deletes, to
+/// `<shots>/<name>.png` and print where: a failing assertion has to name a
+/// path that still exists when a person goes to look.
+pub fn preserve(source: impl AsRef<Path>, name: &str) -> PathBuf {
+    let kept = gpui_agent::shots::keep(source, name)
+        .unwrap_or_else(|error| panic!("failed to keep {name}: {error}"));
+    println!("kept {}", kept.display());
+    kept
+}
+
+/// [`preserve`] a shot the script returned, and decode it.
+pub fn keep(shot: &serde_json::Value, name: &str) -> (PathBuf, image::RgbaImage) {
+    let kept = preserve(shot["path"].as_str().expect("a shot has a path"), name);
     let decoded = decode(&kept);
     (kept, decoded)
+}
+
+/// Mean horizontal high-frequency energy over columns `x` and rows `y`,
+/// clipped to the image: the mean per-channel step between row neighbours.
+/// Blur lowers it; sharp text and edges raise it.
+pub fn edge_energy(image: &image::RgbaImage, x: Range<u32>, y: Range<u32>) -> f32 {
+    let mut total = 0u64;
+    let mut count = 0u64;
+    for y in y.start..y.end.min(image.height()) {
+        for x in (x.start + 1)..x.end.min(image.width()) {
+            let left = image.get_pixel(x - 1, y);
+            let here = image.get_pixel(x, y);
+            total += (0..3)
+                .map(|channel| u64::from(left[channel].abs_diff(here[channel])))
+                .sum::<u64>();
+            count += 3;
+        }
+    }
+    total as f32 / count.max(1) as f32
+}
+
+/// [`edge_energy`] of the whole image but its outer eight pixels, where crop
+/// and background antialiasing contribute edges of their own.
+pub fn inner_edge_energy(image: &image::RgbaImage) -> f32 {
+    let (width, height) = image.dimensions();
+    edge_energy(
+        image,
+        8..width.saturating_sub(8),
+        8..height.saturating_sub(8),
+    )
 }

@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_agent::fixture::{Clip, Fixture, TRACK_NAME, VENUE_NAME};
@@ -6,12 +5,6 @@ use gpui_agent::{Harness, Mode, NAV};
 use serde_json::Value;
 
 const SECONDS: u32 = 20;
-
-fn shots_dir() -> PathBuf {
-    let dir = gpui_agent::shots_root().join("visualizer");
-    std::fs::create_dir_all(&dir).expect("could not make the shots directory");
-    dir
-}
 
 fn run(harness: &mut Harness, code: &str) -> Value {
     let result = harness.exec(code, Duration::from_secs(300));
@@ -37,8 +30,8 @@ fn shot(harness: &mut Harness, name: &str) {
         }
     }
     let (mean, from) = best.expect("at least one frame");
-    let to = shots_dir().join(format!("{name}.png"));
-    std::fs::copy(&from, &to).expect("could not copy the shot");
+    let to = gpui_agent::shots::keep(&from, &format!("visualizer/{name}"))
+        .expect("could not keep the shot");
     println!("shot {} (mean {mean:.2})", to.display());
 }
 

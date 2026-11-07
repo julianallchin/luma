@@ -61,7 +61,7 @@ mod pixel;
 pub mod protocol;
 pub mod pump;
 #[cfg(feature = "pixel")]
-mod shots;
+pub mod shots;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -70,8 +70,6 @@ use std::time::Duration;
 pub use error::HarnessError;
 pub use interp::{ExecResult, Interpreter, API_DTS};
 pub use pump::{Config, Mode, PumpClient, RootFactory, GPU_LIVENESS_TIMEOUT};
-#[cfg(feature = "pixel")]
-pub use shots::shots_root;
 
 /// `until(what, pred)` in a script — see `tests/support/until.js`.
 pub const UNTIL: &str = include_str!("../tests/support/until.js");

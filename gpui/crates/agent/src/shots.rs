@@ -2,18 +2,26 @@
 //!
 //! Three reads cover what the pixel suites assert: how bright a region is,
 //! how much of it changed between two shots, and how much of it is one hue
-//! (a refusal's red). `keep` copies a shot somewhere a person can find it. Rects are logical pixels, like
-//! node bounds, so a script can pass `node.bounds` straight in; the shot's
-//! `scale` turns them into device pixels.
+//! (a refusal's red). `keep` copies a shot somewhere a person can find it.
+//! Rects are logical pixels, like node bounds, so a script can pass
+//! `node.bounds` straight in; the shot's `scale` turns them into device pixels.
+//!
+//! The cargo pixel suites use the same [`CHANNEL_NOISE`],
+//! [`differing_fraction`] and [`keep`], so a script and a suite cannot disagree
+//! about what "these frames differ" means.
 
+use std::path::{Component, Path, PathBuf};
+
+use image::GenericImageView;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::HarnessError;
 
 /// Per-channel delta below which a pixel is noise, not change: antialiasing,
-/// compositor rounding, GPU dithering. The same default the cargo suites use.
-const CHANNEL_NOISE: u8 = 3;
+/// compositor rounding, GPU dithering. A caller that genuinely needs a
+/// different sensitivity passes its own threshold and says why.
+pub const CHANNEL_NOISE: u8 = 3;
 
 #[derive(Deserialize)]
 struct Shot {
@@ -80,7 +88,10 @@ pub(crate) fn call(op: &str, args: &str) -> Result<String, HarnessError> {
         "stats" => stats(serde_json::from_str(args).map_err(bad)?)?,
         "diff" => diff(serde_json::from_str(args).map_err(bad)?)?,
         "tint" => tint(serde_json::from_str(args).map_err(bad)?)?,
-        "keep" => keep(serde_json::from_str(args).map_err(bad)?)?,
+        "keep" => {
+            let args: Keep = serde_json::from_str(args).map_err(bad)?;
+            json!(keep(&args.shot.path, &args.name)?.display().to_string())
+        }
         other => return Err(HarnessError::BadCall(format!("no image.{other}"))),
     };
     Ok(value.to_string())
@@ -129,7 +140,7 @@ fn stats(args: Stats) -> Result<Value, HarnessError> {
     let view = image::imageops::crop_imm(&image, x, y, width, height);
     let mut sum = [0f64; 4];
     let (mut total, mut min, mut max) = (0f64, f64::MAX, f64::MIN);
-    for (_, _, pixel) in image::GenericImageView::pixels(&*view) {
+    for (_, _, pixel) in view.pixels() {
         for (channel, sum) in sum.iter_mut().enumerate() {
             *sum += f64::from(pixel[channel]);
         }
@@ -164,13 +175,32 @@ fn diff(args: Diff) -> Result<Value, HarnessError> {
         image::imageops::crop_imm(&a, x, y, width, height),
         image::imageops::crop_imm(&b, x, y, width, height),
     );
-    let changed = image::GenericImageView::pixels(&*a)
-        .zip(image::GenericImageView::pixels(&*b))
+    Ok(json!(differing_fraction(&*a, &*b, threshold)))
+}
+
+/// Fraction of pixels whose RGB differs by at least `threshold` on any
+/// channel. Alpha is ignored: screenshots are opaque.
+///
+/// # Panics
+/// If the two images differ in size.
+pub fn differing_fraction<I>(a: &I, b: &I, threshold: u8) -> f64
+where
+    I: GenericImageView<Pixel = image::Rgba<u8>>,
+{
+    assert_eq!(
+        a.dimensions(),
+        b.dimensions(),
+        "frames must be the same size to be differenced"
+    );
+    let (width, height) = a.dimensions();
+    let changed = a
+        .pixels()
+        .zip(b.pixels())
         .filter(|((_, _, left), (_, _, right))| {
             (0..3).any(|c| left[c].abs_diff(right[c]) >= threshold)
         })
         .count();
-    Ok(json!(changed as f64 / f64::from(width * height)))
+    changed as f64 / f64::from(width * height)
 }
 
 /// The fraction of pixels in which `channel` exceeds both others by at least
@@ -182,7 +212,8 @@ fn tint(args: Tint) -> Result<Value, HarnessError> {
     let view = image::imageops::crop_imm(&image, x, y, width, height);
     let margin = i16::from(args.margin.unwrap_or(40));
     let index = args.channel as usize;
-    let tinted = image::GenericImageView::pixels(&*view)
+    let tinted = view
+        .pixels()
         .filter(|(_, _, pixel)| {
             let value = i16::from(pixel[index]);
             (0..3)
@@ -194,38 +225,38 @@ fn tint(args: Tint) -> Result<Value, HarnessError> {
 }
 
 /// Where kept shots go: `$LUMA_SHOTS`, else `<temp>/luma-shots`.
-pub fn shots_root() -> std::path::PathBuf {
-    std::env::var_os("LUMA_SHOTS").map_or_else(
-        || std::env::temp_dir().join("luma-shots"),
-        std::path::PathBuf::from,
-    )
+pub fn shots_root() -> PathBuf {
+    std::env::var_os("LUMA_SHOTS")
+        .map_or_else(|| std::env::temp_dir().join("luma-shots"), PathBuf::from)
 }
 
 /// Copy a shot out of the harness's own directory, which goes with the
-/// process, to `$LUMA_SHOTS/<name>.png` (default `<temp>/luma-shots`), and
-/// say where. `name` may carry a drawer (`"sidebar/push-01"`) but may not
-/// climb out of the root.
-fn keep(args: Keep) -> Result<Value, HarnessError> {
-    let relative = std::path::Path::new(&args.name);
-    if args.name.is_empty()
+/// process, to `<shots root>/<name>.png`, and say where. `name` may carry a
+/// drawer (`"sidebar/push-01"`) but may not climb out of the root.
+///
+/// # Errors
+/// A `name` that is empty, absolute or climbs out of the root, or a copy that
+/// fails.
+pub fn keep(source: impl AsRef<Path>, name: &str) -> Result<PathBuf, HarnessError> {
+    let relative = Path::new(name);
+    if name.is_empty()
         || relative.is_absolute()
         || relative
             .components()
-            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
         return Err(HarnessError::BadCall(format!(
-            "image.keep: {:?} is not a relative name inside the shots directory",
-            args.name
+            "image.keep: {name:?} is not a relative name inside the shots directory"
         )));
     }
     let root = shots_root();
-    let kept = root.join(format!("{}.png", args.name));
+    let kept = root.join(format!("{name}.png"));
     let failed = |error: std::io::Error| {
         HarnessError::BadCall(format!("image.keep: {}: {error}", kept.display()))
     };
     std::fs::create_dir_all(kept.parent().unwrap_or(&root)).map_err(failed)?;
-    std::fs::copy(&args.shot.path, &kept).map_err(failed)?;
-    Ok(json!(kept.display().to_string()))
+    std::fs::copy(source, &kept).map_err(failed)?;
+    Ok(kept)
 }
 
 #[cfg(test)]

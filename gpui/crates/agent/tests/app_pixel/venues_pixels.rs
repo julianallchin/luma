@@ -9,8 +9,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{px, size, App, AppContext as _, Window};
+use gpui_agent::shots::{differing_fraction, CHANNEL_NOISE};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use serde_json::Value;
+use support::image::{edge_energy, preserve};
 
 const LAST_VENUE: &str = "last-venue";
 
@@ -83,19 +85,6 @@ fn run(harness: &mut Harness, script: &str) -> Value {
     result.result
 }
 
-fn preserve(source: &str, name: &str) -> PathBuf {
-    let destination = support::image::shots_dir("venues").join(name);
-    fs::copy(source, &destination)
-        .unwrap_or_else(|error| panic!("failed to preserve {}: {error}", destination.display()));
-    println!("venue capture {}", destination.display());
-    destination
-}
-
-/// The shared diff at the shared noise floor — see `support::image`.
-fn differing_fraction(left: &image::RgbaImage, right: &image::RgbaImage) -> f32 {
-    support::image::differing_fraction(left, right, support::image::CHANNEL_NOISE)
-}
-
 fn luma_range(image: &image::RgbaImage) -> u8 {
     let (mut low, mut high) = (u8::MAX, u8::MIN);
     for pixel in image.pixels() {
@@ -104,25 +93,6 @@ fn luma_range(image: &image::RgbaImage) -> u8 {
         high = high.max(luma);
     }
     high.saturating_sub(low)
-}
-
-/// Horizontal high-frequency energy within a screen rectangle. The titlebar
-/// strips sit outside the dialog card, so their change measures the live
-/// backdrop/scrim treatment rather than route-content replacement.
-fn edge_energy(image: &image::RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32) -> f32 {
-    let mut total = 0u64;
-    let mut count = 0u64;
-    for y in y0..y1.min(image.height()) {
-        for x in (x0 + 1)..x1.min(image.width()) {
-            let left = image.get_pixel(x - 1, y);
-            let here = image.get_pixel(x, y);
-            total += (0..3)
-                .map(|channel| u64::from(left[channel].abs_diff(here[channel])))
-                .sum::<u64>();
-            count += 3;
-        }
-    }
-    total as f32 / count.max(1) as f32
 }
 
 fn number(value: &Value, key: &str) -> f64 {
@@ -294,31 +264,31 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         "venue error geometry: card=({card_x:.0},{card_y:.0}) {card_width:.0}x{card_height:.0}; viewport=({viewport_x:.0},{viewport_y:.0}) {viewport_width:.0}x{viewport_height:.0}; text=({text_x:.0},{text_y:.0}) {text_width:.0}x{text_height:.0}"
     );
 
-    let loading = preserve(shots["loading"].as_str().unwrap(), "venue-loading.png");
-    let base = preserve(shots["base"].as_str().unwrap(), "venue-shell-base.png");
-    let browse = preserve(shots["browse"].as_str().unwrap(), "venue-browse.png");
-    let create = preserve(shots["create"].as_str().unwrap(), "venue-create.png");
+    let loading = preserve(shots["loading"].as_str().unwrap(), "venues/venue-loading");
+    let base = preserve(shots["base"].as_str().unwrap(), "venues/venue-shell-base");
+    let browse = preserve(shots["browse"].as_str().unwrap(), "venues/venue-browse");
+    let create = preserve(shots["create"].as_str().unwrap(), "venues/venue-create");
     let error_loading = preserve(
         error_shots["errorLoading"].as_str().unwrap(),
-        "venue-error-loading.png",
+        "venues/venue-error-loading",
     );
-    let error = preserve(error_shots["error"].as_str().unwrap(), "venue-error.png");
+    let error = preserve(error_shots["error"].as_str().unwrap(), "venues/venue-error");
     let card_paths = [
         preserve(
             shots["loadingCardShot"].as_str().unwrap(),
-            "venue-loading-card.png",
+            "venues/venue-loading-card",
         ),
         preserve(
             shots["browseCardShot"].as_str().unwrap(),
-            "venue-browse-card.png",
+            "venues/venue-browse-card",
         ),
         preserve(
             shots["createCardShot"].as_str().unwrap(),
-            "venue-create-card.png",
+            "venues/venue-create-card",
         ),
         preserve(
             error_shots["errorCardShot"].as_str().unwrap(),
-            "venue-error-card.png",
+            "venues/venue-error-card",
         ),
     ];
 
@@ -328,13 +298,13 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     let create_pixels = support::image::decode(&create);
     let error_loading_pixels = support::image::decode(&error_loading);
     let error_pixels = support::image::decode(&error);
-    let shell_edge_before = edge_energy(&base_pixels, 300, 850, 2, 34);
-    let shell_edge_after = edge_energy(&browse_pixels, 300, 850, 2, 34);
-    let sidebar_edge_before = edge_energy(&base_pixels, 8, 250, 2, 34);
-    let sidebar_edge_after = edge_energy(&browse_pixels, 8, 250, 2, 34);
-    let shell_change = differing_fraction(&base_pixels, &browse_pixels);
-    let browse_create_change = differing_fraction(&browse_pixels, &create_pixels);
-    let error_change = differing_fraction(&error_loading_pixels, &error_pixels);
+    let shell_edge_before = edge_energy(&base_pixels, 300..850, 2..34);
+    let shell_edge_after = edge_energy(&browse_pixels, 300..850, 2..34);
+    let sidebar_edge_before = edge_energy(&base_pixels, 8..250, 2..34);
+    let sidebar_edge_after = edge_energy(&browse_pixels, 8..250, 2..34);
+    let shell_change = differing_fraction(&base_pixels, &browse_pixels, CHANNEL_NOISE);
+    let browse_create_change = differing_fraction(&browse_pixels, &create_pixels, CHANNEL_NOISE);
+    let error_change = differing_fraction(&error_loading_pixels, &error_pixels, CHANNEL_NOISE);
     println!(
         "venue pixels: shell changed={shell_change:.3}, browse/create={browse_create_change:.3}, error transition={error_change:.3}; titlebar edge shell {shell_edge_before:.3}->{shell_edge_after:.3}, sidebar {sidebar_edge_before:.3}->{sidebar_edge_after:.3}"
     );
@@ -359,7 +329,7 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         "sidebar backdrop did not reduce titlebar edge energy: {sidebar_edge_before:.3}->{sidebar_edge_after:.3}"
     );
     assert!(
-        differing_fraction(&loading_pixels, &error_loading_pixels) < 0.02,
+        differing_fraction(&loading_pixels, &error_loading_pixels, CHANNEL_NOISE) < 0.02,
         "loading paint changed substantially between route outcomes"
     );
     for path in card_paths {

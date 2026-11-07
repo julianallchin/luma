@@ -1,10 +1,10 @@
 //! Outside-in geometry and pixel proof for the shared morph-dialog reducer.
 
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::support::image::{inner_edge_energy, preserve};
 use gpui::prelude::*;
 use gpui::{actions, div, px, AnyView, App, Context, FocusHandle, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
@@ -471,13 +471,6 @@ fn run(harness: &mut Harness, code: &str) -> Value {
     result.result
 }
 
-fn preserve(source: &str, name: &str) -> PathBuf {
-    let destination = super::support::image::shots_dir("dialog-morph").join(name);
-    fs::copy(source, &destination).unwrap();
-    println!("dialog morph capture {}", destination.display());
-    destination
-}
-
 fn crop(path: &PathBuf, bounds: &Value) -> image::RgbaImage {
     let image = image::open(path).unwrap().to_rgba8();
     let scale = image.width() as f64 / 800.0;
@@ -490,22 +483,6 @@ fn crop(path: &PathBuf, bounds: &Value) -> image::RgbaImage {
         (number("height") * scale).round() as u32,
     )
     .to_image()
-}
-
-fn edge_energy(image: &image::RgbaImage) -> f32 {
-    let mut total = 0_u64;
-    let mut count = 0_u64;
-    for y in 8..image.height().saturating_sub(8) {
-        for x in 9..image.width().saturating_sub(8) {
-            for channel in 0..3 {
-                total += u64::from(
-                    image.get_pixel(x - 1, y)[channel].abs_diff(image.get_pixel(x, y)[channel]),
-                );
-                count += 1;
-            }
-        }
-    }
-    total as f32 / count.max(1) as f32
 }
 
 #[test]
@@ -539,24 +516,22 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
 
     let sharp_frame = preserve(
         out["sharp"].as_str().unwrap(),
-        "dialog-morph-sharp-full.png",
+        "dialog-morph/dialog-morph-sharp-full",
     );
     let faded_frame = preserve(
         out["midFade"].as_str().unwrap(),
-        "dialog-morph-mid-full.png",
+        "dialog-morph/dialog-morph-mid-full",
     );
     let sharp = crop(&sharp_frame, &out["opening"]);
     let faded = crop(&faded_frame, &out["middle"]);
-    let sharp_crop =
-        super::support::image::shots_dir("dialog-morph").join("dialog-morph-sharp-a.png");
-    let faded_crop =
-        super::support::image::shots_dir("dialog-morph").join("dialog-morph-mid-a.png");
+    let sharp_crop = sharp_frame.with_file_name("dialog-morph-sharp-a.png");
+    let faded_crop = faded_frame.with_file_name("dialog-morph-mid-a.png");
     sharp.save(&sharp_crop).unwrap();
     faded.save(&faded_crop).unwrap();
     println!("dialog morph capture {}", sharp_crop.display());
     println!("dialog morph capture {}", faded_crop.display());
-    let sharp_energy = edge_energy(&sharp);
-    let faded_energy = edge_energy(&faded);
+    let sharp_energy = inner_edge_energy(&sharp);
+    let faded_energy = inner_edge_energy(&faded);
     println!("dialog morph edge energy sharp={sharp_energy:.3} mid={faded_energy:.3}");
 
     let width = |at: &str| out[at]["width"].as_f64().unwrap();
@@ -787,7 +762,7 @@ fn scale_crossfade_and_custom_transitions_render_through_the_production_card() {
         );
         preserve(
             out["pixel"].as_str().unwrap(),
-            &format!("dialog-morph-{action}-mid.png"),
+            &format!("dialog-morph/dialog-morph-{action}-mid"),
         );
         assert!(!out["middleA"].is_null(), "{action}: {out:#}");
         assert!(!out["middleB"].is_null(), "{action}: {out:#}");

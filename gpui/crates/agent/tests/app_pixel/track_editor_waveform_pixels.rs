@@ -62,8 +62,8 @@ fn waveform_and_minimap_keep_pixel_coverage_across_zoom() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    let below = support::image::keep_in("waveform-zoom", &out["below"], "lower-zoom");
-    let above = support::image::keep_in("waveform-zoom", &out["above"], "higher-zoom");
+    let below = support::image::keep(&out["below"], "waveform-zoom/lower-zoom");
+    let above = support::image::keep(&out["above"], "waveform-zoom/higher-zoom");
 
     // Every colour worth a percent of the strip, either side. The bed and the
     // three band bars are opaque fills, so these are exact quad colours and not
@@ -137,8 +137,8 @@ fn waveform_and_minimap_keep_pixel_coverage_across_zoom() {
         );
     }
 
-    let minimap = support::image::keep_in("waveform-minimap", &out["minimap"], "minimap");
-    support::image::keep_in("waveform-minimap", &out["editor"], "editor");
+    let minimap = support::image::keep(&out["minimap"], "waveform-minimap/minimap");
+    support::image::keep(&out["editor"], "waveform-minimap/editor");
     assert!(minimap.1.width() > 500 && minimap.1.height() >= 40);
 
     eprintln!(
