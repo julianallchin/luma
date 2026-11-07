@@ -52,6 +52,70 @@ fn atomic_write(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Put one object, then `record` where it landed: the row claims the bytes
+/// only once they are there. `false` with the cause in `errors`, under
+/// `what`, when either half fails — one row's failure must not skip the rest.
+async fn upload<Record, Recorded>(
+    remote: &Storage,
+    token: &str,
+    (bucket, object): (&str, &str),
+    (bytes, content_type): (Vec<u8>, &str),
+    what: &str,
+    errors: &mut Vec<String>,
+    record: Record,
+) -> bool
+where
+    Record: FnOnce(String) -> Recorded,
+    Recorded: std::future::Future<Output = Result<(), sqlx::Error>>,
+{
+    match remote
+        .upload_file(bucket, object, bytes, content_type, token)
+        .await
+    {
+        Ok(full_path) => match record(full_path).await {
+            Ok(()) => true,
+            Err(e) => {
+                errors.push(format!("db update {what}: {e}"));
+                false
+            }
+        },
+        Err(e) => {
+            let msg = format!("upload {what}: {e}");
+            errors.push(msg.clone());
+            sentry::capture_message(&msg, sentry::Level::Error);
+            false
+        }
+    }
+}
+
+/// Fetch the object `storage_path` (`bucket/object`) names and write it to
+/// the file `dest` picks for it. The file, or nothing with the cause in
+/// `errors` under `what`.
+async fn download(
+    remote: &Storage,
+    token: &str,
+    storage_path: &str,
+    what: &str,
+    errors: &mut Vec<String>,
+    dest: impl FnOnce(&str) -> std::io::Result<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let (bucket, object) = storage_path.split_once('/')?;
+    let bytes = match remote.download_file(bucket, object, token).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            errors.push(format!("download {what}: {e}"));
+            return None;
+        }
+    };
+    match dest(object).and_then(|dest| atomic_write(&dest, &bytes).map(|()| dest)) {
+        Ok(dest) => Some(dest),
+        Err(e) => {
+            errors.push(format!("write {what}: {e}"));
+            None
+        }
+    }
+}
+
 // ============================================================================
 // Upload
 // ============================================================================
@@ -149,31 +213,24 @@ pub async fn upload_pending_audio(
                 )
             };
 
-        match remote
-            .upload_file("track-audio", &storage_path, bytes, content_type, token)
-            .await
-        {
-            Ok(full_path) => {
-                // Log and continue: one row's failure must not skip the rest.
-                if let Err(e) = sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
-                    .bind(&full_path)
+        let recorded = upload(
+            remote,
+            token,
+            ("track-audio", &storage_path),
+            (bytes, content_type),
+            &format!("audio {}", row.id),
+            &mut stats.errors,
+            |full_path| async move {
+                sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
+                    .bind(full_path)
                     .bind(&row.id)
                     .execute(pool)
                     .await
-                {
-                    stats
-                        .errors
-                        .push(format!("db update audio {}: {e}", row.id));
-                    continue;
-                }
-                stats.audio_uploaded += 1;
-            }
-            Err(e) => {
-                let msg = format!("upload audio {}: {e}", row.id);
-                stats.errors.push(msg.clone());
-                sentry::capture_message(&msg, sentry::Level::Error);
-            }
-        }
+                    .map(drop)
+            },
+        )
+        .await;
+        stats.audio_uploaded += usize::from(recorded);
     }
 
     Ok(())
@@ -231,34 +288,27 @@ pub async fn upload_pending_stems(
             }
         };
 
-        match remote
-            .upload_file("track-stems", &storage_path, bytes, content_type, token)
-            .await
-        {
-            Ok(full_path) => {
-                if let Err(e) = sqlx::query(
+        let recorded = upload(
+            remote,
+            token,
+            ("track-stems", &storage_path),
+            (bytes, content_type),
+            &format!("stem {}/{}", row.track_id, row.stem_name),
+            &mut stats.errors,
+            |full_path| async move {
+                sqlx::query(
                     "UPDATE track_stems SET storage_path = ? WHERE track_id = ? AND stem_name = ?",
                 )
-                .bind(&full_path)
+                .bind(full_path)
                 .bind(&row.track_id)
                 .bind(&row.stem_name)
                 .execute(pool)
                 .await
-                {
-                    stats.errors.push(format!(
-                        "db update stem {}/{}: {e}",
-                        row.track_id, row.stem_name
-                    ));
-                    continue;
-                }
-                stats.stems_uploaded += 1;
-            }
-            Err(e) => {
-                let msg = format!("upload stem {}/{}: {e}", row.track_id, row.stem_name);
-                stats.errors.push(msg.clone());
-                sentry::capture_message(&msg, sentry::Level::Error);
-            }
-        }
+                .map(drop)
+            },
+        )
+        .await;
+        stats.stems_uploaded += usize::from(recorded);
     }
 
     Ok(())
@@ -302,11 +352,7 @@ pub async fn upload_pending_album_art(
             continue;
         }
 
-        let ext = match row.album_art_mime.as_str() {
-            "image/png" => "png",
-            "image/gif" => "gif",
-            _ => "jpg",
-        };
+        let ext = crate::storage::art_extension(Some(&row.album_art_mime));
         let storage_path = format!("{uid}/{}/cover.{ext}", row.track_hash);
 
         let bytes = match std::fs::read(file_path) {
@@ -317,35 +363,24 @@ pub async fn upload_pending_album_art(
             }
         };
 
-        match remote
-            .upload_file(
-                "track-audio",
-                &storage_path,
-                bytes,
-                &row.album_art_mime,
-                token,
-            )
-            .await
-        {
-            Ok(full_path) => {
-                if let Err(e) =
-                    sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
-                        .bind(&full_path)
-                        .bind(&row.id)
-                        .execute(pool)
-                        .await
-                {
-                    stats.errors.push(format!("db update art {}: {e}", row.id));
-                    continue;
-                }
-                stats.art_uploaded += 1;
-            }
-            Err(e) => {
-                let msg = format!("upload art {}: {e}", row.id);
-                stats.errors.push(msg.clone());
-                sentry::capture_message(&msg, sentry::Level::Error);
-            }
-        }
+        let recorded = upload(
+            remote,
+            token,
+            ("track-audio", &storage_path),
+            (bytes, &row.album_art_mime),
+            &format!("art {}", row.id),
+            &mut stats.errors,
+            |full_path| async move {
+                sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
+                    .bind(full_path)
+                    .bind(&row.id)
+                    .execute(pool)
+                    .await
+                    .map(drop)
+            },
+        )
+        .await;
+        stats.art_uploaded += usize::from(recorded);
     }
 
     Ok(())
@@ -393,27 +428,23 @@ pub async fn upload_pending_agent_figures(
                 continue;
             }
         };
-        match remote
-            .upload_file(figures::BUCKET, object, bytes, "image/png", token)
-            .await
-        {
-            Ok(_) => {
-                if let Err(e) = sqlx::query("DELETE FROM agent_figure_uploads WHERE path = ?")
+        let recorded = upload(
+            remote,
+            token,
+            (figures::BUCKET, object),
+            (bytes, "image/png"),
+            &format!("figure {path}"),
+            &mut stats.errors,
+            |_| async move {
+                sqlx::query("DELETE FROM agent_figure_uploads WHERE path = ?")
                     .bind(path)
                     .execute(pool)
                     .await
-                {
-                    stats.errors.push(format!("db update figure {path}: {e}"));
-                    continue;
-                }
-                stats.figures_uploaded += 1;
-            }
-            Err(e) => {
-                let msg = format!("upload figure {path}: {e}");
-                stats.errors.push(msg.clone());
-                sentry::capture_message(&msg, sentry::Level::Error);
-            }
-        }
+                    .map(drop)
+            },
+        )
+        .await;
+        stats.figures_uploaded += usize::from(recorded);
     }
 
     Ok(())
@@ -477,35 +508,23 @@ pub async fn download_pending_stems(
     progress.phase("Downloading stems", Some(pending.len()), "files");
     for row in pending {
         let _item = progress.item();
-        let Some((bucket, path)) = row.storage_path.split_once('/') else {
+        let Some(dest) = download(
+            remote,
+            token,
+            &row.storage_path,
+            &format!("stem {}/{}", row.track_id, row.stem_name),
+            &mut stats.errors,
+            |object| {
+                let stems_dir = storage.stems_dir(&row.track_hash);
+                std::fs::create_dir_all(&stems_dir)?;
+                let ext = object.rsplit('.').next().unwrap_or("wav");
+                Ok(stems_dir.join(format!("{}.{ext}", row.stem_name)))
+            },
+        )
+        .await
+        else {
             continue;
         };
-        let bytes = match remote.download_file(bucket, path, token).await {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                stats.errors.push(format!(
-                    "download stem {}/{}: {error}",
-                    row.track_id, row.stem_name
-                ));
-                continue;
-            }
-        };
-        let stems_dir = storage.stems_root().join(&row.track_hash);
-        if let Err(error) = std::fs::create_dir_all(&stems_dir) {
-            stats
-                .errors
-                .push(format!("mkdir stems {}: {error}", row.track_id));
-            continue;
-        }
-        let ext = path.rsplit('.').next().unwrap_or("wav");
-        let dest = stems_dir.join(format!("{}.{ext}", row.stem_name));
-        if let Err(error) = atomic_write(&dest, &bytes) {
-            stats.errors.push(format!(
-                "write stem {}/{}: {error}",
-                row.track_id, row.stem_name
-            ));
-            continue;
-        }
         match apply_download_metadata(
             pool,
             sqlx::query(
@@ -564,30 +583,21 @@ pub async fn download_pending_album_art(
     progress.phase("Downloading cover art", Some(rows.len()), "files");
     for row in &rows {
         let _item = progress.item();
-        let (bucket, path) = match row.album_art_storage_path.split_once('/') {
-            Some(bp) => bp,
-            None => continue,
-        };
-
-        let bytes = match remote.download_file(bucket, path, token).await {
-            Ok(b) => b,
-            Err(e) => {
-                stats.errors.push(format!("download art {}: {e}", row.id));
-                continue;
-            }
-        };
-
-        let ext = match row.album_art_mime.as_deref() {
-            Some("image/png") => "png",
-            Some("image/gif") => "gif",
-            _ => "jpg",
-        };
-        let dest = art_dir.join(format!("{}.{ext}", row.track_hash));
-
-        if let Err(e) = atomic_write(&dest, &bytes) {
-            stats.errors.push(format!("write art {}: {e}", row.id));
+        let Some(dest) = download(
+            remote,
+            token,
+            &row.album_art_storage_path,
+            &format!("art {}", row.id),
+            &mut stats.errors,
+            |_| {
+                let ext = crate::storage::art_extension(row.album_art_mime.as_deref());
+                Ok(art_dir.join(format!("{}.{ext}", row.track_hash)))
+            },
+        )
+        .await
+        else {
             continue;
-        }
+        };
 
         if let Err(e) = apply_download_metadata(
             pool,

@@ -240,14 +240,11 @@ fn extract_album_art(
                 .mime_type()
                 .map(|m| m.to_string())
                 .unwrap_or_else(|| "application/octet-stream".into());
-            let art_extension = match mime.as_str() {
-                "image/png" => "png",
-                "image/jpeg" => "jpg",
-                "image/gif" => "gif",
-                "image/bmp" => "bmp",
-                _ => "bin",
-            };
-            let art_file_name = format!("{}.{}", Uuid::new_v4(), art_extension);
+            let art_file_name = format!(
+                "{}.{}",
+                Uuid::new_v4(),
+                crate::storage::art_extension(Some(&mime))
+            );
             let art_path = art_dir.join(&art_file_name);
             std::fs::write(&art_path, picture.data())
                 .map_err(|e| format!("Failed to write album art: {}", e))?;

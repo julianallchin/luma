@@ -185,6 +185,17 @@ impl StorageRoot {
     }
 }
 
+/// The file extension album art of `mime` is stored under, locally and in
+/// storage. Unknown art is most often JPEG, so that is the fallback.
+pub fn art_extension(mime: Option<&str>) -> &'static str {
+    match mime {
+        Some("image/png") => "png",
+        Some("image/gif") => "gif",
+        Some("image/bmp") => "bmp",
+        _ => "jpg",
+    }
+}
+
 /// The app cache directory: where the managed venv and the deployed Python
 /// workers live. `LUMA_CACHE_DIR` overrides the platform location.
 ///
