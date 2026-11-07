@@ -42,9 +42,6 @@ fixture({
   ],
 });
 
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const chips = (s) => s.findAll({ role: "chip" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
 const button = (label) => app.snapshot().find({ role: "button", label });
 const PILL = "1 subagent working";
 const row = (s) => s.findAll({ role: "card" }).find((n) => n.label.includes(DESCRIPTION));

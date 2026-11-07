@@ -53,8 +53,6 @@ fixture({
   ],
 });
 
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
 const chip = (s) => s.findAll({ role: "chip" }).find((n) => n.label.startsWith("Checked"));
 // The paragraph right above the chip.
 const above = (s) => s.find({ role: "text", label: "Checking the ramp." });

@@ -103,9 +103,6 @@ fixture({
 });
 
 const pad = (s, name) => s.find((n) => n.role === "button" && n.label.startsWith(`Pad: ${name}`));
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
-const composer = (s) => s.find({ role: "input", label: "Do anything…" });
 const asked = (s) => s.findAll({ role: "card" }).some((n) => n.label.startsWith(PROMPT));
 
 function openPerform() {

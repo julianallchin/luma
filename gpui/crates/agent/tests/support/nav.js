@@ -23,6 +23,23 @@
 // Assigned onto the global for the same reason `until` is: one interpreter
 // context per session, so a `const` would be a redeclaration on the second
 // paste.
+// Readers the suites share, globals for the same reason `nav` is one.
+//
+// The label of every text, or every chip, in snapshot `s`.
+globalThis.texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
+globalThis.chips = (s) => s.findAll({ role: "chip" }).map((n) => n.label);
+// Whether a chat turn is in flight: its status line says so. Reads the global
+// `texts`, so a test's own `texts` cannot change what it means.
+globalThis.busy = (s) =>
+	globalThis.texts(s).some((label) => label === "Working" || label === "Sending");
+// The chat composer's field.
+globalThis.composer = (s) => s.find({ role: "input", label: "Do anything…" });
+// The `role` node labelled `label`, once it is on screen.
+globalThis.node = (role, label) =>
+	until(label, (s) => s.find({ role, label })).find({ role, label });
+// The same node in the current frame, or undefined: for asserting it is gone.
+globalThis.peek = (role, label) => app.snapshot().find({ role, label });
+
 globalThis.nav = {
 	// Wait for `label` to appear as `role`, then click it. Every step below is
 	// this: the loads behind these views run on a runtime gpui cannot see, so

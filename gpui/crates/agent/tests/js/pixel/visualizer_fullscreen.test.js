@@ -11,19 +11,18 @@ fixture({
 
 // A clip is labelled by its name; the fixture's clip is a Wash.
 const CLIP = "Wash";
-const node = (role, label) => app.snapshot().find({ role, label });
 const camera = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("CAMERA "))?.label;
 
 test("fullscreen keeps the live camera and restores its pose", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  until("the clip", () => node("card", CLIP));
-  app.click(node("card", CLIP));
+  until("the clip", () => peek("card", CLIP));
+  app.click(peek("card", CLIP));
   until("the live stage", () => camera());
   app.frames(8, { waitMs: 60 });
   const before = camera();
 
-  app.click(node("button", "Fullscreen visualizer"));
-  until("expanded", () => !node("card", "Waveform"));
+  app.click(peek("button", "Fullscreen visualizer"));
+  until("expanded", () => !peek("card", "Waveform"));
   app.frames(8, { waitMs: 60 });
   expect(camera()).toBe(before);
   // The fullscreen stage fills the window it is shot from.
@@ -31,39 +30,39 @@ test("fullscreen keeps the live camera and restores its pose", () => {
   expect(full.width).toBe(1400 * full.scale);
   expect(full.height).toBe(900 * full.scale);
 
-  app.click(node("button", "Exit fullscreen"));
-  until("returned", () => node("card", "Waveform"));
+  app.click(peek("button", "Exit fullscreen"));
+  until("returned", () => peek("card", "Waveform"));
   app.frames(8, { waitMs: 60 });
   expect(camera()).toBe(before);
 
   // Pointer focus makes the visualizer's keyboard shortcuts available.
-  app.click(node("card", "Stage"));
+  app.click(peek("card", "Stage"));
   app.key("space");
-  until("play after a stage click", () => node("button", "Pause"));
+  until("play after a stage click", () => peek("button", "Pause"));
   app.key("space");
-  until("pause after a stage click", () => node("button", "Play"));
+  until("pause after a stage click", () => peek("button", "Play"));
   app.key("shift-f");
-  until("shortcut entry", () => node("button", "Exit fullscreen"));
+  until("shortcut entry", () => peek("button", "Exit fullscreen"));
   app.drag({ x: 700, y: 450 }, { dx: 90, dy: 40 }, { steps: 8, restale: "match" });
   app.frames(6, { waitMs: 60 });
   const orbited = camera();
   assert(orbited !== before, "fullscreen could not orbit");
   app.key("escape");
-  until("shortcut exit", () => node("card", "Waveform"));
+  until("shortcut exit", () => peek("card", "Waveform"));
   app.frames(4, { waitMs: 60 });
   expect(camera()).toBe(orbited);
 
   // In a venue tab, fullscreen hides the authoring shortcuts and exit restores them.
   app.action("luma::NewTab");
   nav.step("venue tab", "row", "Venue");
-  until("venue controls", () => node("toggle", "Stage objects"));
-  app.click(node("card", "Stage"));
+  until("venue controls", () => peek("toggle", "Stage objects"));
+  app.click(peek("card", "Stage"));
   app.key("shift-f");
-  until("venue fullscreen", () => node("button", "Exit fullscreen"));
+  until("venue fullscreen", () => peek("button", "Exit fullscreen"));
   app.key("a");
-  expect(node("input", "Search elements")).toBe(undefined);
+  expect(peek("input", "Search elements")).toBe(undefined);
   app.key("escape");
-  until("venue restored", () => node("toggle", "Stage objects"));
+  until("venue restored", () => peek("toggle", "Stage objects"));
   app.key("a");
-  until("authoring shortcut restored", () => node("input", "Search elements"));
+  until("authoring shortcut restored", () => peek("input", "Search elements"));
 });

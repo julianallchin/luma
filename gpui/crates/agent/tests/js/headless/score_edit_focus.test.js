@@ -3,7 +3,6 @@
 const CLIP = { pattern: "pat-glow", name: "Glow", start: 2, end: 5 };
 fixture({ seconds: 20, clips: [CLIP], rig: 4, window: [1400, 900] });
 
-const node = (role, label) => app.snapshot().find({ role, label });
 // A clip is labelled by its name; the fixture's clip is a Wash.
 const CARD = "Wash";
 
@@ -31,18 +30,18 @@ test(
     };
     nav.trackEditor("Test Venue", "Aurora");
     nav.program();
-    until("the clip", () => node("card", CARD));
-    until("the presets", () => node("card", "Presets"));
+    until("the clip", () => peek("card", CARD));
+    until("the presets", () => peek("card", "Presets"));
     const empty = read();
     expect(empty.showing).toBe("Presets");
-    app.click(node("card", CARD));
+    app.click(peek("card", CARD));
     const selecting = sample();
-    until("the clip's controls", () => node("button", "Pick fixtures"));
+    until("the clip's controls", () => peek("button", "Pick fixtures"));
     const opened = read();
     expect(opened.showing).toBe("Pattern graph");
-    app.click(node("card", "Waveform"));
+    app.click(peek("card", "Waveform"));
     const clearing = sample();
-    until("the presets again", () => node("card", "Presets"));
+    until("the presets again", () => peek("card", "Presets"));
     const cleared = read();
     expect(cleared.showing).toBe("Presets");
 
@@ -59,42 +58,42 @@ test("the inspector stays beside the timeline and pickers accept keyboard input"
   nav.venue("Test Venue");
   nav.track("Aurora");
   nav.program();
-  until("the clip", () => node("card", CARD));
-  app.click(node("card", CARD));
-  until("the clip's controls", () => node("button", "Pick fixtures"));
-  const before = node("card", "Pattern graph").bounds;
-  app.drag(node("slider", "Stage height"), { dx: 0, dy: -140 });
+  until("the clip", () => peek("card", CARD));
+  app.click(peek("card", CARD));
+  until("the clip's controls", () => peek("button", "Pick fixtures"));
+  const before = peek("card", "Pattern graph").bounds;
+  app.drag(peek("slider", "Stage height"), { dx: 0, dy: -140 });
   app.frames(4);
-  const inspector = node("card", "Pattern graph").bounds;
-  const wave = node("card", "Waveform").bounds;
+  const inspector = peek("card", "Pattern graph").bounds;
+  const wave = peek("card", "Waveform").bounds;
   // A shorter stage gives the inspector room, and it stays beside the
   // timeline with its controls on screen.
   expect(inspector.height >= before.height).toBe(true);
   assert(inspector.x >= wave.x + wave.width - 1, `the inspector overlaps the timeline: ${JSON.stringify({ inspector, wave })}`);
-  expect(node("button", "Pick fixtures").bounds.height).toBeGreaterThan(0);
+  expect(peek("button", "Pick fixtures").bounds.height).toBeGreaterThan(0);
 
-  app.click(node("button", "Pick fixtures"));
-  until("the selection search", () => node("input", "Search groups…"));
+  app.click(peek("button", "Pick fixtures"));
+  until("the selection search", () => peek("input", "Search groups…"));
   // Hovering a row previews it, and the preview holds just past its edge.
-  app.scroll(node("checkbox", "left_movers"), { dy: 0 });
+  app.scroll(peek("checkbox", "left_movers"), { dy: 0 });
   app.frames(2);
-  const left = node("checkbox", "left_movers").bounds;
+  const left = peek("checkbox", "left_movers").bounds;
   app.scroll({ x: left.x + left.width / 2, y: left.y + left.height + 1 }, { dy: 0 });
-  assert(node("text", "Preview: left_movers"), "the preview did not hold");
-  app.type(node("input", "Search groups…"), "right");
+  assert(peek("text", "Preview: left_movers"), "the preview did not hold");
+  app.type(peek("input", "Search groups…"), "right");
   app.frames(3);
   expect(app.snapshot().findAll({ role: "checkbox" }).map((n) => n.label)).toEqual(["right_movers"]);
   app.key("down enter");
-  app.click(node("button", "Apply"));
+  app.click(peek("button", "Apply"));
   until("the selection applied", (s) => s.findAll({ role: "input" }).some((n) => n.label === "expression = right_movers"));
 
-  app.click(node("row", "Lane 0"), { button: "right" });
-  until("the pattern dialog", () => node("card", "Insert pattern dialog"));
-  expect(node("card", "Insert pattern dialog").bounds.height).toBeGreaterThan(0);
-  app.type(node("input", "Search patterns…"), "Wash");
+  app.click(peek("row", "Lane 0"), { button: "right" });
+  until("the pattern dialog", () => peek("card", "Insert pattern dialog"));
+  expect(peek("card", "Insert pattern dialog").bounds.height).toBeGreaterThan(0);
+  app.type(peek("input", "Search patterns…"), "Wash");
   app.frames(3);
   expect(app.snapshot().findAll({ role: "row" }).filter((n) => n.label === "Wash").length).toBe(1);
   app.key("enter");
   until("the inserted clip", (s) => s.findAll({ role: "card", label: CARD }).length === 2);
-  expect(node("card", "Insert pattern dialog")).toBe(undefined);
+  expect(peek("card", "Insert pattern dialog")).toBe(undefined);
 });

@@ -10,43 +10,42 @@ fixture({
 
 // A clip is labelled by its name; the fixture's clip is a Wash.
 const CLIP = "Wash";
-const node = (role, label) => app.snapshot().find({ role, label });
 
 test("edit focus keeps the controls usable and renders both picker previews", () => {
   nav.trackEditor("Test Venue", "Aurora");
   nav.program();
-  until("the clip", () => node("card", CLIP));
-  app.click(node("card", CLIP));
-  until("the clip controls", () => node("button", "Pick fixtures"));
+  until("the clip", () => peek("card", CLIP));
+  app.click(peek("card", CLIP));
+  until("the clip controls", () => peek("button", "Pick fixtures"));
   app.frames(10, { waitMs: 50 });
   const normal = app.screenshot();
 
   // Taller stage, same inspector: it keeps usable height and stays above the timeline.
-  app.drag(node("slider", "Stage height"), { dx: 0, dy: 160 });
+  app.drag(peek("slider", "Stage height"), { dx: 0, dy: 160 });
   app.frames(5, { waitMs: 50 });
-  const inspector = node("card", "Pattern graph").bounds;
-  const timeline = node("card", "Waveform").bounds;
+  const inspector = peek("card", "Pattern graph").bounds;
+  const timeline = peek("card", "Waveform").bounds;
   expect(inspector.height).toBeGreaterThan(299);
   expect(inspector.y + inspector.height).toBeLessThan(timeline.y + 1);
 
   // The fixture picker's preview draws, and a checked group changes it.
-  app.click(node("button", "Pick fixtures"));
-  until("the selection preview", () => node("card", "Selection preview"));
+  app.click(peek("button", "Pick fixtures"));
+  until("the selection preview", () => peek("card", "Selection preview"));
   app.frames(8, { waitMs: 50 });
-  const preview = () => node("card", "Selection preview");
+  const preview = () => peek("card", "Selection preview");
   const selection = app.screenshot();
   expect(image.stats(selection, preview().bounds).max).toBeGreaterThan(0);
-  app.click(node("checkbox", "left_movers"));
+  app.click(peek("checkbox", "left_movers"));
   app.frames(8, { waitMs: 50 });
   const highlighted = app.screenshot();
   expect(image.diff(selection, highlighted, { rect: preview().bounds })).toBeGreaterThan(0);
   app.key("escape");
-  until("the picker closed", () => !node("card", "Fixture picker dialog"));
+  until("the picker closed", () => !peek("card", "Fixture picker dialog"));
 
-  app.click(node("button", "Add pattern"));
-  until("the pattern search", () => node("input", "Search patterns…"));
-  app.type(node("input", "Search patterns…"), "Wash");
-  until("the pattern preview", () => node("card", "Pattern preview"));
+  app.click(peek("button", "Add pattern"));
+  until("the pattern search", () => peek("input", "Search patterns…"));
+  app.type(peek("input", "Search patterns…"), "Wash");
+  until("the pattern preview", () => peek("card", "Pattern preview"));
   app.frames(8, { waitMs: 50 });
   const pattern = app.screenshot();
   expect(image.diff(normal, pattern)).toBeGreaterThan(0);

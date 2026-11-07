@@ -20,8 +20,6 @@ fixture({
   ],
 });
 
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
 const flying = (s) => s.find({ role: "card", label: "Sending message" });
 // A turn in flight turns Send into Steer, so Send is the idle composer.
 const idle = (s) => !busy(s) && s.find({ role: "button", label: "Send" }) !== undefined;

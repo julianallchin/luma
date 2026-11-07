@@ -50,10 +50,6 @@ fixture({
   ],
 });
 
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const chips = (s) => s.findAll({ role: "chip" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
-const composer = (s) => s.find({ role: "input", label: "Do anything…" });
 const button = (label) => app.snapshot().find({ role: "button", label });
 const resume = (s) => s.find({ role: "button", label: "Resume" });
 

@@ -57,9 +57,6 @@ fixture({
   tools: [PYTHON],
 });
 
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const chips = (s) => s.findAll({ role: "chip" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
 const keep = (shot, name) => image.keep(shot, `gauntlet-chat/${name}`);
 
 // The track's new conversation, with Send pressable: an unattached centre

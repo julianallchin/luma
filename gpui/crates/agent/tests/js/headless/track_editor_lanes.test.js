@@ -13,7 +13,6 @@ fixture({
   clips: Array.from({ length: LAYERS }, (_, z) => ({ pattern: `pattern-l${z}`, name: `L${z}`, start: 2, end: 6, lane: z })),
 });
 
-const node = (role, label) => app.snapshot().find({ role, label });
 
 // Every lane, top to bottom, at the height it is visible at: a lane the
 // waveform covers is clipped to nothing.
@@ -63,28 +62,28 @@ test("the lane stack sits on the floor and the wheel reaches the rest of it", ()
 
   // A bare vertical wheel walks the block up, and walking it back down puts
   // z = 0 on the floor again however far past the end it is pushed.
-  const lifted = wheel(node("row", "Lane 5"), 400, 10);
+  const lifted = wheel(peek("row", "Lane 5"), 400, 10);
   expect(lifted.first.height).toBeGreaterThan(0);
-  const dropped = wheel(node("row", "Lane 5"), -4000, 20);
+  const dropped = wheel(peek("row", "Lane 5"), -4000, 20);
   expect([dropped.first.height, dropped.last.y]).toEqual([opened.first.height, opened.last.y]);
   onTheFloor(dropped, "the lanes after scrolling back down");
 
   // Alt+wheel is the vertical zoom, clamped at both ends: a second notch past
   // the clamp changes nothing.
-  const shrunk = wheel(node("row", "Lane 5"), -600, 10, ["alt"]);
+  const shrunk = wheel(peek("row", "Lane 5"), -600, 10, ["alt"]);
   expect(shrunk.tallest).toBeLessThan(opened.tallest);
   // At the smallest zoom every lane fits, so none is clipped.
   expect(shrunk.shortest).toBe(shrunk.tallest);
   onTheFloor(shrunk, "the shrunk lanes");
-  expect(wheel(node("row", "Lane 5"), -600, 10, ["alt"]).tallest).toBe(shrunk.tallest);
+  expect(wheel(peek("row", "Lane 5"), -600, 10, ["alt"]).tallest).toBe(shrunk.tallest);
 
   // Over the waveform it means nothing: that band is navigation, not the
   // workspace.
-  expect(wheel(node("card", "Waveform"), 600, 10, ["alt"]).tallest).toBe(shrunk.tallest);
+  expect(wheel(peek("card", "Waveform"), 600, 10, ["alt"]).tallest).toBe(shrunk.tallest);
 
-  const grown = wheel(node("row", "Lane 5"), 600, 10, ["alt"]);
+  const grown = wheel(peek("row", "Lane 5"), 600, 10, ["alt"]);
   expect(grown.tallest).toBeGreaterThan(opened.tallest);
-  expect(wheel(node("row", "Lane 5"), 600, 10, ["alt"]).tallest).toBe(grown.tallest);
+  expect(wheel(peek("row", "Lane 5"), 600, 10, ["alt"]).tallest).toBe(grown.tallest);
 
   // H fits the stack: every lane visible at one height, the top one inside
   // the canvas, and still anchored.

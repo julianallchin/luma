@@ -14,7 +14,6 @@ const graph = {
 };
 fixture({ seconds: 20, clips: [{ pattern: "graph-clip", name: "Pulse", start: 1, end: 3, preset: "Pulse", graph }], rig: 4, window: [1400, 1000] });
 
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
 const settle = () => app.frames(6, { waitMs: 30 });
 
 function open() {

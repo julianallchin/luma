@@ -6,7 +6,6 @@
 const WASH = { pattern: "graph-clip", name: "Wash", start: 1, end: 3, preset: "Wash" };
 fixture({ seconds: 20, clips: [WASH], rig: 4, window: [1400, 1400] });
 
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
 const settle = () => app.frames(4);
 const stored = () => library.score().clips["graph-clip"];
 const nodes = () => stored().graph.nodes;

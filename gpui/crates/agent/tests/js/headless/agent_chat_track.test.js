@@ -13,7 +13,6 @@ const SEEDED = "Seeded question about score ";
 
 test("a track keeps its chat until an explicit new or history choice", () => {
   const header = () => until("the chat header", (s) => s.find({ role: "button", label: "Chat history" }));
-  const composer = (s) => s.find({ role: "input", label: "Do anything…" });
   nav.trackEditor("Test Venue", "Aurora");
   header();
   // A clip is labelled by its name; the fixture's clip is a Wash.

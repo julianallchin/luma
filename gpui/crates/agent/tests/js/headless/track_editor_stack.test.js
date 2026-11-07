@@ -28,8 +28,7 @@ fixture({
   window: [1620, 800],
 });
 
-const node = (role, label) => app.snapshot().find({ role, label });
-const card = (name) => node("card", FORMS[name].label);
+const card = (name) => peek("card", FORMS[name].label);
 
 // Which lane each clip is drawn in, by its header's top edge, counting from
 // the topmost occupied one. Lanes, not pixels.
@@ -108,7 +107,7 @@ test(
     app.frames(2);
     app.key("ctrl-c");
     // An empty spot well after both clips: the lane's middle.
-    app.click(node("row", "Lane 0"));
+    app.click(peek("row", "Lane 0"));
     app.frames(2);
     app.key("ctrl-v");
     app.frames(20);

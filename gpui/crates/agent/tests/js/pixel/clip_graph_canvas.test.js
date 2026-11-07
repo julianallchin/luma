@@ -13,7 +13,6 @@ const graph = {
 };
 fixture({ seconds: 20, clips: [{ ...clipOf("Pulse"), graph }], rig: 4, window: [1600, 1000] });
 
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
 
 function open(preset = "Pulse") {
   nav.trackEditor("Test Venue", "Aurora");

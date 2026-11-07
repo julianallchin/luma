@@ -6,7 +6,6 @@
 
 fixture({ seconds: 20, graph_score: { clips: {} }, rig: 4, window: [1400, 1000] });
 
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
 const shipped = (name) => library.presets().find((p) => p.name === name);
 const onlyClip = () => {
   const clips = Object.values(library.score().clips);

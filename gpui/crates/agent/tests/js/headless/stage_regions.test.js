@@ -60,7 +60,6 @@ test("a stage frame rebuilds the stage and not the panes around it", () => {
 
 test("the readout shows both rates and opens the frame stats", () => {
   openVenue();
-  const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
   until("the delivered rate", (s) => texts(s).some((l) => l.startsWith("FPS ")));
   nav.step("the readout", "toggle", "Frame stats");
   const open = until("the stats panel", (s) => texts(s).some((l) => l.startsWith("Rendered ")));

@@ -7,7 +7,6 @@
 const CHASE = { pattern: "form-clip", name: "Chase", start: 1, end: 3, preset: "Chase" };
 fixture({ seconds: 20, clips: [CHASE], rig: 4, window: [1400, 900] });
 
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
 const settle = () => app.frames(2);
 const close = (a, b) => Math.abs(a - b) < 0.02;
 const stored = () => library.score();

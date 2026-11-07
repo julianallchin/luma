@@ -36,9 +36,6 @@ fixture({
   ],
 });
 
-const texts = (s) => s.findAll({ role: "text" }).map((n) => n.label);
-const chips = (s) => s.findAll({ role: "chip" }).map((n) => n.label);
-const busy = (s) => texts(s).some((label) => label === "Working" || label === "Sending");
 const row = (s) => s.findAll({ role: "card" }).find((n) => n.label.includes(DESCRIPTION));
 const answers = (s) => texts(s).filter((l) => l.includes(ANSWER)).length;
 

@@ -5,7 +5,6 @@
 const clip = { pattern: "graph-clip", name: "Sparkle rain", start: 1, end: 3, preset: "Sparkle rain" };
 fixture({ seconds: 20, clips: [clip], rig: 4, window: [1280, 680] });
 
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
 
 function open() {
   nav.trackEditor("Test Venue", "Aurora");
