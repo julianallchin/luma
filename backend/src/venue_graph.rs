@@ -72,14 +72,13 @@ pub fn sockets(fixtures_root: &Path) -> Result<&'static VenueSockets, String> {
 /// Keyed by `fixture_path` — which is what a fixture node's `catalog_ref`
 /// carries, the same way a piece node's carries its mesh — so the supply needs
 /// no patch, no venue and no database to place a light off its housing. The
-/// parse is [`crate::services::fixtures`]'s, read once per path and memoized by
-/// the supply.
+/// parse is [`crate::fixtures::definition`]'s, read once per file and memoized
+/// by the supply.
 pub struct BundledFixtures(pub std::path::PathBuf);
 
 impl FixtureDefinitions for BundledFixtures {
     fn definition(&self, fixture_path: &str) -> Option<luma_scene::definition::Definition> {
-        let relative = crate::resources::confined_path(fixture_path)?;
-        crate::services::fixtures::get_fixture_definition(&self.0, relative)
+        crate::fixtures::definition(&self.0, fixture_path)
             .ok()
             .map(|def| crate::stage_render::definition(&def))
     }

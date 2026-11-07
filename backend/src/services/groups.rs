@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use once_cell::sync::Lazy;
 use rand::prelude::*;
@@ -16,7 +15,6 @@ use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::database::local::venue_graph::{rig_changed, rig_generation};
 use crate::fixtures::layout::{fixture_mount, head_geometry};
-use crate::fixtures::parser;
 use crate::models::fixtures::{FixtureDefinition, Mode, PatchedFixture};
 use crate::models::groups::{
     normalize_group_name, FixtureGroupNode, FixtureRole, GroupTreeNode, GroupedFixtureNode,
@@ -178,39 +176,11 @@ async fn get_cached_venue_fixtures(
     result
 }
 
-/// One fixture's definition, parsed at most once per file per process.
-///
-/// Deriving the group tree asks every fixture for its role, and a venue's
-/// fixtures share a handful of definitions; re-reading and re-parsing a `.qxf`
-/// per fixture per derivation was most of the cost of renaming a group. The
-/// modification time is stored *beside* the entry rather than in its key, so a
-/// definition replaced on disk is re-read and the superseded parse is dropped:
-/// keying on `(path, mtime)` bounded the memo by how many times the library had
-/// ever been edited, which is not a bound.
-///
-/// `None` when the file will not parse: one unreadable `.qxf` should cost the
-/// venue one fixture's classification, not the whole tree.
+/// One fixture's definition. `None` when the file will not parse: one
+/// unreadable `.qxf` should cost the venue one fixture's classification, not
+/// the whole tree.
 fn definition(resource_path: &Path, fixture: &PatchedFixture) -> Option<Arc<FixtureDefinition>> {
-    /// One entry per file: when it was last read, and what it parsed to.
-    type Parsed = HashMap<PathBuf, (Option<SystemTime>, Arc<FixtureDefinition>)>;
-    static CACHE: Lazy<std::sync::Mutex<Parsed>> = Lazy::new(Default::default);
-
-    let path = resource_path.join(&fixture.fixture_path);
-    let changed = std::fs::metadata(&path).ok()?.modified().ok();
-    if let Some(hit) = CACHE
-        .lock()
-        .ok()?
-        .get(&path)
-        .filter(|(seen, _)| *seen == changed)
-        .map(|(_, parsed)| parsed.clone())
-    {
-        return Some(hit);
-    }
-    let parsed = Arc::new(parser::parse_definition(&path).ok()?);
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(path, (changed, parsed.clone()));
-    }
-    Some(parsed)
+    crate::fixtures::definition(resource_path, &fixture.fixture_path).ok()
 }
 
 /// The mode a fixture is patched in, falling back to the definition's first —

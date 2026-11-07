@@ -15,7 +15,7 @@
 //! `LUMA_RESOURCE_DIR` overrides both. A source build has none, and every
 //! caller falls back to the repository through `CARGO_MANIFEST_DIR`.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// The packaged resource directory, if this process has one.
 ///
@@ -116,19 +116,6 @@ pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
             |repo| repo.join("resources/meshes"),
         ),
     }
-}
-
-/// A fixture path that stays inside the fixtures root, or nothing.
-#[must_use]
-pub fn confined_path(path: &str) -> Option<&Path> {
-    let relative = Path::new(path);
-    let escapes = relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    });
-    (!escapes).then_some(relative)
 }
 
 #[cfg(test)]

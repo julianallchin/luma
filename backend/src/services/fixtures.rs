@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::fixtures::parser::{self, FixtureIndex};
-use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
+use crate::models::fixtures::{FixtureEntry, PatchedFixture};
 use crate::services::group_derivation;
 
 /// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
@@ -216,13 +216,6 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
             .filter(|(min, max)| *max > 0.0 && max >= min),
         modes,
     })
-}
-
-/// Get fixture definition from a path relative to the fixtures root.
-///
-/// The caller is responsible for rejecting a `path` that escapes `root`.
-pub fn get_fixture_definition(root: &Path, path: &Path) -> Result<FixtureDefinition, String> {
-    parser::parse_definition(&root.join(path)).map_err(|e| e.to_string())
 }
 
 /// Get all patched fixtures for a venue

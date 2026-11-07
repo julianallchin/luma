@@ -64,8 +64,8 @@ use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::venue_graph::{warning_line, ResolvedDangling};
 use crate::services::fixture_create::{self, Naming, NewFixture};
 use crate::services::group_derivation::derive_groups;
+use crate::services::groups as group_service;
 use crate::services::patch;
-use crate::services::{fixtures as fixture_service, groups as group_service};
 
 /// The fallback body width, in metres, for a definition whose QLC+ physical
 /// block does not say.
@@ -487,7 +487,7 @@ fn occupied(
 
 /// One definition's body width, or the fallback if it cannot be read.
 fn width_of(fixtures_root: &Path, fixture_path: &str) -> f64 {
-    fixture_service::get_fixture_definition(fixtures_root, Path::new(fixture_path))
+    crate::fixtures::definition(fixtures_root, fixture_path)
         .map_or(DEFAULT_FIXTURE_WIDTH_M, |definition| {
             body_width_m(&definition)
         })
@@ -498,8 +498,7 @@ fn definition_and_width(
     fixtures_root: &Path,
     request: &Request<'_>,
 ) -> Result<(FixtureDefinition, u16), String> {
-    let definition =
-        fixture_service::get_fixture_definition(fixtures_root, Path::new(request.fixture_path))?;
+    let definition = crate::fixtures::definition(fixtures_root, request.fixture_path)?;
     let mode = definition
         .modes
         .iter()
@@ -507,7 +506,7 @@ fn definition_and_width(
         .ok_or_else(|| format!("`{}` has no mode `{}`", definition.model, request.mode_name))?;
     let channels = u16::try_from(mode.channels.len())
         .map_err(|_| format!("`{}` is wider than a universe", request.mode_name))?;
-    Ok((definition.clone(), channels))
+    Ok(((*definition).clone(), channels))
 }
 
 /// How wide the fixture's body is, in metres.

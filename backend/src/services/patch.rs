@@ -384,11 +384,8 @@ pub async fn set_mode(
         .find(|row| row.id == id)
         .ok_or_else(|| PatchError::Database(format!("no fixture {id} in this venue")))?;
 
-    let definition = crate::services::fixtures::get_fixture_definition(
-        fixtures_root,
-        Path::new(&row.fixture_path),
-    )
-    .map_err(PatchError::Database)?;
+    let definition = crate::fixtures::definition(fixtures_root, &row.fixture_path)
+        .map_err(PatchError::Database)?;
     let mode = definition
         .modes
         .iter()

@@ -12,14 +12,13 @@ use crate::audio::{
 };
 use crate::eval::ResidentAudio;
 use crate::fixtures::layout::{fixture_mount, head_geometry};
-use crate::fixtures::parser::parse_definition;
 use crate::models::selection::Selection;
 use crate::storage::StorageRoot;
 use fixture_kinematics::{rig_position, FixtureGeometry};
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// Process-wide cache of decoded mono track audio, keyed by `track_hash`. The
@@ -30,12 +29,6 @@ use std::sync::{Arc, Mutex};
 static AUDIO_CACHE: Lazy<Mutex<HashMap<String, ResidentAudio>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 const AUDIO_CACHE_MAX: usize = 8;
-
-/// Process-wide cache of per-fixture cell geometry, keyed by
-/// definition path and mode, so fixture definitions are parsed from disk once
-/// per venue rather than once per (fixture × annotation).
-static OFFSETS_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), Heads>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// A fixture definition's heads: its cells, or a laser projector's, whose
 /// heads are laid out by the clip ([`crate::laser`]).
@@ -56,29 +49,18 @@ fn head_offsets(
     fixture_path: &str,
     mode_name: &str,
 ) -> Result<Heads, String> {
-    let def_path = resource_root.join(fixture_path);
-    let key = (def_path.clone(), mode_name.to_owned());
-    if let Ok(cache) = OFFSETS_CACHE.lock() {
-        if let Some(hit) = cache.get(&key) {
-            return Ok(hit.clone());
-        }
-    }
-    let definition = parse_definition(&def_path)
+    let definition = crate::fixtures::definition(resource_root, fixture_path)
         .map_err(|error| format!("Failed to load fixture definition {fixture_path}: {error}"))?;
     if !definition.modes.iter().any(|mode| mode.name == mode_name) {
         return Err(format!(
             "Fixture definition {fixture_path} has no mode {mode_name}"
         ));
     }
-    let offsets = if definition.is_laser_projector() {
+    Ok(if definition.is_laser_projector() {
         Heads::Projector
     } else {
         Heads::Cells(head_geometry(&definition, mode_name))
-    };
-    if let Ok(mut cache) = OFFSETS_CACHE.lock() {
-        cache.insert(key, offsets.clone());
-    }
-    Ok(offsets)
+    })
 }
 
 /// Resolve the ordered `(primitive_id = "{fixtureUuid}:{head}", world_position)`

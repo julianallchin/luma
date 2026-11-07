@@ -1,5 +1,3 @@
-use std::path::{Component, Path};
-
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::dispatch::AppServices;
@@ -58,11 +56,8 @@ pub async fn get_fixture_definition(
     services: &AppServices,
     path: String,
 ) -> Result<FixtureDefinition, CommandError> {
-    let relative = confine_to_root(&path)?;
-    Ok(fixture_service::get_fixture_definition(
-        &services.fixtures_root,
-        relative,
-    )?)
+    let definition = crate::fixtures::definition(&services.fixtures_root, &path)?;
+    Ok((*definition).clone())
 }
 
 /// Put one fixture at a hand-chosen address, and pin it there.
@@ -225,39 +220,5 @@ pub(super) fn require_changed(rows_affected: u64) -> Result<(), CommandError> {
         Ok(())
     } else {
         Err(CommandError::NotFound("Venue resource not found".into()))
-    }
-}
-
-/// Reject a fixture path that would escape the fixtures root.
-///
-/// The path comes from the caller, which should only echo back a `path` the
-/// index handed it — but it is joined onto a root directory, so the seam is
-/// where it has to be constrained rather than trusted.
-fn confine_to_root(path: &str) -> Result<&Path, CommandError> {
-    let relative = Path::new(path);
-    let escapes = relative.components().any(|c| {
-        matches!(
-            c,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    });
-    if escapes {
-        return Err(CommandError::Invalid(format!(
-            "fixture path escapes the fixtures root: {path}"
-        )));
-    }
-    Ok(relative)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn confines_fixture_paths_to_the_root() {
-        assert!(confine_to_root("chauvet/rogue-r2.qxf").is_ok());
-        assert!(confine_to_root("../../etc/passwd").is_err());
-        assert!(confine_to_root("a/../../b.qxf").is_err());
-        assert!(confine_to_root("/etc/passwd").is_err());
     }
 }

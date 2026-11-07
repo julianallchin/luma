@@ -194,7 +194,8 @@ impl Rig {
     ) -> Result<Self, String> {
         let venue = crate::venue_graph::resolved(access, fixtures_root).await?;
         let patch = crate::database::local::fixtures::get_patched_fixtures(access).await?;
-        let mut definitions: HashMap<&str, Option<FixtureDefinition>> = HashMap::new();
+        let mut definitions: HashMap<&str, Option<std::sync::Arc<FixtureDefinition>>> =
+            HashMap::new();
         let mut rig = Self::default();
         for id in ids {
             let fixture_id = id.split_once(':').map_or(id, |(fixture, _)| fixture);
@@ -207,13 +208,11 @@ impl Rig {
             let definition = definitions
                 .entry(fixture.fixture_path.as_str())
                 .or_insert_with(|| {
-                    crate::fixtures::parser::parse_definition(
-                        &fixtures_root.join(&fixture.fixture_path),
-                    )
-                    .map_err(|error| {
-                        log::warn!("[aim] {}: {error}", fixture.fixture_path);
-                    })
-                    .ok()
+                    crate::fixtures::definition(fixtures_root, &fixture.fixture_path)
+                        .map_err(|error| {
+                            log::warn!("[aim] {}: {error}", fixture.fixture_path);
+                        })
+                        .ok()
                 });
             let Some(definition) = definition else {
                 continue;

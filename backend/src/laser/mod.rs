@@ -206,16 +206,13 @@ impl LaserRig {
             definitions
                 .entry(fixture.fixture_path.clone())
                 .or_insert_with(|| {
-                    crate::fixtures::parser::parse_definition(
-                        &fixtures_root.join(&fixture.fixture_path),
-                    )
-                    .ok()
+                    crate::fixtures::definition(fixtures_root, &fixture.fixture_path).ok()
                 });
         }
         let any = definitions
             .values()
             .flatten()
-            .any(FixtureDefinition::is_laser_projector);
+            .any(|definition| definition.is_laser_projector());
         let venue = if any {
             crate::venue_graph::resolved(access, fixtures_root).await?
         } else {
@@ -224,7 +221,7 @@ impl LaserRig {
         Self::read(
             access,
             &patch,
-            |path| definitions.get(path)?.as_ref(),
+            |path| definitions.get(path)?.as_deref(),
             &venue,
         )
         .await

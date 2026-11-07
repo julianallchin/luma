@@ -17,7 +17,6 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use crate::fixtures::engine;
-use crate::fixtures::parser::parse_definition;
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::patch::{DmxRoute, OutputDevice};
 use crate::models::universe::UniverseState;
@@ -185,8 +184,8 @@ impl OutputHub {
             .filter(|p| !render.fixture_definitions.contains_key(p))
             .collect();
         for path in missing {
-            if let Ok(def) = parse_definition(&render.fixtures_root.join(&path)) {
-                render.fixture_definitions.insert(path, def);
+            if let Ok(def) = crate::fixtures::definition(&render.fixtures_root, &path) {
+                render.fixture_definitions.insert(path, (*def).clone());
             }
         }
     }

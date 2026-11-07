@@ -133,13 +133,8 @@ impl VenueGeometry {
             .map(|fixture| fixture.fixture_path.clone())
             .collect::<std::collections::BTreeSet<_>>()
         {
-            let Some(relative) = crate::resources::confined_path(&path) else {
-                continue;
-            };
-            if let Ok(definition) =
-                crate::services::fixtures::get_fixture_definition(fixtures_root, relative)
-            {
-                definitions.insert(path, definition);
+            if let Ok(definition) = crate::fixtures::definition(fixtures_root, &path) {
+                definitions.insert(path, (*definition).clone());
             }
         }
         let lasers =
