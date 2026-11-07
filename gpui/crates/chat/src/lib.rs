@@ -1760,6 +1760,9 @@ impl AgentChat {
             )
         });
         let error = self.error.clone();
+        // Whether the composer's row is complete: the thread's read has landed
+        // (and with it the model picker), or it failed and will not.
+        let ready = !matches!(self.conversation, Conversation::Loading(_)) || error.is_some();
         let resumable = self.resumable();
         let this = cx.entity();
         let gauge = self
@@ -1826,6 +1829,16 @@ impl AgentChat {
         let opening_trailer = self.rows.is_empty().then_some(trailer).flatten();
         let view = cx.entity_id();
         let rows = this.clone();
+        // Whether the footer below is the composer's own: a composer is not
+        // painted until it is placed (see `composer::Layout::settled`), and
+        // its height reaches `composer_bounds` a paint after that. Until
+        // then the transcript, which clears the footer, is laid out but not
+        // painted either — a pinned tail drawn over a guessed footer would
+        // jump when the real one landed.
+        let placed = self.read_only || self.composer.shown();
+        if !placed {
+            window.request_animation_frame();
+        }
         // The footer's height as last painted. It overlays the transcript, so
         // the list and everything pinned to the transcript's bottom clear it
         // by this much. A change repaints (see the footer's canvas), so a lag
@@ -2055,6 +2068,12 @@ impl AgentChat {
                                 .children(adrift.then(|| jump_to_bottom(&this, footer, &theme)))
                         },
                     )
+                    .when(!placed, |el| {
+                        el.map(|mut el| {
+                            el.style().visibility = Some(gpui::Visibility::Hidden);
+                            el
+                        })
+                    })
                     .agent_node(NodeRole::Card, "Conversation"),
             )
             // Keep the composer on the transcript's reading column. The footer
@@ -2102,6 +2121,7 @@ impl AgentChat {
                                 .child(composer::composer(
                                     &mut self.composer,
                                     &this,
+                                    ready,
                                     streaming,
                                     picker,
                                     gauge,

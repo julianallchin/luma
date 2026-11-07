@@ -14,7 +14,7 @@ const field = (s) => s.findAll({ role: "input" })
   .find((n) => n.label === "Do anything…" || n.label.startsWith("Light the"));
 const DRAFT = "Light the stage\nwarm, then cold";
 
-test.skip("bug: after a visit to Rig the Arrange composer comes back half a pixel higher (y 752.5 → 752)", () => {
+test("after a visit to Rig the Arrange composer comes back where and as big as it left", () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the composer", (s) => {
     const input = field(s);

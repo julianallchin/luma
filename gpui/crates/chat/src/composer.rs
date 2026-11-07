@@ -299,6 +299,13 @@ pub struct Composer {
     /// What the pill actually rendered at last frame — the start height a
     /// reverse flip hands off from.
     last_height: f32,
+    /// The field's layout epoch on the first frame its conversation had
+    /// landed — the model picker beside the field is in the row from then on.
+    /// A measurement newer than this is one the pill can be placed by.
+    ready_epoch: Option<u64>,
+    /// Whether the pill has been painted. Until it has, a flip is a
+    /// placement, not a morph: see [`Layout::settled`].
+    shown: bool,
 }
 
 impl Composer {
@@ -335,7 +342,16 @@ impl Composer {
             morph: None,
             clock: Instant::now(),
             last_height: 0.0,
+            ready_epoch: None,
+            shown: false,
         }
+    }
+
+    /// Whether the pill has been painted — and so whether the footer height
+    /// the panel last measured is the one it keeps.
+    #[must_use]
+    pub(crate) fn shown(&self) -> bool {
+        self.shown
     }
 
     /// What is typed, trimmed — what a send would actually carry.
@@ -380,7 +396,12 @@ impl Composer {
     /// Decide this frame's layout from the field's last measurements, and
     /// arm or advance the morph. Split out from painting because it is the only
     /// part with a decision in it — everything below is geometry.
-    fn settle_layout(&mut self, reduced_motion: bool, cx: &mut Context<AgentChat>) -> Layout {
+    fn settle_layout(
+        &mut self,
+        ready: bool,
+        reduced_motion: bool,
+        cx: &mut Context<AgentChat>,
+    ) -> Layout {
         let (text_width, has_newline, content_height, width, epoch) = {
             let input = self.input.read(cx);
             (
@@ -393,6 +414,12 @@ impl Composer {
         };
         // Only measurements taken *after* the last flip may drive the next one.
         let measured = epoch > self.flip_epoch && width > 0.0;
+        if ready && self.ready_epoch.is_none() {
+            self.ready_epoch = Some(epoch);
+        }
+        // Until the pill is first painted, a flip places it rather than
+        // sweeping it: the layout it would sweep from was never on screen.
+        let placing = !self.shown;
         if measured {
             if self.expanded {
                 if self.expanded_anchor <= 0.0 {
@@ -432,7 +459,7 @@ impl Composer {
         let now_ms = self.clock.elapsed().as_secs_f32() * 1000.0;
         self.morph = morph_step(
             self.morph,
-            committed,
+            committed && !placing,
             self.last_height,
             now_ms,
             reduced_motion,
@@ -451,7 +478,10 @@ impl Composer {
             self.morph = None;
         }
         self.last_height = height;
+        let settled = self.shown || self.ready_epoch.is_some_and(|ready| epoch > ready);
+        self.shown |= settled;
         Layout {
+            settled,
             expanded: self.expanded,
             base,
             height,
@@ -468,6 +498,17 @@ impl Composer {
 /// One frame's resolved pill geometry — the output of [`Composer::settle_layout`]
 /// and the only thing the painting below reads.
 struct Layout {
+    /// Whether the pill may be painted: it has been, or its field has been
+    /// measured in the row it will keep.
+    ///
+    /// Which layout the pill takes — one row or stacked — is decided from
+    /// the field's measured width beside the model picker, and both arrive
+    /// after the chat is first on screen: the field is measured by the
+    /// layout pass after its first render, and the picker by the thread's
+    /// read. Painting before then showed the pill one way and then swept it
+    /// to the other, and a pinned transcript rode the sweep — on the first
+    /// visit to every mode, and every newly opened score.
+    settled: bool,
     expanded: bool,
     /// The committed layout's own height, which the text box is sized from.
     /// The morph animates the *outer* height past it; sizing the inner content
@@ -499,6 +540,7 @@ fn input_style(theme: &Theme) -> text_input::Style {
 pub fn composer(
     composer: &mut Composer,
     chat: &Entity<AgentChat>,
+    ready: bool,
     streaming: bool,
     picker: Option<gpui::AnyElement>,
     gauge: Option<gpui::AnyElement>,
@@ -507,15 +549,15 @@ pub fn composer(
     cx: &mut Context<AgentChat>,
 ) -> impl IntoElement {
     let reduced = motion::reduced_motion(cx);
-    let layout = composer.settle_layout(reduced, cx);
+    let layout = composer.settle_layout(ready, reduced, cx);
     let entrance = if reduced {
         1.0
     } else {
         motion::exit_progress(&motion::FADE_QUICK, composer.clock)
     };
-    if layout.morphing || entrance < 1.0 {
+    if layout.morphing || entrance < 1.0 || !layout.settled {
         // Manual tween drive: keep frames coming while the height sweeps or
-        // the pill fades in.
+        // the pill fades in — or until it can be shown at all.
         window.request_animation_frame();
     }
     let input = composer.input.clone();
@@ -641,15 +683,16 @@ pub fn composer(
     // Frosted so the transcript blurs under it instead of stopping at a seam;
     // the radius matches the pill's, or the blur would square off at its
     // corners.
-    div()
-        .flex()
-        .flex_col()
-        .pt(px(theme::SPACE_MD))
-        .child(dialog::frosted(
-            luma_ui::radius::PILL,
-            theme::PILL_BLUR,
-            body.opacity(entrance),
-        ))
+    let mut plate = div().flex().flex_col().pt(px(theme::SPACE_MD));
+    if !layout.settled {
+        // Laid out, so the field is measured, but not painted.
+        plate.style().visibility = Some(gpui::Visibility::Hidden);
+    }
+    plate.child(dialog::frosted(
+        luma_ui::radius::PILL,
+        theme::PILL_BLUR,
+        body.opacity(entrance),
+    ))
 }
 
 /// Send, steer, or stop.
