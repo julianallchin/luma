@@ -1641,6 +1641,7 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .flex_col()
         .gap(px(12.))
         .px(px(18.))
+        .pt(px(12.))
         .pb(px(16.))
         .children(state.error.clone().map(float::error_row))
         .child(grid::surface(state, &target, app));
@@ -1649,7 +1650,6 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .size_full()
         .flex()
         .flex_col()
-        .child(header(state, &target, app))
         .child(
             div()
                 .flex_1()
@@ -1661,73 +1661,33 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// The way into the layout's editing and back out.
+/// The way into the layout's editing and back out, at the end of the page
+/// tabs.
 ///
 /// The grid is played by default; "Edit layout" turns the same grid into the
 /// one to arrange — the Setup view — and "Done" turns it back. What is
-/// followed is the title bar's and the deck panel's to say, not this row's.
-fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
-    let follow = state.follow.as_ref();
-    let setup = state.surface.view == View::Setup;
-    let (status, problem) = match follow.and_then(|follow| follow.problem.clone()) {
-        Some(problem) => (problem, true),
-        None if setup => ("Changes save as you go".to_owned(), false),
-        None => (String::new(), false),
-    };
-    let (label, next) = if setup {
+/// followed is the deck panel's and the status bar's to say, not this
+/// button's row.
+fn edit_layout(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
+    let (label, next) = if state.surface.view == View::Setup {
         ("Done", View::Perform)
     } else {
         ("Edit layout", View::Setup)
     };
-    // There is nothing to arrange until the layout is read.
-    let loaded = state.layout.is_some();
     let (pressed, edited) = (app.clone(), target.clone());
-    let toggle = luma_ui::button(
-        label,
-        if loaded {
-            luma_ui::Enabled::Yes
-        } else {
-            luma_ui::Enabled::No
-        },
-    )
-    .id("perform-edit-layout")
-    .when(loaded, |button| {
-        button.on_click(move |_, _, cx| {
+    luma_ui::button(label, luma_ui::Enabled::Yes)
+        .id("perform-edit-layout")
+        .on_click(move |_, _, cx| {
             pressed.update(cx, |this, cx| {
                 this.edit_surface(&edited, Edit::View(next), cx)
             });
         })
-    })
-    .agent_node(Role::Button, label);
-    div()
-        .flex_shrink_0()
-        .h(px(44.))
-        .px(px(16.))
-        .flex()
-        .items_center()
-        .gap(px(12.))
-        .border_b_1()
-        .border_color(glass::inner_rule())
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_size(px(12.))
-                .text_color(if problem {
-                    Hsla::from(ladder::danger())
-                } else {
-                    ladder::foreground_alpha(0.5)
-                })
-                .child(status.clone())
-                .agent_node(Role::Text, status),
-        )
-        .child(div().flex_1())
-        .child(toggle)
+        .agent_node(Role::Button, label)
 }
 
 impl Luma {
-    /// What Live is following, in a few words — the title bar's middle and
-    /// the status bar's line while Live is on screen.
+    /// What Live is following, in a few words — the status bar's line while
+    /// Live is on screen.
     pub(crate) fn live_line(&self) -> Option<String> {
         let slot = self.workspace.of_mode(crate::workspace::Mode::Live)?;
         let Body::Perform(state) = &slot.body else {

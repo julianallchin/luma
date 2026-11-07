@@ -92,7 +92,8 @@ fn on_edit(
     }
 }
 
-/// The pages, a "+" for another in Setup, and a line about the page.
+/// The pages, a "+" for another in Setup, a line about the page — or what
+/// is wrong with what Live follows — and the way into the layout's editing.
 fn tabs(
     state: &Perform,
     layout: &PerformLayout,
@@ -132,7 +133,13 @@ fn tabs(
             .agent_focused(chosen)
             .into_any_element()
     });
-    let note = if setup {
+    let problem = state
+        .follow
+        .as_ref()
+        .and_then(|follow| follow.problem.clone());
+    let note = if let Some(problem) = &problem {
+        problem.clone()
+    } else if setup {
         "Double-click a page to rename it · drag a cell to move it, its corner to resize it"
             .to_owned()
     } else {
@@ -169,13 +176,25 @@ fn tabs(
                     .agent_node(Role::Button, "Add busk page")
             })
         })
-        .child(div().flex_1())
+        .child(div().flex_1().min_w(px(12.)))
         .child(
             div()
+                .min_w_0()
+                .truncate()
                 .text_size(px(11.5))
-                .text_color(ladder::foreground_alpha(0.45))
+                .text_color(if problem.is_some() {
+                    Hsla::from(ladder::danger())
+                } else {
+                    ladder::foreground_alpha(0.45)
+                })
                 .child(note.clone())
                 .agent_node(Role::Text, note),
+        )
+        .child(
+            div()
+                .flex_none()
+                .pl(px(8.))
+                .child(super::edit_layout(state, target, app)),
         )
 }
 
