@@ -484,22 +484,19 @@ impl SocketLookup for CatalogSockets {
 /// would be a second thing to keep true.
 #[must_use]
 pub fn node_params(family: Family, params: &Params) -> Procedural {
-    match (family, default_params(family)) {
-        (Family::Truss, Procedural::Truss { span }) => Procedural::Truss {
+    let key = family.param();
+    match default_params(family) {
+        Procedural::Truss { span } => Procedural::Truss {
             #[allow(clippy::cast_possible_truncation)]
-            span: params.get("span", f64::from(span)) as f32,
+            span: params.get(key, f64::from(span)) as f32,
         },
-        (Family::Hinge, Procedural::Hinge { angle }) => Procedural::Hinge {
+        Procedural::Hinge { angle } => Procedural::Hinge {
             #[allow(clippy::cast_possible_truncation)]
-            angle: params.get("angle", f64::from(angle)) as f32,
+            angle: params.get(key, f64::from(angle)) as f32,
         },
-        (Family::Corner, Procedural::Corner { faces }) => Procedural::Corner {
-            faces: params.lookup("faces").map_or(faces, face_set_from_bits),
+        Procedural::Corner { faces } => Procedural::Corner {
+            faces: params.lookup(key).map_or(faces, face_set_from_bits),
         },
-        // `default_params` is total over `Family`, so the pairs above are
-        // exhaustive; matching on both halves is what makes that checkable
-        // rather than asserted.
-        (_, other) => other,
     }
 }
 

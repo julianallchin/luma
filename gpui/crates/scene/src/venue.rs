@@ -186,7 +186,7 @@ impl Node {
     /// Joint yaw belongs to the edge and is validated by the editing operation.
     #[must_use]
     pub fn parameter_names(&self) -> Vec<&'static str> {
-        use crate::catalog::{self, Family, Geometry};
+        use crate::catalog::{self, Geometry};
 
         let mut names = vec!["u", "v", "trim"];
         match self.kind {
@@ -194,16 +194,14 @@ impl Node {
             NodeKind::Array => names.extend(["count", "span"]),
             _ => {}
         }
-        if let Some(piece) = self.catalog_ref.as_deref().and_then(catalog::piece) {
-            match piece.geometry {
-                Geometry::Procedural(Family::Truss) => {
-                    if !names.contains(&"span") {
-                        names.push("span");
-                    }
-                }
-                Geometry::Procedural(Family::Hinge) => names.push("angle"),
-                Geometry::Procedural(Family::Corner) => names.push("faces"),
-                _ => {}
+        if let Some(Geometry::Procedural(family)) = self
+            .catalog_ref
+            .as_deref()
+            .and_then(catalog::piece)
+            .map(|piece| piece.geometry)
+        {
+            if !names.contains(&family.param()) {
+                names.push(family.param());
             }
         }
         names

@@ -151,6 +151,19 @@ impl Family {
             Family::Hinge => "hinge",
         }
     }
+
+    /// The one node parameter this family's generator reads: a truss's
+    /// `span` in metres, a hinge's `angle` in degrees, a corner's open
+    /// `faces` as a bitmask. `luma_render::catalog::node_params` reads it and
+    /// `Node::parameter_names` offers it, so the two cannot name different
+    /// keys.
+    pub fn param(self) -> &'static str {
+        match self {
+            Family::Truss => "span",
+            Family::Corner => "faces",
+            Family::Hinge => "angle",
+        }
+    }
 }
 
 impl Geometry {
