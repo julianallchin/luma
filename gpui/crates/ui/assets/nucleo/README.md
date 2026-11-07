@@ -22,10 +22,12 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Copy | copy | 5838 |
 | Cpu | microchip | 6661 |
 | Expand | expand | 950 |
+| Folder | folder | 1524 |
 | Gear | gear-2 | 1574 |
 | Info | circle-info | 1570 |
 | Minimize | reduce | 1006 |
 | Minus | minus | 5945 |
+| Music | music-note | 6574 |
 | Network | nodes | 4714 |
 | PanelLeft | sidebar-left | 6006 |
 | PanelRight | sidebar-right | 6016 |
