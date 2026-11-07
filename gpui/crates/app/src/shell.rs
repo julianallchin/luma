@@ -250,9 +250,6 @@ impl Luma {
         if self.songs.is_none() {
             return;
         }
-        // A mode chosen from the mode switch is where the settings page goes
-        // back to.
-        self.close_settings(cx);
         self.workspace.set_mode(mode);
         if self.workspace.active().is_none() {
             match mode {
@@ -283,7 +280,6 @@ impl Luma {
         if self.songs.is_none() {
             return;
         }
-        self.close_settings(cx);
         if self.workspace.mode() != Mode::Arrange {
             self.workspace.set_mode(Mode::Arrange);
             self.song_list = true;
@@ -632,66 +628,14 @@ fn cached(region: gpui::Entity<Region>, style: gpui::StyleRefinement) -> AnyElem
 /// rounds (`docs/specs/comet-shell.md` §6).
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
-    let viewport = f32::from(window.viewport_size().width);
     let lights = chrome::corner_lit(window);
-    // Geometry follows state: the panel's resting width is restated every
-    // frame as a pure function of the window and the seam. Only showing or
-    // hiding the panel slides it. A width that moved because the seam was
-    // dragged or the window resized is *set*: it is derived from something
-    // already continuous, and a tween retargeted every frame trails the
-    // pointer it is meant to be under (see `PaneWidth::settled`).
-    let open_width = app.agent_open_width(viewport);
-    let resting = if app.agent_shown(viewport) {
-        open_width
-    } else {
-        0.0
+    // Settings replaces the page's whole content in one frame: the agent
+    // panel is not slid away, it is simply not drawn, and its width is left
+    // as it was so it comes back the same way.
+    let row = match &app.settings {
+        Some(_) => settings_page(app, cx),
+        None => working_row(app, window, cx),
     };
-    let toggled = (resting > 0.0) != (app.agent_width.target() > 0.0);
-    if app.shell_presented && (toggled || !app.agent_width.settled()) {
-        app.agent_width.retarget(resting, cx);
-    } else {
-        app.agent_width.set(resting);
-    }
-    app.shell_presented = true;
-    let agent_w = f32::from(app.agent_width.eval(window));
-    let show_agent = agent_w > 0.0;
-
-    let mut row = div()
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .flex()
-        .flex_row()
-        .relative()
-        .on_drag_move(cx.listener(Luma::drag_agent_seam))
-        .on_drag_move(cx.listener(Luma::drag_visualizer_seam));
-
-    if show_agent {
-        // Laid out at its open width for the whole slide (see `pane::pane`),
-        // so a panel easing away reveals its transcript rather than
-        // re-wrapping it.
-        row = row
-            .child(
-                pane::pane(px(agent_w), px(open_width), agent_panel(app))
-                    .agent_node(Role::Card, "Agent"),
-            )
-            .child(seam());
-    }
-    row = row.child(
-        div()
-            .h_full()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .bg(ladder::background())
-            .key_context(keymap::context::WORKSPACE)
-            .child(content(app, window, cx)),
-    );
-    if show_agent {
-        // After both panels it divides, so it owns the strip it overhangs.
-        row = row.child(agent_grip(agent_w + SEAM_WIDTH / 2.0, cx));
-    }
 
     // Reap a dismissed dialog once its out-animation has played, and keep
     // frames coming until it has. Frame-driven rather than timer-driven —
@@ -760,35 +704,107 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         .child(row)
         .child(page_corners())
         .agent_node(Role::Card, "Page");
-    let mut window_root = div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .relative()
-        .bg(glass::window_trim())
-        // The title bar spans the window: it is on the trim, not on the
-        // page, so the agent panel's coming and going never moves it.
-        .child(title_bar(app, lights, &entity, cx))
-        .child(page)
-        .child(cached(
-            status_bar,
-            gpui::StyleRefinement::default()
-                .w_full()
-                .h(px(STATUS_BAR_HEIGHT))
-                .flex_none(),
-        ))
-        // The title bar's two fixed ends. Above the page, but *below* the
-        // overlay, unlike the traffic lights: a control reachable through a
-        // scrim would move the regions behind a modal that is meant to own
-        // the window. See [`crate::chrome`] for the anchor rule.
-        .child(chrome::agent_toggle(&entity, app.agent_wanted(), lights))
-        .child(chrome::mode_switch(app, &entity, cx));
+    let mut window_root =
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .relative()
+            .bg(glass::window_trim())
+            // The title bar spans the window: it is on the trim, not on the
+            // page, so the agent panel's coming and going never moves it.
+            .child(title_bar(app, lights, &entity, cx))
+            .child(page)
+            .child(cached(
+                status_bar,
+                gpui::StyleRefinement::default()
+                    .w_full()
+                    .h(px(STATUS_BAR_HEIGHT))
+                    .flex_none(),
+            ))
+            // The title bar's two fixed ends. Above the page, but *below* the
+            // overlay, unlike the traffic lights: a control reachable through a
+            // scrim would move the regions behind a modal that is meant to own
+            // the window. See [`crate::chrome`] for the anchor rule.
+            .children(app.settings.is_none().then(|| {
+                chrome::agent_toggle(&entity, app.agent_wanted(), lights).into_any_element()
+            }))
+            .children(
+                app.settings
+                    .is_none()
+                    .then(|| chrome::mode_switch(app, &entity, cx).into_any_element()),
+            );
     if let Some(overlay) = app.overlay.get() {
         window_root = window_root.child(overlay_layer(app, overlay, &entity, window, cx));
     }
     // Last, so nothing — least of all an overlay — can cover the only controls
     // that move and close the window. See [`crate::chrome`].
     window_root.children(chrome::window_controls(window))
+}
+
+/// The page's content while settings is not up: the agent panel beside the
+/// mode's content, and the seam between them.
+fn working_row(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
+    let viewport = f32::from(window.viewport_size().width);
+    // Geometry follows state: the panel's resting width is restated every
+    // frame as a pure function of the window and the seam. Only showing or
+    // hiding the panel slides it. A width that moved because the seam was
+    // dragged or the window resized is *set*: it is derived from something
+    // already continuous, and a tween retargeted every frame trails the
+    // pointer it is meant to be under (see `PaneWidth::settled`).
+    let open_width = app.agent_open_width(viewport);
+    let resting = if app.agent_shown(viewport) {
+        open_width
+    } else {
+        0.0
+    };
+    let toggled = (resting > 0.0) != (app.agent_width.target() > 0.0);
+    if app.shell_presented && (toggled || !app.agent_width.settled()) {
+        app.agent_width.retarget(resting, cx);
+    } else {
+        app.agent_width.set(resting);
+    }
+    app.shell_presented = true;
+    let agent_w = f32::from(app.agent_width.eval(window));
+    let show_agent = agent_w > 0.0;
+
+    let mut row = div()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .flex_row()
+        .relative()
+        .on_drag_move(cx.listener(Luma::drag_agent_seam))
+        .on_drag_move(cx.listener(Luma::drag_visualizer_seam));
+
+    if show_agent {
+        // Laid out at its open width for the whole slide (see `pane::pane`),
+        // so a panel easing away reveals its transcript rather than
+        // re-wrapping it.
+        row = row
+            .child(
+                pane::pane(px(agent_w), px(open_width), agent_panel(app))
+                    .agent_node(Role::Card, "Agent"),
+            )
+            .child(seam());
+    }
+    row = row.child(
+        div()
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .bg(ladder::background())
+            .key_context(keymap::context::WORKSPACE)
+            .child(content(app, window, cx)),
+    );
+    if show_agent {
+        // After both panels it divides, so it owns the strip it overhangs.
+        row = row.child(agent_grip(agent_w + SEAM_WIDTH / 2.0, cx));
+    }
+    row
 }
 
 /// The page's rounded corners. gpui clips to rectangles, so the panels inside
@@ -864,7 +880,10 @@ fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) ->
                 .min_w_0()
                 .flex()
                 .items_center()
-                .child(welcome::venue_trigger(app, entity, cx)),
+                .child(match app.settings {
+                    Some(_) => settings::back(entity),
+                    None => welcome::venue_trigger(app, entity, cx),
+                }),
         )
         .agent_node(Role::Card, "Title bar")
 }
@@ -875,17 +894,6 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
     if app.songs.is_none() {
         // The venue picker is up over this.
         return div().flex_1().into_any_element();
-    }
-    if let Some(state) = &app.settings {
-        let holds_focus = matches!(app.focus_slot(), FocusSlot::Settings);
-        return div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .key_context(keymap::context::SETTINGS)
-            .when(holds_focus, |page| page.track_focus(&app.focus))
-            .child(settings::settings(app, state, &cx.entity()).agent_node(Role::Card, "Settings"))
-            .into_any_element();
     }
     if app.song_list_shown() {
         let region = Regions::get(&mut app.regions.songs, "Songs", songs_body, true, cx);
@@ -978,6 +986,22 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
         .child(body_region(app, cx))
         .child(grip)
         .into_any_element()
+}
+
+/// The settings page, in place of the whole page's content.
+fn settings_page(app: &Luma, cx: &mut Context<Luma>) -> Div {
+    let Some(state) = &app.settings else {
+        return div();
+    };
+    let holds_focus = matches!(app.focus_slot(), FocusSlot::Settings);
+    div()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .key_context(keymap::context::SETTINGS)
+        .when(holds_focus, |page| page.track_focus(&app.focus))
+        .child(settings::settings(app, state, &cx.entity()).agent_node(Role::Card, "Settings"))
 }
 
 /// How tall the stage and the body share: the page — the window less the

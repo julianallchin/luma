@@ -104,26 +104,58 @@ test("the venue menu opens settings", () => {
   until("the settings screen", (s) => s.find({ role: "toggle", label: "AI" }));
 });
 
-// Settings is a page in place of the page's content, not a dialog over it:
-// the title bar stays, the agent panel and the mode's content give it their
-// room, and nothing floats over a scrim.
+// Settings is a page in place of the page's whole content, not a dialog over
+// it: the title bar keeps only the window's corner and Back, and the agent
+// panel is not slid away or back — it is simply not drawn, then drawn again
+// where it was.
 const settingsPage = (s) => s.find({ role: "card", label: "Settings" });
+const agent = (s) => s.find({ role: "card", label: "Agent" })?.bounds;
+// Every frame drawn since `frame`, oldest first.
+const since = (frame) => app.painted().filter((s) => s.frame >= frame);
 
-test("settings takes the page, under the title bar", { fixture: { track: true, seconds: 4 } }, () => {
+test("settings takes the page in one frame, and gives it back the same way", { fixture: { track: true, seconds: 4 } }, () => {
   nav.trackEditor("Test Venue", "Aurora");
-  until("the agent panel", (s) => s.find({ role: "card", label: "Agent" }));
-  app.action("luma::OpenSettings");
+  const before = until("the agent panel at rest", (s) => agent(s)?.width > 0 ? s : undefined);
+  app.frames(4);
+  const rest = app.snapshot();
+  const panel = agent(rest);
+  const timeline = rest.find({ role: "card", label: "Waveform" }).bounds;
+  const mode = nav.shownMode(before);
+
+  const { frame: opened } = app.action("luma::OpenSettings");
   const shot = until("the settings page", (s) =>
     settingsPage(s) && s.find({ role: "toggle", label: "General" }) ? s : undefined);
+  // From the first frame it is up, the agent panel is gone, not leaving.
+  for (const s of since(opened).filter(settingsPage)) {
+    expect(agent(s)).toBe(undefined);
+  }
   const page = shot.find({ role: "card", label: "Page" }).bounds;
   const settings = settingsPage(shot).bounds;
   const bar = shot.find({ role: "card", label: "Title bar" }).bounds;
   expect(shot.find({ role: "button", label: "Dismiss dialog" })).toBe(undefined);
-  until("the agent panel stood aside", (s) => s.find({ role: "card", label: "Agent" }) === undefined);
   expect(shot.find({ role: "card", label: "Waveform" })).toBe(undefined);
   assert(settings.y >= bar.y + bar.height - 1, "the settings page covers the title bar");
   assert(Math.abs(settings.width - page.width) <= 1 && Math.abs(settings.x - page.x) <= 1,
     `the settings page does not span the page: ${JSON.stringify({ settings, page })}`);
+  // The title bar holds Back and nothing else of ours: no venue menu, no
+  // agent toggle, no modes.
+  const back = shot.find({ role: "button", label: "Back" }).bounds;
+  assert(back.y >= bar.y && back.y + back.height <= bar.y + bar.height, "Back is not in the title bar");
+  expect(shot.find({ role: "card", label: "Modes" })).toBe(undefined);
+  expect(shot.find({ role: "button", label: "Test Venue" })).toBe(undefined);
+  expect(shot.find({ role: "button", label: "Hide agent" })).toBe(undefined);
+  expect(shot.find({ role: "button", label: "Show agent" })).toBe(undefined);
+
+  // Back brings the page back as it was, the panel at its width from the
+  // first frame: no slide in.
+  const { frame: closed } = app.click(shot.find({ role: "button", label: "Back" }));
+  const back_ = until("the score again", (s) => !settingsPage(s) && agent(s) ? s : undefined);
+  for (const s of since(closed).filter((s) => !settingsPage(s))) {
+    expect(agent(s)).toEqual(panel);
+  }
+  expect(nav.shownMode(back_)).toBe(mode);
+  expect(back_.find({ role: "card", label: "Waveform" }).bounds).toEqual(timeline);
+  expect(back_.find({ role: "card", label: "Modes" }) !== undefined).toBe(true);
 });
 
 test("Escape leaves the settings page for where you were, keyboard and all", () => {
@@ -139,16 +171,16 @@ test("Escape leaves the settings page for where you were, keyboard and all", () 
   expect(search(back).focused).toBe(true);
 });
 
-test("Back and the mode switch leave the settings page", () => {
+test("Back leaves the settings page for the mode it was opened over", () => {
   nav.venue("Test Venue");
+  nav.venuePage("Test Venue");
   app.action("luma::OpenSettings");
   until("the settings page", settingsPage);
+  // The mode keys are the shell's, and the page owns the keyboard.
+  app.key("3");
+  app.frames(2);
+  assert(settingsPage(app.snapshot()), "a mode key left the settings page");
   nav.step("Back", "button", "Back");
-  until("the settings page gone", (s) => !settingsPage(s));
-
-  app.action("luma::OpenSettings");
-  until("the settings page again", settingsPage);
-  app.click(node("toggle", "Rig"));
-  until("the venue page in its place", (s) =>
+  until("the venue page again", (s) =>
     !settingsPage(s) && s.find({ role: "card", label: "Test Venue Venue" }));
 });

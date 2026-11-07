@@ -505,9 +505,31 @@ pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>) -> Div {
         )
 }
 
-/// The way back and the sections, one row each.
-fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
+/// The way back, in the title bar where the venue menu sits while settings
+/// is not up: the bar carries nothing else then.
+pub(crate) fn back(app: &Entity<Luma>) -> AnyElement {
     let back = app.clone();
+    luma_ui::float::nav_row(RowState::Rest, "settings-back")
+        .id("settings-back")
+        .flex_none()
+        .px(px(10.))
+        .text_size(px(13.))
+        .text_color(glass::ink(glass::TEXT_SECONDARY))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| {
+            back.update(cx, |this, cx| {
+                this.close_settings(cx);
+            })
+        })
+        .child(gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(12.)))
+        .child("Back")
+        .agent_node(Role::Button, "Back")
+        .into_any_element()
+}
+
+/// The sections, one row each. The way back is the title bar's
+/// ([`back`]).
+fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
     div()
         .w(px(NAV_WIDTH))
         .flex_none()
@@ -519,24 +541,9 @@ fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
         .border_r_1()
         .border_color(glass::inner_rule())
         .child(
-            luma_ui::float::nav_row(RowState::Rest, "settings-back")
-                .id("settings-back")
-                .text_color(glass::ink(glass::TEXT_SECONDARY))
-                .on_click(move |_, _, cx| {
-                    back.update(cx, |this, cx| {
-                        this.close_settings(cx);
-                    })
-                })
-                .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(12.)),
-                )
-                .child("Back")
-                .agent_node(Role::Button, "Back"),
-        )
-        .child(
             div()
                 .px(px(8.))
-                .pt(px(12.))
+                .pt(px(4.))
                 .pb(px(4.))
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)

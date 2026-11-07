@@ -406,9 +406,7 @@ impl Luma {
     /// Whether the agent panel should be up: not put away by hand, and not
     /// stood aside for the song list unless asked for over it.
     pub(crate) fn agent_wanted(&self) -> bool {
-        !self.agent_hidden
-            && self.settings.is_none()
-            && (!self.song_list_shown() || self.agent_over_songs)
+        !self.agent_hidden && (!self.song_list_shown() || self.agent_over_songs)
     }
 
     /// Show or hide the agent panel, by its toggle or ⌘B. Over the song list

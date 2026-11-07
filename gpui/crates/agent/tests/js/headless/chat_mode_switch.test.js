@@ -33,7 +33,8 @@ const anchor = (s) => {
 // composer.
 const layout = (s) => {
   const field = composer(s)?.bounds;
-  if (!field || field.width === 0) return undefined;
+  // An unplaced composer is laid out in a box of no height: not on screen.
+  if (!field || field.width === 0 || field.height === 0) return undefined;
   return {
     anchor: anchor(s),
     composer: field,

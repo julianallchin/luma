@@ -143,12 +143,14 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
   source can be changed or disconnected, back to the tapped tempo. The MIDI
   and OSC status sits under it. What is followed is the status bar's line.
 - **Settings** is a page, not a dialog: zeron's settings page in place of the
-  page's content — the agent panel stands aside, as for the song list, and
-  the title bar stays. A 200 nav (Back, then the sections), then a 640 column
-  with a title and description over sections, each a small title over a card
-  of 52-high rows with hairlines between, each control at its row's end in a
-  240 slot; titles and row words share one 17px inset. Back, Escape or a mode
-  from the mode switch returns to what was there.
+  page's whole content, swapped in one frame — the agent panel is not slid
+  away, it is not drawn, and comes back at its width. The title bar keeps the
+  window's corner and Back, where the venue menu was; no agent toggle, no
+  mode switch. A 200 nav of sections, then a 640 column with a title and
+  description over sections, each a small title over a card of 52-high rows
+  with hairlines between, each control at its row's end in a 240 slot;
+  titles and row words share one 17px inset. Back or Escape returns to what
+  was there.
 
 ## 7. Escape
 
