@@ -713,9 +713,9 @@ class Perform:
         "below"), an accent color list setting the accent effects' own colors,
         effects from presets with a pad, a live color and a speed each (the
         base ones take the color below, the accent ones their own), movers'
-        movement one at a time, and flash hits (strobe, blinder, white,
-        black). Select, Clear, tap, the master, the effects' levels and their
-        speed stand at the right. It is a new page, "Busk" or "Busk 2", of new
+        movement one at a time, and hits (strobe and black while held,
+        blinder and white struck by each press). Select, Clear, tap, the
+        master, the effects' levels and their speed stand at the right. It is a new page, "Busk" or "Busk 2", of new
         patterns over the set's; nothing there changes."""
         return self.page(self._change("perform.busk", {})["id"])
 
