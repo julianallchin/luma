@@ -1,5 +1,4 @@
 //! Capture the shared action family together so panel and dialog styles can be reviewed.
-#![cfg(feature = "pixel")]
 use gpui::{div, prelude::*, px, size, AnyView, App, Context, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use luma_ui::node::{Instrument, Role};

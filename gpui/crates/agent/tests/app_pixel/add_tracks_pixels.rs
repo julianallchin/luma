@@ -2,8 +2,6 @@
 //! routes' picture is `tests/js/pixel/add_tracks.test.js`; these stay in Rust
 //! because they print `support::cost` summaries and read environment knobs.
 
-#![cfg(all(feature = "app", feature = "pixel"))]
-
 use super::support;
 
 use std::collections::HashMap;
@@ -189,7 +187,7 @@ fn route_morph_gpu_cost() {
         .with_source_fixture(big_source_fixture(TRACKS))
         .with_motion()
         .with_motion_scale(40.0)
-        .window(1280.0, 800.0)
+        .window(width, height)
         .open(Mode::Pixel);
     run(
         &mut fixture,

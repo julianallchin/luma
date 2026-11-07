@@ -1,16 +1,14 @@
 //! Pixel mode, which only exists with the `pixel` feature:
 //!
 //! ```sh
-//! cargo test -p gpui-agent --features pixel --test pixel
+//! cargo test -p gpui-agent --features pixel --test ui_pixel
 //! ```
 //!
 //! It creates a GPU device, so it is not part of the default test run — but it
 //! is the only mode that can answer "what did that actually look like", and an
 //! untested screenshot path is a screenshot path that has rotted.
-#![cfg(feature = "pixel")]
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use gpui::{div, prelude::*, px, AnyView, App, Context, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};

@@ -1,7 +1,5 @@
 //! Pixel proof for every production venue-dialog route.
 
-#![cfg(all(feature = "app", feature = "pixel"))]
-
 use super::support;
 use support::session;
 

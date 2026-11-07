@@ -1,5 +1,4 @@
 //! Sync is quiet until a backlog, a slow operation or a fault is worth showing.
-#![cfg(feature = "app")]
 use super::support::Fixture;
 use gpui_agent::Mode;
 use luma_lib::models::sync::SyncStatus;

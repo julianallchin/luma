@@ -2,7 +2,7 @@
 //! durable import, close-not-cancel, newest-row reconciliation, and explicit
 //! venue membership.
 
-#![cfg(all(feature = "app", unix))]
+#![cfg(unix)]
 
 use super::support;
 

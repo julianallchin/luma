@@ -1,4 +1,3 @@
-#![cfg(feature = "app")]
 //! The builder's inline height row, on a bespoke view.
 //!
 //! This one stays in Rust: it mounts its own gpui view around

@@ -1,7 +1,5 @@
 //! Outside-in geometry and pixel proof for the shared morph-dialog reducer.
 
-#![cfg(feature = "pixel")]
-
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;

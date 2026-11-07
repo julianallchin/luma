@@ -5,8 +5,6 @@
 //! what the renderer is handed, which the section reports as
 //! `Renderer probes = on|off, balls on|off`.
 
-#![cfg(feature = "app")]
-
 use super::support;
 
 use std::time::Duration;

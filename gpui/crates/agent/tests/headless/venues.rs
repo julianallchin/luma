@@ -5,8 +5,6 @@
 //! remembered venue from the state database. The venue-switch test that needs
 //! none of that is `tests/js/headless/venues.test.js`.
 
-#![cfg(feature = "app")]
-
 use super::support;
 use support::session;
 

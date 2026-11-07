@@ -8,8 +8,6 @@
 //! behind a splash, and lands at the gate when the answer is no. Nothing
 //! opens without a principal — there is no guest door.
 
-#![cfg(feature = "app")]
-
 use super::support;
 use support::session::{self, Stored};
 
@@ -30,10 +28,10 @@ async fn seed(dir: &Path, stored: Stored) {
     // admission was armed for the right identity.
     //
     sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Sign-in Venue')")
-    .bind(session::owner(stored))
-    .execute(&db.0)
-    .await
-    .expect("failed to seed venue");
+        .bind(session::owner(stored))
+        .execute(&db.0)
+        .await
+        .expect("failed to seed venue");
     db.0.close().await;
     session::seed(dir, stored).await;
 }
@@ -208,4 +206,3 @@ fn signing_out_from_the_account_foot_lands_at_the_gate() {
     assert_eq!(out["gate"], true, "signing out must land at the gate");
     assert_eq!(out["menu"], false, "the account menu stayed open");
 }
-

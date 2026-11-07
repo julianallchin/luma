@@ -69,17 +69,22 @@ required-features = ["app"]
 # Its tests are the JS suites it runs; it has none of its own to link.
 test = false
 
-# Built only with `--features pixel`: without it these would link two empty
-# test binaries on every run.
+# Every suite but `unit` shares `tests/support`, which seeds a library, so it
+# needs `app`; the pixel suites also need a renderer.
+[[test]]
+name = "headless"
+path = "tests/headless/main.rs"
+required-features = ["app"]
+
 [[test]]
 name = "app_pixel"
 path = "tests/app_pixel/main.rs"
-required-features = ["pixel"]
+required-features = ["pixel", "app"]
 
 [[test]]
 name = "ui_pixel"
 path = "tests/ui_pixel/main.rs"
-required-features = ["pixel"]
+required-features = ["pixel", "app"]
 
 # The fixture crates (`luma`, `sqlx`, …) come in through `app`, which every
 # suite that seeds a library already needs.

@@ -15,7 +15,6 @@
 //! Frame time alone cannot tell them apart, so this records resident memory
 //! next to it. Growth in both is an accumulation; growth in neither over
 //! several thousand frames rules one out for the configuration under test.
-#![cfg(all(feature = "app", feature = "pixel"))]
 
 use super::support;
 

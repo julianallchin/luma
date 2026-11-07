@@ -1,10 +1,8 @@
 //! The headless suite: every outside-in test that drives the Luma app
 //! through the automation harness without a GPU.
 //!
-//! One binary rather than one per file. Each member keeps the `#![cfg(...)]`
-//! it had — an inner attribute on a `mod`-included file gates the module and
-//! every test in it, exactly as it gated the standalone target — and each gets
-//! its own [`support::Fixture`], which is safe here because a fixture carries
+//! One binary rather than one per file. Each member gets its own
+//! [`support::Fixture`], which is safe here because a fixture carries
 //! its library directory and motion policy in the harness `Runtime` rather
 //! than in the process environment.
 //!

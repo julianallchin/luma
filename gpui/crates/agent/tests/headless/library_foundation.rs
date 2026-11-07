@@ -1,7 +1,5 @@
 //! Data seams needed by venue restore and the add-track dialog.
 
-#![cfg(feature = "app")]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;

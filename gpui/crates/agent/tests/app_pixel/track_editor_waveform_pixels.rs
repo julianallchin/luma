@@ -1,7 +1,5 @@
 //! Both waveform strips keep the same band palette and pixel coverage across zoom.
 
-#![cfg(all(feature = "app", feature = "pixel"))]
-
 use super::support;
 
 use std::collections::HashMap;

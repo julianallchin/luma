@@ -1,5 +1,4 @@
 //! Pixel proof for the real backdrop primitive used by the shared dialog host.
-#![cfg(feature = "pixel")]
 
 use std::fs;
 use std::sync::Arc;

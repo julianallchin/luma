@@ -165,7 +165,7 @@ CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --tes
 | target | contents |
 |---|---|
 | `headless` | outside-in app tests, no GPU |
-| `app_pixel` | outside-in app tests with a real renderer; `pixel_suite_guard` in it is not feature-gated, so a run without `pixel` still reports something |
+| `app_pixel` | outside-in app tests with a real renderer; built only with `--features pixel` |
 | `ui_pixel` | `luma-ui` surfaces with a renderer, no app |
 | `unit` | tests of the harness itself: no library, no renderer |
 
