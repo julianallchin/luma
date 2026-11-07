@@ -306,9 +306,14 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         app.action("luma::DismissOverlay");
 
         // Two reads of the same venue: the second answer must win even though
-        // the first lands later.
+        // the first lands later. The menu does nothing for the venue that is
+        // already open, so each read is a return from another venue.
+        menuRow("Alpha Hall");
+        until("Alpha", (s) => s.find({ role: "button", label: "Alpha Hall" }) !== undefined);
         menuRow("Beta Room");
-        app.frames(2);
+        until("Beta, loading", (s) => s.find({ role: "button", label: "Beta Room" }) !== undefined);
+        menuRow("Alpha Hall");
+        until("Alpha again", (s) => s.find({ role: "button", label: "Alpha Hall" }) !== undefined);
         menuRow("Beta Room");
         until("the same-id latest row", (s) =>
             s.find({ role: "row", label: "Beta same-id latest" }) !== undefined);

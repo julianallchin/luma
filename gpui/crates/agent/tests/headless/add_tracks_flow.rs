@@ -82,17 +82,21 @@ fn harness() -> Harness {
 }
 
 const SCRIPT: &str = r#"
-    // A track is on screen twice while this dialog is open: the venue's own
-    // list *behind* it (x 0, width 255) and the browser's row *inside* it
-    // (x 268, width 664). Only the second is what any step here means, and
-    // width is the only thing that tells them apart.
+    // A track is on screen twice while this dialog is open: the song list
+    // *behind* it and the browser's row *inside* it. Only the second is what
+    // any step here means, and the dialog's box is what tells them apart.
     //
     // So `find({role: "row", label})` alone is not a wait for the browser — it
     // is satisfied instantly by the row behind the dialog, before the browser
     // has laid out. Every predicate below waits on this instead.
-    const BROWSER_ROW_MIN_WIDTH = 300;
-    const browserRow = (s, label) => s.findAll({ role: "row", label })
-        .find((row) => row.bounds.width > BROWSER_ROW_MIN_WIDTH);
+    const browserRow = (s, label) => {
+        const dialog = s.findAll({ role: "card", label: "Add tracks dialog" }).at(-1)?.bounds;
+        if (dialog === undefined) return undefined;
+        const from = s.nodes.findIndex((n) => n.role === "card" && n.label === "Add tracks dialog");
+        return s.nodes.slice(from).find((row) => row.role === "row" && row.label === label
+            && row.bounds.x >= dialog.x && row.bounds.x + row.bounds.width <= dialog.x + dialog.width
+            && row.bounds.y >= dialog.y && row.bounds.y + row.bounds.height <= dialog.y + dialog.height);
+    };
 
     nav.venue("Test Venue");
     nav.step("the add-track affordance", "button", "Add track");
