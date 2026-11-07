@@ -179,10 +179,11 @@ async fn a_pad_plays_a_button_as_the_button_says() {
         ),
     };
     let pad = perform::pad(&pattern).expect("a pad");
-    services
-        .controls
-        .venue(&venue)
-        .install(&[pattern], &PerformLayout::default());
+    services.controls.venue(&venue).install(
+        &[pattern],
+        &PerformLayout::default(),
+        Default::default(),
+    );
     learn(&services, &venue, &pad, "momentary", cc(30, 1.0)).await;
     learn(&services, &venue, &pad, "toggle", cc(31, 1.0)).await;
 

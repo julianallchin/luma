@@ -525,6 +525,73 @@ pub(crate) mod tests {
         }
     }
 
+    /// The head's light at beat 1 over `base`: a head with `color` and no
+    /// light, as the Perform set's base color leaves it.
+    fn over_base(color: [f32; 3], layers: Vec<CompiledAnnotation>) -> [f32; 3] {
+        let mut base = crate::models::universe::UniverseState::default();
+        base.primitives.insert(
+            "head".into(),
+            crate::models::universe::PrimitiveState {
+                color,
+                ..super::nothing()
+            },
+        );
+        let levels = vec![1.0; layers.len()];
+        let head = &Scene::new(layers)
+            .render_onto(base, 1.0, &levels, &mut Arena::default())
+            .primitives["head"];
+        head.color.map(|c| c * head.dimmer)
+    }
+
+    #[test]
+    fn a_below_layer_takes_the_color_under_it() {
+        close(
+            light(vec![
+                wash(RED, 1.0, 1.0, p::BlendMode::Replace, 0),
+                wash(BLUE, 0.5, 1.0, p::BlendMode::Below, 1),
+            ]),
+            [0.5, 0.0, 0.0],
+        );
+        // Over nothing, the color of no light: white.
+        close(
+            light(vec![wash(BLUE, 0.5, 1.0, p::BlendMode::Below, 0)]),
+            [0.5; 3],
+        );
+    }
+
+    #[test]
+    fn a_base_color_lights_nothing_and_colors_a_below_layer() {
+        close(over_base([1.0, 0.0, 0.0], Vec::new()), [0.0; 3]);
+        close(
+            over_base(
+                [1.0, 0.0, 0.0],
+                vec![wash(BLUE, 0.5, 1.0, p::BlendMode::Below, 0)],
+            ),
+            [0.5, 0.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn an_own_color_covers_the_base_only_where_it_lights() {
+        let above = || wash([1.0; 3], 0.5, 1.0, p::BlendMode::Below, 1);
+        // Dark, a layer of its own color leaves the base's for the one above.
+        close(
+            over_base(
+                [1.0, 0.0, 0.0],
+                vec![wash(BLUE, 0.0, 1.0, p::BlendMode::Replace, 0), above()],
+            ),
+            [0.5, 0.0, 0.0],
+        );
+        // Lit, its color is the one above takes.
+        close(
+            over_base(
+                [1.0, 0.0, 0.0],
+                vec![wash(BLUE, 1.0, 1.0, p::BlendMode::Replace, 0), above()],
+            ),
+            [0.0, 0.0, 0.5],
+        );
+    }
+
     /// A laser clip over one projector: `count` beams, all at `x`.
     fn laser(count: usize, x: f64, alpha: f64, mode: p::BlendMode, z: i64) -> CompiledAnnotation {
         let nodes = json!({

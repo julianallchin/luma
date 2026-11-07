@@ -14,11 +14,16 @@
 //! ([`luma_patterns::PreparedGraph::played_live`]), so the speed changes with
 //! no jump and on the bar.
 //!
-//! An instance, a pattern played on targets' groups ([`Instance`]), is the
-//! pattern compiled on those groups, its pad node reading the instance's
-//! button. It is compiled the first time it plays, off the frame path: a
-//! frame that sees the bank has made a new one asks the set's [`Build`],
-//! which compiles it and hands the engine the set's [`Layers`] grown by it.
+//! Each pattern is one layer, compiled on the groups the bank says it plays
+//! on (none: its own selection), with the blend the bank says (Select can
+//! put an effect on the color below or back on its own). When either
+//! changes, the frame that sees it asks the set's [`Build`], which compiles
+//! that pattern again off the frame path and hands the engine the set's
+//! [`Layers`] anew. Until then the old layer plays on only if it already
+//! plays, so an effect never lights where it was not asked to.
+//!
+//! The bank's base color lies under every layer: each light's color, with
+//! no light of its own, for a layer that takes the color below.
 //!
 //! A pattern is a score's pattern placed from long before now and running
 //! for hours, so whenever it is turned on it is already in step. On the
@@ -28,16 +33,16 @@
 //! it the tapped beat converted to that grid's seconds, so a new tempo is a
 //! new clock, never a new compile.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::controls::{self, Instance, PatternControls, VenueControls};
+use crate::controls::{self, PatternControls, VenueControls};
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::eval::aim::Rig;
 use crate::eval::{Arena, CompiledAnnotation, Scene};
 use crate::models::beat_grid::BeatGrid;
-use crate::models::perform::{PerformLayout, PerformPattern};
+use crate::models::perform::{CellContent, PerformLayout, PerformPattern};
 use crate::models::universe::UniverseState;
 use crate::storage::StorageRoot;
 
@@ -61,8 +66,8 @@ pub(crate) enum LiveClock {
 
 /// The compiled set and the controls that play it.
 pub(crate) struct LiveSet {
-    /// Which build of the set this is, so an instance compiled for it joins
-    /// it and no later one.
+    /// Which build of the set this is, so layers compiled for it join it
+    /// and no later one.
     id: u64,
     layers: Arc<Layers>,
     controls: Arc<VenueControls>,
@@ -71,21 +76,26 @@ pub(crate) struct LiveSet {
     /// which the bank reads a deck's beat and bar by.
     timeline: luma_patterns::BeatTimeline,
     beats_per_bar: f64,
-    /// Each annotation's level as of the last frame.
+    /// Each layer's level as of the last frame.
     levels: Vec<f32>,
-    /// How many instances the bank had made when the set last asked for
-    /// them, and where it asks for those made since.
-    made: u64,
+    /// The bank's count of changes when the set last asked for them, and
+    /// where it asks.
+    changed: u64,
     wants: tokio::sync::mpsc::UnboundedSender<()>,
 }
 
-/// An annotation's pad (or its instance's button), when it has one, and
-/// its level control.
-type Switch = (Option<String>, String);
+/// What plays a layer: its pattern, its pad when it has one, its level
+/// control, and the groups it was compiled on.
+#[derive(Clone, Debug)]
+struct Switch {
+    pattern: String,
+    pad: Option<String>,
+    level: String,
+    groups: Vec<String>,
+}
 
-/// The set as compiled: its scene, and each annotation's switch, in the
-/// scene's order. The set's [`Build`] makes it, and grows it by each
-/// instance; the engine plays the same one.
+/// The set as compiled: its scene, and each layer's switch, in the scene's
+/// order. The set's [`Build`] makes it; the engine plays the same one.
 #[derive(Default)]
 pub(crate) struct Layers {
     scene: Scene,
@@ -102,15 +112,6 @@ impl Layers {
             scene: Scene::new(annotations).with_rig(rig)?,
             switches,
         })
-    }
-
-    /// Each annotation and its switch, in order.
-    fn iter(&self) -> impl Iterator<Item = (CompiledAnnotation, Switch)> + '_ {
-        self.scene
-            .annotations
-            .iter()
-            .cloned()
-            .zip(self.switches.iter().cloned())
     }
 }
 
@@ -140,55 +141,80 @@ impl LiveSet {
             .tick(deck.map(|beat| (beat, self.beats_per_bar)), now);
     }
 
-    /// Read each pattern's opacity from the controls: its level × the
-    /// master, its pad's envelope being in its graph's alpha already. A
-    /// pattern whose pad is all the way off plays nothing. Asks for the
-    /// instances the bank has made since the last frame. Answers whether
-    /// anything plays.
+    /// Read each layer's opacity from the controls: its level × the master,
+    /// its pad's envelope being in its graph's alpha already. A pattern
+    /// whose pad is all the way off plays nothing, nor does a layer compiled
+    /// on other groups than its pattern plays on now, unless it already
+    /// plays. Asks for what the bank changed since the last frame. Answers
+    /// whether anything plays, or the base colors anything.
     pub(crate) fn update_levels(&mut self) -> bool {
-        let made = self.controls.made();
-        if made != self.made {
-            self.made = made;
+        let changed = self.controls.changed();
+        if changed != self.changed {
+            self.changed = changed;
             let _ = self.wants.send(());
         }
         let master = self.controls.value(controls::perform::MASTER) as f32;
         let mut playing = false;
-        for ((pad, level), out) in self.layers.switches.iter().zip(self.levels.iter_mut()) {
-            let silent = pad
+        for (switch, out) in self.layers.switches.iter().zip(self.levels.iter_mut()) {
+            let silent = switch
+                .pad
                 .as_ref()
                 .is_some_and(|pad| self.controls.value(pad) <= 0.);
-            *out = if silent {
+            let moved = *out <= 0. && !self.controls.plays_on(&switch.pattern, &switch.groups);
+            *out = if silent || moved {
                 0.
             } else {
-                self.controls.value(level) as f32 * master
+                self.controls.value(&switch.level) as f32 * master
             };
             playing |= *out > 0.;
         }
-        playing
+        playing || self.controls.has_base()
     }
 
     /// The set over `base` at `time`, at the levels of the last
-    /// [`Self::update_levels`].
+    /// [`Self::update_levels`], the base color under it as of `now`.
     pub(crate) fn render_onto(
         &self,
-        base: UniverseState,
+        mut base: UniverseState,
         time: f32,
+        now: Instant,
         scratch: &mut Arena,
     ) -> UniverseState {
+        self.controls.color_base(&mut base, now);
         self.layers
             .scene
             .render_onto(base, time, &self.levels, scratch)
     }
 
-    /// Play `grown`, the set with more instances, from now.
-    pub(crate) fn grow(&mut self, grown: Arc<Layers>) {
-        self.levels = vec![0.; grown.switches.len()];
-        self.layers = grown;
+    /// Play `layers`, the set compiled anew, from now. A layer keeps its
+    /// level where it is the same pattern's.
+    pub(crate) fn replace(&mut self, layers: Arc<Layers>) {
+        let was: HashMap<&str, f32> = self
+            .layers
+            .switches
+            .iter()
+            .zip(&self.levels)
+            .map(|(switch, level)| (switch.pattern.as_str(), *level))
+            .collect();
+        let levels = layers
+            .switches
+            .iter()
+            .map(|switch| was.get(switch.pattern.as_str()).copied().unwrap_or(0.))
+            .collect();
+        self.levels = levels;
+        self.layers = layers;
     }
 }
 
+/// One pattern as the set's build last compiled it: the groups it was
+/// compiled on, and its layer, `None` when it lights nothing there.
+struct Compiled {
+    groups: Vec<String>,
+    layer: Option<CompiledAnnotation>,
+}
+
 /// What a set was compiled from and what it compiled, kept while it plays to
-/// compile each instance the bank makes, the first time it is played.
+/// compile a pattern again when the bank moves it.
 pub(crate) struct Build {
     id: u64,
     controls: Arc<VenueControls>,
@@ -197,9 +223,9 @@ pub(crate) struct Build {
     grid: Option<BeatGrid>,
     timeline: luma_patterns::BeatTimeline,
     beats_per_bar: f64,
+    /// Each pattern's, beside `patterns`.
+    compiled: Vec<Compiled>,
     layers: Arc<Layers>,
-    /// The instances compiled, by button.
-    instances: HashSet<String>,
 }
 
 impl Build {
@@ -207,26 +233,19 @@ impl Build {
         self.id
     }
 
-    /// Compile `pattern` on its own selection, or as `instance` (by its
-    /// button) on that instance's groups; `None` when it lights nothing
-    /// there.
+    /// Compile `pattern` on `groups` (none: its own selection); `None` when
+    /// it lights nothing there.
     async fn compile(
         &self,
         access: &mut impl AuthorizedVenue,
         fixtures_root: &std::path::Path,
         storage: &StorageRoot,
         pattern: &PerformPattern,
-        instance: Option<(&str, &Instance)>,
-    ) -> Result<Option<(CompiledAnnotation, Switch)>, String> {
+        groups: &[String],
+    ) -> Result<Option<CompiledAnnotation>, String> {
         let mut clip = pattern.as_clip(-PICKUP_BARS * self.beats_per_bar, BEATS);
-        let mut source = PatternControls::new(self.controls.clone(), &pattern.id);
-        let mut pad = controls::perform::pad(pattern);
-        if let Some((button, instance)) = instance {
-            clip.selection = luma_patterns::Selection::new(instance.on.join(" | "));
-            if let Some(node) = pattern.graph.pad() {
-                source = source.with_pad(&node.node, button);
-            }
-            pad = Some(button.to_owned());
+        if !groups.is_empty() {
+            clip.selection = luma_patterns::Selection::new(groups.join(" | "));
         }
         let elements = clip.graph.laser().map(|laser| laser.count());
         let cells = crate::services::composable_patterns::resolve_cells(
@@ -246,6 +265,7 @@ impl Build {
             return Ok(None);
         }
         let library = luma_patterns::standard_library();
+        let source = PatternControls::new(self.controls.clone(), &pattern.id);
         let prepared = luma_patterns::PreparedGraph::new(
             &library,
             &clip.graph,
@@ -280,72 +300,94 @@ impl Build {
         let plan =
             crate::eval::lighting::compile_clip(&clip, self.timeline.clone(), cells, prepared)
                 .map_err(|error| format!("{}: {error}", pattern.name))?;
-        let annotation = CompiledAnnotation {
+        Ok(Some(CompiledAnnotation {
             span: plan.span,
             plan: Arc::new(plan),
             z_index: clip.z_index,
             blend_mode: clip.blend_mode,
-        };
-        Ok(Some((
-            annotation,
-            (pad, controls::perform::level(&pattern.id)),
-        )))
+        }))
     }
 
-    /// Compile each instance the bank holds that the set does not yet. One
-    /// that fails is left out, and why logged, so it never stops the set.
-    /// Answers how many instances the bank had made by then.
-    async fn add_instances(
+    /// Bring each pattern to where and how the bank plays it: compile again
+    /// each whose groups changed, give each its blend. Answers whether
+    /// anything changed.
+    async fn refresh(
         &mut self,
         access: &mut impl AuthorizedVenue,
         fixtures_root: &std::path::Path,
         storage: &StorageRoot,
-        layers: &mut Vec<(CompiledAnnotation, Switch)>,
-    ) -> u64 {
-        let (made, instances) = self.controls.instances();
-        for (button, instance) in &instances {
-            if self.instances.contains(button) {
-                continue;
-            }
-            let Some(pattern) = self.patterns.iter().find(|p| p.id == instance.pattern_id) else {
+    ) -> Result<bool, String> {
+        let mut changed = false;
+        for at in 0..self.patterns.len() {
+            let pattern = &self.patterns[at];
+            let Some((groups, blend)) = self.controls.effect(&pattern.id) else {
                 continue;
             };
-            match self
-                .compile(
-                    access,
-                    fixtures_root,
-                    storage,
-                    pattern,
-                    Some((button, instance)),
-                )
-                .await
+            if self
+                .compiled
+                .get(at)
+                .is_some_and(|was| was.groups == groups)
             {
-                Ok(compiled) => layers.extend(compiled),
-                Err(error) => log::warn!("a Perform instance did not compile: {error}"),
+                let layer = self.compiled[at].layer.as_mut();
+                if let Some(layer) = layer.filter(|layer| layer.blend_mode != blend) {
+                    layer.blend_mode = blend;
+                    changed = true;
+                }
+                continue;
             }
-            self.instances.insert(button.clone());
+            let layer = self
+                .compile(access, fixtures_root, storage, pattern, &groups)
+                .await?
+                .map(|layer| CompiledAnnotation {
+                    blend_mode: blend,
+                    ..layer
+                });
+            let compiled = Compiled { groups, layer };
+            match self.compiled.get_mut(at) {
+                Some(was) => *was = compiled,
+                None => self.compiled.push(compiled),
+            }
+            changed = true;
         }
-        made
+        Ok(changed)
     }
 
-    /// Compile the instances the bank has made since, and answer the set
-    /// grown by them; `None` when there are none.
-    pub(crate) async fn grow(
+    /// The set as compiled now, the heads it aims loaded with `access`.
+    async fn layers(
+        &self,
+        access: &mut impl AuthorizedVenue,
+        fixtures_root: &std::path::Path,
+    ) -> Result<Layers, String> {
+        let layers: Vec<(CompiledAnnotation, Switch)> = self
+            .patterns
+            .iter()
+            .zip(&self.compiled)
+            .filter_map(|(pattern, compiled)| {
+                let switch = Switch {
+                    pattern: pattern.id.clone(),
+                    pad: controls::perform::pad(pattern),
+                    level: controls::perform::level(&pattern.id),
+                    groups: compiled.groups.clone(),
+                };
+                Some((compiled.layer.clone()?, switch))
+            })
+            .collect();
+        let rig = aimed(access, fixtures_root, &layers).await?;
+        Layers::new(layers, rig)
+    }
+
+    /// Compile again what the bank moved, and answer the set anew; `None`
+    /// when nothing moved.
+    pub(crate) async fn rebuild(
         &mut self,
         access: &mut impl AuthorizedVenue,
         fixtures_root: &std::path::Path,
         storage: &StorageRoot,
     ) -> Result<Option<Arc<Layers>>, String> {
-        let mut added = Vec::new();
-        self.add_instances(access, fixtures_root, storage, &mut added)
-            .await;
-        if added.is_empty() {
+        if !self.refresh(access, fixtures_root, storage).await? {
             return Ok(None);
         }
-        let mut rig = aimed(access, fixtures_root, &added).await?;
-        rig.extend(self.layers.scene.rig().unwrap_or(&Rig::default()));
-        let layers = self.layers.iter().chain(added).collect();
-        self.layers = Arc::new(Layers::new(layers, rig)?);
+        self.layers = Arc::new(self.layers(access, fixtures_root).await?);
         Ok(Some(self.layers.clone()))
     }
 }
@@ -368,11 +410,50 @@ async fn aimed(
     Rig::load(access, fixtures_root, aimed).await
 }
 
-/// Compile the venue's set, its patterns and the instances `controls` holds,
-/// as build `id`. `track` is the master deck's song; `None` puts it on the
-/// tapped tempo, as does a song with no beat grid. Answers the clock the set
-/// runs on, and the set with its build, `None` when nothing of it lights
-/// anything. The set asks for the instances made since on `wants`.
+/// Each group of `layout`'s group cells, and [`controls::ALL`], to its
+/// lights. A group that does not resolve lights nothing, and why is logged.
+async fn group_lights(
+    access: &mut impl AuthorizedVenue,
+    fixtures_root: &std::path::Path,
+    layout: &PerformLayout,
+) -> HashMap<String, Arc<[String]>> {
+    let mut groups: BTreeSet<&str> = layout
+        .pages
+        .iter()
+        .flat_map(|page| &page.cells)
+        .filter_map(|cell| match &cell.content {
+            CellContent::Group { group, .. } => Some(group.as_str()),
+            _ => None,
+        })
+        .collect();
+    groups.insert(controls::ALL);
+    let mut lights = HashMap::new();
+    for group in groups {
+        let selection = luma_patterns::Selection::new(group);
+        let resolved = crate::eval::context::resolve_selection_primitives_with_access(
+            access,
+            fixtures_root,
+            &selection,
+            0,
+            None,
+        )
+        .await;
+        match resolved {
+            Ok(primitives) => {
+                let ids: Arc<[String]> = primitives.into_iter().map(|(id, _)| id).collect();
+                lights.insert(group.to_owned(), ids);
+            }
+            Err(error) => log::warn!("Perform group {group} lights nothing: {error}"),
+        }
+    }
+    lights
+}
+
+/// Compile the venue's set as build `id`, each pattern where and how
+/// `controls` plays it. `track` is the master deck's song; `None` puts it
+/// on the tapped tempo, as does a song with no beat grid. Answers the clock
+/// the set runs on, and the set with its build. The set asks on `wants` for
+/// what the bank changes after.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn compile(
     id: u64,
@@ -384,7 +465,7 @@ pub(crate) async fn compile(
     layout: &PerformLayout,
     track: Option<(u8, &str)>,
     wants: tokio::sync::mpsc::UnboundedSender<()>,
-) -> Result<(LiveClock, Option<(LiveSet, Build)>), String> {
+) -> Result<(LiveClock, (LiveSet, Build)), String> {
     let grid = match track {
         Some((_, track_id)) => {
             crate::database::local::tracks::get_track_beats_for_connection(
@@ -410,7 +491,8 @@ pub(crate) async fn compile(
         .map(|grid| f64::from(grid.beats_per_bar))
         .filter(|beats| *beats > 0.)
         .unwrap_or(controls::TAPPED_BEATS_PER_BAR);
-    controls.install(patterns, layout);
+    let lights = group_lights(access, fixtures_root, layout).await;
+    controls.install(patterns, layout, lights);
     let mut build = Build {
         id,
         controls: controls.clone(),
@@ -419,24 +501,12 @@ pub(crate) async fn compile(
         grid,
         timeline: timeline.clone(),
         beats_per_bar,
+        compiled: Vec::new(),
         layers: Arc::default(),
-        instances: HashSet::new(),
     };
-    let mut layers = Vec::new();
-    for pattern in &build.patterns {
-        let compiled = build
-            .compile(access, fixtures_root, storage, pattern, None)
-            .await?;
-        layers.extend(compiled);
-    }
-    let made = build
-        .add_instances(access, fixtures_root, storage, &mut layers)
-        .await;
-    if layers.is_empty() {
-        return Ok((live_clock, None));
-    }
-    let rig = aimed(access, fixtures_root, &layers).await?;
-    build.layers = Arc::new(Layers::new(layers, rig)?);
+    let changed = controls.changed();
+    build.refresh(access, fixtures_root, storage).await?;
+    build.layers = Arc::new(build.layers(access, fixtures_root).await?);
     let set = LiveSet {
         id,
         levels: vec![0.; build.layers.switches.len()],
@@ -445,10 +515,10 @@ pub(crate) async fn compile(
         clock: live_clock,
         timeline,
         beats_per_bar,
-        made,
+        changed,
         wants,
     };
-    Ok((live_clock, Some((set, build))))
+    Ok((live_clock, (set, build)))
 }
 
 #[cfg(test)]
@@ -480,8 +550,36 @@ mod tests {
         }
     }
 
+    fn switch(pattern: &PerformPattern, groups: &[&str]) -> Switch {
+        Switch {
+            pattern: pattern.id.clone(),
+            pad: controls::perform::pad(pattern),
+            level: controls::perform::level(&pattern.id),
+            groups: groups.iter().map(|group| (*group).to_owned()).collect(),
+        }
+    }
+
+    /// A set of `switches` over no scene, played by `controls`.
+    fn live(controls: &Arc<VenueControls>, switches: Vec<Switch>) -> LiveSet {
+        let (wants, _wanted) = tokio::sync::mpsc::unbounded_channel();
+        LiveSet {
+            id: 0,
+            changed: controls.changed(),
+            wants,
+            levels: vec![0.; switches.len()],
+            layers: Arc::new(Layers {
+                scene: Scene::new(Vec::new()),
+                switches,
+            }),
+            controls: controls.clone(),
+            clock: LiveClock::Tap,
+            timeline: luma_patterns::BeatTimeline::new(vec![0., 0.5], 0.).unwrap(),
+            beats_per_bar: controls::TAPPED_BEATS_PER_BAR,
+        }
+    }
+
     #[test]
-    fn an_instance_grown_in_keeps_its_switch_beside_its_annotation() {
+    fn layers_stack_by_z_with_their_switches() {
         let annotation = |z| {
             crate::eval::composite::tests::wash(
                 [1.; 3],
@@ -491,59 +589,32 @@ mod tests {
                 z,
             )
         };
-        let switch = |pad: &str| (Some(pad.to_owned()), format!("{pad} level"));
+        let (low, high) = (pattern("low", true), pattern("high", true));
         let built = Layers::new(
             vec![
-                (annotation(0), switch("low")),
-                (annotation(1), switch("high")),
+                (annotation(1), switch(&high, &[])),
+                (annotation(0), switch(&low, &[])),
             ],
             Rig::default(),
         )
         .unwrap();
-        // An instance of the lower pattern composites with it, under the
-        // higher one, and its switch goes with it.
-        let grown = Layers::new(
-            built
-                .iter()
-                .chain([(annotation(0), switch("low@front"))])
-                .collect(),
-            Rig::default(),
-        )
-        .unwrap();
-        let order: Vec<(i64, &str)> = grown
+        let order: Vec<(i64, &str)> = built
             .scene
             .annotations
             .iter()
-            .zip(&grown.switches)
-            .map(|(annotation, (pad, _))| (annotation.z_index, pad.as_deref().unwrap()))
+            .zip(&built.switches)
+            .map(|(annotation, switch)| (annotation.z_index, switch.pattern.as_str()))
             .collect();
-        assert_eq!(order, [(0, "low"), (0, "low@front"), (1, "high")]);
+        assert_eq!(order, [(0, "low"), (1, "high")]);
     }
 
     #[test]
     fn a_pattern_plays_at_its_level_times_master_while_its_pad_is_up() {
         let controls = Arc::new(VenueControls::default());
         let set = [pattern("a", true), pattern("b", true), pattern("c", false)];
-        controls.install(&set, &PerformLayout::default());
+        controls.install(&set, &PerformLayout::default(), HashMap::new());
         let pad = |pattern: &PerformPattern| controls::perform::pad(pattern).unwrap();
-        let (wants, _wanted) = tokio::sync::mpsc::unbounded_channel();
-        let mut live = LiveSet {
-            id: 0,
-            made: 0,
-            wants,
-            layers: Arc::new(Layers {
-                scene: Scene::new(Vec::new()),
-                switches: set
-                    .iter()
-                    .map(|p| (controls::perform::pad(p), controls::perform::level(&p.id)))
-                    .collect(),
-            }),
-            controls: controls.clone(),
-            clock: LiveClock::Tap,
-            timeline: luma_patterns::BeatTimeline::new(vec![0., 0.5], 0.).unwrap(),
-            beats_per_bar: controls::TAPPED_BEATS_PER_BAR,
-            levels: vec![0.; 3],
-        };
+        let mut live = live(&controls, set.iter().map(|p| switch(p, &[])).collect());
         assert!(live.update_levels(), "c has no pad: it plays");
         assert_eq!(live.levels, vec![0., 0., 1.], "a and b are off");
 
@@ -562,5 +633,60 @@ mod tests {
         controls.set(&controls::perform::level("c"), 0.);
         controls.press(&pad(&set[0]), true, Instant::now());
         assert!(!live.update_levels(), "a toggled off, c faded out");
+    }
+
+    #[test]
+    fn a_layer_compiled_elsewhere_lights_only_while_it_already_plays() {
+        let controls = Arc::new(VenueControls::default());
+        let wash = pattern("wash", true);
+        let layout = PerformLayout {
+            pages: vec![crate::models::perform::LayoutPage {
+                id: "page".into(),
+                name: "Main".into(),
+                columns: 2,
+                rows: 1,
+                one_at_a_time: Vec::new(),
+                cells: vec![crate::models::perform::Cell {
+                    id: "front".into(),
+                    column: 0,
+                    row: 0,
+                    width: 1,
+                    height: 1,
+                    content: CellContent::Group {
+                        label: String::new(),
+                        group: "front".into(),
+                    },
+                }],
+            }],
+        };
+        controls.install(std::slice::from_ref(&wash), &layout, HashMap::new());
+        let pad = controls::perform::pad(&wash).unwrap();
+        let mut live = live(&controls, vec![switch(&wash, &[])]);
+        let (wants, mut wanted) = tokio::sync::mpsc::unbounded_channel();
+        live.wants = wants;
+        let at = Instant::now();
+
+        // Off, then on at front: the layer on its own selection stays dark
+        // until the one on front lands, and the set asks for it.
+        controls.press(&controls::perform::cell("front"), true, at);
+        controls.press(&controls::perform::cell("front"), false, at);
+        controls.press(&pad, true, at);
+        live.update_levels();
+        assert_eq!(live.levels, vec![0.]);
+        assert!(wanted.try_recv().is_ok(), "the set asked for it");
+        live.replace(Arc::new(Layers {
+            scene: Scene::new(Vec::new()),
+            switches: vec![switch(&wash, &["front"])],
+        }));
+        live.update_levels();
+        assert_eq!(live.levels, vec![1.]);
+
+        // On, moved to its own selection too: the front layer plays on
+        // until the next lands.
+        controls.choose(&[]);
+        controls.press(&pad, true, at);
+        controls.press(&pad, true, at);
+        live.update_levels();
+        assert_eq!(live.levels, vec![1.], "already playing, it plays on");
     }
 }

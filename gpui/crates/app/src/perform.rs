@@ -14,12 +14,12 @@
 //! A cell is a pattern of the venue's Perform set: its pad (the button node
 //! its graph's alpha depends on) turns it on and off, its level fader and the
 //! other faders and buttons of its graph play it, and it shows its live
-//! colors. A cell can also hold the master, tap, a fader of its own that
-//! moves several things at once, a color cell's swatches, each of which
-//! fades the live colors it sets to its color, or a target: a venue group,
-//! held while pressed. A pad pressed while targets are held plays its
-//! pattern on their groups instead of its own; with one pointer, that is a
-//! press on a target that lets go over a pad. Everything moves a control of the venue: the
+//! colors. A cell can also hold a venue group to choose, a list of values (a
+//! color list with no targets sets the base color), a fader of its own that
+//! moves several things at once, or a utility: the master, tap, Select or
+//! Clear. Choose where, then do something: a group tapped stays chosen, and a
+//! pad tapped then plays its pattern there (the bank's rules, in
+//! `luma_lib::controls`). Everything moves a control of the venue: the
 //! backend's control bank holds them and every input writes there, so a pad
 //! pressed here, a MIDI key and an OSC button are one thing; this tab shows
 //! what the bank holds, as of its last read. Learn binds the next input heard
@@ -48,11 +48,12 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Focusable as _, Hsla, SharedString, Window};
-use luma_lib::controls::{perform as names, Control, UNSET_COLOR, UNTAPPED_BPM};
+use luma_lib::controls::{perform as names, Control, Played, UNSET_COLOR, UNTAPPED_BPM};
 use luma_lib::dispatch::handlers::inputs::{Address, Binding, InputState, Mode};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::perform::{
-    Cell, CellContent, PerformClock, PerformLayout, PerformPattern, PerformSource, PerformState,
+    Cell, CellContent, ListValue, PerformClock, PerformLayout, PerformPattern, PerformSource,
+    PerformState,
 };
 use luma_patterns::clip_graph::LiveInputKind;
 use luma_patterns::press::Button;
@@ -104,10 +105,11 @@ pub(crate) struct Perform {
     /// a read that left before then cannot say it ended.
     learning: Option<String>,
     learning_since: u64,
-    /// A name being typed: a page's, a pattern's or a fader or color cell's.
+    /// A name being typed: a page's, a pattern's or a fader, list or group
+    /// cell's.
     draft: Option<Draft>,
-    /// The swatch of a color cell its picker edits in Setup.
-    swatch: Option<SwatchEditor>,
+    /// The value of a list Setup edits.
+    value: Option<ValueEditor>,
     /// The inspector's group menu is open.
     group_menu: bool,
     /// Each matched deck's waveform and beats, read once per track.
@@ -138,17 +140,19 @@ struct Draft {
 enum Named {
     Page(String),
     Pattern(String),
-    /// A fader or color cell's label, by cell id.
+    /// A fader, list or group cell's label, by cell id.
     Label(String),
 }
 
-/// A color cell's swatch open in Setup's picker, which stays open while its
-/// color is dragged.
-pub(super) struct SwatchEditor {
+/// A list's value open in Setup: a color in the picker, which stays open
+/// while it is dragged, or a number or the color below, which need none.
+pub(super) struct ValueEditor {
     pub cell: String,
     pub index: usize,
-    pub picker: Entity<luma_ui::arg::color::ColorArgEditor>,
-    _changed: gpui::Subscription,
+    pub picker: Option<(
+        Entity<luma_ui::arg::color::ColorArgEditor>,
+        gpui::Subscription,
+    )>,
 }
 
 /// One thing of a cell a hand plays: a pad, a fader or a button, and the
@@ -170,26 +174,30 @@ pub(super) enum PartKind {
     /// Another button node of a pattern's graph.
     Button,
     Tap,
-    /// A live color node of a pattern's graph, which a color cell sets.
+    /// A live color node of a pattern's graph, which a list sets.
     Color,
-    /// Swatch `index` of a color cell: pressed, it is chosen.
-    Swatch {
+    /// Value `index` of a list: pressed, it is tapped.
+    Value {
         index: usize,
     },
-    /// A target, held while pressed.
-    Target,
+    /// A list's own control: pressed, its next value is tapped.
+    Next,
+    /// A group cell: tapped, it is chosen or no longer; held, a press
+    /// meanwhile acts on it alone.
+    Group,
+    /// Select and Clear.
+    Select,
+    Clear,
 }
 
 impl PartKind {
     /// The way a controller binds to it; `None` for a live color, which
-    /// only a color cell sets.
+    /// only a list sets.
     pub(super) fn mode(self) -> Option<Mode> {
         match self {
             Self::Fader { .. } => Some(Mode::Fader),
-            Self::Pad | Self::Button | Self::Tap | Self::Swatch { .. } | Self::Target => {
-                Some(Mode::Momentary)
-            }
             Self::Color => None,
+            _ => Some(Mode::Momentary),
         }
     }
 }
@@ -225,9 +233,9 @@ impl Perform {
             })
     }
 
-    /// The swatch on in color cell `id`, if one is.
-    pub(super) fn swatch_on(&self, id: &str) -> Option<usize> {
-        self.follow.as_ref()?.bank.swatches.get(id).copied()
+    /// The value on in list `id`, if one is.
+    pub(super) fn value_on(&self, id: &str) -> Option<usize> {
+        self.follow.as_ref()?.bank.lists.get(id).copied()
     }
 
     /// Whether button `name` is on: held, or toggled on.
@@ -276,37 +284,37 @@ impl Perform {
         names::pad(self.pattern(id)?)
     }
 
-    /// The buttons pattern `id` plays by, and the groups each plays it on:
-    /// its pad, on none (its own selection), then each of its instances.
-    pub(super) fn plays(&self, id: &str) -> Vec<(String, Vec<String>)> {
-        let instances = self
-            .follow
-            .iter()
-            .flat_map(|follow| &follow.bank.instances)
-            .filter(|(_, instance)| instance.pattern_id == id)
-            .map(|(button, instance)| (button.clone(), instance.on.clone()));
-        self.pad(id)
-            .map(|pad| (pad, Vec::new()))
-            .into_iter()
-            .chain(instances)
-            .collect()
+    /// Where pattern `id` plays and whether it takes the color below, as
+    /// the bank last said.
+    pub(super) fn effect(&self, id: &str) -> Option<&Played> {
+        self.follow.as_ref()?.bank.effects.get(id)
     }
 
-    /// Whether `name` is a target's control.
-    fn is_target(&self, name: &str) -> bool {
-        self.layout
-            .iter()
-            .flat_map(|layout| &layout.pages)
-            .flat_map(|page| &page.cells)
-            .any(|cell| {
-                matches!(cell.content, CellContent::Target { .. }) && names::cell(&cell.id) == name
-            })
+    /// Whether Select chose pattern `id`.
+    pub(super) fn selected(&self, id: &str) -> bool {
+        self.follow
+            .as_ref()
+            .is_some_and(|follow| follow.bank.selected.iter().any(|one| one == id))
     }
 
-    /// Whether target control `name` is held: by the pointer here, or by
-    /// an input.
-    pub(super) fn held(&self, name: &str) -> bool {
-        self.pressed.as_deref() == Some(name) || self.value(name, 0.) > 0.5
+    /// Whether `group` is chosen, and whether it is held down.
+    pub(super) fn group(&self, group: &str) -> (bool, bool) {
+        let has = |groups: &[String]| groups.iter().any(|one| one == group);
+        self.follow.as_ref().map_or((false, false), |follow| {
+            (has(&follow.bank.chosen), has(&follow.bank.held))
+        })
+    }
+
+    /// `group`'s base color, when its lights have one.
+    pub(super) fn base(&self, group: &str) -> Option<[f64; 3]> {
+        self.follow.as_ref()?.bank.base.get(group).copied()
+    }
+
+    /// Whether Select is down or latched.
+    pub(super) fn selecting(&self) -> bool {
+        self.follow
+            .as_ref()
+            .is_some_and(|follow| follow.bank.selecting)
     }
 
     fn pattern(&self, id: &str) -> Option<&PerformPattern> {
@@ -343,27 +351,36 @@ impl Perform {
                 .map_or_else(|| "Deleted pattern".into(), |pattern| pattern.name.clone()),
             CellContent::Master => "Master".into(),
             CellContent::Tap => "Tap".into(),
+            CellContent::Select => "Select".into(),
+            CellContent::Clear => "Clear".into(),
             CellContent::Fader { label, .. } if label.is_empty() => "Fader".into(),
-            CellContent::Color { label, .. } if label.is_empty() => "Colors".into(),
-            CellContent::Target { label, group } if label.is_empty() => group_label(group),
+            CellContent::List { label, .. } if label.is_empty() => match cell.content.colors() {
+                true => "Colors".into(),
+                false => "Numbers".into(),
+            },
+            CellContent::Group { label, group } if label.is_empty() => group_label(group),
             CellContent::Fader { label, .. }
-            | CellContent::Color { label, .. }
-            | CellContent::Target { label, .. } => label.clone(),
+            | CellContent::List { label, .. }
+            | CellContent::Group { label, .. } => label.clone(),
         }
     }
 
-    /// A cell's colour: its pattern's, a color cell's swatch on, or a quiet
-    /// white.
+    /// A cell's colour: its pattern's, a list's color on, a group's base
+    /// color, or a quiet white.
     fn tint(&self, cell: &Cell) -> Hsla {
+        let quiet = ladder::foreground_alpha(0.8);
         match &cell.content {
             CellContent::Pattern { pattern_id } => ladder::pattern(pattern_id).into(),
             CellContent::Fader { .. } => Hsla::from(ladder::accent()),
-            CellContent::Color { swatches, .. } => self
-                .swatch_on(&cell.id)
-                .and_then(|on| swatches.get(on))
-                .map_or_else(|| Hsla::from(ladder::accent()), |rgb| paint(*rgb)),
-            CellContent::Master | CellContent::Tap | CellContent::Target { .. } => {
-                ladder::foreground_alpha(0.8)
+            CellContent::List { values, .. } => {
+                match self.value_on(&cell.id).and_then(|on| values.get(on)) {
+                    Some(ListValue::Color(rgb)) => paint(*rgb),
+                    _ => Hsla::from(ladder::accent()),
+                }
+            }
+            CellContent::Group { group, .. } => self.base(group).map_or(quiet, paint),
+            CellContent::Master | CellContent::Tap | CellContent::Select | CellContent::Clear => {
+                quiet
             }
         }
     }
@@ -416,24 +433,27 @@ impl Perform {
                 PartKind::Fader { rest: 1. },
             )],
             CellContent::Tap => vec![part(names::TAP.into(), "Tap", PartKind::Tap)],
+            CellContent::Select => vec![part(names::SELECT.into(), "Select", PartKind::Select)],
+            CellContent::Clear => vec![part(names::CLEAR.into(), "Clear", PartKind::Clear)],
             CellContent::Fader { .. } => vec![part(
                 names::cell(&cell.id),
                 &self.title(cell),
                 PartKind::Fader { rest: 0. },
             )],
-            CellContent::Color { swatches, .. } => (0..swatches.len())
+            CellContent::List { values, .. } => (0..values.len())
                 .map(|index| {
                     part(
-                        names::swatch(&cell.id, index),
-                        &format!("Swatch {}", index + 1),
-                        PartKind::Swatch { index },
+                        names::value(&cell.id, index),
+                        &format!("Value {}", index + 1),
+                        PartKind::Value { index },
                     )
                 })
+                .chain([part(names::cell(&cell.id), "Next", PartKind::Next)])
                 .collect(),
-            CellContent::Target { .. } => vec![part(
+            CellContent::Group { .. } => vec![part(
                 names::cell(&cell.id),
                 &self.title(cell),
-                PartKind::Target,
+                PartKind::Group,
             )],
         }
     }
@@ -527,7 +547,7 @@ impl Luma {
             learning: None,
             learning_since: 0,
             draft: None,
-            swatch: None,
+            value: None,
             group_menu: false,
             tracks: HashMap::new(),
             fetching: HashSet::new(),
@@ -568,89 +588,91 @@ impl Luma {
     /// Read the follow session, the inputs and (now and then) the controls,
     /// for as long as the tab is open.
     fn poll_perform(&mut self, target: Target, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| loop {
-            // The reads are made inside the update: the library is the app's,
-            // and a tab that closed since the last poll ends the loop here.
-            let Ok(Some((polled, follow, inputs, controls, player))) =
-                this.update(cx, |this, _| {
-                    let venue = this.perform_mut(&target).map(|state| {
-                        state.polls += 1;
-                        (state.polls, state.venue_id.clone())
-                    });
-                    venue.map(|(polls, venue)| {
-                        (
-                            polls,
-                            this.library.perform_state(),
-                            this.library.input_state(),
-                            (polls % CONTROLS_EVERY == 1)
-                                .then(|| this.library.control_list(&venue)),
-                            this.library.transport_after(Duration::ZERO),
-                        )
+        cx.spawn(async move |this, cx| {
+            loop {
+                // The reads are made inside the update: the library is the app's,
+                // and a tab that closed since the last poll ends the loop here.
+                let Ok(Some((polled, follow, inputs, controls, player))) =
+                    this.update(cx, |this, _| {
+                        let venue = this.perform_mut(&target).map(|state| {
+                            state.polls += 1;
+                            (state.polls, state.venue_id.clone())
+                        });
+                        venue.map(|(polls, venue)| {
+                            (
+                                polls,
+                                this.library.perform_state(),
+                                this.library.input_state(),
+                                (polls % CONTROLS_EVERY == 1)
+                                    .then(|| this.library.control_list(&venue)),
+                                this.library.transport_after(Duration::ZERO),
+                            )
+                        })
                     })
-                })
-            else {
-                return;
-            };
-            let follow = follow.await;
-            let inputs = inputs.await;
-            let player = player.await;
-            let controls = match controls {
-                Some(controls) => Some(controls.await),
-                None => None,
-            };
-            let landed = this.update(cx, |this, cx| {
-                let Some(state) = this.perform_mut(&target) else {
-                    return None;
+                else {
+                    return;
                 };
-                if let Ok(player) = player {
-                    state.player = Some(player);
-                }
-                // A failed read keeps what we knew: dropping to `None` would
-                // flash the chooser to Off until the next poll.
-                if let Ok(follow) = follow {
-                    if state
-                        .choosing
-                        .as_ref()
-                        .is_some_and(|choice| same_source(choice.as_ref(), follow.source.as_ref()))
-                    {
-                        state.choosing = None;
+                let follow = follow.await;
+                let inputs = inputs.await;
+                let player = player.await;
+                let controls = match controls {
+                    Some(controls) => Some(controls.await),
+                    None => None,
+                };
+                let landed = this.update(cx, |this, cx| {
+                    let Some(state) = this.perform_mut(&target) else {
+                        return None;
+                    };
+                    if let Ok(player) = player {
+                        state.player = Some(player);
                     }
-                    state.follow = Some(follow);
-                    state.polled_at = Instant::now();
-                }
-                if let Ok(inputs) = inputs {
-                    // Learning ended somewhere other than here: a binding
-                    // landed, or it was cancelled.
-                    if inputs.learning.is_none() && polled > state.learning_since {
-                        state.learning = None;
+                    // A failed read keeps what we knew: dropping to `None` would
+                    // flash the chooser to Off until the next poll.
+                    if let Ok(follow) = follow {
+                        if state.choosing.as_ref().is_some_and(|choice| {
+                            same_source(choice.as_ref(), follow.source.as_ref())
+                        }) {
+                            state.choosing = None;
+                        }
+                        state.follow = Some(follow);
+                        state.polled_at = Instant::now();
                     }
-                    state.inputs = Some(inputs);
-                }
-                match controls {
-                    Some(Ok(controls)) => state.controls = controls,
-                    Some(Err(error)) => state.error = Some(error.to_string()),
-                    None => {}
-                }
-                state.held.retain(|_, (_, at)| at.elapsed() < HELD_FOR);
-                let wanted: Vec<String> = state
-                    .follow
-                    .iter()
-                    .flat_map(|follow| follow.decks.iter())
-                    .filter_map(deck_strip::track_id)
-                    .filter(|id| !state.tracks.contains_key(*id) && !state.fetching.contains(*id))
-                    .map(str::to_owned)
-                    .collect();
-                state.fetching.extend(wanted.iter().cloned());
-                for track_id in wanted {
-                    this.load_deck_track(&target, track_id, cx);
-                }
-                cx.notify();
-                Some(this.library.debounce(POLL))
-            });
-            let Ok(Some(wait)) = landed else {
-                return;
-            };
-            wait.await;
+                    if let Ok(inputs) = inputs {
+                        // Learning ended somewhere other than here: a binding
+                        // landed, or it was cancelled.
+                        if inputs.learning.is_none() && polled > state.learning_since {
+                            state.learning = None;
+                        }
+                        state.inputs = Some(inputs);
+                    }
+                    match controls {
+                        Some(Ok(controls)) => state.controls = controls,
+                        Some(Err(error)) => state.error = Some(error.to_string()),
+                        None => {}
+                    }
+                    state.held.retain(|_, (_, at)| at.elapsed() < HELD_FOR);
+                    let wanted: Vec<String> = state
+                        .follow
+                        .iter()
+                        .flat_map(|follow| follow.decks.iter())
+                        .filter_map(deck_strip::track_id)
+                        .filter(|id| {
+                            !state.tracks.contains_key(*id) && !state.fetching.contains(*id)
+                        })
+                        .map(str::to_owned)
+                        .collect();
+                    state.fetching.extend(wanted.iter().cloned());
+                    for track_id in wanted {
+                        this.load_deck_track(&target, track_id, cx);
+                    }
+                    cx.notify();
+                    Some(this.library.debounce(POLL))
+                });
+                let Ok(Some(wait)) = landed else {
+                    return;
+                };
+                wait.await;
+            }
         })
         .detach();
     }
@@ -686,47 +708,34 @@ impl Luma {
     }
 
     /// A button of a cell pressed (`down`) or let go: a pad or another button
-    /// node, tap, or a target. The backend plays a button node by its
-    /// settings, toggle or flash, and holds a target while it is down.
-    /// A release counts only for the button the pointer pressed, but a
-    /// press on a target that lets go `over` a pad presses that pad with the
-    /// target held, then lets go of the target.
+    /// node, tap, a group, a list's value, Select or Clear. The backend plays
+    /// each as the bank says. A release counts only for the button the
+    /// pointer pressed.
     fn press_part(
         &mut self,
         target: &Target,
         name: &str,
         kind: PartKind,
         down: bool,
-        over: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
-        let presses = match state.pressed.take() {
-            _ if down => {
-                state.pressed = Some(name.to_owned());
-                vec![(name.to_owned(), true)]
-            }
-            Some(pressed) if pressed == name => vec![(pressed, false)],
-            Some(held) if over && kind == PartKind::Pad && state.is_target(&held) => {
-                vec![
-                    (name.to_owned(), true),
-                    (name.to_owned(), false),
-                    (held, false),
-                ]
-            }
+        match state.pressed.take() {
+            _ if down => state.pressed = Some(name.to_owned()),
+            Some(pressed) if pressed == name => {}
             pressed => {
                 state.pressed = pressed;
                 return;
             }
-        };
+        }
         let request: std::pin::Pin<Box<dyn std::future::Future<Output = _>>> = match kind {
             PartKind::Tap => Box::pin(
                 self.library
                     .perform_control(name, f64::from(u8::from(down))),
             ),
-            _ => Box::pin(self.library.perform_press(presses)),
+            _ => Box::pin(self.library.perform_press(vec![(name.to_owned(), down)])),
         };
         cx.notify();
         self.after_request(target.clone(), request, cx);
@@ -786,7 +795,7 @@ impl Luma {
             self.stop_learning(target, cx);
             if let Some(state) = self.perform_mut(target) {
                 state.group_menu = false;
-                state.swatch = None;
+                state.value = None;
             }
         }
         self.apply_surface(target, edit, cx);
@@ -1253,8 +1262,8 @@ impl Luma {
                 "Name",
                 state.cell(id).and_then(|cell| match &cell.content {
                     CellContent::Fader { label, .. }
-                    | CellContent::Color { label, .. }
-                    | CellContent::Target { label, .. } => Some(label.clone()),
+                    | CellContent::List { label, .. }
+                    | CellContent::Group { label, .. } => Some(label.clone()),
                     _ => None,
                 }),
             ),
@@ -1346,8 +1355,8 @@ impl Luma {
                         let mut content = cell.content.clone();
                         match &mut content {
                             CellContent::Fader { label, .. }
-                            | CellContent::Color { label, .. }
-                            | CellContent::Target { label, .. } => {
+                            | CellContent::List { label, .. }
+                            | CellContent::Group { label, .. } => {
                                 *label = typed;
                                 Some(content)
                             }
@@ -1361,9 +1370,9 @@ impl Luma {
         }
     }
 
-    /// Open swatch `index` of color cell `cell` in Setup's picker, or with
-    /// `None` close the picker.
-    fn open_swatch(
+    /// Open value `index` of list `cell` in Setup, a color in the picker,
+    /// or with `None` close it.
+    fn open_value(
         &mut self,
         target: &Target,
         cell: &str,
@@ -1373,48 +1382,53 @@ impl Luma {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
-        let rgb = index.and_then(|index| match &state.cell(cell)?.content {
-            CellContent::Color { swatches, .. } => swatches.get(index).copied(),
+        let value = index.and_then(|index| match &state.cell(cell)?.content {
+            CellContent::List { values, .. } => values.get(index).copied(),
             _ => None,
         });
-        let (Some(index), Some(rgb)) = (index, rgb) else {
-            state.swatch = None;
+        let (Some(index), Some(value)) = (index, value) else {
+            state.value = None;
             return cx.notify();
         };
         use luma_ui::arg::color::{ColorArg, ColorArgEditor, ColorArgEvent};
-        let picker = cx.new(|cx| {
-            ColorArgEditor::new(
-                format!("Swatch {}", index + 1),
-                ColorArg::decode(rgb.map(|c| c as f32), 1.),
-                cx,
-            )
-            .rgb_only()
-        });
-        let changed = {
-            let (target, cell) = (target.clone(), cell.to_owned());
-            cx.subscribe(
-                &picker,
-                move |this: &mut Luma, _, event: &ColorArgEvent, cx| {
-                    let ColorArgEvent::Changed(value) = *event;
-                    let rgb = value.encode().0.map(f64::from);
-                    this.set_swatch_color(&target, &cell, index, rgb, cx);
-                },
-            )
+        let picker = match value {
+            ListValue::Color(rgb) => {
+                let picker = cx.new(|cx| {
+                    ColorArgEditor::new(
+                        format!("Value {}", index + 1),
+                        ColorArg::decode(rgb.map(|c| c as f32), 1.),
+                        cx,
+                    )
+                    .rgb_only()
+                });
+                let changed = {
+                    let (target, cell) = (target.clone(), cell.to_owned());
+                    cx.subscribe(
+                        &picker,
+                        move |this: &mut Luma, _, event: &ColorArgEvent, cx| {
+                            let ColorArgEvent::Changed(value) = *event;
+                            let rgb = value.encode().0.map(f64::from);
+                            this.set_value_color(&target, &cell, index, rgb, cx);
+                        },
+                    )
+                };
+                Some((picker, changed))
+            }
+            ListValue::Number(_) | ListValue::Below => None,
         };
         if let Some(state) = self.perform_mut(target) {
-            state.swatch = Some(SwatchEditor {
+            state.value = Some(ValueEditor {
                 cell: cell.to_owned(),
                 index,
                 picker,
-                _changed: changed,
             });
         }
         cx.notify();
     }
 
-    /// Give swatch `index` of color cell `cell` the color `rgb`, as its
-    /// picker is dragged: it shows at once and is saved once it rests.
-    fn set_swatch_color(
+    /// Give value `index` of list `cell` the color `rgb`, as its picker is
+    /// dragged: it shows at once and is saved once it rests.
+    fn set_value_color(
         &mut self,
         target: &Target,
         cell: &str,
@@ -1425,20 +1439,20 @@ impl Luma {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
-        let swatch = state
+        let value = state
             .layout
             .iter_mut()
             .flat_map(|layout| layout.pages.iter_mut())
             .flat_map(|page| page.cells.iter_mut())
             .find(|one| one.id == cell)
             .and_then(|one| match &mut one.content {
-                CellContent::Color { swatches, .. } => swatches.get_mut(index),
+                CellContent::List { values, .. } => values.get_mut(index),
                 _ => None,
             });
-        let Some(swatch) = swatch else {
+        let Some(value) = value else {
             return;
         };
-        *swatch = rgb;
+        *value = ListValue::Color(rgb);
         state.edits += 1;
         let edits = state.edits;
         let wait = self.library.debounce(SAVE_COLOR_AFTER);
@@ -1479,7 +1493,7 @@ impl Luma {
     }
 
     /// Have cell `id` light `expression`, a group's name or `all`: its
-    /// pattern's selection, or a target's group.
+    /// pattern's selection, or a group cell's group.
     fn set_group(&mut self, target: &Target, id: &str, expression: String, cx: &mut Context<Self>) {
         let Some(state) = self.perform_mut(target) else {
             return;
@@ -1500,8 +1514,8 @@ impl Luma {
                     self.store_perform_pattern(target, pattern, cx);
                 }
             }
-            CellContent::Target { label, group } if group != expression => {
-                let content = CellContent::Target {
+            CellContent::Group { label, group } if group != expression => {
+                let content = CellContent::Group {
                     label,
                     group: expression,
                 };
@@ -2036,15 +2050,15 @@ fn decks(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoEleme
         _ => None,
     };
     let tap = tempo.map(|tempo| {
-        let press = |down: bool, over: bool| {
+        let press = |down: bool| {
             let (app, target) = (app.clone(), target.clone());
             move |app_cx: &mut gpui::App| {
                 app.update(app_cx, |this, cx| {
-                    this.press_part(&target, names::TAP, PartKind::Tap, down, over, cx)
+                    this.press_part(&target, names::TAP, PartKind::Tap, down, cx)
                 });
             }
         };
-        let (down, up, out) = (press(true, true), press(false, true), press(false, false));
+        let (down, up, out) = (press(true), press(false), press(false));
         let nudge = |label: &'static str, key: &'static str, bpm: f64| {
             let (app, target) = (app.clone(), target.clone());
             float::btn(label, key)

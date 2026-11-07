@@ -5,11 +5,13 @@
 // and a toggle button, `pad`, on its alpha: its pad. Its cell is a column
 // two places tall, so it shows its pad and, under it, its level and its
 // `drop` fader. "Hue wash", beside it and as tall, has a live color, `hue`
-// (named "main"), straight into its output's color, shown under its pad.
-// A color cell of two swatches, red and blue, fading at once, sets `hue`.
-// A target on the left movers sits beside it, and "Bar wash", whose pad
-// starts on the next bar, beside that. Tap and the master sit at the page's
-// right. Nothing is followed, so the set runs on the tapped tempo.
+// (named "main"), straight into its output's color, shown under its pad; it
+// takes the color below. A list of two colors, red and blue, fading at once,
+// sets `hue`. Group cells on the left and the right movers sit beside it,
+// and "Bar wash", whose pad starts on the next bar, beside those. Under them
+// a list with no targets sets the base color: red, blue, white and the color
+// below; then Select and Clear. Tap and the master sit at the page's right.
+// Nothing is followed, so the set runs on the tapped tempo.
 
 const PATTERN = "8c1d2b8e-0000-4000-8000-000000000001";
 const HUE = "8c1d2b8e-0000-4000-8000-000000000002";
@@ -62,17 +64,30 @@ const layout = JSON.stringify({
           content: { kind: "pattern", patternId: HUE } },
         { id: "cell-colors", column: 2, row: 0, width: 2, height: 1,
           content: {
-            kind: "color",
+            kind: "list",
             label: "Colors",
-            swatches: [[1, 0, 0], [0, 0, 1]],
+            values: [{ color: [1, 0, 0] }, { color: [0, 0, 1] }],
             fade: 0,
             unit: "beats",
             targets: [{ kind: "node", patternId: HUE, node: "hue" }],
           } },
         { id: "cell-left", column: 4, row: 0, width: 1, height: 1,
-          content: { kind: "target", label: "", group: "left_movers" } },
-        { id: "cell-bar", column: 5, row: 0, width: 1, height: 1,
+          content: { kind: "group", label: "", group: "left_movers" } },
+        { id: "cell-right", column: 5, row: 0, width: 1, height: 1,
+          content: { kind: "group", label: "", group: "right_movers" } },
+        { id: "cell-bar", column: 6, row: 0, width: 1, height: 1,
           content: { kind: "pattern", patternId: BAR } },
+        { id: "cell-base", column: 2, row: 1, width: 3, height: 1,
+          content: {
+            kind: "list",
+            label: "Base",
+            values: [{ color: [1, 0, 0] }, { color: [0, 0, 1] }, { color: [1, 1, 1] }, "below"],
+            fade: 0,
+            unit: "beats",
+            targets: [],
+          } },
+        { id: "cell-select", column: 5, row: 1, width: 1, height: 1, content: { kind: "select" } },
+        { id: "cell-clear", column: 6, row: 1, width: 1, height: 1, content: { kind: "clear" } },
         { id: "cell-tap", column: 7, row: 0, width: 1, height: 1, content: { kind: "tap" } },
         { id: "cell-master", column: 7, row: 1, width: 1, height: 3, content: { kind: "master" } },
       ],
@@ -89,7 +104,7 @@ fixture({
        VALUES ('${PATTERN}', '$PRINCIPAL', 'venue-main', 'Front wash',
                '{"expression":"all"}', 0, 'replace', '7', '${graph}'),
               ('${HUE}', '$PRINCIPAL', 'venue-main', 'Hue wash',
-               '{"expression":"all"}', 1, 'replace', '7', '${hued}'),
+               '{"expression":"all"}', 1, 'below', '7', '${hued}'),
               ('${BAR}', '$PRINCIPAL', 'venue-main', 'Bar wash',
                '{"expression":"all"}', 2, 'replace', '7', '${onTheBar}')`,
     `INSERT INTO perform_layouts (id, uid, venue_id, layout_json)
@@ -106,6 +121,17 @@ function reading(shot, control) {
   return node === undefined ? null : Number(node.label.split(" = ")[1]);
 }
 const key = PATTERN.replaceAll("-", "");
+// A group cell, published as `Group: Left movers (chosen, #FF0000)`.
+const group = (s, name) =>
+  s.find((n) => n.role === "button" && n.label.startsWith(`Group: ${name}`));
+// A list's value, published as `Base Value 2, #0000FF` and ` (on)` once tapped.
+const value = (s, list, number) =>
+  s.find((n) => n.role === "button" && n.label.startsWith(`${list} Value ${number},`));
+const hex = (label) => label?.match(/#[0-9A-F]{6}/)?.[0];
+// The pattern's live color, published as `Hue wash main #RRGGBB`.
+const live = (s) =>
+  s.find((n) => n.role === "text" && n.label.startsWith("Hue wash main #"));
+
 
 function open() {
   nav.venue("Test Venue");
@@ -151,29 +177,74 @@ test("a pad that starts on the bar waits for it, then lights", () => {
   until("on at the bar", (s) => (bar(s)?.label === "Pad: Bar wash (on)" ? s : undefined));
 });
 
-test("a pad pressed with a target held plays its pattern on the target's group", () => {
-  const target = (s) =>
-    s.find((n) => n.role === "button" && n.label.startsWith("Target: Left movers"));
-  expect(target(open()).label).toBe("Target: Left movers");
+test("a group tapped is chosen, and a pad then plays its pattern there", () => {
+  expect(group(open(), "Left movers").label).toBe("Group: Left movers");
 
-  // One pointer holds the target and lets go over the pad.
-  const centre = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
-  const holdThenPad = () => {
-    const shot = app.snapshot();
-    const [from, to] = [centre(target(shot).bounds), centre(pad(shot).bounds)];
-    app.drag(target(shot), { dx: to.x - from.x, dy: to.y - from.y }, { steps: 4 });
-  };
-  holdThenPad();
+  app.click(group(app.snapshot(), "Left movers"));
+  until("chosen", (s) =>
+    group(s, "Left movers")?.label === "Group: Left movers (chosen)" ? s : undefined,
+  );
+  app.click(pad(app.snapshot()));
   until("on the left movers", (s) =>
     pad(s)?.label === "Pad: Front wash (on: Left movers)" ? s : undefined,
   );
-  until("the target let go", (s) =>
-    target(s)?.label === "Target: Left movers" ? s : undefined,
+
+  // Tapped again with the same group chosen, the pattern leaves it: off.
+  app.click(pad(app.snapshot()));
+  until("off", (s) => (pad(s)?.label === "Pad: Front wash" ? s : undefined));
+
+  // Clear tapped: nothing chosen.
+  nav.step("Clear", "button", "Clear");
+  until("not chosen", (s) =>
+    group(s, "Left movers")?.label === "Group: Left movers" ? s : undefined,
+  );
+});
+
+test("a color on a list with no targets is the base color of the groups chosen", () => {
+  open();
+  const opened = until("the base list", (s) => (value(s, "Base", 2) ? s : undefined));
+  const [red, blue] = [1, 2].map((n) => hex(value(opened, "Base", n).label));
+
+  // Nothing chosen: every light.
+  app.click(value(app.snapshot(), "Base", 1));
+  until("both groups red", (s) =>
+    hex(group(s, "Left movers")?.label) === red && hex(group(s, "Right movers")?.label) === red
+      ? s : undefined,
   );
 
-  // Pressed again with the same target held, that instance turns off.
-  holdThenPad();
-  until("off", (s) => (pad(s)?.label === "Pad: Front wash" ? s : undefined));
+  // The left movers chosen: blue there alone.
+  app.click(group(app.snapshot(), "Left movers"));
+  app.click(value(app.snapshot(), "Base", 2));
+  until("left blue, right still red", (s) =>
+    hex(group(s, "Left movers")?.label) === blue && hex(group(s, "Right movers")?.label) === red
+      ? s : undefined,
+  );
+  nav.step("Clear", "button", "Clear");
+});
+
+test("Select chooses an effect for a color of its own, and Below gives it the color below again", () => {
+  const hue = (s) => pad(s, "Hue wash");
+  expect(hue(open()).label).toBe("Pad: Hue wash (below)");
+
+  // Select tapped latches it; the pad is then chosen, not played.
+  nav.step("Select", "button", "Select");
+  until("Select on", (s) => s.find({ role: "button", label: "Select (on)" }));
+  app.click(hue(app.snapshot()));
+  until("chosen", (s) => (hue(s)?.label === "Pad: Hue wash (below, chosen)" ? s : undefined));
+
+  // White: its own color, and the effect is no longer chosen.
+  const white = hex(value(app.snapshot(), "Base", 3).label);
+  app.click(value(app.snapshot(), "Base", 3));
+  until("its own white", (s) =>
+    hue(s)?.label === "Pad: Hue wash" && hex(live(s)?.label) === white ? s : undefined,
+  );
+  assert(!hex(group(app.snapshot(), "Left movers").label), "the base was set");
+
+  // Select, the effect, Below: the color below again.
+  nav.step("Select", "button", "Select");
+  app.click(hue(until("Select on", (s) => (s.find({ role: "button", label: "Select (on)" }) ? s : undefined))));
+  app.click(value(app.snapshot(), "Base", 4));
+  until("below again", (s) => (hue(s)?.label === "Pad: Hue wash (below)" ? s : undefined));
 });
 
 test("a tall cell's faders move its pattern's level and its own fader", () => {
@@ -295,47 +366,43 @@ test("Learn waits for an input for the cell's control; Cancel stops it", () => {
   expect(app.snapshot().find({ role: "button", label: "Learn Master" }) !== undefined).toBe(true);
 });
 
-// A swatch, published as `Colors Swatch 2, #0000FF` and ` (on)` once chosen.
-const swatch = (s, number) =>
-  s.find((n) => n.role === "button" && n.label.startsWith(`Colors Swatch ${number},`));
-const hex = (label) => label?.match(/#[0-9A-F]{6}/)?.[0];
-// The pattern's live color, published as `Hue wash main #RRGGBB`.
-const live = (s) =>
-  s.find((n) => n.role === "text" && n.label.startsWith("Hue wash main #"));
-
-test("pressing a swatch sets the live colors it targets", () => {
+// A value of the Colors list, published as `Colors Value 2, #0000FF`.
+const swatch = (s, number) => value(s, "Colors", number);
+test("pressing a list's value sets the live colors it targets", () => {
   open();
-  const opened = until("the swatches", (s) => (swatch(s, 2) && live(s) ? s : undefined));
+  const opened = until("the values", (s) => (swatch(s, 2) && live(s) ? s : undefined));
   const blue = hex(swatch(opened, 2).label);
   assert(hex(live(opened).label) !== blue, "the live color starts unset, not blue");
 
   app.click(swatch(opened, 2));
-  const chosen = until("the swatch on", (s) =>
+  const chosen = until("the value on", (s) =>
     swatch(s, 2)?.label.endsWith("(on)") ? s : undefined,
   );
   expect(swatch(chosen, 1).label.endsWith("(on)")).toBe(false);
   until("the target blue", (s) => (hex(live(s)?.label) === blue ? s : undefined));
 
-  // The other swatch takes it back.
+  // The other value takes it back.
   const red = hex(swatch(app.snapshot(), 1).label);
   app.click(swatch(app.snapshot(), 1));
   until("the target red", (s) => (hex(live(s)?.label) === red ? s : undefined));
 });
 
-test("Setup edits a color cell's swatches and lists the live colors it can set", () => {
+test("Setup edits a list's values and lists the live colors it can set", () => {
   setup();
   const cell = (s) => s.find({ role: "button", label: "Select Colors" });
   app.click(cell(until("the color cell", (s) => (cell(s) ? s : undefined))));
   const target = (s) => s.find({ role: "checkbox", label: "Hue wash · main" });
   const opened = until("its targets", (s) => (target(s) ? s : undefined));
   expect(target(opened).focused).toBe(true);
-  const chips = (s) => s.findAll((n) => n.role === "toggle" && n.label.startsWith("Edit swatch"));
+  const chips = (s) => s.findAll((n) => n.role === "toggle" && n.label.startsWith("Edit value"));
   expect(chips(opened).length).toBe(2);
 
-  app.click(opened.find({ role: "button", label: "Add swatch" }));
-  const added = until("a third swatch, open", (s) =>
-    chips(s).length === 3 && s.find({ role: "button", label: "Remove swatch 3" }) ? s : undefined,
+  assert(opened.find({ role: "button", label: "Add below" }) === undefined,
+    "a list with targets offers the color below");
+  app.click(opened.find({ role: "button", label: "Add" }));
+  const added = until("a third value, open", (s) =>
+    chips(s).length === 3 && s.find({ role: "button", label: "Remove value 3" }) ? s : undefined,
   );
-  app.click(added.find({ role: "button", label: "Remove swatch 3" }));
+  app.click(added.find({ role: "button", label: "Remove value 3" }));
   until("two again", (s) => (chips(s).length === 2 ? s : undefined));
 });

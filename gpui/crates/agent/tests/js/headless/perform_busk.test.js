@@ -7,6 +7,8 @@ fixture({ seconds: 1, rig: 2, window: [1400, 1100] });
 test("Busk page makes a page from the rig, its rows top to bottom", () => {
   nav.venue("Test Venue");
   nav.live();
+  // "Edit layout" does nothing until the layout has landed.
+  until("the set's first page", (s) => s.find({ role: "toggle", label: "Page Main" }));
   nav.step("Edit layout", "button", "Edit layout");
   until("the empty set's first page", (s) => s.find({ role: "button", label: "Select Master" }));
   nav.step("a busk page", "button", "Add busk page");
@@ -22,7 +24,7 @@ test("Busk page makes a page from the rig, its rows top to bottom", () => {
     expect(node).toBeTruthy();
     return node.bounds.y;
   };
-  // Targets on everything and on the rig's groups, side by side.
+  // Groups to choose, everything and the rig's, side by side.
   expect(top("Left movers")).toBe(top("All"));
   expect(top("Right movers")).toBe(top("All"));
   const rows = ["All", "Base color", "Accent color", "Chase", "Strobe"].map(top);
@@ -32,6 +34,9 @@ test("Busk page makes a page from the rig, its rows top to bottom", () => {
   expect(top("Black")).toBe(top("Strobe"));
   expect(shot.find({ role: "button", label: "Select Sweep" })).toBe(undefined);
   expect(shot.find({ role: "button", label: "Select Speed" })).toBeTruthy();
+  // Select and Clear head the side column.
+  expect(top("Select")).toBe(top("All"));
+  expect(top("Clear")).toBeGreaterThan(top("Select"));
   // The first page is still there.
   expect(shot.find({ role: "toggle", label: "Page Main" })).toBeTruthy();
 });

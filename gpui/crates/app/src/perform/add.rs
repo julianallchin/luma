@@ -1,10 +1,11 @@
 //! The menu an empty place's "+" opens in Setup: a new pattern, from a
-//! preset, lighting the group chosen here; or the master, tap, a fader of
-//! its own, a color cell, or a target on the group chosen.
+//! preset, lighting the group chosen here; or a group cell on the group
+//! chosen, a list of colors or of numbers, a fader of its own, or a
+//! utility: the master, tap, Select or Clear.
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, SharedString};
-use luma_lib::models::perform::CellContent;
+use luma_lib::models::perform::{CellContent, ListValue};
 use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{glass, ladder, radius};
@@ -16,20 +17,34 @@ use crate::Luma;
 
 const WIDTH: f32 = 380.;
 
-/// A new color cell: a warm white, red, amber and blue, fading over a beat,
-/// setting nothing until its targets are chosen.
-fn colors() -> CellContent {
-    CellContent::Color {
-        label: "Colors".into(),
-        swatches: ["#ffd9a8", "#ff2a1a", "#ffa000", "#2050ff"]
-            .into_iter()
-            .filter_map(luma_patterns::color_space::from_hex)
-            .collect(),
+/// A new list of `values`, fading over a beat, setting no targets.
+fn list(label: &str, values: Vec<ListValue>) -> CellContent {
+    CellContent::List {
+        label: label.into(),
+        values,
         fade: 1.,
         unit: luma_patterns::press::TimeUnit::Beats,
         targets: Vec::new(),
         step: None,
     }
+}
+
+/// A new color list: a warm white, red, amber and blue. Until it has
+/// targets, it sets the base color.
+fn colors() -> CellContent {
+    let values = ["#ffd9a8", "#ff2a1a", "#ffa000", "#2050ff"]
+        .into_iter()
+        .filter_map(luma_patterns::color_space::from_hex)
+        .map(ListValue::Color)
+        .collect();
+    list("Colors", values)
+}
+
+/// A new number list: a quarter, a half and all the way, to move what it
+/// is given.
+fn numbers() -> CellContent {
+    let values = [0.25, 0.5, 1.].map(ListValue::Number).to_vec();
+    list("Numbers", values)
 }
 
 /// The menu, hung off the place it fills. A press outside closes it.
@@ -163,9 +178,17 @@ pub(super) fn menu(state: &Perform, target: &Target, app: &Entity<Luma>) -> AnyE
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .gap(px(6.))
-                .child(other("Master", CellContent::Master))
-                .child(other("Tap", CellContent::Tap))
+                .child(other(
+                    "Group",
+                    CellContent::Group {
+                        label: String::new(),
+                        group: adding.group.clone(),
+                    },
+                ))
+                .child(other("Colors", colors()))
+                .child(other("Numbers", numbers()))
                 .child(other(
                     "Fader",
                     CellContent::Fader {
@@ -173,14 +196,10 @@ pub(super) fn menu(state: &Perform, target: &Target, app: &Entity<Luma>) -> AnyE
                         targets: Vec::new(),
                     },
                 ))
-                .child(other("Colors", colors()))
-                .child(other(
-                    "Target",
-                    CellContent::Target {
-                        label: String::new(),
-                        group: adding.group.clone(),
-                    },
-                )),
+                .child(other("Master", CellContent::Master))
+                .child(other("Tap", CellContent::Tap))
+                .child(other("Select", CellContent::Select))
+                .child(other("Clear", CellContent::Clear)),
         );
     float::anchored_below(
         "perform-add-menu",

@@ -44,6 +44,7 @@ BLEND_MODES = frozenset(
         "max",
         "min",
         "subtract",
+        "below",
         "offset",
     }
 )

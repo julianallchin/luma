@@ -85,8 +85,8 @@ fn busk(rig: &Rig) -> Busk {
     make(rig, "Busk".into(), 0)
 }
 
-/// What the page holds in `row`, left to right: a target's group or a
-/// pattern's name.
+/// What the page holds in `row`, left to right: a group cell's group, a
+/// list's label or a pattern's name.
 fn row(busk: &Busk, row: u16) -> Vec<String> {
     let mut cells: Vec<&Cell> = busk
         .page
@@ -98,9 +98,9 @@ fn row(busk: &Busk, row: u16) -> Vec<String> {
     cells
         .iter()
         .map(|cell| match &cell.content {
-            CellContent::Target { group, .. } => group.clone(),
+            CellContent::Group { group, .. } => group.clone(),
             CellContent::Pattern { pattern_id } => pattern(busk, pattern_id).name.clone(),
-            CellContent::Color { label, .. } => label.clone(),
+            CellContent::List { label, .. } => label.clone(),
             other => format!("{other:?}"),
         })
         .collect()
@@ -142,7 +142,7 @@ fn stores(busk: &Busk) {
 }
 
 #[test]
-fn a_small_rig_gets_no_movement_and_few_targets() {
+fn a_small_rig_gets_no_movement_and_few_groups() {
     let busk = busk(&small());
     stores(&busk);
     assert_eq!(row(&busk, 0), ["all", "washes", "strobes"]);
@@ -153,7 +153,7 @@ fn a_small_rig_gets_no_movement_and_few_targets() {
         ["Wash", "Pulse", "Breathe", "Chase", "Sparkle", "Ripple"]
     );
     assert_eq!(row(&busk, 4), ["Strobe", "White", "Black"], "no blinders");
-    assert_eq!(busk.page.rows, 5);
+    assert_eq!(busk.page.rows, 6, "the side column's six");
     assert!(busk.page.one_at_a_time.is_empty(), "nothing moves");
     assert_eq!(named(&busk, "Chase").selection.expression, "washes");
     assert_eq!(named(&busk, "Strobe").selection.expression, "strobes");
@@ -174,12 +174,12 @@ fn movers_get_a_movement_row_that_plays_one_at_a_time() {
 }
 
 #[test]
-fn past_the_targets_row_roles_come_before_places_and_big_before_small() {
+fn past_the_groups_row_roles_come_before_places_and_big_before_small() {
     let rig = large();
     let busk = busk(&rig);
     stores(&busk);
     let targets = row(&busk, 0);
-    assert_eq!(targets.len(), MOST_TARGETS);
+    assert_eq!(targets.len(), MOST_GROUPS);
     assert_eq!(
         targets[..7],
         ["all", "washes", "led_bars", "spots", "beams", "strobes", "blinders"]
@@ -268,15 +268,43 @@ fn an_effect_has_a_pad_a_live_color_and_a_speed_from_its_period() {
     assert_eq!(bound("low"), period, "at rest, its own period");
     assert_eq!(bound("high"), period / 2., "pushed up, twice as fast");
 
-    // The color cells set the live colors; the side faders reach every effect.
-    let colors: Vec<&ControlTarget> = busk
-        .page
-        .cells
+    // The accent list sets the accent effects' own colors; the base list
+    // sets no targets, so it is the base color, and has the color below.
+    let list = |label: &str| {
+        busk.page
+            .cells
+            .iter()
+            .find_map(|cell| match &cell.content {
+                CellContent::List {
+                    label: l,
+                    values,
+                    targets,
+                    ..
+                } if l == label => Some((values.clone(), targets.clone())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no list {label}"))
+    };
+    let (base, unlinked) = list("Base color");
+    assert!(unlinked.is_empty());
+    assert_eq!(base.last(), Some(&ListValue::Below));
+    let (_, accents) = list("Accent color");
+    let accented: BTreeSet<&str> = accents
         .iter()
-        .filter(|cell| matches!(cell.content, CellContent::Color { .. }))
-        .flat_map(|cell| cell.content.targets())
+        .filter_map(|target| match target {
+            ControlTarget::Node { pattern_id, .. } => {
+                Some(pattern(&busk, pattern_id).name.as_str())
+            }
+            _ => None,
+        })
         .collect();
-    assert_eq!(colors.len(), 6);
+    assert_eq!(accented, BTreeSet::from(ACCENT));
+    for name in BASE {
+        assert_eq!(named(&busk, name).blend_mode, BlendMode::Below, "{name}");
+    }
+    assert_ne!(chase.blend_mode, BlendMode::Below, "an accent has its own");
+
+    // The side faders reach every effect.
     let fader = |label: &str| {
         busk.page
             .cells
@@ -287,6 +315,17 @@ fn an_effect_has_a_pad_a_live_color_and_a_speed_from_its_period() {
     assert_eq!(fader("Levels"), Some(6));
     // Wash has no clock, so no speed.
     assert_eq!(fader("Speed"), Some(5));
+    // Select and Clear stand at the top of the side column.
+    let side = |content: CellContent| {
+        busk.page
+            .cells
+            .iter()
+            .find(|cell| cell.content == content)
+            .map(|cell| (cell.column, cell.row))
+    };
+    let right = busk.page.columns - 1;
+    assert_eq!(side(CellContent::Select), Some((right, 0)));
+    assert_eq!(side(CellContent::Clear), Some((right, 1)));
 }
 
 #[test]

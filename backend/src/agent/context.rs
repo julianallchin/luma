@@ -176,11 +176,14 @@ pub struct PerformView {
     pub page: Option<PerformPageView>,
     pub selected: Option<PerformCellView>,
     /// The patterns that play: those whose pads are on and, while the set is
-    /// open, those with no pad, then each instance on; the top of the set
-    /// first, at most [`MAX_PLAYING`].
+    /// open, those with no pad; the top of the set first, at most
+    /// [`MAX_PLAYING`].
     pub playing: Vec<PlayingPattern>,
     #[serde(default)]
     pub playing_omitted: usize,
+    /// The groups chosen: what the next action acts on. None is everything.
+    #[serde(default)]
+    pub chosen: Vec<String>,
     /// The Perform master, 0–1.
     pub master: f64,
     pub clock: Option<PerformClockView>,
@@ -212,7 +215,8 @@ pub struct PerformCellView {
     pub width: u16,
     pub height: u16,
     /// `pattern <id> "<name>", selection <expression>`, `master`, `tap`,
-    /// `fader "<label>"` and what it moves, a color cell, or `target`.
+    /// `select`, `clear`, `fader "<label>"` and what it moves, a list, or a
+    /// group.
     pub holds: String,
 }
 
@@ -222,8 +226,7 @@ pub struct PlayingPattern {
     pub id: String,
     pub name: String,
     pub level: f64,
-    /// The groups an instance plays on; empty for the pattern on its own
-    /// selection.
+    /// The groups it plays on; empty for its own selection.
     #[serde(default)]
     pub on: Vec<String>,
 }
@@ -278,25 +281,18 @@ impl PerformView {
         };
         let mut playing: Vec<PlayingPattern> = patterns
             .iter()
-            .flat_map(|pattern| {
-                let own = match names::pad(pattern) {
-                    Some(pad) => on(&pad),
-                    None => live.is_some_and(|live| live.clock.is_some()),
-                };
-                let instances = live
-                    .into_iter()
-                    .flat_map(|live| &live.bank.instances)
-                    .filter(|(button, instance)| instance.pattern_id == pattern.id && on(button))
-                    .map(|(_, instance)| instance.on.clone());
-                own.then(Vec::new)
-                    .into_iter()
-                    .chain(instances)
-                    .map(|on| PlayingPattern {
-                        id: pattern.id.clone(),
-                        name: pattern.name.clone(),
-                        level: value(&names::level(&pattern.id), 1.0),
-                        on,
-                    })
+            .filter(|pattern| match names::pad(pattern) {
+                Some(pad) => on(&pad),
+                None => live.is_some_and(|live| live.clock.is_some()),
+            })
+            .map(|pattern| PlayingPattern {
+                id: pattern.id.clone(),
+                name: pattern.name.clone(),
+                level: value(&names::level(&pattern.id), 1.0),
+                on: live
+                    .and_then(|live| live.bank.effects.get(&pattern.id))
+                    .map(|effect| effect.groups.clone())
+                    .unwrap_or_default(),
             })
             .collect();
         let playing_omitted = playing.len().saturating_sub(MAX_PLAYING);
@@ -328,6 +324,9 @@ impl PerformView {
                 }),
             playing,
             playing_omitted,
+            chosen: live
+                .map(|live| live.bank.chosen.clone())
+                .unwrap_or_default(),
             master: value(names::MASTER, 1.0),
             clock: live
                 .and_then(|live| live.clock.as_ref())
@@ -420,9 +419,11 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
                 format!("fader {label:?}, moving {}", moves(targets))
             }
         }
-        CellContent::Color {
+        CellContent::Select => "select".into(),
+        CellContent::Clear => "clear".into(),
+        CellContent::List {
             label,
-            swatches,
+            values,
             fade,
             unit,
             targets,
@@ -432,10 +433,11 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
                 luma_patterns::press::TimeUnit::Beats => "beats",
                 luma_patterns::press::TimeUnit::Seconds => "seconds",
             };
-            let setting = if targets.is_empty() {
-                "setting nothing".to_owned()
-            } else {
-                format!("setting {}", moves(targets))
+            let colors = cell.content.colors();
+            let setting = match (targets.is_empty(), colors) {
+                (false, _) => format!("setting {}", moves(targets)),
+                (true, true) => "setting the base color".to_owned(),
+                (true, false) => "setting nothing".to_owned(),
             };
             let step = step.map_or(String::new(), |step| {
                 format!(
@@ -444,13 +446,14 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
                     if step.loops { ", looping" } else { "" }
                 )
             });
+            let kind = if colors { "colors" } else { "numbers" };
             format!(
-                "color {label:?}, {} swatches, {setting}, fading over {fade} {unit}{step}",
-                swatches.len()
+                "list {label:?}, {} {kind}, {setting}, fading over {fade} {unit}{step}",
+                values.len()
             )
         }
-        CellContent::Target { label, group } if label.is_empty() => format!("target on {group}"),
-        CellContent::Target { label, group } => format!("target {label:?} on {group}"),
+        CellContent::Group { label, group } if label.is_empty() => format!("group {group}"),
+        CellContent::Group { label, group } => format!("group {label:?}, {group}"),
     }
 }
 
@@ -643,6 +646,9 @@ fn render_perform(out: &mut String, perform: &PerformView) {
         if perform.playing_omitted > 0 {
             let _ = writeln!(out, "…and {} more", perform.playing_omitted);
         }
+    }
+    if !perform.chosen.is_empty() {
+        let _ = writeln!(out, "Chosen: {}", perform.chosen.join(", "));
     }
     let _ = writeln!(out, "Master: {:.2}", perform.master);
     if let Some(clock) = &perform.clock {
@@ -1014,6 +1020,15 @@ mod tests {
             crate::controls::Playing {
                 controls: [(names::level("p1"), 0.5), (names::MASTER.to_owned(), 0.8)].into(),
                 buttons: [(names::pad(&patterns[0]).expect("a pad"), on)].into(),
+                effects: [(
+                    "p1".to_owned(),
+                    crate::controls::Played {
+                        groups: vec!["front".into()],
+                        below: false,
+                    },
+                )]
+                .into(),
+                chosen: vec!["back".into()],
                 ..Default::default()
             },
         );
@@ -1044,10 +1059,11 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("- p1 \"Warm wash\" at level 0.50\n"),
+            text.contains("- p1 \"Warm wash\" on front at level 0.50\n"),
             "{text}"
         );
         assert!(!text.contains("Strobe\" at level"), "{text}");
+        assert!(text.contains("Chosen: back\n"), "{text}");
         assert!(text.contains("Master: 0.80\n"), "{text}");
         assert!(text.contains("Clock: tapped tempo, 124.0 BPM\n"), "{text}");
     }

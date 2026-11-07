@@ -13,8 +13,9 @@
 //! states the verb as an edit of the set as stored, refuses what makes no
 //! sense, and answers the set as it now stands, so a program reads its own
 //! effect without a second call. Bindings go through the input hub the
-//! Perform tab's Map mode uses, and pressing or moving a control through the
-//! session's control bank, as a pad or fader on screen does.
+//! Perform tab's Map mode uses, and pressing or moving a control, choosing
+//! groups and effects, and the base color through the session's control
+//! bank, as a pad or fader on screen does.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +34,7 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::error::CommandError;
 use crate::inputs::{InputHub, Mode};
 use crate::models::perform::{
-    Cell, CellContent, ControlTarget, LayoutPage, PerformLayout, PerformPattern, Step,
+    Cell, CellContent, ControlTarget, LayoutPage, ListValue, PerformLayout, PerformPattern, Step,
 };
 use crate::perform::PerformSession;
 use crate::services::perform_set::{PerformSet, Set};
@@ -127,7 +128,7 @@ impl PerformHost {
             }
             "perform.place" => {
                 let place: Place = decode(payload)?;
-                if let CellContent::Target { group, .. } = &place.content {
+                if let CellContent::Group { group, .. } = &place.content {
                     self.check_selection(group).await?;
                 }
                 self.change(|set| place.apply(set)).await
@@ -151,26 +152,76 @@ impl PerformHost {
             }
             "perform.live" => Ok(self.live()),
             "perform.control" => {
-                let Control { name, value, on } = decode(payload)?;
+                let Control { name, value } = decode(payload)?;
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                     return Err(refused(format!("a control's value is 0 to 1; got {value}")));
                 }
-                self.require_open(&name)?;
-                match on {
-                    Some(on) => {
-                        for group in &on {
-                            self.check_selection(group).await?;
-                        }
-                        self.session.set_on(&name, value, &on)
-                    }
-                    None => self.session.set_control(&name, value),
+                control_name(&name)?;
+                self.require_open()?;
+                self.session.set_control(&name, value).map_err(refused)?;
+                Ok(self.live())
+            }
+            "perform.choose" => {
+                let Groups { groups } = decode(payload)?;
+                self.require_open()?;
+                let set = self.set().read().await?;
+                if let Some(group) = groups.iter().find(|group| !set.layout.has_group(group)) {
+                    return Err(refused(format!(
+                        "no group cell of this set holds {group:?}: place one first"
+                    )));
                 }
-                .map_err(refused)?;
+                self.session.choose(&groups).map_err(refused)?;
+                Ok(self.live())
+            }
+            "perform.select" => {
+                let Ids { ids } = decode(payload)?;
+                self.require_open()?;
+                let set = self.set().read().await?;
+                let known = |id: &String| set.patterns.iter().any(|pattern| &pattern.id == id);
+                if let Some(id) = ids.iter().find(|id| !known(id)) {
+                    return Err(HostCallError::new(
+                        "not_found",
+                        format!("this Perform set has no pattern {id}"),
+                    ));
+                }
+                self.session.select(&ids).map_err(refused)?;
+                Ok(self.live())
+            }
+            "perform.clear" => {
+                let Clear { effects } = decode(payload)?;
+                self.require_open()?;
+                self.session.clear(effects).map_err(refused)?;
+                Ok(self.live())
+            }
+            "perform.base" => {
+                let Base {
+                    color,
+                    groups,
+                    fade,
+                    unit,
+                } = decode(payload)?;
+                if color.iter().any(|c| !(0.0..=1.0).contains(c)) || !fade.is_finite() || fade < 0.0
+                {
+                    return Err(refused(format!(
+                        "a base color is (r, g, b) each 0 to 1, over a fade of 0 or more; got {color:?} over {fade}"
+                    )));
+                }
+                self.require_open()?;
+                let set = self.set().read().await?;
+                if let Some(group) = groups.iter().find(|group| !set.layout.has_group(group)) {
+                    return Err(refused(format!(
+                        "no group cell of this set holds {group:?}: place one first"
+                    )));
+                }
+                self.session
+                    .base(&groups, color, fade, unit)
+                    .map_err(refused)?;
                 Ok(self.live())
             }
             "perform.press" => {
                 let Pressed { name, down } = decode(payload)?;
-                self.require_open(&name)?;
+                control_name(&name)?;
+                self.require_open()?;
                 self.session.press(&name, down).map_err(refused)?;
                 Ok(self.live())
             }
@@ -223,10 +274,9 @@ impl PerformHost {
         json!({ "open": true, "state": self.session.state() })
     }
 
-    /// Refuse to play `name` unless it is a control name and this venue's
-    /// set is the one open, which the Perform tab does while it is shown.
-    fn require_open(&self, name: &str) -> Result<(), HostCallError> {
-        control_name(name)?;
+    /// Refuse to play unless this venue's set is the one open, which the
+    /// Perform tab does while it is shown.
+    fn require_open(&self) -> Result<(), HostCallError> {
         if self.session.open_venue().as_deref() != Some(self.venue_id.as_str()) {
             return Err(refused(
                 "this venue's Perform set is not open; it opens while its Perform tab is shown",
@@ -283,7 +333,7 @@ impl HostCallHandler for PerformHost {
     }
 }
 
-/// The methods that change the set.
+/// The methods that change the set as stored.
 const WRITES: [&str; 10] = [
     "perform.add",
     "perform.update",
@@ -561,8 +611,8 @@ fn remove_page(layout: &mut PerformLayout, id: &str) -> Result<Value, CommandErr
     Ok(json!({}))
 }
 
-/// A new cell of the master, tap, a fader of its own, a color cell or a
-/// target.
+/// A new cell of the master, tap, Select, Clear, a fader of its own, a list
+/// or a group.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Place {
@@ -594,9 +644,9 @@ impl Place {
 }
 
 /// A cell moved, resized or taken to another page, a fader cell's label and
-/// targets, a color cell's label, targets, swatches, fade and step, or a
-/// target's label and group: what is given changes. A step of null stops a
-/// color cell stepping.
+/// targets, a list's label, targets, values, fade and step, or a group
+/// cell's label and group: what is given changes. A step of null stops a
+/// list stepping.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CellChange {
@@ -612,7 +662,7 @@ struct CellChange {
     #[serde(default)]
     targets: Option<Vec<ControlTarget>>,
     #[serde(default)]
-    swatches: Option<Vec<[f64; 3]>>,
+    values: Option<Vec<ListValue>>,
     #[serde(default)]
     fade: Option<f64>,
     #[serde(default)]
@@ -644,57 +694,64 @@ impl CellChange {
             .position(|cell| cell.id == self.id)
             .expect("found on this page");
         let mut cell = set.layout.pages[from].cells.remove(held);
-        let colors = self.swatches.is_some()
+        let listed = self.values.is_some()
             || self.fade.is_some()
             || self.unit.is_some()
             || self.step.is_some();
-        if self.group.is_some() && !matches!(cell.content, CellContent::Target { .. }) {
-            return Err(invalid(format!(
-                "cell {} is not a target, so it has no group",
-                cell.id
-            )));
-        }
+        let label = self.label.map(|new| new.trim().to_owned());
         match &mut cell.content {
-            CellContent::Target { .. } if colors || self.targets.is_some() => {
+            CellContent::Group { .. } if listed || self.targets.is_some() => {
                 return Err(invalid(format!(
-                    "cell {} is a target: it has a label and a group",
+                    "cell {} is a group cell: it has a label and a group",
                     cell.id
-                )))
+                )));
             }
-            CellContent::Target { label, group } => {
-                set_given(label, self.label.map(|new| new.trim().to_owned()));
-                set_given(group, self.group);
+            CellContent::Group {
+                label: was,
+                group: held,
+            } => {
+                set_given(was, label);
+                set_given(held, self.group);
             }
-            CellContent::Fader { .. } if colors => {
+            _ if self.group.is_some() => {
                 return Err(invalid(format!(
-                    "cell {} is a fader: it has no swatches, fade or step",
+                    "cell {} is not a group cell, so it has no group",
                     cell.id
-                )))
+                )));
             }
-            CellContent::Fader { label, targets } => {
-                set_given(label, self.label.map(|new| new.trim().to_owned()));
+            CellContent::Fader { .. } if listed => {
+                return Err(invalid(format!(
+                    "cell {} is a fader: it has no values, fade or step",
+                    cell.id
+                )));
+            }
+            CellContent::Fader {
+                label: was,
+                targets,
+            } => {
+                set_given(was, label);
                 set_given(targets, self.targets);
             }
-            CellContent::Color {
-                label,
-                swatches,
+            CellContent::List {
+                label: was,
+                values,
                 fade,
                 unit,
                 targets,
                 step,
             } => {
-                set_given(label, self.label.map(|new| new.trim().to_owned()));
+                set_given(was, label);
                 set_given(targets, self.targets);
-                set_given(swatches, self.swatches);
+                set_given(values, self.values);
                 set_given(fade, self.fade);
                 set_given(unit, self.unit);
                 set_given(step, self.step);
             }
-            _ if colors || self.label.is_some() || self.targets.is_some() => {
+            _ if listed || label.is_some() || self.targets.is_some() => {
                 return Err(invalid(format!(
-                    "cell {} is not a fader, a color cell or a target, so it has no label or targets",
+                    "cell {} is not a fader, a list or a group cell, so it has no label or targets",
                     cell.id
-                )))
+                )));
             }
             _ => {}
         }
@@ -738,8 +795,8 @@ fn set_given<T>(field: &mut T, given: Option<T>) {
     }
 }
 
-/// Remove a cell of the master, tap, a fader or a color cell. A pattern's
-/// cell goes with its pattern.
+/// Remove a cell that holds no pattern. A pattern's cell goes with its
+/// pattern.
 fn remove_cell(layout: &mut PerformLayout, id: &str) -> Result<Value, CommandError> {
     let page = layout
         .pages
@@ -822,10 +879,46 @@ fn no_room(page: &LayoutPage, width: u16, height: u16) -> CommandError {
 struct Control {
     name: String,
     value: f64,
-    /// For a pad: the venue groups to play its pattern on, whatever targets
-    /// are held; none is its own selection.
+}
+
+/// Venue groups, by name; none is everything.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Groups {
+    groups: Vec<String>,
+}
+
+/// Patterns, by id.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Ids {
+    ids: Vec<String>,
+}
+
+/// Clear: nothing chosen, or with `effects`, every effect let go.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Clear {
     #[serde(default)]
-    on: Option<Vec<String>>,
+    effects: bool,
+}
+
+/// A base color for the lights of `groups` (none: every light), fading
+/// over `fade` in `unit`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Base {
+    color: [f64; 3],
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    fade: f64,
+    #[serde(default = "beats")]
+    unit: TimeUnit,
+}
+
+fn beats() -> TimeUnit {
+    TimeUnit::Beats
 }
 
 #[derive(Deserialize)]

@@ -135,7 +135,7 @@ fn doc(shown: Shown) -> Doc {
         Shown::Kind(kind) => kind,
         Shown::LiveColor => return Doc {
             python: "control(name=\"main\", kind=\"color\")",
-            about: s("A live color a performer sets, the same at every head, wired straight into a color input such as the output's `color`. A color cell in the Perform tab sets it, fading from one swatch to the next. In a Perform pattern it belongs to that pattern and shows in the pattern's cell. In a score it reads the venue's live color called `name`; a color nothing has set reads white. It is a `control` node of kind `color`; like a fader, it cannot reach a fixed input, and changing it never prepares the graph again."),
+            about: s("A live color a performer sets, the same at every head, wired straight into a color input such as the output's `color`. A color list in the Perform tab sets it, fading from one value to the next. In a Perform pattern it belongs to that pattern and shows in the pattern's cell. In a score it reads the venue's live color called `name`; a color nothing has set reads white. It is a `control` node of kind `color`; like a fader, it cannot reach a fixed input, and changing it never prepares the graph again."),
             empty: vec![],
             settings: vec![
                 ("name", "A control name, as for a fader."),

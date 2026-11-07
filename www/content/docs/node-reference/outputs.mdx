@@ -13,7 +13,7 @@ When a clock's events overlap, they make one layer. Color and strobe keep the la
 
 ## Color
 
-`color` · Python: `color(color, brightness, alpha)` · Gives nothing: it is the clip's output. Blend modes: Replace, Add, Multiply, Screen, Max, Min, Subtract.
+`color` · Python: `color(color, brightness, alpha)` · Gives nothing: it is the clip's output. Blend modes: Replace, Add, Multiply, Screen, Max, Min, Subtract, Below.
 
 The light of each head: color × brightness. `brightness` is the pattern across the lights: a chase, a pulse, a cut. `alpha` is the clip's opacity: the clip's light blends with the light below by the blend mode, and the result mixes with the light below by alpha. The timeline's fade handles edit `alpha`. Colors are linear Rec. 2020.
 
@@ -44,7 +44,7 @@ Points moving heads. `base` picks the starting aim: `direction` aims along the v
 
 ## Strobe
 
-`strobe` · Python: `strobe(rate, alpha)` · Gives nothing: it is the clip's output. Blend modes: Replace, Add, Multiply, Screen, Max, Min, Subtract.
+`strobe` · Python: `strobe(rate, alpha)` · Gives nothing: it is the clip's output. Blend modes: Replace, Add, Multiply, Screen, Max, Min, Subtract, Below.
 
 Strobes the fixtures' shutters at `rate`. `alpha` is the clip's opacity over the strobe below.
 

@@ -1,16 +1,19 @@
 //! A busk page, made from a venue's rig.
 //!
 //! The page never names a fixture: its effects are shapes over a group's
-//! space and its targets are groups, so a small rig and a large one get the
-//! same page and only the targets row grows. [`make`] is the whole rule, from
-//! the rig alone to patterns and a page; [`add`] puts them in
-//! the set beside what is there, never over it.
+//! space and where they play is chosen by group cells, so a small rig and a
+//! large one get the same page and only the groups row grows. [`make`] is
+//! the whole rule, from the rig alone to patterns and a page; [`add`] puts
+//! them in the set beside what is there, never over it.
 //!
-//! The rows, top to bottom, each left out when the rig cannot use it:
-//! targets, the base effects' color, the accent effects' color, the effects,
-//! movement (one at a time) and hits. Tap, the master, the effects' levels
-//! and their speed stand in a column at the right. Every pattern is an
-//! ordinary Perform pattern, edited like any other.
+//! The rows, top to bottom, each left out when the rig cannot use it: the
+//! groups, the base color (a list with no targets, so it colors the groups
+//! chosen), the accent color (a list setting the accent effects' own
+//! colors), the effects (the base ones take the color below, the accent
+//! ones their own), movement (one at a time) and hits. Select, Clear, tap,
+//! the master, the effects' levels and their speed stand in a column at the
+//! right. Every pattern is an ordinary Perform pattern, edited like any
+//! other.
 
 use std::collections::BTreeSet;
 
@@ -21,8 +24,10 @@ use sqlx::SqlitePool;
 
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::error::CommandError;
-use crate::models::perform::{Cell, CellContent, ControlTarget, LayoutPage, PerformPattern};
 use crate::models::groups::FixtureRole;
+use crate::models::perform::{
+    Cell, CellContent, ControlTarget, LayoutPage, ListValue, PerformPattern,
+};
 use crate::services::groups::GroupSources;
 use crate::services::perform_set::Set;
 
@@ -47,14 +52,15 @@ pub struct RigGroup {
     pub fixtures: Vec<String>,
 }
 
-/// The base effects, under the accent effects.
+/// The base effects, which take the color below, under the accent
+/// effects, which have their own.
 const BASE: [&str; 3] = ["Wash", "Pulse", "Breathe"];
 const ACCENT: [&str; 3] = ["Chase", "Sparkle", "Ripple"];
 const MOVEMENT: [&str; 4] = ["Sweep", "Circle", "Figure-8", "Nod wave"];
 
-/// The most target cells: `all` and seven groups.
-const MOST_TARGETS: usize = 8;
-/// The roles a busk page targets, in the order it shows them.
+/// The most group cells: `all` and seven groups.
+const MOST_GROUPS: usize = 8;
+/// The roles a busk page has a group cell for, in the order it shows them.
 const ROLES: [FixtureRole; 6] = [
     FixtureRole::Wash,
     FixtureRole::Pixel,
@@ -81,7 +87,7 @@ const PLACES: [&str; 8] = [
 const BASE_SWATCHES: [&str; 6] = [
     "#ff2a1a", "#2050ff", "#ffa000", "#8a2be2", "#ffffff", "#20e040",
 ];
-/// White first: what a live color is before a swatch is chosen.
+/// White first: what a live color is before a value is tapped.
 const ACCENT_SWATCHES: [&str; 6] = [
     "#ffffff", "#ff2a1a", "#2050ff", "#ffa000", "#8a2be2", "#20e040",
 ];
@@ -129,17 +135,17 @@ impl Rig {
         found
     }
 
-    /// The targets: `all`, then the role groups, then the groups named for
-    /// where they hang. Past [`MOST_TARGETS`], roles are kept before places,
-    /// and bigger places before smaller.
-    fn targets(&self) -> Vec<&str> {
+    /// The groups to choose: `all`, then the role groups, then the groups
+    /// named for where they hang. Past [`MOST_GROUPS`], roles are kept
+    /// before places, and bigger places before smaller.
+    fn chosen(&self) -> Vec<&str> {
         std::iter::once("all")
             .chain(
                 self.role_groups()
                     .chain(self.place_groups())
                     .map(|group| group.name.as_str()),
             )
-            .take(MOST_TARGETS)
+            .take(MOST_GROUPS)
             .collect()
     }
 
@@ -184,64 +190,72 @@ struct Effect {
 /// The busk page `rig` gets, called `name`, its patterns from z `bottom` up.
 pub fn make(rig: &Rig, name: String, bottom: i64) -> Busk {
     let colored = either(COLORED.iter().filter_map(|role| rig.role_group(*role)));
-    let effects = |names: &[&str], selection: &str| -> Vec<Effect> {
+    let effects = |names: &[&str], selection: &str, below: bool| -> Vec<Effect> {
         names
             .iter()
             .filter_map(|name| presets().clip(name))
-            .map(|preset| effect(preset, selection))
+            .map(|preset| effect(preset, selection, below))
             .collect()
     };
-    let base = effects(&BASE, &colored);
-    let accent = effects(&ACCENT, &colored);
+    let base = effects(&BASE, &colored, true);
+    let accent = effects(&ACCENT, &colored, false);
     let aims = rig.fixtures.iter().any(|fixture| fixture.moves);
     let movement = if aims {
         let movers = either(rig.role_groups().filter(|group| rig.all_move(group)));
-        effects(&MOVEMENT, &movers)
+        effects(&MOVEMENT, &movers, false)
     } else {
         Vec::new()
     };
     let hits = hits(rig);
 
-    let targets = rig.targets();
+    let groups = rig.chosen();
     let played = base.len() + accent.len();
-    let width = [targets.len(), played, movement.len(), hits.len()]
+    let width = [groups.len(), played, movement.len(), hits.len()]
         .into_iter()
         .max()
         .unwrap_or(1) as u16;
     let mut cells = Vec::new();
     let mut row = 0;
-    cells.extend(targets.iter().enumerate().map(|(column, group)| {
+    cells.extend(groups.iter().enumerate().map(|(column, group)| {
         cell(
             column as u16,
             row,
             1,
-            CellContent::Target {
+            CellContent::Group {
                 label: String::new(),
                 group: (*group).to_owned(),
             },
         )
     }));
     row += 1;
-    for (label, swatches, effects) in [
-        ("Base color", BASE_SWATCHES, &base),
-        ("Accent color", ACCENT_SWATCHES, &accent),
+    let accents: Vec<ControlTarget> = accent
+        .iter()
+        .filter_map(|effect| Some(node(&effect.pattern, effect.color.as_ref()?)))
+        .collect();
+    let swatches = |hexes: [&str; 6]| {
+        hexes.map(|hex| {
+            ListValue::Color(luma_patterns::color_space::from_hex(hex).expect("a hex color"))
+        })
+    };
+    let base_colors = swatches(BASE_SWATCHES)
+        .into_iter()
+        .chain([ListValue::Below])
+        .collect();
+    let accent_colors = (!accents.is_empty()).then(|| swatches(ACCENT_SWATCHES).to_vec());
+    for (label, values, targets) in [
+        ("Base color", Some(base_colors), Vec::new()),
+        ("Accent color", accent_colors, accents),
     ] {
-        let targets: Vec<ControlTarget> = effects
-            .iter()
-            .filter_map(|effect| Some(node(&effect.pattern, effect.color.as_ref()?)))
-            .collect();
-        if targets.is_empty() {
+        let Some(values) = values else {
             continue;
-        }
+        };
         cells.push(cell(
             0,
             row,
             width,
-            CellContent::Color {
+            CellContent::List {
                 label: label.into(),
-                swatches: swatches
-                    .map(|hex| luma_patterns::color_space::from_hex(hex).expect("a hex color"))
-                    .to_vec(),
+                values,
                 fade: 1.,
                 unit: TimeUnit::Beats,
                 targets,
@@ -284,8 +298,9 @@ pub fn make(rig: &Rig, name: String, bottom: i64) -> Busk {
         row += 1;
     }
 
-    // The side column: tap, the master, the effects' levels and speeds.
-    let rows = row.max(4);
+    // The side column: Select, Clear, tap, the master, the effects' levels
+    // and speeds.
+    let rows = row.max(6);
     let levels = base
         .iter()
         .chain(&accent)
@@ -299,10 +314,16 @@ pub fn make(rig: &Rig, name: String, bottom: i64) -> Busk {
         .chain(&movement)
         .filter_map(|effect| Some(node(&effect.pattern, effect.speed.as_ref()?)))
         .collect();
-    cells.push(cell(width, 0, 1, CellContent::Tap));
+    for (at, content) in [
+        (0, CellContent::Select),
+        (1, CellContent::Clear),
+        (2, CellContent::Tap),
+    ] {
+        cells.push(cell(width, at, 1, content));
+    }
     cells.push(Cell {
-        height: rows - 3,
-        ..cell(width, 1, 1, CellContent::Master)
+        height: rows - 5,
+        ..cell(width, 3, 1, CellContent::Master)
     });
     for (at, label, targets) in [(rows - 2, "Levels", levels), (rows - 1, "Speed", speeds)] {
         cells.push(cell(
@@ -412,13 +433,20 @@ fn hit(name: &str, selection: &str, graph: ClipGraph) -> PerformPattern {
 }
 
 /// `preset` with its pad, a live color into its output's color, and a speed
-/// fader into each of its clocks.
-fn effect(preset: &ClipPreset, selection: &str) -> Effect {
+/// fader into each of its clocks; taking the color below when `below`, else
+/// by the preset's blend. Its live color is its own, for when Select gives
+/// it one.
+fn effect(preset: &ClipPreset, selection: &str, below: bool) -> Effect {
     let mut graph = preset.graph.clone().with_pad();
     let color = live_color(&mut graph);
     let speed = speed(&mut graph);
+    let blend = if below {
+        BlendMode::Below
+    } else {
+        preset.blend_mode
+    };
     Effect {
-        pattern: pattern(&preset.name, selection, preset.blend_mode, graph),
+        pattern: pattern(&preset.name, selection, blend, graph),
         color,
         speed,
     }

@@ -312,7 +312,10 @@ Exactly one per graph. The clip's blend mode stays on the clip row.
 
 Light per head = color × brightness × alpha; a list is the product of its
 items. Blend modes: the light set
-(`replace`, `add`, `multiply`, `screen`, `max`, `min`, `subtract`). `replace` is the top light.
+(`replace`, `add`, `multiply`, `screen`, `max`, `min`, `subtract`, `below`). `replace` is the top light;
+`below` is the clip's brightness in the color already under each head (2026-11-06), so a
+Perform effect can take the base color. Where a blend leaves no light the color under it
+stays, for a `below` clip higher up.
 
 **aim**
 
@@ -509,7 +512,7 @@ users as a *fader*, or a *live color*.
 
 Of kind `color` it gives a color wire, the same at every head: linear Rec.
 2020 rgb, each channel 0–1, which goes straight into any color input and
-never into `curve.x`. A Perform color cell sets it, fading from one swatch to
+never into `curve.x`. A Perform color list sets it, fading from one value to
 the next; a source reads it with `ControlSource::color`, and one nothing has
 set reads white in the venue's bank (black with no source bound). Everything
 below holds for both kinds.
@@ -558,7 +561,8 @@ on and off, is the button node the output's `alpha` depends on: wired into
 (`ClipGraph::pad`). With several, the first by id is the pad; the others stay
 buttons of the pattern. There is no flag: the wiring says it, so the pad's
 mode and envelope are its node's settings and its fade is in the graph's
-alpha. A graph with no button on `alpha` has no pad, and as a Perform pattern
+alpha. A Perform pattern's pad plays it where the groups chosen are
+(`docs/design/live-control.md`). A graph with no button on `alpha` has no pad, and as a Perform pattern
 plays at its level whenever the set is open. A new Perform pattern gets one
 when its graph has none (`ClipGraph::with_pad`): a `toggle` button named
 `pad` that starts on the next `beat`, through a ramp curve into `alpha`, times (a `*` math node) whatever

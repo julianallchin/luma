@@ -441,11 +441,14 @@ mod tests {
             assert_eq!(frame.primitives.len(), values.len());
             for (id, value) in values {
                 assert_eq!(frame.primitives[id].dimmer, value.dimmer.unwrap() as f32);
-                assert_eq!(
-                    frame.primitives[id].color,
-                    value.color.unwrap_or([1.0; 3]).map(|v| v as f32)
-                );
-                lit += usize::from(frame.primitives[id].dimmer > 0.);
+                // A dark head keeps the color under it, which never shows.
+                if frame.primitives[id].dimmer > 0. {
+                    assert_eq!(
+                        frame.primitives[id].color,
+                        value.color.unwrap_or([1.0; 3]).map(|v| v as f32)
+                    );
+                    lit += 1;
+                }
             }
         }
         assert!(lit > 0, "the dissolve lights some heads");

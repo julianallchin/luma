@@ -18,13 +18,23 @@ the set is open.
 
 The set is laid out on pages of a grid. A cell covers whole places, at
 (column, row) counted from 0, and holds a pattern (every pattern has exactly
-one cell), the master, tap, a fader of its own that moves several targets
-together, a color cell: swatches, one of which is on, that fade the live
-colors it targets to the chosen swatch, or a target: a venue group. A pad
-pressed while targets are held plays its pattern on their groups instead of
-its own selection, as an instance with a pad of its own; play(p, on=[...])
-does the same. A page's one-at-a-time rows play one pattern at a time, per
-set of groups.
+one cell), a group (a venue group to choose), a list (colors or numbers, one
+of which is on), a fader of its own that moves several targets together, or a
+utility: the master, tap, Select or Clear. A page's one-at-a-time rows play
+one pattern at a time where each plays.
+
+Choose where, then do something; nothing chosen means everything. A group
+tapped is chosen and stays so (choose() does the same). A pad tapped with
+nothing chosen turns its pattern on or off on its own selection; with groups
+chosen it comes on there, or if it already plays there leaves them, or adds
+them. A list value tapped sets the list's targets; a color list with no
+targets sets the base color of the chosen groups' lights (base() does the
+same): color only, under every effect, lighting nothing itself. An effect
+with blend "below" takes the color under it; one with its own color uses its
+live color and a normal blend. select() (or Select held on screen) chooses
+effects: the next color tapped on a list with no targets is their own, and
+"below" puts them back on the color below. clear() chooses nothing;
+clear(effects=True) lets every effect go.
 
 Every verb is checked and saved at once, the same way the Perform tab saves,
 and answers what it made. A refusal raises PerformRefused and saves nothing.
@@ -43,9 +53,9 @@ from .track import _blend
 
 #: What a binding's hardware sends.
 BINDING_MODES = ("fader", "momentary", "toggle")
-#: What a color cell's fade is counted in.
+#: What a list's fade is counted in.
 FADE_UNITS = ("beats", "seconds")
-#: Not given, where None means something: update_color(step=None) stops stepping.
+#: Not given, where None means something: update_list(step=None) stops stepping.
 _UNSET = object()
 
 
@@ -57,14 +67,14 @@ class PerformHostUnavailableError(RuntimeError):
 class Control:
     """A control a hand plays: its bank name, what it is called, and its kind:
     "level", "fader", "color" or "button" of a pattern (node is the graph
-    node's id; its pad is a button; a color is a live color, which a color
-    cell sets), "fader" of a fader cell, "swatch" of a color cell, "target"
-    (held while pressed), "master" or "tap". mode is how hardware binds to it."""
+    node's id; its pad is a button; a color is a live color, which a list
+    sets), "fader" of a fader cell, "value" or "next" of a list, "group",
+    "select", "clear", "master" or "tap". mode is how hardware binds to it."""
     name: str
     label: str
     kind: str
     node: str | None = None
-    #: The fader or color cell target this control is, for place(targets=...).
+    #: The fader or list target this control is, for place(targets=...).
     _target: Any = None
 
     @property
@@ -119,13 +129,13 @@ class Pattern:
 @dataclass(frozen=True)
 class Cell:
     """A cell: id, page (its id), at (column, row from 0), size (width,
-    height), kind ("pattern", "master", "tap", "fader", "color" or
-    "target"), the pattern's id, and for a fader or color cell its label and
-    targets. A color cell also has swatches ((r, g, b) each 0-1, linear Rec.
-    2020), fade and unit (how long choosing one takes, in "beats" or
-    "seconds"), and step, (bars, loops) or None: it moves on to the next
-    swatch every bars bars. A target has a label and group, a venue group's
-    name."""
+    height), kind ("pattern", "group", "list", "fader", "master", "tap",
+    "select" or "clear"), the pattern's id, and for a fader or list its label
+    and targets. A list also has values (each (r, g, b) 0-1 in linear Rec.
+    2020, a number 0-1, or "below", the color below), fade and unit (how long
+    a color takes to fade, in "beats" or "seconds"), and step, (bars, loops)
+    or None: it moves on to the next value every bars bars. A group cell has
+    a label and group, a venue group's name."""
     id: str
     page: str
     at: tuple
@@ -134,24 +144,32 @@ class Cell:
     pattern: str | None
     label: str | None
     targets: tuple
-    swatches: tuple = ()
+    values: tuple = ()
     fade: float | None = None
     unit: str | None = None
     step: tuple | None = None
     group: str | None = None
-    #: Each swatch's control name, in order; a target's one control.
-    _swatches: tuple = ()
+    #: Each value's control name, in order, then the list's own (its next
+    #: value); a fader or group cell's one control.
+    _controls: tuple = ()
 
-    def swatch(self, index):
-        """Swatch index's control (from 0): pressed, it is chosen."""
-        if not 0 <= index < len(self._swatches):
-            raise KeyError(f"cell {self.label!r} has {len(self._swatches)} swatches; no swatch {index}")
-        return Control(self._swatches[index], f"{self.label} {index + 1}", "swatch")
+    def value(self, index):
+        """Value index's control (from 0): pressed, it is tapped."""
+        if not 0 <= index < len(self.values):
+            raise KeyError(f"cell {self.label!r} has {len(self.values)} values; no value {index}")
+        return Control(self._controls[index], f"{self.label} {index + 1}", "value")
+
+    @property
+    def next(self):
+        """A list's own control: pressed, its next value is tapped."""
+        if self.kind != "list":
+            raise KeyError(f"cell {self.id} is a {self.kind}, not a list")
+        return Control(self._controls[-1], f"{self.label} next", "next")
 
     def __repr__(self):
         what = {"pattern": f"pattern {self.pattern}", "fader": f"fader {self.label!r}",
-                "color": f"color {self.label!r} of {len(self.swatches)} swatches",
-                "target": f"target on {self.group}"}.get(self.kind, self.kind)
+                "list": f"list {self.label!r} of {len(self.values)} values",
+                "group": f"group {self.group}"}.get(self.kind, self.kind)
         return f"<Cell {what} at {self.at} size {self.size} {self.id}>"
 
 
@@ -195,38 +213,41 @@ class Binding:
 
 class Live:
     """What plays now: open (whether this venue's set is open, as it is while
-    its Perform tab is shown), playing (pattern, level) pairs, instances
-    (pattern, groups) pairs, each pattern playing on venue groups instead of
-    its selection, waiting ((pattern, groups, "on" or "off") triples, each
-    press of a pad that waits for its beat or bar to turn it on or off,
-    groups () on its own selection), master, clock, decks, values (every
-    control set, by name; a button is played, not set, so its pads count in
-    playing instead), colors (each live color set, by name: the (r, g, b) it
-    is at or fading to) and swatches (each color cell's swatch on, by cell
-    id)."""
+    its Perform tab is shown), playing (pattern, level) pairs, effects
+    ((pattern, groups, below) triples: the groups each plays on, () for its
+    own selection, and whether it takes the color below), waiting ((pattern, "on"
+    or "off") pairs, each press of a pad that waits for its beat or bar),
+    chosen and held (the groups chosen, and those held down), selecting
+    (whether Select is down or latched) and selected (the patterns it chose),
+    master, clock, decks, values (every control set, by name; a button is
+    played, not set, so its pads count in playing instead), colors (each live
+    color set, by name: the (r, g, b) it is at or fading to), lists (each
+    list's value on, by cell id) and base (each group's base color now)."""
 
     def __init__(self, response, perform):
         self.open = bool(response.get("open"))
         state = response.get("state") or {}
         self.values = dict(state.get("controls") or {})
         self.colors = {name: tuple(color["fade"]["to"]) for name, color in (state.get("colors") or {}).items()}
-        self.swatches = dict(state.get("swatches") or {})
+        self.lists = dict(state.get("lists") or {})
+        self.chosen = tuple(state.get("chosen") or ())
+        self.held = tuple(state.get("held") or ())
+        self.selecting = bool(state.get("selecting"))
+        self.base = {group: tuple(rgb) for group, rgb in (state.get("base") or {}).items()}
         gates = {name: _gate(button) for name, button in (state.get("buttons") or {}).items()}
         on = {name for name, (lit, _) in gates.items() if lit}
         self.master = float(self.values.get(perform._controls["master"], 1.0))
+        patterns = {pattern.id: pattern for pattern in perform.patterns}
+        self.selected = tuple(patterns[id] for id in state.get("selected") or () if id in patterns)
+        self.effects = tuple((patterns[id], tuple(effect.get("groups") or ()), bool(effect.get("below")))
+                             for id, effect in (state.get("effects") or {}).items() if id in patterns)
         self.playing = tuple(
             (pattern, float(self.values.get(pattern.control("level").name, 1.0)))
             for pattern in perform.patterns
             if (pattern.pad.name in on if pattern.pad else self.open))
-        patterns = {pattern.id: pattern for pattern in perform.patterns}
-        instances = {name: (patterns[instance["patternId"]], tuple(instance["on"]))
-                     for name, instance in (state.get("instances") or {}).items()
-                     if instance["patternId"] in patterns}
-        self.instances = tuple(played for name, played in instances.items() if name in on)
-        plays = {**{pattern.pad.name: (pattern, ()) for pattern in perform.patterns if pattern.pad},
-                 **instances}
-        self.waiting = tuple((*plays[name], "off" if lit else "on")
-                             for name, (lit, waits) in gates.items() if waits and name in plays)
+        pads = {pattern.pad.name: pattern for pattern in perform.patterns if pattern.pad}
+        self.waiting = tuple((pads[name], "off" if lit else "on")
+                             for name, (lit, waits) in gates.items() if waits and name in pads)
         self.clock = state.get("clock")
         self.decks = tuple(state.get("decks") or ())
 
@@ -243,18 +264,27 @@ class Live:
             state = "playing" if deck.get("playing") else "stopped"
             lines.append(f"deck {deck.get('id')}: {deck.get('title')!r} by {deck.get('artist')!r}, "
                          f"{float(deck.get('bpm', 0)):.1f} BPM, {state}")
-        lines.append("playing: " + (", ".join(f"{p.name!r} at {level:.2f}" for p, level in self.playing)
+        effects = {p.id: (groups, below) for p, groups, below in self.effects}
+
+        def where(pattern):
+            groups, below = effects.get(pattern.id, ((), False))
+            return (f" on {' + '.join(groups)}" if groups else "") + (" (color below)" if below else "")
+        lines.append("playing: " + (", ".join(f"{p.name!r}{where(p)} at {level:.2f}" for p, level in self.playing)
                                     or "nothing"))
-        if self.instances:
-            lines.append("on groups: " + ", ".join(f"{p.name!r} on {' + '.join(on)}"
-                                                    for p, on in self.instances))
+        lines.append("chosen: " + (", ".join(self.chosen) or "nothing (everything)"))
+        if self.held:
+            lines.append("held: " + ", ".join(self.held))
+        if self.selecting or self.selected:
+            lines.append("selected: " + (", ".join(repr(p.name) for p in self.selected) or "nothing yet"))
         if self.waiting:
             lines.append("waiting for the beat or bar: " + ", ".join(
-                f"{p.name!r}{' on ' + ' + '.join(on) if on else ''} to go {going}"
-                for p, on, going in self.waiting))
-        if self.swatches:
-            lines.append("swatches on: " + ", ".join(f"cell {cell} swatch {index}"
-                                                     for cell, index in self.swatches.items()))
+                f"{p.name!r} to go {going}" for p, going in self.waiting))
+        if self.lists:
+            lines.append("lists on: " + ", ".join(f"cell {cell} value {index}"
+                                                  for cell, index in self.lists.items()))
+        if self.base:
+            lines.append("base color: " + ", ".join(
+                f"{group} ({', '.join(f'{c:.2f}' for c in rgb)})" for group, rgb in self.base.items()))
         return "<Live\n  " + "\n  ".join(lines) + ">"
 
 
@@ -278,18 +308,42 @@ def _id(value, kind):
     raise TypeError(f"expected a {kind.__name__} or its id; got {value!r}")
 
 
-def _swatches(swatches):
+def _color(color, what):
+    try:
+        rgb = _stop_color(color, what)
+    except ClipError as error:
+        raise PerformRefused(str(error)) from None
+    rgb = list(rgb) if isinstance(rgb, (list, tuple)) else rgb
+    if not isinstance(rgb, list) or len(rgb) != 3:
+        raise PerformRefused(f'a {what} is (r, g, b) or "#RRGGBB"; got {color!r}')
+    return rgb
+
+
+def _values(values):
+    """A list's values as the host takes them: a number 0-1, "below", or a color."""
     out = []
-    for swatch in swatches:
-        try:
-            rgb = _stop_color(swatch, "swatch")
-        except ClipError as error:
-            raise PerformRefused(str(error)) from None
-        rgb = list(rgb) if isinstance(rgb, (list, tuple)) else rgb
-        if not isinstance(rgb, list) or len(rgb) != 3:
-            raise PerformRefused(f'a swatch is (r, g, b) or "#RRGGBB"; got {swatch!r}')
-        out.append(rgb)
+    for value in values:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            out.append({"number": float(value)})
+        elif value == "below":
+            out.append("below")
+        else:
+            out.append({"color": _color(value, "list value")})
     return out
+
+
+def _colors(values):
+    """Whether stored list values are colors (or the color below)."""
+    return bool(values) and (values[0] == "below" or "color" in values[0])
+
+
+def _value(value):
+    """One stored list value as Python reads it."""
+    if isinstance(value, dict) and "color" in value:
+        return tuple(value["color"])
+    if isinstance(value, dict) and "number" in value:
+        return float(value["number"])
+    return value
 
 
 def _unit(unit):
@@ -363,15 +417,17 @@ class Perform:
     def _cell(self, page, cell):
         content = cell["content"]
         step = content.get("step")
-        swatches = self._controls["cells"].get(cell["id"]) if content["kind"] == "color" else None
-        if content["kind"] == "target":
-            swatches = (self._controls["cells"][cell["id"]],)
+        names = self._controls["cells"].get(cell["id"])
+        if content["kind"] == "list":
+            names = (*names["values"], names["next"])
+        elif names is not None:
+            names = (names,)
         return Cell(cell["id"], page, (cell["column"], cell["row"]), (cell["width"], cell["height"]),
                     content["kind"], content.get("patternId"), content.get("label"),
                     tuple(copy.deepcopy(content.get("targets") or ())),
-                    tuple(tuple(rgb) for rgb in content.get("swatches") or ()), content.get("fade"),
+                    tuple(_value(value) for value in content.get("values") or ()), content.get("fade"),
                     content.get("unit"), (step["bars"], step["loops"]) if step else None,
-                    content.get("group"), tuple(swatches or ()))
+                    content.get("group"), tuple(names or ()))
 
     @property
     def cells(self):
@@ -436,19 +492,20 @@ class Perform:
         raise KeyError(f"no cell {key!r}")
 
     def controls(self):
-        """Every control the set plays under: each pattern's, each fader cell's,
-        each color cell's swatches, each target's (held while pressed), the
-        master and tap."""
+        """Every control the set plays under: each pattern's, each fader and
+        group cell's, each list's values and its next, the master, tap,
+        Select and Clear."""
         controls = [control for pattern in self.patterns for control in pattern.controls]
         for cell in self.cells:
             if cell.kind == "fader":
-                controls.append(Control(self._controls["cells"][cell.id], cell.label or "Fader", "fader"))
-            if cell.kind == "color":
-                controls.extend(cell.swatch(index) for index in range(len(cell.swatches)))
-            if cell.kind == "target":
-                controls.append(Control(cell._swatches[0], cell.label or cell.group, "target"))
-        controls.append(Control(self._controls["master"], "Master", "master"))
-        controls.append(Control(self._controls["tap"], "Tap", "tap"))
+                controls.append(Control(cell._controls[0], cell.label or "Fader", "fader"))
+            if cell.kind == "group":
+                controls.append(Control(cell._controls[0], cell.label or cell.group, "group"))
+            if cell.kind == "list":
+                controls.extend(cell.value(index) for index in range(len(cell.values)))
+                controls.append(cell.next)
+        for kind in ("master", "tap", "select", "clear"):
+            controls.append(Control(self._controls[kind], kind.capitalize(), kind))
         return tuple(controls)
 
     def describe(self):
@@ -465,14 +522,17 @@ class Perform:
                     what = f"{p.name!r} on {p.selection}" if p else "a deleted pattern"
                 elif cell.kind == "fader":
                     what = f"fader {cell.label!r} moving {len(cell.targets)} targets"
-                elif cell.kind == "color":
+                elif cell.kind == "list":
                     step = (f", the next every {cell.step[0]} bars{', looping' if cell.step[1] else ''}"
                             if cell.step else "")
-                    what = (f"color {cell.label!r} of {len(cell.swatches)} swatches setting "
-                            f"{len(cell.targets)} targets, fading over {cell.fade} {cell.unit}{step}")
-                elif cell.kind == "target":
+                    colors = any(not isinstance(v, float) for v in cell.values)
+                    sets = (f"setting {len(cell.targets)} targets" if cell.targets
+                            else "setting the base color" if colors else "setting nothing")
+                    what = (f"list {cell.label!r} of {len(cell.values)} {'colors' if colors else 'numbers'} "
+                            f"{sets}, fading over {cell.fade} {cell.unit}{step}")
+                elif cell.kind == "group":
                     named = f" labelled {cell.label!r}" if cell.label else ""
-                    what = f"target on group {cell.group}{named}"
+                    what = f"group {cell.group}{named}"
                 else:
                     what = cell.kind
                 lines.append(f"  {cell.at}{size}: {what} ({cell.id})")
@@ -560,7 +620,7 @@ class Perform:
         return self.pattern(self._change("perform.update", payload)["id"])
 
     def remove(self, pattern):
-        """Delete a pattern, its cell, and every fader and color cell's hold on it."""
+        """Delete a pattern, its cell, and every fader and list's hold on it."""
         self._change("perform.remove", {"id": _id(pattern, Pattern)})
 
     def reorder(self, patterns):
@@ -592,46 +652,54 @@ class Perform:
         self._change("perform.remove_page", {"id": self.page(page).id})
 
     def busk(self):
-        """Add a busk page made from the venue's rig and return it: targets
-        (all, the role groups, then groups named for a place), a base and an
-        accent color cell, effects from presets with a pad, a live color and
-        a speed each, movers' movement one at a time, and flash hits (strobe,
-        blinder, white, black). Tap, the master, the effects' levels and their
+        """Add a busk page made from the venue's rig and return it: groups to
+        choose (all, the role groups, then groups named for a place), a base
+        color list (no targets: it colors the groups chosen, and ends with
+        "below"), an accent color list setting the accent effects' own colors,
+        effects from presets with a pad, a live color and a speed each (the
+        base ones take the color below, the accent ones their own), movers'
+        movement one at a time, and flash hits (strobe, blinder, white,
+        black). Select, Clear, tap, the master, the effects' levels and their
         speed stand at the right. It is a new page, "Busk" or "Busk 2", of new
         patterns over the set's; nothing there changes."""
         return self.page(self._change("perform.busk", {})["id"])
 
-    def place(self, kind, *, page=None, at=None, size=(1, 1), label=None, targets=(), swatches=(),
+    def place(self, kind, *, page=None, at=None, size=(1, 1), label=None, targets=(), values=(),
               fade=1, unit="beats", step=None, group=None):
-        """Add a cell of kind "master", "tap", "fader", "color" or "target" and
-        return it.
+        """Add a cell of kind "group", "list", "fader", "master", "tap",
+        "select" or "clear" and return it.
 
+        A group cell holds group, a venue group's name such as "front_wash" or
+        "all": tapped, it is chosen. Its label is the group's unless given. A
+        list holds values of one kind: colors ((r, g, b) 0-1 or "#RRGGBB"),
+        numbers 0-1, or "below" (the color below, for a color list with no
+        targets). A value tapped sets every target to it: controls of kind
+        "color" for colors, fading over fade in unit ("beats" or "seconds"),
+        or what a fader moves for numbers. A color list with no targets sets
+        the base color of the groups chosen, or after select() the effects'
+        own colors. step=(bars, loops) moves it on to the next value every bars
+        bars of the set's clock, after the last back to the first when loops.
         A fader cell moves every one of targets together: patterns (their
-        level), controls from pattern.controls of kind "fader", or the venue's
-        own control names, such as "drop". A color cell holds swatches, each
-        (r, g, b) 0-1 or "#RRGGBB"; choosing one fades every target (controls
-        of kind "color") to it over fade, in unit ("beats" or "seconds").
-        step=(bars, loops) moves it on to the next swatch every bars bars of
-        the set's clock, after the last back to the first when loops. A
-        target holds group, a venue group's name such as "front_wash": a pad
-        pressed while it is held plays its pattern there. Its label is the
-        group's unless given.
+        level), controls of kind "fader", or the venue's own control names,
+        such as "drop".
         """
         if kind == "fader":
             content = {"kind": "fader", "label": str(label or "Fader"), "targets": self._targets(targets)}
-        elif kind == "color":
-            content = {"kind": "color", "label": str(label or "Colors"),
-                       "swatches": _swatches(swatches), "fade": float(fade), "unit": _unit(unit),
-                       "targets": self._targets(targets, colors=True), "step": _step(step)}
-        elif kind == "target":
+        elif kind == "list":
+            stored = _values(values)
+            colors = _colors(stored)
+            content = {"kind": "list", "label": str(label or ("Colors" if colors else "Values")),
+                       "values": stored, "fade": float(fade), "unit": _unit(unit),
+                       "targets": self._targets(targets, colors=colors), "step": _step(step)}
+        elif kind == "group":
             if not group:
-                raise PerformRefused('a target holds a venue group, such as group="front_wash"')
-            content = {"kind": "target", "label": str(label or ""), "group": str(group)}
-        elif kind in ("master", "tap"):
+                raise PerformRefused('a group cell holds a venue group, such as group="front_wash"')
+            content = {"kind": "group", "label": str(label or ""), "group": str(group)}
+        elif kind in ("master", "tap", "select", "clear"):
             content = {"kind": kind}
         else:
-            raise PerformRefused(f"place makes a master, tap, fader, color or target cell; got {kind!r}. "
-                                 "A pattern's cell comes with add().")
+            raise PerformRefused(f"place makes a group, list, fader, master, tap, select or clear cell; "
+                                 f"got {kind!r}. A pattern's cell comes with add().")
         payload = {"content": content, "size": _place(size, "size")}
         if page is not None:
             payload["page"] = self.page(page).id
@@ -644,7 +712,7 @@ class Perform:
         for target in targets:
             if colors:
                 if not isinstance(target, Control) or target.kind != "color":
-                    raise PerformRefused(f"a color cell sets live colors, controls of kind \"color\" "
+                    raise PerformRefused(f"a color list sets live colors, controls of kind \"color\" "
                                          f"such as p.control(\"main\"); got {target!r}")
                 out.append(dict(target._target))
                 continue
@@ -652,8 +720,8 @@ class Perform:
                 target = target.control("level")
             if isinstance(target, Control):
                 if target._target is None or target.kind == "color":
-                    raise PerformRefused(f"{target.label} is a {target.kind}: a fader cell moves "
-                                         "levels, fader nodes and the venue's own controls")
+                    raise PerformRefused(f"{target.label} is a {target.kind}: a fader or number list "
+                                         "moves levels, fader nodes and the venue's own controls")
                 out.append(dict(target._target))
             elif isinstance(target, str):
                 out.append({"kind": "named", "name": target})
@@ -683,17 +751,19 @@ class Perform:
             payload["targets"] = self._targets(targets)
         return self.cell(self._change("perform.cell", payload)["id"])
 
-    def update_color(self, cell, *, label=None, swatches=None, targets=None, fade=None, unit=None,
-                     step=_UNSET):
-        """Change a color cell's label, swatches, targets, fade, unit or step
-        (see place); step=None stops it stepping."""
-        payload = {"id": _id(cell, Cell)}
+    def update_list(self, cell, *, label=None, values=None, targets=None, fade=None, unit=None,
+                    step=_UNSET):
+        """Change a list's label, values, targets, fade, unit or step (see
+        place); step=None stops it stepping."""
+        cell = self.cell(_id(cell, Cell))
+        payload = {"id": cell.id}
         if label is not None:
             payload["label"] = str(label)
-        if swatches is not None:
-            payload["swatches"] = _swatches(swatches)
+        if values is not None:
+            payload["values"] = _values(values)
+        colors = _colors(payload.get("values") or _values(cell.values))
         if targets is not None:
-            payload["targets"] = self._targets(targets, colors=True)
+            payload["targets"] = self._targets(targets, colors=colors)
         if fade is not None:
             payload["fade"] = float(fade)
         if unit is not None:
@@ -702,8 +772,8 @@ class Perform:
             payload["step"] = _step(step)
         return self.cell(self._change("perform.cell", payload)["id"])
 
-    def update_target(self, cell, *, label=None, group=None):
-        """Change a target's label or group (see place)."""
+    def update_group(self, cell, *, label=None, group=None):
+        """Change a group cell's label or group (see place)."""
         payload = {"id": _id(cell, Cell)}
         if label is not None:
             payload["label"] = str(label)
@@ -712,7 +782,7 @@ class Perform:
         return self.cell(self._change("perform.cell", payload)["id"])
 
     def remove_cell(self, cell):
-        """Remove a master, tap, fader, color or target cell. A pattern's cell goes with remove()."""
+        """Remove a cell that holds no pattern. A pattern's cell goes with remove()."""
         self._change("perform.remove_cell", {"id": _id(cell, Cell)})
 
     # -- playing ---------------------------------------------------------
@@ -739,41 +809,56 @@ class Perform:
         self._call("perform.press", {"name": name, "down": True})
         return Live(self._call("perform.press", {"name": name, "down": False}), self)
 
-    def choose(self, cell, index):
-        """Choose swatch index (from 0) of a color cell, as a press on screen
-        does: its targets fade to it."""
-        return self.press(self.cell(_id(cell, Cell)).swatch(index))
+    def tap(self, cell, index):
+        """Tap value index (from 0) of a list, as a press on screen does."""
+        return self.press(self.cell(_id(cell, Cell)).value(index))
 
-    def _on(self, pattern, value, on):
+    def next(self, cell):
+        """Tap a list's next value, as its one-place Next button does."""
+        return self.press(self.cell(_id(cell, Cell)).next)
+
+    def choose(self, *groups):
+        """Choose exactly these venue groups, each held by a group cell of the
+        set; none chooses nothing, which means everything."""
+        names = [str(group) for group in groups]
+        return Live(self._call("perform.choose", {"groups": names}), self)
+
+    def select(self, *patterns):
+        """Choose these effects, as Select held while their pads are pressed:
+        the next color tapped on a list with no targets is their own color,
+        and "below" puts them back on the color below."""
+        ids = [self.pattern(pattern).id for pattern in patterns]
+        return Live(self._call("perform.select", {"ids": ids}), self)
+
+    def clear(self, effects=False):
+        """Choose nothing, as Clear tapped does; effects=True lets every effect
+        go instead, as Clear held does."""
+        return Live(self._call("perform.clear", {"effects": bool(effects)}), self)
+
+    def base(self, color, on=None, fade=0, unit="beats"):
+        """Fade the base color of the lights of groups on (a name or a list,
+        each held by a group cell) to color over fade in unit; on=None is
+        every light. The base color lights nothing: effects with blend
+        "below" take it."""
         if isinstance(on, str):
             on = [on]
-        groups = [str(group) for group in on]
-        if not groups:
-            raise PerformRefused('on names venue groups, such as on=["front_wash"]')
-        answer = self._call("perform.control", {"name": pattern.control("pad").name,
-                                                "value": value, "on": groups})
-        return Live(answer, self)
+        payload = {"color": _color(color, "base color"), "groups": [str(g) for g in on or ()],
+                   "fade": float(fade), "unit": _unit(unit)}
+        return Live(self._call("perform.base", payload), self)
 
-    def play(self, pattern, level=None, on=None):
-        """Turn a pattern's pad on, at level (0-1) when given, to hear it. A
-        pattern with no pad already plays while the set is open. on=[groups]
-        plays it on those venue groups instead of its selection, as targets
-        held on screen do: an instance of its own, with its own pad."""
+    def play(self, pattern, level=None):
+        """Turn a pattern's pad on, at level (0-1) when given, to hear it,
+        where the groups chosen are (its own selection when none is). A
+        pattern with no pad already plays while the set is open."""
         pattern = self.pattern(pattern)
         if level is not None:
             self.set(pattern.control("level"), level)
-        if on is not None:
-            return self._on(pattern, 1.0, on)
         return self.live() if pattern.pad is None else self.set(pattern.pad, 1.0)
 
-    def stop(self, pattern, on=None):
-        """Turn a pattern's pad off, or with on=[groups] its instance there;
-        it fades by the pad node's release. A pattern with no pad has nothing
-        to turn off: set its level to 0."""
-        pattern = self.pattern(pattern)
-        if on is not None:
-            return self._on(pattern, 0.0, on)
-        return self.set(pattern.control("pad"), 0.0)
+    def stop(self, pattern):
+        """Turn a pattern's pad off; it fades by the pad node's release. A
+        pattern with no pad has nothing to turn off: set its level to 0."""
+        return self.set(self.pattern(pattern).control("pad"), 0.0)
 
     # -- bindings --------------------------------------------------------
 

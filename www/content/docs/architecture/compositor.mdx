@@ -72,6 +72,7 @@ value.
 | `max` | `max(base, top)` |
 | `min` | `min(base, top)` |
 | `subtract` | `max(base - top, 0)` |
+| `below` | `top` |
 
 The default blend mode of a clip is `replace`.
 
@@ -90,10 +91,16 @@ dimmer, in linear Rec. 2020. No light under a head is a dimmer of 0.
 - `replace` is the top light: the top color and the top dimmer. Black on
   `replace` paints black. Opacity is alpha's job: `blend_light_alpha` mixes
   the result with the light below by alpha.
+- `below` is the top dimmer in the color already under the head: a layer
+  that takes its color from the layers below it. Over nothing that color is
+  white.
 - Every other mode applies `blend_value` to each channel of the light. The
   new dimmer is the peak channel, and the color is the light divided by it.
   So `add` and `screen` over black equal `add` and `screen` over nothing, and
   `multiply` or `subtract` over nothing stay nothing.
+
+Where a blend leaves no light, the head keeps the color under it, so a
+`below` layer higher up still finds it.
 
 `offset` never reaches `blend_value`: an `offset` clip goes through
 `offset_frame` instead.

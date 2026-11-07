@@ -365,9 +365,11 @@ async fn an_open_set_plays_its_pads_and_faders() {
 }
 
 #[tokio::test]
-async fn a_color_cell_sets_live_colors_and_a_fader_moves_numbers() {
+async fn a_color_list_sets_live_colors_and_a_fader_moves_numbers() {
     use crate::controls::perform;
-    use crate::models::perform::{Cell, CellContent, ControlTarget, PerformLayout, PerformPattern};
+    use crate::models::perform::{
+        Cell, CellContent, ControlTarget, ListValue, PerformLayout, PerformPattern,
+    };
 
     let (_dir, services, venue) = library().await;
     let graph = luma_patterns::ClipGraph::from_json(
@@ -404,9 +406,12 @@ async fn a_color_cell_sets_live_colors_and_a_fader_moves_numbers() {
         layout
     };
     let colors = |target: ControlTarget| {
-        with(CellContent::Color {
+        with(CellContent::List {
             label: "Colors".into(),
-            swatches: vec![[1., 0., 0.], [0., 0., 1.]],
+            values: vec![
+                ListValue::Color([1., 0., 0.]),
+                ListValue::Color([0., 0., 1.]),
+            ],
             fade: 0.,
             unit: luma_patterns::press::TimeUnit::Beats,
             targets: vec![target],
@@ -419,7 +424,7 @@ async fn a_color_cell_sets_live_colors_and_a_fader_moves_numbers() {
         async move { dispatch(services, "save_perform_layout", &args).await }
     };
     let refused = store(colors(node("drop"))).await.unwrap_err();
-    assert_eq!(refused.kind(), "invalid", "a color cell sets no fader");
+    assert_eq!(refused.kind(), "invalid", "a color list sets no fader");
     let fader = with(CellContent::Fader {
         label: "Speeds".into(),
         targets: vec![node("hue")],
@@ -432,7 +437,7 @@ async fn a_color_cell_sets_live_colors_and_a_fader_moves_numbers() {
     dispatch(&services, "perform_open_set", &json!({ "venueId": venue }))
         .await
         .unwrap();
-    let blue = perform::swatch("cell", 1);
+    let blue = perform::value("cell", 1);
     for down in [true, false] {
         dispatch(
             &services,
@@ -443,7 +448,7 @@ async fn a_color_cell_sets_live_colors_and_a_fader_moves_numbers() {
         .unwrap();
     }
     let state = services.perform.state();
-    assert_eq!(state.bank.swatches["cell"], 1, "the swatch pressed is on");
+    assert_eq!(state.bank.lists["cell"], 1, "the value pressed is on");
     let color = state.bank.colors[&perform::node("lit", "hue")];
     assert_eq!(color.value(120.), [0., 0., 1.], "its target took its color");
 
@@ -576,83 +581,166 @@ async fn two_groups(services: &AppServices, venue: &str) {
     }
 }
 
-#[tokio::test]
-async fn a_pad_pressed_on_a_target_lights_only_that_groups_heads() {
-    use crate::controls::perform;
+/// Open `venue`'s set of `pattern`, laid out with a group cell on each of
+/// `left` and `right` and `extra`.
+async fn open_on_groups(
+    services: &AppServices,
+    venue: &str,
+    pattern: &crate::models::perform::PerformPattern,
+    extra: Vec<crate::models::perform::CellContent>,
+) {
     use crate::models::perform::{Cell, CellContent, PerformLayout};
 
-    let (_dir, services, venue) = library().await;
-    two_groups(&services, &venue).await;
-    let pattern = wash("wash");
-    save(&services, &venue, &pattern).await.unwrap();
-    let mut layout = PerformLayout::generated(std::slice::from_ref(&pattern));
+    save(services, venue, pattern).await.unwrap();
+    let mut layout = PerformLayout::generated(std::slice::from_ref(pattern));
     let page = &mut layout.pages[0];
-    let (column, row) = page.free_spot(1, 1).expect("room for a target");
-    page.cells.push(Cell {
-        id: "on-left".into(),
-        column,
-        row,
-        width: 1,
-        height: 1,
-        content: CellContent::Target {
-            label: String::new(),
-            group: "left".into(),
-        },
+    let groups = ["left", "right"].map(|group| CellContent::Group {
+        label: String::new(),
+        group: group.into(),
     });
+    for (n, content) in groups.into_iter().chain(extra).enumerate() {
+        let (column, row) = page.free_spot(1, 1).expect("room");
+        page.cells.push(Cell {
+            id: format!("cell-{n}"),
+            column,
+            row,
+            width: 1,
+            height: 1,
+            content,
+        });
+    }
     dispatch(
-        &services,
+        services,
         "save_perform_layout",
         &json!({ "venueId": venue, "layout": layout }),
     )
     .await
     .unwrap();
-    dispatch(&services, "perform_open_set", &json!({ "venueId": venue }))
+    dispatch(services, "perform_open_set", &json!({ "venueId": venue }))
         .await
         .unwrap();
-    let dimmers = || {
-        let frame = services.render_engine.sample(0.0).unwrap_or_default();
-        let lit = |fixture: &str| {
-            frame
-                .primitives
-                .iter()
-                .filter(|(id, _)| id.starts_with(&format!("{fixture}:")))
-                .map(|(_, head)| head.dimmer)
-                .fold(0.0_f32, f32::max)
-        };
-        (lit("left"), lit("right"))
-    };
-    assert_eq!(dimmers(), (0.0, 0.0), "nothing pressed, nothing lit");
+}
 
-    let target = perform::cell("on-left");
-    let pad = perform::pad(&pattern).expect("a pad");
-    for (name, down) in [
-        (&target, true),
-        (&pad, true),
-        (&pad, false),
-        (&target, false),
-    ] {
-        services.perform.press(name, down).unwrap();
-    }
-    // The first frame asks for the instance; it plays once compiled.
+/// The brightest head of `fixture` now, and its color.
+fn head(services: &AppServices, fixture: &str) -> (f32, [f32; 3]) {
+    let frame = services.render_engine.sample(0.0).unwrap_or_default();
+    frame
+        .primitives
+        .iter()
+        .filter(|(id, _)| id.starts_with(&format!("{fixture}:")))
+        .map(|(_, head)| (head.dimmer, head.color))
+        .fold(
+            (0.0, [1.0; 3]),
+            |best, head| if head.0 >= best.0 { head } else { best },
+        )
+}
+
+/// Tap control `name`: press and let go.
+fn tap(services: &AppServices, name: &str) {
+    services.perform.press(name, true).unwrap();
+    services.perform.press(name, false).unwrap();
+}
+
+/// Wait until `ready` holds for the heads of left and right.
+async fn lit_until(
+    services: &AppServices,
+    ready: impl Fn((f32, [f32; 3]), (f32, [f32; 3])) -> bool,
+) -> ((f32, [f32; 3]), (f32, [f32; 3])) {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let (left, right) = loop {
-        let (left, right) = dimmers();
-        if left > 0.0 || Instant::now() > deadline {
-            break (left, right);
+    loop {
+        let heads = (head(services, "left"), head(services, "right"));
+        if ready(heads.0, heads.1) {
+            return heads;
         }
+        assert!(Instant::now() < deadline, "never lit so: {heads:?}");
         tokio::time::sleep(Duration::from_millis(5)).await;
-    };
-    assert!(left > 0.0, "the instance lights the target's group");
-    assert_eq!(right, 0.0, "and nothing outside it");
-    assert!(
-        !services.perform.state().bank.buttons[&pad].on(),
-        "the pattern on its own selection stays off"
+    }
+}
+
+#[tokio::test]
+async fn an_effect_on_a_group_lights_only_its_heads_and_moves_when_it_does() {
+    use crate::controls::perform;
+
+    let (_dir, services, venue) = library().await;
+    two_groups(&services, &venue).await;
+    let pattern = wash("wash");
+    open_on_groups(&services, &venue, &pattern, Vec::new()).await;
+    let ((left, _), (right, _)) = lit_until(&services, |_, _| true).await;
+    assert_eq!((left, right), (0.0, 0.0), "nothing pressed, nothing lit");
+
+    // Left chosen, the pad tapped: the effect is compiled on left, off
+    // the frame path, and lights left alone.
+    let (on_left, on_right) = (perform::cell("cell-0"), perform::cell("cell-1"));
+    let pad = perform::pad(&pattern).expect("a pad");
+    tap(&services, &on_left);
+    tap(&services, &pad);
+    let ((_, _), (right, _)) = lit_until(&services, |left, _| left.0 > 0.0).await;
+    assert_eq!(right, 0.0, "nothing outside left");
+    assert_eq!(
+        services.perform.state().bank.effects["wash"].groups,
+        ["left"]
     );
 
-    // No target held: the pattern on its own selection, everywhere.
-    services.perform.press(&pad, true).unwrap();
-    let (left, right) = dimmers();
-    assert!(left > 0.0 && right > 0.0, "{left} {right}");
+    // Right chosen instead, the pad tapped again: right too.
+    tap(&services, &on_left);
+    tap(&services, &on_right);
+    tap(&services, &pad);
+    lit_until(&services, |left, right| left.0 > 0.0 && right.0 > 0.0).await;
+
+    // Right tapped from it: left alone again.
+    tap(&services, &pad);
+    lit_until(&services, |left, right| left.0 > 0.0 && right.0 == 0.0).await;
+}
+
+#[tokio::test]
+async fn an_effect_below_takes_the_base_color_of_each_group() {
+    use crate::controls::perform;
+    use crate::models::perform::{CellContent, ListValue, PerformPattern};
+
+    let (_dir, services, venue) = library().await;
+    two_groups(&services, &venue).await;
+    let pattern = PerformPattern {
+        blend_mode: luma_patterns::BlendMode::Below,
+        ..wash("wash")
+    };
+    const RED: [f64; 3] = [1., 0., 0.];
+    const BLUE: [f64; 3] = [0., 0., 1.];
+    let base = CellContent::List {
+        label: "Base".into(),
+        values: vec![ListValue::Color(RED), ListValue::Color(BLUE)],
+        fade: 0.,
+        unit: luma_patterns::press::TimeUnit::Beats,
+        targets: Vec::new(),
+        step: None,
+    };
+    open_on_groups(&services, &venue, &pattern, vec![base]).await;
+    let near = |color: [f32; 3], want: [f64; 3]| {
+        color
+            .iter()
+            .zip(want)
+            .all(|(got, want)| (f64::from(*got) - want).abs() < 1e-3)
+    };
+
+    // The base alone lights nothing, and colors every head.
+    tap(&services, &perform::value("cell-2", 0));
+    let ((left, color), (right, _)) = lit_until(&services, |left, right| {
+        near(left.1, RED) && near(right.1, RED)
+    })
+    .await;
+    assert_eq!((left, right), (0.0, 0.0), "a color, no light: {color:?}");
+
+    // The effect takes it, then left's own once left is blue.
+    tap(&services, &perform::pad(&pattern).expect("a pad"));
+    lit_until(&services, |left, right| {
+        left.0 > 0.0 && near(left.1, RED) && near(right.1, RED)
+    })
+    .await;
+    tap(&services, &perform::cell("cell-0"));
+    tap(&services, &perform::value("cell-2", 1));
+    lit_until(&services, |left, right| {
+        right.0 > 0.0 && near(left.1, BLUE) && near(right.1, RED)
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -697,7 +785,7 @@ async fn a_speed_fader_changes_a_chases_rate_on_the_bar() {
     )
     .await
     .unwrap();
-    let (mut live, _build) = compiled.expect("the chase compiles");
+    let (mut live, _build) = compiled;
 
     // Play the set on the tapped tempo's grid, 120 BPM, a sixteenth of a
     // beat a frame, moving the fader mid-bar.
@@ -713,7 +801,7 @@ async fn a_speed_fader_changes_a_chases_rate_on_the_bar() {
         live.tick(time, now);
         assert!(live.update_levels());
         let lit = live
-            .render_onto(Default::default(), time, &mut scratch)
+            .render_onto(Default::default(), time, now, &mut scratch)
             .primitives
             .values()
             .map(|head| head.dimmer)

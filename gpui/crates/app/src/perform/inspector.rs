@@ -3,16 +3,16 @@
 //!
 //! For a pattern it holds the name, the group it lights, the way into its
 //! editor, where its pad (a button node of its graph) is said to live.
-//! A fader cell says what it moves. A color cell holds its swatches, each
-//! edited in the color picker, its fade, whether it steps on by itself, and
-//! the live colors it sets. A target holds its name and group. Every cell
-//! lists what of it can be mapped, each with a Learn button and the
-//! controller inputs bound to it.
+//! A fader cell says what it moves. A list holds its values (a color edited
+//! in the color picker, a number by dragging, or the color below), its
+//! fade, whether it steps on by itself, and what it sets. A group cell holds
+//! its name and group. Every cell lists what of it can be mapped, each with
+//! a Learn button and the controller inputs bound to it.
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, Hsla, SharedString};
 use luma_lib::models::perform::{
-    Cell, CellContent, ControlTarget, LayoutPage, PerformPattern, Step, MOST_SWATCHES,
+    Cell, CellContent, ControlTarget, LayoutPage, ListValue, PerformPattern, Step, MOST_VALUES,
 };
 use luma_patterns::clip_graph::LiveInputKind;
 use luma_patterns::press::TimeUnit;
@@ -229,9 +229,11 @@ fn kind(cell: &Cell) -> &'static str {
         CellContent::Pattern { .. } => "Pattern",
         CellContent::Master => "Master",
         CellContent::Tap => "Tap",
+        CellContent::Select => "Select",
+        CellContent::Clear => "Clear",
         CellContent::Fader { .. } => "Fader",
-        CellContent::Color { .. } => "Colors",
-        CellContent::Target { .. } => "Target",
+        CellContent::List { .. } => "List",
+        CellContent::Group { .. } => "Group",
     }
 }
 
@@ -289,8 +291,8 @@ fn cell_sections(
             {
                 sections.push(
                     note(format!(
-                        "Row {} plays one at a time: turning this pattern on turns the \
-                         row's others off.",
+                        "Row {} plays one at a time: where this pattern comes on, the \
+                         row's others go off.",
                         cell.row + 1
                     ))
                     .into_any_element(),
@@ -319,8 +321,8 @@ fn cell_sections(
             sections.push(moves(state, cell, targets, target, app).into_any_element());
         }
         (
-            CellContent::Color {
-                swatches,
+            CellContent::List {
+                values,
                 fade,
                 unit,
                 targets,
@@ -329,6 +331,16 @@ fn cell_sections(
             },
             _,
         ) => {
+            let colors = cell.content.colors();
+            let what = match (colors, targets.is_empty()) {
+                (true, true) => {
+                    "Tapping a color sets the base color of the groups chosen, or of \
+                     every light. After Select it sets the chosen effects' own color, \
+                     and Below puts them back on the color under them."
+                }
+                (true, false) => "Tapping a color fades every live color it sets to it.",
+                (false, _) => "Tapping a number sets everything it moves to it.",
+            };
             sections.push(
                 column()
                     .child(head)
@@ -339,17 +351,19 @@ fn cell_sections(
                         target,
                         app,
                     ))
-                    .child(note(
-                        "Choosing a swatch fades every live color it sets to that color.",
-                    ))
+                    .child(note(what))
                     .into_any_element(),
             );
-            sections.push(swatch_list(state, cell, swatches, target, app).into_any_element());
-            sections.push(fading(cell, *fade, *unit, target, app).into_any_element());
+            sections.push(
+                value_list(state, cell, values, targets.is_empty(), target, app).into_any_element(),
+            );
+            if colors {
+                sections.push(fading(cell, *fade, *unit, target, app).into_any_element());
+            }
             sections.push(stepping(cell, *step, target, app).into_any_element());
             sections.push(moves(state, cell, targets, target, app).into_any_element());
         }
-        (CellContent::Target { group, .. }, _) => sections.push(
+        (CellContent::Group { group, .. }, _) => sections.push(
             column()
                 .child(head)
                 .child(name(
@@ -364,8 +378,25 @@ fn cell_sections(
                     group_picker(state, cell, group, target, app),
                 ))
                 .child(note(
-                    "Hold it and press a pad: the pad's pattern plays on this group \
-                     instead of its own. Hold several to play on all of them.",
+                    "Tap it to choose its group: what you do next acts there. Hold it \
+                     and press something to act on this group alone.",
+                ))
+                .into_any_element(),
+        ),
+        (CellContent::Select, _) => sections.push(
+            column()
+                .child(head)
+                .child(note(
+                    "Hold it, or tap it, then press effects: they are chosen instead of \
+                     played. The next color tapped on a list with no targets is theirs.",
+                ))
+                .into_any_element(),
+        ),
+        (CellContent::Clear, _) => sections.push(
+            column()
+                .child(head)
+                .child(note(
+                    "Tap it to choose nothing. Hold it to turn every effect off.",
                 ))
                 .into_any_element(),
         ),
@@ -389,8 +420,8 @@ fn cell_sections(
     sections
 }
 
-/// The group a pattern lights or a target holds, `current`, and the menu to
-/// pick another.
+/// The group a pattern lights or a group cell holds, `current`, and the
+/// menu to pick another.
 fn group_picker(
     state: &Perform,
     cell: &Cell,
@@ -511,7 +542,7 @@ fn target_options(state: &Perform, colors: bool) -> Vec<(ControlTarget, String)>
     options
 }
 
-/// A fader or color cell's targets: a checklist of what it can move.
+/// A fader or list's targets: a checklist of what it can move.
 fn moves(
     state: &Perform,
     cell: &Cell,
@@ -519,7 +550,7 @@ fn moves(
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
-    let colors = matches!(cell.content, CellContent::Color { .. });
+    let colors = cell.content.colors();
     let options = target_options(state, colors);
     let empty = options.is_empty();
     let rows = options
@@ -572,27 +603,27 @@ fn moves(
         .child(div().flex().flex_col().gap(px(2.)).children(rows))
 }
 
-/// What of a color cell an edit here changes.
-struct Palette<'a> {
-    swatches: &'a mut Vec<[f64; 3]>,
+/// What of a list an edit here changes.
+struct Listed<'a> {
+    values: &'a mut Vec<ListValue>,
     fade: &'a mut f64,
     unit: &'a mut TimeUnit,
     step: &'a mut Option<Step>,
 }
 
-/// Color cell `cell` as `change` leaves it.
-fn recolored(cell: &Cell, change: impl FnOnce(Palette<'_>)) -> Edit {
+/// List `cell` as `change` leaves it.
+fn relisted(cell: &Cell, change: impl FnOnce(Listed<'_>)) -> Edit {
     let mut content = cell.content.clone();
-    if let CellContent::Color {
-        swatches,
+    if let CellContent::List {
+        values,
         fade,
         unit,
         step,
         ..
     } = &mut content
     {
-        change(Palette {
-            swatches,
+        change(Listed {
+            values,
             fade,
             unit,
             step,
@@ -601,67 +632,90 @@ fn recolored(cell: &Cell, change: impl FnOnce(Palette<'_>)) -> Edit {
     Edit::SetContent(cell.id.clone(), content)
 }
 
-/// A color cell's swatches: each a chip that opens it in the picker, a way
-/// to add one, and for the one open its picker, its place and removing it.
-fn swatch_list(
+/// A list's values: each a chip that opens it, a way to add one (and to a
+/// color list with no targets, the color below), and for the one open its
+/// color picker or its number, its place and removing it.
+fn value_list(
     state: &Perform,
     cell: &Cell,
-    swatches: &[[f64; 3]],
+    values: &[ListValue],
+    unlinked: bool,
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
     let open = state
-        .swatch
+        .value
         .as_ref()
-        .filter(|editor| editor.cell == cell.id && editor.index < swatches.len());
+        .filter(|editor| editor.cell == cell.id && editor.index < values.len());
     let pick = |index: Option<usize>| {
         let (app, target, id) = (app.clone(), target.clone(), cell.id.clone());
         move |_: &gpui::ClickEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
-            app.update(cx, |this, cx| this.open_swatch(&target, &id, index, cx));
+            app.update(cx, |this, cx| this.open_value(&target, &id, index, cx));
         }
     };
-    let chips = swatches.iter().enumerate().map(|(index, rgb)| {
+    let chips = values.iter().enumerate().map(|(index, value)| {
         let chosen = open.is_some_and(|editor| editor.index == index);
-        div()
-            .id(SharedString::from(format!("perform-swatch-edit-{index}")))
-            .size(px(28.))
+        let chip = div()
+            .id(SharedString::from(format!("perform-value-edit-{index}")))
+            .h(px(28.))
+            .min_w(px(28.))
+            .px(px(4.))
+            .flex()
+            .items_center()
+            .justify_center()
             .rounded(px(radius::CONTROL))
-            .bg(super::paint(*rgb))
+            .text_size(px(10.5))
+            .text_color(ladder::foreground_alpha(0.85))
             .border_2()
             .border_color(if chosen {
                 ladder::foreground().into()
             } else {
                 glass::hairline(0.12)
             })
-            .cursor_pointer()
-            .on_click(pick((!chosen).then_some(index)))
-            .agent_node(Role::Toggle, format!("Edit swatch {}", index + 1))
+            .cursor_pointer();
+        let chip = match value {
+            ListValue::Color(rgb) => chip.bg(super::paint(*rgb)),
+            ListValue::Number(number) => chip
+                .bg(glass::ink(0.06))
+                .child(format!("{:.0}%", number * 100.)),
+            ListValue::Below => chip.bg(glass::ink(0.06)).child("Below"),
+        };
+        chip.on_click(pick((!chosen).then_some(index)))
+            .agent_node(Role::Toggle, format!("Edit value {}", index + 1))
             .agent_focused(chosen)
     });
-    let full = swatches.len() >= MOST_SWATCHES;
-    let add = {
+    let full = values.len() >= MOST_VALUES;
+    let add = |label: &'static str, key: &'static str, value: ListValue| {
         let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
-        let at = swatches.len();
-        let copy = swatches.last().copied().unwrap_or([1.; 3]);
-        luma_ui::button("Add", if full { Enabled::No } else { Enabled::Yes })
-            .id("perform-swatch-add")
+        let at = values.len();
+        luma_ui::button(label, if full { Enabled::No } else { Enabled::Yes })
+            .id(key)
             .when(!full, |button| {
                 button.on_click(move |_, _, cx| {
-                    let edit = recolored(&cell, |palette| palette.swatches.push(copy));
+                    let edit = relisted(&cell, |list| list.values.push(value));
                     app.update(cx, |this, cx| {
                         this.edit_surface(&target, edit, cx);
-                        this.open_swatch(&target, &cell.id, Some(at), cx);
+                        this.open_value(&target, &cell.id, Some(at), cx);
                     });
                 })
             })
-            .agent_node(Role::Button, "Add swatch")
+            .agent_node(Role::Button, label)
     };
+    let colors = values.first().is_none_or(|value| value.is_color());
+    let copy = values
+        .iter()
+        .rev()
+        .find(|value| **value != ListValue::Below)
+        .copied()
+        .unwrap_or(ListValue::Color([1.; 3]));
+    let below = (colors && unlinked && !values.contains(&ListValue::Below))
+        .then(|| add("Add below", "perform-value-add-below", ListValue::Below));
     let editing = open.map(|editor| {
         let index = editor.index;
-        let last = swatches.len() - 1;
+        let last = values.len() - 1;
         let shift = |label: &'static str, to: Option<usize>| {
             let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
-            let key = format!("perform-swatch-{}", label.to_lowercase().replace(' ', "-"));
+            let key = format!("perform-value-{}", label.to_lowercase().replace(' ', "-"));
             luma_ui::button(
                 label,
                 if to.is_some() {
@@ -673,45 +727,62 @@ fn swatch_list(
             .id(SharedString::from(key))
             .when_some(to, |button, to| {
                 button.on_click(move |_, _, cx| {
-                    let edit = recolored(&cell, |palette| palette.swatches.swap(index, to));
+                    let edit = relisted(&cell, |list| list.values.swap(index, to));
                     app.update(cx, |this, cx| {
                         this.edit_surface(&target, edit, cx);
-                        this.open_swatch(&target, &cell.id, Some(to), cx);
+                        this.open_value(&target, &cell.id, Some(to), cx);
                     });
                 })
             })
-            .agent_node(Role::Button, format!("{label} swatch {}", index + 1))
+            .agent_node(Role::Button, format!("{label} value {}", index + 1))
         };
         let remove = {
             let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
             let can = last > 0;
             luma_ui::button("Remove", if can { Enabled::Yes } else { Enabled::No })
-                .id("perform-swatch-remove")
+                .id("perform-value-remove")
                 .text_color(Hsla::from(ladder::danger()))
                 .when(can, |button| {
                     button.on_click(move |_, _, cx| {
-                        let edit = recolored(&cell, |palette| {
-                            palette.swatches.remove(index);
+                        let edit = relisted(&cell, |list| {
+                            list.values.remove(index);
                         });
                         app.update(cx, |this, cx| {
-                            this.open_swatch(&target, &cell.id, None, cx);
+                            this.open_value(&target, &cell.id, None, cx);
                             this.edit_surface(&target, edit, cx);
                         });
                     })
                 })
-                .agent_node(Role::Button, format!("Remove swatch {}", index + 1))
+                .agent_node(Role::Button, format!("Remove value {}", index + 1))
         };
-        column().child(editor.picker.clone()).child(
-            div()
-                .flex()
-                .gap(px(6.))
-                .child(shift("Earlier", index.checked_sub(1)))
-                .child(shift("Later", (index < last).then_some(index + 1)))
-                .child(remove),
-        )
+        let number = match values[index] {
+            ListValue::Number(number) => {
+                let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
+                Some(
+                    float::scrub("Value", number, 0., 1., 0.01, 120., move |value, _, cx| {
+                        let edit =
+                            relisted(&cell, |list| list.values[index] = ListValue::Number(value));
+                        app.update(cx, |this, cx| this.edit_surface(&target, edit, cx));
+                    })
+                    .agent_node(Role::Slider, "Value"),
+                )
+            }
+            _ => None,
+        };
+        column()
+            .children(editor.picker.as_ref().map(|(picker, _)| picker.clone()))
+            .children(number.map(|number| float::inline_field_row("Number", number)))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .child(shift("Earlier", index.checked_sub(1)))
+                    .child(shift("Later", (index < last).then_some(index + 1)))
+                    .child(remove),
+            )
     });
     column()
-        .child(float::label("Swatches"))
+        .child(float::label("Values"))
         .child(
             div()
                 .flex()
@@ -719,12 +790,13 @@ fn swatch_list(
                 .items_center()
                 .gap(px(6.))
                 .children(chips)
-                .child(add),
+                .child(add("Add", "perform-value-add", copy))
+                .children(below),
         )
         .children(editing)
 }
 
-/// A color cell's fade: its length, and whether it counts beats or seconds.
+/// A color list's fade: its length, and whether it counts beats or seconds.
 fn fading(
     cell: &Cell,
     fade: f64,
@@ -735,7 +807,7 @@ fn fading(
     let length = {
         let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
         float::scrub("Fade", fade, 0., 16., 0.25, 120., move |value, _, cx| {
-            let edit = recolored(&cell, |palette| *palette.fade = value);
+            let edit = relisted(&cell, |list| *list.fade = value);
             app.update(cx, |this, cx| this.edit_surface(&target, edit, cx));
         })
         .agent_node(Role::Slider, "Fade")
@@ -751,7 +823,7 @@ fn fading(
                     .on_click(on_edit(
                         target,
                         app,
-                        recolored(cell, |palette| *palette.unit = choice),
+                        relisted(cell, |list| *list.unit = choice),
                     ))
                     .agent_node(Role::Toggle, label)
                     .agent_focused(chosen),
@@ -763,16 +835,15 @@ fn fading(
         .child(float::inline_field_row("In", units))
 }
 
-/// Whether a color cell steps on by itself, every how many bars, and
-/// whether it loops back to its first swatch.
+/// Whether a list steps on by itself, every how many bars, and whether it
+/// loops back to its first value.
 fn stepping(
     cell: &Cell,
     step: Option<Step>,
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
-    let set =
-        |next: Option<Step>| on_edit(target, app, recolored(cell, |palette| *palette.step = next));
+    let set = |next: Option<Step>| on_edit(target, app, relisted(cell, |list| *list.step = next));
     let choices = [
         ("Off", None),
         (
@@ -811,7 +882,7 @@ fn stepping(
                         bars: value as u16,
                         ..step
                     };
-                    let edit = recolored(&cell, |palette| *palette.step = Some(next));
+                    let edit = relisted(&cell, |list| *list.step = Some(next));
                     app.update(cx, |this, cx| this.edit_surface(&target, edit, cx));
                 },
             )
@@ -848,14 +919,14 @@ fn stepping(
         .child(switch)
         .children(details)
         .child(note(
-            "It moves on to its next swatch on the set's bars: the deck's, or \
+            "It moves on to its next value on the set's bars: the deck's, or \
              4 beats of the tapped tempo.",
         ))
 }
 
 /// What of the cell can be mapped, each with Learn and its bindings.
 fn mapping(state: &Perform, cell: &Cell, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
-    // A live color is set by a color cell, not by a controller.
+    // A live color is set by a list, not by a controller.
     let parts: Vec<(super::Part, Mode)> = state
         .parts(cell)
         .into_iter()

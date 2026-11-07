@@ -61,7 +61,8 @@ impl Set {
     /// every control they play under (`controls::perform`), so a program that
     /// binds or presses one names it as the bank does. A pattern's `pad` is
     /// the id of its pad node, one of its `nodes`, or null. A fader cell and
-    /// a target have one control; a color cell a list, one per swatch.
+    /// a group cell have one control; a list one per value and its own,
+    /// for its next value.
     pub fn described(&self) -> Value {
         use crate::controls::perform as names;
         let patterns: serde_json::Map<String, Value> = self
@@ -93,8 +94,8 @@ impl Set {
                 (pattern.id.clone(), controls)
             })
             .collect();
-        // A fader cell's or a target's control, or a color cell's swatches'
-        // one by one.
+        // A fader or group cell's control, or a list's: its values' one by
+        // one, and its own, for its next value.
         let cells: serde_json::Map<String, Value> = self
             .layout
             .pages
@@ -102,12 +103,15 @@ impl Set {
             .flat_map(|page| page.cells.iter())
             .filter_map(|cell| {
                 let controls = match &cell.content {
-                    CellContent::Fader { .. } | CellContent::Target { .. } => {
+                    CellContent::Fader { .. } | CellContent::Group { .. } => {
                         json!(names::cell(&cell.id))
                     }
-                    CellContent::Color { swatches, .. } => json!((0..swatches.len())
-                        .map(|index| names::swatch(&cell.id, index))
-                        .collect::<Vec<_>>()),
+                    CellContent::List { values, .. } => json!({
+                        "values": (0..values.len())
+                            .map(|index| names::value(&cell.id, index))
+                            .collect::<Vec<_>>(),
+                        "next": names::cell(&cell.id),
+                    }),
                     _ => return None,
                 };
                 Some((cell.id.clone(), controls))
@@ -121,6 +125,8 @@ impl Set {
                 "cells": cells,
                 "master": names::MASTER,
                 "tap": names::TAP,
+                "select": names::SELECT,
+                "clear": names::CLEAR,
             },
         })
     }

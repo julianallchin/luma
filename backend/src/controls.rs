@@ -7,10 +7,11 @@
 //!
 //! The Perform set plays through controls too, under names of its own
 //! ([`perform`]): each pattern's level, each fader, live color and button
-//! node of its graph (its pad among them), each fader cell, each color
-//! cell's swatches, each target, the Perform master, and tap tempo. So everything that
-//! can move a control (an on-screen pad, a MIDI key, an OSC message) can
-//! play the set, and the bank is the one place that enforces how they play.
+//! node of its graph (its pad among them), each fader, group and list cell,
+//! each list's values, the master, tap, Select and Clear. So everything
+//! that can move a control (an on-screen pad, a MIDI key, an OSC message)
+//! can play the set, and the bank is the one place that enforces how they
+//! play.
 //!
 //! A control is a fader, a button or a live color. A fader holds the value
 //! it was set to. A button is declared with the [`Press`] that plays it
@@ -18,38 +19,56 @@
 //! value is its envelope through that gate, now. A press flips a toggle and
 //! holds a flash; setting a button outright gates it on above ½ and off
 //! below. A name pressed that no button declares is momentary: 1 while
-//! held. Turning a pad on in a one-at-a-time row releases the row's others,
-//! a fader cell moves every one of its targets, and a tap lands on the
-//! venue's tempo.
+//! held. A fader cell moves every one of its targets, and a tap lands on
+//! the venue's tempo.
 //!
 //! A button whose press starts on the beat or the bar ([`Start`]) gates on
 //! or off at the set's next one: the bank keeps that time, still to come, as
 //! the gate's, so its value stays a pure function of time. The opposite
 //! change before then calls it off.
 //!
-//! A pattern can play on venue groups instead of its own selection: its pad
-//! pressed while target cells are held plays an [`Instance`] of it on their
-//! groups. Each instance is a button of its own, played by its pattern's
-//! pad's press: pressed again with the same targets held, it toggles, and a
-//! one-at-a-time row releases only the row's instances on the same targets.
-//! Everything else of the pattern (its level, faders and colors) is the
-//! pattern's, in every instance.
+//! Perform plays on two axes: where (venue groups) and the stack (patterns
+//! over each other). The rule is: choose where, then do something; nothing
+//! chosen means everything. A group cell tapped is chosen or not, and stays
+//! so; held while another control is pressed, that one press acts on the
+//! held group alone and the choice stays as it was. Several chosen or held
+//! act on all of them.
 //!
-//! A live color is set by a color cell: pressing one of its swatches fades
-//! every target of the cell from the color it has now to the swatch's. The
-//! bank keeps only that fade (from, to, when and how long), so a color too
-//! is a pure function of time. A color cell that steps moves on to its next
-//! swatch every so many bars of the set's clock.
+//! Each pattern with a pad is an effect: on or off, and where it plays, a
+//! set of groups (none is its own selection). Its pad tapped with nothing
+//! chosen turns it on or off where it was made to play. Tapped with groups
+//! chosen, it comes on there if it was off; if it was on there already it
+//! leaves them (and goes off when it is left nowhere), else it adds them.
+//! A one-at-a-time row takes the groups an effect comes on at from the
+//! row's others, each going off when it is left nowhere; an effect on its
+//! own selection takes the whole row.
+//!
+//! A list cell holds colors or numbers. A value tapped sets the list's
+//! targets to it, a color fading by the list's fade. A color list with no
+//! targets sets the base color: a color per light, under every effect,
+//! which lights nothing itself. It sets the lights of the groups chosen, or
+//! every light. Pressed while Select is held (or after Select is tapped, which
+//! latches it), an effect is chosen instead of played; the next color tapped
+//! on a list with no targets sets its own color, or with the color below
+//! sets it back to taking the color under it (the blend
+//! [`luma_patterns::BlendMode::Below`]). Clear tapped chooses nothing;
+//! held, it lets every effect go.
+//!
+//! The bank keeps each fade (from, to, when and how long), so a color too is
+//! a pure function of time. A list that steps moves on to its next value
+//! every so many bars of the set's clock.
 //!
 //! The set's clock is the bank's own tapped tempo, its bars starting at a
 //! run's first tap, or, while the set follows a deck, the deck's beat grid
-//! as the engine reads it at each frame ([`VenueControls::tick`]). Color
-//! cells step on it and quantised presses land on it.
+//! as the engine reads it at each frame ([`VenueControls::tick`]). Lists
+//! step on it and quantised presses land on it.
 //!
 //! Values are live state, like the render engine's, so they live here
 //! rather than in the database: every scene an app compiles for a venue
 //! reads that app's one bank of the venue ([`ControlBanks`]), and setting a
-//! value never recompiles.
+//! value never recompiles. Where an effect plays and whether it takes the
+//! color below change what the engine plays; it sees each change by
+//! [`VenueControls::changed`].
 //!
 //! [`install`]: VenueControls::install
 
@@ -59,10 +78,12 @@ use std::time::{Duration, Instant};
 
 use luma_patterns::clip_graph::{LiveInput, LiveInputKind};
 use luma_patterns::press::{Button, Gate, Press, PressMode, Shape, Start, TimeUnit};
+use luma_patterns::BlendMode;
 use serde::Serialize;
 
 use crate::database::local::venue_access::AuthorizedVenue;
-use crate::models::perform::{CellContent, PerformLayout, PerformPattern, Step, Tempo};
+use crate::models::perform::{CellContent, ListValue, PerformLayout, PerformPattern, Step, Tempo};
+use crate::models::universe::UniverseState;
 
 /// The names the Perform set plays under, all `perform_…`. Nothing lists
 /// them as the venue's own.
@@ -73,6 +94,10 @@ pub mod perform {
     pub const MASTER: &str = "perform_master";
     /// Pressed on each beat to tap the tempo.
     pub const TAP: &str = "perform_tap";
+    /// Held, or tapped to latch, while effects are pressed: it chooses them.
+    pub const SELECT: &str = "perform_select";
+    /// Tapped, nothing is chosen; held, every effect is let go.
+    pub const CLEAR: &str = "perform_clear";
 
     /// Pattern `id`'s level, 1 until moved.
     pub fn level(id: &str) -> String {
@@ -92,28 +117,18 @@ pub mod perform {
     }
 
     /// Cell `id`'s own control: a fader cell's value, which moves its
-    /// targets, or a target's, 1 while it is held.
+    /// targets; a group cell's, pressed to choose it; or a list cell's,
+    /// pressed for its next value.
     pub fn cell(id: &str) -> String {
         format!("perform_c{}", key(id))
     }
 
-    /// Swatch `index` of color cell `id`, from 0: pressed, it is chosen.
-    pub fn swatch(id: &str, index: usize) -> String {
-        format!("perform_c{}_s{index}", key(id))
+    /// Value `index` of list cell `id`, from 0: pressed, it is tapped.
+    pub fn value(id: &str, index: usize) -> String {
+        format!("perform_c{}_v{index}", key(id))
     }
 
-    /// The button of pad `pad` playing on groups `on`, sorted: the pad
-    /// itself when `on` is empty. It is no control name, so nothing binds
-    /// to an instance; hardware plays it through the pad and the targets.
-    pub fn instance(pad: &str, on: &[String]) -> String {
-        if on.is_empty() {
-            pad.to_owned()
-        } else {
-            format!("{pad}@{}", on.join("+"))
-        }
-    }
-
-    /// The control a fader or color cell's `target` moves.
+    /// The control a fader or list cell's `target` moves.
     pub fn target(target: &ControlTarget) -> String {
         match target {
             ControlTarget::Level { pattern_id } => level(pattern_id),
@@ -141,13 +156,19 @@ pub mod perform {
     }
 }
 
+/// Clear held this long lets every effect go; let go sooner, it is a tap.
+pub const CLEAR_HOLD: Duration = Duration::from_millis(500);
+
+/// The group that is every light: what nothing chosen acts on.
+pub const ALL: &str = "all";
+
 /// One venue's control values, its buttons and its tempo.
 #[derive(Debug)]
 pub struct VenueControls {
     bank: RwLock<Bank>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Bank {
     /// Every fader's value, and every undeclared name pressed.
     values: BTreeMap<String, f64>,
@@ -158,24 +179,86 @@ struct Bank {
     links: HashMap<String, Arc<[String]>>,
     /// Every live color set so far.
     colors: HashMap<String, Fading>,
-    /// Each color cell, by cell id.
-    palettes: HashMap<String, Palette>,
-    /// Each swatch's control, to its color cell and its place there.
-    swatches: HashMap<String, (String, usize)>,
+    /// Each list cell, by cell id.
+    lists: HashMap<String, List>,
+    /// Each list's controls: a value's, to its list and its place there,
+    /// and the list's own, to its list and no place (its next value).
+    taps: HashMap<String, (String, Option<usize>)>,
     /// Each pad, to its pattern's id.
     pads: HashMap<String, String>,
-    /// Each target cell's control, to its group.
-    targets: HashMap<String, String>,
-    /// Each instance's button, to its pad and what it is.
-    instances: BTreeMap<String, (String, Instance)>,
-    /// Each button held down, to the button its press went to: a pad's
-    /// instance, so its release lets go of the same one.
-    pressed: HashMap<String, String>,
-    /// How many instances were ever made, for the engine to see a new one.
-    made: u64,
+    /// Every pattern, by id.
+    effects: HashMap<String, Effect>,
+    /// Each group cell's control, to its group.
+    groups: HashMap<String, String>,
+    /// Each group's lights, `ALL` among them.
+    lights: HashMap<String, Arc<[String]>>,
+    /// The groups chosen.
+    chosen: BTreeSet<String>,
+    /// Each group cell held down, and whether another control was pressed
+    /// while it was, so its release is no tap.
+    held: BTreeMap<String, bool>,
+    select: Select,
+    /// The effects chosen by Select, by pattern id.
+    selected: BTreeSet<String>,
+    /// When Clear went down, while it is.
+    clearing: Option<Instant>,
+    /// Each light's base color.
+    base: HashMap<String, Fading>,
+    /// Bumped whenever an effect's groups or blend change, for the engine.
+    changed: u64,
     tempo: TapTempo,
     /// The deck the set follows, while it follows one.
     deck: Option<Deck>,
+}
+
+/// Select: down, and whether an effect or value was pressed meanwhile, so
+/// its release is no tap; and latched, by a tap.
+#[derive(Clone, Copy, Debug, Default)]
+struct Select {
+    down: Option<bool>,
+    latched: bool,
+}
+
+impl Select {
+    fn on(self) -> bool {
+        self.down.is_some() || self.latched
+    }
+}
+
+/// A pattern as the bank plays it.
+#[derive(Clone, Debug)]
+struct Effect {
+    /// The groups it plays on, sorted; none is its own selection.
+    groups: Vec<String>,
+    /// Its own color: the first live color node of its graph.
+    color: Option<String>,
+    /// Its blend as stored.
+    blend: BlendMode,
+    /// Where Select put its color, and the blend it was stored with then.
+    /// A blend stored since wins.
+    source: Option<(Source, BlendMode)>,
+}
+
+/// Where an effect's color comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Source {
+    /// The color under it: the blend [`BlendMode::Below`].
+    Below,
+    /// Its own color control, and a blend that lights its own color.
+    Own,
+}
+
+impl Effect {
+    /// The blend it plays by: as stored, or as Select set its color. Own
+    /// color over a stored Below is Replace.
+    fn blend(&self) -> BlendMode {
+        match self.source {
+            Some((Source::Below, _)) => BlendMode::Below,
+            Some((Source::Own, _)) if self.blend == BlendMode::Below => BlendMode::Replace,
+            _ => self.blend,
+        }
+    }
 }
 
 /// The deck the set follows: its tempo, and its beat as the engine last
@@ -200,15 +283,6 @@ fn seconds(then: Instant, at: Instant) -> f64 {
         Some(since) => since.as_secs_f64(),
         None => -then.duration_since(at).as_secs_f64(),
     }
-}
-
-/// A pattern playing on venue groups instead of its own selection.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Instance {
-    pub pattern_id: String,
-    /// The groups it plays on, by name, sorted.
-    pub on: Vec<String>,
 }
 
 /// A live color nothing has set: white.
@@ -265,7 +339,7 @@ impl LiveColor {
     }
 }
 
-/// A live color's last fade and when it began.
+/// A color's last fade and when it began.
 #[derive(Clone, Copy, Debug)]
 struct Fading {
     fade: Fade,
@@ -281,19 +355,19 @@ impl Fading {
     }
 }
 
-/// A color cell as the bank plays it: its swatches, fade, targets and
-/// step, from the layout, and the swatch on, which is live.
+/// A list cell as the bank plays it: its values, fade, targets and step,
+/// from the layout, and the value on, which is live.
 #[derive(Clone, Debug)]
-struct Palette {
-    swatches: Arc<[[f64; 3]]>,
+struct List {
+    values: Arc<[ListValue]>,
     fade: f64,
     unit: TimeUnit,
     targets: Arc<[String]>,
     step: Option<Step>,
-    /// The swatch on, `None` until one is chosen.
+    /// The value on, `None` until one is tapped.
     on: Option<usize>,
-    /// The bar of the set's clock the swatch on is counted from, once the
-    /// clock has been read since it was chosen.
+    /// The bar of the set's clock the value on is counted from, once the
+    /// clock has been read since it was tapped.
     counted_from: Option<i64>,
 }
 
@@ -330,22 +404,19 @@ impl Default for VenueControls {
         Self {
             bank: RwLock::new(Bank {
                 values: BTreeMap::from([(perform::MASTER.to_owned(), 1.0)]),
-                buttons: HashMap::new(),
-                exclusive: HashMap::new(),
-                links: HashMap::new(),
-                colors: HashMap::new(),
-                palettes: HashMap::new(),
-                swatches: HashMap::new(),
-                pads: HashMap::new(),
-                targets: HashMap::new(),
-                instances: BTreeMap::new(),
-                pressed: HashMap::new(),
-                made: 0,
-                tempo: TapTempo::default(),
-                deck: None,
+                ..Bank::default()
             }),
         }
     }
+}
+
+/// `groups` sorted, each once.
+fn sorted(groups: impl IntoIterator<Item = String>) -> Vec<String> {
+    groups
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 impl Bank {
@@ -398,6 +469,207 @@ impl Bank {
         self.after_beats(at, (beat / every).ceil() * every - beat)
     }
 
+    /// The groups an action acts on: those held down, else those chosen;
+    /// none is everything.
+    fn aimed(&self) -> Vec<String> {
+        if self.held.is_empty() {
+            self.chosen.iter().cloned().collect()
+        } else {
+            sorted(
+                self.held
+                    .keys()
+                    .filter_map(|control| self.groups.get(control).cloned()),
+            )
+        }
+    }
+
+    /// Press (`down`) or release `name` at `at`. A press marks every group
+    /// held, and Select, as used: their release is no tap.
+    fn press(&mut self, name: &str, down: bool, at: Instant) {
+        if down {
+            for (control, used) in &mut self.held {
+                *used |= control != name;
+            }
+            if name != perform::SELECT {
+                if let Some(used) = &mut self.select.down {
+                    *used = true;
+                }
+            }
+        }
+        if self.groups.contains_key(name) {
+            return self.hold(name, down);
+        }
+        match name {
+            perform::SELECT => return self.press_select(down),
+            perform::CLEAR => return self.press_clear(down, at),
+            _ => {}
+        }
+        if let Some(pattern) = self.pads.get(name).cloned() {
+            return self.press_pad(name, &pattern, down, at);
+        }
+        let Some(&held) = self.buttons.get(name) else {
+            return self.set(name, f64::from(u8::from(down)), at);
+        };
+        match held.press.mode {
+            PressMode::Toggle if down => self.gate(name, !held.on(), at),
+            PressMode::Toggle => {}
+            PressMode::Flash => self.gate(name, down, at),
+        }
+    }
+
+    /// A group cell's control down or let go: let go with nothing pressed
+    /// meanwhile, its group is chosen, or no longer.
+    fn hold(&mut self, control: &str, down: bool) {
+        if down {
+            self.held.insert(control.to_owned(), false);
+            return;
+        }
+        if self.held.remove(control) == Some(false) {
+            let group = self.groups[control].clone();
+            if !self.chosen.remove(&group) {
+                self.chosen.insert(group);
+            }
+        }
+    }
+
+    /// Select down, or let go: let go with nothing pressed meanwhile, it
+    /// latches, or unlatches and chooses no effect.
+    fn press_select(&mut self, down: bool) {
+        if down {
+            self.select.down = Some(false);
+        } else if self.select.down.take() == Some(false) {
+            self.select.latched = !self.select.latched;
+            if !self.select.latched {
+                self.selected.clear();
+            }
+        }
+    }
+
+    /// Clear down, or let go: held long, every effect goes; else nothing is
+    /// chosen.
+    fn press_clear(&mut self, down: bool, at: Instant) {
+        if down {
+            self.clearing = Some(at);
+            return;
+        }
+        match self.clearing.take() {
+            Some(since) if at.saturating_duration_since(since) >= CLEAR_HOLD => {
+                self.release_all(at)
+            }
+            Some(_) => self.clear(),
+            None => {}
+        }
+    }
+
+    /// Let every effect go.
+    fn release_all(&mut self, at: Instant) {
+        let pads: Vec<String> = self.pads.keys().cloned().collect();
+        for pad in pads {
+            self.gate(&pad, false, at);
+        }
+    }
+
+    /// Choose nothing: no group, no effect, Select unlatched.
+    fn clear(&mut self) {
+        self.chosen.clear();
+        self.selected.clear();
+        self.select.latched = false;
+    }
+
+    /// Pad `pad` of `pattern` pressed or let go. While Select is on, a press
+    /// chooses the effect, or no longer. A flash plays while held, on the
+    /// groups aimed at; a toggle plays by the rule of the module's doc.
+    fn press_pad(&mut self, pad: &str, pattern: &str, down: bool, at: Instant) {
+        if down && self.select.on() {
+            if !self.selected.remove(pattern) {
+                self.selected.insert(pattern.to_owned());
+            }
+            return;
+        }
+        let Some(&held) = self.buttons.get(pad) else {
+            return;
+        };
+        let aimed = self.aimed();
+        match held.press.mode {
+            PressMode::Flash if down => self.play(pad, pattern, aimed.clone(), &aimed, at),
+            PressMode::Flash => self.gate(pad, false, at),
+            PressMode::Toggle if !down => {}
+            PressMode::Toggle if aimed.is_empty() => match held.on() {
+                true => self.gate(pad, false, at),
+                false => self.play(pad, pattern, Vec::new(), &[], at),
+            },
+            PressMode::Toggle if !held.on() => self.play(pad, pattern, aimed.clone(), &aimed, at),
+            PressMode::Toggle => {
+                let groups = self.effects[pattern].groups.clone();
+                if aimed.iter().all(|group| groups.contains(group)) {
+                    let left: Vec<String> = groups
+                        .iter()
+                        .filter(|group| !aimed.contains(group))
+                        .cloned()
+                        .collect();
+                    if left.is_empty() {
+                        self.gate(pad, false, at);
+                    } else {
+                        self.aim(pattern, left);
+                    }
+                } else {
+                    let more = groups.iter().cloned().chain(aimed.iter().cloned());
+                    self.play(pad, pattern, sorted(more), &aimed, at);
+                }
+            }
+        }
+    }
+
+    /// Play `pattern` by its pad `pad` on `groups`, and take `claimed` from
+    /// its one-at-a-time row's others when it comes on.
+    fn play(
+        &mut self,
+        pad: &str,
+        pattern: &str,
+        groups: Vec<String>,
+        claimed: &[String],
+        at: Instant,
+    ) {
+        self.aim(pattern, groups);
+        self.gate(pad, true, at);
+        let from = self
+            .buttons
+            .get(pad)
+            .and_then(|button| button.gate)
+            .map_or(at, |(on, _)| on.max(at));
+        let Some(row) = self.exclusive.get(pad).cloned() else {
+            return;
+        };
+        for other in row.iter().filter(|other| *other != pad) {
+            let Some(theirs) = self.pads.get(other).cloned() else {
+                continue;
+            };
+            let on = self.buttons.get(other).is_some_and(Held::on);
+            let groups = self.effects[&theirs].groups.clone();
+            let left: Vec<String> = groups
+                .iter()
+                .filter(|group| !claimed.contains(group))
+                .cloned()
+                .collect();
+            if on && !claimed.is_empty() && !left.is_empty() {
+                self.aim(&theirs, left);
+            } else {
+                // Off, or going off, it goes no later than this comes on.
+                self.release(other, at, from);
+            }
+        }
+    }
+
+    /// Play `pattern` on `groups` from now.
+    fn aim(&mut self, pattern: &str, groups: Vec<String>) {
+        if let Some(effect) = self.effects.get_mut(pattern) {
+            if effect.groups != groups {
+                effect.groups = groups;
+                self.changed += 1;
+            }
+        }
+    }
+
     /// Set `name` and, for a fader cell, its targets. A target is set as
     /// itself, never through its own links, so no two cells can loop.
     fn set(&mut self, name: &str, value: f64, at: Instant) {
@@ -408,84 +680,177 @@ impl Bank {
         }
     }
 
+    /// Set `name` outright: a group is chosen above ½, Select latched, a
+    /// pad on (where the groups aimed at say) or off, any other button
+    /// gated; Clear, tap and a list's controls act as they rise past ½.
     fn set_one(&mut self, name: &str, value: f64, at: Instant) {
-        if self.buttons.contains_key(name) {
-            let button = self.aim(name, None, value > 0.5);
-            self.gate(&button, value > 0.5, at);
+        let on = value > 0.5;
+        if let Some(group) = self.groups.get(name).cloned() {
+            if on {
+                self.chosen.insert(group);
+            } else {
+                self.chosen.remove(&group);
+            }
             return;
         }
+        if name == perform::SELECT {
+            self.select.latched = on;
+            if !on {
+                self.selected.clear();
+            }
+            return;
+        }
+        if let Some(pattern) = self.pads.get(name).cloned() {
+            let aimed = self.aimed();
+            return match on {
+                true => self.play(name, &pattern, aimed.clone(), &aimed, at),
+                false => self.gate(name, false, at),
+            };
+        }
+        if self.buttons.contains_key(name) {
+            return self.gate(name, on, at);
+        }
         let was = self.values.insert(name.to_owned(), value).unwrap_or(0.0);
-        if value <= 0.5 || was > 0.5 {
+        if !on || was > 0.5 {
             return;
         }
         if name == perform::TAP {
             self.tempo.tap(at);
         }
-        if let Some((cell, index)) = self.swatches.get(name).cloned() {
-            self.choose(&cell, index, None, at);
+        if name == perform::CLEAR {
+            self.clear();
+        }
+        if let Some((list, index)) = self.taps.get(name).cloned() {
+            let index = index.unwrap_or_else(|| {
+                let list = &self.lists[&list];
+                list.on.map_or(0, |on| (on + 1) % list.values.len())
+            });
+            self.tap_value(&list, index, at);
         }
     }
 
-    /// Put color cell `id` on swatch `index`, counted from bar
-    /// `counted_from` (`None`: the next the clock reads), and fade each of
-    /// its targets from where it is to the swatch.
-    fn choose(&mut self, id: &str, index: usize, counted_from: Option<i64>, at: Instant) {
-        let Some(palette) = self.palettes.get_mut(id) else {
+    /// Value `index` of list `id` tapped at `at`: with effects chosen by
+    /// Select and no targets, their color; else what [`Self::put`] sets.
+    fn tap_value(&mut self, id: &str, index: usize, at: Instant) {
+        let Some(list) = self.lists.get(id) else {
             return;
         };
-        let Some(&to) = palette.swatches.get(index) else {
+        let Some(&value) = list.values.get(index) else {
             return;
         };
-        palette.on = Some(index);
-        palette.counted_from = counted_from;
-        let (targets, length, unit) = (palette.targets.clone(), palette.fade, palette.unit);
-        for target in targets.iter() {
-            let from = self.color(target, at);
-            self.colors.insert(
-                target.clone(),
-                Fading {
-                    fade: Fade {
-                        from,
-                        to,
-                        length,
-                        unit,
-                    },
-                    start: at,
-                },
-            );
+        if !list.targets.is_empty() || self.selected.is_empty() || !value.is_color() {
+            return self.put(id, index, None, at);
+        }
+        let (length, unit) = (list.fade, list.unit);
+        let source = match value {
+            ListValue::Color(_) => Source::Own,
+            _ => Source::Below,
+        };
+        for pattern in std::mem::take(&mut self.selected) {
+            let Some(effect) = self.effects.get_mut(&pattern) else {
+                continue;
+            };
+            let before = effect.blend();
+            effect.source = Some((source, effect.blend));
+            if effect.blend() != before {
+                self.changed += 1;
+            }
+            if let (ListValue::Color(to), Some(color)) = (value, effect.color.clone()) {
+                self.fade(&color, to, length, unit, at);
+            }
+        }
+        self.select.latched = false;
+    }
+
+    /// Put list `id` on value `index`, counted from bar `counted_from`
+    /// (`None`: the next the clock reads): its targets fade or move to it,
+    /// or with none, a color is the base color of the lights aimed at.
+    fn put(&mut self, id: &str, index: usize, counted_from: Option<i64>, at: Instant) {
+        let Some(list) = self.lists.get_mut(id) else {
+            return;
+        };
+        let Some(&value) = list.values.get(index) else {
+            return;
+        };
+        list.on = Some(index);
+        list.counted_from = counted_from;
+        let (targets, length, unit) = (list.targets.clone(), list.fade, list.unit);
+        match value {
+            ListValue::Number(number) => {
+                for target in targets.iter() {
+                    self.set_one(target, number, at);
+                }
+            }
+            ListValue::Color(to) if targets.is_empty() => {
+                let aimed = self.aimed();
+                self.paint(&aimed, to, length, unit, at);
+            }
+            ListValue::Color(to) => {
+                for target in targets.iter() {
+                    self.fade(target, to, length, unit, at);
+                }
+            }
+            ListValue::Below => {}
         }
     }
 
-    /// Move each stepping color cell on whose bars are up at `at`. A
-    /// cell's count starts at the first bar read after its swatch was
-    /// chosen, and again when the clock goes back past it.
+    /// Fade the base color of the lights of `groups` (none: every light)
+    /// from where each is to `to`.
+    fn paint(&mut self, groups: &[String], to: [f64; 3], length: f64, unit: TimeUnit, at: Instant) {
+        let groups = if groups.is_empty() {
+            &[ALL.to_owned()][..]
+        } else {
+            groups
+        };
+        let lights: BTreeSet<String> = groups
+            .iter()
+            .filter_map(|group| self.lights.get(group))
+            .flat_map(|lights| lights.iter())
+            .cloned()
+            .collect();
+        for light in lights {
+            let from = self.base_at(&light, at);
+            self.base.insert(light, faded(from, to, length, unit, at));
+        }
+    }
+
+    /// Fade live color `name` from where it is to `to`.
+    fn fade(&mut self, name: &str, to: [f64; 3], length: f64, unit: TimeUnit, at: Instant) {
+        let from = self.color(name, at);
+        self.colors
+            .insert(name.to_owned(), faded(from, to, length, unit, at));
+    }
+
+    /// Move each stepping list on whose bars are up at `at`. A list's count
+    /// starts at the first bar read after its value was tapped, and again
+    /// when the clock goes back past it.
     fn step(&mut self, at: Instant) {
-        if !self.palettes.values().any(|palette| palette.step.is_some()) {
+        if !self.lists.values().any(|list| list.step.is_some()) {
             return;
         }
         let (beat, beats_per_bar) = self.beat(at);
         let bar = (beat / beats_per_bar).floor() as i64;
         let mut due = Vec::new();
-        for (id, palette) in &mut self.palettes {
-            let (Some(step), Some(on)) = (palette.step, palette.on) else {
+        for (id, list) in &mut self.lists {
+            let (Some(step), Some(on)) = (list.step, list.on) else {
                 continue;
             };
-            match palette.counted_from {
+            match list.counted_from {
                 Some(from) if (from..from + i64::from(step.bars)).contains(&bar) => {}
                 Some(from) if bar > from => {
-                    palette.counted_from = Some(bar);
-                    let next = if on + 1 < palette.swatches.len() {
+                    list.counted_from = Some(bar);
+                    let next = if on + 1 < list.values.len() {
                         Some(on + 1)
                     } else {
                         step.loops.then_some(0)
                     };
                     due.extend(next.map(|next| (id.clone(), next)));
                 }
-                _ => palette.counted_from = Some(bar),
+                _ => list.counted_from = Some(bar),
             }
         }
         for (id, index) in due {
-            self.choose(&id, index, Some(bar), at);
+            self.put(&id, index, Some(bar), at);
         }
     }
 
@@ -495,76 +860,18 @@ impl Bank {
             .map_or(UNSET_COLOR, |fading| fading.at(at).value(self.bpm()))
     }
 
-    /// The groups of the target cells held now, sorted.
-    fn held(&self) -> Vec<String> {
-        let mut on: Vec<String> = self
-            .targets
-            .iter()
-            .filter(|(control, _)| self.values.get(*control).is_some_and(|value| *value > 0.5))
-            .map(|(_, group)| group.clone())
-            .collect();
-        on.sort();
-        on.dedup();
-        on
-    }
-
-    /// The button that playing button `name` plays: for a pad, its instance
-    /// on groups `on` (the targets held when `None`), made when it is to
-    /// `make` and not made yet; the pad itself on no groups; any other button
-    /// itself.
-    fn aim(&mut self, name: &str, on: Option<&[String]>, make: bool) -> String {
-        let Some(pattern_id) = self.pads.get(name).cloned() else {
-            return name.to_owned();
-        };
-        let on = match on {
-            Some(on) => {
-                let mut on = on.to_vec();
-                on.sort();
-                on.dedup();
-                on
-            }
-            None => self.held(),
-        };
-        let button = perform::instance(name, &on);
-        if make && !on.is_empty() && !self.instances.contains_key(&button) {
-            let press = self.buttons[name].press;
-            self.buttons
-                .insert(button.clone(), Held { press, gate: None });
-            self.instances.insert(
-                button.clone(),
-                (name.to_owned(), Instance { pattern_id, on }),
-            );
-            self.made += 1;
-        }
-        button
-    }
-
-    /// Press (`down`) or release declared button `name` at `at`: a press
-    /// goes to the button [`Self::aim`] picks, its release to the same one.
-    fn press(&mut self, name: &str, down: bool, at: Instant) {
-        let button = if down {
-            let button = self.aim(name, None, true);
-            self.pressed.insert(name.to_owned(), button.clone());
-            button
-        } else {
-            self.pressed.remove(name).unwrap_or_else(|| name.to_owned())
-        };
-        let Some(&held) = self.buttons.get(&button) else {
-            return;
-        };
-        match held.press.mode {
-            PressMode::Toggle if down => self.gate(&button, !held.on(), at),
-            PressMode::Toggle => {}
-            PressMode::Flash => self.gate(&button, down, at),
-        }
+    /// Light `light`'s base color at `at`, white while none is set.
+    fn base_at(&self, light: &str, at: Instant) -> [f64; 3] {
+        self.base
+            .get(light)
+            .map_or(UNSET_COLOR, |fading| fading.at(at).value(self.bpm()))
     }
 
     /// Gate declared button `name` on or off, asked for at `at`: at once,
     /// or on the set's next beat or bar, as its press starts. One on or
     /// going on stays so, and one off or going off. A change still to come
     /// is called off by the opposite one, but a flash let go before its beat
-    /// stays on for one, so a tap lands. Gating a pad or an instance on
-    /// releases its row's others on the same groups, when it goes on.
+    /// stays on for one, so a tap lands.
     fn gate(&mut self, name: &str, on: bool, at: Instant) {
         let Some(&Held { press, gate }) = self.buttons.get(name) else {
             return;
@@ -580,21 +887,8 @@ impl Bank {
             }
             (false, _) => return self.release(name, at, when),
         };
-        let from = gate.0.max(at);
         if let Some(button) = self.buttons.get_mut(name) {
             button.gate = Some(gate);
-        }
-        if !on {
-            return;
-        }
-        let (pad, groups) = match self.instances.get(name) {
-            Some((pad, instance)) => (pad.clone(), instance.on.clone()),
-            None => (name.to_owned(), Vec::new()),
-        };
-        if let Some(row) = self.exclusive.get(&pad).cloned() {
-            for other in row.iter().filter(|other| **other != pad) {
-                self.release(&perform::instance(other, &groups), at, from);
-            }
         }
     }
 
@@ -620,10 +914,24 @@ impl Bank {
     }
 }
 
+/// A fade from `from` to `to` over `length` in `unit`, begun at `at`.
+fn faded(from: [f64; 3], to: [f64; 3], length: f64, unit: TimeUnit, at: Instant) -> Fading {
+    Fading {
+        fade: Fade {
+            from,
+            to,
+            length,
+            unit,
+        },
+        start: at,
+    }
+}
+
 impl VenueControls {
     /// Set `name` to `value`, clamped to 0–1. A button gates on above ½ and
-    /// off below, whatever its mode; a fader cell sets its targets too;
-    /// pressing [`perform::TAP`] taps the tempo.
+    /// off below, whatever its mode, a pad on the groups chosen; a fader
+    /// cell sets its targets too; a group is chosen above ½; pressing
+    /// [`perform::TAP`] taps the tempo.
     pub fn set(&self, name: &str, value: f64) {
         let value = if value.is_finite() {
             value.clamp(0.0, 1.0)
@@ -633,30 +941,53 @@ impl VenueControls {
         self.write().set(name, value, Instant::now());
     }
 
-    /// Press (`down`) or release button `name` at `at`. A toggle flips on
-    /// the press and ignores the release; a flash is on while held. A name
-    /// no button declares is momentary: 1 while held.
+    /// Press (`down`) or release control `name` at `at`. A toggle flips on
+    /// the press and ignores the release; a flash is on while held; a pad,
+    /// a group, Select and Clear play as the module's doc says. A name
+    /// nothing declares is momentary: 1 while held.
     pub fn press(&self, name: &str, down: bool, at: Instant) {
+        self.write().press(name, down, at);
+    }
+
+    /// Choose exactly `groups`, of those a group cell holds: none is
+    /// everything.
+    pub fn choose(&self, groups: &[String]) {
         let mut bank = self.write();
-        if bank.buttons.contains_key(name) {
-            bank.press(name, down, at);
-        } else {
-            bank.set(name, f64::from(u8::from(down)), at);
+        let chosen = groups
+            .iter()
+            .filter(|group| bank.groups.values().any(|held| held == *group))
+            .cloned()
+            .collect();
+        bank.chosen = chosen;
+    }
+
+    /// Choose nothing, as Clear tapped does; with `effects`, let every
+    /// effect go instead, as Clear held does.
+    pub fn clear(&self, effects: bool) {
+        let mut bank = self.write();
+        match effects {
+            true => bank.release_all(Instant::now()),
+            false => bank.clear(),
         }
     }
 
-    /// Set pad `name` on (above ½) or off, playing on groups `on` whatever
-    /// targets are held: the pad itself on none, else its instance there.
-    /// Any other control is set as [`Self::set`] sets it.
-    pub fn set_on(&self, name: &str, value: f64, on: &[String]) {
+    /// Fade the base color of the lights of `groups` (none: every light)
+    /// to `color` over `fade` in `unit`.
+    pub fn base(&self, groups: &[String], color: [f64; 3], fade: f64, unit: TimeUnit) {
+        self.write()
+            .paint(groups, color, fade, unit, Instant::now());
+    }
+
+    /// Choose the effects of `patterns` by Select, so the next color tapped
+    /// on a list with no targets sets theirs.
+    pub fn select(&self, patterns: &[String]) {
         let mut bank = self.write();
-        let button = bank.aim(name, Some(on), value > 0.5);
-        if bank.buttons.contains_key(&button) {
-            bank.gate(&button, value > 0.5, Instant::now());
-        } else {
-            drop(bank);
-            self.set(name, value);
-        }
+        let selected = patterns
+            .iter()
+            .filter(|id| bank.effects.contains_key(*id))
+            .cloned()
+            .collect();
+        bank.selected = selected;
     }
 
     /// Control `name` now: a fader's value, a button's envelope, 0 for a
@@ -683,6 +1014,19 @@ impl VenueControls {
     pub fn playing(&self) -> Playing {
         let now = Instant::now();
         let bank = self.read();
+        let base = bank
+            .lights
+            .iter()
+            .filter(|(_, lights)| lights.iter().any(|light| bank.base.contains_key(light)))
+            .map(|(group, lights)| {
+                let mut sum = [0.0; 3];
+                for light in lights.iter() {
+                    let rgb = bank.base_at(light, now);
+                    (0..3).for_each(|c| sum[c] += rgb[c]);
+                }
+                (group.clone(), sum.map(|c| c / lights.len() as f64))
+            })
+            .collect();
         Playing {
             controls: bank.values.clone(),
             buttons: bank
@@ -695,39 +1039,83 @@ impl VenueControls {
                 .iter()
                 .map(|(name, fading)| (name.clone(), fading.at(now)))
                 .collect(),
-            swatches: bank
-                .palettes
+            lists: bank
+                .lists
                 .iter()
-                .filter_map(|(id, palette)| Some((id.clone(), palette.on?)))
+                .filter_map(|(id, list)| Some((id.clone(), list.on?)))
                 .collect(),
-            instances: bank
-                .instances
+            chosen: bank.chosen.iter().cloned().collect(),
+            held: sorted(
+                bank.held
+                    .keys()
+                    .filter_map(|control| bank.groups.get(control).cloned()),
+            ),
+            selecting: bank.select.on(),
+            selected: bank.selected.iter().cloned().collect(),
+            effects: bank
+                .effects
                 .iter()
-                .map(|(name, (_, instance))| (name.clone(), instance.clone()))
+                .map(|(id, effect)| {
+                    let played = Played {
+                        groups: effect.groups.clone(),
+                        below: effect.blend() == BlendMode::Below,
+                    };
+                    (id.clone(), played)
+                })
                 .collect(),
+            base,
         }
     }
 
-    /// Every instance as it stands, by its button, and how many were ever
-    /// made: a count the engine compares to see a new one.
-    pub(crate) fn instances(&self) -> (u64, Vec<(String, Instance)>) {
-        let bank = self.read();
-        let instances = bank
-            .instances
-            .iter()
-            .map(|(name, (_, instance))| (name.clone(), instance.clone()))
-            .collect();
-        (bank.made, instances)
+    /// Bumped whenever an effect's groups or blend change: the engine
+    /// compares it at each frame.
+    pub(crate) fn changed(&self) -> u64 {
+        self.read().changed
     }
 
-    /// How many instances were ever made.
-    pub(crate) fn made(&self) -> u64 {
-        self.read().made
+    /// Where pattern `id` plays, sorted (none is its own selection), and
+    /// the blend it plays by; `None` for a pattern the bank does not hold.
+    pub(crate) fn effect(&self, id: &str) -> Option<(Vec<String>, BlendMode)> {
+        let bank = self.read();
+        let effect = bank.effects.get(id)?;
+        Some((effect.groups.clone(), effect.blend()))
+    }
+
+    /// Whether pattern `id` plays on `groups` now.
+    pub(crate) fn plays_on(&self, id: &str, groups: &[String]) -> bool {
+        self.read()
+            .effects
+            .get(id)
+            .is_some_and(|effect| effect.groups == groups)
+    }
+
+    /// Whether any light has a base color.
+    pub(crate) fn has_base(&self) -> bool {
+        !self.read().base.is_empty()
+    }
+
+    /// Give each light of `frame` its base color at `at`, and its dimmer
+    /// none where it has no light yet: the base lights nothing.
+    pub(crate) fn color_base(&self, frame: &mut UniverseState, at: Instant) {
+        let bank = self.read();
+        for (light, fading) in &bank.base {
+            let rgb = fading.at(at).value(bank.bpm()).map(|c| c as f32);
+            match frame.primitives.get_mut(light) {
+                Some(head) => head.color = rgb,
+                None => {
+                    let head = crate::eval::composite::nothing();
+                    frame.primitives.insert(
+                        light.clone(),
+                        crate::models::universe::PrimitiveState { color: rgb, ..head },
+                    );
+                }
+            }
+        }
     }
 
     /// Read the set's clock at `at`: `deck` is the followed deck's beat
     /// and the beats in its bar, `None` on the tapped tempo. Then move each
-    /// stepping color cell on. The engine calls it as it renders the set.
+    /// stepping list on. The engine calls it as it renders the set.
     pub(crate) fn tick(&self, deck: Option<(f64, f64)>, at: Instant) {
         let mut bank = self.write();
         if let (Some(followed), Some((beat, beats_per_bar))) = (bank.deck.as_mut(), deck) {
@@ -742,22 +1130,29 @@ impl VenueControls {
         bank.step(at);
     }
 
-    /// Make `patterns` the venue's Perform set, laid out by `layout`: declare
-    /// each button node of each pattern's graph, start each level at 1, link
-    /// each fader cell to its targets, give each color cell its swatches,
-    /// know each target cell's group, and make each one-at-a-time row's pads
-    /// release each other. What already plays holds, so recompiling the set
-    /// changes nothing that is playing; an instance that has gone quiet is
-    /// forgotten, to be made again when next played.
-    pub(crate) fn install(&self, patterns: &[PerformPattern], layout: &PerformLayout) {
+    /// Make `patterns` the venue's Perform set, laid out by `layout`, with
+    /// `lights` each group's lights, [`ALL`] among them: declare each button
+    /// node of each pattern's graph, start each level at 1, link each fader
+    /// cell to its targets, give each list its values, know each group
+    /// cell's group, and make each one-at-a-time row's pads take from each
+    /// other. What already plays holds, so recompiling the set changes
+    /// nothing that is playing: where each effect plays, its color as Select
+    /// set it (unless its blend was stored anew since), what is chosen and
+    /// each list's value on.
+    pub(crate) fn install(
+        &self,
+        patterns: &[PerformPattern],
+        layout: &PerformLayout,
+        lights: HashMap<String, Arc<[String]>>,
+    ) {
         let pads: HashMap<&str, String> = patterns
             .iter()
             .filter_map(|pattern| Some((pattern.id.as_str(), perform::pad(pattern)?)))
             .collect();
         let mut rows: BTreeMap<(&str, u16), Vec<String>> = BTreeMap::new();
         let mut links = HashMap::new();
-        let mut palettes = HashMap::new();
-        let mut targets = HashMap::new();
+        let mut lists = HashMap::new();
+        let mut groups = HashMap::new();
         for page in &layout.pages {
             for cell in &page.cells {
                 match &cell.content {
@@ -776,18 +1171,18 @@ impl VenueControls {
                             targets.iter().map(perform::target).collect(),
                         );
                     }
-                    CellContent::Color {
-                        swatches,
+                    CellContent::List {
+                        values,
                         fade,
                         unit,
                         targets,
                         step,
                         ..
                     } => {
-                        palettes.insert(
+                        lists.insert(
                             cell.id.clone(),
-                            Palette {
-                                swatches: swatches.as_slice().into(),
+                            List {
+                                values: values.as_slice().into(),
                                 fade: *fade,
                                 unit: *unit,
                                 targets: targets.iter().map(perform::target).collect(),
@@ -797,8 +1192,8 @@ impl VenueControls {
                             },
                         );
                     }
-                    CellContent::Target { group, .. } => {
-                        targets.insert(perform::cell(&cell.id), group.clone());
+                    CellContent::Group { group, .. } => {
+                        groups.insert(perform::cell(&cell.id), group.clone());
                     }
                     _ => {}
                 }
@@ -816,28 +1211,11 @@ impl VenueControls {
                     LiveInputKind::Fader | LiveInputKind::Color => None,
                 })
         });
-        let now = Instant::now();
         let mut bank = self.write();
         let mut buttons = HashMap::new();
         for (name, press) in declared {
             let gate = bank.buttons.get(&name).and_then(|button| button.gate);
             buttons.insert(name, Held { press, gate });
-        }
-        let bpm = bank.bpm();
-        let instances = std::mem::take(&mut bank.instances);
-        for (name, (pad, instance)) in instances {
-            let (Some(pad_button), Some(held)) = (buttons.get(&pad), bank.buttons.get(&name))
-            else {
-                continue;
-            };
-            let held = Held {
-                press: pad_button.press,
-                gate: held.gate,
-            };
-            if held.on() || held.at(now).value(bpm) > 0.0 {
-                buttons.insert(name.clone(), held);
-                bank.instances.insert(name, (pad, instance));
-            }
         }
         bank.buttons = buttons;
         bank.pads = patterns
@@ -846,27 +1224,64 @@ impl VenueControls {
                 Some((pads.get(pattern.id.as_str())?.clone(), pattern.id.clone()))
             })
             .collect();
-        bank.targets = targets;
+        let effects = patterns
+            .iter()
+            .map(|pattern| {
+                let was = bank.effects.get(&pattern.id);
+                let color = pattern
+                    .graph
+                    .live_inputs()
+                    .into_iter()
+                    .find(|input| input.kind == LiveInputKind::Color)
+                    .map(|input| perform::node(&pattern.id, &input.node));
+                let effect = Effect {
+                    groups: was
+                        .filter(|_| pads.contains_key(pattern.id.as_str()))
+                        .map(|was| was.groups.clone())
+                        .unwrap_or_default(),
+                    color,
+                    blend: pattern.blend_mode,
+                    source: was
+                        .and_then(|was| was.source)
+                        .filter(|(_, over)| *over == pattern.blend_mode),
+                };
+                (pattern.id.clone(), effect)
+            })
+            .collect();
+        bank.effects = effects;
+        bank.changed += 1;
         for pattern in patterns {
             bank.values
                 .entry(perform::level(&pattern.id))
                 .or_insert(1.0);
         }
         bank.links = links;
-        for (id, palette) in &mut palettes {
-            if let Some(was) = bank.palettes.get(id) {
-                palette.on = was.on.filter(|on| *on < palette.swatches.len());
-                palette.counted_from = was.counted_from;
+        for (id, list) in &mut lists {
+            if let Some(was) = bank.lists.get(id) {
+                list.on = was.on.filter(|on| *on < list.values.len());
+                list.counted_from = was.counted_from;
             }
         }
-        bank.swatches = palettes
+        bank.taps = lists
             .iter()
-            .flat_map(|(id, palette)| {
-                (0..palette.swatches.len())
-                    .map(move |index| (perform::swatch(id, index), (id.clone(), index)))
+            .flat_map(|(id, list)| {
+                (0..list.values.len())
+                    .map(move |index| (perform::value(id, index), (id.clone(), Some(index))))
+                    .chain([(perform::cell(id), (id.clone(), None))])
             })
             .collect();
-        bank.palettes = palettes;
+        bank.lists = lists;
+        let known: BTreeSet<&String> = groups.values().collect();
+        let chosen = std::mem::take(&mut bank.chosen);
+        bank.chosen = chosen.into_iter().filter(|g| known.contains(g)).collect();
+        bank.held.retain(|control, _| groups.contains_key(control));
+        bank.groups = groups;
+        bank.lights = lights;
+        let selected = std::mem::take(&mut bank.selected);
+        bank.selected = selected
+            .into_iter()
+            .filter(|id| bank.effects.contains_key(id))
+            .collect();
         bank.exclusive = rows
             .into_values()
             .flat_map(|row| {
@@ -923,11 +1338,30 @@ pub struct Playing {
     pub buttons: BTreeMap<String, Button>,
     /// Every live color set so far, to play its fade on likewise.
     pub colors: BTreeMap<String, LiveColor>,
-    /// Each color cell's swatch on, by cell id; a cell none is on is absent.
-    pub swatches: BTreeMap<String, usize>,
-    /// Every pattern playing, or played, on venue groups, by its button,
-    /// which is among `buttons`.
-    pub instances: BTreeMap<String, Instance>,
+    /// Each list cell's value on, by cell id; a list none is on is absent.
+    pub lists: BTreeMap<String, usize>,
+    /// The groups chosen, and those held down, sorted.
+    pub chosen: Vec<String>,
+    pub held: Vec<String>,
+    /// Whether Select is down or latched, and the effects it chose.
+    pub selecting: bool,
+    pub selected: Vec<String>,
+    /// Every pattern, by id: where it plays, and whether it takes the color
+    /// below.
+    pub effects: BTreeMap<String, Played>,
+    /// Each group's base color now, the mean of its lights'; a group none
+    /// of whose lights has one is absent.
+    pub base: BTreeMap<String, [f64; 3]>,
+}
+
+/// One pattern as the bank plays it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Played {
+    /// The groups it plays on, sorted; none is its own selection.
+    pub groups: Vec<String>,
+    /// Whether it takes the color below rather than its own.
+    pub below: bool,
 }
 
 /// A score reads the venue's controls by name: a fader node its value, a
@@ -945,13 +1379,11 @@ impl luma_patterns::ControlSource for VenueControls {
 
 /// What a Perform pattern's graph reads: each fader, live color and button
 /// node is a value of its own pattern ([`perform::node`]), not a venue
-/// control. An instance's pad node reads the instance's button instead.
+/// control.
 #[derive(Debug)]
 pub(crate) struct PatternControls {
     bank: Arc<VenueControls>,
     pattern_id: String,
-    /// An instance's pad node, and the button it reads.
-    pad: Option<(String, String)>,
 }
 
 impl PatternControls {
@@ -959,27 +1391,14 @@ impl PatternControls {
         Self {
             bank,
             pattern_id: pattern_id.to_owned(),
-            pad: None,
-        }
-    }
-
-    /// Read pad node `node` as `button`, an instance's.
-    pub(crate) fn with_pad(self, node: &str, button: &str) -> Self {
-        Self {
-            pad: Some((node.to_owned(), button.to_owned())),
-            ..self
         }
     }
 }
 
 impl luma_patterns::ControlSource for PatternControls {
     fn value(&self, input: &LiveInput) -> f64 {
-        match &self.pad {
-            Some((node, button)) if *node == input.node => self.bank.value(button),
-            _ => self
-                .bank
-                .value(&perform::node(&self.pattern_id, &input.node)),
-        }
+        self.bank
+            .value(&perform::node(&self.pattern_id, &input.node))
     }
 
     fn color(&self, input: &LiveInput) -> [f64; 3] {
@@ -1141,765 +1560,4 @@ pub(crate) async fn list(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-    use crate::models::perform::{Cell, ControlTarget, LayoutPage};
-    use luma_patterns::ClipGraph;
-
-    /// `graph` with a pad ([`ClipGraph::with_pad`]) that plays at once, not
-    /// on the next beat, for a test that presses it and looks straight away.
-    pub(crate) fn with_pad_at_once(graph: ClipGraph) -> ClipGraph {
-        let mut graph = graph.with_pad();
-        if let Some(pad) = graph.pad() {
-            if let Some(node) = graph.nodes.get_mut(&pad.node) {
-                node.settings.insert("start".into(), "now".into());
-            }
-        }
-        graph
-    }
-
-    /// A pattern of `id` with no pad.
-    fn pattern(id: &str) -> PerformPattern {
-        PerformPattern {
-            id: id.into(),
-            venue_id: "venue".into(),
-            name: id.into(),
-            selection: luma_patterns::Selection {
-                expression: "all".into(),
-            },
-            z_index: 0,
-            blend_mode: luma_patterns::BlendMode::Replace,
-            seed: 1,
-            graph: luma_patterns::ClipGraph::default(),
-        }
-    }
-
-    /// A pattern whose pad plays as `mode` ("toggle" or "flash"), at once,
-    /// fading in over `attack` and out over `release`, linearly, in `unit`.
-    fn faded(id: &str, mode: &str, attack: f64, release: f64, unit: &str) -> PerformPattern {
-        let mut graph = with_pad_at_once(
-            ClipGraph::from_json(r#"{"version": 3, "nodes": {"color1": {"kind": "color"}}}"#)
-                .unwrap(),
-        );
-        let node = graph.pad().unwrap().node;
-        let settings = &mut graph.nodes.get_mut(&node).unwrap().settings;
-        for (name, value) in [
-            ("mode", mode.to_owned()),
-            ("attack", attack.to_string()),
-            ("release", release.to_string()),
-            ("unit", unit.to_owned()),
-            ("shape", "linear".to_owned()),
-        ] {
-            settings.insert(name.into(), value);
-        }
-        PerformPattern {
-            graph,
-            ..pattern(id)
-        }
-    }
-
-    fn pad(pattern: &PerformPattern) -> String {
-        perform::pad(pattern).expect("a pad")
-    }
-
-    fn cell(id: &str, column: u16, row: u16, content: CellContent) -> Cell {
-        Cell {
-            id: id.into(),
-            column,
-            row,
-            width: 1,
-            height: 1,
-            content,
-        }
-    }
-
-    /// `rows` of pattern ids, the first row one at a time, and `extra`
-    /// cells.
-    fn layout(rows: &[&[&str]], extra: Vec<Cell>) -> PerformLayout {
-        let mut cells: Vec<Cell> = rows
-            .iter()
-            .enumerate()
-            .flat_map(|(row, ids)| {
-                ids.iter().enumerate().map(move |(column, id)| {
-                    cell(
-                        &format!("cell-{id}"),
-                        column as u16,
-                        row as u16,
-                        CellContent::Pattern {
-                            pattern_id: (*id).into(),
-                        },
-                    )
-                })
-            })
-            .collect();
-        cells.extend(extra);
-        PerformLayout {
-            pages: vec![LayoutPage {
-                id: "page".into(),
-                name: "Main".into(),
-                columns: 8,
-                rows: 4,
-                one_at_a_time: vec![0],
-                cells,
-            }],
-        }
-    }
-
-    fn after(start: Instant, seconds: f64) -> Instant {
-        start + Duration::from_secs_f64(seconds)
-    }
-
-    /// Whether button `name` is on, or going on, as of its last press.
-    fn lit(controls: &VenueControls, name: &str) -> bool {
-        controls.read().buttons[name].on()
-    }
-
-    #[test]
-    fn a_pad_fades_in_and_out_by_its_envelope() {
-        let controls = VenueControls::default();
-        let wash = faded("wash", "toggle", 1.0, 2.0, "seconds");
-        let on = pad(&wash);
-        controls.install(&[wash], &PerformLayout::default());
-        let start = Instant::now();
-        assert_eq!(controls.value_at(&on, start), 0.0, "never pressed");
-        controls.press(&on, true, start);
-        controls.press(&on, false, after(start, 0.1));
-        assert!(lit(&controls, &on), "a toggle holds after release");
-        let rising = controls.value_at(&on, after(start, 0.5));
-        assert!(0.0 < rising && rising < 1.0, "halfway up: {rising}");
-        assert_eq!(controls.value_at(&on, after(start, 1.5)), 1.0);
-
-        controls.press(&on, true, after(start, 2.0));
-        assert!(!lit(&controls, &on), "the next press turns it off");
-        let falling = controls.value_at(&on, after(start, 3.0));
-        assert!(0.0 < falling && falling < 1.0, "releasing: {falling}");
-        assert_eq!(controls.value_at(&on, after(start, 4.5)), 0.0);
-    }
-
-    #[test]
-    fn a_flash_is_on_while_held() {
-        let controls = VenueControls::default();
-        let hit = faded("hit", "flash", 0.0, 0.0, "seconds");
-        let on = pad(&hit);
-        controls.install(&[hit], &PerformLayout::default());
-        let start = Instant::now();
-        controls.press(&on, true, start);
-        assert_eq!(controls.value_at(&on, after(start, 0.5)), 1.0);
-        controls.press(&on, false, after(start, 1.0));
-        assert_eq!(controls.value_at(&on, after(start, 1.0)), 0.0);
-        assert!(!lit(&controls, &on));
-    }
-
-    #[test]
-    fn beats_follow_the_deck_the_set_follows() {
-        let controls = VenueControls::default();
-        let slow = faded("wash", "toggle", 4.0, 0.0, "beats");
-        let on = pad(&slow);
-        controls.install(&[slow], &PerformLayout::default());
-        let start = Instant::now();
-        controls.press(&on, true, start);
-        // Four beats: two seconds at the tapped 120, one at a deck's 240.
-        let tapped = controls.value_at(&on, after(start, 1.0));
-        controls.follow(Some(240.0));
-        let unread = controls.value_at(&on, after(start, 1.0));
-        assert_eq!(unread, tapped, "a deck not read yet is no clock");
-        controls.tick(Some((8.0, 4.0)), start);
-        let followed = controls.value_at(&on, after(start, 1.0));
-        assert!(tapped < followed, "{tapped} < {followed}");
-        assert_eq!(followed, 1.0);
-        controls.follow(None);
-        assert_eq!(controls.value_at(&on, after(start, 1.0)), tapped);
-    }
-
-    #[test]
-    fn a_followed_deck_not_read_yet_leaves_the_tapped_clock_whole() {
-        let start = Instant::now();
-        let wash = quantised("wash", "toggle", "beat");
-        let on = pad(&wash);
-        let controls = tapped(&[wash], &PerformLayout::default(), start);
-        // No live set reads the deck: a press half a beat in waits for the
-        // tapped tempo's next beat, counted at its tempo, not the deck's.
-        controls.follow(Some(240.0));
-        controls.press(&on, true, beat(start, 0.5));
-        assert_eq!(state_at(&controls, &on, beat(start, 0.9)), (false, true));
-        assert_eq!(state_at(&controls, &on, beat(start, 1.0)), (true, false));
-    }
-
-    #[test]
-    fn a_one_at_a_time_row_releases_the_others() {
-        let controls = VenueControls::default();
-        let set = [
-            faded("red", "toggle", 0.0, 1.0, "seconds"),
-            faded("blue", "toggle", 0.0, 0.0, "seconds"),
-            faded("chase", "toggle", 0.0, 0.0, "seconds"),
-            pattern("plain"),
-        ];
-        let [red, blue, chase] = [&set[0], &set[1], &set[2]].map(pad);
-        controls.install(
-            &set,
-            &layout(&[&["red", "blue", "plain"], &["chase"]], Vec::new()),
-        );
-        assert_eq!(
-            controls.value(&perform::level("red")),
-            1.0,
-            "levels start full"
-        );
-        let start = Instant::now();
-        let press = |name: &str, at| controls.press(name, true, at);
-        press(&red, start);
-        press(&chase, start);
-        press(&blue, after(start, 1.0));
-        assert!(!lit(&controls, &red), "blue released red");
-        assert!(lit(&controls, &blue));
-        assert!(lit(&controls, &chase), "in another row");
-        let fading = controls.value_at(&red, after(start, 1.5));
-        assert!(0.0 < fading && fading < 1.0, "red fades by its own release");
-    }
-
-    /// A target cell `id` on group `group`.
-    fn aimed(id: &str, group: &str) -> Cell {
-        cell(
-            id,
-            7,
-            3,
-            CellContent::Target {
-                label: String::new(),
-                group: group.into(),
-            },
-        )
-    }
-
-    /// Hold (`down`) or let go of target cell `id` at `at`.
-    fn hold(controls: &VenueControls, id: &str, down: bool, at: Instant) {
-        controls.press(&perform::cell(id), down, at);
-    }
-
-    fn on(group: &[&str]) -> Vec<String> {
-        group.iter().map(|group| (*group).to_owned()).collect()
-    }
-
-    #[test]
-    fn a_pad_pressed_on_targets_plays_an_instance_there_and_toggles_it() {
-        let controls = VenueControls::default();
-        let wash = faded("wash", "toggle", 0.0, 0.0, "seconds");
-        let own = pad(&wash);
-        controls.install(
-            &[wash],
-            &layout(&[], vec![aimed("front", "front"), aimed("back", "back")]),
-        );
-        let at = Instant::now();
-        let front = perform::instance(&own, &on(&["front"]));
-        hold(&controls, "front", true, at);
-        controls.press(&own, true, at);
-        controls.press(&own, false, at);
-        assert!(lit(&controls, &front), "on front");
-        assert!(!lit(&controls, &own), "not on its own selection");
-        assert_eq!(
-            controls.playing().instances[&front],
-            Instance {
-                pattern_id: "wash".into(),
-                on: on(&["front"]),
-            }
-        );
-
-        // Both held: one instance on both, their union.
-        hold(&controls, "back", true, at);
-        controls.press(&own, true, at);
-        let both = perform::instance(&own, &on(&["back", "front"]));
-        assert!(lit(&controls, &both));
-        assert!(lit(&controls, &front), "front's is another instance");
-        hold(&controls, "back", false, at);
-
-        // Front held again: the same instance, toggled off.
-        controls.press(&own, true, at);
-        assert!(!lit(&controls, &front), "the same targets toggle it");
-        hold(&controls, "front", false, at);
-        controls.press(&own, true, at);
-        assert!(lit(&controls, &own), "no target held: its own selection");
-        assert!(lit(&controls, &both), "an instance plays on by itself");
-    }
-
-    #[test]
-    fn a_flash_lets_go_of_the_instance_its_press_went_to() {
-        let controls = VenueControls::default();
-        let hit = faded("hit", "flash", 0.0, 0.0, "seconds");
-        let own = pad(&hit);
-        controls.install(&[hit], &layout(&[], vec![aimed("front", "front")]));
-        let at = Instant::now();
-        let front = perform::instance(&own, &on(&["front"]));
-        hold(&controls, "front", true, at);
-        controls.press(&own, true, at);
-        hold(&controls, "front", false, at);
-        assert!(lit(&controls, &front), "held");
-        controls.press(&own, false, at);
-        assert!(
-            !lit(&controls, &front),
-            "let go, though the target was first"
-        );
-        assert!(!lit(&controls, &own));
-    }
-
-    #[test]
-    fn a_one_at_a_time_row_releases_the_others_on_the_same_targets() {
-        let controls = VenueControls::default();
-        let set = [
-            faded("a", "toggle", 0.0, 0.0, "seconds"),
-            faded("b", "toggle", 0.0, 0.0, "seconds"),
-        ];
-        let [a, b] = [&set[0], &set[1]].map(pad);
-        controls.install(
-            &set,
-            &layout(
-                &[&["a", "b"]],
-                vec![aimed("front", "front"), aimed("back", "back")],
-            ),
-        );
-        let at = Instant::now();
-        let instance = |pad: &str, group: &str| perform::instance(pad, &on(&[group]));
-        controls.press(&a, true, at);
-        for group in ["front", "back"] {
-            hold(&controls, group, true, at);
-            controls.press(&a, true, at);
-            hold(&controls, group, false, at);
-        }
-        hold(&controls, "front", true, at);
-        controls.press(&b, true, at);
-        hold(&controls, "front", false, at);
-        assert!(lit(&controls, &instance(&b, "front")));
-        assert!(
-            !lit(&controls, &instance(&a, "front")),
-            "b released a on front"
-        );
-        assert!(lit(&controls, &instance(&a, "back")), "on back a plays on");
-        assert!(lit(&controls, &a), "and on its own selection");
-
-        // Set outright, on groups named.
-        controls.set_on(&b, 1.0, &on(&["back"]));
-        assert!(
-            !lit(&controls, &instance(&a, "back")),
-            "b released a on back"
-        );
-        assert!(lit(&controls, &a), "its own still plays");
-    }
-
-    #[test]
-    fn a_recompile_keeps_the_instances_that_sound() {
-        let controls = VenueControls::default();
-        let wash = faded("wash", "toggle", 0.0, 0.0, "seconds");
-        let own = pad(&wash);
-        let layout = layout(&[], vec![aimed("front", "front"), aimed("back", "back")]);
-        controls.install(std::slice::from_ref(&wash), &layout);
-        let at = Instant::now();
-        for group in ["front", "back"] {
-            hold(&controls, group, true, at);
-            controls.press(&own, true, at);
-            hold(&controls, group, false, at);
-        }
-        let front = perform::instance(&own, &on(&["front"]));
-        let back = perform::instance(&own, &on(&["back"]));
-        hold(&controls, "back", true, at);
-        controls.press(&own, true, at);
-        hold(&controls, "back", false, at);
-        assert_eq!(controls.made(), 2);
-        controls.install(&[wash], &layout);
-        let playing = controls.playing();
-        assert!(playing.instances.contains_key(&front), "on, kept");
-        assert!(lit(&controls, &front));
-        assert!(!playing.instances.contains_key(&back), "off, forgotten");
-        assert!(!playing.buttons.contains_key(&back));
-    }
-
-    #[test]
-    fn a_fader_cell_moves_every_target() {
-        let controls = VenueControls::default();
-        let speeds = CellContent::Fader {
-            label: "Speed".into(),
-            targets: vec![
-                ControlTarget::Level {
-                    pattern_id: "red".into(),
-                },
-                ControlTarget::Node {
-                    pattern_id: "chase".into(),
-                    node: "control1".into(),
-                },
-                ControlTarget::Named {
-                    name: "drop".into(),
-                },
-            ],
-        };
-        controls.install(
-            &[pattern("red"), pattern("chase")],
-            &layout(&[], vec![cell("speeds", 0, 1, speeds)]),
-        );
-        controls.set(&perform::cell("speeds"), 0.25);
-        for name in [
-            perform::cell("speeds"),
-            perform::level("red"),
-            perform::node("chase", "control1"),
-            "drop".to_owned(),
-        ] {
-            assert_eq!(controls.value(&name), 0.25, "{name}");
-        }
-    }
-
-    /// A color cell `id` of three swatches, red, green and blue, fading
-    /// over `fade` beats into pattern `wash`'s node `hue`, stepping as
-    /// `step` says.
-    fn colors(id: &str, fade: f64, step: Option<Step>) -> Cell {
-        cell(
-            id,
-            0,
-            2,
-            CellContent::Color {
-                label: "Colors".into(),
-                swatches: vec![[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
-                fade,
-                unit: TimeUnit::Beats,
-                targets: vec![ControlTarget::Node {
-                    pattern_id: "wash".into(),
-                    node: "hue".into(),
-                }],
-                step,
-            },
-        )
-    }
-
-    /// Choose swatch `index` of color cell `id` at `at`, as a pad press.
-    fn choose(controls: &VenueControls, id: &str, index: usize, at: Instant) {
-        controls.press(&perform::swatch(id, index), true, at);
-        controls.press(&perform::swatch(id, index), false, at);
-    }
-
-    #[test]
-    fn a_swatch_fades_its_targets_to_it_in_time() {
-        let controls = VenueControls::default();
-        controls.install(&[], &layout(&[], vec![colors("cell", 2., None)]));
-        let hue = perform::node("wash", "hue");
-        let start = Instant::now();
-        assert_eq!(controls.color_at(&hue, start), UNSET_COLOR, "never set");
-        choose(&controls, "cell", 0, start);
-        // Two beats at the untapped 120 BPM is one second.
-        let halfway = controls.color_at(&hue, after(start, 0.5));
-        assert_eq!(
-            halfway,
-            controls.color_at(&hue, after(start, 0.5)),
-            "a pure function of time"
-        );
-        assert!(
-            halfway[0] == 1. && 0. < halfway[1] && halfway[1] < 1.,
-            "on the way from white to red: {halfway:?}"
-        );
-        assert_eq!(controls.color_at(&hue, after(start, 1.)), [1., 0., 0.]);
-
-        // A swatch chosen midway fades from where the color is then.
-        let again = after(start, 2.);
-        choose(&controls, "cell", 2, again);
-        let mid = controls.color_at(&hue, after(again, 0.5));
-        assert!(
-            mid[0] > 0. && mid[2] > 0. && mid[1] == 0.,
-            "red to blue: {mid:?}"
-        );
-        assert_eq!(controls.color_at(&hue, after(again, 1.)), [0., 0., 1.]);
-        assert_eq!(controls.playing().swatches["cell"], 2);
-    }
-
-    #[test]
-    fn a_stepping_cell_moves_on_at_its_bars() {
-        let controls = VenueControls::default();
-        let step = |loops| Step { bars: 2, loops };
-        controls.install(
-            &[],
-            &layout(
-                &[],
-                vec![
-                    colors("looping", 0., Some(step(true))),
-                    colors("once", 0., Some(step(false))),
-                ],
-            ),
-        );
-        let start = Instant::now();
-        let on = |id: &str| controls.playing().swatches.get(id).copied();
-        // A deck's clock, read at its beats.
-        controls.follow(Some(120.));
-        let read = |beat| controls.tick(Some((beat, 4.)), start);
-        read(1.5);
-        assert_eq!(
-            on("looping"),
-            None,
-            "nothing steps before a swatch is chosen"
-        );
-        choose(&controls, "looping", 0, start);
-        choose(&controls, "once", 1, start);
-        // Chosen in the bar from beat 4; two bars later is beat 12.
-        for beat in [5., 8., 11.9] {
-            read(beat);
-            assert_eq!(on("looping"), Some(0), "still in its bars at beat {beat}");
-        }
-        read(12.);
-        assert_eq!(on("looping"), Some(1), "on at the bar");
-        assert_eq!(on("once"), Some(2));
-        read(20.);
-        assert_eq!(on("looping"), Some(2));
-        assert_eq!(on("once"), Some(2), "it stays on the last");
-        read(28.);
-        assert_eq!(on("looping"), Some(0), "back to the first");
-
-        // Recompiling the set keeps the swatch on.
-        controls.install(
-            &[],
-            &layout(&[], vec![colors("looping", 0., Some(step(true)))]),
-        );
-        assert_eq!(on("looping"), Some(0));
-    }
-
-    #[test]
-    fn a_button_node_is_declared_and_read_by_its_pattern() {
-        let graph = luma_patterns::ClipGraph::from_json(
-            r#"{"version": 3, "nodes": {
-                "button1": {"kind": "button", "settings": {"name": "hit", "mode": "toggle"}},
-                "curve1": {"kind": "curve", "inputs": {"x": {"node": "button1"}}},
-                "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}}"#,
-        )
-        .unwrap();
-        let controls = Arc::new(VenueControls::default());
-        controls.install(
-            &[PerformPattern {
-                graph: graph.clone(),
-                ..pattern("chase")
-            }],
-            &PerformLayout::default(),
-        );
-        let input = &graph.live_inputs()[0];
-        let source = PatternControls::new(controls.clone(), "chase");
-        use luma_patterns::ControlSource as _;
-        assert_eq!(source.value(input), 0.0);
-        let name = perform::node("chase", "button1");
-        controls.press(&name, true, Instant::now());
-        controls.press(&name, false, Instant::now());
-        assert_eq!(source.value(input), 1.0, "a toggle node holds");
-        assert_eq!(
-            controls.value("hit"),
-            0.0,
-            "the venue's control of its name is another"
-        );
-    }
-
-    #[test]
-    fn an_undeclared_name_is_momentary() {
-        let controls = VenueControls::default();
-        controls.press("drop", true, Instant::now());
-        assert_eq!(controls.value("drop"), 1.0);
-        controls.press("drop", false, Instant::now());
-        assert_eq!(controls.value("drop"), 0.0);
-    }
-
-    #[test]
-    fn taps_set_the_tempo_and_land_on_a_beat() {
-        let controls = VenueControls::default();
-        let start = Instant::now();
-        for tap in 0..4 {
-            let at = start + Duration::from_millis(500 * tap);
-            controls.press(perform::TAP, true, at);
-            controls.press(perform::TAP, false, at + Duration::from_millis(50));
-        }
-        let last = start + Duration::from_millis(1500);
-        let tempo = controls.tempo(last);
-        assert!((tempo.bpm - 120.0).abs() < 1e-6, "{}", tempo.bpm);
-        assert_eq!(tempo.beat.fract(), 0.0, "the last tap is on a beat");
-        let half = controls.tempo(last + Duration::from_millis(250)).beat;
-        assert!((half - tempo.beat - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn the_first_tap_of_a_run_starts_a_bar() {
-        let controls = VenueControls::default();
-        let start = Instant::now();
-        let tap = |at: Instant| {
-            controls.press(perform::TAP, true, at);
-            controls.press(perform::TAP, false, at + Duration::from_millis(50));
-        };
-        tap(start);
-        tap(start + Duration::from_millis(500));
-        // A pause, then a tap a beat and a bit later: a new run, so the 1.
-        let again = start + Duration::from_millis(3_200);
-        tap(again);
-        let beat = controls.tempo(again).beat;
-        assert_eq!(beat.rem_euclid(TAPPED_BEATS_PER_BAR), 0.0, "{beat}");
-        tap(again + Duration::from_millis(500));
-        let next = controls.tempo(again + Duration::from_millis(500)).beat;
-        assert_eq!(next - beat, 1.0, "a later tap is the next beat");
-    }
-
-    /// A pattern whose pad, a toggle, starts on `start` ("beat" or "bar"),
-    /// at once on and off.
-    fn quantised(id: &str, mode: &str, start: &str) -> PerformPattern {
-        let mut pattern = faded(id, mode, 0.0, 0.0, "seconds");
-        let node = pattern.graph.pad().unwrap().node;
-        pattern
-            .graph
-            .nodes
-            .get_mut(&node)
-            .unwrap()
-            .settings
-            .insert("start".into(), start.into());
-        pattern
-    }
-
-    /// The instant of beat `beat` of the tapped tempo, 120 BPM from a
-    /// first tap at `start`, which is beat 0.
-    fn beat(start: Instant, beat: f64) -> Instant {
-        after(start, beat * 0.5)
-    }
-
-    /// A bank whose tapped tempo starts a bar at `start`.
-    fn tapped(set: &[PerformPattern], layout: &PerformLayout, start: Instant) -> VenueControls {
-        let controls = VenueControls::default();
-        controls.install(set, layout);
-        controls.press(perform::TAP, true, start);
-        controls.press(perform::TAP, false, start);
-        controls
-    }
-
-    /// Whether button `name` is on at `at`, and whether it waits then.
-    fn state_at(controls: &VenueControls, name: &str, at: Instant) -> (bool, bool) {
-        let held = controls.read().buttons[name];
-        let button = held.at(at);
-        (button.on(), button.waiting())
-    }
-
-    #[test]
-    fn a_press_on_the_beat_opens_at_the_next_and_lets_go_on_one_too() {
-        let start = Instant::now();
-        let wash = quantised("wash", "toggle", "beat");
-        let on = pad(&wash);
-        let controls = tapped(&[wash], &PerformLayout::default(), start);
-        controls.press(&on, true, beat(start, 2.3));
-        assert_eq!(
-            state_at(&controls, &on, beat(start, 2.9)),
-            (false, true),
-            "waits for beat 3"
-        );
-        assert_eq!(controls.value_at(&on, beat(start, 2.9)), 0.0);
-        assert_eq!(state_at(&controls, &on, beat(start, 3.01)), (true, false));
-        assert_eq!(controls.value_at(&on, beat(start, 3.01)), 1.0);
-
-        // Its release lands on a beat too: on until beat 6.
-        controls.press(&on, true, beat(start, 5.5));
-        assert_eq!(state_at(&controls, &on, beat(start, 5.9)), (true, true));
-        assert_eq!(controls.value_at(&on, beat(start, 5.9)), 1.0);
-        assert_eq!(state_at(&controls, &on, beat(start, 6.01)), (false, false));
-        assert_eq!(controls.value_at(&on, beat(start, 6.01)), 0.0);
-    }
-
-    #[test]
-    fn a_press_on_the_bar_opens_at_the_next_bar_of_the_taps() {
-        let start = Instant::now();
-        let wash = quantised("wash", "toggle", "bar");
-        let on = pad(&wash);
-        let controls = tapped(&[wash], &PerformLayout::default(), start);
-        controls.press(&on, true, beat(start, 2.3));
-        assert!(
-            state_at(&controls, &on, beat(start, 3.9)).1,
-            "waits for the bar"
-        );
-        assert_eq!(state_at(&controls, &on, beat(start, 4.01)), (true, false));
-    }
-
-    #[test]
-    fn a_press_lands_on_the_followed_decks_bars() {
-        let start = Instant::now();
-        let wash = quantised("wash", "toggle", "bar");
-        let on = pad(&wash);
-        let controls = tapped(&[wash], &PerformLayout::default(), start);
-        // A deck at 240 BPM in bars of 3, read at beat 4.5 of its grid: its
-        // next bar is beat 6, a beat and a half, 0.375 s, on.
-        controls.follow(Some(240.));
-        controls.tick(Some((4.5, 3.)), start);
-        controls.press(&on, true, start);
-        assert!(state_at(&controls, &on, after(start, 0.37)).1);
-        assert_eq!(state_at(&controls, &on, after(start, 0.38)), (true, false));
-    }
-
-    #[test]
-    fn a_change_still_to_come_is_called_off_by_the_opposite() {
-        let start = Instant::now();
-        let set = [
-            quantised("toggle", "toggle", "beat"),
-            quantised("flash", "flash", "beat"),
-        ];
-        let [toggle, flash] = [&set[0], &set[1]].map(pad);
-        let controls = tapped(&set, &PerformLayout::default(), start);
-        controls.press(&toggle, true, beat(start, 2.3));
-        controls.press(&toggle, true, beat(start, 2.6));
-        let (on, waiting) = state_at(&controls, &toggle, beat(start, 3.5));
-        assert!(!on && !waiting, "pressed twice before its beat: nothing");
-
-        // A flash let go before its beat still plays for one, so a tap lands.
-        controls.press(&flash, true, beat(start, 2.3));
-        controls.press(&flash, false, beat(start, 2.4));
-        assert_eq!(state_at(&controls, &flash, beat(start, 3.5)), (true, true));
-        assert_eq!(
-            state_at(&controls, &flash, beat(start, 4.01)),
-            (false, false)
-        );
-    }
-
-    #[test]
-    fn a_quantised_press_releases_its_row_when_it_goes_on() {
-        let start = Instant::now();
-        let set = [
-            quantised("a", "toggle", "beat"),
-            quantised("b", "toggle", "bar"),
-            quantised("c", "toggle", "beat"),
-        ];
-        let [a, b, c] = [&set[0], &set[1], &set[2]].map(pad);
-        let controls = tapped(&set, &layout(&[&["a", "b", "c"]], Vec::new()), start);
-        controls.press(&a, true, beat(start, 0.5));
-        controls.press(&b, true, beat(start, 1.5));
-        assert!(
-            state_at(&controls, &a, beat(start, 3.9)).0,
-            "a plays to b's bar"
-        );
-        assert_eq!(state_at(&controls, &a, beat(start, 4.01)), (false, false));
-        assert_eq!(state_at(&controls, &b, beat(start, 4.01)), (true, false));
-
-        // b let go, to its bar; a pressed, then c, both on beat 5.
-        controls.press(&b, true, beat(start, 4.5));
-        controls.press(&a, true, beat(start, 4.6));
-        controls.press(&c, true, beat(start, 4.7));
-        let (on, waiting) = state_at(&controls, &a, beat(start, 5.5));
-        assert!(
-            !on && !waiting,
-            "a, still to come when c was pressed, is called off"
-        );
-        assert_eq!(state_at(&controls, &c, beat(start, 5.01)), (true, false));
-        assert_eq!(
-            state_at(&controls, &b, beat(start, 5.01)),
-            (false, false),
-            "b goes as c comes, not at its own bar"
-        );
-    }
-
-    #[test]
-    fn an_instance_waits_for_its_beat_too() {
-        let start = Instant::now();
-        let wash = quantised("wash", "toggle", "beat");
-        let own = pad(&wash);
-        let controls = tapped(&[wash], &layout(&[], vec![aimed("front", "front")]), start);
-        let front = perform::instance(&own, &on(&["front"]));
-        hold(&controls, "front", true, beat(start, 2.3));
-        controls.press(&own, true, beat(start, 2.3));
-        hold(&controls, "front", false, beat(start, 2.4));
-        assert_eq!(state_at(&controls, &front, beat(start, 2.5)), (false, true));
-        assert_eq!(
-            state_at(&controls, &front, beat(start, 3.01)),
-            (true, false)
-        );
-        // Recompiled while it waits, it is kept.
-        controls.install(
-            &[quantised("wash", "toggle", "beat")],
-            &layout(&[], vec![aimed("front", "front")]),
-        );
-        assert!(controls.playing().instances.contains_key(&front));
-    }
-}
+pub(crate) mod tests;

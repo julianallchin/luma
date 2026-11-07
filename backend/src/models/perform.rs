@@ -49,7 +49,8 @@ pub struct PerformState {
     pub clock: Option<PerformClock>,
     /// What the open set's venue's control bank plays now: its controls as
     /// set, the Perform set's own among them (`controls::perform`), its
-    /// buttons, its live colors and each color cell's swatch.
+    /// buttons, live colors, lists, groups, Select and base colors, and
+    /// where each effect plays.
     #[serde(flatten)]
     pub bank: crate::controls::Playing,
 }
@@ -198,9 +199,10 @@ impl PerformPattern {
 
 /// How a venue's Perform tab lays out its set: named pages of a grid. A cell
 /// holds one pattern (its level, and a fader, color or button for each live
-/// node of its graph, its pad first), or the master, tap, a fader of its own,
-/// a color cell's swatches, or a target to play patterns on. Nothing is tied
-/// to a controller, which reaches a cell through bindings.
+/// node of its graph, its pad first), a venue group to choose, a list of
+/// values, a fader of its own, or a utility: the master, tap, Select or
+/// Clear. Nothing is tied to a controller, which reaches a cell through
+/// bindings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PerformLayout {
@@ -215,10 +217,28 @@ pub struct LayoutPage {
     pub columns: u16,
     pub rows: u16,
     /// Rows whose patterns play one at a time: turning one on turns the
-    /// row's others off.
+    /// row's others off where it plays.
     #[serde(default)]
     pub one_at_a_time: Vec<u16>,
+    #[serde(deserialize_with = "known_cells")]
     pub cells: Vec<Cell>,
+}
+
+/// The cells of a stored page, less any of a kind this build does not
+/// know, such as a target cell of an older one: it is dropped as the page
+/// is read.
+fn known_cells<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Cell>, D::Error> {
+    let cells = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(cells
+        .into_iter()
+        .filter_map(|cell| match serde_json::from_value(cell) {
+            Ok(cell) => Some(cell),
+            Err(error) => {
+                log::warn!("a Perform cell was dropped: {error}");
+                None
+            }
+        })
+        .collect())
 }
 
 /// A cell: the grid cells it covers and what it holds.
@@ -243,6 +263,11 @@ pub enum CellContent {
     Master,
     /// Tap tempo.
     Tap,
+    /// Held while effects are pressed, or tapped to latch, it chooses them
+    /// instead of turning them on or off, for a color to set.
+    Select,
+    /// Tapped, nothing is chosen; held, every effect is let go.
+    Clear,
     /// A fader of its own, moving every one of `targets` together: one knob
     /// on three chases' speeds.
     #[serde(rename_all = "camelCase")]
@@ -250,32 +275,51 @@ pub enum CellContent {
         label: String,
         targets: Vec<ControlTarget>,
     },
-    /// Swatches to choose from: choosing one fades every one of `targets`,
-    /// live colors of the set's patterns, to it over `fade` (in `unit`).
-    /// Which swatch is on is live, in the control bank.
+    /// Values of one kind, colors or numbers, one of which is on. Tapping
+    /// one sets every one of `targets` to it, a color fading over `fade`
+    /// (in `unit`). A color list with no targets sets the base color of the
+    /// groups chosen, or after Select the color of the effects chosen.
+    /// Which value is on is live, in the control bank.
     #[serde(rename_all = "camelCase")]
-    Color {
+    List {
         label: String,
-        /// Linear Rec. 2020 rgb, each channel 0–1.
-        swatches: Vec<[f64; 3]>,
+        values: Vec<ListValue>,
         fade: f64,
         unit: luma_patterns::press::TimeUnit,
         targets: Vec<ControlTarget>,
-        /// Moving on to the next swatch by itself, on the set's bars.
+        /// Moving on to the next value by itself, on the set's bars.
         #[serde(default)]
         step: Option<Step>,
     },
-    /// A venue group to play patterns on, by name (or `all`): a pattern's
-    /// pad pressed while this is held plays the pattern on `group` instead
-    /// of its own selection. Several held play it on all of them. An empty
+    /// A venue group, by name (or `all`), to choose: tapped, it is chosen
+    /// or not; held, what is pressed meanwhile acts on it alone. An empty
     /// label shows the group's.
     #[serde(rename_all = "camelCase")]
-    Target { label: String, group: String },
+    Group { label: String, group: String },
 }
 
-/// A color cell moving on by itself: to the next swatch every `bars` bars
-/// of the set's clock, after the last back to the first when it `loops`,
-/// else staying on the last.
+/// One value of a list cell.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ListValue {
+    /// Linear Rec. 2020 rgb, each channel 0–1.
+    Color([f64; 3]),
+    /// 0–1, as a fader sets.
+    Number(f64),
+    /// The color below: an effect chosen by Select takes it again.
+    Below,
+}
+
+impl ListValue {
+    /// Whether this is of a color list: a color, or the color below.
+    pub fn is_color(self) -> bool {
+        !matches!(self, ListValue::Number(_))
+    }
+}
+
+/// A list cell moving on by itself: to the next value every `bars` bars of
+/// the set's clock, after the last back to the first when it `loops`, else
+/// staying on the last.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
@@ -283,10 +327,10 @@ pub struct Step {
     pub loops: bool,
 }
 
-/// The most swatches a color cell holds: a controller's 4 × 4 pads.
-pub const MOST_SWATCHES: usize = 16;
+/// The most values a list cell holds: a controller's 4 × 4 pads.
+pub const MOST_VALUES: usize = 16;
 
-/// Something a fader cell moves, or a color cell sets.
+/// Something a fader cell moves, or a list cell sets.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ControlTarget {
@@ -318,69 +362,87 @@ impl Cell {
 }
 
 impl CellContent {
-    /// What a fader or color cell moves; nothing for any other cell.
+    /// What a fader or list cell moves; nothing for any other cell.
     pub fn targets(&self) -> &[ControlTarget] {
         match self {
-            CellContent::Fader { targets, .. } | CellContent::Color { targets, .. } => targets,
+            CellContent::Fader { targets, .. } | CellContent::List { targets, .. } => targets,
             _ => &[],
         }
     }
 
-    /// What a fader or color cell moves, to change; `None` for any other
+    /// What a fader or list cell moves, to change; `None` for any other
     /// cell.
     pub fn targets_mut(&mut self) -> Option<&mut Vec<ControlTarget>> {
         match self {
-            CellContent::Fader { targets, .. } | CellContent::Color { targets, .. } => {
-                Some(targets)
-            }
+            CellContent::Fader { targets, .. } | CellContent::List { targets, .. } => Some(targets),
             _ => None,
         }
     }
 
+    /// Whether this is a list of colors, whose targets are live colors.
+    pub fn colors(&self) -> bool {
+        matches!(self, CellContent::List { values, .. } if values.first().is_some_and(|v| v.is_color()))
+    }
+
     /// Why this cannot be stored with `patterns`, if it cannot: a fader
-    /// moving what is no number, a color cell setting what is no live
-    /// color, a color cell's swatches, fade or step out of range, or a
-    /// target holding what is no group name.
+    /// moving what is no number, a list mixing colors and numbers, setting
+    /// what is not of its kind, or with its values, fade or step out of
+    /// range, or a group cell holding what is no group name.
     fn misfit(&self, patterns: &[PerformPattern]) -> Option<String> {
-        if let CellContent::Target { group, .. } = self {
+        if let CellContent::Group { group, .. } = self {
             return (group != "all")
                 .then(|| crate::models::groups::validate_group_name(group).err())
                 .flatten()
                 .map(|why| {
                     format!(
-                        "a target holds a venue group's name, such as front_wash, or all: {why}"
+                        "a group cell holds a venue group's name, such as front_wash, or all: {why}"
                     )
                 });
         }
-        if let CellContent::Color {
-            swatches,
+        if let CellContent::List {
+            values,
             fade,
             step,
+            targets,
             ..
         } = self
         {
-            if swatches.is_empty() || swatches.len() > MOST_SWATCHES {
+            if values.is_empty() || values.len() > MOST_VALUES {
                 return Some(format!(
-                    "a color cell holds 1 to {MOST_SWATCHES} swatches; got {}",
-                    swatches.len()
+                    "a list holds 1 to {MOST_VALUES} values; got {}",
+                    values.len()
                 ));
             }
-            if let Some(rgb) = swatches
+            if values
                 .iter()
-                .find(|rgb| rgb.iter().any(|c| !(0.0..=1.0).contains(c)))
+                .any(|value| value.is_color() != values[0].is_color())
             {
+                return Some("a list holds colors or numbers, not both".into());
+            }
+            let outside = |value: &ListValue| match value {
+                ListValue::Color(rgb) => rgb.iter().any(|c| !(0.0..=1.0).contains(c)),
+                ListValue::Number(number) => !(0.0..=1.0).contains(number),
+                ListValue::Below => false,
+            };
+            if let Some(value) = values.iter().find(|value| outside(value)) {
                 return Some(format!(
-                    "a swatch is a color with each channel 0 to 1; got {rgb:?}"
+                    "a list's value is a color with each channel 0 to 1, or a number 0 to 1; got {value:?}"
                 ));
+            }
+            if !targets.is_empty() && values.contains(&ListValue::Below) {
+                return Some(
+                    "the color below is for a list that sets no targets: after Select it puts an effect back on it"
+                        .into(),
+                );
             }
             if !fade.is_finite() || *fade < 0.0 {
-                return Some(format!("a color cell's fade is 0 or more; got {fade}"));
+                return Some(format!("a list's fade is 0 or more; got {fade}"));
             }
             if step.is_some_and(|step| step.bars == 0) {
-                return Some("a color cell steps every 1 bar or more".into());
+                return Some("a list steps every 1 bar or more".into());
             }
         }
-        let colors = matches!(self, CellContent::Color { .. });
+        let colors = self.colors();
         self.targets()
             .iter()
             .find_map(|target| target.misfit(colors, patterns))
@@ -388,13 +450,13 @@ impl CellContent {
 }
 
 impl ControlTarget {
-    /// Why a fader cell (or with `colors`, a color cell) cannot move this
-    /// among `patterns`, if it cannot.
+    /// Why a fader or number list (or with `colors`, a color list) cannot
+    /// move this among `patterns`, if it cannot.
     fn misfit(&self, colors: bool, patterns: &[PerformPattern]) -> Option<String> {
         let pattern = |id: &str| patterns.iter().find(|pattern| pattern.id == id);
         match self {
             ControlTarget::Level { pattern_id } if colors => Some(format!(
-                "a color cell sets live colors; pattern {pattern_id}'s level is a number"
+                "a color list sets live colors; pattern {pattern_id}'s level is a number"
             )),
             ControlTarget::Level { pattern_id } => pattern(pattern_id)
                 .is_none()
@@ -417,14 +479,12 @@ impl ControlTarget {
                 (!fits).then(|| format!("pattern \"{}\" has no {what} node {node}", pattern.name))
             }
             ControlTarget::Named { name } if colors => Some(format!(
-                "a color cell sets live colors of the set's patterns; got the venue's control {name}"
+                "a color list sets live colors of the set's patterns; got the venue's control {name}"
             )),
             ControlTarget::Named { name } => (!is_control_name(name)
                 || crate::controls::perform::owns(name))
             .then(|| {
-                format!(
-                    "expected one of the venue's own control names, such as drop; got {name:?}"
-                )
+                format!("expected one of the venue's own control names, such as drop; got {name:?}")
             }),
         }
     }
@@ -516,7 +576,7 @@ impl PerformLayout {
     }
 
     /// Why this layout cannot be stored with `patterns`, if it cannot: a
-    /// cell off its page or over another, or a fader or color cell that
+    /// cell off its page or over another, or a fader or list cell that
     /// moves what it cannot.
     pub fn check(&self, patterns: &[PerformPattern]) -> Result<(), String> {
         let misfit = self.pages.iter().find_map(|page| {
@@ -550,7 +610,7 @@ impl PerformLayout {
             })
             .collect();
         for cell in self.pages.iter_mut().flat_map(|page| page.cells.iter_mut()) {
-            let colors = matches!(cell.content, CellContent::Color { .. });
+            let colors = cell.content.colors();
             let id = cell.id.clone();
             if let Some(targets) = cell.content.targets_mut() {
                 targets.retain(|target| {
@@ -561,7 +621,7 @@ impl PerformLayout {
         }
     }
 
-    /// Take pattern `id` off the layout: its cell, and every fader and color
+    /// Take pattern `id` off the layout: its cell, and every fader and list
     /// cell's hold on it.
     pub fn forget(&mut self, id: &str) {
         for page in &mut self.pages {
@@ -576,6 +636,13 @@ impl PerformLayout {
                 }
             }
         }
+    }
+
+    /// Whether a group cell, on any page, holds `group`.
+    pub fn has_group(&self, group: &str) -> bool {
+        self.pages.iter().flat_map(|page| &page.cells).any(
+            |cell| matches!(&cell.content, CellContent::Group { group: held, .. } if held == group),
+        )
     }
 
     /// Every cell holding `pattern_id`, on any page.

@@ -159,15 +159,15 @@ impl RenderEngine {
             return base;
         }
         let base = base.unwrap_or_default();
-        Some(live.render_onto(base, time, &mut inner.scratch))
+        Some(live.render_onto(base, time, now, &mut inner.scratch))
     }
 
-    /// Play `grown` in the Perform set, the set grown by the instances
-    /// compiled since, if the set is still build `id`.
-    pub(crate) fn grow_live(&self, id: u64, grown: Arc<crate::perform::live::Layers>) {
+    /// Play `layers` in the Perform set, the set with patterns compiled
+    /// again since, if the set is still build `id`.
+    pub(crate) fn replace_live(&self, id: u64, layers: Arc<crate::perform::live::Layers>) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         if let Some(live) = guard.live.as_mut().filter(|live| live.id() == id) {
-            live.grow(grown);
+            live.replace(layers);
         }
     }
 

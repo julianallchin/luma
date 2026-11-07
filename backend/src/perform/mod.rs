@@ -352,16 +352,43 @@ impl PerformSession {
         Ok(())
     }
 
-    /// Set pad `name` of the open set's venue on or off on groups `on`,
-    /// whatever targets are held: on none, the pattern on its own selection.
-    pub fn set_on(&self, name: &str, value: f64, on: &[String]) -> Result<(), String> {
-        self.bank()?.set_on(name, value, on);
+    /// Choose exactly `groups` in the open set's venue: none is everything.
+    pub fn choose(&self, groups: &[String]) -> Result<(), String> {
+        self.bank()?.choose(groups);
         Ok(())
     }
 
-    /// Press (`down`) or release button `name` of the open set's venue: a
-    /// button node of a pattern, its pad or another. It plays as the button says: a toggle
-    /// flips on the press, a flash is on while held.
+    /// Choose the effects of `patterns` in the open set's venue, as Select
+    /// does, for the next color tapped on a list with no targets.
+    pub fn select(&self, patterns: &[String]) -> Result<(), String> {
+        self.bank()?.select(patterns);
+        Ok(())
+    }
+
+    /// Clear the open set's venue: choose nothing, or with `effects`, let
+    /// every effect go, as Clear tapped or held does.
+    pub fn clear(&self, effects: bool) -> Result<(), String> {
+        self.bank()?.clear(effects);
+        Ok(())
+    }
+
+    /// Fade the base color of the lights of `groups` (none: every light)
+    /// in the open set's venue to `color` over `fade` in `unit`.
+    pub fn base(
+        &self,
+        groups: &[String],
+        color: [f64; 3],
+        fade: f64,
+        unit: luma_patterns::press::TimeUnit,
+    ) -> Result<(), String> {
+        self.bank()?.base(groups, color, fade, unit);
+        Ok(())
+    }
+
+    /// Press (`down`) or release control `name` of the open set's venue: a
+    /// pad or another button node, a group, a list's value, Select or
+    /// Clear. It plays as the bank says: a toggle flips on the press, a
+    /// flash is on while held.
     pub fn press(&self, name: &str, down: bool) -> Result<(), String> {
         self.bank()?.press(name, down, Instant::now());
         Ok(())
@@ -491,17 +518,14 @@ impl Shared {
         };
         let (wants, wanted) = tokio::sync::mpsc::unbounded_channel();
         match Self::compile_set(&shared, &venue_id, track.as_ref(), update.id(), wants).await {
-            Ok((clock, set)) => {
+            Ok((clock, (set, build))) => {
                 let mut state = shared.lock();
                 state.set_clock = Some(clock);
                 shared.follow_tempo(&state);
                 drop(state);
-                let set = set.map(|(set, build)| {
-                    let grows = Self::grow_set(Arc::downgrade(&shared), venue_id, build, wanted);
-                    tokio::spawn(grows);
-                    set
-                });
-                shared.render.finish_update(update, Built::Live(set));
+                let rebuilds = Self::rebuild_set(Arc::downgrade(&shared), venue_id, build, wanted);
+                tokio::spawn(rebuilds);
+                shared.render.finish_update(update, Built::Live(Some(set)));
             }
             Err(message) => {
                 log::warn!("the Perform set did not compile: {message}");
@@ -511,11 +535,11 @@ impl Shared {
         }
     }
 
-    /// Compile each instance the open set's bank makes into the set that
-    /// `build` built, the first time the instance is played: off the frame
-    /// path, so the set plays on meanwhile. Ends when that set is replaced,
-    /// which drops the other end of `wanted`.
-    async fn grow_set(
+    /// Compile again each pattern the open set's bank moves (to other
+    /// groups, or another blend) into the set that `build` built: off the
+    /// frame path, so the set plays on meanwhile. Ends when that set is
+    /// replaced, which drops the other end of `wanted`.
+    async fn rebuild_set(
         shared: Weak<Self>,
         venue_id: String,
         mut build: live::Build,
@@ -527,26 +551,26 @@ impl Shared {
                 return;
             };
             let started = Instant::now();
-            let grown = async {
+            let rebuilt = async {
                 let mut access =
                     VenueAccess::<Read>::read(&shared.pool, VenueResource::Venue(&venue_id))
                         .await
                         .map_err(|error| error.to_string())?;
                 build
-                    .grow(&mut access, &shared.fixtures_root, &shared.storage)
+                    .rebuild(&mut access, &shared.fixtures_root, &shared.storage)
                     .await
             }
             .await;
-            match grown {
-                Ok(Some(grown)) => {
+            match rebuilt {
+                Ok(Some(layers)) => {
                     log::debug!(
-                        "Perform instances compiled in {:.1} ms",
+                        "Perform patterns compiled again in {:.1} ms",
                         started.elapsed().as_secs_f64() * 1000.
                     );
-                    shared.render.grow_live(build.id(), grown);
+                    shared.render.replace_live(build.id(), layers);
                 }
                 Ok(None) => {}
-                Err(message) => log::warn!("a Perform instance did not compile: {message}"),
+                Err(message) => log::warn!("a Perform pattern did not compile: {message}"),
             }
         }
     }
@@ -557,7 +581,7 @@ impl Shared {
         track: Option<&(u8, String)>,
         id: u64,
         wants: tokio::sync::mpsc::UnboundedSender<()>,
-    ) -> Result<(LiveClock, Option<(live::LiveSet, live::Build)>), String> {
+    ) -> Result<(LiveClock, (live::LiveSet, live::Build)), String> {
         let mut access = VenueAccess::<Read>::read(&shared.pool, VenueResource::Venue(venue_id))
             .await
             .map_err(|error| error.to_string())?;

@@ -7,16 +7,17 @@
 //! taller cell stands its level and its graph's other faders and buttons up
 //! under the pad, and a wider one lays them along it; a live color shows as
 //! its color, which a color cell sets. A pattern with no pad shows the same
-//! face, which nothing presses: it plays whenever the set is open. While a
-//! pattern plays on targets, its cell names where it plays. A color cell
-//! fills itself with its swatches, the one on marked. A target is a pad held
-//! while pressed.
+//! face, which nothing presses: it plays whenever the set is open. A pattern
+//! cell names where it plays, and says when it takes the color below. A
+//! list fills itself with its values, the one on marked; a list one place
+//! big is a single Next button. A group cell is lit while chosen, and shows
+//! its base color. Select is lit while it is held or latched.
 
 use std::cell::Cell as Shared;
 
 use gpui::prelude::*;
 use gpui::{canvas, div, px, relative, AnyElement, Axis, Entity, Hsla, MouseButton, SharedString};
-use luma_lib::models::perform::{Cell, CellContent, LayoutPage, PerformLayout};
+use luma_lib::models::perform::{Cell, CellContent, LayoutPage, ListValue, PerformLayout};
 use luma_patterns::clip_graph::LiveInputKind;
 use luma_patterns::press::PressMode;
 use luma_ui::float::{self, RowState};
@@ -561,8 +562,10 @@ fn face(state: &Perform, cell: &Cell, rect: Rect, live: Live) -> AnyElement {
         CellContent::Pattern { pattern_id } => pattern_face(state, cell, pattern_id, rect, live),
         CellContent::Master | CellContent::Fader { .. } => fader_face(state, cell, rect, live),
         CellContent::Tap => tap_face(state, cell, live),
-        CellContent::Color { swatches, .. } => color_face(state, cell, swatches, rect, live),
-        CellContent::Target { .. } => target_face(state, cell, live),
+        CellContent::Select => utility_face(state, cell, state.selecting(), live),
+        CellContent::Clear => utility_face(state, cell, false, live),
+        CellContent::List { values, .. } => list_face(state, cell, values, rect, live),
+        CellContent::Group { group, .. } => group_face(state, cell, group, live),
     }
 }
 
@@ -627,47 +630,34 @@ fn pattern_face(
         Some((pad, controls)) if pad.kind == PartKind::Pad => (Some(pad), controls),
         _ => (None, &parts[..]),
     };
-    // It glows by the brightest of its pad and its instances, and is on
-    // while any is.
-    let plays = state.plays(pattern_id);
-    let level = plays
-        .iter()
-        .map(|(button, _)| state.value(button, 0.) as f32)
-        .fold(0., f32::max);
-    let on = plays.iter().any(|(button, _)| state.on(button));
-    let waiting = plays.iter().any(|(button, _)| state.waiting(button));
+    // It glows by its pad's envelope, and is on while its pad is.
+    let level = pad.map_or(0., |pad| state.value(&pad.control, 0.) as f32);
+    let on = pad.is_some_and(|pad| state.on(&pad.control));
+    let waiting = pad.is_some_and(|pad| state.waiting(&pad.control));
+    let effect = state.effect(pattern_id);
+    let chosen = state.selected(pattern_id);
     // Where it plays, when that is more than its own selection.
-    let places: Vec<String> = pattern
-        .map(|pattern| {
-            plays
+    let places = effect
+        .filter(|effect| !effect.groups.is_empty())
+        .map(|effect| {
+            effect
+                .groups
                 .iter()
-                .filter(|(button, _)| state.on(button))
-                .map(|(_, groups)| match groups.as_slice() {
-                    [] => group_label(&pattern.selection.expression),
-                    groups => groups
-                        .iter()
-                        .map(|group| group_label(group))
-                        .collect::<Vec<_>>()
-                        .join(" + "),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let on_targets = plays
-        .iter()
-        .any(|(button, groups)| !groups.is_empty() && state.on(button));
+                .map(|group| group_label(group))
+                .collect::<Vec<_>>()
+                .join(" + ")
+        });
+    let below = effect.is_some_and(|effect| effect.below);
     let subtitle = pattern.map(|pattern| {
-        if on_targets {
-            return places.join(", ");
-        }
-        let group = group_label(&pattern.selection.expression);
-        match pattern.graph.pad().map(|pad| pad.kind) {
-            Some(LiveInputKind::Button(press)) if press.mode == PressMode::Flash => {
-                format!("{group} · flash")
-            }
-            Some(_) => group,
-            None => format!("{group} · always on"),
-        }
+        let place = places
+            .clone()
+            .unwrap_or_else(|| group_label(&pattern.selection.expression));
+        let how = match pattern.graph.pad().map(|pad| pad.kind) {
+            Some(LiveInputKind::Button(press)) if press.mode == PressMode::Flash => " · flash",
+            Some(_) => "",
+            None => " · always on",
+        };
+        format!("{place}{how}{}", if below { " · below" } else { "" })
     });
     let arrangement = arrange(rect.width, rect.height, controls.len());
     // GPUI clips to rectangles, not to rounded corners, so the fill rounds
@@ -706,7 +696,7 @@ fn pattern_face(
                             .text_color(ladder::foreground())
                             .child(title.clone()),
                     )
-                    .child(dot(on, waiting, tint)),
+                    .child(dot(on || chosen, waiting, tint)),
             )
             .children(subtitle.map(|subtitle| {
                 div()
@@ -722,7 +712,9 @@ fn pattern_face(
     );
     let pad_view = match (live, pad) {
         (Some((target, app)), Some(pad)) => press(
-            pad_view.id(SharedString::from(format!("perform-pad-{}", cell.id))),
+            pad_view
+                .id(SharedString::from(format!("perform-pad-{}", cell.id)))
+                .when(chosen, |view| view.border_2().border_color(tint)),
             &pad.control,
             PartKind::Pad,
             target,
@@ -732,12 +724,15 @@ fn pattern_face(
             Role::Button,
             described(
                 format!("Pad: {title}"),
-                match (on, on_targets) {
-                    (true, true) => Some(format!("on: {}", places.join(", "))),
-                    (true, false) => Some("on".into()),
-                    (false, _) => None,
-                },
-                waiting,
+                [
+                    on.then(|| match &places {
+                        Some(places) => format!("on: {places}"),
+                        None => "on".into(),
+                    }),
+                    below.then(|| "below".into()),
+                    chosen.then(|| "chosen".into()),
+                    waiting.then(|| "waiting".into()),
+                ],
             ),
         )
         .into_any_element(),
@@ -808,11 +803,8 @@ fn dot(on: bool, waiting: bool, tint: Hsla) -> gpui::Div {
 
 /// What a button says it is to an agent: `name`, and how it stands, as
 /// "Pad: Wash (on, waiting)".
-fn described(name: String, on: Option<String>, waiting: bool) -> String {
-    let state: Vec<String> = on
-        .into_iter()
-        .chain(waiting.then(|| "waiting".to_owned()))
-        .collect();
+fn described<const N: usize>(name: String, state: [Option<String>; N]) -> String {
+    let state: Vec<String> = state.into_iter().flatten().collect();
     if state.is_empty() {
         name
     } else {
@@ -821,9 +813,7 @@ fn described(name: String, on: Option<String>, waiting: bool) -> String {
 }
 
 /// Press and release handlers for a button of a cell: the pointer's
-/// release, wherever it lands, lets go of the button it pressed. A target
-/// lets go after the release is handled where it landed, so a pad there
-/// still sees it held.
+/// release, wherever it lands, lets go of the button it pressed.
 fn press(
     element: gpui::Stateful<gpui::Div>,
     control: &str,
@@ -831,28 +821,15 @@ fn press(
     target: &Target,
     app: &Entity<Luma>,
 ) -> gpui::Stateful<gpui::Div> {
-    let handler = |down: bool, over: bool| {
+    let handler = |down: bool| {
         let (app, target, control) = (app.clone(), target.clone(), control.to_owned());
         move |cx: &mut gpui::App| {
-            let app = app.clone();
-            let (target, control) = (target.clone(), control.clone());
-            let press = move |cx: &mut gpui::App| {
-                app.update(cx, |this, cx| {
-                    this.press_part(&target, &control, kind, down, over, cx)
-                });
-            };
-            if kind == PartKind::Target && !down {
-                cx.defer(press);
-            } else {
-                press(cx);
-            }
+            app.update(cx, |this, cx| {
+                this.press_part(&target, &control, kind, down, cx)
+            });
         }
     };
-    let (down, up, out) = (
-        handler(true, true),
-        handler(false, true),
-        handler(false, false),
-    );
+    let (down, up, out) = (handler(true), handler(false), handler(false));
     element
         .cursor_pointer()
         .on_mouse_down(MouseButton::Left, move |_, _, cx| down(cx))
@@ -935,15 +912,21 @@ fn button(
         Some((target, app)) => press(plate, &part.control, PartKind::Button, target, app)
             .agent_node(
                 Role::Button,
-                described(name, on.then(|| "on".to_owned()), waiting),
+                described(
+                    name,
+                    [
+                        on.then(|| "on".to_owned()),
+                        waiting.then(|| "waiting".into()),
+                    ],
+                ),
             )
             .into_any_element(),
         None => plate.into_any_element(),
     }
 }
 
-/// A live color of a pattern's graph: its color as it is now. A color cell
-/// sets it, so here it only shows.
+/// A live color of a pattern's graph: its color as it is now. A list sets
+/// it, so here it only shows.
 fn live_color(state: &Perform, name: String, part: &Part) -> AnyElement {
     let rgb = state.color(&part.control);
     let hex = luma_ui::arg::color::Hex::of_light(rgb.map(|c| c as f32));
@@ -1100,41 +1083,106 @@ fn fader_face(state: &Perform, cell: &Cell, rect: Rect, live: Live) -> AnyElemen
         .into_any_element()
 }
 
-/// How many columns `count` swatches fill a cell `width` × `height` places
-/// in: as many as keep each swatch near square.
+/// How many columns `count` values fill a cell `width` × `height` places
+/// in: as many as keep each value near square.
 pub(super) fn swatch_columns(width: u16, height: u16, count: usize) -> usize {
     let count = count.max(1);
     let wide = f64::from(width) / f64::from(height.max(1));
     ((count as f64 * wide).sqrt().round() as usize).clamp(1, count)
 }
 
-/// A color cell: its name over its swatches, filling the cell. Pressing a
-/// swatch chooses it; the one on is ringed.
-fn color_face(
+/// A list's value as it shows: a color as itself, a number as a percentage
+/// on a quiet plate, the color below as a word.
+fn value_plate(value: ListValue) -> (gpui::Div, String) {
+    let plate = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius::CONTROL))
+        .text_size(px(11.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(ladder::foreground_alpha(0.9));
+    match value {
+        ListValue::Color(rgb) => (
+            plate.bg(super::paint(rgb)),
+            luma_ui::arg::color::Hex::of_light(rgb.map(|c| c as f32)).to_string(),
+        ),
+        ListValue::Number(number) => {
+            let text = format!("{:.0}%", number * 100.);
+            (plate.bg(glass::ink(0.08)).child(text.clone()), text)
+        }
+        ListValue::Below => (
+            plate.bg(glass::ink(0.08)).child("Below"),
+            "below".to_owned(),
+        ),
+    }
+}
+
+/// A list: its name over its values, filling the cell, the one on marked;
+/// pressing one taps it. One place big, a single Next button that shows the
+/// value on and taps the next.
+fn list_face(
     state: &Perform,
     cell: &Cell,
-    swatches: &[[f64; 3]],
+    values: &[ListValue],
     rect: Rect,
     live: Live,
 ) -> AnyElement {
     let title = state.title(cell);
-    let on = state.swatch_on(&cell.id);
+    let on = state.value_on(&cell.id);
     let parts = state.parts(cell);
-    let columns = swatch_columns(rect.width, rect.height, swatches.len());
-    // A part per swatch, in order.
-    let swatch = |index: usize, part: &Part| {
+    if (rect.width, rect.height) == (1, 1) {
+        let Some(next) = parts.last() else {
+            return plate().into_any_element();
+        };
+        let shown = on.or((!values.is_empty()).then_some(0));
+        let (value, text) = match shown.and_then(|index| values.get(index)) {
+            Some(value) => value_plate(*value),
+            None => (div(), String::new()),
+        };
+        let body = div()
+            .id(SharedString::from(format!("perform-next-{}", cell.id)))
+            .size_full()
+            .p(px(10.))
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(12.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(ladder::foreground())
+                    .child(title.clone()),
+            )
+            .child(value.flex_1().min_h_0().w_full().child("Next"));
+        let label = format!("{title} Next, {text}");
+        return match live {
+            Some((target, app)) => plate()
+                .child(
+                    press(body, &next.control, next.kind, target, app)
+                        .agent_node(Role::Button, label),
+                )
+                .into_any_element(),
+            None => plate()
+                .child(body.agent_node(Role::Text, label))
+                .into_any_element(),
+        };
+    }
+    let columns = swatch_columns(rect.width, rect.height, values.len());
+    // A part per value, in order; the list's Next is last.
+    let shown = &parts[..values.len().min(parts.len())];
+    let value = |index: usize, part: &super::Part| {
         let chosen = on == Some(index);
-        let hex = luma_ui::arg::color::Hex::of_light(swatches[index].map(|c| c as f32));
-        let plate = div()
+        let (plate, text) = value_plate(values[index]);
+        let plate = plate
             .id(SharedString::from(format!(
-                "perform-swatch-{}-{index}",
+                "perform-value-{}-{index}",
                 cell.id
             )))
             .flex_1()
             .min_w_0()
             .h_full()
-            .rounded(px(radius::CONTROL))
-            .bg(super::paint(swatches[index]))
             .border_2()
             .border_color(if chosen {
                 ladder::foreground().into()
@@ -1151,7 +1199,7 @@ fn color_face(
                 )
             });
         let label = format!(
-            "{title} {}, {hex}{}",
+            "{title} {}, {text}{}",
             part.label,
             if chosen { " (on)" } else { "" }
         );
@@ -1170,7 +1218,7 @@ fn color_face(
         .flex()
         .flex_col()
         .gap(px(6.))
-        .children(parts.chunks(columns).enumerate().map(|(row, parts)| {
+        .children(shown.chunks(columns).enumerate().map(|(row, parts)| {
             let room = columns - parts.len();
             div()
                 .flex_1()
@@ -1181,9 +1229,9 @@ fn color_face(
                     parts
                         .iter()
                         .enumerate()
-                        .map(|(column, part)| swatch(row * columns + column, part)),
+                        .map(|(column, part)| value(row * columns + column, part)),
                 )
-                // The last row's empty places keep its swatches as wide.
+                // The last row's empty places keep its values as wide.
                 .children((0..room).map(|_| div().flex_1()))
         }));
     plate()
@@ -1202,24 +1250,100 @@ fn color_face(
         .into_any_element()
 }
 
-/// A target: held while pressed, it plays the pads pressed meanwhile on its
-/// group. With one pointer, a press on it let go over a pad presses that pad.
-fn target_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
+/// A group cell: tapped, it is chosen or no longer, and lit while it is;
+/// held, what is pressed meanwhile acts on its group alone. It shows its
+/// group's base color.
+fn group_face(state: &Perform, cell: &Cell, group: &str, live: Live) -> AnyElement {
     let title = state.title(cell);
     let control = luma_lib::controls::perform::cell(&cell.id);
-    let held = state.held(&control);
+    let (chosen, held) = state.group(group);
+    let base = state.base(group);
+    let lit = chosen || held;
     let body = div()
-        .id(SharedString::from(format!("perform-target-{}", cell.id)))
+        .id(SharedString::from(format!("perform-group-{}", cell.id)))
         .size_full()
         .p(px(10.))
         .flex()
         .flex_col()
         .justify_between()
         .rounded(px(radius::CHIP))
-        .bg(glass::ink(if held { 0.22 } else { 0.08 }))
+        .bg(glass::ink(if lit { 0.22 } else { 0.08 }))
+        .when(lit, |body| {
+            body.border_2()
+                .border_color(Hsla::from(ladder::foreground()))
+        })
         .child(
             div()
-                .line_clamp(2)
+                .flex()
+                .items_start()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .line_clamp(2)
+                        .text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(ladder::foreground())
+                        .child(title.clone()),
+                )
+                .children(base.map(|rgb| {
+                    div()
+                        .flex_none()
+                        .mt(px(3.))
+                        .size(px(10.))
+                        .rounded_full()
+                        .bg(super::paint(rgb))
+                })),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(ladder::foreground_alpha(if lit { 0.85 } else { 0.55 }))
+                .child(match (held, chosen) {
+                    (true, _) => "Held",
+                    (false, true) => "Chosen",
+                    (false, false) => "Tap to choose",
+                }),
+        );
+    let label = described(
+        format!("Group: {title}"),
+        [
+            chosen.then(|| "chosen".into()),
+            held.then(|| "held".into()),
+            base.map(|rgb| luma_ui::arg::color::Hex::of_light(rgb.map(|c| c as f32)).to_string()),
+        ],
+    );
+    let body = match live {
+        Some((target, app)) => press(body, &control, PartKind::Group, target, app)
+            .agent_node(Role::Button, label)
+            .into_any_element(),
+        None => body.into_any_element(),
+    };
+    plate().child(body).into_any_element()
+}
+
+/// Select or Clear: its name and what it does, lit while `lit`.
+fn utility_face(state: &Perform, cell: &Cell, lit: bool, live: Live) -> AnyElement {
+    let title = state.title(cell);
+    let Some(part) = state.parts(cell).pop() else {
+        return plate().into_any_element();
+    };
+    let hint = match part.kind {
+        PartKind::Select => "Hold or tap, then an effect",
+        _ => "Tap: choose nothing · hold: all off",
+    };
+    let body = div()
+        .id(SharedString::from(format!("perform-utility-{}", cell.id)))
+        .size_full()
+        .p(px(10.))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .rounded(px(radius::CHIP))
+        .bg(glass::ink(if lit { 0.22 } else { 0.08 }))
+        .child(
+            div()
                 .text_size(px(13.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(ladder::foreground())
@@ -1228,19 +1352,12 @@ fn target_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
         .child(
             div()
                 .text_size(px(11.))
-                .text_color(ladder::foreground_alpha(if held { 0.85 } else { 0.55 }))
-                .child(if held {
-                    "Held: pads play here"
-                } else {
-                    "Hold, then press a pad"
-                }),
+                .text_color(ladder::foreground_alpha(0.55))
+                .child(hint),
         );
     let body = match live {
-        Some((target, app)) => press(body, &control, PartKind::Target, target, app)
-            .agent_node(
-                Role::Button,
-                format!("Target: {title}{}", if held { " (held)" } else { "" }),
-            )
+        Some((target, app)) => press(body, &part.control, part.kind, target, app)
+            .agent_node(Role::Button, described(title, [lit.then(|| "on".into())]))
             .into_any_element(),
         None => body.into_any_element(),
     };

@@ -98,8 +98,8 @@ pub(crate) enum Edit {
     /// Put a new cell on the current page and select it.
     Place(Rect, CellContent),
     Remove(String),
-    /// Change what a cell holds: a fader or color cell's label, targets,
-    /// swatches, fade or step.
+    /// Change what a cell holds: a fader, list or group cell's label,
+    /// targets, values, fade, step or group.
     SetContent(String, CellContent),
     /// Show `cell` at `rect` while it is dragged.
     Preview(String, Rect),

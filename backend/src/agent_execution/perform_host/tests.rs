@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::PerformHost;
 use crate::agent_execution::worker_process::HostCallError;
 use crate::dispatch::{dispatch, AppServices};
-use crate::models::perform::{CellContent, PerformLayout, PerformPattern};
+use crate::models::perform::{CellContent, ListValue, PerformLayout, PerformPattern};
 
 /// A signed-in library with one empty venue, and the host a Perform thread
 /// of that venue gets.
@@ -375,7 +375,7 @@ fn with_color() -> Value {
 }
 
 #[tokio::test]
-async fn a_color_cell_sets_live_colors_and_changes_as_told() {
+async fn a_list_sets_what_it_targets_and_changes_as_told() {
     let (_dir, _services, host) = library().await;
     let mut add = wash();
     add["graph"] = with_color();
@@ -383,8 +383,8 @@ async fn a_color_cell_sets_live_colors_and_changes_as_told() {
     let id = added["id"].as_str().unwrap();
     let node = |node: &str| json!({"kind": "node", "patternId": id, "node": node});
     let colors = |target: Value| {
-        json!({"content": {"kind": "color", "label": "Colors",
-            "swatches": [[1, 0, 0], [0, 0, 1]], "fade": 1, "unit": "beats",
+        json!({"content": {"kind": "list", "label": "Colors",
+            "values": [{"color": [1, 0, 0]}, {"color": [0, 0, 1]}], "fade": 1, "unit": "beats",
             "targets": [target], "step": {"bars": 4, "loops": true}}})
     };
     let fader = call(&host, "perform.place", colors(node("speed")))
@@ -419,11 +419,14 @@ async fn a_color_cell_sets_live_colors_and_changes_as_told() {
     let cell = placed["id"].as_str().unwrap();
     assert_eq!(
         placed["set"]["controls"]["cells"][cell],
-        json!([
-            crate::controls::perform::swatch(cell, 0),
-            crate::controls::perform::swatch(cell, 1)
-        ]),
-        "a control per swatch"
+        json!({
+            "values": [
+                crate::controls::perform::value(cell, 0),
+                crate::controls::perform::value(cell, 1)
+            ],
+            "next": crate::controls::perform::cell(cell),
+        }),
+        "a control per value, and one for the next"
     );
     let content = |answer: &Value| {
         layout(answer).pages[0]
@@ -437,34 +440,74 @@ async fn a_color_cell_sets_live_colors_and_changes_as_told() {
     let changed = call(
         &host,
         "perform.cell",
-        json!({"id": cell, "swatches": [[0, 1, 0]], "fade": 2, "unit": "seconds"}),
+        json!({"id": cell, "values": [{"color": [0, 1, 0]}], "fade": 2, "unit": "seconds"}),
     )
     .await
     .unwrap();
-    let CellContent::Color {
-        swatches,
+    let CellContent::List {
+        values,
         fade,
         unit,
         step,
         ..
     } = content(&changed)
     else {
-        panic!("still a color cell");
+        panic!("still a list");
     };
-    assert_eq!((swatches, fade), (vec![[0., 1., 0.]], 2.));
+    assert_eq!((values, fade), (vec![ListValue::Color([0., 1., 0.])], 2.));
     assert_eq!(unit, luma_patterns::press::TimeUnit::Seconds);
     assert!(step.is_some(), "a step not given stays");
     let still = call(&host, "perform.cell", json!({"id": cell, "step": null}))
         .await
         .unwrap();
-    let CellContent::Color { step, .. } = content(&still) else {
-        panic!("still a color cell");
+    let CellContent::List { step, .. } = content(&still) else {
+        panic!("still a list");
     };
     assert_eq!(step, None, "a step of null stops it stepping");
-    let none = call(&host, "perform.cell", json!({"id": cell, "swatches": []}))
+    let none = call(&host, "perform.cell", json!({"id": cell, "values": []}))
         .await
         .unwrap_err();
-    assert!(none.message.contains("swatches"), "{}", none.message);
+    assert!(none.message.contains("values"), "{}", none.message);
+    let mixed = call(
+        &host,
+        "perform.cell",
+        json!({"id": cell, "values": [{"color": [0, 1, 0]}, {"number": 0.5}]}),
+    )
+    .await
+    .unwrap_err();
+    assert!(mixed.message.contains("not both"), "{}", mixed.message);
+    let below = call(
+        &host,
+        "perform.cell",
+        json!({"id": cell, "values": [{"color": [0, 1, 0]}, "below"]}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        below.message.contains("sets no targets"),
+        "the color below is for a list with no targets: {}",
+        below.message
+    );
+    // With no targets, a list may hold the color below.
+    call(
+        &host,
+        "perform.cell",
+        json!({"id": cell, "targets": [], "values": [{"color": [0, 1, 0]}, "below"]}),
+    )
+    .await
+    .unwrap();
+
+    // A list of numbers moves faders and levels.
+    let numbers = call(
+        &host,
+        "perform.place",
+        json!({"content": {"kind": "list", "label": "Speeds",
+            "values": [{"number": 0}, {"number": 1}], "fade": 0, "unit": "beats",
+            "targets": [node("speed")]}}),
+    )
+    .await
+    .unwrap();
+    assert!(numbers["id"].is_string());
 }
 
 #[tokio::test]
@@ -512,53 +555,161 @@ async fn group(services: &AppServices, host: &PerformHost, name: &str) {
 }
 
 #[tokio::test]
-async fn a_pattern_plays_on_targets_as_told() {
+async fn groups_are_chosen_and_an_effect_plays_where_they_are() {
     let (_dir, services, host) = library().await;
     group(&services, &host, "front").await;
     let added = call(&host, "perform.add", wash_starting("now"))
         .await
         .unwrap();
+    let pattern = patterns(&added)[0].id.clone();
     let pad = crate::controls::perform::pad(&patterns(&added)[0]).expect("a pad");
-    let target = |group: &str| json!({"content": {"kind": "target", "label": "", "group": group}});
-    let unknown = call(&host, "perform.place", target("nowhere"))
+    let placed_group =
+        |group: &str| json!({"content": {"kind": "group", "label": "", "group": group}});
+    let unknown = call(&host, "perform.place", placed_group("nowhere"))
         .await
         .unwrap_err();
     assert!(unknown.message.contains("nowhere"), "{}", unknown.message);
-    let placed = call(&host, "perform.place", target("front")).await.unwrap();
+    let placed = call(&host, "perform.place", placed_group("front"))
+        .await
+        .unwrap();
     let cell = placed["id"].as_str().unwrap().to_owned();
     assert_eq!(
         placed["set"]["controls"]["cells"][&cell],
         crate::controls::perform::cell(&cell),
-        "a target is held by its control"
+        "a group cell is pressed by its control"
+    );
+    assert_eq!(
+        placed["set"]["controls"]["select"],
+        crate::controls::perform::SELECT
+    );
+    assert_eq!(
+        placed["set"]["controls"]["clear"],
+        crate::controls::perform::CLEAR
     );
 
+    let closed = call(&host, "perform.choose", json!({"groups": ["front"]}))
+        .await
+        .unwrap_err();
+    assert!(closed.message.contains("not open"), "{}", closed.message);
     services
         .perform
         .open_set(host.venue_id.clone())
         .await
         .unwrap();
-    let play = |value: f64, on: &[&str]| {
-        call(
-            &host,
-            "perform.control",
-            json!({"name": pad, "value": value, "on": on}),
-        )
-    };
-    let on = play(1.0, &["front"]).await.unwrap();
-    let instance = crate::controls::perform::instance(&pad, &["front".to_owned()]);
+    let nowhere = call(&host, "perform.choose", json!({"groups": ["back"]}))
+        .await
+        .unwrap_err();
+    assert_eq!(nowhere.code, "refused");
+    assert!(nowhere.message.contains("back"), "{}", nowhere.message);
+    let chosen = call(&host, "perform.choose", json!({"groups": ["front"]}))
+        .await
+        .unwrap();
+    assert_eq!(chosen["state"]["chosen"], json!(["front"]));
+
+    // The pad set on plays where the groups chosen are.
+    let on = call(&host, "perform.control", json!({"name": pad, "value": 1.0}))
+        .await
+        .unwrap();
+    assert!(on["state"]["buttons"][&pad]["gate"]["offFor"].is_null());
+    assert_eq!(on["state"]["effects"][&pattern]["groups"], json!(["front"]));
+    let gone = call(
+        &host,
+        "perform.control",
+        json!({"name": pad, "value": 1.0, "on": ["front"]}),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
-        on["state"]["instances"][&instance],
-        json!({"patternId": patterns(&added)[0].id, "on": ["front"]})
+        gone.code, "invalid_request",
+        "on= is gone: {}",
+        gone.message
     );
-    assert!(on["state"]["buttons"][&instance]["gate"]["offFor"].is_null());
-    assert!(
-        on["state"]["buttons"][&pad]["gate"].is_null(),
-        "its own selection stays off"
+
+    // Clear chooses nothing; with effects, it lets every effect go.
+    let cleared = call(&host, "perform.clear", json!({})).await.unwrap();
+    assert_eq!(cleared["state"]["chosen"], json!([]));
+    assert!(cleared["state"]["buttons"][&pad]["gate"]["offFor"].is_null());
+    let released = call(&host, "perform.clear", json!({"effects": true}))
+        .await
+        .unwrap();
+    assert!(!released["state"]["buttons"][&pad]["gate"]["offFor"].is_null());
+}
+
+#[tokio::test]
+async fn select_and_the_base_color_set_colors_as_told() {
+    let (_dir, services, host) = library().await;
+    group(&services, &host, "front").await;
+    let mut add = wash_starting("now");
+    add["graph"] = with_color();
+    let added = call(&host, "perform.add", add).await.unwrap();
+    let pattern = added["id"].as_str().unwrap().to_owned();
+    let placed = call(
+        &host,
+        "perform.place",
+        json!({"content": {"kind": "list", "label": "Base",
+            "values": [{"color": [1, 0, 0]}, "below"], "fade": 0, "unit": "beats",
+            "targets": []}}),
+    )
+    .await
+    .unwrap();
+    let list = placed["id"].as_str().unwrap().to_owned();
+    call(
+        &host,
+        "perform.place",
+        json!({"content": {"kind": "group", "label": "", "group": "front"}}),
+    )
+    .await
+    .unwrap();
+    services
+        .perform
+        .open_set(host.venue_id.clone())
+        .await
+        .unwrap();
+
+    let missing = call(&host, "perform.select", json!({"ids": ["nope"]}))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "not_found");
+    let selected = call(&host, "perform.select", json!({"ids": [pattern]}))
+        .await
+        .unwrap();
+    assert_eq!(selected["state"]["selected"], json!([pattern]));
+    // Red tapped on a list with no targets: the effect's own color, and
+    // the effect no longer chosen.
+    let red = crate::controls::perform::value(&list, 0);
+    call(&host, "perform.press", json!({"name": red, "down": true}))
+        .await
+        .unwrap();
+    let own = call(&host, "perform.press", json!({"name": red, "down": false}))
+        .await
+        .unwrap();
+    assert_eq!(own["state"]["selected"], json!([]));
+    assert_eq!(own["state"]["effects"][&pattern]["below"], false);
+    let hue = crate::controls::perform::node(&pattern, "hue");
+    assert_eq!(
+        own["state"]["colors"][&hue]["fade"]["to"],
+        json!([1.0, 0.0, 0.0])
     );
-    let off = play(0.0, &["front"]).await.unwrap();
-    assert!(!off["state"]["buttons"][&instance]["gate"]["offFor"].is_null());
-    let refused = play(1.0, &["nowhere"]).await.unwrap_err();
-    assert_eq!(refused.code, "refused", "{}", refused.message);
+
+    let bad = call(&host, "perform.base", json!({"color": [2, 0, 0]}))
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code, "refused");
+    let nowhere = call(
+        &host,
+        "perform.base",
+        json!({"color": [0, 0, 1], "groups": ["back"]}),
+    )
+    .await
+    .unwrap_err();
+    assert!(nowhere.message.contains("back"), "{}", nowhere.message);
+    call(
+        &host,
+        "perform.base",
+        json!({"color": [0, 0, 1], "groups": ["front"], "fade": 0}),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -650,14 +801,14 @@ async fn a_busk_page_is_added_beside_the_set_and_plays() {
         .iter()
         .filter(|pattern| pattern.id != kept[0].id)
         .all(|pattern| pattern.z_index > kept[0].z_index));
-    // A room with no groups has one target, everything.
-    let targets: Vec<&CellContent> = busk
+    // A room with no groups has one group cell, everything.
+    let groups: Vec<&CellContent> = busk
         .cells
         .iter()
         .map(|cell| &cell.content)
-        .filter(|content| matches!(content, CellContent::Target { .. }))
+        .filter(|content| matches!(content, CellContent::Group { .. }))
         .collect();
-    assert!(matches!(targets[..], [CellContent::Target { group, .. }] if group == "all"));
+    assert!(matches!(groups[..], [CellContent::Group { group, .. }] if group == "all"));
 
     let again = call(&host, "perform.busk", json!({})).await.unwrap();
     let names: Vec<String> = layout(&again)

@@ -10,6 +10,9 @@ pub enum BlendMode {
     Max,
     Min,
     Subtract,
+    /// This layer's brightness in the colour already below it at each
+    /// light: a layer that takes its colour from the layers under it.
+    Below,
     /// An aim clip's yaw and pitch turn the aim under it
     /// ([`crate::aim::offset_aim`]). Only aim takes it
     /// ([`crate::blend_modes`]).
@@ -21,7 +24,7 @@ impl BlendMode {
     /// hasher, and both hosts' blend selects all read it (or a form's share
     /// of it, [`crate::blend_modes`]) from here rather than keeping a
     /// spelling of their own.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Replace,
         Self::Add,
         Self::Multiply,
@@ -29,11 +32,12 @@ impl BlendMode {
         Self::Max,
         Self::Min,
         Self::Subtract,
+        Self::Below,
         Self::Offset,
     ];
 
     /// The modes that blend light, in the order a picker lists them.
-    pub const LIGHT: [Self; 7] = [
+    pub const LIGHT: [Self; 8] = [
         Self::Replace,
         Self::Add,
         Self::Multiply,
@@ -41,6 +45,7 @@ impl BlendMode {
         Self::Max,
         Self::Min,
         Self::Subtract,
+        Self::Below,
     ];
 
     /// The mode's wire spelling. Identical to the serde `camelCase` rename on
@@ -56,6 +61,7 @@ impl BlendMode {
             Self::Max => "max",
             Self::Min => "min",
             Self::Subtract => "subtract",
+            Self::Below => "below",
             Self::Offset => "offset",
         }
     }
@@ -71,6 +77,7 @@ impl BlendMode {
             Self::Max => "Max",
             Self::Min => "Min",
             Self::Subtract => "Subtract",
+            Self::Below => "Below",
             Self::Offset => "Offset",
         }
     }
@@ -83,11 +90,11 @@ impl BlendMode {
 }
 
 /// Blend a single scalar channel (dimmer / strobe / a color component).
-/// Ported from `compositor::blend_values`.
+/// Below takes the top's value, as Replace does: it is brightness.
 #[inline]
 pub fn blend_value(base: f32, top: f32, mode: BlendMode) -> f32 {
     match mode {
-        BlendMode::Replace => top,
+        BlendMode::Replace | BlendMode::Below => top,
         BlendMode::Offset => {
             unreachable!("an Offset clip turns aim through `offset_aim` and blends no value")
         }
@@ -103,13 +110,15 @@ pub fn blend_value(base: f32, top: f32, mode: BlendMode) -> f32 {
 /// Blend one head's light onto the light under it. Light is a normalized
 /// color and a dimmer; the light itself is their product. No light under a
 /// head is a zero dimmer, and the color of zero light never shows, so a black
-/// head under a layer is the same as no head.
+/// head under a layer is the same as no head. Where a blend leaves no light,
+/// the color under it stays, for a `Below` layer higher up to take.
 ///
 /// `Replace` is the top light, as in every compositor: black on replace
-/// paints black. Opacity is alpha's job ([`blend_light_alpha`]). Every other
-/// mode is [`blend_value`] on each channel of the light: add and screen over
-/// black equal add and screen over nothing, and multiply or subtract over
-/// nothing stay nothing.
+/// paints black. `Below` is the top's dimmer in the color under it. Opacity
+/// is alpha's job ([`blend_light_alpha`]). Every other mode is
+/// [`blend_value`] on each channel of the light: add and screen over black
+/// equal add and screen over nothing, and multiply or subtract over nothing
+/// stay nothing.
 #[inline]
 pub fn blend_light(
     base_color: [f32; 3],
@@ -120,17 +129,22 @@ pub fn blend_light(
 ) -> ([f32; 3], f32) {
     let base_dimmer = base_dimmer.clamp(0.0, 1.0);
     let top_dimmer = top_dimmer.clamp(0.0, 1.0);
-    if mode == BlendMode::Replace {
-        return (top_color, top_dimmer);
-    }
-    let light: [f32; 3] = std::array::from_fn(|c| {
-        blend_value(base_color[c] * base_dimmer, top_color[c] * top_dimmer, mode).clamp(0.0, 1.0)
-    });
-    let dimmer = light.into_iter().fold(0.0_f32, f32::max);
+    let (color, dimmer) = match mode {
+        BlendMode::Replace => (top_color, top_dimmer),
+        BlendMode::Below => (base_color, top_dimmer),
+        _ => {
+            let light: [f32; 3] = std::array::from_fn(|c| {
+                blend_value(base_color[c] * base_dimmer, top_color[c] * top_dimmer, mode)
+                    .clamp(0.0, 1.0)
+            });
+            let dimmer = light.into_iter().fold(0.0_f32, f32::max);
+            (light.map(|v| v / dimmer.max(1e-6)), dimmer)
+        }
+    };
     if dimmer <= 1e-6 {
-        return (top_color, 0.0);
+        return (base_color, 0.0);
     }
-    (light.map(|v| v / dimmer), dimmer)
+    (color, dimmer)
 }
 
 /// A clip's light over the light under it at the clip's opacity `alpha`:
@@ -162,7 +176,7 @@ pub fn blend_light_alpha(
     });
     let dimmer = light.into_iter().fold(0.0_f32, f32::max);
     if dimmer <= 1e-6 {
-        return (color, 0.0);
+        return (base_color, 0.0);
     }
     (light.map(|v| v / dimmer), dimmer)
 }
@@ -280,6 +294,31 @@ mod tests {
         }
         assert_eq!(blend_value_alpha(0.2, 0.9, BlendMode::Replace, 0.0), 0.2);
         assert!((blend_value_alpha(0.2, 0.9, BlendMode::Replace, 0.5) - 0.55).abs() < 1e-6);
+    }
+
+    #[test]
+    fn below_is_the_tops_brightness_in_the_color_under_it() {
+        let (color, dimmer) = blend_light(RED, 0.0, BLUE, 0.5, BlendMode::Below);
+        assert_eq!((color, dimmer), (RED, 0.5), "a dark red gives its color");
+        assert!(close(
+            over((RED, 1.0), (BLUE, 0.25), BlendMode::Below),
+            [0.25, 0.0, 0.0]
+        ));
+        // Over nothing it is white, the color of no light.
+        assert!(close(
+            over(NOTHING, (BLUE, 0.5), BlendMode::Below),
+            [0.5; 3]
+        ));
+    }
+
+    #[test]
+    fn no_light_keeps_the_color_under_it() {
+        for mode in BlendMode::LIGHT {
+            let (color, dimmer) = blend_light(RED, 0.0, BLUE, 0.0, mode);
+            assert_eq!((color, dimmer), (RED, 0.0), "{mode:?}");
+            let half = blend_light_alpha(RED, 0.0, BLUE, 0.0, mode, 0.5);
+            assert_eq!(half, (RED, 0.0), "{mode:?}");
+        }
     }
 
     #[test]
