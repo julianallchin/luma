@@ -78,7 +78,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use luma_patterns::clip_graph::{LiveInput, LiveInputKind};
-use luma_patterns::press::{Button, Gate, Press, PressMode, Shape, Start, TimeUnit};
+use luma_patterns::press::{Button, Gate, Press, PressMode, Presses, Shape, Start, TimeUnit};
 use luma_patterns::BlendMode;
 use serde::Serialize;
 
@@ -469,11 +469,41 @@ struct List {
 
 /// A declared button: how it plays, and when it goes on and off, either
 /// still to come while a press waits for its beat; `None` until first
-/// pressed.
-#[derive(Clone, Copy, Debug)]
+/// pressed. Beside its gate, its turns on: what a press clock counts.
+#[derive(Clone, Debug)]
 struct Held {
     press: Press,
     gate: Option<(Instant, Option<Instant>)>,
+    turns_on: TurnsOn,
+}
+
+/// How many times a button has turned on, and when its last [`KEPT_TURNS`]
+/// did (or will, while a press waits for its beat), oldest first.
+#[derive(Clone, Debug, Default)]
+struct TurnsOn {
+    count: u64,
+    at: VecDeque<Instant>,
+}
+
+/// The turns on of a button a press clock reads: more than a beat's worth
+/// of hits pressed as fast as hands go.
+const KEPT_TURNS: usize = 16;
+
+impl TurnsOn {
+    fn push(&mut self, at: Instant) {
+        self.count += 1;
+        self.at.push_back(at);
+        if self.at.len() > KEPT_TURNS {
+            self.at.pop_front();
+        }
+    }
+
+    /// Call off the last, which was still to come.
+    fn pop(&mut self) {
+        if self.at.pop_back().is_some() {
+            self.count -= 1;
+        }
+    }
 }
 
 impl Held {
@@ -603,11 +633,15 @@ impl Bank {
         if let Some(pattern) = self.pads.get(name).cloned() {
             return self.press_pad(name, &pattern, down, at);
         }
-        let Some(&held) = self.buttons.get(name) else {
+        let Some((mode, on)) = self
+            .buttons
+            .get(name)
+            .map(|held| (held.press.mode, held.on()))
+        else {
             return self.set(name, f64::from(u8::from(down)), at);
         };
-        match held.press.mode {
-            PressMode::Toggle if down => self.gate(name, !held.on(), at),
+        match mode {
+            PressMode::Toggle if down => self.gate(name, !on, at),
             PressMode::Toggle => {}
             PressMode::Flash => self.gate(name, down, at),
         }
@@ -682,19 +716,23 @@ impl Bank {
             }
             return;
         }
-        let Some(&held) = self.buttons.get(pad) else {
+        let Some((mode, on)) = self
+            .buttons
+            .get(pad)
+            .map(|held| (held.press.mode, held.on()))
+        else {
             return;
         };
         let aimed = self.aimed();
-        match held.press.mode {
+        match mode {
             PressMode::Flash if down => self.play(pad, pattern, aimed.clone(), &aimed, at),
             PressMode::Flash => self.gate(pad, false, at),
             PressMode::Toggle if !down => {}
-            PressMode::Toggle if aimed.is_empty() => match held.on() {
+            PressMode::Toggle if aimed.is_empty() => match on {
                 true => self.gate(pad, false, at),
                 false => self.play(pad, pattern, Vec::new(), &[], at),
             },
-            PressMode::Toggle if !held.on() => self.play(pad, pattern, aimed.clone(), &aimed, at),
+            PressMode::Toggle if !on => self.play(pad, pattern, aimed.clone(), &aimed, at),
             PressMode::Toggle => {
                 let groups = self.effects[pattern].groups.clone();
                 if aimed.iter().all(|group| groups.contains(group)) {
@@ -973,8 +1011,9 @@ impl Bank {
     /// going on stays so, and one off or going off. A change still to come
     /// is called off by the opposite one, but a flash let go before its beat
     /// stays on for one, so a tap lands.
+    /// A new gate on is a turn on, which a press clock counts.
     fn gate(&mut self, name: &str, on: bool, at: Instant) {
-        let Some(&Held { press, gate }) = self.buttons.get(name) else {
+        let Some((press, gate)) = self.buttons.get(name).map(|held| (held.press, held.gate)) else {
             return;
         };
         let when = self.when(press.start, at);
@@ -989,6 +1028,9 @@ impl Bank {
             (false, _) => return self.release(name, at, when),
         };
         if let Some(button) = self.buttons.get_mut(name) {
+            if button.gate.is_none_or(|(since, _)| since != gate.0) {
+                button.turns_on.push(gate.0);
+            }
             button.gate = Some(gate);
         }
     }
@@ -1001,10 +1043,30 @@ impl Bank {
             return;
         };
         button.gate = match button.gate {
-            Some((since, _)) if since > at => None,
+            Some((since, _)) if since > at => {
+                button.turns_on.pop();
+                None
+            }
             Some((since, off)) if off.is_none_or(|off| off > when) => Some((since, Some(when))),
             gate => gate,
         };
+    }
+
+    /// Declared button `name`'s turns on, each on the set's clock as it
+    /// reads now: one still to come is a beat still to come.
+    fn presses(&self, name: &str) -> Presses {
+        self.buttons
+            .get(name)
+            .map(|button| Presses {
+                count: button.turns_on.count,
+                beats: button
+                    .turns_on
+                    .at
+                    .iter()
+                    .map(|on| self.beat(*on).0)
+                    .collect(),
+            })
+            .unwrap_or_default()
     }
 
     fn value(&self, name: &str, at: Instant) -> f64 {
@@ -1109,6 +1171,12 @@ impl VenueControls {
 
     pub(crate) fn color_at(&self, name: &str, at: Instant) -> [f64; 3] {
         self.read().color(name, at)
+    }
+
+    /// Button `name`'s turns on, on the set's clock: what a press clock on
+    /// it counts. None for a name no button declares.
+    pub fn presses(&self, name: &str) -> Presses {
+        self.read().presses(name)
     }
 
     /// Everything the bank plays, as it stands now.
@@ -1315,8 +1383,19 @@ impl VenueControls {
         let mut bank = self.write();
         let mut buttons = HashMap::new();
         for (name, press) in declared {
-            let gate = bank.buttons.get(&name).and_then(|button| button.gate);
-            buttons.insert(name, Held { press, gate });
+            let (gate, turns_on) = bank
+                .buttons
+                .get(&name)
+                .map(|button| (button.gate, button.turns_on.clone()))
+                .unwrap_or_default();
+            buttons.insert(
+                name,
+                Held {
+                    press,
+                    gate,
+                    turns_on,
+                },
+            );
         }
         bank.buttons = buttons;
         bank.pads = patterns
@@ -1483,6 +1562,11 @@ impl luma_patterns::ControlSource for VenueControls {
     fn color(&self, input: &LiveInput) -> [f64; 3] {
         VenueControls::color(self, &input.name)
     }
+
+    /// In a score nobody presses: a button there is a plain gate.
+    fn presses(&self, _: &LiveInput) -> Presses {
+        Presses::default()
+    }
 }
 
 /// What a Perform pattern's graph reads: each fader, live color and button
@@ -1512,6 +1596,11 @@ impl luma_patterns::ControlSource for PatternControls {
     fn color(&self, input: &LiveInput) -> [f64; 3] {
         self.bank
             .color(&perform::node(&self.pattern_id, &input.node))
+    }
+
+    fn presses(&self, input: &LiveInput) -> Presses {
+        self.bank
+            .presses(&perform::node(&self.pattern_id, &input.node))
     }
 }
 
@@ -1550,9 +1639,10 @@ impl Default for TapTempo {
 }
 
 impl TapTempo {
+    /// The beat at `at`, before the anchor too: a press made before the
+    /// last tap keeps its age.
     fn beat_at(&self, at: Instant) -> f64 {
-        let elapsed = at.saturating_duration_since(self.anchor).as_secs_f64();
-        self.anchor_beat + elapsed * self.bpm / 60.0
+        self.anchor_beat + seconds(self.anchor, at) * self.bpm / 60.0
     }
 
     fn tap(&mut self, at: Instant) {

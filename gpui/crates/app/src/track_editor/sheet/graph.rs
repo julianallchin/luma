@@ -611,7 +611,8 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
 /// one event lasts and where the playhead is in it, after the time's delay
 /// and phase. Before the delay the playhead holds at 0 and after the event
 /// at 1, as the curve holds its ends there. A time with a wired `every`,
-/// `duration`, delay or phase has no one clock to draw.
+/// `duration`, delay or phase, or one that counts presses, has no one
+/// clock to draw.
 fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Clock> {
     let app = app.upgrade()?;
     let host = app.read(cx).sheet_host()?;
@@ -622,7 +623,10 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
         playing,
     } = host.beats()?;
     let (time, _) = coordinate(graph, curve)?;
-    let time = graph.nodes.get(&time)?;
+    let time = graph
+        .nodes
+        .get(&time)
+        .filter(|time| !time.inputs.contains_key("on"))?;
     let number = |name: &str| match time.inputs.get(name).map(|held| graph.resolve(held)) {
         Some(Input::Number(v)) => Some(Some(*v)),
         None => Some(None),
@@ -652,9 +656,32 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
 }
 
 /// A random node's settings as the preview draws them: a value node's
-/// value, and a wired one held at its empty value, which the preview says.
+/// value, its time's every, and a wired one held at a stand-in, which the
+/// preview says.
 fn random_settings(graph: &ClipGraph, node: &Node) -> random::Settings {
     let mut held = Vec::new();
+    // The events of its time: every so many beats, or one draw with none. A
+    // clock a wire or presses move is shown every 4 beats.
+    let clock = node
+        .inputs
+        .get("time")
+        .and_then(Input::source)
+        .and_then(|time| graph.nodes.get(time));
+    let every = match clock {
+        Some(time) if time.inputs.contains_key("on") => {
+            held.push("a draw per press every 4 beats".to_owned());
+            Some(4.)
+        }
+        Some(time) => match time.inputs.get("every").map(|every| graph.resolve(every)) {
+            Some(Input::Number(every)) => Some(*every),
+            Some(_) => {
+                held.push("every at 4 beats".to_owned());
+                Some(4.)
+            }
+            None => None,
+        },
+        None => None,
+    };
     let mut number = |input: &str, empty: f64, note: &str| match node
         .inputs
         .get(input)
@@ -667,7 +694,6 @@ fn random_settings(graph: &ClipGraph, node: &Node) -> random::Settings {
         }
         None => None,
     };
-    let every = number("every", 4., "every at 4 beats").unwrap_or(4.);
     let glide = number("glide", 0., "glide at 0").unwrap_or(0.);
     let scale = number("scale", 0.25, "scale at 25 %");
     let contrast = number("contrast", 0., "contrast at 0").unwrap_or(0.);
@@ -822,6 +848,11 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
             options.push(("Once".into(), Pick::Empty));
             options.push((Kind::Time.label().into(), Pick::Insert(Kind::Time)));
             wired.map_or("Once".into(), |(to, _)| from_name(graph, &to))
+        }
+        Ty::Button => {
+            options.push(("None".into(), Pick::Empty));
+            options.push((Kind::Button.label().into(), Pick::Insert(Kind::Button)));
+            wired.map_or("None".into(), |(to, _)| from_name(graph, &to))
         }
         Ty::Points | Ty::Gradient | Ty::Values | Ty::Figures => return None,
     };
@@ -1519,9 +1550,14 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
             match cx.controls.fields.get(&(id.to_owned(), input.to_owned())) {
                 Some(field) => field_element(field),
                 None => match spec.map(|spec| spec.ty) {
-                    Some(Ty::Heads | Ty::Time | Ty::Coordinate | Ty::Values | Ty::Figures) => {
-                        return header_row(&label, accessories)
-                    }
+                    Some(
+                        Ty::Heads
+                        | Ty::Time
+                        | Ty::Button
+                        | Ty::Coordinate
+                        | Ty::Values
+                        | Ty::Figures,
+                    ) => return header_row(&label, accessories),
                     _ => {
                         let note = edit::empty_note(node, input);
                         div()

@@ -28,6 +28,9 @@ pub enum InputType {
     Heads,
     /// A wire from a `time` node: its events.
     Time,
+    /// A wire from a `button` node: its turns on, each the birth of an
+    /// event of a press clock (`time.on`).
+    Button,
     /// A wire from `time`, `space`, `along`, `random`, `audio`, a number
     /// `control` or `button`.
     Coordinate,
@@ -48,7 +51,11 @@ impl InputType {
     pub fn is_wire_only(self) -> bool {
         matches!(
             self,
-            InputType::Heads | InputType::Time | InputType::Coordinate | InputType::Figures
+            InputType::Heads
+                | InputType::Time
+                | InputType::Button
+                | InputType::Coordinate
+                | InputType::Figures
         )
     }
     /// Whether the input takes a value only.
@@ -447,6 +454,7 @@ fn build(kind: Kind) -> Definition {
                 ("duration", number(Unit::Beats, "2").above(0.).clock()),
                 ("delay", number(Unit::Beats, "0.5")),
                 ("phase", number(Unit::Degrees, "90")),
+                ("on", wire(T::Button, "button(\"hit\")")),
             ],
             vec![],
         ),
@@ -484,7 +492,7 @@ fn build(kind: Kind) -> Definition {
             Produces::Coordinate,
             vec![
                 heads(),
-                ("every", number(Unit::Beats, "4").above(0.).clock()),
+                ("time", wire(T::Time, "time(every=4)")),
                 ("glide", share("0.5")),
                 ("scale", number(Unit::Share, "0.5").above(0.)),
                 ("contrast", share("0")),

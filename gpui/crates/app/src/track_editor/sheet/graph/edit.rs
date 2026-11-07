@@ -63,8 +63,10 @@ pub(crate) enum Ty {
     Points,
     Gradient,
     Heads,
-    /// A wire from a time node: a shuffle's events.
+    /// A wire from a time node: a shuffle's or a random's events.
     Time,
+    /// A wire from a button node: a press clock's presses.
+    Button,
     Coordinate,
     /// A math node's items: numbers and value wires.
     Values,
@@ -113,6 +115,7 @@ pub(crate) fn spec(graph: &ClipGraph, id: &str, input: &str) -> Option<Spec> {
         InputType::Gradient => Ty::Gradient,
         InputType::Heads => Ty::Heads,
         InputType::Time => Ty::Time,
+        InputType::Button => Ty::Button,
         InputType::Coordinate => Ty::Coordinate,
         InputType::Values => Ty::Values,
         InputType::Figures => Ty::Figures,
@@ -188,7 +191,6 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
         (Kind::Space, "centre") => Input::Vector([0.5; 3]),
         (Kind::Space, "scale") => Input::Number(1.),
         (Kind::Mirror, "at") => Input::Number(0.5),
-        (Kind::Random, "every") => Input::Number(4.),
         (Kind::Random, "glide" | "contrast") => Input::Number(0.),
         (Kind::Audio, "low_hz") => Input::Number(p::empty_band().0),
         (Kind::Audio, "high_hz") => Input::Number(p::empty_band().1),
@@ -234,7 +236,9 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
         Ty::Color => Input::Color([1., 1., 1.]),
         Ty::Points => Input::Points(preset_curve("Ramp up")),
         Ty::Gradient => Input::Gradient(gradient(&[([0., 0., 0.], 0.), ([1., 1., 1.], 1.)])),
-        Ty::Heads | Ty::Time | Ty::Coordinate | Ty::Values | Ty::Figures => return None,
+        Ty::Heads | Ty::Time | Ty::Button | Ty::Coordinate | Ty::Values | Ty::Figures => {
+            return None
+        }
     })
 }
 
@@ -600,42 +604,58 @@ pub(crate) fn promote(graph: &mut ClipGraph, id: &str, input: &str, source: Kind
             .with_input("high", 180.),
         _ => promoted(spec, current.as_ref()),
     };
-    let x = add(graph, Node::new(source));
+    let x = add_source(graph, source);
     let curve = add(graph, curve.with_input("x", Input::wire(x)));
     link(graph, id, input, &curve);
     held
 }
 
+/// A new coordinate node of `source`. A new random reads a new time with
+/// events every four beats, so it draws anew as one did before it took a
+/// clock.
+fn add_source(graph: &mut ClipGraph, source: Kind) -> String {
+    let mut node = Node::new(source);
+    if source == Kind::Random {
+        let time = add(graph, Node::new(Kind::Time).with_input("every", 4.));
+        node = node.with_input("time", Input::wire(time));
+    }
+    add(graph, node)
+}
+
 /// Point a curve's `x` at a new coordinate node of `source`.
 pub(crate) fn recoordinate(graph: &mut ClipGraph, curve: &str, source: Kind) {
-    let x = add(graph, Node::new(source));
+    let x = add_source(graph, source);
     if let Some(node) = graph.nodes.get_mut(curve) {
         node.inputs.insert("x".into(), Input::wire(x));
     }
     prune(graph);
 }
 
-/// Wire a new node of `kind` (a shaper, or a time) into a heads or time
-/// input. A new time has events every beat.
+/// Wire a new node of `kind` (a shaper, a time or a button) into a heads,
+/// time or button input. A new time has events every beat.
 pub(crate) fn insert(graph: &mut ClipGraph, id: &str, input: &str, kind: Kind) {
     let mut new = Node::new(kind);
     if kind == Kind::Time {
         new.inputs.insert("every".into(), Input::Number(1.));
     }
     let new = add(graph, new);
-    if let Some(node) = graph.nodes.get_mut(id) {
-        node.inputs.insert(input.to_owned(), Input::wire(new));
-    }
-    prune(graph);
+    link(graph, id, input, &new);
 }
 
 /// Wire an existing node into an input: the two places share it. A math
 /// node's values and a laser's figures take the wire as one more item; any
 /// other input holds only the wire after.
+/// A time that comes to count a button's presses counts no beats: its
+/// every becomes how long each press lasts.
 pub(crate) fn link(graph: &mut ClipGraph, id: &str, input: &str, target: &str) {
     let listed =
         spec(graph, id, input).is_some_and(|spec| matches!(spec.ty, Ty::Values | Ty::Figures));
     if let Some(node) = graph.nodes.get_mut(id) {
+        if (node.kind, input) == (Kind::Time, "on") {
+            if let Some(every) = node.inputs.remove("every") {
+                node.inputs.entry("duration".into()).or_insert(every);
+            }
+        }
         match node.inputs.get_mut(input) {
             Some(Input::List(items)) if listed => items.push(Input::wire(target)),
             _ if listed => {
@@ -886,6 +906,7 @@ pub(crate) fn link_candidates(graph: &ClipGraph, id: &str, input: &str) -> Vec<S
                 Ty::Figures => node.kind == Kind::Figure,
                 Ty::Heads => SHAPERS.contains(&node.kind),
                 Ty::Time => node.kind == Kind::Time,
+                Ty::Button => node.kind == Kind::Button,
                 Ty::Coordinate => SOURCES.contains(&node.kind) && !node.is_live_color(),
                 Ty::Points | Ty::Gradient => false,
             }
@@ -993,6 +1014,7 @@ pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> b
         Ty::Coordinate => SOURCES.contains(&kind),
         Ty::Heads => SHAPERS.contains(&kind),
         Ty::Time => kind == Kind::Time,
+        Ty::Button => kind == Kind::Button,
         Ty::Figures => kind == Kind::Figure,
         Ty::Points | Ty::Gradient => false,
     }
@@ -1528,6 +1550,32 @@ mod tests {
             Some(&Input::Number(1.))
         );
         assert!(graph.check().is_ok(), "{:?}", graph.check());
+    }
+
+    #[test]
+    fn a_new_random_draws_anew_on_a_clock_of_its_own() {
+        let mut graph = wash();
+        promote(&mut graph, "color1", "brightness", Kind::Random);
+        let random = wired(&graph, &wired(&graph, "color1", "brightness"), "x");
+        let time = wired(&graph, &random, "time");
+        assert!(graph.nodes[&time].inputs.contains_key("every"));
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+    }
+
+    #[test]
+    fn a_time_on_a_button_counts_its_presses_for_as_long_as_it_counted_beats() {
+        let mut graph = wash();
+        promote(&mut graph, "color1", "alpha", Kind::Time);
+        let time = wired(&graph, &wired(&graph, "color1", "alpha"), "x");
+        set_input(&mut graph, &time, "every", Some(Input::Number(2.)));
+        assert!(accepts(&graph, &time, "on", Kind::Button));
+        assert!(!accepts(&graph, &time, "on", Kind::Time));
+        insert(&mut graph, &time, "on", Kind::Button);
+        let node = &graph.nodes[&time];
+        assert!(!node.inputs.contains_key("every"), "presses, not beats");
+        assert_eq!(node.inputs.get("duration"), Some(&Input::Number(2.)));
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        assert!(graph.pad().is_some(), "its button is the pad");
     }
 
     #[test]

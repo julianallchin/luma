@@ -23,7 +23,13 @@ impl PreparedGraph {
                         Source::Slot(index) => baked[*index].is_some(),
                     })
                 {
-                    self.run_step(step, &[self.clip_start], features, &[], &baked)?
+                    self.run_step(
+                        step,
+                        &[self.clip_start],
+                        features,
+                        &Default::default(),
+                        &baked,
+                    )?
                 } else {
                     continue;
                 };
@@ -49,7 +55,7 @@ impl PreparedGraph {
         let dependencies = self.live_steps(index, baked, [source]);
         if dependencies
             .iter()
-            .any(|step| self.steps[*step].primitive == Primitive::Control)
+            .any(|step| self.steps[*step].plays_live())
         {
             return Ok(BTreeMap::new());
         }
@@ -67,10 +73,12 @@ impl PreparedGraph {
         let mut slots = baked.to_vec();
         for parent in dependencies {
             let step = &self.steps[parent];
-            for (key, value) in self.run_step(step, &beats, features, &[], &slots)? {
+            for (key, value) in
+                self.run_step(step, &beats, features, &Default::default(), &slots)?
+            {
                 slots[step.outputs[&key]] = Some(value);
             }
         }
-        self.run_step(step, &beats, features, &[], &slots)
+        self.run_step(step, &beats, features, &Default::default(), &slots)
     }
 }

@@ -25,6 +25,7 @@ pub(crate) fn run(
         Primitive::Control => {
             let index = inputs["index"].sample(0)?.scalar();
             let value = batch
+                .live
                 .controls
                 .get(index as usize)
                 .copied()

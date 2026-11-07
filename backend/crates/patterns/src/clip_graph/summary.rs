@@ -3,7 +3,8 @@ use super::{ClipGraph, Input, Kind};
 
 impl ClipGraph {
     /// Parts joined by " · ": each space's kind word, each time node's
-    /// `every {E}` (or `every varies`), `along` and `random` when present, `audio
+    /// `every {E}` (or `every varies`, or `per press` for a press clock),
+    /// `along` and `random` when present, `audio
     /// {lo}–{hi} Hz` when present; `still` when none apply. A part that
     /// repeats is written once.
     pub fn summary(&self) -> String {
@@ -20,6 +21,7 @@ impl ClipGraph {
         for node in nodes(Kind::Time) {
             parts.push(
                 match node.inputs.get("every").map(|every| self.resolve(every)) {
+                    None if node.inputs.contains_key("on") => "per press".into(),
                     None => continue,
                     Some(Input::Number(every)) => format!("every {every}"),
                     _ => "every varies".into(),

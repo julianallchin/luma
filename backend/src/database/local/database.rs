@@ -452,20 +452,28 @@ mod tests {
             check(&graph).unwrap();
             graph
         };
+        // The period became the random's every, which a later migration
+        // moved into a clock of its own (random_time).
         let clouds = parsed(&graph("clouds").await);
+        let every = |graph: &ClipGraph, random: &str| {
+            let clock = graph.nodes[random].inputs["time"]
+                .source()
+                .unwrap()
+                .to_owned();
+            graph.nodes[&clock].inputs["every"].clone()
+        };
         let first = &clouds.nodes["noise1"];
         assert_eq!(first.kind, Kind::Random);
-        assert_eq!(first.inputs["every"], Input::Number(8.));
+        assert_eq!(every(&clouds, "noise1"), Input::Number(8.));
         assert_eq!(first.inputs["glide"], Input::Number(1.));
         assert_eq!(first.inputs["scale"], Input::Number(0.4));
         assert_eq!(first.inputs["contrast"], Input::Number(0.6));
-        let wired = &clouds.nodes["noise2"];
-        assert_eq!(wired.inputs["every"], Input::wire("beats"));
-        assert!(!wired.inputs.contains_key("period"));
+        assert_eq!(every(&clouds, "noise2"), Input::wire("beats"));
+        assert!(!clouds.nodes["noise2"].inputs.contains_key("period"));
         // No period is the same four beats as no every.
         let plain = parsed(&graph("plain").await);
         assert_eq!(plain.nodes["noise1"].kind, Kind::Random);
-        assert!(!plain.nodes["noise1"].inputs.contains_key("every"));
+        assert_eq!(every(&plain, "noise1"), Input::Number(4.));
         assert_eq!(
             graph("still").await,
             still,
@@ -481,6 +489,132 @@ mod tests {
             assert!(text.contains("13369261119795889533"), "{text}");
             let clip: Value = serde_json::from_str::<Value>(&text).unwrap()["clips"]["c-1"].clone();
             assert_eq!(parsed(&clip["graph"].to_string()), clouds);
+        }
+    }
+
+    #[tokio::test]
+    async fn random_time_gives_each_saved_random_a_clock_of_its_every() {
+        use luma_patterns::clip_graph::{check, ClipGraph, Input, Kind};
+        use serde_json::{json, Value};
+
+        const RANDOM_TIME: i64 = 20_261_107_130_000;
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(directory.path().join("luma.db"))
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+        sqlx::migrate!("./migrations")
+            .run_to(RANDOM_TIME - 1, &pool)
+            .await
+            .unwrap();
+        // Two randoms, one wired, beside a time node that holds time1, and
+        // one with no every.
+        let drift = json!({"version": 3, "nodes": {
+            "time1": {"kind": "time", "inputs": {"every": 1}},
+            "pulse": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "beats": {"kind": "value", "inputs": {"value": 2.0}},
+            "a": {"kind": "random", "inputs": {"every": 8.0, "glide": 1.0, "scale": 0.3}},
+            "b": {"kind": "random", "inputs": {"every": {"node": "beats"}}},
+            "c": {"kind": "random"},
+            "ca": {"kind": "curve", "inputs": {"x": {"node": "a"}}},
+            "cb": {"kind": "curve", "inputs": {"x": {"node": "b"}}},
+            "cc": {"kind": "curve", "inputs": {"x": {"node": "c"}}},
+            "product": {"kind": "math", "inputs": {"values": [
+                {"node": "pulse"}, {"node": "ca"}, {"node": "cb"}, {"node": "cc"}]}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "product"}}}}});
+        let still =
+            r#"{"version":3,"nodes":{"color1":{"kind":"color","inputs":{"brightness":0.5}}}}"#;
+        for (id, graph) in [("drift", drift.to_string()), ("still", still.to_owned())] {
+            sqlx::query(
+                "INSERT INTO clips (id, uid, score_id, graph, graph_json, start, duration, seed,
+                                    selection_json, blend_mode)
+                 VALUES (?, 'u', 's', '', ?, 0, 4, '7', '{}', 'replace')",
+            )
+            .bind(id)
+            .bind(graph)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO perform_patterns (id, uid, venue_id, name, selection_json, z_index,
+                                           blend_mode, seed, graph_json)
+             VALUES ('p', 'u', 'hall', 'Drift', '{}', 0, 'replace', '7', ?)",
+        )
+        .bind(drift.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        // A draft's seed is past i64: it must come back digit for digit.
+        let draft = json!({"clips": {"c-1": {"seed": 13369261119795889533_u64, "graph": drift}}})
+            .to_string();
+        sqlx::query(
+            "INSERT INTO drafts (id, uid, score_id, base_json, state_json) VALUES ('d', 'u', 's', ?, ?)",
+        )
+        .bind(&draft)
+        .bind(&draft)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let db = init_app_db_at(directory.path()).await.unwrap();
+        let read = |query: &'static str| {
+            let db = db.clone();
+            async move {
+                let text: String = sqlx::query_scalar(query).fetch_one(&db.0).await.unwrap();
+                text
+            }
+        };
+        let parsed = |text: &str| {
+            let graph: ClipGraph = serde_json::from_str(text).unwrap();
+            check(&graph).unwrap();
+            graph
+        };
+        let drift = parsed(&read("SELECT graph_json FROM clips WHERE id = 'drift'").await);
+        let clock = |random: &str| {
+            let node = &drift.nodes[random];
+            assert_eq!(node.kind, Kind::Random);
+            assert!(
+                !node.inputs.contains_key("every"),
+                "{random} keeps no every"
+            );
+            let clock = node.inputs["time"].source().unwrap().to_owned();
+            (clock.clone(), drift.nodes[&clock].inputs["every"].clone())
+        };
+        assert_eq!(
+            clock("a"),
+            ("time2".into(), Input::Number(8.)),
+            "time1 is taken"
+        );
+        assert_eq!(clock("b"), ("time3".into(), Input::wire("beats")));
+        assert_eq!(
+            clock("c"),
+            ("time4".into(), Input::Number(4.)),
+            "no every was 4 beats"
+        );
+        assert_eq!(drift.nodes["a"].inputs["glide"], Input::Number(1.));
+        assert_eq!(
+            read("SELECT graph_json FROM clips WHERE id = 'still'").await,
+            still,
+            "a graph with no random is untouched"
+        );
+        assert_eq!(
+            parsed(&read("SELECT graph_json FROM perform_patterns WHERE id = 'p'").await),
+            drift
+        );
+        for column in [
+            "SELECT base_json FROM drafts WHERE id = 'd'",
+            "SELECT state_json FROM drafts WHERE id = 'd'",
+        ] {
+            let text = read(column).await;
+            assert!(text.contains("13369261119795889533"), "{text}");
+            let clip: Value = serde_json::from_str::<Value>(&text).unwrap()["clips"]["c-1"].clone();
+            assert_eq!(parsed(&clip["graph"].to_string()), drift);
         }
     }
 

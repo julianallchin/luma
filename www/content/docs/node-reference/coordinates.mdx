@@ -9,16 +9,19 @@ A coordinate node gives a raw coordinate at each head, usually 0–1. A coordina
 
 ## Time
 
-`time` · Python: `time(every, duration, delay, phase)` · Gives a coordinate.
+`time` · Python: `time(every, duration, delay, phase, on)` · Gives a coordinate.
 
-Each head's own clock: 0–1 over the clip, or 0–1 over each event. With `every`, an event starts every `every` beats from the clip start. Each head's clock is the event's age over its duration, minus `delay / duration`. When `phase` is set, the clock wraps: `fract(clock + phase / 360)`, so 360° is one event. Before a head starts, its clock is below 0 and a curve holds its first value; after it ends, the curve holds its last value. A curve over space on `delay` makes a one-shot (a wipe); on `phase` it makes a loop (a chase, a wave). Two time nodes with equal `every` and `duration` share one set of events.
+Each head's own clock: 0–1 over the clip, or 0–1 over each event. With `every`, an event starts every `every` beats from the clip start. With `on`, a button wire, the clock counts presses instead: an event starts at each press that turns the button on, on the beat or bar its `start` waits for, and event k is press k, so a shuffle or a random over it is new each press. Each head's clock is the event's age over its duration, minus `delay / duration`. When `phase` is set, the clock wraps: `fract(clock + phase / 360)`, so 360° is one event. Before a head starts, its clock is below 0 and a curve holds its first value; after it ends, the curve holds its last value. A curve over space on `delay` makes a one-shot (a wipe); on `phase` it makes a loop (a chase, a wave). Two time nodes with equal `every` (or `on`) and `duration` share one set of events.
+
+Events that overlap (a `duration` longer or shorter than `every`, or presses that last a `duration`) each light on their own, and the brightest wins; they meet another clock's only at the output. A clock with one live event at a time (an `every` alone, or presses with no `duration`, each lasting until the next) is a plain value over time and combines with any other clock. A hit is `k = time(on=button("hit"), duration=1)` and a fade over `k`: hits pressed fast stack. Between events, before the first press and outside the clip the clip is transparent; in a score nobody presses.
 
 | Input | Type | Unit | Range | Takes | Empty |
 |---|---|---|---|---|---|
 | `every` | number | beats | above 0 | a value or a wire | Once over the clip: no events. |
-| `duration` | number | beats | above 0 | a value or a wire | `every`; with no `every`, the clip's length. A `duration` with no `every` is one event of that length from the clip start. |
+| `duration` | number | beats | above 0 | a value or a wire | `every`; with `on`, until the next press, with no delay or phase; with neither, the clip's length. A `duration` with no `every` or `on` is one event of that length from the clip start. |
 | `delay` | number | beats | any | a value or a wire | 0. |
 | `phase` | number | degrees | any | a value or a wire | No phase: the clock does not wrap. |
+| `on` | button |  |  | a wire | No presses: events by `every`. `on` and `every` are exclusive. |
 
 - A number in `every`, `duration` and `delay` is on the beat grid: a multiple of 1/32 or 1/24 of a beat. The editor snaps a typed number to it. A wire is free.
 - `every` and `duration` set a clock's period. A wire that follows events gives them the newest event's value, so the clock keeps its own events. A fader wired in changes the clock's speed as it plays, with no jump: a speed that fits the bar starts where the clock's beats and bars stay on the grid, any other at the next event.
@@ -53,19 +56,17 @@ No inputs.
 
 ## Random
 
-`random` · Python: `random(heads, every, glide, scale, contrast)` · Gives a coordinate.
+`random` · Python: `random(heads, time, glide, scale, contrast)` · Gives a coordinate.
 
-A random value, 0–1 at each head, drawn again each turn of `every` beats. Random gives a value; Shuffle gives an order. `glide` 0 jumps to the new value on the turn and holds it; 1 drifts the whole turn; in between, it holds for the first 1 − glide of the turn and then eases to the next value. `scale` is how far apart heads are before their values differ, as a share of the heads' largest extent: 0.02 gives each head its own value. Heads a mirror folded together read one value. `contrast` spreads the values away from 0.5, up to four times at 1, and clips them to 0–1. Each random node has its own stream, from the clip's seed and the node's id.
+A random value, 0–1 at each head, drawn again for each event of its `time` (a wire from a time node with `every` or `on`): `random(time=time(every=4))` draws every four beats, `random(time=time(on=button("hit")))` at each press. Random gives a value; Shuffle gives an order. `glide` 0 jumps to the new value at the event's start and holds it; 1 drifts over the whole event; in between, it holds for the first 1 − glide of the event and then eases to the next value. `scale` is how far apart heads are before their values differ, as a share of the heads' largest extent: 0.02 gives each head its own value. Heads a mirror folded together read one value. `contrast` spreads the values away from 0.5, up to four times at 1, and clips them to 0–1. Each random node has its own stream, from the clip's seed and the node's id.
 
 | Input | Type | Unit | Range | Takes | Empty |
 |---|---|---|---|---|---|
 | `heads` | heads |  |  | a wire | All the clip's heads. |
-| `every` | number | beats | above 0 | a value or a wire | 4 beats. |
+| `time` | time |  |  | a wire | One draw for the whole clip. |
 | `glide` | number | share | 0–1 | a value or a wire | 0. |
 | `scale` | number | share | above 0 | a value or a wire | Uniform: one value for all heads. |
 | `contrast` | number | share | 0–1 | a value or a wire | 0. |
-
-- `every` sets a clock's period. A wire that follows events gives it the newest event's value, so the clock keeps its own events. A fader wired in changes the clock's speed as it plays, with no jump: a speed that fits the bar starts where the clock's beats and bars stay on the grid, any other at the next event.
 
 ## Audio
 
@@ -95,7 +96,7 @@ No inputs.
 
 `button` · Python: `button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats", shape="smooth", start="now")` · Gives a coordinate.
 
-A button a performer presses: 0–1 along its envelope, the same at every head. In `flash` mode it is on while held; in `toggle` mode, from one press to the next. The value rises over the attack, falls to the sustain over the decay, holds while on, and falls to 0 over the release. In a Perform pattern, the button that the output's `alpha` depends on is the pattern's pad. In a score a button reads the venue's control `name` as a plain gate, and its envelope does not apply. Like a fader, it cannot reach a fixed input.
+A button a performer presses: 0–1 along its envelope, the same at every head. In `flash` mode it is on while held; in `toggle` mode, from one press to the next. The value rises over the attack, falls to the sustain over the decay, holds while on, and falls to 0 over the release. In a Perform pattern, the button that the output's `alpha` depends on is the pattern's pad. In a score a button reads the venue's control `name` as a plain gate, and its envelope does not apply. Like a fader, it cannot reach a fixed input. Wired into a time node's `on`, its presses are events of their own instead: each turn on starts one, so a hit's fade is a curve over that time node and hits stack, where an envelope's next press cuts the last one's tail. Use the envelope for levels and holds.
 
 No inputs.
 

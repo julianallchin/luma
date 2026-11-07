@@ -17,7 +17,11 @@ pub enum Kernel {
     ClockTable,
     /// Turns of a clock table at each beat.
     Clock,
-    /// The live events of a clock: progress, presence and index per event.
+    /// The live events of a clock: progress, presence and index per event,
+    /// born on the turns of its every or, for a press clock (`on`, a live
+    /// input's place, or -1), at its button's turns on. A clock of one live
+    /// event at a time (`single`) gives only its newest begun event, so it
+    /// carries no event axis; a press of one lives until the next.
     Events,
     /// Progress 0–1 over the clip.
     ClipProgress,
@@ -135,7 +139,7 @@ impl Kernel {
             Kernel::Clock => (names(&["table"]), &[], &["value"]),
             Kernel::Events => (
                 names(&["every", "duration"]),
-                &[],
+                &["on", "single"],
                 &["progress", "present", "index"],
             ),
             Kernel::ClipProgress => (vec![], &[], &["value"]),
@@ -434,26 +438,76 @@ pub(crate) fn run(
         Kernel::Events => {
             let every = s("every");
             let duration = s("duration");
+            let single = f("single")? != 0.;
+            // A press clock's births are its button's turns on; any other
+            // clock's, the turns of its every.
+            let presses = match f("on")? {
+                on if on >= 0. => Some(
+                    batch
+                        .live
+                        .presses
+                        .get(on as usize)
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+                _ => None,
+            };
             let rows_n = every.values().dim().0.max(duration.values().dim().0);
             let times = batch.times.len();
-            let mut rows = Vec::with_capacity(rows_n * times);
-            let mut width = 1;
+            // Per head and time, the events that may be live, in birth
+            // order: each one's index and its age over its life, live from
+            // 0 to 1.
+            let mut rows: Vec<Vec<(f64, f64)>> = Vec::with_capacity(rows_n * times);
             for n in 0..rows_n {
                 for (t, beat) in batch.times.iter().enumerate() {
                     let schedule = clock(every, n, t);
                     let life = clock(duration, n, t);
-                    let now = life.turns(*beat);
-                    let last = (schedule.turns(*beat).floor() as i64 + 1).max(0);
-                    let first = (schedule.turns(life.beat_at(now - 1.)).floor() as i64).max(0);
-                    if last - first > 65535 {
-                        return Err(Error(
-                            "events are too dense; raise every or shorten duration".into(),
-                        ));
-                    }
-                    width = width.max((last - first).max(0) as usize);
-                    rows.push((now, first, last));
+                    let born = |presses: &'_ crate::press::Presses| {
+                        presses
+                            .each()
+                            .filter(|(_, at)| at <= beat)
+                            .collect::<Vec<_>>()
+                    };
+                    let events = match &presses {
+                        // One press lives until the next and does not age.
+                        Some(presses) if single => born(presses)
+                            .last()
+                            .map(|(k, _)| (*k as f64, 0.))
+                            .into_iter()
+                            .collect(),
+                        Some(presses) => {
+                            let now = life.turns(*beat);
+                            born(presses)
+                                .into_iter()
+                                .map(|(k, at)| (k as f64, now - life.turns(at)))
+                                .filter(|(_, age)| *age < 1.)
+                                .collect()
+                        }
+                        None => {
+                            let now = life.turns(*beat);
+                            let last = (schedule.turns(*beat).floor() as i64 + 1).max(0);
+                            let first = if single {
+                                (last - 1).max(0)
+                            } else {
+                                (schedule.turns(life.beat_at(now - 1.)).floor() as i64).max(0)
+                            };
+                            if last - first > 65535 {
+                                return Err(Error(
+                                    "events are too dense; raise every or shorten duration".into(),
+                                ));
+                            }
+                            (first..last)
+                                .map(|k| {
+                                    let born = life.turns(schedule.beat_at(k as f64));
+                                    (k as f64, now - born)
+                                })
+                                .collect()
+                        }
+                    };
+                    rows.push(events);
                 }
             }
+            let width = rows.iter().map(Vec::len).max().unwrap_or(0).max(1);
             if rows_n.saturating_mul(times).saturating_mul(width) > 16_777_216 {
                 return Err(Error("event tensor exceeds 16,777,216 elements".into()));
             }
@@ -463,15 +517,10 @@ pub(crate) fn run(
             let mut index = Array3::zeros(dims);
             for n in 0..rows_n {
                 for t in 0..times {
-                    let schedule = clock(every, n, t);
-                    let life = clock(duration, n, t);
-                    let (now, first, last) = rows[n * times + t];
-                    for (e, k) in (first..last).enumerate() {
-                        let born = life.turns(schedule.beat_at(k as f64));
-                        let age = now - born;
+                    for (e, (k, age)) in rows[n * times + t].iter().enumerate() {
                         progress[[n, t, e]] = age.clamp(0., 1.);
-                        present[[n, t, e]] = if (0. ..1.).contains(&age) { 1. } else { 0. };
-                        index[[n, t, e]] = k as f64;
+                        present[[n, t, e]] = if (0. ..1.).contains(age) { 1. } else { 0. };
+                        index[[n, t, e]] = *k;
                     }
                 }
             }
@@ -1259,9 +1308,12 @@ mod tests {
             )
             .unwrap()
         };
+        let fixed = |value: f64| EvaluatedValue::literal(&Value::Number(value)).unwrap();
         let inputs = BTreeMap::from([
             ("every".to_string(), table(2., 0.25)),
             ("duration".to_string(), table(2., 0.5)),
+            ("on".to_string(), fixed(-1.)),
+            ("single".to_string(), fixed(0.)),
         ]);
         let times = [1.5, 7.5, 15.5];
         let out = run(
@@ -1271,7 +1323,7 @@ mod tests {
                 frame,
                 times: &times,
                 fixtures: &[],
-                controls: &[],
+                live: &Default::default(),
             },
         )
         .unwrap();

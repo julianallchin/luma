@@ -88,9 +88,35 @@ pub(crate) struct LiveSet {
 #[derive(Clone, Debug)]
 struct Switch {
     pattern: String,
-    pad: Option<String>,
+    pad: Option<Pad>,
     level: String,
     groups: Vec<String>,
+}
+
+/// How a pattern's pad plays its layer.
+#[derive(Clone, Debug)]
+enum Pad {
+    /// Its envelope, by this control, is the layer's alpha: all the way
+    /// off, the layer plays nothing.
+    Gate(String),
+    /// Its presses start events of a press clock, which play out after it
+    /// is let go (a hit).
+    Trigger,
+}
+
+impl Switch {
+    fn new(pattern: &PerformPattern, groups: Vec<String>) -> Self {
+        let pad = controls::perform::pad(pattern).map(|pad| match pattern.graph.pad_gates() {
+            true => Pad::Gate(pad),
+            false => Pad::Trigger,
+        });
+        Self {
+            pattern: pattern.id.clone(),
+            pad,
+            level: controls::perform::level(&pattern.id),
+            groups,
+        }
+    }
 }
 
 /// The set as compiled: its scene, and each layer's switch, in the scene's
@@ -141,11 +167,13 @@ impl LiveSet {
     }
 
     /// Read each layer's opacity from the controls: its level × the master,
-    /// its pad's envelope being in its graph's alpha already. A pattern
-    /// whose pad is all the way off plays nothing, nor does a layer compiled
-    /// on other groups than its pattern plays on now, unless it already
-    /// plays. Asks for what the bank changed since the last frame. Answers
-    /// whether anything plays, or the base colors anything.
+    /// its pad's envelope (or its hits) being in its graph's alpha already.
+    /// A pattern whose pad gates it and is all the way off plays nothing,
+    /// nor does a layer compiled on other groups than its pattern plays on
+    /// now, unless it already plays and is no hit: a hit's next press must
+    /// light where it was asked to. Asks for what the bank changed since the
+    /// last frame. Answers whether anything plays, or the base colors
+    /// anything.
     pub(crate) fn update_levels(&mut self) -> bool {
         let changed = self.controls.changed();
         if changed != self.changed {
@@ -155,11 +183,10 @@ impl LiveSet {
         let master = self.controls.value(controls::perform::MASTER) as f32;
         let mut playing = false;
         for (switch, out) in self.layers.switches.iter().zip(self.levels.iter_mut()) {
-            let silent = switch
-                .pad
-                .as_ref()
-                .is_some_and(|pad| self.controls.value(pad) <= 0.);
-            let moved = *out <= 0. && !self.controls.plays_on(&switch.pattern, &switch.groups);
+            let silent =
+                matches!(&switch.pad, Some(Pad::Gate(pad)) if self.controls.value(pad) <= 0.);
+            let keeps = *out > 0. && !matches!(switch.pad, Some(Pad::Trigger));
+            let moved = !keeps && !self.controls.plays_on(&switch.pattern, &switch.groups);
             *out = if silent || moved {
                 0.
             } else {
@@ -352,12 +379,7 @@ impl Build {
             .iter()
             .zip(&self.compiled)
             .filter_map(|(pattern, compiled)| {
-                let switch = Switch {
-                    pattern: pattern.id.clone(),
-                    pad: controls::perform::pad(pattern),
-                    level: controls::perform::level(&pattern.id),
-                    groups: compiled.groups.clone(),
-                };
+                let switch = Switch::new(pattern, compiled.groups.clone());
                 Some((compiled.layer.clone()?, switch))
             })
             .collect();
@@ -540,12 +562,10 @@ mod tests {
     }
 
     fn switch(pattern: &PerformPattern, groups: &[&str]) -> Switch {
-        Switch {
-            pattern: pattern.id.clone(),
-            pad: controls::perform::pad(pattern),
-            level: controls::perform::level(&pattern.id),
-            groups: groups.iter().map(|group| (*group).to_owned()).collect(),
-        }
+        Switch::new(
+            pattern,
+            groups.iter().map(|group| (*group).to_owned()).collect(),
+        )
     }
 
     /// A set of `switches` over no scene, played by `controls`.
@@ -677,5 +697,58 @@ mod tests {
         controls.press(&pad, true, at);
         live.update_levels();
         assert_eq!(live.levels, vec![1.], "already playing, it plays on");
+    }
+
+    #[test]
+    fn a_hit_plays_out_after_its_pad_is_let_go_and_never_where_it_was() {
+        let controls = Arc::new(VenueControls::default());
+        let hit = PerformPattern {
+            graph: luma_patterns::ClipGraph::from_json(
+                r#"{"version": 3, "nodes": {
+                    "pad": {"kind": "button", "settings": {"name": "pad", "mode": "flash"}},
+                    "k": {"kind": "time", "inputs": {"on": {"node": "pad"}, "duration": 1}},
+                    "fade": {"kind": "curve", "inputs": {"x": {"node": "k"}, "shape": {"points": [[0, 1], [1, 0]]}}},
+                    "color1": {"kind": "color", "inputs": {"alpha": {"node": "fade"}}}}}"#,
+            )
+            .unwrap(),
+            ..pattern("hit", false)
+        };
+        assert!(!hit.graph.pad_gates(), "its pad only starts events");
+        let layout = PerformLayout {
+            pages: vec![crate::models::perform::LayoutPage {
+                id: "page".into(),
+                name: "Main".into(),
+                columns: 2,
+                rows: 1,
+                one_at_a_time: Vec::new(),
+                cells: vec![crate::models::perform::Cell {
+                    id: "front".into(),
+                    column: 0,
+                    row: 0,
+                    width: 1,
+                    height: 1,
+                    content: CellContent::Group {
+                        label: String::new(),
+                        group: "front".into(),
+                    },
+                }],
+            }],
+        };
+        controls.install(std::slice::from_ref(&hit), &layout, HashMap::new());
+        let pad = controls::perform::pad(&hit).unwrap();
+        let mut live = live(&controls, vec![switch(&hit, &[])]);
+        let at = Instant::now();
+        controls.press(&pad, true, at);
+        controls.press(&pad, false, at);
+        live.update_levels();
+        assert_eq!(live.levels, vec![1.], "let go, its hit plays out");
+
+        // Pressed again on front: the layer on its own selection would
+        // light the new hit there, so it goes dark until front's lands.
+        controls.press(&controls::perform::cell("front"), true, at);
+        controls.press(&controls::perform::cell("front"), false, at);
+        controls.press(&pad, true, at);
+        live.update_levels();
+        assert_eq!(live.levels, vec![0.]);
     }
 }

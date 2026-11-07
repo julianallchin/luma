@@ -40,9 +40,10 @@ pub type TransportSource = Rc<dyn Fn(&App) -> Transport>;
 /// A random node's settings as fixed numbers.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
-    /// Beats per turn: each turn draws a new value.
-    pub every: f64,
-    /// The share of each turn that eases to the next value.
+    /// Beats per event of the random's time: each event draws a new value.
+    /// `None` is one draw for the clip.
+    pub every: Option<f64>,
+    /// The share of each event that eases to the next value.
     pub glide: f64,
     /// The blob size, a share of the rig; `None` is one value for all heads.
     pub scale: Option<f64>,

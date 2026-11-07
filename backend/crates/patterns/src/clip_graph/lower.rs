@@ -4,7 +4,9 @@
 //! one event table; and the output node combines each clock's live events
 //! into one layer (spec 5.3): light keeps the largest per channel, aim lays
 //! the newest over the older by its alpha, and no live event is
-//! transparent.
+//! transparent. A clock of one live event at a time carries no event axis:
+//! a wire that follows it is a plain value, and only its presence reaches
+//! the output's alpha.
 use super::heads::{SplitBy, Units};
 use super::kernels::{Kernel, AIM_MIRRORS};
 use super::{ClipGraph, Input, Kind, Node as ClipNode};
@@ -14,19 +16,23 @@ use crate::{
     Rate, Result, Signal, SignalType, Unit, Value, ValueType,
 };
 use ndarray::Array3;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 /// The empty aim direction: the venue's default aim.
 const DEFAULT_DIRECTION: [f64; 3] = [0., 0.766, -0.643];
 
 /// A lowered value wire: one binding per component (a number uses the
-/// first), and the clock whose events it carries.
+/// first), and the clocks it follows, by key: at most one whose live events
+/// it carries on the channel axis, and any number of one live event at a
+/// time.
 #[derive(Clone)]
 struct Lowered {
     parts: [Binding; 3],
-    clock: Option<String>,
+    clocks: Clocks,
 }
+
+type Clocks = BTreeSet<String>;
 
 /// A lowered heads wire.
 #[derive(Clone)]
@@ -38,8 +44,8 @@ struct Heads {
     unfolded: Binding,
     /// Per stacked mirror, in order.
     mirrors: Vec<Mirror>,
-    /// A shuffle's event index and its clock.
-    shuffle: Option<(Binding, Option<String>)>,
+    /// A shuffle's event index and the clocks it follows.
+    shuffle: Option<(Binding, Clocks)>,
 }
 
 /// One mirror of a heads wire: whether each cell was folded and the unit
@@ -55,6 +61,9 @@ struct Events {
     progress: Binding,
     present: Binding,
     index: Binding,
+    /// Whether several may be live at once, so the events lie on the
+    /// channel axis; else there is one, the newest begun.
+    overlap: bool,
 }
 
 struct Lowering<'a> {
@@ -91,27 +100,27 @@ fn output(node: &str, name: &str) -> Binding {
 fn constant(value: f64) -> Lowered {
     Lowered {
         parts: std::array::from_fn(|_| number(value)),
-        clock: None,
+        clocks: Clocks::new(),
     }
 }
 fn constant3(value: [f64; 3]) -> Lowered {
     Lowered {
         parts: value.map(number),
-        clock: None,
+        clocks: Clocks::new(),
     }
 }
 /// Component `c` of a vector or color wire, as a number wire.
 fn component(lowered: &Lowered, c: usize) -> Lowered {
     Lowered {
         parts: std::array::from_fn(|_| lowered.parts[c].clone()),
-        clock: lowered.clock.clone(),
+        clocks: lowered.clocks.clone(),
     }
 }
 
-/// The one clock of several wires; the checker allows at most one outside
-/// an output node.
-fn clock_of<'a>(clocks: impl IntoIterator<Item = &'a Option<String>>) -> Option<String> {
-    clocks.into_iter().flatten().next().cloned()
+/// Every clock several wires follow. The checker allows at most one with
+/// overlapping events outside an output node.
+fn clocks_of<'a>(clocks: impl IntoIterator<Item = &'a Clocks>) -> Clocks {
+    clocks.into_iter().flatten().cloned().collect()
 }
 
 impl Lowering<'_> {
@@ -263,10 +272,19 @@ impl Lowering<'_> {
 
     // ---- clocks ----
 
+    /// The clock among `lowered`'s whose live events it carries on the
+    /// channel axis, when it follows one of several live events at a time.
+    fn axis<'l>(&self, lowered: &'l Lowered) -> Option<&'l String> {
+        lowered
+            .clocks
+            .iter()
+            .find(|clock| self.clocks[*clock].overlap)
+    }
+
     /// A clock table over `period`. A period that follows events takes the
     /// newest event's value.
     fn clock_table(&mut self, period: &Lowered) -> String {
-        let period = match &period.clock {
+        let period = match self.axis(period) {
             None => period.parts[0].clone(),
             Some(clock) => {
                 let events = self.clocks[clock].clone();
@@ -284,37 +302,50 @@ impl Lowering<'_> {
         self.kernel(Kernel::ClockTable, vec![("period", period)])
     }
 
-    /// The events of time node `id`, which has `every`: one event table
-    /// per clock key, so time nodes with equal `every` and `duration`
-    /// share their events.
+    /// The events of time node `id`, which has `every` or `on`: one event
+    /// table per clock key, so time nodes with equal inputs share their
+    /// events. A press clock is born at each turn on of its button.
     fn events(&mut self, id: &str) -> Result<(Events, String)> {
-        let key = self
-            .graph
-            .clock_key(id)
-            .ok_or_else(|| Error(format!("{id}: a time node without every has no events")))?;
+        let key = self.graph.clock_key(id).ok_or_else(|| {
+            Error(format!(
+                "{id}: a time node without every or on has no events"
+            ))
+        })?;
         if let Some(known) = self.clocks.get(&key) {
             return Ok((known.clone(), key));
         }
-        let every = self.number(id, "every", 1.)?;
-        let every_table = self.clock_table(&every);
-        // Events as long as every count on its own table.
-        let duration_table = if self.node(id).inputs.contains_key("duration") {
-            let duration = self.duration(id)?;
-            self.clock_table(&duration)
-        } else {
-            every_table.clone()
+        let overlap = self.graph.overlaps(id);
+        let lasts = self.node(id).inputs.contains_key("duration");
+        let (every, on) = match self.wire(id, "on") {
+            Some(button) => (None, self.live_input(&button) as f64),
+            None => {
+                let every = self.number(id, "every", 1.)?;
+                (Some(self.clock_table(&every)), -1.)
+            }
         };
+        // Events as long as every count on its own table; a press with no
+        // duration lives until the next and reads no table.
+        let duration = if lasts {
+            let duration = self.duration(id)?;
+            Some(self.clock_table(&duration))
+        } else {
+            every.clone()
+        };
+        let table = |table: Option<String>| table.map_or(number(1.), |id| output(&id, "value"));
         let events = self.kernel(
             Kernel::Events,
             vec![
-                ("every", output(&every_table, "value")),
-                ("duration", output(&duration_table, "value")),
+                ("every", table(every)),
+                ("duration", table(duration)),
+                ("on", number(on)),
+                ("single", number(if overlap { 0. } else { 1. })),
             ],
         );
         let lowered = Events {
             progress: output(&events, "progress"),
             present: output(&events, "present"),
             index: output(&events, "index"),
+            overlap,
         };
         self.clocks.insert(key.clone(), lowered.clone());
         Ok((lowered, key))
@@ -333,32 +364,41 @@ impl Lowering<'_> {
         }
     }
 
+    /// Live input node `id`'s place among the graph's live inputs.
+    fn live_input(&self, id: &str) -> usize {
+        self.graph
+            .live_inputs()
+            .iter()
+            .position(|input| input.node == id)
+            .expect("a live node is among the graph's live inputs")
+    }
+
     // ---- coordinates ----
 
     /// Each head's clock: the event's progress less the head's delay over
     /// the duration, plus the phase, wrapped (spec section 0).
     fn time(&mut self, id: &str) -> Result<Lowered> {
         let node = self.node(id).clone();
-        let (progress, clock) = if node.inputs.contains_key("every") {
+        let (progress, clocks) = if self.graph.clock_key(id).is_some() {
             let (events, clock) = self.events(id)?;
-            (events.progress, Some(clock))
+            (events.progress, Clocks::from([clock]))
         } else if node.inputs.contains_key("duration") {
             // Once, `duration` beats long from the clip start; past its end
             // the clock runs on above 1, so curves hold their last value.
             let duration = self.number(id, "duration", 1.)?;
             let table = self.clock_table(&duration);
             let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
-            (output(&turns, "value"), None)
+            (output(&turns, "value"), Clocks::new())
         } else {
             (
                 output(&self.kernel(Kernel::ClipProgress, vec![]), "value"),
-                None,
+                Clocks::new(),
             )
         };
         if !node.inputs.contains_key("delay") && !node.inputs.contains_key("phase") {
             return Ok(Lowered {
                 parts: std::array::from_fn(|_| progress.clone()),
-                clock,
+                clocks,
             });
         }
         let delay = self.number(id, "delay", 0.)?;
@@ -377,7 +417,7 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&shifted, "value")),
-            clock: clock_of([&clock, &delay.clock, &phase.clock]),
+            clocks: clocks_of([&clocks, &delay.clocks, &phase.clocks]),
         })
     }
 
@@ -424,14 +464,18 @@ impl Lowering<'_> {
             ),
         ];
         let axis = self.kernel_named(Kernel::Axis, ports);
-        let shuffled = heads.shuffle.as_ref().and_then(|(_, clock)| clock.clone());
+        let shuffled = heads
+            .shuffle
+            .as_ref()
+            .map(|(_, clocks)| clocks.clone())
+            .unwrap_or_default();
         if !["at", "shift", "scale"]
             .iter()
             .any(|k| node.inputs.contains_key(*k))
         {
             return Ok(Lowered {
                 parts: std::array::from_fn(|_| output(&axis, "value")),
-                clock: shuffled,
+                clocks: shuffled,
             });
         }
         let at = self.number(id, "at", 0.)?;
@@ -449,7 +493,7 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&slid, "value")),
-            clock: clock_of([&shuffled, &at.clock, &shift.clock, &scale.clock]),
+            clocks: clocks_of([&shuffled, &at.clocks, &shift.clocks, &scale.clocks]),
         })
     }
 
@@ -473,15 +517,29 @@ impl Lowering<'_> {
         Ok(output(&rank, "value"))
     }
 
+    /// A random's field, read on the events of its time: a new draw per
+    /// event, glided over each event's life; with no events, one draw.
     fn random(&mut self, id: &str) -> Result<Lowered> {
         let heads = self.heads_input(id)?;
-        let every = self.number(id, "every", 4.)?;
+        let (turns, clocks) = match self.wire(id, "time") {
+            Some(source) if self.graph.clock_key(&source).is_some() => {
+                let (events, clock) = self.events(&source)?;
+                let turns = self.kernel(
+                    Kernel::Math,
+                    vec![
+                        ("a", events.index),
+                        ("b", events.progress),
+                        ("op", number(1.)),
+                    ],
+                );
+                (output(&turns, "value"), Clocks::from([clock]))
+            }
+            _ => (number(0.), Clocks::new()),
+        };
         let glide = self.number(id, "glide", 0.)?;
         let uniform = !self.node(id).inputs.contains_key("scale");
         let scale = self.number(id, "scale", 1.)?;
         let contrast = self.number(id, "contrast", 0.)?;
-        let table = self.clock_table(&every);
-        let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
         let salt = super::random::fnv(id);
         let span = self.index_field(&heads.units.span)?;
         let random = self.kernel(
@@ -489,7 +547,7 @@ impl Lowering<'_> {
             vec![
                 ("positions", heads.positions.clone()),
                 ("span", span),
-                ("turns", output(&turns, "value")),
+                ("turns", turns),
                 ("glide", glide.parts[0].clone()),
                 ("scale", scale.parts[0].clone()),
                 ("contrast", contrast.parts[0].clone()),
@@ -500,7 +558,7 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&random, "value")),
-            clock: clock_of([&glide.clock, &scale.clock, &contrast.clock]),
+            clocks: clocks_of([&clocks, &glide.clocks, &scale.clocks, &contrast.clocks]),
         })
     }
 
@@ -524,7 +582,7 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&energy, "value")),
-            clock: None,
+            clocks: Clocks::new(),
         })
     }
 
@@ -533,10 +591,7 @@ impl Lowering<'_> {
     /// node's place among the numbers of the graph's live inputs.
     fn live(&mut self, id: &str) -> Lowered {
         let inputs = self.graph.live_inputs();
-        let at = inputs
-            .iter()
-            .position(|input| input.node == id)
-            .expect("a live node is among the graph's live inputs");
+        let at = self.live_input(id);
         let first: usize = inputs[..at].iter().map(|input| input.kind.width()).sum();
         let parts: Vec<Binding> = (first..first + inputs[at].kind.width())
             .map(|index| {
@@ -546,7 +601,7 @@ impl Lowering<'_> {
             .collect();
         Lowered {
             parts: std::array::from_fn(|c| parts[c.min(parts.len() - 1)].clone()),
-            clock: None,
+            clocks: Clocks::new(),
         }
     }
 
@@ -599,7 +654,7 @@ impl Lowering<'_> {
                 output(&curve, "y"),
                 output(&curve, "z"),
             ],
-            clock: clock_of([&x.clock, &low.clock, &high.clock]),
+            clocks: clocks_of([&x.clocks, &low.clocks, &high.clocks]),
         })
     }
 
@@ -651,7 +706,7 @@ impl Lowering<'_> {
                     };
                     Lowered {
                         parts,
-                        clock: clock_of([&left.clock, &item.clock]),
+                        clocks: clocks_of([&left.clocks, &item.clocks]),
                     }
                 }
             });
@@ -758,9 +813,9 @@ impl Lowering<'_> {
                 heads.shuffle = Some(match self.wire(id, "time") {
                     Some(source) if self.graph.clock_key(&source).is_some() => {
                         let (events, clock) = self.events(&source)?;
-                        (events.index, Some(clock))
+                        (events.index, Clocks::from([clock]))
                     }
-                    _ => (number(0.), None),
+                    _ => (number(0.), Clocks::new()),
                 });
             }
             kind => {
@@ -801,8 +856,10 @@ impl Lowering<'_> {
     /// into one layer (spec 5.3). A light output (`over` false) multiplies
     /// each part's factors per event, premultiplied by alpha, and keeps the
     /// largest per part across the live events; an aim (`over` true) lays
-    /// each newer event over the older by its alpha. Where a clock has no
-    /// live event the clip is transparent: alpha 0.
+    /// each newer event over the older by its alpha. A clock of one live
+    /// event at a time carries no events to combine: its presence scales
+    /// the alpha. Where a clock has no live event the clip is transparent:
+    /// alpha 0.
     ///
     /// `parts[p]` are the factors of output part `p`; `alpha` is the
     /// output's alpha. Returns the parts, premultiplied for light, and the
@@ -813,38 +870,37 @@ impl Lowering<'_> {
         alpha: Lowered,
         over: bool,
     ) -> Result<(Vec<Binding>, Binding)> {
-        let mut clocks: Vec<String> = parts
-            .iter()
-            .flatten()
-            .chain([&alpha])
-            .filter_map(|l| l.clock.clone())
-            .collect();
-        clocks.sort();
-        clocks.dedup();
-        let carries = |l: &Lowered, clock: &str| l.clock.as_deref() == Some(clock);
-        // Factors that carry no clock, per part; light is premultiplied.
+        let followed = clocks_of(parts.iter().flatten().chain([&alpha]).map(|l| &l.clocks));
+        let alpha_axis = self.axis(&alpha).cloned();
+        let carries =
+            |this: &Self, l: &Lowered, clock: &str| this.axis(l).is_some_and(|axis| axis == clock);
+        // Factors that carry no events, per part; light is premultiplied.
         let mut out: Vec<Vec<Binding>> = parts
             .iter()
             .map(|factors| {
                 let mut kept: Vec<Binding> = factors
                     .iter()
-                    .filter(|l| l.clock.is_none())
+                    .filter(|l| self.axis(l).is_none())
                     .map(|l| l.parts[0].clone())
                     .collect();
-                if !over && alpha.clock.is_none() {
+                if !over && alpha_axis.is_none() {
                     kept.push(alpha.parts[0].clone());
                 }
                 kept
             })
             .collect();
-        let mut alphas: Vec<Binding> = if alpha.clock.is_none() {
+        let mut alphas: Vec<Binding> = if alpha_axis.is_none() {
             vec![alpha.parts[0].clone()]
         } else {
             vec![]
         };
-        for clock in clocks {
+        for clock in followed {
             let events = self.clocks[&clock].clone();
-            let alpha_carried = carries(&alpha, &clock);
+            if !events.overlap {
+                alphas.push(events.present);
+                continue;
+            }
+            let alpha_carried = alpha_axis.as_deref() == Some(clock.as_str());
             let weight = if alpha_carried {
                 alpha.parts[0].clone()
             } else {
@@ -868,7 +924,7 @@ impl Lowering<'_> {
             for (p, factors) in parts.iter().enumerate() {
                 let mut own: Vec<Binding> = factors
                     .iter()
-                    .filter(|l| carries(l, &clock))
+                    .filter(|l| carries(self, l, &clock))
                     .map(|l| l.parts[0].clone())
                     .collect();
                 // Light is premultiplied, so a clock that carries alpha

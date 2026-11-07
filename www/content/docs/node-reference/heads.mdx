@@ -25,7 +25,7 @@ Folds the heads across a plane, as a shader's reflect. The plane is across `dire
 
 `shuffle` · Python: `shuffle(heads, time)` · Gives heads.
 
-A random order of the heads within each span. Read it with `space(kind="order")`. With a `time` wire from a time node with `every`, the order is new for each event. Positions do not change. Heads a mirror folded together share one place in the order, whether the mirror comes before or after the shuffle.
+A random order of the heads within each span. Read it with `space(kind="order")`. With a `time` wire from a time node with `every` or `on`, the order is new for each event: each press, for a press clock. Positions do not change. Heads a mirror folded together share one place in the order, whether the mirror comes before or after the shuffle.
 
 | Input | Type | Unit | Range | Takes | Empty |
 |---|---|---|---|---|---|

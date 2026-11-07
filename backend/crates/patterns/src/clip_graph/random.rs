@@ -1,6 +1,6 @@
 //! The Random node's field: coherent value noise over three space axes and
-//! time, a pure function of its coordinates and seed, read on a clock
-//! that holds each turn's draw for all but its last `glide`.
+//! time, a pure function of its coordinates and seed, read on the events of
+//! its time: each event's draw held for all but its last `glide`.
 use crate::{Error, Result};
 
 /// Value noise at `point`, 0–1, smooth across the lattice.
@@ -33,9 +33,10 @@ fn coherent_noise(point: [f64; 4], seed: u64) -> Result<f64> {
     Ok(sum.clamp(0.0, 1.0))
 }
 
-/// The noise field's time coordinate at `turns` of a Random's clock: the
-/// turn's draw held for the first 1 − `glide` of the turn, then eased to
-/// the next over the rest. `glide` 1 drifts the whole turn.
+/// The noise field's time coordinate at `turns` of a Random's clock (an
+/// event's index plus its progress): the event's draw held for the first
+/// 1 − `glide` of it, then eased to the next over the rest. `glide` 1
+/// drifts the whole event.
 pub(crate) fn glided(turns: f64, glide: f64) -> f64 {
     let glide = glide.clamp(0., 1.);
     let turn = turns.floor();
@@ -68,22 +69,27 @@ pub(crate) fn field(
 /// Random node `node`'s value at one head, as playback computes it (spec
 /// 2.3): `seed` is the clip's, `place` the head's position over its span's
 /// largest extent (0–1 on each axis), `beats` the beats since the clip
-/// start. `every` is beats per turn; `scale` `None` gives one value for
-/// every head.
+/// start. `every` is the beats of each event of the random's time, `None`
+/// for one draw over the clip; `scale` `None` gives one value for every
+/// head.
 #[allow(clippy::too_many_arguments)]
 pub fn sample_random(
     node: &str,
     seed: u64,
     place: [f64; 3],
     beats: f64,
-    every: f64,
+    every: Option<f64>,
     glide: f64,
     scale: Option<f64>,
     contrast: f64,
 ) -> Result<f64> {
-    if every.is_nan() || every <= 0. {
-        return Err(Error(format!("{node}.every needs beats above 0")));
-    }
+    let turns = match every {
+        Some(every) if every.is_nan() || every <= 0. => {
+            return Err(Error(format!("{node}.time needs every above 0 beats")))
+        }
+        Some(every) => beats / every,
+        None => 0.,
+    };
     let (place, size) = match scale {
         Some(scale) => (place, scale),
         None => ([0.; 3], 1.),
@@ -91,7 +97,7 @@ pub fn sample_random(
     field(
         place,
         size,
-        glided(beats / every, glide),
+        glided(turns, glide),
         contrast,
         seed ^ fnv(node),
     )

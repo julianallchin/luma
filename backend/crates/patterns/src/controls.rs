@@ -18,6 +18,10 @@ pub trait ControlSource: std::fmt::Debug + Send + Sync {
     /// A live color now: linear Rec. 2020 rgb, each channel 0–1. A color
     /// the source does not know reads its own default.
     fn color(&self, input: &crate::clip_graph::LiveInput) -> [f64; 3];
+    /// A button's turns on so far, on the beats the graph is evaluated at,
+    /// for the press clocks that count them (`time(on=button)`). A source
+    /// where nobody presses answers none.
+    fn presses(&self, input: &crate::clip_graph::LiveInput) -> crate::press::Presses;
 }
 
 /// The kernel library's `control`: number `index` of the graph's live
