@@ -202,7 +202,7 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .when(state.follow, |el| el.child(luma_ui::caption("Follow"))),
         )
         .child(div().flex_1())
-        // Which score is on the timeline, by the handle the sidebar names it
+        // Which score is on the timeline, by the handle the song list names it
         // by.
         .child(luma_ui::caption(format!("Score #{}", state.score.ordinal)))
         // A refused write, over the timeline it was refused for.

@@ -460,7 +460,7 @@ type RegionBody = fn(&mut Luma, &mut Window, &mut Context<Luma>) -> AnyElement;
 /// frame it draws. The stage asks for a frame on every render (see
 /// [`visualizer::visualizer`]), so while every pane was part of the root, each
 /// stage frame rebuilt and laid out every pane in the window — the fixture
-/// table, the sidebar, the editors — with nothing in them changed. A *cached*
+/// table, the song list, the editors — with nothing in them changed. A *cached*
 /// region is not rebuilt: gpui reuses its last layout, prepaint and paint
 /// until the region's entity is notified (or its bounds change, or the window
 /// is refreshed).

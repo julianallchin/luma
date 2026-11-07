@@ -24,7 +24,7 @@ pub(crate) struct TrackImportActivity {
     /// Empty while they are still being copied in.
     pub(super) items: Vec<ImportItem>,
     /// Whether the progress page has been looked at since the import ended,
-    /// so the sidebar keeps a failed import on screen until it has been.
+    /// so the status bar keeps a failed import on screen until it has been.
     pub(super) seen: bool,
 }
 
@@ -170,7 +170,7 @@ impl TrackImportActivity {
             .count()
     }
 
-    /// The one line that says where the import is — the sidebar row and the
+    /// The one line that says where the import is — the status bar item and the
     /// progress page's title both read it.
     ///
     /// Once the songs are known it is counted off their rows, so the header
@@ -383,7 +383,7 @@ impl Luma {
     }
 
     /// Put every song an import brought in into the venue it was imported
-    /// from, then show them in the sidebar. The dialog stays open: it is
+    /// from, then show them in the song list. The dialog stays open: it is
     /// showing the import's progress, which is still going.
     fn add_imported_to_venue(
         &mut self,
@@ -417,11 +417,11 @@ impl Luma {
                 let generation = this
                     .songs
                     .as_ref()
-                    .filter(|sidebar| sidebar.venue_id() == venue_id)
+                    .filter(|songs| songs.venue_id() == venue_id)
                     .map(crate::tracks::Tracks::load_generation);
                 if let (Ok(rows), Some(generation)) = (rows, generation) {
-                    this.with_tracks_for_venue(&venue_id, generation, cx, |sidebar| {
-                        sidebar.replace_rows(rows)
+                    this.with_tracks_for_venue(&venue_id, generation, cx, |songs| {
+                        songs.replace_rows(rows)
                     });
                 }
                 if !errors.is_empty() {

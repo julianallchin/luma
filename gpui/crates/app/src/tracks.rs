@@ -809,7 +809,7 @@ fn track_row(
                 at: event.position,
                 track_id: menu_track.clone(),
             };
-            raised.update(cx, |this, cx| this.open_sidebar_menu(menu, cx));
+            raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
         })
         .child(
             div()

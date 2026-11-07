@@ -22,7 +22,7 @@ impl Luma {
         self.open_add_tracks(Route::TrackBrowser, Purpose::PlayVirtual(target), cx);
     }
 
-    /// The sidebar's import row: the dialog, opened on the import's progress.
+    /// The status bar's import item: the dialog, opened on the import's progress.
     pub(crate) fn show_track_import(&mut self, cx: &mut Context<Self>) {
         if let Some(activity) = &mut self.track_import {
             activity.seen = true;

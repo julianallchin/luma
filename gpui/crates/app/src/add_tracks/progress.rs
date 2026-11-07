@@ -1,5 +1,5 @@
 //! The import's progress, drawn: the Progress route's per-song rows and the
-//! sidebar row that stays up while an import runs or after one fails.
+//! status bar item that stays up while an import runs or after one fails.
 
 use std::rc::Rc;
 

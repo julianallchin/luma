@@ -26,7 +26,7 @@
 //! belongs on the binding: every binding whose key is a character a person
 //! could be typing carries `&& !`[`context::TEXT_INPUT`], a predicate gpui
 //! evaluates over the *whole* focus path. One rule, stated once, and it is
-//! what keeps the sidebar's spacebar a space and its escape a cleared query.
+//! what keeps the song list's spacebar a space and its escape a cleared query.
 
 use gpui::{actions, Action, App, KeyBinding};
 

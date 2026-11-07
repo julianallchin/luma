@@ -47,7 +47,7 @@ impl ChatStatus {
     }
 }
 
-/// The dot itself, in the size and recipe of the sidebar's coverage dot.
+/// The dot itself, in the size and recipe of the song list's coverage dot.
 /// `subject` names it in the automation tree.
 pub(crate) fn status_dot(status: ChatStatus, subject: &str) -> impl IntoElement {
     let (color, word) = match status {

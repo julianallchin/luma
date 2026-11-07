@@ -63,7 +63,7 @@ pub(crate) enum Action {
         /// pair.
         venue_id: SharedString,
     },
-    /// Delete a sidebar folder. Only its links go; its songs and their scores
+    /// Delete a song list folder. Only its links go; its songs and their scores
     /// stay.
     DeleteFolder {
         folder_id: SharedString,

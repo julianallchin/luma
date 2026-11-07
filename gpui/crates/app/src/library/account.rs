@@ -113,7 +113,7 @@ impl Library {
     }
 
     /// Whether this library talks to the cloud at all — the one thing the
-    /// sidebar's sync row is conditioned on.
+    /// status bar's sync item is conditioned on.
     pub(crate) fn cloud_sync_enabled(&self) -> bool {
         #[cfg(feature = "agent")]
         if self.sync_status_fixture.is_some() {

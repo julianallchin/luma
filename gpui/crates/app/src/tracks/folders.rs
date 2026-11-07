@@ -1,5 +1,5 @@
-//! The sidebar's folders: a venue's named sets of its songs
-//! (`docs/specs/venue-tabs.md`, phase 2).
+//! The song list's folders: a venue's named sets of its songs
+//! (`docs/specs/comet-shell.md` §4).
 //!
 //! A folder holds links, not songs. A song in a folder is the same song as
 //! under All songs: pressing it opens the same scores level, so a song in two
@@ -71,7 +71,7 @@ impl Tracks {
 
 impl Luma {
     /// Re-read the venue's folders. Admitted only while the same venue load
-    /// still owns the sidebar, the rule its rows follow.
+    /// still owns the song list, the rule its rows follow.
     pub(crate) fn reload_folders(&mut self, cx: &mut Context<Self>) {
         let Some(state) = &self.songs else {
             return;
@@ -241,7 +241,7 @@ impl Luma {
         self.change_folders(pending, cx);
     }
 
-    pub(crate) fn open_sidebar_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+    pub(crate) fn open_song_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
         if let Some(state) = &mut self.songs {
             state.menu = Some(menu);
             cx.notify();
@@ -371,7 +371,7 @@ pub(super) fn folder_row(
                     at: event.position,
                     folder_id: menu_id.clone(),
                 };
-                raised.update(cx, |this, cx| this.open_sidebar_menu(menu, cx));
+                raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
             })
             .child(
                 gpui_component::Icon::new(if open {
@@ -407,7 +407,7 @@ pub(super) fn folder_row(
 }
 
 /// The name as a live field. The draft context gives the field Enter and
-/// Escape ahead of the sidebar's own keys; presses inside it stop here, so
+/// Escape ahead of the song list's own keys; presses inside it stop here, so
 /// placing the caret does not close the folder.
 fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
     float::field()

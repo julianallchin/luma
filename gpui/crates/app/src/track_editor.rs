@@ -297,12 +297,12 @@ pub struct Editor {
 /// The score being edited, how it is spoken about, and whether this host owns
 /// it.
 ///
-/// Minted by the sidebar's scores level ([`crate::tracks::scores`]), which is
+/// Minted from the song list's scores ([`crate::tracks::scores`]), which is
 /// the one place a listing row becomes an open document.
 #[derive(Clone)]
 pub(crate) struct Score {
     pub(crate) id: String,
-    /// Its display ordinal within `(track, venue)` — the `#2` the sidebar and
+    /// Its display ordinal within `(track, venue)` — the `#2` the song list and
     /// the toolbar name it by. A position, not identity: [`Self::id`] is the
     /// key.
     pub(crate) ordinal: i64,

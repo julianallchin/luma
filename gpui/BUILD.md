@@ -156,7 +156,7 @@ each a directory that groups many test files. Filter by test name to run one
 file:
 
 ```sh
-cargo test -p gpui-agent --test headless tab_chrome
+cargo test -p gpui-agent --test headless venues
 cargo test -p gpui-agent --test unit
 CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --test app_pixel
 CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --test ui_pixel

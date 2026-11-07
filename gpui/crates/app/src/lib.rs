@@ -430,7 +430,7 @@ impl Render for Luma {
             .flex_col()
             // The floor. Every region either leaves it showing (the thread
             // column, the workspace panel) or raises itself off it (the
-            // sidebar) — see `shell::regions`. Opaque, and from the ladder
+            // agent panel) — see `shell::regions`. Opaque, and from the ladder
             // rather than the glass tier, because a plane whose brightness is
             // decided by the desktop behind the window has no rung.
             .bg(ladder::background())

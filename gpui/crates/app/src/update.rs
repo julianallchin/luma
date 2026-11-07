@@ -1,5 +1,5 @@
 //! Self-update in the window: the hourly poll, the "update ready" dialog, the
-//! sidebar's "Restart to update" row, and the About section's controls.
+//! status bar's "Restart to update" item, and the About section's controls.
 //!
 //! The work is [`luma_update::Updater`]'s, on a thread of its own; this module
 //! mirrors its status onto [`Luma`] and draws it, the way Zed's title bar
@@ -119,7 +119,7 @@ impl Luma {
     }
 
     /// Raise the ready dialog the first time a version is on disk. A dialog
-    /// already up is left alone: the sidebar's row still offers the restart.
+    /// already up is left alone: the status bar's item still offers the restart.
     fn announce_update(&mut self, cx: &mut Context<Self>) {
         let Status::Updated { version, .. } = &self.update.status else {
             return;

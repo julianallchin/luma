@@ -210,7 +210,7 @@ impl Luma {
     /// only honest proof it landed.
     ///
     /// Hangs off the app rather than the settings screen because both doors to
-    /// it — the sidebar's account menu and the settings row — press the same
+    /// it — the venue menu's account row and the settings row — press the same
     /// three commands, and a guard living on one screen could not stop the
     /// other from pressing them again mid-flight.
     pub(crate) fn sign_out(&mut self, cx: &mut Context<Self>) {
