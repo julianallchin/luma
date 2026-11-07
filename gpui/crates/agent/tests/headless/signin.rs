@@ -9,7 +9,7 @@
 //! opens without a principal — there is no guest door.
 
 use super::support;
-use support::session::{self, Stored};
+use gpui_agent::fixture::session::{self, Stored};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

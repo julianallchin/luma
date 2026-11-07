@@ -6,7 +6,7 @@
 //! none of that is `tests/js/headless/venues.test.js`.
 
 use super::support;
-use support::session;
+use gpui_agent::fixture::session;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

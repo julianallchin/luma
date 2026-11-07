@@ -1,7 +1,6 @@
 //! Pixel mode: the same headless app, with real glyphs and a real GPU.
 //!
-//! The spec for this harness assumed pixel mode would need a display server —
-//! Xvfb and a software rasterizer. At the pinned gpui rev it needs neither.
+//! It needs no display server and no software rasterizer.
 //! `HeadlessAppContext` is `TestPlatform` — the same deterministic dispatcher
 //! headless mode uses, the same absence of a window server — with two things
 //! plugged in: a real `PlatformTextSystem`, so text is measured with its true

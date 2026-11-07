@@ -281,9 +281,8 @@ fn clustered_surface_uses_shared_cone_and_gobo_photometry() -> anyhow::Result<()
     Ok(())
 }
 
-/// The fixed-width mask has no growth path, so "bounded" is structural
-/// now; this keeps the three cone counts rendering, which is what used to
-/// overflow before the CSR era's `max_lights_per_cluster` cap was removed.
+/// The light index's fixed-width mask has no growth path, so the three cone
+/// counts must all render.
 #[test]
 fn clustered_surface_renders_at_32_128_and_512_cones() -> anyhow::Result<()> {
     let mut renderer = Renderer::new()?;

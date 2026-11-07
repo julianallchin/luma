@@ -1,6 +1,6 @@
-//! What the cargo suites share: the seeded library (now in the library as
-//! `gpui_agent::fixture`, so the script runner seeds the same way), the
-//! navigation helpers, and a few readers of what a test left behind.
+//! What the cargo suites share: the seeded library (`gpui_agent::fixture`,
+//! which the script runner seeds with too), the navigation helpers, and a few
+//! readers of what a test left behind.
 
 // Each test binary uses the parts of this it needs, and cargo compiles the
 // whole module into each — the standard shape of a shared test fixture.
@@ -120,12 +120,8 @@ pub fn score(clips: Value) -> Value {
     json!({ "clips": clips })
 }
 
-/// The score the fixture seeded, read back from its rows.
-///
-/// A score is `scores` and `clips`; there is no document
-/// column to read any more. Tests assert on a `luma_patterns::Score`, which is
-/// what those rows load into — so this is the one place that knows the
-/// difference, rather than eighteen copies of a `SELECT`.
+/// The score the fixture seeded, read back from its `scores` and `clips` rows
+/// as the `luma_patterns::Score` they load into.
 pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
     let pool = sqlx::SqlitePool::connect(&format!(
         "sqlite:{}",
@@ -148,7 +144,6 @@ pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
 
 #[cfg(feature = "pixel")]
 pub mod image;
-pub mod session;
 
 /// Reading `app.timings()` — shared so two suites cannot disagree about what a
 /// percentile means.

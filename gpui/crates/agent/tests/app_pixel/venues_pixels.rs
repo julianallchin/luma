@@ -1,7 +1,7 @@
 //! Pixel proof for every production venue-dialog route.
 
 use super::support;
-use support::session;
+use gpui_agent::fixture::session;
 
 use std::fs;
 use std::path::{Path, PathBuf};

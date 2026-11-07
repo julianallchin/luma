@@ -15,7 +15,7 @@ fn sign_in(config: &std::path::Path) {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(super::support::session::signed_in(config));
+        .block_on(gpui_agent::fixture::session::signed_in(config));
 }
 
 /// A library directory of the test's own, so tests on parallel threads do not
@@ -61,7 +61,7 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
             "INSERT INTO tracks (id, uid, track_hash, title, file_path)
              VALUES ('track', ?, 'hash', 'Empty score', '/track.mp3')",
         )
-        .bind(super::support::session::PRINCIPAL)
+        .bind(gpui_agent::fixture::session::PRINCIPAL)
         .execute(&db.0)
         .await
         .unwrap();
