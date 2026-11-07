@@ -931,6 +931,18 @@ impl AgentChat {
         }
     }
 
+    /// How far the transcript's head sits under the floating header: the
+    /// header and its blur ([`theme::HEADER_FADE`]). The list's first row
+    /// rests below it, and what scrolls up passes under it. A reader has no
+    /// header.
+    fn header_clearance(&self) -> f32 {
+        if self.read_only {
+            0.0
+        } else {
+            theme::HEADER_FADE
+        }
+    }
+
     /// Read this frame's layout, consume reserved room, then advance the
     /// message toward its moving on-screen destination with the shared spring.
     fn step_send_motion(&mut self, reduced: bool) {
@@ -950,10 +962,11 @@ impl AgentChat {
             {
                 let content_end = f32::from(bounds.bottom() - viewport.top()) + scroll;
                 // The room fills what the reader sees, which stops at the
-                // composer: the list's bottom padding (the footer) is scroll
-                // travel of its own, so counting it here too lifts the prompt
-                // above the viewport by the footer's height.
-                let visible = f32::from(viewport.size.height) - self.pin_footer;
+                // composer below and the header above: the list's padding at
+                // either end is scroll travel of its own, so counting it here
+                // too lifts the prompt out of sight by that much.
+                let visible =
+                    f32::from(viewport.size.height) - self.pin_footer - self.header_clearance();
                 let fold = self.fold_in_turn().then(|| self.fold_px.get());
                 let room = self
                     .send_motion
@@ -1856,6 +1869,7 @@ impl AgentChat {
         } else {
             0.0
         };
+        let header = self.header_clearance();
         // The composer grew or shrank: the list's bottom padding moves with it,
         // and a pinned view has to move too or the tail slides under the
         // composer.
@@ -1982,8 +1996,10 @@ impl AgentChat {
             })
         })
         .size_full()
-        // The footer floats over the list's tail, so the last row can scroll
-        // clear of it and what passes under it blurs rather than stops.
+        // The footer floats over the list's tail and the header over its
+        // head, so the first and last rows can scroll clear of them and what
+        // passes under either blurs rather than stops.
+        .pt(px(header))
         .pb(px(footer));
 
         let plate_bounds = self.plate_bounds.clone();
@@ -2004,7 +2020,7 @@ impl AgentChat {
                 )
                 .agent_node(NodeRole::Card, "Sending message")
         });
-        self.plate(&this, &theme)
+        self.plate(&theme)
             .font(luma_ui::fonts::font(theme.font_sans.clone()))
             .child(
                 gpui::canvas(
@@ -2061,7 +2077,8 @@ impl AgentChat {
                                     .left_0()
                                     .child(working::trailer(&state, &theme, view, cx))
                             });
-                            el.pb(px(footer))
+                            el.pt(px(header))
+                                .pb(px(footer))
                                 .child(opening(&Opening::CHAT, &this, &theme))
                                 .children(opening_trailer)
                         },
@@ -2144,14 +2161,16 @@ impl AgentChat {
                         ),
                 )
             })
+            // A reader is mounted inside a dialog that already carries a header
+            // band; a second one would be two titles over one conversation.
+            .when(!self.read_only, |el| el.child(self.header(&this)))
             .children(flight)
             .into_any_element()
     }
 
-    /// The thread's surface and its header: the one place where the chat
-    /// meets the shell.
-    fn plate(&self, chat: &Entity<AgentChat>, theme: &Theme) -> gpui::Div {
-        let plate = div()
+    /// The thread's surface: the one place where the chat meets the shell.
+    fn plate(&self, theme: &Theme) -> gpui::Div {
+        div()
             .relative()
             .size_full()
             .flex()
@@ -2159,52 +2178,100 @@ impl AgentChat {
             // No fill of its own: the shell's content card paints the ground
             // (`theme::panel`), and a second plane here would stack a second
             // coverage over the blur the card is there to let through.
-            .text_color(theme.text);
-        // A reader is mounted inside a dialog that already carries a header
-        // band; a second one would be two titles over one conversation.
-        if self.read_only {
-            return plate;
-        }
-        plate.child(self.header(chat))
+            .text_color(theme.text)
     }
 
+    /// The panel's header, floating over the transcript's head: a progressive
+    /// blur that dissolves what scrolls up under it, and the icons crisp on
+    /// top.
+    ///
+    /// The renderer's backdrop blur is one radius over a rectangle; it has no
+    /// mask. So the blur is stepped: each of [`theme::HEADER_BLUR_STEPS`]
+    /// covers the band from the top edge down to a line that climbs with each
+    /// step, and since every step blurs what the steps before it left, the
+    /// blur compounds toward the edge. A fade to the panel's own ground over
+    /// the steps finishes the dissolve and hides their seams. Where there is
+    /// no backdrop blur, the fade alone does it.
+    ///
+    /// Nothing here moves on its own: it paints when the panel does, so an
+    /// idle panel costs nothing and a scroll pays a few small blurs a frame.
     fn header(&self, chat: &Entity<AgentChat>) -> impl IntoElement {
+        let steps = theme::HEADER_BLUR_STEPS.len();
+        let blur = luma_ui::dialog::BACKDROP_BLUR_SUPPORTED.then(|| {
+            theme::HEADER_BLUR_STEPS
+                .iter()
+                .enumerate()
+                .map(move |(step, radius)| {
+                    let reach = theme::HEADER_FADE * (steps - step) as f32 / steps as f32;
+                    luma_ui::dialog::frosted(
+                        0.0,
+                        *radius,
+                        div().absolute().top_0().left_0().right_0().h(px(reach)),
+                    )
+                })
+        });
         div()
-            .h(px(theme::HEADER_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_end()
-            .px(px(theme::SPACE_LG))
-            // The two ways out of the conversation you are in: back to an
-            // older one, or on to a new one.
-            .child({
-                let rewind = chat.clone();
-                let fresh = chat.clone();
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(theme::HEADER_FADE))
+            // A press here is the header's, not the transcript's unpin; the
+            // wheel still scrolls the list under it.
+            .block_mouse_except_scroll()
+            .children(blur.into_iter().flatten())
+            // Two fades, the second over the icons' row only, so the ground
+            // closes in faster toward the edge than one linear band would.
+            .child(luma_ui::pane::edge_fade(
+                theme::HEADER_FADE,
+                theme::panel_opaque(),
+                true,
+            ))
+            .child(luma_ui::pane::edge_fade(
+                theme::HEADER_HEIGHT,
+                theme::panel_opaque(),
+                true,
+            ))
+            .child(
                 div()
+                    .relative()
+                    .w_full()
+                    .h(px(theme::HEADER_HEIGHT))
                     .flex()
-                    .flex_row()
                     .items_center()
-                    .gap(px(theme::SPACE_XS))
-                    .child(header_button(
-                        "chat-history",
-                        IconName::Undo,
-                        "Chat history",
-                        false,
-                        move |cx| {
-                            rewind.update(cx, |_, cx| cx.emit(ChatEvent::HistoryRequested));
-                        },
-                    ))
-                    .child(header_button(
-                        "chat-new",
-                        IconName::Plus,
-                        "New chat",
-                        !self.is_open(),
-                        move |cx| {
-                            fresh.update(cx, |this, cx| this.new_thread(cx));
-                        },
-                    ))
-            })
+                    .justify_end()
+                    .px(px(theme::SPACE_LG))
+                    // The two ways out of the conversation you are in: back
+                    // to an older one, or on to a new one.
+                    .child({
+                        let rewind = chat.clone();
+                        let fresh = chat.clone();
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(theme::SPACE_XS))
+                            .child(header_button(
+                                "chat-history",
+                                IconName::Undo,
+                                "Chat history",
+                                false,
+                                move |cx| {
+                                    rewind.update(cx, |_, cx| cx.emit(ChatEvent::HistoryRequested));
+                                },
+                            ))
+                            .child(header_button(
+                                "chat-new",
+                                IconName::Plus,
+                                "New chat",
+                                !self.is_open(),
+                                move |cx| {
+                                    fresh.update(cx, |this, cx| this.new_thread(cx));
+                                },
+                            ))
+                    }),
+            )
+            .agent_node(NodeRole::Card, "Chat header")
     }
 }
 
@@ -2231,7 +2298,7 @@ fn header_button(
 }
 
 /// The band at the bottom of the transcript, dissolved into the panel's own
-/// ground. The top edge has no band: text overflows it sharply.
+/// ground. The top edge is the header's ([`AgentChat::header`]).
 ///
 /// Painted overlays rather than gpui's `EdgeFade`, which this pin does not
 /// have: a gradient to the panel's own ground *is* the fade. Without it a

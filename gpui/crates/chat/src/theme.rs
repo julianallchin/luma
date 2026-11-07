@@ -35,6 +35,15 @@ pub const SPACE_LG: f32 = 16.0;
 
 /// The panel's own header.
 pub const HEADER_HEIGHT: f32 = luma_ui::dialog::TITLEBAR_CLEARANCE;
+/// How far the header's blur reaches down the transcript: the header and a
+/// lead-in under it, so the dissolve has begun before text reaches the icons.
+/// The transcript's first row rests below it.
+pub const HEADER_FADE: f32 = HEADER_HEIGHT + SPACE_LG;
+/// The header's progressive blur, one radius per step, weakest first. Step
+/// `i` of `n` reaches `(n - i) / n` of [`HEADER_FADE`] down from the top
+/// edge, so the zone's bottom is blurred by the first step alone and the top
+/// edge by all of them, compounded.
+pub const HEADER_BLUR_STEPS: [f32; 6] = [0.5, 1.0, 1.75, 3.0, 4.5, 7.0];
 /// Reserved for the working indicator, always — reserving it is what keeps the
 /// composer from shifting the moment a turn starts.
 pub const STATUS_STRIP_HEIGHT: f32 = 24.0;
