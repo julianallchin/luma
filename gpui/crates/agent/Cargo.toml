@@ -6,8 +6,9 @@ publish = false
 
 [features]
 default = ["app"]
-# The Luma view tree the harness drives. Off, the crate is a harness with no
-# app in it — which is what `cargo test` wants.
+# The Luma view tree the harness drives, on by default because every suite but
+# `unit` drives it. Off (`--no-default-features`), the crate is a harness with
+# no app in it, and only `unit` builds.
 #
 # It also carries the seeded library (`fixture`), which the script runner and
 # the cargo suites share — so the seeding crates ride on it too.
