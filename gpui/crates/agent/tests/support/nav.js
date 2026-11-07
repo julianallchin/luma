@@ -266,17 +266,22 @@ globalThis.nav = {
 		nav.switchVenue(venue);
 	},
 
-	// The clip card labelled `clip` on the timeline, selected, and its graph
-	// opened where the timeline was.
+	// The clip card labelled `clip` on the timeline, double-clicked the way a
+	// person opens it: its graph where the timeline was.
 	clipGraph(clip) {
-		nav.step(`the clip ${clip}`, "card", clip);
-		nav.graphPage();
+		nav.step(`the clip ${clip}`, "card", clip, { count: 2 });
+		nav.onGraphPage();
 	},
 
 	// The selected clip's graph, where the timeline was: what a double-click
-	// on the clip opens.
+	// on the clip opens, for a test whose selection is already made.
 	graphPage() {
 		app.action("luma::OpenClipGraph");
+		nav.onGraphPage();
+	},
+
+	// Wait for the graph page to be up and drawn.
+	onGraphPage() {
 		until("the graph page", (s) =>
 			s.find({ role: "button", label: "Back to timeline" })
 				&& s.find({ role: "card", label: "Pattern graph" }));
