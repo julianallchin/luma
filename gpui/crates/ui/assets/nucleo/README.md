@@ -22,6 +22,8 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Copy | copy | 5838 |
 | Cpu | microchip | 6661 |
 | Expand | expand | 950 |
+| Gear | gear-2 | 1574 |
+| Info | circle-info | 1570 |
 | Minimize | reduce | 1006 |
 | Minus | minus | 5945 |
 | Network | nodes | 4714 |
@@ -35,6 +37,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Search | magnifier | 2724 |
 | ThumbsDown | thumbs-down | 1807 |
 | ThumbsUp | thumbs-up | 1808 |
+| User | user | 1459 |
 | Undo | undo | 1103 |
 | RotateLeft | arrow-rotate-anticlockwise | 767 |
 | RotateRight | arrow-rotate-clockwise | 771 |
