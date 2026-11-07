@@ -74,7 +74,8 @@ pub(crate) const CASCADE_COUNT: usize = 3;
 pub(crate) const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
 pub(crate) const CASCADE_BLEND: f32 = 0.1;
 
-const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The scene-linear target the scene and composite passes write.
+pub(crate) const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Timestamp query layout:

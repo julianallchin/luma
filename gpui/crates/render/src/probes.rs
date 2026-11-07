@@ -57,7 +57,6 @@ const FACES_PER_FRAME: u32 = 6;
 const ALBEDO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const RADIANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Probes a layer holds, and layers, by quality.
 fn grid_budget(quality: Quality) -> (u32, u32) {
@@ -584,7 +583,7 @@ impl Pipelines {
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
+                format: crate::gpu::DEPTH_FORMAT,
                 depth_write_enabled: Some(true),
                 depth_compare: Some(wgpu::CompareFunction::Greater),
                 stencil: wgpu::StencilState::default(),
@@ -629,7 +628,7 @@ impl Pipelines {
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
+                format: crate::gpu::DEPTH_FORMAT,
                 depth_write_enabled: Some(true),
                 depth_compare: Some(wgpu::CompareFunction::Always),
                 stencil: wgpu::StencilState::default(),
@@ -979,7 +978,7 @@ impl Probes {
         Self {
             albedo: view(&albedo_texture),
             normal: view(&normal_texture),
-            depth: view(&atlas("probe-depth", DEPTH_FORMAT)),
+            depth: view(&atlas("probe-depth", crate::gpu::DEPTH_FORMAT)),
             albedo_texture,
             normal_texture,
             radiance,

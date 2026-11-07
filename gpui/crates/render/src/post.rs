@@ -39,10 +39,9 @@ use glam::{Mat4, Vec3};
 
 use crate::frame::FixtureCone;
 use crate::psf;
+use crate::gpu::SCENE_FORMAT;
 use crate::scene_desc::{GlareStyle, Look, Quality};
 
-/// The scene-linear target the composite pass writes for this chain.
-pub(crate) const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const GLARE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The glare's FFT grid, texels across and down, by quality. The frame is
 /// averaged into at most half of each side, so the kernel can reach across

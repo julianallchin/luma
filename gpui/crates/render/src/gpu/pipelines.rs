@@ -332,7 +332,7 @@ impl Gpu {
             &queue,
             &format!("{bindings}{}", include_str!("../shaders/sun_shafts.wgsl")),
         );
-        let laser = crate::laser::Pipelines::new(&device, crate::post::SCENE_FORMAT);
+        let laser = crate::laser::Pipelines::new(&device, SCENE_FORMAT);
         let haze_glow = crate::haze_glow::Pipelines::new(&device);
         let fixture_light = include_str!("../shaders/fixture_light.wgsl");
         let visibility = include_str!("../shaders/visibility.wgsl");
@@ -992,7 +992,7 @@ impl Gpu {
                 fragment: Some(wgpu::FragmentState {
                     module: &composite_module,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(crate::post::SCENE_FORMAT.into())],
+                    targets: &[Some(SCENE_FORMAT.into())],
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[("LINEAR_OUTPUT", 1.0)],
                         ..Default::default()
