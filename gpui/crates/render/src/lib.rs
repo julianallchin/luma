@@ -59,6 +59,7 @@ mod share;
 mod sky_visibility;
 mod sun_shafts;
 pub mod viewport;
+mod visibility;
 pub mod warmup;
 pub mod waveform;
 
@@ -87,5 +88,3 @@ pub use warmup::{warm, warming, Warming};
 ///
 /// The live path has its own, much smaller, budget: [`LIVE_SUBFRAMES`].
 pub const DEFAULT_SUBFRAMES: u32 = 16;
-
-mod visibility;
