@@ -11,7 +11,7 @@ use luma_ui::{glass, ladder, radius};
 
 use super::surface::Edit;
 use super::{group_label, Perform};
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::Luma;
 
 const WIDTH: f32 = 380.;

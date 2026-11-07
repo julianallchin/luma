@@ -11,8 +11,8 @@ use gpui::{div, AnyElement, Context, Entity, Window};
 use luma_lib::models::perform::PerformPattern;
 
 use super::Perform;
-use crate::tabs::Target;
 use crate::track_editor::sheet::{self, Host, HostMut};
+use crate::workspace::Target;
 use crate::Luma;
 
 /// The graph editor of a Perform tab.
@@ -110,8 +110,8 @@ pub(crate) fn page(state: &Perform, target: &Target, app: &Entity<Luma>) -> Opti
     let target = target.clone();
     // Back to the view it was opened from.
     let (label, agent) = match state.surface.view {
-        super::surface::View::Perform => ("Perform", "Back to Perform"),
-        super::surface::View::Setup => ("Setup", "Back to Setup"),
+        super::surface::View::Perform => ("Live", "Back to Live"),
+        super::surface::View::Setup => ("Layout", "Back to layout"),
     };
     let back = sheet::back("pattern-sheet-back", label, agent, app, move |this, cx| {
         this.close_pattern_sheet(&target, cx);

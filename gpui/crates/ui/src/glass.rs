@@ -277,6 +277,43 @@ fn tinted(tone: gpui::Rgba, alpha: f32) -> Hsla {
     Hsla::from(tone).opacity(alpha)
 }
 
+// ---------------------------------------------------------------------------
+// Flush panels (zeron's tokens, `apps/zgx/ui/ds/themes/zeron-dark.json`)
+// ---------------------------------------------------------------------------
+//
+// The shell's panels touch: a hairline between each, no gaps, no panel
+// corners. Surfaces are white washes over whatever is under them, and muted
+// text is the primary text at less opacity rather than a grey. Corners belong
+// only to controls, clips and pads, and floating things — see
+// `luma_ui::radius`.
+
+/// Alpha of the hairline *between* two panels — zeron's `border`, `#ffffff12`.
+pub const PANEL_RULE_ALPHA: f32 = 0x12 as f32 / 255.0;
+/// Alpha of a hairline *inside* one panel — `border.subtle`, `#ffffff0a`.
+pub const INNER_RULE_ALPHA: f32 = 0x0a as f32 / 255.0;
+/// The hover wash — `hover`, `#ffffff0d`.
+pub const HOVER_ALPHA: f32 = 0x0d as f32 / 255.0;
+/// The pressed wash — `pressed`, `#ffffff17`.
+pub const PRESSED_ALPHA: f32 = 0x17 as f32 / 255.0;
+/// The selected wash — `selection.item`, `#ffffff1a`.
+pub const SELECTED_ALPHA: f32 = 0x1a as f32 / 255.0;
+/// Muted text: the primary at 60% (secondary) and 42% (tertiary).
+pub const TEXT_SECONDARY: f32 = 0.60;
+pub const TEXT_TERTIARY: f32 = 0.42;
+
+/// The hairline between two panels: the agent panel and the content, the
+/// title bar and the stage, the stage and the mode under it.
+#[must_use]
+pub fn panel_seam() -> Hsla {
+    hairline(PANEL_RULE_ALPHA)
+}
+
+/// A hairline inside one panel: between rows, under a panel's own head.
+#[must_use]
+pub fn inner_rule() -> Hsla {
+    hairline(INNER_RULE_ALPHA)
+}
+
 /// The chrome band's three wash strengths, named so the tab chips, the corner
 /// toggles and the close hotspot cannot drift apart one literal at a time.
 /// Hover on a control at rest — the quietest lift there is.

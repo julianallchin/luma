@@ -1,19 +1,7 @@
-//! The screen's entry points: the tab body, Direct's clip graph page, the
-//! inspector, and the fullscreen transport.
+//! The screen's entry points: Arrange's body, the clip graph page, and the
+//! fullscreen transport.
 
 use super::*;
-
-/// The inspector occupies the editing area, even with the rig hidden: the
-/// selected clip's controls, or the preset browser — see [`sheet::panel`].
-pub(crate) fn inspector(
-    state: &mut Editor,
-    app: &Entity<Luma>,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) -> AnyElement {
-    sheet::sync(sheet::HostMut::Track(state), window, cx);
-    sheet::panel(sheet::Host::Track(state), app, None)
-}
 
 /// Direct's graph page: the selected clip's inspector where the timeline was,
 /// with a way back to it at the head of the inspector's strip.
@@ -161,13 +149,8 @@ pub(crate) fn fullscreen_transport(
 }
 
 impl Luma {
-    /// Put the selected clip's graph where the timeline is. Direct only:
-    /// Program's inspector already shows it beside the timeline, and a flag
-    /// set there would spring the page open on the next switch to Direct.
+    /// Put the selected clip's graph where the timeline is.
     pub(crate) fn open_clip_graph(&mut self, cx: &mut Context<Self>) {
-        if self.view_mode != ViewMode::Direct {
-            return;
-        }
         self.with_track_editor(cx, |editor| {
             editor.graph_open = !editor.selected.is_empty();
         });
@@ -176,11 +159,10 @@ impl Luma {
     /// Back from the graph page to the timeline, keeping the selection.
     /// Reports whether there was a page to leave, for the Escape ladder.
     pub(crate) fn close_clip_graph(&mut self, cx: &mut Context<Self>) -> bool {
-        let direct = self.view_mode == ViewMode::Direct;
         let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
             return false;
         };
-        if !direct || !editor.clip_graph_shown() {
+        if !editor.clip_graph_shown() {
             return false;
         }
         editor.graph_open = false;

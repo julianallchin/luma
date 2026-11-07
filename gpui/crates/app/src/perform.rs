@@ -41,19 +41,19 @@ use std::time::{Duration, Instant};
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Focusable as _, Hsla, SharedString, Window};
 use luma_lib::controls::{perform as names, Control, UNTAPPED_BPM};
-use luma_patterns::press::Button;
 use luma_lib::dispatch::handlers::inputs::{Address, Binding, InputState, Mode};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::perform::{
     Cell, CellContent, PerformClock, PerformLayout, PerformPattern, PerformSource, PerformState,
 };
 use luma_patterns::clip_graph::LiveInputKind;
+use luma_patterns::press::Button;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::{float, glass, ladder};
 
 use crate::shell::Body;
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::Luma;
 use surface::{Edit, Rect, View};
 
@@ -68,7 +68,7 @@ const HELD_FOR: Duration = Duration::from_millis(400);
 
 pub(crate) struct Perform {
     pub(crate) venue_id: String,
-    pub(crate) chat: crate::agent::TabChat,
+    pub(crate) chat: crate::agent::BodyChat,
     follow: Option<PerformState>,
     inputs: Option<InputState>,
     /// The venue's Perform set, the top first. `None` until read.
@@ -366,9 +366,9 @@ fn group_label(expression: &str) -> String {
 }
 
 impl Luma {
-    /// Open the selected venue's Perform tab, or bring it to the front.
-    pub(crate) fn open_perform_tab(&mut self, thread: Option<&str>, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
+    /// Open the venue's Perform set in Live, or bring Live on screen.
+    pub(crate) fn open_live(&mut self, thread: Option<&str>, cx: &mut Context<Self>) {
+        let Some(browser) = &self.songs else {
             return;
         };
         let venue_id = browser.venue_id().to_string();
@@ -376,11 +376,11 @@ impl Luma {
             venue: venue_id.clone(),
         };
         if self.workspace.body(&target).is_some() {
-            self.workspace.select(&target);
+            self.workspace.set_mode(target.mode());
             cx.notify();
             return;
         }
-        let chat = self.tab_chat(&target, thread, cx);
+        let chat = self.body_chat(&target, thread, cx);
         let state = Perform {
             venue_id: venue_id.clone(),
             chat,
@@ -407,7 +407,7 @@ impl Luma {
             error: None,
             polls: 0,
         };
-        self.open_tab(target.clone(), move || Body::Perform(Box::new(state)), cx);
+        self.open_body(target.clone(), move || Body::Perform(Box::new(state)), cx);
         self.poll_perform(target.clone(), cx);
         self.reload_perform_set(&target, cx);
         let opened = self.library.input_open(&venue_id);
@@ -428,7 +428,7 @@ impl Luma {
     }
 
     fn perform_mut(&mut self, target: &Target) -> Option<&mut Perform> {
-        match self.parked.body_mut(&mut self.workspace, target) {
+        match self.venues.body_mut(&mut self.workspace, target) {
             Some(Body::Perform(state)) => Some(state),
             _ => None,
         }
@@ -1370,7 +1370,10 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// The title, what is followed, and the Perform | Setup switch.
+/// What is followed, and the way into the layout's editing and back out.
+///
+/// The grid is played by default; "Edit layout" turns the same grid into the
+/// one to arrange — the Setup view — and "Done" turns it back.
 fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
     let follow = state.follow.as_ref();
     let setup = state.surface.view == View::Setup;
@@ -1379,38 +1382,29 @@ fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElem
         None if setup => ("Changes save as you go".to_owned(), false),
         None => (following(state), false),
     };
-    let views = [(View::Perform, "Perform"), (View::Setup, "Setup")]
-        .into_iter()
-        .fold(float::pill_segmented(), |track, (view, label)| {
-            let chosen = state.surface.view == view;
-            let (app, target) = (app.clone(), target.clone());
-            let key = format!("perform-view-{label}");
-            track.child(
-                float::pill_segment(label, chosen, key.clone())
-                    .id(SharedString::from(key))
-                    .on_click(move |_, _, cx| {
-                        app.update(cx, |this, cx| {
-                            this.edit_surface(&target, Edit::View(view), cx)
-                        });
-                    })
-                    .agent_node(Role::Toggle, label)
-                    .agent_focused(chosen),
-            )
-        });
+    let (label, next) = if setup {
+        ("Done", View::Perform)
+    } else {
+        ("Edit layout", View::Setup)
+    };
+    let (pressed, edited) = (app.clone(), target.clone());
+    let toggle = luma_ui::button(label, luma_ui::Enabled::Yes)
+        .id("perform-edit-layout")
+        .on_click(move |_, _, cx| {
+            pressed.update(cx, |this, cx| {
+                this.edit_surface(&edited, Edit::View(next), cx)
+            });
+        })
+        .agent_node(Role::Button, label);
     div()
         .flex_shrink_0()
-        .h(px(52.))
-        .px(px(18.))
+        .h(px(44.))
+        .px(px(16.))
         .flex()
         .items_center()
         .gap(px(12.))
-        .child(
-            div()
-                .text_size(px(15.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(ladder::foreground())
-                .child("Perform"),
-        )
+        .border_b_1()
+        .border_color(glass::inner_rule())
         .child(
             div()
                 .min_w_0()
@@ -1425,7 +1419,27 @@ fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElem
                 .agent_node(Role::Text, status),
         )
         .child(div().flex_1())
-        .child(views)
+        .child(toggle)
+}
+
+impl Luma {
+    /// What Live is following, in a few words — the title bar's middle and
+    /// the status bar's line while Live is on screen.
+    pub(crate) fn live_line(&self) -> Option<String> {
+        let slot = self.workspace.of_mode(crate::workspace::Mode::Live)?;
+        let Body::Perform(state) = &slot.body else {
+            return None;
+        };
+        let line = match state
+            .follow
+            .as_ref()
+            .and_then(|follow| follow.problem.clone())
+        {
+            Some(problem) => problem,
+            None => following(state),
+        };
+        (!line.is_empty()).then_some(line)
+    }
 }
 
 /// What is followed, in a few words: "Pro DJ Link · 2 decks".

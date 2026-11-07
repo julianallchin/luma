@@ -415,7 +415,7 @@ impl Luma {
             let rows = rows.await;
             this.update(cx, |this, cx| {
                 let generation = this
-                    .sidebar
+                    .songs
                     .as_ref()
                     .filter(|sidebar| sidebar.venue_id() == venue_id)
                     .map(crate::tracks::Tracks::load_generation);

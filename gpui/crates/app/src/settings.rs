@@ -16,7 +16,7 @@ use luma_ui::text_input::{self, TextInput};
 use luma_ui::Enabled;
 
 use luma_lib::settings::{
-    agent_models, key, ApiKeyStatus, AppSettings, ViewMode, AGENT_PROVIDERS, MAX_DIMMER_RANGE,
+    agent_models, key, ApiKeyStatus, AppSettings, AGENT_PROVIDERS, MAX_DIMMER_RANGE,
 };
 
 use crate::Luma;
@@ -388,59 +388,15 @@ impl Luma {
             self.hdr_output_allowed = values.hdr_output;
             cx.notify();
         }
-        if self.view_mode != values.view_mode {
-            self.view_mode = values.view_mode;
+        if self.dmx_output != values.dmx_output_enabled {
+            self.dmx_output = values.dmx_output_enabled;
             cx.notify();
         }
         self.set_auto_update(values.auto_update);
     }
 
-    /// Lay the window out as `mode` now, and remember it for the next launch.
-    ///
-    /// Applied before the write lands, like the stage's view toggles: the
-    /// switch is the head band's, not the settings screen's, so there is no
-    /// screen to re-read into, and a layout that waited on the database would
-    /// lag the click. A failed write is only reported to the log — the window
-    /// is already in the mode the click asked for, and the next launch opens
-    /// in the last one that was stored.
-    pub(crate) fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
-        if self.view_mode == mode {
-            return;
-        }
-        self.view_mode = mode;
-        cx.notify();
-        let pending = self.library.set_setting(key::VIEW_MODE, mode.key());
-        cx.spawn(async move |_, _| {
-            if let Err(error) = pending.await {
-                eprintln!("[luma] the view mode was not saved: {error}");
-            }
-        })
-        .detach();
-    }
-
-    /// Open or dismiss the account menu that hangs off the sidebar's foot.
-    ///
-    /// A [`luma_ui::dialog::Popup`] like every other menu in the app, so it
-    /// leaves with the same motion — see [`crate::tracks::account_menu`].
-    pub(crate) fn toggle_account_menu(&mut self, cx: &mut Context<Self>) {
-        if self.account_menu.is_open() {
-            self.account_menu.begin_close(cx);
-        } else {
-            self.account_menu.open(());
-        }
-        cx.notify();
-    }
-
-    /// Begin the account menu's exit. Both of its rows do this first: the
-    /// gesture is over the moment one is pressed, and the menu plays out from
-    /// under whatever it opened.
-    pub(crate) fn close_account_menu(&mut self, cx: &mut Context<Self>) {
-        self.account_menu.begin_close(cx);
-        cx.notify();
-    }
-
     /// The one gesture that changes who this library belongs to, in whichever
-    /// direction it currently points. The account menu's second row, and the
+    /// direction it currently points. The venue menu's account row, and the
     /// settings screen's account button — one path, so the in-flight guard
     /// cannot be walked around by pressing the other door.
     pub(crate) fn switch_identity(&mut self, cx: &mut Context<Self>) {
@@ -463,6 +419,10 @@ impl Luma {
 }
 
 // -- rendering ----------------------------------------------------------------
+
+/// What the account row says when nobody is signed in — the guest namespace,
+/// which is a working library and not a failure.
+pub(crate) const GUEST_ACCOUNT: &str = "Working locally";
 
 const PAD: f32 = 16.;
 /// Gap between one labelled control and the next.
@@ -754,7 +714,7 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
     // The address where the session carries one, the principal where it does
     // not — one spelling of "who this is", shared with the sidebar's foot.
     let identity = account.as_ref().map_or_else(
-        || crate::tracks::GUEST_ACCOUNT.to_string(),
+        || GUEST_ACCOUNT.to_string(),
         |account| account.label().to_string(),
     );
     let label = if shell.account_action.signing_out {

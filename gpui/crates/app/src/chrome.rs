@@ -3,18 +3,16 @@
 //! The window draws no titlebar of its own on any platform, so nothing draws
 //! chrome but this module — with one exception, the traffic lights on macOS,
 //! which are AppKit's (see below). Everything painted here is **glass tier**
-//! (spec §9): the sidebar toggle, back/forward, the shell tab strip, the
-//! settings gear and, off macOS, our own traffic lights are painted from
-//! `luma_ui::glass` — never from the ladder, and never as `BUTTON_CLASS`
-//! slabs. Ladder language starts inside the regions' bodies.
+//! (`docs/specs/comet-shell.md` §6): the agent toggle, the venue menu's
+//! trigger, the mode switch and, off macOS, our own traffic lights.
 //!
-//! # There is no titlebar
+//! # Two head bands, one line
 //!
-//! The window splits vertically first: each region is a full-height column
-//! carrying its own [`band`] across its own width. A full-width bar would cut
-//! every seam off at `y = HEIGHT`, and a seam that stops is not a seam — it is
-//! a border on a box. The bands align because they share one height, not
-//! because they are one element.
+//! The window splits vertically first: the agent panel runs the window's full
+//! height on the left, and the content column beside it carries the title bar
+//! across its own width. The agent panel's head is the chat's own header; the
+//! title bar is [`band`]. They align because they share one height,
+//! [`HEIGHT`], which is also the chat header's.
 //!
 //! # The traffic lights are the topmost layer
 //!
@@ -24,79 +22,55 @@
 //!
 //! - **macOS: AppKit.** The window asks for a transparent titlebar (see
 //!   `main`), and the close / minimise / zoom buttons that come with it are the
-//!   real ones — hover glyphs, the zoom button's tiling menu, ⌥-click,
-//!   accessibility. gpui moves them to [`traffic_light_position`] and moves
-//!   them back after every resize, re-layout and fullscreen exit. They are
-//!   views in the titlebar, which sits over the content view, so nothing we
-//!   paint can cover them.
+//!   real ones. gpui moves them to [`traffic_light_position`] and moves them
+//!   back after every resize, re-layout and fullscreen exit. They are views in
+//!   the titlebar, which sits over the content view, so nothing we paint can
+//!   cover them.
 //! - **Everywhere else: us.** [`window_controls`] paints three dots at the
 //!   window's top-left corner, and the shell paints it last — above the
 //!   regions *and* above any overlay.
 //!
 //! On both, [`window_controls`] is the corner's one statement in the tree: an
-//! inert slot the lights' width, empty on macOS because AppKit fills it. A
-//! capture has no AppKit views in it, so this slot is the only evidence a
-//! headless test gets that the corner was left for them.
-//!
-//! Room for them is reserved by [`band`], not by each surface: **anything that
-//! starts at `y = 0` wears a band**, and a band that reaches the window's
-//! corner leaves that corner free. A region does, and so does an overlay plane
-//! — one mechanism rather than an opt-in every future surface has to remember.
-//! The slot itself is inert apart from the painted dots, so forgetting is a
-//! visible overlap and never a corner that silently swallows presses.
+//! inert slot the lights' width, empty on macOS because AppKit fills it.
 //!
 //! **In a macOS fullscreen space the corner is given back.** AppKit hides the
-//! buttons until the menu bar drops over the top edge, taking them with it, so
-//! a reserved corner would be an empty gap at rest. [`corner_lit`] says so,
-//! [`BandSpan::lights`] carries it, and the left anchor slides into the corner.
-//! Painted lights stay where they are in fullscreen — nothing else would
-//! close the window there.
+//! buttons until the menu bar drops over the top edge, so a reserved corner
+//! would be an empty gap at rest. [`corner_lit`] says so, [`BandSpan::lights`]
+//! carries it, and the left anchor slides into the corner.
 //!
 //! # The corner controls are anchors, not controls a region carries
 //!
-//! [`sidebar_toggle`] beside the lights and [`mode_switch`] at the trailing
-//! edge are painted in window space, and the window's two corners are the
-//! only place they appear. A control rendered *by* a region rides that
-//! region's pane, and a pane whose width is animating clips its own band, so
-//! the control would vanish part-way through a close — or, for the mode
-//! switch, jump between regions as the mode it sets moves the chat. A fixed
-//! point cannot live on a moving thing.
-//!
-//! So the rule the whole band reads:
+//! [`agent_toggle`] beside the lights and [`mode_switch`] at the trailing edge
+//! are painted in window space, and the window's two corners are the only
+//! place they appear. A control rendered *by* the agent panel rides its pane,
+//! and a pane whose width is animating clips its own content, so the toggle
+//! would vanish part-way through a hide. A fixed point cannot live on a moving
+//! thing. So with the agent shown the lights and its toggle sit over the
+//! panel's head; with it hidden the title bar starts at the window's edge and
+//! they sit at its start, ahead of the venue menu:
 //!
 //! ```text
-//! [lights][◧] left cluster ……………… right cluster [Direct|Program]
-//!  \___ fixed ___/                                \____ fixed ____/
+//! [lights][◧] venue ▾ ………… subject ………… [Rig · Arrange · Live]
+//!  \___ fixed ___/                         \______ fixed ______/
 //! ```
 //!
 //! The anchors hold still and the *clusters* move: [`band_insets`] is the one
 //! statement of the room each edge owes them, read by [`band`] when it pads
-//! itself and by [`band_room`] when it offers a band's flexible child what is
-//! left. A panel opening pushes its neighbour's cluster inward because the
-//! neighbour's band starts where the panel's edge is this frame — the live
-//! width *is* the curve, so nothing here re-states one.
-
-use std::time::Instant;
+//! itself. A panel opening pushes the title bar's cluster inward because the
+//! bar starts where the panel's edge is this frame.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::Icon;
-use luma_lib::settings::ViewMode;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
-use luma_ui::{glass, motion, radius};
 
-use crate::tab_chrome::{PointerRegion, TabDescriptor, CHIP_GAP};
-use crate::tabs::Target;
+use crate::workspace::{Mode, Target};
 use crate::Luma;
 
-/// Height of a region's head band — comet's `TITLEBAR_HEIGHT`.
-pub const HEIGHT: f32 = 38.;
-/// A tab chip: comet's 24px rounded-6 chip.
-const CHIP_HEIGHT: f32 = 24.;
-/// One icon-button box in the band — the gear, the sidebar toggle, the `+`. The
-/// shell budgets bands against it, so it is stated here once rather than
-/// restated as a second 24 beside the code that reads it.
+/// Height of the title bar, and of the agent panel's head (the chat's
+/// header) beside it.
+pub const HEIGHT: f32 = luma_chat::theme::HEADER_HEIGHT;
+/// One icon-button box in the band.
 pub(crate) const CONTROL: f32 = 24.;
 /// A band's inset from its region's edge, and the gap between its controls.
 const BAND_PAD: f32 = 12.;
@@ -116,28 +90,23 @@ const LIGHT: f32 = 12.;
 const LIGHT_GAP: f32 = 8.;
 
 /// Room the traffic lights claim at the window's top-left corner, inset
-/// included. Derived rather than measured so the two cannot drift: the shell
-/// pads the leftmost band by exactly what the lights occupy.
+/// included. Derived rather than measured so the two cannot drift.
 const LIGHTS_WIDTH: f32 = BAND_PAD + 3. * LIGHT + 2. * LIGHT_GAP;
 
 /// Where gpui places AppKit's close button: one [`BAND_PAD`] in, and centred
-/// in the band. gpui sizes the titlebar to the button plus this `y` above and
-/// below it, so a band-centred `y` makes the titlebar exactly [`HEIGHT`] —
-/// the buttons share a centre line with every control beside them.
+/// in the band, so the buttons share a centre line with every control beside
+/// them.
 pub fn traffic_light_position() -> Point<Pixels> {
     point(px(BAND_PAD), px((HEIGHT - LIGHT) / 2.))
 }
 
 /// Whether the window's top-left corner holds the traffic lights this frame.
-/// False only in a macOS fullscreen space, where AppKit hides them — see the
-/// module docs.
+/// False only in a macOS fullscreen space, where AppKit hides them.
 pub(crate) fn corner_lit(window: &Window) -> bool {
     !(cfg!(target_os = "macos") && window.is_fullscreen())
 }
 
-/// Where the sidebar toggle sits: one [`BAND_GAP`] past the lights, which is
-/// the spacing every other pair of controls in a band keeps — flush against
-/// [`LIGHTS_WIDTH`] the toggle's hover wash touches the green dot. With the
+/// Where the agent toggle sits: one [`BAND_GAP`] past the lights. With the
 /// corner given back it takes the band's own inset, like any first control.
 fn left_toggle_x(lights: bool) -> f32 {
     if lights {
@@ -146,20 +115,21 @@ fn left_toggle_x(lights: bool) -> f32 {
         BAND_PAD
     }
 }
+
 /// Where the window's left anchor block ends — the first pixel a band's own
 /// content may use.
 pub(crate) fn left_anchor_end(lights: bool) -> f32 {
     left_toggle_x(lights) + CONTROL + BAND_GAP
 }
+
 /// Where the window's right anchor block begins, measured back from the
-/// trailing edge. The mode switch itself is inset by [`BAND_PAD`], so this is
-/// one gap further in.
+/// trailing edge.
 fn right_anchor_start(viewport: f32) -> f32 {
     viewport - BAND_PAD - MODE_SWITCH_WIDTH - BAND_GAP
 }
 
 /// Where a band sits in window space: what it needs to know to stay clear of
-/// the anchors. The shell already computes all of it for every region.
+/// the anchors.
 #[derive(Clone, Copy)]
 pub(crate) struct BandSpan {
     pub x: f32,
@@ -170,18 +140,14 @@ pub(crate) struct BandSpan {
 }
 
 /// What a band owes each of its edges — the single statement of the anchors'
-/// room. [`band`] pads itself with it and [`band_room`] subtracts it, so the
-/// space a child is *offered* can never disagree with the space the band
-/// actually leaves.
+/// room.
 ///
 /// Stated against the band's **position**, not against "am I the leftmost
-/// region?". The boolean is the same answer only at the two rest widths: a
-/// sidebar one pixel open stops being leftmost while its neighbour still
-/// starts under the lights, so a band that asked the boolean snapped its
-/// cluster 84px left on the first frame of the slide and then crept back out
-/// from beneath the toggle. Reserving by span makes the cluster hold at the
-/// anchor until the panel's edge passes it and ride the edge after that —
-/// which is the whole behaviour, in one `max`.
+/// region?": a panel one pixel open stops being leftmost while the bar beside
+/// it still starts under the lights, so a band that asked the boolean would
+/// snap its cluster on the first frame of the slide. Reserving by span makes
+/// the cluster hold at the anchor until the panel's edge passes it, and ride
+/// the edge after that.
 pub(crate) fn band_insets(span: BandSpan) -> (f32, f32) {
     (
         (left_anchor_end(span.lights) - span.x).max(BAND_PAD),
@@ -189,32 +155,16 @@ pub(crate) fn band_insets(span: BandSpan) -> (f32, f32) {
     )
 }
 
-/// Width a band's flexible child may claim after its fixed siblings and the
-/// gaps between them. Keeping this arithmetic beside the band constants
-/// prevents a narrow window from laying out fixed slots past the viewport.
-pub(crate) fn band_room(
-    span: BandSpan,
-    leading_width: f32,
-    trailing_width: f32,
-    sibling_gaps: usize,
-) -> f32 {
-    let (left, right) = band_insets(span);
-    (span.width - left - right - leading_width - trailing_width - sibling_gaps as f32 * BAND_GAP)
-        .max(0.0)
-}
-
-/// Window-space origin of the tab strip. It is the panel band's first child
-/// (see [`tab_strip`]), so this is where that band's leading inset ends.
-pub(crate) fn tab_strip_origin(span: BandSpan) -> f32 {
+/// Window-space origin of a band's first child: where its leading inset ends.
+#[cfg(test)]
+pub(crate) fn band_origin(span: BandSpan) -> f32 {
     span.x + band_insets(span).0
 }
 
-/// One region's head band: the empty drag strip its controls sit in.
+/// The title bar: the drag strip its controls sit in.
 ///
-/// No fill and no border — the band *is* the region's own ground, and a rule
-/// under it would be the one horizontal border this shell does not have. The
-/// span is where the region sits this frame, which is what yields the window's
-/// corners to [`window_controls`] and the two panel toggles.
+/// No fill of its own, and a hairline under it: the bar is the content
+/// column's head, and the stage below is a different panel.
 pub(crate) fn band(span: BandSpan) -> Div {
     let (left, right) = band_insets(span);
     div()
@@ -232,100 +182,80 @@ pub(crate) fn band(span: BandSpan) -> Div {
         })
 }
 
-/// The sidebar's show/hide toggle: the window's fixed left anchor, one gap
-/// right of the traffic lights. See the module docs for why it is painted here
-/// and not by whichever region happens to be leftmost.
-pub(crate) fn sidebar_toggle(
-    app: &Entity<Luma>,
-    open: bool,
-    enabled: bool,
-    lights: bool,
-) -> impl IntoElement {
-    panel_anchor(
-        anchor(px(left_toggle_x(lights)), None),
-        "sidebar-toggle",
-        IconName::PanelLeft,
-        open,
-        enabled,
-        app,
-        Luma::toggle_sidebar,
+/// A drag strip over the agent panel's head, left of the chat's own
+/// buttons: the panel has no band of its own, and the window still has to be
+/// movable by its top edge there.
+pub(crate) fn head_drag_strip(width: f32) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(width.max(0.0)))
+        .h(px(HEIGHT))
+        .on_mouse_down(MouseButton::Left, |_, window, _| {
+            window.start_window_move();
+        })
+}
+
+/// The agent panel's show/hide toggle: the window's fixed left anchor, one
+/// gap right of the traffic lights.
+pub(crate) fn agent_toggle(app: &Entity<Luma>, open: bool, lights: bool) -> impl IntoElement {
+    let toggled = app.clone();
+    anchor(px(left_toggle_x(lights)), None).child(
+        div()
+            .child(
+                luma_ui::icon_toggle(IconName::PanelLeft, open)
+                    .id("agent-toggle")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| {
+                        toggled.update(cx, |this, cx| {
+                            this.toggle_agent();
+                            cx.notify();
+                        });
+                    }),
+            )
+            .agent_node(Role::Button, if open { "Hide agent" } else { "Show agent" }),
     )
 }
 
 /// How wide [`mode_switch`] is. Fixed, because the right anchor is reserved
-/// by width before anything is laid out — see [`band_insets`] — and its two
-/// cells split it evenly, so the pill does not change shape with the mode.
-const MODE_SWITCH_WIDTH: f32 = 136.;
+/// by width before anything is laid out — see [`band_insets`] — and its cells
+/// split it evenly, so the control does not change shape with the mode.
+const MODE_SWITCH_WIDTH: f32 = 246.;
 
-/// The window's two layouts, Direct | Program: the fixed right anchor.
-///
-/// A segmented pill rather than a toggle because both answers are named
-/// places to be, not one thing on or off. Always live, with or without a
-/// tab: the mode is the window's, and a tab opened next opens into it.
-pub(crate) fn mode_switch(app: &Entity<Luma>, mode: ViewMode) -> impl IntoElement {
-    let track = luma_ui::float::pill_segmented()
+/// Rig · Arrange · Live: the fixed right anchor. Each cell carries its key
+/// and, while that mode's agent is working or finished unseen, its dot.
+pub(crate) fn mode_switch(app: &Luma, entity: &Entity<Luma>, cx: &App) -> impl IntoElement {
+    let on = app.workspace.mode();
+    let enabled = app.songs.is_some();
+    let track = luma_ui::float::segmented()
         .w(px(MODE_SWITCH_WIDTH))
-        .children(
-            [(ViewMode::Direct, "Direct"), (ViewMode::Program, "Program")].map(|(cell, label)| {
-                let app = app.clone();
-                luma_ui::float::pill_segment(label, cell == mode, label)
-                    .id(label)
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, _, cx| {
-                        app.update(cx, |this, cx| this.set_view_mode(cell, cx))
+        .children(Mode::ALL.into_iter().enumerate().map(|(index, mode)| {
+            let label = mode.label();
+            let status = app
+                .workspace
+                .of_mode(mode)
+                .and_then(|slot| app.body_status(&slot.target, cx));
+            let pressed = entity.clone();
+            luma_ui::float::segment(label, mode == on, label)
+                .id(label)
+                .gap(px(6.))
+                .child(luma_ui::float::key_cap().child(format!("{}", index + 1)))
+                .children(status.map(|status| crate::agent::status_dot(status, label)))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .when(enabled, |cell| {
+                    cell.on_click(move |_, _, cx| {
+                        pressed.update(cx, |this, cx| this.set_mode(mode, cx))
                     })
-                    .agent_node(Role::Toggle, label)
-            }),
-        );
-    anchor(px(0.0), Some(px(BAND_PAD))).child(track.agent_node(Role::Card, "View mode"))
-}
-
-/// The room [`history_pair`] takes at the head of the band, with the gap
-/// after it.
-pub(crate) const HISTORY_SLOT: f32 = 2. * CONTROL + 2. * BAND_GAP;
-
-/// The sidebar toggle in its fixed slot.
-///
-/// `enabled` is false when there is nothing to toggle — no venue. Dimmed and
-/// inert then, the way [`history_pair`] is: the chrome's anatomy holds still,
-/// and a control that cannot act says so rather than vanishing and moving
-/// everything beside it.
-fn panel_anchor(
-    slot: Div,
-    id: &'static str,
-    icon: IconName,
-    open: bool,
-    enabled: bool,
-    app: &Entity<Luma>,
-    toggle: fn(&mut Luma),
-) -> impl IntoElement {
-    let button = if enabled {
-        luma_ui::icon_toggle(icon, open)
-            .id(id)
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click({
-                let toggled = app.clone();
-                move |_, _, cx| {
-                    toggled.update(cx, |this, cx| {
-                        toggle(this);
-                        cx.notify();
-                    });
-                }
-            })
-            .into_any_element()
-    } else {
-        luma_ui::icon_button(icon, luma_ui::Enabled::No).into_any_element()
-    };
-    slot.child(
-        div()
-            .child(button)
-            .agent_node(Role::Button, id)
-            .agent_disabled(!enabled),
-    )
+                })
+                .agent_node(Role::Toggle, label)
+                .agent_disabled(!enabled)
+        }));
+    anchor(px(0.0), Some(px(BAND_PAD))).child(track.agent_node(Role::Card, "Modes"))
 }
 
 /// One window-space slot at the head band's height, pinned to an edge. `right`
-/// wins when given; the toggles are the only callers and each picks one side.
+/// wins when given.
 fn anchor(left: Pixels, right: Option<Pixels>) -> Div {
     div()
         .absolute()
@@ -339,47 +269,98 @@ fn anchor(left: Pixels, right: Option<Pixels>) -> Div {
         })
 }
 
-/// Back/forward: comet's chrome carries them always, dimmed when there is
-/// nowhere to go. This shell has no navigation history — nothing is destroyed,
-/// so there is nothing to go back to — and the pair is permanently at rest
-/// until a history exists to drive it.
-pub(crate) fn history_pair() -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(BAND_GAP))
-        // Published disabled rather than left out of the tree: this pair *is*
-        // the left cluster the fixed toggle pushes, so where it sits is the
-        // observable half of the anchor rule (`chrome_anchors`).
-        .child(
-            luma_ui::icon_button(IconName::ArrowLeft, luma_ui::Enabled::No)
-                .agent_node(Role::Button, "Back")
-                .agent_disabled(true),
+/// The middle of the title bar: what the mode is working on. In Arrange, the
+/// open song and score — the door to the song list. In Live, what is being
+/// followed. In Rig, nothing.
+pub(crate) fn subject(app: &Luma, entity: &Entity<Luma>) -> Option<AnyElement> {
+    match app.workspace.active() {
+        Some(Target::Score { .. }) | None if app.workspace.mode() == Mode::Arrange => {
+            Some(song_title(app, entity))
+        }
+        Some(Target::Perform { .. }) => {
+            let line = app.live_line()?;
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(12.))
+                    .text_color(luma_ui::glass::ink(0.6))
+                    .child(
+                        div()
+                            .size(px(6.))
+                            .rounded_full()
+                            .bg(luma_ui::ladder::status_ok()),
+                    )
+                    .child(line.clone())
+                    .agent_node(Role::Text, line)
+                    .into_any_element(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Arrange's song title: the open score's track and score, or the offer to
+/// pick one. A press opens or closes the song list.
+fn song_title(app: &Luma, entity: &Entity<Luma>) -> AnyElement {
+    let open = app.song_list_shown();
+    let (art, title, score) = match app.workspace.active_body() {
+        Some(crate::shell::Body::TrackEditor(editor)) => (
+            app.songs
+                .as_ref()
+                .and_then(|songs| songs.find(editor.track_id()))
+                .and_then(|track| track.album_art_path),
+            editor.track_name().to_string(),
+            editor.score_label(),
+        ),
+        _ => (None, "Songs".to_string(), String::new()),
+    };
+    let pressed = entity.clone();
+    let label = if score.is_empty() {
+        title.clone()
+    } else {
+        format!("{title} · {score}")
+    };
+    luma_ui::float::nav_row(luma_ui::float::RowState::of(open, false), "song-title")
+        .id("song-title")
+        .flex_none()
+        .gap(px(10.))
+        .px(px(10.))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_song_list(cx)))
+        .children(
+            art.is_some()
+                .then(|| crate::tracks::album_art(art.as_deref(), 20.)),
         )
         .child(
-            luma_ui::icon_button(IconName::ArrowRight, luma_ui::Enabled::No)
-                .agent_node(Role::Button, "Forward")
-                .agent_disabled(true),
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(luma_ui::glass::ink(0.95))
+                .child(title),
         )
+        .when(!score.is_empty(), |row| {
+            row.child(div().text_color(luma_ui::glass::ink(0.6)).child(score))
+        })
+        .child(
+            gpui_component::Icon::new(if open {
+                IconName::ChevronUp
+            } else {
+                IconName::ChevronDown
+            })
+            .size(px(11.))
+            .text_color(luma_ui::glass::ink(0.42)),
+        )
+        .agent_node(Role::Button, label)
+        .into_any_element()
 }
 
 /// The window's traffic-light corner: AppKit's slot on macOS, our three dots
 /// everywhere else. `None` while the corner is given back ([`corner_lit`]).
 ///
-/// The painted dots are the window's close / minimise / zoom off macOS. Hue is
-/// meaning here — the one place the shell keeps color. On macOS the slot is
-/// empty: AppKit's buttons sit over it, and it is here so the tree still says
-/// where they are.
-///
-/// Absolutely placed at the window's corner and painted last, for the reason
-/// in the module docs.
-///
-/// **Nothing here is interactive but the painted dots.** The slot carries no
-/// handler of its own, so a press anywhere else in the corner reaches whatever
-/// this is painted over — which is what keeps a surface that forgot to reserve
-/// the corner a *visible* overlap rather than a silent dead zone that eats its
-/// buttons. Dragging the corner still moves the window, because the [`band`]
-/// underneath is the drag region and the press now gets there.
+/// **Nothing here is interactive but the painted dots.** A press anywhere
+/// else in the corner reaches whatever this is painted over, and dragging the
+/// corner still moves the window.
 pub(crate) fn window_controls(window: &Window) -> Option<AnyElement> {
     if !corner_lit(window) {
         return None;
@@ -423,328 +404,4 @@ fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoEle
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, _| action(window))
         .agent_node(Role::Button, id)
-}
-
-/// The shell tab strip: one rounded chip per open tab, and the `+`.
-///
-/// # The strip spans the chat and the editor
-///
-/// A tab owns both its chat and its editor, so the strip rides the band over
-/// both (`docs/specs/venue-tabs.md`, Layout). The `+` is part of the
-/// **strip** rather than of the band: it extends a row of tabs, so it is
-/// wherever that row is.
-///
-/// The `+` is there with no tabs too: it is the one way to open a tab from
-/// the strip (`docs/specs/venue-tabs.md` rule 9), and the empty panel only
-/// points at it. It needs a venue, whose songs it lists.
-pub(crate) fn tab_strip(
-    app: &mut Luma,
-    entity: &Entity<Luma>,
-    available_width: f32,
-    window_x: f32,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) -> impl IntoElement {
-    app.tab_chrome
-        .set_strip_origin(window_x, (HEIGHT - CHIP_HEIGHT) / 2.0);
-    let active = app.workspace.active().cloned();
-    let descriptors = app
-        .workspace
-        .iter()
-        .map(|tab| TabDescriptor {
-            target: tab.target.clone(),
-            title: tab.body.title().to_string(),
-        })
-        .collect::<Vec<_>>();
-    let show_plus = app.sidebar.is_some() && available_width >= CONTROL;
-    let controls_width = if show_plus { CONTROL } else { 0.0 };
-    let now = Instant::now();
-    let frame = app.tab_chrome.frame(
-        &descriptors,
-        available_width,
-        controls_width,
-        motion::reduced_motion(cx),
-        now,
-    );
-    if frame.animating {
-        window.request_animation_frame();
-    }
-
-    let strip = div()
-        .w(px(available_width.max(0.0)))
-        .h(px(CHIP_HEIGHT))
-        .flex_none()
-        .relative();
-    let mut rail = div()
-        .size_full()
-        .flex()
-        .items_center()
-        .relative()
-        // The combo box is a sibling outside this mask. Chips and fixed
-        // controls are clipped to the exact room the band assigned them, so a
-        // 0px slot cannot leak its icon/padding over history or settings.
-        .overflow_hidden();
-    for (index, tab) in frame.live.iter().enumerate() {
-        let region = PointerRegion {
-            x: index as f32 * (tab.width + frame.gap) + 8.0,
-            y: (CHIP_HEIGHT - 14.0) / 2.0,
-            width: 14.0,
-            height: 14.0,
-        };
-        rail = rail.child(
-            div()
-                .w(px(tab.width))
-                .h(px(CHIP_HEIGHT))
-                .mr(px(frame.gap))
-                .overflow_hidden()
-                .relative()
-                .left(px(tab.x_offset))
-                .child(chip(
-                    &tab.target,
-                    tab.title.clone().into(),
-                    active.as_ref() == Some(&tab.target),
-                    app.tab_status(&tab.target, cx),
-                    region,
-                    entity,
-                )),
-        );
-    }
-    let mut controls = div()
-        .h(px(CHIP_HEIGHT))
-        .flex()
-        .items_center()
-        .gap(px(CHIP_GAP))
-        .relative()
-        .left(px(frame.controls_x_offset));
-    if show_plus {
-        controls = controls.child(new_tab_control(entity));
-    }
-    rail = rail.child(controls);
-
-    let mut strip = strip.child(rail);
-    // The combo box hangs off the strip through the house floating layer,
-    // above everything painted in normal order — the window controls
-    // included. An overlay up means the combo box yields.
-    if show_plus && app.overlay.get().is_none() {
-        let at = point(px(window_x + frame.controls_x), px(HEIGHT - 3.0));
-        strip = strip.children(app.new_tab_popover(at, window, cx));
-    }
-    strip.agent_node(Role::Card, "Tab strip")
-}
-
-/// Window-space close transition layer. Exit paint and the stable successor
-/// hotspot live here rather than in the strip's own rail, so the panel sliding
-/// or being dragged under them cannot rebase or clip them.
-pub(crate) fn tab_transition_layer(
-    app: &mut Luma,
-    entity: &Entity<Luma>,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) -> AnyElement {
-    let now = Instant::now();
-    let frame = app
-        .tab_chrome
-        .transition_frame(motion::reduced_motion(cx), now);
-    if frame.animating {
-        window.request_animation_frame();
-    }
-    let mut layer = div().absolute().inset_0();
-    if frame.stable_close.is_some() {
-        let moved = entity.clone();
-        layer = layer.on_mouse_move(move |event: &MouseMoveEvent, _, cx| {
-            moved.update(cx, |this, cx| {
-                if this
-                    .tab_chrome
-                    .stable_pointer_moved(f32::from(event.position.x), f32::from(event.position.y))
-                {
-                    cx.notify();
-                }
-            });
-        });
-    }
-    for exit in &frame.exits {
-        layer = layer.child(exit_chip(exit));
-    }
-    if let Some(region) = frame.stable_close {
-        layer = layer.child(stable_close_hotspot(entity, region));
-    }
-    layer.into_any_element()
-}
-
-fn new_tab_control(entity: &Entity<Luma>) -> Div {
-    let toggled = entity.clone();
-    div().size(px(CONTROL)).relative().child(
-        luma_ui::icon_button(IconName::Plus, luma_ui::Enabled::Yes)
-            .id("new-tab")
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(move |_, window, cx| {
-                toggled.update(cx, |this, cx| this.toggle_new_tab(window, cx));
-            })
-            .agent_node(Role::Button, "new-tab"),
-    )
-}
-
-fn stable_close_hotspot(entity: &Entity<Luma>, region: PointerRegion) -> impl IntoElement {
-    let closed = entity.clone();
-    div()
-        .id("stable-tab-close")
-        .absolute()
-        .left(px(region.x))
-        .top(px(region.y))
-        .w(px(region.width))
-        .h(px(region.height))
-        .rounded(px(radius::CHIP))
-        .flex()
-        .items_center()
-        .justify_center()
-        .hover(|button| button.bg(glass::wash(glass::WASH_REST)))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(move |_, _, cx| {
-            closed.update(cx, |this, cx| {
-                let targets = this
-                    .workspace
-                    .iter()
-                    .map(|tab| tab.target.clone())
-                    .collect::<Vec<_>>();
-                if let Some(target) = this
-                    .tab_chrome
-                    .stable_close_target(&targets, Instant::now())
-                {
-                    this.close_tab_at_window_region(&target, region, cx);
-                }
-            });
-        })
-        .child(Icon::new(IconName::Close).size(px(11.0)))
-        .agent_node(Role::Button, "Close next tab")
-}
-
-fn exit_chip(exit: &crate::tab_chrome::ExitChipFrame) -> impl IntoElement {
-    div()
-        .absolute()
-        .left(px(exit.x))
-        .top(px(exit.y))
-        .w(px(exit.width))
-        .h(px(CHIP_HEIGHT))
-        .opacity(exit.opacity)
-        .overflow_hidden()
-        .rounded(px(radius::CONTROL))
-        .bg(glass::wash(0.08))
-        .px(px(8.0))
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .child(Icon::new(kind_icon(&exit.target)).size(px(12.0)))
-        .child(
-            div()
-                .truncate()
-                .text_size(px(11.5))
-                .child(exit.title.clone()),
-        )
-        .agent_node(
-            Role::Card,
-            format!("Closing {} opacity {:.3}", exit.title, exit.opacity),
-        )
-}
-
-/// One tab chip: a leading icon slot that swaps in place for a ✕ on hover, the
-/// title, its chat's status dot, and [`luma_ui::toggle_paint`]. Click selects;
-/// the ✕ closes through the same teardown every close takes.
-fn chip(
-    target: &Target,
-    title: SharedString,
-    is_active: bool,
-    status: Option<crate::agent::TabStatus>,
-    close_region: PointerRegion,
-    entity: &Entity<Luma>,
-) -> impl IntoElement {
-    let group = SharedString::from(format!("chip:{}", target.element_key()));
-    let select = entity.clone();
-    let selected = target.clone();
-    let close = entity.clone();
-    let closed = target.clone();
-    let close_label = SharedString::from(format!("Close {title}"));
-    let middle = entity.clone();
-    let middle_closed = target.clone();
-    div()
-        .id(group.clone())
-        .group(group.clone())
-        .h(px(CHIP_HEIGHT))
-        .w_full()
-        .px(px(8.))
-        .rounded(px(radius::CONTROL))
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .map(|chip| luma_ui::toggle_paint(chip, is_active))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
-            cx.stop_propagation();
-            middle.update(cx, |this, cx| this.close_tab(&middle_closed, None, cx));
-        })
-        .on_click(move |_, _, cx| {
-            select.update(cx, |this, cx| {
-                this.workspace.select(&selected);
-                cx.notify();
-            });
-        })
-        // The 14px leading slot: the tab's icon at rest, the ✕ under the
-        // pointer — swapped in place so the chip never changes width.
-        .child(
-            div()
-                .size(px(14.))
-                .flex_none()
-                .relative()
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .group_hover(group.clone(), |icon| icon.opacity(0.))
-                        .child(Icon::new(kind_icon(target)).size(px(12.))),
-                )
-                .child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "close:{}",
-                            target.element_key()
-                        )))
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .opacity(0.)
-                        .group_hover(group.clone(), |x| x.opacity(1.))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(move |_, _, cx| {
-                            close.update(cx, |this, cx| {
-                                this.close_tab(&closed, Some(close_region), cx);
-                            });
-                        })
-                        .child(Icon::new(IconName::Close).size(px(11.)))
-                        .agent_node(Role::Button, close_label),
-                ),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_size(px(11.5))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .child(title.clone()),
-        )
-        .children(status.map(|status| crate::agent::status_dot(status, &title)))
-        .agent_node(Role::Button, title)
-}
-
-/// The icon a tab kind wears in its chip.
-fn kind_icon(target: &Target) -> IconName {
-    match target {
-        Target::Score { .. } => IconName::Play,
-        Target::Venue { .. } => IconName::Cpu,
-        Target::Perform { .. } => IconName::Sliders,
-    }
 }

@@ -91,7 +91,7 @@ impl Luma {
         let instance_id = state.instance_id;
         let venue_id = state.venue_id.clone();
         let Some(venue_generation) = self
-            .sidebar
+            .songs
             .as_ref()
             .filter(|sidebar| sidebar.venue_id() == venue_id)
             .map(crate::tracks::Tracks::load_generation)

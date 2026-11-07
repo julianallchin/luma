@@ -1,12 +1,12 @@
-//! A quiet sidebar row. It says nothing while sync is healthy and idle.
+//! Sync, as the status bar says it: up to date, syncing, or what is wrong.
 use crate::Luma;
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Entity};
+use gpui::{div, px, AnyElement, Context};
 use luma_lib::models::sync::SyncStatus;
 use luma_ui::node::{Instrument as _, Role};
 
 #[derive(Default)]
-pub(crate) struct SidebarSync {
+pub(crate) struct SyncState {
     pub status: SyncStatus,
     pub expanded: bool,
     pub read_error: Option<String>,
@@ -14,7 +14,7 @@ pub(crate) struct SidebarSync {
     show_activity: bool,
 }
 
-impl SidebarSync {
+impl SyncState {
     /// Everything worth reading when the row is expanded.
     fn details(&self) -> Vec<String> {
         let mut details = Vec::new();
@@ -86,22 +86,21 @@ impl Luma {
     }
 }
 
-pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
+/// The status bar's sync item, while this library syncs at all.
+///
+/// The item is one word or two, and a transport error is the one thing worth
+/// reading at a glance: "Sync needs attention" is what a user sees for twenty
+/// minutes while nothing syncs and nothing says why. The first sentence of
+/// the error is the item itself; the whole of it is one press away, hung
+/// above the bar.
+pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
     if !shell.library.cloud_sync_enabled() {
-        return div().into_any_element();
+        return None;
     }
     let state = &shell.sync_status;
     let status = &state.status;
-    let unhealthy = status.error.is_some() || state.read_error.is_some();
-    if !state.show_activity && !unhealthy && !state.expanded {
-        return div().into_any_element();
-    }
-    // The row is one line, and a transport error is the one thing on it worth
-    // reading at a glance: "Sync needs attention" is what a user sees for
-    // twenty minutes while nothing syncs and nothing says why. The first
-    // sentence of the error goes in the row itself; the whole of it is one
-    // click away.
-    let label = if let Some(error) = status.error.as_ref().or(state.read_error.as_ref()) {
+    let error = status.error.as_ref().or(state.read_error.as_ref());
+    let label = if let Some(error) = error {
         let headline = error
             .split(['.', '\n'])
             .next()
@@ -113,65 +112,52 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
         } else {
             headline
         }
-    } else if status.pending_uploads > 0 {
+    } else if state.show_activity && status.pending_uploads > 0 {
         format!("Syncing · {}", status.pending_uploads)
-    } else if state.busy() {
+    } else if state.show_activity && state.busy() {
         "Syncing…".to_owned()
     } else {
-        "Up to date".to_owned()
+        "Synced".to_owned()
     };
-    let toggle = app.clone();
-    let keyboard_toggle = app.clone();
-    let details = state.details();
-    div()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .px(px(12.))
-        .py(px(6.))
-        .gap(px(6.))
-        .text_size(px(11.))
-        .text_color(if unhealthy {
-            luma_ui::ladder::danger()
+    let mut item = crate::status_bar::Item::new("sync-status", label);
+    item.danger = error.is_some();
+    item.ok = error.is_none() && !state.show_activity;
+    item.press = Some(|this, cx| {
+        this.sync_status.expanded = !this.sync_status.expanded;
+        cx.notify();
+    });
+    item.detail = state.expanded.then(|| details(state));
+    Some(item)
+}
+
+/// Everything worth reading about sync, in a card above the bar.
+fn details(state: &SyncState) -> AnyElement {
+    let lines = state.details();
+    let card = luma_ui::float::popover_card()
+        .id("sync-details")
+        .w(px(320.))
+        .max_h(px(240.))
+        .overflow_y_scroll()
+        .gap(px(8.))
+        .p(px(10.))
+        .text_size(px(12.))
+        .children(if lines.is_empty() {
+            vec![div().child("Up to date").into_any_element()]
         } else {
-            luma_ui::ladder::muted_foreground()
-        })
-        .child(
-            div()
-                .id("sync-status")
-                .tab_index(0)
-                .on_key_down(move |event, _, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        keyboard_toggle.update(cx, |this, cx| {
-                            this.sync_status.expanded = !this.sync_status.expanded;
-                            cx.notify();
-                        });
-                    }
+            lines
+                .into_iter()
+                .map(|line| {
+                    div()
+                        .child(line.clone())
+                        .agent_node(Role::Text, line)
+                        .into_any_element()
                 })
-                .cursor_pointer()
-                .py(px(4.))
-                .child(label.clone())
-                .on_click(move |_, _, cx| {
-                    toggle.update(cx, |this, cx| {
-                        this.sync_status.expanded = !this.sync_status.expanded;
-                        cx.notify();
-                    })
-                })
-                .agent_node(Role::Button, label),
-        )
-        .when(state.expanded, |el| {
-            el.child(
-                div()
-                    .id("sync-details")
-                    .max_h(px(240.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .children(details.into_iter().map(|message| {
-                        div().child(message.clone()).agent_node(Role::Text, message)
-                    })),
-            )
-        })
-        .into_any_element()
+                .collect()
+        });
+    luma_ui::float::anchored_above(
+        "sync-details-float",
+        crate::shell::STATUS_BAR_HEIGHT,
+        luma_ui::float::Dismiss::Never,
+        card.into_any_element(),
+    )
 }

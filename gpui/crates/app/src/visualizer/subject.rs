@@ -57,7 +57,7 @@ impl Luma {
         if self.workspace.is_empty() {
             return None;
         }
-        let venue_id = self.parked.current()?.to_string();
+        let venue_id = self.venues.current()?.to_string();
         // The *score*, not the pair it sits on. A `(track, venue)` carries as
         // many scores as there are people who annotated it, and the editor is
         // the one thing that knows which of them is open — so the stage takes
@@ -67,7 +67,7 @@ impl Luma {
             Some(Body::TrackEditor(_) | Body::Patch(_) | Body::Perform(_)) | None => None,
         };
         let name = self
-            .sidebar
+            .songs
             .as_ref()
             .filter(|browser| browser.venue_id() == venue_id)
             .map_or_else(
@@ -94,7 +94,7 @@ impl Luma {
     /// workspace has nothing about a room.
     ///
     /// Done at draw rather than at every navigation for the reason
-    /// [`Luma::sync_venue_tabs`] is: a navigation is a field assignment, and a
+    /// [`Luma::sync_venue_modes`] is: a navigation is a field assignment, and a
     /// gesture that forgot to ask would leave the stage lighting a room
     /// nothing on screen is about. Comparing the venue *and* the score is what
     /// separates the two costs — a different room rebuilds, a different track
@@ -135,7 +135,7 @@ impl Luma {
             }
             _ => {
                 let mut opened = Visualizer::open(library, &venue_id, venue_name, subject, cx);
-                opened.restore_pose(saved_cameras.pose(&venue_id));
+                opened.restore_pose(saved_cameras.value().pose(&venue_id));
                 *visualizer = Some(opened);
                 cx.notify();
             }

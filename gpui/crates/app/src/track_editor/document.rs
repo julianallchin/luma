@@ -245,7 +245,7 @@ impl Luma {
                     this.commit_graph_score_for(target, cx);
                 } else {
                     // A re-read this write held off.
-                    this.refresh_agent_tabs(cx);
+                    this.refresh_agent_bodies(cx);
                 }
             })
             .ok();
@@ -329,8 +329,8 @@ impl Luma {
                 match held {
                     // The write's return reads it.
                     Some(true) => {
-                        if !this.agent_stale_tabs.contains(&target) {
-                            this.agent_stale_tabs.push(target);
+                        if !this.agent_stale.contains(&target) {
+                            this.agent_stale.push(target);
                         }
                     }
                     Some(false) => this.reload_score_contents(target, cx),

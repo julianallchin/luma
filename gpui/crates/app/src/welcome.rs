@@ -33,7 +33,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_lib::models::venues::{display_share_code, Venue, VenueMember, ROLE_OWNER};
 
-use crate::agent::TabStatus;
+use crate::agent::ChatStatus;
 use crate::library::LibraryError;
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
@@ -69,6 +69,25 @@ impl Route {
     fn descriptor(self) -> RouteDescriptor<Self> {
         RouteDescriptor::exact(self, PICKER_SIZE.width, PICKER_SIZE.height)
             .with_transition(morph::direction(self != Self::Browse))
+    }
+}
+
+/// Which of the venue menu's actions opened the picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Entry {
+    Create,
+    Join,
+    /// Share the venue with this id.
+    Share(String),
+}
+
+impl Entry {
+    fn route(&self) -> Route {
+        match self {
+            Self::Create => Route::Create,
+            Self::Join => Route::Join,
+            Self::Share(_) => Route::Share,
+        }
     }
 }
 
@@ -126,6 +145,10 @@ pub(crate) struct VenuePicker {
     join_error: Option<String>,
     joining: bool,
     sharing: Option<Sharing>,
+    /// Where the title bar's venue menu sent this picker in, or none for the
+    /// picker a window with no venue opens on. Back from the route it entered
+    /// at closes the dialog: the menu is the list it came from.
+    entry: Option<Entry>,
     /// The header band's fields — see the module docs on why every route
     /// puts one there.
     search: Entity<TextInput>,
@@ -212,6 +235,7 @@ impl VenuePicker {
             join_error: None,
             joining: false,
             sharing: None,
+            entry: None,
             search,
             name,
             code,
@@ -238,7 +262,22 @@ impl VenuePicker {
         self.adopt(venues, cx);
         self.loaded = true;
         self.error = None;
-        if self.venues.is_empty() {
+        let shared = match &self.entry {
+            Some(Entry::Share(id)) => self
+                .venues
+                .iter()
+                .find(|venue| &venue.id == id && shareable(venue))
+                .cloned(),
+            _ => None,
+        };
+        if let Some(venue) = shared {
+            self.sharing = Some(Sharing::new(venue));
+            self.settle_route(Route::Share);
+            self.focus_pending = Some(FocusTarget::SharePrimary);
+        } else if self.entry == Some(Entry::Join) {
+            self.settle_route(Route::Join);
+            self.focus_pending = Some(FocusTarget::JoinCode);
+        } else if self.entry == Some(Entry::Create) || self.venues.is_empty() {
             self.settle_route(Route::Create);
             self.focus_pending = Some(FocusTarget::CreateName);
         } else {
@@ -389,24 +428,23 @@ impl Luma {
             ))));
         let venues = self.library.venues();
         let remembered = self.library.get_session_item(LAST_VENUE);
-        let saved_tabs = self.read_saved_tabs();
+        let saved_venues = self.read_saved_venues();
         let saved_cameras = self.read_saved_cameras();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let venues = venues.await;
             let remembered = remembered.await;
-            let saved_tabs = saved_tabs.await;
+            let saved_venues = saved_venues.await;
             let saved_cameras = saved_cameras.await;
             this.update(cx, |this, cx| {
                 this.restoring_venue = false;
-                // Every venue's tabs, reopened as each venue is. A store that
-                // cannot be read is nothing saved: the tabs are a convenience.
-                this.saved_tabs =
-                    crate::saved_tabs::SavedTabs::read(saved_tabs.ok().flatten().as_deref());
+                // Every venue's mode and score, restored as each venue is
+                // opened. A store that cannot be read is nothing saved.
+                this.saved_venues =
+                    crate::saved_venues::SavedVenues::read(saved_venues.ok().flatten().as_deref());
                 // The same for each venue's last camera pose.
-                this.saved_cameras = crate::saved_cameras::SavedCameras::read(
-                    saved_cameras.ok().flatten().as_deref(),
-                );
+                this.saved_cameras =
+                    crate::saved_cameras::read(saved_cameras.ok().flatten().as_deref());
                 let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
                     return;
                 };
@@ -457,14 +495,19 @@ impl Luma {
         .detach();
     }
 
-    /// Reopen the same shared picker from the sidebar, with a freshly
-    /// correlated catalogue read and no startup restore decision.
+    /// The picker a window with no venue opens on: the catalogue, or the
+    /// create route when there is none yet.
     pub(crate) fn show_venues(&mut self, cx: &mut Context<Self>) {
+        self.show_venue_dialog(None, cx);
+    }
+
+    /// Open the picker with a freshly correlated catalogue read, at the route
+    /// `entry` names — the venue menu's New venue, Join with code and Share.
+    pub(crate) fn show_venue_dialog(&mut self, entry: Option<Entry>, cx: &mut Context<Self>) {
         let generation = self.next_venue_picker_generation();
-        self.overlay
-            .open(Overlay::Venues(Box::new(VenuePicker::loading(
-                generation, cx,
-            ))));
+        let mut picker = VenuePicker::loading(generation, cx);
+        picker.entry = entry.clone();
+        self.overlay.open(Overlay::Venues(Box::new(picker)));
         let pending = self.library.venues();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -480,7 +523,14 @@ impl Luma {
                     Ok(rows) => state.finish(rows, cx),
                     Err(error) => state.fail(format!("Failed to load venues: {error}")),
                 }
+                let sharing = state
+                    .sharing
+                    .as_ref()
+                    .map(|sharing| sharing.venue.id.clone());
                 cx.notify();
+                if let Some(venue_id) = sharing {
+                    this.load_share_members(venue_id, cx);
+                }
             })
             .ok();
         })
@@ -620,6 +670,9 @@ impl Luma {
     }
 
     fn cancel_create_venue(&mut self, cx: &mut Context<Self>) {
+        if self.leave_entry(Route::Create, cx) {
+            return;
+        }
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
             if !state.venues.is_empty() && !state.creating {
@@ -656,7 +709,7 @@ impl Luma {
                     // A new venue has no rig yet, so it starts on its setup tab.
                     Ok(venue) => {
                         this.open_venue(venue, cx);
-                        this.open_venue_tab(None, cx);
+                        this.open_rig(None, cx);
                     }
                     Err(error) => {
                         if let Some(Overlay::Venues(state)) = this.overlay.open_mut() {
@@ -689,6 +742,9 @@ impl Luma {
     }
 
     fn cancel_join_venue(&mut self, cx: &mut Context<Self>) {
+        if self.leave_entry(Route::Join, cx) {
+            return;
+        }
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
             if state.joining {
@@ -781,6 +837,9 @@ impl Luma {
     }
 
     fn close_share_venue(&mut self, cx: &mut Context<Self>) {
+        if self.leave_entry(Route::Share, cx) {
+            return;
+        }
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
             state.go(Route::Browse, reduced);
@@ -987,12 +1046,309 @@ impl Luma {
         }
     }
 
+    /// Back from `route`, when the venue menu sent the picker straight there:
+    /// the dialog closes rather than stepping back to a list the person never
+    /// saw. Reports whether it did. A write in flight keeps the dialog.
+    fn leave_entry(&mut self, route: Route, cx: &mut Context<Self>) -> bool {
+        let leaving = matches!(
+            self.overlay.as_open(),
+            Some(Overlay::Venues(state)) if state.entry.as_ref().map(Entry::route) == Some(route)
+                && !state.creating
+                && !state.joining
+        );
+        if leaving {
+            self.close_overlay(cx);
+        }
+        leaving
+    }
+
     fn with_venue_picker(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut VenuePicker)) {
         if let Some(Overlay::Venues(state)) = self.overlay.open_mut() {
             edit(state);
             cx.notify();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The title bar's venue menu
+// ---------------------------------------------------------------------------
+
+/// The venue menu: every venue to switch to, then the picker's other acts —
+/// a new venue, joining one by code, sharing this one — and the account.
+///
+/// A menu rather than the picker's dialog, because switching venue is the
+/// everyday act and a list one press deep is all it needs. The dialog stays
+/// for what needs a field: the menu's acts open it straight at their route.
+pub(crate) struct VenueMenu {
+    generation: u64,
+    /// The catalogue, read fresh on every opening; `None` while it is out.
+    venues: Option<Result<Vec<Venue>, String>>,
+}
+
+impl Luma {
+    /// Open or close the venue menu.
+    pub(crate) fn toggle_venue_menu(&mut self, cx: &mut Context<Self>) {
+        if self.venue_menu.is_open() {
+            self.close_venue_menu(cx);
+            return;
+        }
+        let generation = self.next_venue_picker_generation();
+        self.venue_menu.open(VenueMenu {
+            generation,
+            venues: None,
+        });
+        let pending = self.library.venues();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(menu) = this.venue_menu.open_mut() {
+                    if menu.generation == generation {
+                        menu.venues = Some(result.map_err(|error| error.to_string()));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Begin the menu's exit. Every row does this first: the gesture is over
+    /// the moment one is pressed.
+    pub(crate) fn close_venue_menu(&mut self, cx: &mut Context<Self>) {
+        self.venue_menu.begin_close(cx);
+        cx.notify();
+    }
+
+    /// Switch to the venue `id` names, from the menu's list.
+    fn switch_venue(&mut self, id: &str, cx: &mut Context<Self>) {
+        let venue = self
+            .venue_menu
+            .get()
+            .and_then(|menu| menu.venues.as_ref())
+            .and_then(|venues| venues.as_ref().ok())
+            .and_then(|venues| venues.iter().find(|venue| venue.id == id).cloned());
+        self.close_venue_menu(cx);
+        let current = self
+            .songs
+            .as_ref()
+            .map(|songs| songs.venue_id().to_string());
+        if let Some(venue) = venue.filter(|venue| Some(&venue.id) != current.as_ref()) {
+            self.open_venue(venue, cx);
+        }
+    }
+}
+
+/// The venue's name in the title bar: the menu's trigger, and the menu hung
+/// off it. Venues get no icon or swatch.
+pub(crate) fn venue_trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> AnyElement {
+    let name = app.songs.as_ref().map_or_else(
+        || "Venues".to_string(),
+        |songs| songs.venue_name().to_string(),
+    );
+    let open = app.venue_menu.is_open();
+    let toggled = entity.clone();
+    float::nav_row(RowState::of(open, false), "venue-menu-trigger")
+        .id("venue-menu-trigger")
+        .flex_none()
+        .relative()
+        .px(px(10.))
+        .text_size(px(13.))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| toggled.update(cx, |this, cx| this.toggle_venue_menu(cx)))
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(glass::ink(0.95))
+                .child(name.clone()),
+        )
+        .child(
+            gpui_component::Icon::new(IconName::ChevronDown)
+                .size(px(11.))
+                .text_color(glass::ink(0.42)),
+        )
+        .children(venue_menu(app, entity, cx))
+        .agent_node(Role::Button, name)
+        .into_any_element()
+}
+
+/// How wide the venue menu opens.
+const VENUE_MENU_WIDTH: f32 = 260.;
+
+fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
+    let menu = app.venue_menu.get()?;
+    let closing = app.venue_menu.closing_since();
+    let pressable = closing.is_none();
+    let current = app.songs.as_ref().map(|songs| songs.venue_id().to_string());
+    let statuses = app.venue_statuses(cx);
+    let row = |key: String, label: SharedString| {
+        float::menu_row(RowState::Rest, key.clone())
+            .id(SharedString::from(key))
+            .child(div().flex_1().min_w_0().truncate().child(label))
+    };
+    let mut card = float::popover_card()
+        .w(px(VENUE_MENU_WIDTH))
+        .child(menu_heading("Venues"));
+    match &menu.venues {
+        None => card = card.child(menu_note("Loading venues…")),
+        Some(Err(error)) => {
+            card = card.child(menu_note(format!("Failed to load venues: {error}")));
+        }
+        Some(Ok(venues)) => {
+            for venue in venues {
+                let here = current.as_deref() == Some(venue.id.as_str());
+                let (picked, id) = (entity.clone(), venue.id.clone());
+                card = card.child(
+                    row(
+                        format!("venue-menu:{}", venue.id),
+                        venue.name.clone().into(),
+                    )
+                    .when(pressable, |row| {
+                        row.on_click(move |_, _, cx| {
+                            picked.update(cx, |this, cx| this.switch_venue(&id, cx))
+                        })
+                    })
+                    .children(
+                        statuses
+                            .get(&venue.id)
+                            .map(|status| crate::agent::status_dot(*status, &venue.name)),
+                    )
+                    .child(float::check(here))
+                    .agent_node(Role::Row, venue.name.clone()),
+                );
+            }
+        }
+    }
+    let share = menu
+        .venues
+        .as_ref()
+        .and_then(|venues| venues.as_ref().ok())
+        .and_then(|venues| {
+            venues
+                .iter()
+                .find(|venue| current.as_deref() == Some(venue.id.as_str()))
+        })
+        .filter(|venue| shareable(venue))
+        .map(|venue| (venue.id.clone(), venue.name.clone()));
+    let act = |key: &'static str, label: SharedString, chord: Option<&'static str>, act: Act| {
+        let pressed = entity.clone();
+        row(key.to_string(), label.clone())
+            .when(pressable, |row| {
+                row.on_click(move |_, _, cx| {
+                    let act = act.clone();
+                    pressed.update(cx, |this, cx| {
+                        this.close_venue_menu(cx);
+                        match act {
+                            Act::Dialog(entry) => this.show_venue_dialog(Some(entry), cx),
+                            Act::Settings => this.open_settings(cx),
+                            Act::Identity => this.switch_identity(cx),
+                        }
+                    })
+                })
+            })
+            .children(chord.map(|chord| float::key_cap().child(chord)))
+            .agent_node(Role::Row, label)
+    };
+    card = card
+        .child(menu_rule())
+        .child(act(
+            "venue-menu-new",
+            "New venue…".into(),
+            None,
+            Act::Dialog(Entry::Create),
+        ))
+        .child(act(
+            "venue-menu-join",
+            "Join with code…".into(),
+            None,
+            Act::Dialog(Entry::Join),
+        ))
+        .children(share.map(|(id, name)| {
+            act(
+                "venue-menu-share",
+                format!("Share {name}…").into(),
+                None,
+                Act::Dialog(Entry::Share(id)),
+            )
+        }))
+        .child(menu_rule())
+        .child(act(
+            "venue-menu-settings",
+            "Settings…".into(),
+            Some("⌘,"),
+            Act::Settings,
+        ))
+        .child(act(
+            "venue-menu-identity",
+            if app.account_action.signing_out {
+                "Signing out…".into()
+            } else if app.library.user_id().is_some() {
+                "Sign out".into()
+            } else {
+                "Sign in".into()
+            },
+            None,
+            Act::Identity,
+        ));
+    let card = card.into_any_element();
+    Some(match closing {
+        Some(since) => float::anchored_below_closing(
+            "venue-menu",
+            float::NAV_ROW_HEIGHT,
+            card,
+            luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since),
+        ),
+        None => {
+            let dismiss = entity.clone();
+            float::anchored_below(
+                "venue-menu",
+                float::NAV_ROW_HEIGHT,
+                float::Dismiss::on_press_out(move |_, cx| {
+                    dismiss.update(cx, |this, cx| this.close_venue_menu(cx));
+                }),
+                card,
+            )
+        }
+    })
+}
+
+/// What a venue menu row below the list does.
+#[derive(Clone)]
+enum Act {
+    Dialog(Entry),
+    Settings,
+    Identity,
+}
+
+/// The small heading over the menu's list.
+fn menu_heading(text: &'static str) -> Div {
+    div()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .px(px(float::ROW_INSET))
+        .text_size(px(11.))
+        .text_color(glass::ink(glass::TEXT_TERTIARY))
+        .child(text)
+}
+
+/// A line the menu says instead of its list.
+fn menu_note(text: impl Into<SharedString>) -> impl IntoElement {
+    let text = text.into();
+    div()
+        .px(px(float::ROW_INSET))
+        .py(px(6.))
+        .text_size(px(12.))
+        .text_color(glass::ink(glass::TEXT_SECONDARY))
+        .child(text.clone())
+        .agent_node(Role::Text, text)
+}
+
+/// The hairline between the menu's groups.
+fn menu_rule() -> Div {
+    div().my(px(4.)).h(px(1.)).bg(glass::inner_rule())
 }
 
 /// Focus is committed after the async route decision, never while the loading
@@ -1040,7 +1396,7 @@ pub(crate) fn tick(
 /// on screen still says when its agents are working or have finished.
 pub(crate) fn render(
     state: &VenuePicker,
-    statuses: &HashMap<String, TabStatus>,
+    statuses: &HashMap<String, ChatStatus>,
     app: &Entity<Luma>,
     window: &Window,
     cx: &mut gpui::App,
@@ -1054,7 +1410,7 @@ pub(crate) fn render(
 
 fn route_body(
     state: &VenuePicker,
-    statuses: &HashMap<String, TabStatus>,
+    statuses: &HashMap<String, ChatStatus>,
     route: Route,
     mode: ContentMode,
     app: &Entity<Luma>,
@@ -1418,7 +1774,7 @@ fn footer(state: &VenuePicker, route: Route) -> Div {
 
 fn browser(
     state: &VenuePicker,
-    statuses: &HashMap<String, TabStatus>,
+    statuses: &HashMap<String, ChatStatus>,
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
@@ -1451,7 +1807,7 @@ fn browser(
 /// Every venue must stay reachable by keyboard, so every venue is built.
 fn venue_list(
     state: &VenuePicker,
-    statuses: &HashMap<String, TabStatus>,
+    statuses: &HashMap<String, ChatStatus>,
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
@@ -1490,7 +1846,7 @@ fn venue_list(
 fn venue_card(
     venue: &Venue,
     cursor: bool,
-    status: Option<TabStatus>,
+    status: Option<ChatStatus>,
     mode: ContentMode,
     focus: &FocusHandle,
     share_focus: Option<&FocusHandle>,

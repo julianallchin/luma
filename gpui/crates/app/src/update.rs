@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use gpui::*;
 use luma_ui::dialog::morph::{self, MorphSize};
-use luma_ui::float::{self, RowState};
+use luma_ui::float;
 use luma_ui::glass;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
@@ -142,7 +142,7 @@ impl Luma {
 
     /// Relaunch into the installed update. gpui waits for this process to
     /// exit before it starts the new one.
-    fn restart_to_update(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn restart_to_update(&mut self, cx: &mut Context<Self>) {
         if let Status::Updated { restart, .. } = &self.update.status {
             cx.set_restart_path(restart.clone());
             cx.restart();
@@ -150,51 +150,20 @@ impl Luma {
     }
 }
 
-/// The sidebar's update row: present only once there is something to press.
+/// The status bar's update item: present only once there is something to
+/// press.
 ///
 /// Downloading and installing say nothing here, as in Zed: an update the user
 /// has not asked for should not ask for attention until it is ready.
-pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
+pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
     let Status::Updated { version, .. } = &shell.update.status else {
         return None;
     };
-    let label = format!("Restart to update to {version}");
-    let restart = app.clone();
-    let keyed = app.clone();
-    Some(
-        div()
-            .flex_shrink_0()
-            .px(px(12.))
-            .pb(px(4.))
-            .child(
-                float::nav_row(RowState::Rest, "update-restart")
-                    .id("update-restart")
-                    .tab_stop(true)
-                    .on_key_down(move |event, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            keyed.update(cx, |this, cx| this.restart_to_update(cx));
-                        }
-                    })
-                    .on_click(move |_, _, cx| {
-                        restart.update(cx, |this, cx| this.restart_to_update(cx));
-                    })
-                    .child(
-                        gpui_component::Icon::new(IconName::RotateRight)
-                            .size(px(12.))
-                            .text_color(luma_ui::glass::ink(0.72)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(luma_ui::glass::ink(0.85))
-                            .child(label.clone()),
-                    )
-                    .agent_node(Role::Button, label),
-            )
-            .into_any_element(),
-    )
+    let mut item =
+        crate::status_bar::Item::new("update-restart", format!("Restart to update to {version}"));
+    item.icon = Some(IconName::RotateRight);
+    item.press = Some(|this, cx| this.restart_to_update(cx));
+    Some(item)
 }
 
 /// What the About section says about updates, and the restart button once

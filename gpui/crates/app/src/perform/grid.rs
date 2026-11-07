@@ -22,7 +22,7 @@ use luma_ui::{glass, ladder, radius};
 
 use super::surface::{self, Edit, Rect, View};
 use super::{group_label, Named, Part, PartKind, Perform};
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::Luma;
 
 /// The air between two cells.
@@ -66,9 +66,12 @@ pub(super) fn surface(state: &Perform, target: &Target, app: &Entity<Luma>) -> A
             // A button's envelope is played here, so draw every frame until
             // each settles.
             surface.child(
-                canvas(|_, _, _| (), |_, (), window, _| window.request_animation_frame())
-                    .absolute()
-                    .size_0(),
+                canvas(
+                    |_, _, _| (),
+                    |_, (), window, _| window.request_animation_frame(),
+                )
+                .absolute()
+                .size_0(),
             )
         })
         .into_any_element()
@@ -631,14 +634,12 @@ fn pattern_face(
         .absolute()
         .inset_0()
         .rounded_t(corner)
-        .when(arrangement == Arrangement::Pad, |fill| fill.rounded_b(corner))
+        .when(arrangement == Arrangement::Pad, |fill| {
+            fill.rounded_b(corner)
+        })
         .bg(tint.opacity(level.clamp(0., 1.)));
-    let pad_view = div()
-        .relative()
-        .w_full()
-        .min_h_0()
-        .child(fill)
-        .child(
+    let pad_view =
+        div().relative().w_full().min_h_0().child(fill).child(
             div()
                 .relative()
                 .size_full()

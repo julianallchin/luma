@@ -95,15 +95,14 @@ use luma_ui::{float, ladder, paint};
 
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::beat_grid::BeatGrid;
-use luma_patterns::BlendMode;
 use luma_lib::models::patterns::{AimCurves, AnnotationPreview};
 use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
 use luma_lib::models::waveforms::TrackWaveform;
-use luma_lib::settings::ViewMode;
+use luma_patterns::BlendMode;
 
 use crate::history::History;
 use crate::shell::Body;
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::{LibraryError, Luma};
 
 mod beat_grid;
@@ -151,7 +150,7 @@ use navigation::{Anchor, Wheel};
 use preview::{paint_preview, Installed, Preview, BODY_ALPHA};
 use ruler::{paint_beat_grid, paint_time_ruler};
 pub use screen::track_editor;
-pub(crate) use screen::{clip_graph_page, fullscreen_transport, inspector};
+pub(crate) use screen::{clip_graph_page, fullscreen_transport};
 pub(crate) use toolbar::clock;
 use toolbar::toolbar;
 
@@ -169,7 +168,7 @@ pub struct Editor {
     /// (see [`Editor::target`]), so another score is another tab.
     score: Score,
     /// The tab's chat: this score's conversations.
-    pub(crate) chat: crate::agent::TabChat,
+    pub(crate) chat: crate::agent::BodyChat,
     waveform: Option<Rc<TrackWaveform>>,
     gpu_waveform: Rc<RefCell<waveform::Resource>>,
     timeline_waveform: waveform::Strip,
@@ -431,8 +430,14 @@ const POLL: Duration = Duration::from_millis(33);
 impl Editor {
     /// The tab's chip: the track, and which of its scores. Two scores of one
     /// track are two tabs, so the track alone would not tell them apart.
-    pub(crate) fn title(&self) -> String {
-        format!("{} · #{}", self.track_name, self.score.ordinal)
+    /// The open song, as the title bar names it.
+    pub(crate) fn track_name(&self) -> &str {
+        &self.track_name
+    }
+
+    /// The open score, as the title bar names it beside its song: `#n`.
+    pub(crate) fn score_label(&self) -> String {
+        format!("#{}", self.score.ordinal)
     }
 
     /// What an export of the open score takes from the timeline: its name,
