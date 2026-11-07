@@ -323,8 +323,14 @@ impl Visualizer {
         self.camera.fly(keys, speed, dt, self.framing.floor_z());
     }
 
-    /// A wheel event: a zoom at the pointer, or during a fly its speed.
+    /// A wheel event: a zoom at the pointer, or during a fly its speed. A
+    /// wheel with no vertical travel — a sideways trackpad swipe, a gesture's
+    /// end — is not a zoom: even a unit step re-aims the target at the
+    /// pointer's depth and flashes the pivot.
     pub(super) fn wheel(&mut self, wheel: f32, at: Point<Pixels>) {
+        if wheel == 0.0 {
+            return;
+        }
         let factor = zoom_scale(-wheel);
         if self.fly.is_some() {
             let (lo, hi) = FLY_SPEED_MULTIPLE;
@@ -475,5 +481,19 @@ mod tests {
         );
         state.end_drag();
         assert!(state.input_redraws());
+    }
+
+    /// A wheel that does not travel leaves the camera and draws no pivot,
+    /// and one that does still zooms.
+    #[test]
+    fn a_still_wheel_leaves_the_camera_alone() {
+        let mut state = visualizer(None, empty_pick(Camera::default()));
+        state.size = gpui::size(px(800.), px(600.));
+        let start = state.camera;
+        state.wheel(0.0, gpui::point(px(200.), px(150.)));
+        assert_eq!(state.camera, start);
+        assert!(state.pivot_dot.is_none(), "a still wheel flashed the pivot");
+        state.wheel(-40.0, gpui::point(px(200.), px(150.)));
+        assert!(state.camera != start, "a travelling wheel did not zoom");
     }
 }
