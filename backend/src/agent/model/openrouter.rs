@@ -8,10 +8,10 @@ use serde_json::{json, Value};
 use super::sse::{stream_sse, SseParser};
 use super::{
     ContentBlock, ModelClient, ModelError, ModelEvent, ModelMessage, ModelRequest, ModelRole,
-    ReasoningLevel, StopReason, Usage,
+    Provider, ReasoningLevel, StopReason, Usage,
 };
 
-const PROVIDER: &str = "openrouter";
+const PROVIDER: &str = Provider::OpenRouter.as_str();
 
 pub struct OpenRouterClient {
     http: reqwest::Client,

@@ -254,7 +254,7 @@ pub enum Provider {
 }
 
 /// Providers in preference order.
-const PROVIDER_PREFERENCE: [Provider; 2] = [Provider::VercelAiGateway, Provider::OpenRouter];
+pub const PROVIDER_PREFERENCE: [Provider; 2] = [Provider::VercelAiGateway, Provider::OpenRouter];
 
 impl Provider {
     /// The provider Luma uses when the settings table names none.
@@ -265,6 +265,15 @@ impl Provider {
         match self {
             Provider::OpenRouter => "openrouter",
             Provider::VercelAiGateway => "vercel-ai-gateway",
+        }
+    }
+
+    /// The service's name as a person reads it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Provider::OpenRouter => "OpenRouter",
+            Provider::VercelAiGateway => "Vercel AI Gateway",
         }
     }
 

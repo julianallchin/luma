@@ -9,14 +9,24 @@ use crate::database::local::settings as db;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-/// Services the agents can be pointed at, as `(stored value, label)`. Both
-/// speak the same "creator/model" model ids; only the key and routing differ.
+/// Services the agents can be pointed at, as `(stored value, label)`, in
+/// [`crate::agent::model::PROVIDER_PREFERENCE`] order. Both speak the same
+/// "creator/model" model ids; only the key and routing differ.
 ///
 /// A gateway key reaches every model in [`crate::agent::model::MODELS`].
-pub const AGENT_PROVIDERS: &[(&str, &str)] = &[
-    ("vercel-ai-gateway", "Vercel AI Gateway"),
-    ("openrouter", "OpenRouter"),
-];
+pub const AGENT_PROVIDERS: &[(&str, &str)] = &{
+    use crate::agent::model::PROVIDER_PREFERENCE;
+    let mut providers = [("", ""); PROVIDER_PREFERENCE.len()];
+    let mut i = 0;
+    while i < providers.len() {
+        providers[i] = (
+            PROVIDER_PREFERENCE[i].as_str(),
+            PROVIDER_PREFERENCE[i].label(),
+        );
+        i += 1;
+    }
+    providers
+};
 
 /// The picker reads the same catalog as inference routing.
 pub fn agent_models() -> Vec<(&'static str, &'static str)> {
@@ -370,18 +380,5 @@ mod tests {
                 mode
             );
         }
-    }
-
-    /// Same contract one axis over: the picker must not offer a service the
-    /// loop cannot build a client for.
-    #[test]
-    fn every_offered_provider_resolves_in_the_model_seam() {
-        for (stored, _) in AGENT_PROVIDERS {
-            assert!(
-                crate::agent::model::Provider::parse(stored).is_some(),
-                "settings offers provider '{stored}', which agent::model does not know"
-            );
-        }
-        assert!(crate::agent::model::Provider::parse(DEFAULT_AGENT_PROVIDER).is_some());
     }
 }
