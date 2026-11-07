@@ -619,16 +619,19 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     let viewport = f32::from(window.viewport_size().width);
     let lights = chrome::corner_lit(window);
     // Geometry follows state: the panel's resting width is restated every
-    // frame as a pure function of the window, so a toggle only flips a flag
-    // and `retarget` — a no-op while the destination is unchanged — turns
-    // that into a slide.
+    // frame as a pure function of the window and the seam. Only showing or
+    // hiding the panel slides it. A width that moved because the seam was
+    // dragged or the window resized is *set*: it is derived from something
+    // already continuous, and a tween retargeted every frame trails the
+    // pointer it is meant to be under (see `PaneWidth::settled`).
     let open_width = app.agent_open_width(viewport);
     let resting = if app.agent_shown(viewport) {
         open_width
     } else {
         0.0
     };
-    if app.shell_presented {
+    let toggled = (resting > 0.0) != (app.agent_width.target() > 0.0);
+    if app.shell_presented && (toggled || !app.agent_width.settled()) {
         app.agent_width.retarget(resting, cx);
     } else {
         app.agent_width.set(resting);

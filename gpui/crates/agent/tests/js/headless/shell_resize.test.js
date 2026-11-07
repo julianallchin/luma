@@ -6,31 +6,30 @@
 // width eased toward the pointer trailed it, and a window at its minimum size
 // must still seat the agent panel at its floor beside the content at its own.
 
-const WINDOW = [1600, 950];
 fixture({
   seconds: 20,
   rig: 4,
   clips: [{ pattern: "pattern-strobe", name: "Strobe", start: 2, end: 6 }],
-  window: WINDOW,
+  window: [1600, 950],
 });
 
 const at = (s, role, label) => s.find({ role, label })?.bounds;
-const centre = (b, axis) => (axis === "x" ? b.x + b.width / 2 : b.y + b.height / 2);
+const middle = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
 
-// Drag a grip by `delta` along `axis` and read where it ends up one frame
-// after each step: it must be under the pointer, not on its way there.
+// Drag a grip by `delta` along `axis`, a step at a time, and read where it is
+// one frame after each step: under the pointer, not on its way there.
 function follows(label, axis, delta) {
   const grip = at(app.snapshot(), "slider", label);
   assert(grip, `no ${label} grip`);
-  const from = centre(grip, axis);
+  const from = middle(grip)[axis];
   const steps = 6;
   for (let step = 1; step <= steps; step++) {
-    const now = at(app.snapshot(), "slider", label);
-    const offset = from + (delta * step) / steps - centre(now, axis);
-    app.drag(now, axis === "x" ? { dx: offset, dy: 0 } : { dx: 0, dy: offset }, { steps: 2 });
-    app.frames(1);
-    const landed = centre(at(app.snapshot(), "slider", label), axis);
+    const held = middle(at(app.snapshot(), "slider", label));
     const wanted = from + (delta * step) / steps;
+    const by = wanted - held[axis];
+    app.drag(held, axis === "x" ? { dx: by, dy: 0 } : { dx: 0, dy: by }, { steps: 2 });
+    app.frames(1);
+    const landed = middle(at(app.snapshot(), "slider", label))[axis];
     assert(Math.abs(landed - wanted) <= 1,
       `the ${label} seam trails the pointer at step ${step}: at ${landed}, pointer at ${wanted}`);
   }
@@ -42,7 +41,8 @@ test("each seam stays under the pointer while motion is on", { fixture: { motion
   app.frames(30, { waitMs: 16 });
   follows("Agent width", "x", 180);
   follows("Agent width", "x", -120);
-  follows("Stage height", "y", 90);
+  follows("Stage height", "y", -90);
+  follows("Stage height", "y", 50);
 
   app.action("luma::ShowLive");
   until("Live's deck seam", (s) => at(s, "slider", "Deck panel width"));
