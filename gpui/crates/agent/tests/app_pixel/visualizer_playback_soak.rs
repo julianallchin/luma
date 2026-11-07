@@ -21,8 +21,8 @@ use super::support;
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
-use serde_json::Value;
-use support::{Clip, Fixture, NAV, TRACK_NAME, VENUE_NAME};
+use serde_json::{json, Value};
+use support::{Fixture, NAV, TRACK_NAME, VENUE_NAME};
 
 const SECONDS: u32 = 240;
 const RIG: usize = 120;
@@ -32,21 +32,27 @@ const CHUNK: usize = 300;
 const CHUNKS: usize = 10;
 
 fn harness() -> Harness {
-    Fixture::new(
+    Fixture::from_json(
         "visualizer-playback-soak",
-        SECONDS,
-        // Pulse moves every frame, so the stage never settles into a still.
-        vec![Clip {
-            preset: Some("Pulse".into()),
-            ..Clip::new("pulse", "Pulse", 0., f64::from(SECONDS))
-        }],
+        json!({
+            "seconds": SECONDS,
+            // Pulse moves every frame, so the stage never settles into a still.
+            "clips": [{
+                "pattern": "pulse",
+                "name": "Pulse",
+                "start": 0,
+                "end": SECONDS,
+                "preset": "Pulse",
+            }],
+            "rig": RIG,
+            // A full-screen-sized stage, not the suite's default 1200x800. The
+            // presentation path allocates and uploads a viewport-sized texture
+            // per presented frame, so pixel count is the axis it scales on and
+            // the default window understates it by ~4x.
+            "window": [2560.0, 1440.0],
+        }),
     )
-    .with_rig_of(RIG)
-    // A full-screen-sized stage, not the suite's default 1200x800. The
-    // presentation path allocates and uploads a viewport-sized texture per
-    // presented frame, so pixel count is the axis it scales on and the default
-    // window understates it by ~4x.
-    .window(2560.0, 1440.0)
+    .unwrap()
     .open(Mode::Pixel)
 }
 

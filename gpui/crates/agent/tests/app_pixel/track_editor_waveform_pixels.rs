@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
 use image::RgbaImage;
-use serde_json::Value;
-use support::{Clip, Fixture};
+use serde_json::{json, Value};
+use support::Fixture;
 
 const TRACK_SECONDS: u32 = 180;
 
@@ -21,15 +21,18 @@ const NOTCH: i32 = 40;
 /// tracks its scores reference, and a track with no score on it is not in the
 /// venue to be opened. Nothing here reads the clip.
 fn harness() -> Harness {
-    Fixture::new(
+    Fixture::from_json(
         "track-editor-waveform-pixels",
-        TRACK_SECONDS,
-        vec![Clip::new("pattern-strobe", "Strobe", 11.5, 12.5)],
+        json!({
+            "seconds": TRACK_SECONDS,
+            "clips": [{ "pattern": "pattern-strobe", "name": "Strobe", "start": 11.5, "end": 12.5 }],
+            // The zoom arithmetic here was authored against a 1200-wide
+            // canvas; in takeover the shell spends 280 of the row (sidebar +
+            // card gaps), so the window grows by exactly that much.
+            "window": [1480.0, 828.0],
+        }),
     )
-    // The zoom arithmetic here was authored against a 1200-wide canvas; in
-    // takeover the shell spends 280 of the row (sidebar + card gaps), so the
-    // window grows by exactly that much.
-    .window(1480., 828.)
+    .unwrap()
     .open(Mode::Pixel)
 }
 

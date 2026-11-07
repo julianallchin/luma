@@ -10,14 +10,17 @@ use super::support;
 use std::time::Duration;
 
 use gpui_agent::Mode;
+use serde_json::json;
 use support::Fixture;
 
 #[test]
 fn the_probe_switches_change_what_the_renderer_draws() {
-    let mut harness = Fixture::new("probe-view", 20, Vec::new())
-        .with_rig()
-        .window(1500., 1100.)
-        .open(Mode::Headless);
+    let mut harness = Fixture::from_json(
+        "probe-view",
+        json!({ "seconds": 20, "rig": 4, "window": [1500.0, 1100.0] }),
+    )
+    .unwrap()
+    .open(Mode::Headless);
     let script = support::script(
         r#"
         function toggled(name) {

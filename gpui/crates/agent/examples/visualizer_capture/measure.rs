@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use gpui_agent::fixture::{Clip, Fixture, TRACK_NAME, VENUE_NAME};
+use gpui_agent::fixture::{Fixture, TRACK_NAME, VENUE_NAME};
 use gpui_agent::{Harness, Mode, NAV};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const SECONDS: u32 = 20;
 
@@ -48,12 +48,15 @@ fn mean_level(path: &std::path::Path) -> f64 {
 }
 
 pub fn main() {
-    let mut harness = Fixture::new(
+    let mut harness = Fixture::from_json(
         "visualizer-capture",
-        SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
+        json!({
+            "seconds": SECONDS,
+            "clips": [{ "pattern": "pattern-pulse", "name": "Pulse", "start": 0, "end": SECONDS }],
+            "rig": 4,
+        }),
     )
-    .with_rig()
+    .unwrap()
     .open(Mode::Pixel);
 
     run(

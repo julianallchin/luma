@@ -48,7 +48,7 @@ pub const TRACK_NAME: &str = "Aurora";
 /// movers, in metres. Public because a test that projects one has to know.
 pub const SKEW_DEPTH_M: f64 = 2.0;
 
-/// Where [`Fixture::with_rig`]'s fixtures are patched from, relative to the
+/// Where a `rig` fixture's movers are patched from, relative to the
 /// bundle root it writes.
 pub const MOVER_PATH: &str = "Luma/Mover.qxf";
 
@@ -114,8 +114,10 @@ impl Clip {
 
 /// A library with one venue, one track, one score, and clips on it.
 ///
-/// The JSON form names each option after its builder method; durations are
-/// `*_ms` integers and `window` is `[width, height]`.
+/// Every option is spelled once, in the JSON form [`Fixture::from_json`]
+/// reads, which the script runner and the cargo suites share: keys are the
+/// field names below (or their `rename`), durations are `*_ms` integers and
+/// `window` is `[width, height]`.
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Fixture {
@@ -126,8 +128,10 @@ pub struct Fixture {
     name: String,
     seconds: u32,
     clips: Vec<Clip>,
-    /// Patched movers. 0 is no rig: most fixtures test rows and geometry, and
-    /// a rig would only be a slower seed.
+    /// Patched movers, with the definition they need bundled and the
+    /// harness's fixtures root pointed at it. 0 is no rig: most fixtures test
+    /// rows and geometry, and a rig would only be a slower seed. Rig size is
+    /// the axis most renderer costs scale on.
     rig: usize,
     /// `rig` movers placed off the `y = 0` plane, and no deck. The default rig
     /// lies on the one plane the data→world mirror leaves fixed, so a screen
@@ -135,12 +139,18 @@ pub struct Fixture {
     skewed_rig: bool,
     #[serde(rename = "track")]
     seed_track: bool,
+    /// The seeded track's insertion time, to prove ordering against a later
+    /// import without wall-clock sleeps.
     track_created_at: Option<String>,
+    /// The window, instead of the default 1200×800.
     #[serde(deserialize_with = "window_size")]
     window: Option<gpui::Size<gpui::Pixels>>,
     /// Shared with the test that set it, so it has no JSON form.
     #[serde(skip)]
     sync_status: Option<Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>>,
+    /// Raw DJ-adapter answers. The UI still crosses the production Library
+    /// normalization and import seams; only the external database read is
+    /// substituted.
     #[serde(deserialize_with = "source_fixture")]
     source_fixture: Option<luma_app::SourceAdapterFixture>,
     #[serde(rename = "source_fixture_delay_ms", deserialize_with = "millis")]
@@ -151,10 +161,16 @@ pub struct Fixture {
     source_import_fixture_delay: Option<Duration>,
     equal_timestamp_track: bool,
     second_track_seconds: Option<u32>,
+    /// Authored motion forced on, for a test that measures a transition.
     #[serde(rename = "motion")]
     force_motion: bool,
+    /// Every timeline stretched by this. Only meaningful with `motion`.
     motion_scale: Option<f32>,
+    /// Padding rows with no audio and no beats.
     extra_tracks: usize,
+    /// Album art on the padding rows: one real PNG, and a path that resolves
+    /// to nothing for every n-th row (`0` disables those). A missing file is
+    /// the case worth pinning: an uncached failed decode is a per-frame cost.
     album_art: Option<usize>,
     extra_scores: usize,
     seeded_threads: bool,
@@ -243,83 +259,13 @@ impl Fixture {
         Ok(fixture)
     }
 
-    /// Open the window at `width` × `height` instead of the default 1200×800.
-    pub fn window(mut self, width: f32, height: f32) -> Self {
-        self.window = Some(gpui::size(gpui::px(width), gpui::px(height)));
-        self
-    }
-
-    /// Patch a small rig into the venue and bundle the definition it needs,
-    /// and point the harness's fixtures root at that bundle.
-    pub fn with_rig(self) -> Self {
-        self.with_rig_of(4)
-    }
-
-    /// Patch `count` movers instead of the default four. Rig size is the axis
-    /// most renderer costs scale on.
-    pub fn with_rig_of(mut self, count: usize) -> Self {
-        self.rig = count;
-        self
-    }
-
+    /// The sync status the app shows, shared with the test so it can change
+    /// it mid-run. The one option with no JSON form.
     pub fn with_sync_status(
         mut self,
         status: Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>,
     ) -> Self {
         self.sync_status = Some(status);
-        self
-    }
-
-    /// Raw DJ-adapter answers. The UI still crosses the production Library
-    /// normalization and import seams; only the external database read is
-    /// substituted.
-    pub fn with_source_fixture(mut self, fixture: luma_app::SourceAdapterFixture) -> Self {
-        self.source_fixture = Some(fixture);
-        self
-    }
-
-    pub fn with_source_import_fixture_delay(mut self, delay: Duration) -> Self {
-        self.source_import_fixture_delay = Some(delay);
-        self
-    }
-
-    pub fn with_equal_timestamp_track(mut self) -> Self {
-        self.equal_timestamp_track = true;
-        self
-    }
-
-    /// Force authored motion on for a test that measures a transition.
-    pub fn with_motion(mut self) -> Self {
-        self.force_motion = true;
-        self
-    }
-
-    /// Stretch every timeline by `scale`. Only meaningful with
-    /// [`Self::with_motion`].
-    pub fn with_motion_scale(mut self, scale: f32) -> Self {
-        self.motion_scale = Some(scale);
-        self
-    }
-
-    /// Pad the library with `count` extra rows with no audio and no beats.
-    pub fn with_extra_tracks(mut self, count: usize) -> Self {
-        self.extra_tracks = count;
-        self
-    }
-
-    /// Give the padding rows album art: one real PNG, and a path that resolves
-    /// to nothing for every `broken_every`-th row (`0` disables those). A
-    /// missing file is the case worth pinning: an uncached failed decode is a
-    /// per-frame cost.
-    pub fn with_album_art(mut self, broken_every: usize) -> Self {
-        self.album_art = Some(broken_every);
-        self
-    }
-
-    /// Pin the seeded track's insertion time, to prove ordering against a
-    /// later import without wall-clock sleeps.
-    pub fn with_track_created_at(mut self, created_at: impl Into<String>) -> Self {
-        self.track_created_at = Some(created_at.into());
         self
     }
 
@@ -408,7 +354,7 @@ impl Fixture {
                 fixtures_root,
                 // Snapped, so the frame after an action is the finished one
                 // and geometry is not a race against a 200ms tween. Tests that
-                // shoot the slides themselves opt out with `with_motion`.
+                // shoot the slides themselves opt out with `motion`.
                 reduced_motion: !self.force_motion,
                 motion_scale: self.motion_scale.unwrap_or(1.0),
                 cloud: false,
@@ -531,7 +477,7 @@ impl Fixture {
             let art = art_path.as_ref().map(|path| {
                 let broken_every = self.album_art.unwrap_or(0);
                 if broken_every > 0 && index % broken_every == 0 {
-                    // Points nowhere on purpose. See `with_album_art`.
+                    // Points nowhere on purpose. See `album_art`.
                     format!("{path}.missing-{index:05}")
                 } else {
                     path.clone()

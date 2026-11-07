@@ -4,7 +4,6 @@
 
 use super::support;
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui_agent::Mode;
@@ -27,7 +26,7 @@ fn run(harness: &mut gpui_agent::Harness, script: &str) -> Value {
 
 /// A source library of `count` tracks, so the import route is a list rather
 /// than a line.
-fn big_source_fixture(count: usize) -> luma_app::SourceAdapterFixture {
+fn big_source_fixture(count: usize) -> Value {
     let rows: Vec<Value> = (0..count)
         .map(|index| {
             json!({
@@ -45,18 +44,17 @@ fn big_source_fixture(count: usize) -> luma_app::SourceAdapterFixture {
             })
         })
         .collect();
-    luma_app::SourceAdapterFixture {
-        library: json!({ "trackCount": count }),
-        playlists: json!([{
+    json!({
+        "library": { "trackCount": count },
+        "playlists": [{
             "id": "big-crate",
             "name": "Big crate",
             "parentId": null,
             "trackCount": count
-        }]),
-        tracks: json!(rows.clone()),
-        playlist_tracks: HashMap::from([("big-crate".into(), json!(rows))]),
-        searches: HashMap::new(),
-    }
+        }],
+        "tracks": rows.clone(),
+        "playlist_tracks": { "big-crate": rows },
+    })
 }
 
 /// The measurement script. A placeholder rather than `format!` because the
@@ -106,17 +104,20 @@ fn route_morph_frame_cost() {
     // LUMA_COST_ART: unset = no art (the cheap arm), "on" = every row has a
     // real PNG, "broken" = every 8th row points at a file that is not there.
     let art = std::env::var("LUMA_COST_ART").unwrap_or_default();
-    let mut builder = Fixture::new("add-tracks-cost", 8, vec![])
-        .with_extra_tracks(tracks)
-        .with_source_fixture(big_source_fixture(tracks))
-        .with_motion()
-        .window(1280.0, 800.0);
-    builder = match art.as_str() {
-        "on" => builder.with_album_art(0),
-        "broken" => builder.with_album_art(8),
-        _ => builder,
-    };
-    let mut fixture = builder.open(Mode::Pixel);
+    let mut spec = json!({
+        "extra_tracks": tracks,
+        "source_fixture": big_source_fixture(tracks),
+        "motion": true,
+        "window": [1280.0, 800.0],
+    });
+    match art.as_str() {
+        "on" => spec["album_art"] = json!(0),
+        "broken" => spec["album_art"] = json!(8),
+        _ => {}
+    }
+    let mut fixture = Fixture::from_json("add-tracks-cost", spec)
+        .unwrap()
+        .open(Mode::Pixel);
     // Newest first, and the list is virtualized: the row on screen is the
     // last one seeded, not the first.
     let newest = format!("Padding Track {:05}", tracks - 1);
@@ -182,13 +183,18 @@ fn route_morph_gpu_cost() {
             Some((w.parse().ok()?, h.parse().ok()?))
         })
         .unwrap_or((1280.0, 800.0));
-    let mut fixture = Fixture::new("add-tracks-gpu-cost", 8, vec![])
-        .with_extra_tracks(TRACKS)
-        .with_source_fixture(big_source_fixture(TRACKS))
-        .with_motion()
-        .with_motion_scale(40.0)
-        .window(width, height)
-        .open(Mode::Pixel);
+    let mut fixture = Fixture::from_json(
+        "add-tracks-gpu-cost",
+        json!({
+            "extra_tracks": TRACKS,
+            "source_fixture": big_source_fixture(TRACKS),
+            "motion": true,
+            "motion_scale": 40.0,
+            "window": [width, height],
+        }),
+    )
+    .unwrap()
+    .open(Mode::Pixel);
     run(
         &mut fixture,
         r#"
@@ -273,16 +279,19 @@ fn analysis_view_mid_analysis() {
         "fileSize": std::fs::metadata(&audio).unwrap().len(),
         "sampleRate": 44100,
     });
-    let mut harness = Fixture::new("add-tracks-analysis-pixels", 8, vec![])
-        .with_source_fixture(luma_app::SourceAdapterFixture {
-            library: json!({ "trackCount": 1 }),
-            playlists: json!([]),
-            tracks: json!([track]),
-            playlist_tracks: HashMap::new(),
-            searches: HashMap::new(),
-        })
-        .window(1000.0, 720.0)
-        .open(Mode::Pixel);
+    let mut harness = Fixture::from_json(
+        "add-tracks-analysis-pixels",
+        json!({
+            "source_fixture": {
+                "library": { "trackCount": 1 },
+                "playlists": [],
+                "tracks": [track],
+            },
+            "window": [1000.0, 720.0],
+        }),
+    )
+    .unwrap()
+    .open(Mode::Pixel);
     support::stub_genre_model(&support::config_dir("add-tracks-analysis-pixels"));
 
     let out = run(

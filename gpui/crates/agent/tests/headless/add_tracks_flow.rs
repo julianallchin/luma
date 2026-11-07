@@ -6,7 +6,6 @@
 
 use super::support;
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
@@ -39,23 +38,29 @@ fn harness() -> Harness {
         "fileSize": 16044,
         "sampleRate": 8000
     });
-    let harness = Fixture::new("add-tracks-flow", 20, vec![])
-        .with_track_created_at("2000-01-01 00:00:00")
-        .with_equal_timestamp_track()
-        .with_source_fixture(luma_app::SourceAdapterFixture {
-            library: json!({"trackCount": 1}),
-            playlists: json!([{
-                "id": "crate-1",
-                "name": "Warmup crate",
-                "parentId": null,
-                "trackCount": 1
-            }]),
-            tracks: json!([track.clone()]),
-            playlist_tracks: HashMap::from([("crate-1".into(), json!([track.clone()]))]),
-            searches: HashMap::from([("needle".into(), json!([track]))]),
-        })
-        .with_source_import_fixture_delay(Duration::from_millis(350))
-        .open(Mode::Headless);
+    let harness = Fixture::from_json(
+        "add-tracks-flow",
+        json!({
+            "seconds": 20,
+            "track_created_at": "2000-01-01 00:00:00",
+            "equal_timestamp_track": true,
+            "source_fixture": {
+                "library": { "trackCount": 1 },
+                "playlists": [{
+                    "id": "crate-1",
+                    "name": "Warmup crate",
+                    "parentId": null,
+                    "trackCount": 1
+                }],
+                "tracks": [track],
+                "playlist_tracks": { "crate-1": [track] },
+                "searches": { "needle": [track] },
+            },
+            "source_import_fixture_delay_ms": 350,
+        }),
+    )
+    .unwrap()
+    .open(Mode::Headless);
     support::stub_genre_model(&support::config_dir("add-tracks-flow"));
     harness
 }
