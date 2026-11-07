@@ -20,8 +20,9 @@ test("ticking a group changes the picture", { timeoutMs: 120000 }, () => {
   nav.agentOff();
   nav.stageOff();
 
-  // A clip is labelled by its name; the fixture's clip is a Wash.
-  nav.step("the clip", "card", "Wash");
+  // A clip is labelled by its name; the fixture's clip is a Wash. Its
+  // selection strip is on its graph page.
+  nav.clipGraph("Wash");
   until("the strip", (s) => s.findAll({ role: "input" }).some((n) => n.label.startsWith("expression = ")));
   nav.step("the fixture picker", "button", "Pick fixtures");
   until("the picker", (s) => checkbox("left_movers") !== undefined);

@@ -28,7 +28,7 @@ function chroma(shot) {
   return Math.max(r, g, b) - Math.min(r, g, b);
 }
 
-// The track editor is the only tab that names a `(track, venue)`, so it is
+// Arrange is the only mode that names a `(track, venue)`, so it is
 // what puts a lit stage up. The clip is the evidence the score has landed.
 function openLitStage() {
   nav.trackEditor("Test Venue", "Aurora");
@@ -80,7 +80,7 @@ test("the footage look still draws the rig lit and moving with the track", () =>
 // have leaves the pattern no fixtures, so the beam must go out.
 test("an arg edit relights the rig", () => {
   openLitStage();
-  app.click(app.snapshot().find({ role: "card", label: CLIP }));
+  nav.clipGraph(CLIP);
   const field = () => app.snapshot().findAll({ role: "input" }).find((n) => n.label.startsWith("expression = "));
   until("the clip's selection field", () => field() !== undefined);
   app.frames(6, { waitMs: 40 });
