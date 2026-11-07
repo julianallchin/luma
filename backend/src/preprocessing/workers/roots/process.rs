@@ -1,5 +1,6 @@
+use crate::models::tracks::ChordSection;
 use crate::preprocessing::WorkerEnvironment;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::PathBuf;
 
 const WORKER_SOURCE: &str = include_str!(concat!(
@@ -7,14 +8,6 @@ const WORKER_SOURCE: &str = include_str!(concat!(
     "/python/ace_chord_sections_worker.py"
 ));
 const WORKER_SCRIPT_NAME: &str = "ace_chord_sections_worker.py";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChordSection {
-    pub start: f32,
-    pub end: f32,
-    pub root: Option<u8>,
-    pub label: String,
-}
 
 #[derive(Debug, Clone)]
 pub struct RootAnalysis {
@@ -72,10 +65,10 @@ pub fn compute_roots(
     let mut sections = Vec::new();
     for sec in payload.sections {
         sections.push(ChordSection {
-            start: sec.start as f32,
-            end: sec.end as f32,
-            root: parse_root_from_label(&sec.label),
-            label: sec.label,
+            start_s: sec.start as f32,
+            end_s: sec.end as f32,
+            root_pitch_class: parse_root_from_label(&sec.label),
+            label: Some(sec.label),
         });
     }
 

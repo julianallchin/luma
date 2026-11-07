@@ -139,8 +139,11 @@ pub struct TrackBeats {
 /// older rows.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ChordSection {
+    #[serde(rename = "start")]
     pub start_s: f32,
+    #[serde(rename = "end")]
     pub end_s: f32,
+    #[serde(rename = "root")]
     pub root_pitch_class: Option<u8>,
     pub label: Option<String>,
 }

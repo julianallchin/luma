@@ -836,20 +836,14 @@ pub async fn get_track_chord_sections(
 }
 
 /// Parse `track_roots.sections_json`. `None` when the blob isn't a JSON array;
-/// entries missing `start`/`end` are dropped.
+/// an entry that is not a section (no `start`/`end`) is dropped on its own, so
+/// one bad entry costs one section rather than the track's chords.
 fn parse_chord_sections(json: &str) -> Option<Vec<ChordSection>> {
     let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
     Some(
         entries
-            .iter()
-            .filter_map(|s| {
-                Some(ChordSection {
-                    start_s: s["start"].as_f64()? as f32,
-                    end_s: s["end"].as_f64()? as f32,
-                    root_pitch_class: s["root"].as_u64().map(|r| r as u8),
-                    label: s["label"].as_str().map(str::to_string),
-                })
-            })
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value(entry).ok())
             .collect(),
     )
 }
@@ -1415,5 +1409,14 @@ mod tests {
         assert!(parse_chord_sections("not json").is_none());
         assert!(parse_chord_sections("{}").is_none());
         assert_eq!(parse_chord_sections("[]").unwrap(), vec![]);
+    }
+
+    /// What the roots worker writes is the shape every stored row has, so a
+    /// row written today and one synced from an older build read the same.
+    #[test]
+    fn written_sections_keep_the_stored_shape() {
+        let stored = r#"[{"start":2.716,"end":4.318,"root":9,"label":"A:(1)"}]"#;
+        let sections = parse_chord_sections(stored).unwrap();
+        assert_eq!(serde_json::to_string(&sections).unwrap(), stored);
     }
 }
