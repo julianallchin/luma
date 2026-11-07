@@ -151,7 +151,7 @@ impl Footprint {
     pub fn of(world: &DMat4, bounds: DAabb) -> Footprint {
         let mut lo = DVec3::splat(f64::INFINITY);
         let mut hi = DVec3::splat(f64::NEG_INFINITY);
-        for corner in corners(bounds) {
+        for corner in bounds.corners() {
             let p = facade_from_three(world.transform_point3(corner));
             lo = lo.min(p);
             hi = hi.max(p);
@@ -188,7 +188,7 @@ impl Extent {
         let mut hi = DVec3::splat(f64::NEG_INFINITY);
         let mut count = 0;
         for (world, bounds) in items {
-            for corner in corners(bounds) {
+            for corner in bounds.corners() {
                 let p = facade_from_three(world.transform_point3(corner));
                 lo = lo.min(p);
                 hi = hi.max(p);
@@ -242,26 +242,12 @@ fn hosts_nothing_because(piece: &crate::catalog::Piece) -> Option<&'static str> 
 fn span_along(world: &DMat4, bounds: DAabb, direction: DVec3) -> f64 {
     let direction = direction.normalize_or_zero();
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    for corner in corners(bounds) {
+    for corner in bounds.corners() {
         let along = world.transform_point3(corner).dot(direction);
         lo = lo.min(along);
         hi = hi.max(along);
     }
     hi - lo
-}
-
-fn corners(b: DAabb) -> [DVec3; 8] {
-    let (l, h) = (b.min, b.max);
-    [
-        DVec3::new(l.x, l.y, l.z),
-        DVec3::new(h.x, l.y, l.z),
-        DVec3::new(l.x, h.y, l.z),
-        DVec3::new(h.x, h.y, l.z),
-        DVec3::new(l.x, l.y, h.z),
-        DVec3::new(h.x, l.y, h.z),
-        DVec3::new(l.x, h.y, h.z),
-        DVec3::new(h.x, h.y, h.z),
-    ]
 }
 
 /// One free end of a placed node, as a direction rather than a name.

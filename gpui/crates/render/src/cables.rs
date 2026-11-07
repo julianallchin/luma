@@ -28,10 +28,11 @@ use std::collections::HashMap;
 use std::hash::{Hash as _, Hasher as _};
 use std::sync::Arc;
 
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 
 use crate::frame::Draw;
 use luma_scene::mesh::{MeshData, Vertex};
+use luma_scene::Aabb;
 
 /// How close a piece's underside comes to the floor before it counts as
 /// standing on it.
@@ -113,16 +114,14 @@ impl Bodies {
     /// Total: a piece with no draws, or one whose meshes are empty, records
     /// nothing rather than a degenerate box at the origin.
     pub(crate) fn add(&mut self, draws: &[Draw], meshes: &[MeshData]) {
-        let mut min = Vec3::splat(f32::INFINITY);
-        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        let mut bounds = Aabb::EMPTY;
         for draw in draws {
-            let Some(local) = self.bounds_of(draw.mesh, meshes) else {
+            let Some((lo, hi)) = self.bounds_of(draw.mesh, meshes) else {
                 continue;
             };
-            let (lo, hi) = corners(local, draw.model);
-            min = min.min(lo);
-            max = max.max(hi);
+            bounds.union(&Aabb::new(lo, hi).transformed(draw.model));
         }
+        let Aabb { min, max } = bounds;
         if min.x.is_finite() && max.x.is_finite() {
             self.boxes.push(Body { min, max });
         }
@@ -302,23 +301,6 @@ fn build(drops: &[Vec3], band: Band) -> MeshData {
         vertices: Arc::from(vertices),
         indices: Arc::from(indices),
     }
-}
-
-/// A local box under a model matrix, as a world box: the eight corners, since
-/// the matrix may rotate.
-fn corners((lo, hi): (Vec3, Vec3), model: Mat4) -> (Vec3, Vec3) {
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
-    for x in [lo.x, hi.x] {
-        for y in [lo.y, hi.y] {
-            for z in [lo.z, hi.z] {
-                let p = model.transform_point3(Vec3::new(x, y, z));
-                min = min.min(p);
-                max = max.max(p);
-            }
-        }
-    }
-    (min, max)
 }
 
 #[cfg(test)]

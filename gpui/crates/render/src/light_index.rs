@@ -25,6 +25,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
+use luma_scene::Aabb;
 use wgpu::util::DeviceExt as _;
 
 use crate::frame::{Camera, FixtureCone, MAX_FIXTURE_CONES};
@@ -1161,7 +1162,8 @@ impl View {
     }
 
     fn extent_for_bounds(&self, min: Vec3, max: Vec3) -> Option<LightExtent> {
-        let corners = box_corners(min, max);
+        // Bit 0 is X, bit 1 Y, bit 2 Z: the order the clip edge table assumes.
+        let corners = Aabb::new(min, max).corners();
         let depths = corners.map(|corner| (corner - self.eye).dot(self.forward));
         let min_depth = depths.iter().copied().fold(f32::INFINITY, f32::min);
         let max_depth = depths.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -1378,22 +1380,6 @@ fn finite_vec(value: Vec3, fallback: Vec3) -> Vec3 {
     }
 }
 
-/// The eight corners of an axis-aligned box, ordered so bit 0 is X, bit 1 is Y
-/// and bit 2 is Z — the order [`for_each_clipped_vertex`]'s edge table assumes.
-#[must_use]
-pub(crate) fn box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
-    [
-        Vec3::new(min.x, min.y, min.z),
-        Vec3::new(max.x, min.y, min.z),
-        Vec3::new(min.x, max.y, min.z),
-        Vec3::new(max.x, max.y, min.z),
-        Vec3::new(min.x, min.y, max.z),
-        Vec3::new(max.x, min.y, max.z),
-        Vec3::new(min.x, max.y, max.z),
-        Vec3::new(max.x, max.y, max.z),
-    ]
-}
-
 /// Visit every vertex of the box clipped to `depth >= clip`, with the depth to
 /// project it at.
 ///
@@ -1402,7 +1388,7 @@ pub(crate) fn box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
 /// either original corners inside it or points where an edge crosses the plane,
 /// so visiting exactly those bounds the clipped projection with no slack.
 ///
-/// `depths` must be the view depths of [`box_corners`] in the same order.
+/// `depths` must be the view depths of [`Aabb::corners`] in the same order.
 /// Callers own the projection: the cullers parameterise the camera
 /// differently, but the clipping is one piece of geometry and lives here once.
 pub(crate) fn for_each_clipped_vertex(
@@ -1411,7 +1397,7 @@ pub(crate) fn for_each_clipped_vertex(
     clip: f32,
     mut visit: impl FnMut(Vec3, f32),
 ) {
-    /// The twelve edges as index pairs into [`box_corners`], so the box is
+    /// The twelve edges as index pairs into [`Aabb::corners`], so the box is
     /// clipped as a wire frame rather than as a point cloud.
     const EDGES: [(usize, usize); 12] = [
         (0, 1),

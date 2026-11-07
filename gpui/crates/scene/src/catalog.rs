@@ -37,7 +37,7 @@
 //! which is also [`crate::truss`]'s local space, so an end frame is already a
 //! socket frame and needs no conversion.
 
-use crate::aabb::DAabb;
+use crate::aabb::{Aabb, DAabb};
 use crate::definition::Definition;
 use crate::luminaire::{is_procedural, model_kind, ModelKind};
 use crate::mesh::MeshBounds;
@@ -927,17 +927,12 @@ pub fn assembly_placements(
 /// As [`assembly_placements`].
 pub fn assembly_bounds(parts: &[Part], meshes: &mut impl MeshBounds) -> anyhow::Result<DAabb> {
     let placements = assembly_placements(parts, meshes)?;
-    let mut lo = Vec3::splat(f32::INFINITY);
-    let mut hi = Vec3::splat(f32::NEG_INFINITY);
+    let mut bounds = Aabb::EMPTY;
     for (part, placement) in parts.iter().zip(&placements) {
-        let (plo, phi) = meshes.bounds(part.mesh)?;
-        for corner in corners(plo, phi) {
-            let p = placement.transform.transform_point3(corner);
-            lo = lo.min(p);
-            hi = hi.max(p);
-        }
+        let (lo, hi) = meshes.bounds(part.mesh)?;
+        bounds.union(&Aabb::new(lo, hi).transformed(placement.transform));
     }
-    Ok(DAabb::new(lo.as_dvec3(), hi.as_dvec3()))
+    Ok(DAabb::new(bounds.min.as_dvec3(), bounds.max.as_dvec3()))
 }
 
 /// How far an assembly reaches from its own origin, from the authored plan
@@ -966,27 +961,8 @@ fn quarter_turn_radians(quarter_turns: i8) -> f32 {
 /// axis-aligned, so this stays a box rather than widening to a hull.
 fn turn_bounds(lo: Vec3, hi: Vec3, quarter_turns: i8) -> (Vec3, Vec3) {
     let turn = Mat4::from_rotation_y(quarter_turn_radians(quarter_turns));
-    let mut out_lo = Vec3::splat(f32::INFINITY);
-    let mut out_hi = Vec3::splat(f32::NEG_INFINITY);
-    for corner in corners(lo, hi) {
-        let p = turn.transform_point3(corner);
-        out_lo = out_lo.min(p);
-        out_hi = out_hi.max(p);
-    }
-    (out_lo, out_hi)
-}
-
-fn corners(lo: Vec3, hi: Vec3) -> [Vec3; 8] {
-    [
-        Vec3::new(lo.x, lo.y, lo.z),
-        Vec3::new(hi.x, lo.y, lo.z),
-        Vec3::new(lo.x, hi.y, lo.z),
-        Vec3::new(hi.x, hi.y, lo.z),
-        Vec3::new(lo.x, lo.y, hi.z),
-        Vec3::new(hi.x, lo.y, hi.z),
-        Vec3::new(lo.x, hi.y, hi.z),
-        Vec3::new(hi.x, hi.y, hi.z),
-    ]
+    let turned = Aabb::new(lo, hi).transformed(turn);
+    (turned.min, turned.max)
 }
 
 /// Mesh bounds for the catalog's own measurement: each GLB under the mesh root

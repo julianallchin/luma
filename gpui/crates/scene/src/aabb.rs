@@ -6,7 +6,7 @@
 //! are resolved against a mesh's measured bbox and a float32 rounding is
 //! already larger than the tolerance the golden vectors hold us to.
 
-use glam::{DMat4, DVec3, Vec3};
+use glam::{DMat4, DVec3, Mat4, Vec3};
 
 /// Renderer-space AABB (f32, Z-up). Empty is encoded as `min > max`, which
 /// makes [`Aabb::EMPTY`] absorb any point under [`Aabb::expand`].
@@ -69,6 +69,13 @@ impl Aabb {
         })
     }
 
+    /// The box that holds this one under `transform`: its eight corners
+    /// carried through, since the matrix may rotate.
+    #[must_use]
+    pub fn transformed(&self, transform: Mat4) -> Aabb {
+        Aabb::from_points(self.corners().map(|c| transform.transform_point3(c)))
+    }
+
     /// Surface area, the SAH cost term. Zero for an empty box.
     pub fn surface_area(&self) -> f32 {
         if self.is_empty() {
@@ -98,6 +105,18 @@ impl DAabb {
 
     pub fn size(&self) -> DVec3 {
         self.max - self.min
+    }
+
+    /// The eight corners, in [`Aabb::corners`]'s order.
+    pub fn corners(&self) -> [DVec3; 8] {
+        let (lo, hi) = (self.min, self.max);
+        std::array::from_fn(|i| {
+            DVec3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            )
+        })
     }
 
     pub fn as_aabb(&self) -> Aabb {
