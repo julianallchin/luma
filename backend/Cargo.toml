@@ -100,7 +100,6 @@ dirs = "5"
 tempfile = "3"
 log = "0.4"
 midir = "0.9"
-sentry = { version = "0.34", default-features = false, features = ["backtrace", "panic", "reqwest", "rustls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The MIDI thread runs its run loop: CoreMIDI reports ports plugged in there
