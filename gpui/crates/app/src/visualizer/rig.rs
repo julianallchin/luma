@@ -316,7 +316,7 @@ impl Visualizer {
         let definitions: BTreeMap<_, _> = rig
             .definitions
             .iter()
-            .map(|(path, def)| (path.clone(), stage_render::definition(def)))
+            .map(|(path, def)| (path.clone(), luma_scene::definition::Definition::from(def)))
             .collect();
         if !self.environment_edited {
             self.venue_environment = rig.environment;

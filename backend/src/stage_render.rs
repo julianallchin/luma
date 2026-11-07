@@ -175,7 +175,7 @@ impl VenueGeometry {
         let definitions: BTreeMap<String, luma_scene::definition::Definition> = self
             .definitions
             .iter()
-            .map(|(path, def)| (path.clone(), definition(def)))
+            .map(|(path, def)| (path.clone(), def.into()))
             .collect();
         let scene = scene_desc::Scene {
             id: "venue".into(),
@@ -306,7 +306,7 @@ pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
 ///
 /// Read off [`luma_scene::catalog`] rather than stored, so it cannot drift
 /// from the catalog.
-pub fn catalog_kind(catalog_ref: Option<&str>) -> &'static str {
+fn catalog_kind(catalog_ref: Option<&str>) -> &'static str {
     catalog_ref
         .and_then(luma_scene::catalog::piece)
         .map_or("", |p| p.kind.as_str())
@@ -343,56 +343,6 @@ pub fn primitive_state(
         gobo: 0,
         gobo_rotation: 0.0,
     })
-}
-
-/// The QLC+ subset the renderer reads, out of the QLC+ model Luma parsed.
-///
-/// [`crate::models::fixtures`] and [`scene_desc`] are the same concept — a
-/// `.qxf` file — declared twice, and this function is the standing cost of
-/// that. It should collapse to one set of types that the golden JSON also
-/// deserialises into.
-#[must_use]
-pub fn definition(def: &FixtureDefinition) -> luma_scene::definition::Definition {
-    luma_scene::definition::Definition {
-        kind: def.type_.clone(),
-        modes: def
-            .modes
-            .iter()
-            .map(|mode| luma_scene::definition::Mode {
-                name: mode.name.clone(),
-                // Only the length is read (`Definition::head_count`); the
-                // renderer's head is deliberately opaque.
-                heads: mode.heads.iter().map(|_| serde_json::Value::Null).collect(),
-            })
-            .collect(),
-        physical: def
-            .physical
-            .as_ref()
-            .map(|p| luma_scene::definition::Physical {
-                dimensions: p
-                    .dimensions
-                    .as_ref()
-                    .map(|d| luma_scene::definition::Dimensions {
-                        width: d.width,
-                        height: d.height,
-                        depth: d.depth,
-                    }),
-                layout: p.layout.as_ref().map(|l| luma_scene::definition::Layout {
-                    width: l.width,
-                    height: l.height,
-                }),
-                // Zero is the renderer's "unknown", which is what an absent QLC+
-                // attribute means.
-                lens: p.lens.as_ref().map(|l| luma_scene::definition::Lens {
-                    degrees_min: l.degrees_min.unwrap_or(0.0),
-                    degrees_max: l.degrees_max.unwrap_or(0.0),
-                    // QLC+ has no lens size or position; spec-sheet values
-                    // go here when the library carries them.
-                    radius_m: None,
-                    offset_m: None,
-                }),
-            }),
-    }
 }
 
 /// `selection` resolved in the venue behind `access` and drawn as a highlight

@@ -36,7 +36,7 @@ pub(crate) fn install(
     let definitions: BTreeMap<_, _> = rig
         .definitions
         .iter()
-        .map(|(path, def)| (path.clone(), stage_render::definition(def)))
+        .map(|(path, def)| (path.clone(), luma_scene::definition::Definition::from(def)))
         .collect();
     let mut scene = crate::visualizer::scene(rig, &definitions, rig.environment, rig.haze);
     if let Some(settings) = settings {

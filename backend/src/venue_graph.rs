@@ -80,7 +80,7 @@ impl FixtureDefinitions for BundledFixtures {
     fn definition(&self, fixture_path: &str) -> Option<luma_scene::definition::Definition> {
         crate::fixtures::definition(&self.0, fixture_path)
             .ok()
-            .map(|def| crate::stage_render::definition(&def))
+            .map(|def| luma_scene::definition::Definition::from(&*def))
     }
 }
 

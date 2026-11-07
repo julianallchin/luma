@@ -539,7 +539,7 @@ mod tests {
     fn drawn(pose: &NodePose, definition: &FixtureDefinition, position: [f32; 2]) -> [f64; 3] {
         let (_, rot) = pose.data_pose();
         luma_scene::luminaire::beam_direction(
-            Some(&crate::stage_render::definition(definition)),
+            Some(&luma_scene::definition::Definition::from(definition)),
             rot.map(|v| v as f32),
             Some(position),
         )
