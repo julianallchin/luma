@@ -400,7 +400,7 @@ fn slot(
                 .id(SharedString::from(format!("perform-slot-{column}-{row}")))
                 .relative()
                 .size_full()
-                .rounded(px(radius::PANEL))
+                .rounded(px(radius::CHIP))
                 .border_1()
                 .border_dashed()
                 .border_color(if open { accent } else { glass::hairline(0.12) })
@@ -444,7 +444,7 @@ fn setup_cell(
     let outline = div()
         .absolute()
         .inset_0()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .map(|line| match (fits, selected) {
             (false, _) => line.border_2().border_color(Hsla::from(ladder::danger())),
             (true, true) => line.border_2().border_color(accent),
@@ -511,7 +511,7 @@ fn setup_cell(
     let body = div()
         .absolute()
         .inset_0()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .overflow_hidden()
         .child(face(state, cell, rect, None))
         .child(outline)
@@ -593,7 +593,7 @@ fn plate() -> gpui::Div {
         .size_full()
         .flex()
         .flex_col()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .overflow_hidden()
         .bg(glass::card_bg())
 }
@@ -629,7 +629,7 @@ fn pattern_face(
     // GPUI clips to rectangles, not to rounded corners, so the fill rounds
     // itself: its top always meets the card's, its bottom only when the pad
     // is the whole cell.
-    let corner = px(radius::PANEL);
+    let corner = px(radius::CHIP);
     let fill = div()
         .absolute()
         .inset_0()
@@ -1016,7 +1016,7 @@ fn tap_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
         .flex()
         .flex_col()
         .justify_between()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .bg(glass::ink(if held { 0.22 } else { 0.08 }))
         .child(
             div()

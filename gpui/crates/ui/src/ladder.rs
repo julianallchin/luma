@@ -280,11 +280,14 @@ pub fn foreground() -> Rgba {
     rgb(0xe4e4e4)
 }
 
-/// Placeholders and de-emphasised text. The reference measures its muted ink
-/// at this value, and a ladder whose ground is [`background`] has the room to
-/// spend it.
+/// Placeholders and de-emphasised text: [`foreground`] at
+/// [`glass::TEXT_SECONDARY`] rather than a grey, so it sits on any plane the
+/// way the primary does.
+///
+/// [`glass::TEXT_SECONDARY`]: crate::glass::TEXT_SECONDARY
 pub fn muted_foreground() -> Rgba {
-    rgb(0xa3a3a3)
+    // 0x99 is TEXT_SECONDARY (60%) of 0xff.
+    rgba(0xe4e4e499)
 }
 
 /// [`foreground`] at 90% — the resting label color on controls.

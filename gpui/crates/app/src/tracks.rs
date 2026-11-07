@@ -791,10 +791,10 @@ fn track_row(
         .when(folder.is_some(), |row| row.pl(px(PAD_X + FOLDER_INDENT)))
         .border_b_1()
         .border_color(glass::inner_rule())
-        .when(open, |row| row.bg(glass::wash(glass::PRESSED_ALPHA)))
+        .when(open, |row| row.bg(glass::wash(glass::WASH_PRESSED)))
         .when(!open, |row| {
             row.bg(glass::wash(0.))
-                .hover(|style| style.bg(glass::wash(glass::HOVER_ALPHA)))
+                .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
                 .fade_hover()
         })
         .on_click(move |_, _, cx| {

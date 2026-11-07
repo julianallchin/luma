@@ -131,7 +131,8 @@ pub fn hairline(alpha: f32) -> Hsla {
 }
 
 /// Interactive-state wash: a softened [`ink`] that stops short of pure white,
-/// so a hover plate reads as tinted glass rather than paint.
+/// so a hover plate reads as tinted glass rather than paint. Its strengths are
+/// zeron's: [`WASH_SUBTLE`], [`WASH_PRESSED`], [`WASH_REST`].
 #[must_use]
 pub fn wash(alpha: f32) -> Hsla {
     hsla(0.0, 0.0, 0.92, alpha)
@@ -291,12 +292,6 @@ fn tinted(tone: gpui::Rgba, alpha: f32) -> Hsla {
 pub const PANEL_RULE_ALPHA: f32 = 0x12 as f32 / 255.0;
 /// Alpha of a hairline *inside* one panel — `border.subtle`, `#ffffff0a`.
 pub const INNER_RULE_ALPHA: f32 = 0x0a as f32 / 255.0;
-/// The hover wash — `hover`, `#ffffff0d`.
-pub const HOVER_ALPHA: f32 = 0x0d as f32 / 255.0;
-/// The pressed wash — `pressed`, `#ffffff17`.
-pub const PRESSED_ALPHA: f32 = 0x17 as f32 / 255.0;
-/// The selected wash — `selection.item`, `#ffffff1a`.
-pub const SELECTED_ALPHA: f32 = 0x1a as f32 / 255.0;
 /// Muted text: the primary at 60% (secondary) and 42% (tertiary).
 pub const TEXT_SECONDARY: f32 = 0.60;
 pub const TEXT_TERTIARY: f32 = 0.42;
@@ -314,13 +309,17 @@ pub fn inner_rule() -> Hsla {
     hairline(INNER_RULE_ALPHA)
 }
 
-/// The chrome band's three wash strengths, named so the tab chips, the corner
-/// toggles and the close hotspot cannot drift apart one literal at a time.
-/// Hover on a control at rest — the quietest lift there is.
-pub const WASH_SUBTLE: f32 = 0.06;
-/// What an *active* chrome control rests at: the selected tab chip, a toggle
-/// whose panel is up, the armed close hotspot.
-pub const WASH_REST: f32 = 0.10;
+/// The three wash strengths every control takes, named so the chips, the
+/// toggles and the rows cannot drift apart one literal at a time.
+///
+/// Hover on a control at rest — zeron's `hover`, `#ffffff0d`.
+pub const WASH_SUBTLE: f32 = 0x0d as f32 / 255.0;
+/// A control under the press, and a button's own plate — `pressed`,
+/// `#ffffff17`.
+pub const WASH_PRESSED: f32 = 0x17 as f32 / 255.0;
+/// What a *selected* or active control rests at: the chosen segment, a toggle
+/// whose panel is up, an open menu's trigger — `selection.item`, `#ffffff1a`.
+pub const WASH_REST: f32 = 0x1a as f32 / 255.0;
 /// Hover over an already-active control — one step above its rest, so the
 /// pointer still reads on the brightest chip in the band.
 pub const WASH_EMPHASIS: f32 = 0.14;
@@ -332,7 +331,7 @@ pub const WASH_EMPHASIS: f32 = 0.14;
 /// the pointer rests on the selected row they have to resolve into one anyway.
 /// What distinguishes selection is the ring ([`card_selected_shadows`]), which
 /// is an *edge* — a different channel, so the two compose instead of fighting.
-pub const SELECTION_ALPHA: f32 = 0.11;
+pub const SELECTION_ALPHA: f32 = WASH_REST;
 
 /// Hover wash for a row sitting directly on [`glass`]. Softer than an opaque
 /// element hover: over a translucent ground a full-strength wash paints out the
