@@ -36,8 +36,8 @@ jobs:
       - name: Test updater
         run: cargo test -p luma-update
         working-directory: gpui
-      - name: Test native pattern workflow
-        run: cargo test -p gpui-agent --test headless lighting_patterns
+      - name: Test headless app flows
+        run: cargo test -p gpui-agent --test headless
         working-directory: gpui
 
   backend:
