@@ -12,16 +12,18 @@ test("a dialog is clamped below live window controls and changes the shell", () 
   until("the track browser", (s) => s.find({ role: "input", label: "Search tracks" }) !== undefined);
   const base = app.screenshot();
 
-  app.action("luma::OpenSettings");
-  until("the settings dialog", (s) => s.find({ role: "card", label: "Settings dialog" }) !== undefined);
+  // Adding tracks, opened from the song list. (Settings, which this used to
+  // open, is a page now.)
+  app.click(node("button", "Add track"));
+  until("the add tracks dialog", (s) => s.find({ role: "card", label: "Add tracks dialog" }) !== undefined);
   app.frames(2);
   const shot = app.snapshot();
-  const card = shot.find({ role: "card", label: "Settings dialog" });
+  const card = shot.find({ role: "card", label: "Add tracks dialog" });
   const overlay = app.screenshot();
   const cardShot = app.screenshot({ node: card });
   image.keep(base, "dialog-host/base");
-  image.keep(overlay, "dialog-host/settings");
-  image.keep(cardShot, "dialog-host/settings-card");
+  image.keep(overlay, "dialog-host/add-tracks");
+  image.keep(cardShot, "dialog-host/add-tracks-card");
 
   const box = card.bounds;
   // The lights' corner, not the lights: on macOS they are AppKit's buttons,
