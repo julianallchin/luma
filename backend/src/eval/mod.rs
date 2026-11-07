@@ -23,7 +23,7 @@ pub struct OutputBinding {
     pub speed: bool,
     pub aim: bool,
     /// The plan draws laser elements
-    /// ([`luma_patterns::laser::ELEMENT_OUTPUT`]) rather than light: they
+    /// ([`luma_patterns::laser::element_output`]) rather than light: they
     /// layer into [`UniverseState::lasers`].
     pub laser: bool,
 }

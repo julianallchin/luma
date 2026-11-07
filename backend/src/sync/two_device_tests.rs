@@ -637,7 +637,7 @@ async fn a_share_code_admits_a_second_user_until_it_is_revoked() {
 /// venue back once it has downloaded, a revoked code admits nobody, and the
 /// owner removing a member takes the venue off their device.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
 async fn the_sharing_service_admits_with_a_code_and_revoking_it_admits_nobody() {
     use crate::services::venue_sharing::{self, Refusal, ShareCodeServer};
 

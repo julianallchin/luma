@@ -267,7 +267,7 @@ pub struct StructureFact {
 }
 
 /// Everything the rule reads. Assembled from the venue graph and the patch list
-/// by [`super::groups::venue_facts`]; a pure value so the rule can be tested
+/// by [`facts_from`]; a pure value so the rule can be tested
 /// without a database, a catalog or a solve.
 #[derive(Debug, Clone, Default)]
 pub struct VenueFacts {

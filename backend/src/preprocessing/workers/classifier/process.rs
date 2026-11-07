@@ -183,8 +183,7 @@ pub fn classify_bars(
     Ok(analysis)
 }
 
-/// SHA-256 of the bundled weight bytes — useful for an integrity assertion
-/// in tests and for logging which weights are deployed.
+/// How many bytes of weights are bundled.
 #[cfg(test)]
 pub fn bundled_weights_len() -> usize {
     BUNDLED_WEIGHTS.len()
