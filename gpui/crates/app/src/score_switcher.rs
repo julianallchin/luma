@@ -22,7 +22,7 @@ use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument as _, Role};
 
 use crate::shell::Body;
-use crate::tracks::scores::{open_row, ScoreRow};
+use crate::tracks::scores::{elsewhere, open_row, ScoreRow};
 use crate::workspace::{Mode, Target};
 use crate::Luma;
 
@@ -135,6 +135,23 @@ impl Luma {
             self.open_score(&track_id, score, None, cx);
             return;
         }
+        self.ask_to_switch_venue(venue_id, venue, &track_id, score, cx);
+    }
+
+    /// Ask before opening `score` of `track_id` in another venue, `venue_id`
+    /// named `venue`: taking it switches the whole window there. The stage's
+    /// menu and the song list both ask this one question.
+    pub(crate) fn ask_to_switch_venue(
+        &mut self,
+        venue_id: SharedString,
+        venue: SharedString,
+        track_id: &str,
+        score: crate::track_editor::Score,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(songs) = &self.songs else {
+            return;
+        };
         let here = songs.venue_name().to_string();
         self.ask(
             crate::confirm::Confirm {
@@ -148,7 +165,7 @@ impl Luma {
                 verb: "Switch".into(),
                 action: crate::confirm::Action::SwitchVenue {
                     venue_id,
-                    track_id: track_id.into(),
+                    track_id: track_id.to_string().into(),
                     score,
                 },
             },
@@ -363,22 +380,6 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
             )
         }
     })
-}
-
-/// Every other venue's rows, grouped under the venue's name, in the order the
-/// venues first appear — newest-created first, as the listing is.
-fn elsewhere<'a>(rows: &'a [ScoreRow], here: &str) -> Vec<(SharedString, Vec<&'a ScoreRow>)> {
-    let mut groups: Vec<(SharedString, SharedString, Vec<&ScoreRow>)> = Vec::new();
-    for row in rows.iter().filter(|row| row.venue_id.as_ref() != here) {
-        match groups.iter_mut().find(|(id, _, _)| *id == row.venue_id) {
-            Some((_, _, listed)) => listed.push(row),
-            None => groups.push((row.venue_id.clone(), row.venue.clone(), vec![row])),
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(_, name, listed)| (name, listed))
-        .collect()
 }
 
 /// A hairline between the menu's sections.

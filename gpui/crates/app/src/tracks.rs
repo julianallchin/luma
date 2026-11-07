@@ -1,10 +1,17 @@
-//! The song list: one venue's library, as a full page over Arrange.
+//! The song list: one venue's library, as a full page over Arrange, laid out
+//! as Finder's column view.
 //!
-//! The title bar's song title opens it (and ⌘P). A row is a song: its art,
-//! title, artist, BPM, length and how many scores this venue holds for it. A
-//! press expands it in place to its scores — see [`scores`] — and choosing a
-//! score opens it and closes the page. An ownership filter and a search work
-//! over the venue's rows; the venue's folders lead the list.
+//! The title bar's song title opens it (and ⌘P). Three columns, left to
+//! right: the places — "All songs", then the venue's folders, see [`folders`];
+//! the songs in the selected place; and the selected song's scores, see
+//! [`scores`]. Selecting in one column fills the next. Choosing a score opens
+//! it and closes the page. An ownership filter and a search work over the
+//! venue's songs; a search lists its matches from every place, under All
+//! songs.
+//!
+//! The selection is the page's, not the frame's: it outlives the page closing
+//! and opening again over the same venue, so the page reopens on the folder and
+//! song it was left on.
 //!
 //! # Filtering is the view's job, not the query's
 //!
@@ -15,28 +22,20 @@
 //! presentation metadata and never decide membership, so a newly added track
 //! is visible before its first annotation is authored.
 //!
-//! # Folders
-//!
-//! At the head of the list the page shows the venue's folders, each opening
-//! onto the songs it holds, and then every song under "All songs". A song in a
-//! folder is the same song as under All songs: it opens the same scores. See
-//! [`folders`].
-//!
 //! Album art comes from `album_art_path` — a path on disk, never inlined bytes.
 //! The native host reads the file with `img(path)` and GPUI's image cache
 //! handles the decode and the lazy load.
 
-use luma_ui::motion::FadeHover;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use luma_ui::float;
+use luma_ui::float::{self, RowState};
 use luma_ui::glass;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::pane;
 
 use luma_lib::models::folders::Folder;
 use luma_lib::models::tracks::TrackBrowserRow;
@@ -80,39 +79,33 @@ impl Ownership {
     }
 }
 
-/// One line of the list. The list measures each row as it draws it, so a
-/// row's height is written only on the row.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Entry {
-    /// A folder; `folder` indexes [`Tracks::folders`], and `songs` is how
-    /// many of its songs the filters admit.
-    Folder {
-        folder: usize,
-        songs: usize,
-        open: bool,
-    },
-    /// The way to make another folder.
-    NewFolder,
-    /// The heading over every song, with how many the filters admit.
-    AllSongs { songs: usize },
-    /// What All songs says when it lists nothing.
-    NoSongs,
-    /// A song; `row` indexes [`Tracks::rows`]. `folder` is the folder it is
-    /// listed under, or none under All songs.
-    Song { row: usize, folder: Option<usize> },
-    /// The song at `row`'s scores, expanded under it.
-    Scores { row: usize, folder: Option<usize> },
+/// What the first column has selected: every song, or one folder's.
+///
+/// Folders do not nest, so this is the whole of the first column's state and
+/// there are always exactly three columns.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum Place {
+    All,
+    Folder(String),
+}
+
+/// The columns, left to right. The one the keyboard is in wears the stronger
+/// selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Column {
+    Places,
+    Songs,
+    Scores,
 }
 
 /// The page's whole state: the venue it is showing, everything the seam
-/// returned for it, the filters over that, and the songs expanded to their
-/// scores.
+/// returned for it, the filters over that, and the selection path through
+/// the three columns.
 ///
-/// [`Self::entries`] is indices into [`Self::rows`] and [`Self::folders`]
-/// rather than a second copy of them, recomputed on every state change instead
-/// of on every draw: a draw happens per frame and per hover, and re-filtering
-/// a full library there is the difference between a scroll that keeps up and
-/// one that does not.
+/// [`Self::shown`] is indices into [`Self::rows`] rather than a second copy
+/// of them, recomputed on every state change instead of on every draw: a draw
+/// happens per frame and per hover, and re-filtering a full library there is
+/// the difference between a scroll that keeps up and one that does not.
 pub struct Tracks {
     /// The venue the rows were decorated for. The editor needs it too — a
     /// track's score is per-venue — so it is kept beside the name it is shown
@@ -124,12 +117,23 @@ pub struct Tracks {
     /// The venue's folders, by name, each with the songs it holds. Re-read
     /// whenever the rows are — see [`Luma::with_tracks_for_venue`].
     folders: Rc<[Folder]>,
-    /// The open folders, by id.
-    expanded: HashSet<String>,
-    /// The songs expanded to their scores, by track id — see [`scores`].
-    pub(crate) scores: HashMap<String, scores::Scores>,
-    /// What the list draws, top to bottom.
-    entries: Rc<[Entry]>,
+    /// The first column's selection.
+    place: Place,
+    /// The second column's selection, by track id.
+    track: Option<String>,
+    /// The second column: the songs the filters admit in the place.
+    shown: Rc<[usize]>,
+    /// How many songs the filters admit in each folder, in [`Self::folders`]'
+    /// order, and in all.
+    counts: Rc<[usize]>,
+    all_count: usize,
+    /// The third column: the selected song's scores.
+    pub(crate) scores: Option<scores::Scores>,
+    /// The column the keyboard is in.
+    column: Column,
+    /// The first two columns' widths; the scores take the rest.
+    widths: [f32; 2],
+    songs_scroll: UniformListScrollHandle,
     /// The menu a right-click raised, or none. One slot: two menus open at
     /// once is the bug it rules out.
     menu: Option<folders::Menu>,
@@ -152,9 +156,6 @@ pub struct Tracks {
     /// ownership filter reads it.
     user: Option<String>,
     search_focus: FocusHandle,
-    /// The row list's measured heights and scroll position, one item per
-    /// entry.
-    list: ListState,
     /// A score chosen from another venue's menu, to open here once this
     /// venue's catalogue has landed — it needs its track's row. Taken in
     /// place of the score saved for this venue.
@@ -196,6 +197,22 @@ impl Tracks {
         self.refilter();
     }
 
+    /// Whether a query is up. A search lists its matches from every place.
+    fn searching(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
+
+    /// The place the second column lists: the selected one, or All songs
+    /// while a search is up.
+    fn shown_place(&self) -> &Place {
+        const ALL: &Place = &Place::All;
+        if self.searching() {
+            ALL
+        } else {
+            &self.place
+        }
+    }
+
     /// The songs the filters admit, in the order the query returned them.
     fn filter(&self) -> Vec<usize> {
         let query = self.query.trim().to_lowercase();
@@ -211,75 +228,82 @@ impl Tracks {
             .collect()
     }
 
-    /// The song at `row`, and the expansion under it when it was expanded
-    /// from this place in the list — a song listed in a folder and under All
-    /// songs is expanded where it was pressed, not twice.
-    fn song(&self, row: usize, folder: Option<usize>) -> [Option<Entry>; 2] {
-        let song = Entry::Song { row, folder };
-        let place = folder.map(|folder| self.folders[folder].id.as_str());
-        let expanded = self
-            .scores
-            .get(&self.rows[row].id)
-            .is_some_and(|scores| scores.folder.as_deref() == place);
-        [
-            Some(song),
-            expanded.then_some(Entry::Scores { row, folder }),
-        ]
-    }
-
-    /// Rebuild [`Self::entries`]: each folder, followed by its songs when it
-    /// is open; the way to make another; then every song. A folder lists the
-    /// songs the filters admit, in the same order as All songs. An expanded
-    /// song carries its scores under it.
+    /// Recompute the second column and the counts beside every place. A
+    /// selected folder that has gone selects All songs, and a selected song
+    /// the column no longer lists is deselected, its scores with it — the
+    /// path never runs through something that is not on screen.
     fn refilter(&mut self) {
-        let shown = self.filter();
-        let mut entries = Vec::with_capacity(self.folders.len() + shown.len() + 3);
-        for (index, folder) in self.folders.iter().enumerate() {
-            let held: HashSet<&str> = folder.track_ids.iter().map(String::as_str).collect();
-            let songs: Vec<usize> = shown
-                .iter()
-                .copied()
-                .filter(|row| held.contains(self.rows[*row].id.as_str()))
-                .collect();
-            let open = self.expanded.contains(&folder.id);
-            entries.push(Entry::Folder {
-                folder: index,
-                songs: songs.len(),
-                open,
-            });
-            if open {
-                for row in songs {
-                    entries.extend(self.song(row, Some(index)).into_iter().flatten());
-                }
+        if let Place::Folder(id) = &self.place {
+            if self.loaded && !self.folders.iter().any(|folder| folder.id == *id) {
+                self.place = Place::All;
             }
         }
-        entries.push(Entry::NewFolder);
-        entries.push(Entry::AllSongs { songs: shown.len() });
-        if shown.is_empty() {
-            entries.push(Entry::NoSongs);
+        let admitted = self.filter();
+        fn held(folder: &Folder) -> HashSet<&str> {
+            folder.track_ids.iter().map(String::as_str).collect()
         }
-        for row in shown {
-            entries.extend(self.song(row, None).into_iter().flatten());
+        self.counts = self
+            .folders
+            .iter()
+            .map(|folder| {
+                let held = held(folder);
+                admitted
+                    .iter()
+                    .filter(|row| held.contains(self.rows[**row].id.as_str()))
+                    .count()
+            })
+            .collect();
+        self.all_count = admitted.len();
+        let place = match self.shown_place() {
+            Place::All => None,
+            Place::Folder(id) => self.folders.iter().find(|folder| folder.id == *id),
+        };
+        self.shown = match place {
+            None => admitted.into(),
+            Some(folder) => {
+                let held = held(folder);
+                admitted
+                    .into_iter()
+                    .filter(|row| held.contains(self.rows[*row].id.as_str()))
+                    .collect()
+            }
+        };
+        if self.track.is_some() && self.selected_song().is_none() {
+            self.track = None;
+            self.scores = None;
+            if self.column == Column::Scores {
+                self.column = Column::Songs;
+            }
         }
-        self.set_entries(entries);
     }
 
-    /// Adopt `entries`, telling the list only which run of rows changed: the
-    /// rows around it keep their measured heights, and a folder opening keeps
-    /// the scroll where it was.
-    fn set_entries(&mut self, entries: Vec<Entry>) {
-        let old = &self.entries;
-        let same = |(a, b): &(&Entry, &Entry)| a == b;
-        let head = old.iter().zip(&entries).take_while(same).count();
-        let tail = old[head..]
+    /// Where the selected song is in the second column.
+    fn selected_song(&self) -> Option<usize> {
+        let track = self.track.as_deref()?;
+        self.shown
             .iter()
-            .rev()
-            .zip(entries[head..].iter().rev())
-            .take_while(same)
-            .count();
-        self.list
-            .splice(head..old.len() - tail, entries.len() - head - tail);
-        self.entries = entries.into();
+            .position(|row| self.rows[*row].id == track)
+    }
+
+    /// The first column top to bottom: All songs, then each folder.
+    fn places(&self) -> Vec<Place> {
+        std::iter::once(Place::All)
+            .chain(
+                self.folders
+                    .iter()
+                    .map(|folder| Place::Folder(folder.id.clone())),
+            )
+            .collect()
+    }
+
+    /// How a row in `column` that is on the selection path is painted: the
+    /// stronger tint in the column the keyboard is in, a plate in the others.
+    fn path_state(&self, column: Column, on_path: bool) -> RowState {
+        match (on_path, self.column == column) {
+            (false, _) => RowState::Rest,
+            (true, true) => RowState::Selected,
+            (true, false) => RowState::Cursor,
+        }
     }
 }
 
@@ -328,15 +352,26 @@ impl Luma {
                 cx.notify();
             }
         });
+        // Column widths are the person's, not the venue's: they carry over.
+        let widths = self
+            .songs
+            .as_ref()
+            .map_or(DEFAULT_WIDTHS, |songs| songs.widths);
         self.songs = Some(Tracks {
             venue_id: venue.id,
             venue_name: venue.name,
             load_generation: generation,
             rows: Rc::from(Vec::new()),
             folders: Rc::from(Vec::new()),
-            expanded: HashSet::new(),
-            scores: HashMap::new(),
-            entries: Rc::from(Vec::new()),
+            place: Place::All,
+            track: None,
+            shown: Rc::from(Vec::new()),
+            counts: Rc::from(Vec::new()),
+            all_count: 0,
+            scores: None,
+            column: Column::Places,
+            widths,
+            songs_scroll: UniformListScrollHandle::new(),
             menu: None,
             rename: None,
             folder_error: None,
@@ -348,7 +383,6 @@ impl Luma {
             _search_subscription: search_subscription,
             user: self.library.user_id(),
             search_focus,
-            list: ListState::new(0, ListAlignment::Top, px(0.)),
             arrival: None,
         });
         self.song_list = false;
@@ -482,42 +516,234 @@ impl Luma {
             _ => None,
         }
     }
+
+    /// Select `place` in the first column. Another place opens with nothing
+    /// selected in it, as a folder does in Finder. A search lists every
+    /// place's songs, so choosing a place ends it.
+    pub(crate) fn select_place(&mut self, place: Place, cx: &mut Context<Self>) {
+        let Some(state) = &mut self.songs else {
+            return;
+        };
+        state.menu = None;
+        if *state.shown_place() != place {
+            state.track = None;
+            state.scores = None;
+        }
+        state.place = place;
+        state.column = Column::Places;
+        let field = state.searching().then(|| state.search.clone());
+        state.refilter();
+        cx.notify();
+        if let Some(field) = field {
+            field.update(cx, |field, cx| field.set_text("", cx));
+        }
+    }
+
+    /// Select `track_id` in the second column, and list its scores in the
+    /// third. Selecting the song already selected keeps its listing.
+    pub(crate) fn select_track(&mut self, track_id: &str, cx: &mut Context<Self>) {
+        let Some(state) = &mut self.songs else {
+            return;
+        };
+        state.menu = None;
+        state.column = Column::Songs;
+        if let Some(index) = state
+            .shown
+            .iter()
+            .position(|row| state.rows[*row].id == track_id)
+        {
+            state
+                .songs_scroll
+                .scroll_to_item(index, ScrollStrategy::Top);
+        }
+        if state.track.as_deref() == Some(track_id) && state.scores.is_some() {
+            if let Some(scores) = &mut state.scores {
+                scores.cursor = None;
+            }
+            cx.notify();
+            return;
+        }
+        let Some(track) = state.find(track_id) else {
+            return;
+        };
+        state.track = Some(track_id.to_string());
+        state.scores = Some(scores::Scores::new(track));
+        cx.notify();
+        self.load_track_scores(track_id, cx);
+    }
+
+    /// A key the song list's columns answer: the arrows walk the selection,
+    /// Enter opens the score under the cursor. Reports whether it was one.
+    fn song_list_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &mut self.songs else {
+            return false;
+        };
+        let step = match key {
+            "up" => -1,
+            "down" => 1,
+            _ => 0,
+        };
+        match (state.column, key) {
+            (Column::Places, "up" | "down") => {
+                let places = state.places();
+                let at = places
+                    .iter()
+                    .position(|place| place == state.shown_place())
+                    .unwrap_or(0);
+                let next = (at as isize + step).clamp(0, places.len() as isize - 1) as usize;
+                self.select_place(places[next].clone(), cx);
+            }
+            (Column::Places, "right" | "enter") => {
+                let first = state.shown.first().map(|row| state.rows[*row].id.clone());
+                if let Some(track) = state.track.clone().or(first) {
+                    self.select_track(&track, cx);
+                }
+            }
+            (Column::Songs, "up" | "down") => {
+                if state.shown.is_empty() {
+                    return true;
+                }
+                let next = match state.selected_song() {
+                    None => 0,
+                    Some(at) => {
+                        (at as isize + step).clamp(0, state.shown.len() as isize - 1) as usize
+                    }
+                };
+                let track = state.rows[state.shown[next]].id.clone();
+                self.select_track(&track, cx);
+            }
+            (Column::Songs, "left") => {
+                state.track = None;
+                state.scores = None;
+                state.column = Column::Places;
+                cx.notify();
+            }
+            (Column::Songs, "right" | "enter") => {
+                let venue = state.venue_id.clone();
+                if let Some(scores) = state.scores.as_mut().filter(|scores| scores.loaded) {
+                    if !scores.items(&venue).is_empty() {
+                        scores.cursor = Some(scores.cursor.unwrap_or(0));
+                        state.column = Column::Scores;
+                        cx.notify();
+                    }
+                }
+            }
+            (Column::Scores, "up" | "down") => {
+                let venue = state.venue_id.clone();
+                if let Some(scores) = &mut state.scores {
+                    let last = scores.items(&venue).len().saturating_sub(1) as isize;
+                    let at = scores.cursor.map_or(-1, |at| at as isize);
+                    scores.cursor = Some((at + step).clamp(0, last) as usize);
+                    cx.notify();
+                }
+            }
+            (Column::Scores, "left") => {
+                if let Some(scores) = &mut state.scores {
+                    scores.cursor = None;
+                }
+                state.column = Column::Songs;
+                cx.notify();
+            }
+            (Column::Scores, "enter") => {
+                let venue = state.venue_id.clone();
+                let chosen = state.scores.as_ref().and_then(|scores| {
+                    let item = *scores.items(&venue).get(scores.cursor?)?;
+                    Some((scores.track.id.clone(), item))
+                });
+                if let Some((track, item)) = chosen {
+                    self.choose_score_item(&track, item, cx);
+                }
+            }
+            (Column::Scores, "right") => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// Give the keyboard to the columns: a press on a row there is a press in
+    /// a keyboard-driven view, and the arrows should answer it next.
+    fn focus_columns(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+    }
+
+    /// Down from the search field: the keyboard goes to the first match.
+    fn search_to_songs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = &self.songs else {
+            return;
+        };
+        let Some(first) = state.shown.first().map(|row| state.rows[*row].id.clone()) else {
+            return;
+        };
+        self.focus_columns(window, cx);
+        self.select_track(&first, cx);
+    }
+
+    /// Follow the pointer while one of the column seams is dragged: `column`
+    /// is the column whose right edge it is, and `x` the pointer's distance
+    /// from the page's left edge.
+    fn drag_song_column(&mut self, column: usize, x: f32, room: f32, cx: &mut Context<Self>) {
+        let Some(state) = &mut self.songs else {
+            return;
+        };
+        let lead: f32 = state.widths[..column].iter().map(|w| w + HAIRLINE).sum();
+        let others: f32 = state.widths.iter().sum::<f32>() - state.widths[column];
+        let ceiling = (room - others - 2. * HAIRLINE - SCORES_MIN).max(COLUMN_MIN);
+        state.widths[column] = (x - lead).clamp(COLUMN_MIN, ceiling).round();
+        cx.notify();
+    }
+}
+
+/// The song list's keys, for the region that holds the keyboard while the
+/// page is up. Only while the columns themselves have it: a field typing a
+/// name or a query keeps its arrows and its Enter.
+pub(crate) fn on_key(app: &Entity<Luma>) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) {
+    let app = app.clone();
+    move |event, window, cx| {
+        if !app.read(cx).focus.is_focused(window) || event.keystroke.modifiers.modified() {
+            return;
+        }
+        let key = event.keystroke.key.clone();
+        if app.update(cx, |this, cx| this.song_list_key(&key, cx)) {
+            cx.stop_propagation();
+        }
+    }
 }
 
 // -- rendering ----------------------------------------------------------------
 
-/// A song row: art, two columns of text, the numbers.
-const ROW_HEIGHT: f32 = 52.;
-/// The page's inset from its edges, and the gap between a row's columns.
+/// The page's inset from its edges, and the gap between a head's controls.
 const PAD_X: f32 = 16.;
 const GAP: f32 = 12.;
 /// The page head's height: the title, the search, the filter and Add songs.
 const HEAD_HEIGHT: f32 = 52.;
-/// The column heads' row.
-const COLUMNS_HEIGHT: f32 = 28.;
+/// A song row: art over its padding.
+const SONG_ROW: f32 = 46.;
+const ART: f32 = 32.;
 /// The coverage dot's box.
 const DOT: f32 = 6.;
-/// The disclosure column at a row's start, and the art beside it.
-const DISCLOSURE: f32 = 16.;
-const ART: f32 = 36.;
-/// The numeric columns' widths: BPM, length, scores.
-const NUMBER: f32 = 60.;
-const SCORES: f32 = 96.;
-/// The artist column.
-const ARTIST: f32 = 220.;
 /// The search field's width in the head.
 const SEARCH_WIDTH: f32 = 260.;
+/// The places' and the songs' widths before either is dragged, the narrowest
+/// either can be dragged to, and what the scores always keep.
+const DEFAULT_WIDTHS: [f32; 2] = [200., 340.];
+const COLUMN_MIN: f32 = 140.;
+const SCORES_MIN: f32 = 260.;
+/// The rule between two columns.
+const HAIRLINE: f32 = 1.;
+/// The inset of a column's rows from its edges.
+const COLUMN_PAD: f32 = 6.;
 
-/// The song list page: the head, the column heads, and the list.
+/// The song list page: the head, then the three columns.
 ///
-/// `statuses` are the open bodies' status dots, drawn on the score rows that
-/// open them and on closed folders.
+/// `statuses` are the open bodies' status dots, drawn on the scores that open
+/// them and on the songs and folders that hold those.
 pub(crate) fn page(
     shell: &Luma,
     state: &Tracks,
     statuses: &HashMap<Target, ChatStatus>,
     app: &Entity<Luma>,
     window: &Window,
+    cx: &mut Context<Luma>,
 ) -> impl IntoElement {
     div()
         .size_full()
@@ -525,7 +751,6 @@ pub(crate) fn page(
         .flex_col()
         .text_color(glass::ink(0.95))
         .child(header(state, app, window))
-        .child(columns())
         .children(
             state
                 .folder_error
@@ -540,12 +765,12 @@ pub(crate) fn page(
             None if !state.loaded => {
                 luma_ui::plate("Loading tracks…".to_string(), ladder::muted_foreground())
             }
-            None => body(shell, state, statuses, app).into_any_element(),
+            None => columns(shell, state, statuses, app, cx).into_any_element(),
         })
-        // Siblings of the list, not children of a row: the list clips, and a
-        // menu inside it would be cut off at its edge.
+        // Siblings of the columns, not children of a row: a column clips,
+        // and a menu inside it would be cut off at its edge.
         .children(folders::menu(state, app))
-        .children(scores::menus(state, app))
+        .children(scores::menu(state, app))
         .agent_node(Role::Card, "Song list")
 }
 
@@ -586,33 +811,7 @@ fn header(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         )
 }
 
-/// The heads over the list's columns.
-fn columns() -> Div {
-    let head = |text: &'static str| {
-        div()
-            .text_size(px(11.))
-            .text_color(glass::ink(glass::TEXT_TERTIARY))
-            .child(text)
-    };
-    div()
-        .h(px(COLUMNS_HEIGHT))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .gap(px(GAP))
-        .px(px(PAD_X))
-        .border_b_1()
-        .border_color(glass::inner_rule())
-        .child(div().w(px(DISCLOSURE + DOT + 4.)).flex_none())
-        .child(div().w(px(ART)).flex_none())
-        .child(head("Title").flex_1().min_w_0())
-        .child(head("Artist").w(px(ARTIST)).flex_none())
-        .child(head("BPM").w(px(NUMBER)).flex_none())
-        .child(head("Length").w(px(NUMBER)).flex_none())
-        .child(head("Scores").w(px(SCORES)).flex_none())
-}
-
-/// The header's one text size, the same as the rows'.
+/// The header's one text size.
 const HEADER_TEXT: f32 = 13.;
 
 /// The search field: a [`float::field`] that takes keystrokes.
@@ -628,13 +827,19 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
         .h(px(28.))
         .text_size(px(HEADER_TEXT))
         .gap(px(6.))
-        // Keys the field leaves unbound bubble through here — see
-        // `Luma::track_search_escape`.
-        .on_key_down(move |event, _, cx| {
-            if event.keystroke.key == "escape" {
-                typed.update(cx, |this, cx| this.track_search_escape(cx));
-            }
-        })
+        // Keys the field leaves unbound bubble through here: Escape clears
+        // the query (see `Luma::track_search_escape`), and Down goes to the
+        // first match.
+        .on_key_down(
+            move |event, window, cx| match event.keystroke.key.as_str() {
+                "escape" => typed.update(cx, |this, cx| this.track_search_escape(cx)),
+                "down" => {
+                    cx.stop_propagation();
+                    typed.update(cx, |this, cx| this.search_to_songs(window, cx));
+                }
+                _ => {}
+            },
+        )
         .child(
             gpui_component::Icon::new(luma_ui::icons::IconName::Search)
                 .size(px(14.))
@@ -666,99 +871,157 @@ fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
     }))
 }
 
-/// The scrolling rows. `list` virtualizes them, so a library of thousands
-/// costs one screenful of elements, and measures each as it draws it, so a
-/// song, a folder and an expanded song's scores can be different heights.
-fn body(
+/// The three columns, hairlines between them, and the grips that drag the
+/// first two's widths.
+fn columns(
     shell: &Luma,
     state: &Tracks,
     statuses: &HashMap<Target, ChatStatus>,
     app: &Entity<Luma>,
+    cx: &mut Context<Luma>,
 ) -> Div {
-    let rows = Rc::clone(&state.rows);
-    let entries = Rc::clone(&state.entries);
-    let folders = Rc::clone(&state.folders);
-    let dots = folders::statuses(state, statuses);
-    let renaming = state
-        .rename
-        .as_ref()
-        .map(|rename| (rename.folder_id.clone(), rename.field.clone()));
-    // Each expanded song's scores, drawn ahead of the list so its closure
-    // copies elements' inputs rather than borrowing the shell.
-    let expansions: HashMap<String, Rc<dyn Fn() -> AnyElement>> = state
-        .scores
-        .keys()
-        .map(|track| {
-            (
-                track.clone(),
-                scores::expansion(shell, state, track, statuses, app),
-            )
-        })
-        .collect();
-    let app = app.clone();
-    let open = shell.front_track().map(str::to_string);
-    let no_songs = if state.rows.is_empty() {
-        "No tracks imported"
-    } else {
-        "No matching tracks"
+    let [places, songs] = state.widths;
+    let (first, second) = (app.clone(), app.clone());
+    let column = |width: f32| div().w(px(width)).flex_none().h_full().min_h_0();
+    let rule = || {
+        div()
+            .w(px(HAIRLINE))
+            .flex_none()
+            .h_full()
+            .bg(glass::panel_seam())
     };
-    let expanded: HashSet<String> = state.scores.keys().cloned().collect();
-    div().flex_1().min_h(px(0.)).child(
-        list(state.list.clone(), move |index, _, _| {
-            match entries[index] {
-                Entry::Folder {
-                    folder,
-                    songs,
-                    open,
-                } => {
-                    let folder_row = &folders[folder];
-                    let field = renaming
-                        .as_ref()
-                        .filter(|(id, _)| *id == folder_row.id)
-                        .map(|(_, field)| field);
-                    folders::folder_row(folder_row, songs, open, dots[folder], field, &app)
-                }
-                Entry::NewFolder => folders::new_folder_row(&app),
-                Entry::AllSongs { songs } => all_songs(songs),
-                Entry::NoSongs => slot(
-                    div()
-                        .h(px(float::NAV_ROW_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .px(px(float::ROW_INSET))
-                        .text_size(px(12.))
-                        .text_color(ladder::muted_foreground())
-                        .child(no_songs)
-                        .agent_node(Role::Text, no_songs),
-                )
-                .into_any_element(),
-                Entry::Song { row, folder } => {
-                    let track = &rows[row];
-                    track_row(
-                        track,
-                        folder.map(|folder| folders[folder].id.as_str()),
-                        open.as_deref() == Some(track.id.as_str()),
-                        expanded.contains(&track.id),
-                        &app,
-                    )
-                }
-                Entry::Scores { row, .. } => expansions
-                    .get(&rows[row].id)
-                    .map_or_else(|| div().into_any_element(), |draw| draw()),
-            }
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .relative()
+        .on_drag_move::<PlacesResize>(move |event, _, cx| {
+            let x = f32::from(event.event.position.x - event.bounds.left());
+            let room = f32::from(event.bounds.size.width);
+            first.update(cx, |this, cx| this.drag_song_column(0, x, room, cx));
         })
-        .size_full(),
-    )
+        .on_drag_move::<SongsResize>(move |event, _, cx| {
+            let x = f32::from(event.event.position.x - event.bounds.left());
+            let room = f32::from(event.bounds.size.width);
+            second.update(cx, |this, cx| this.drag_song_column(1, x, room, cx));
+        })
+        .child(column(places).child(folders::column(state, statuses, app)))
+        .child(rule())
+        .child(column(songs).child(songs_column(shell, state, statuses, app)))
+        .child(rule())
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(scores::column(shell, state, statuses, app)),
+        )
+        .child(
+            pane::resize_handle(
+                "places-seam",
+                pane::Seam::Vertical,
+                places + HAIRLINE / 2.,
+                || PlacesResize,
+                |app: &mut Luma, _| reset_width(app, 0),
+                glass::glass_hover(),
+                cx,
+            )
+            .agent_node(Role::Slider, "Folders column width"),
+        )
+        .child(
+            pane::resize_handle(
+                "songs-seam",
+                pane::Seam::Vertical,
+                places + HAIRLINE + songs + HAIRLINE / 2.,
+                || SongsResize,
+                |app: &mut Luma, _| reset_width(app, 1),
+                glass::glass_hover(),
+                cx,
+            )
+            .agent_node(Role::Slider, "Songs column width"),
+        )
 }
 
-/// One song: the disclosure and the coverage dot, the art, title, artist,
-/// BPM, length and its scores in this venue. A press expands it to its
-/// scores, or folds them away; a right-click is the folder menu.
-fn track_row(
+/// The seam right of the places, under the pointer — routed by type like the
+/// shell's own seams.
+struct PlacesResize;
+/// The seam right of the songs.
+struct SongsResize;
+
+/// A double-click on a seam: that column back to its default width.
+fn reset_width(app: &mut Luma, column: usize) {
+    if let Some(state) = &mut app.songs {
+        state.widths[column] = DEFAULT_WIDTHS[column];
+    }
+}
+
+/// The second column: the songs in the selected place. `uniform_list`
+/// virtualizes them, so a library of thousands costs one screenful.
+fn songs_column(
+    shell: &Luma,
+    state: &Tracks,
+    statuses: &HashMap<Target, ChatStatus>,
+    app: &Entity<Luma>,
+) -> AnyElement {
+    if state.shown.is_empty() {
+        let empty = if state.rows.is_empty() {
+            "No tracks imported"
+        } else if state.searching() {
+            "No matching tracks"
+        } else if matches!(state.place, Place::Folder(_)) {
+            "No songs in this folder"
+        } else {
+            "No matching tracks"
+        };
+        return float::empty_row(empty)
+            .agent_node(Role::Text, empty)
+            .into_any_element();
+    }
+    let rows = Rc::clone(&state.rows);
+    let shown = Rc::clone(&state.shown);
+    let selected = state.track.clone();
+    let path = state.path_state(Column::Songs, true);
+    let open = shell.front_track().map(str::to_string);
+    // Each song's dot: the strongest of its scores' tabs in this venue.
+    let mut dots: HashMap<String, ChatStatus> = HashMap::new();
+    for (target, status) in statuses {
+        if let Target::Score { venue, track, .. } = target {
+            if *venue == state.venue_id {
+                let dot = dots.entry(track.clone()).or_insert(*status);
+                *dot = dot.max(*status);
+            }
+        }
+    }
+    let app = app.clone();
+    uniform_list("songs", shown.len(), move |range, _, _| {
+        range
+            .map(|index| {
+                let track = &rows[shown[index]];
+                let chosen = selected.as_deref() == Some(track.id.as_str());
+                song_row(
+                    track,
+                    if chosen { path } else { RowState::Rest },
+                    open.as_deref() == Some(track.id.as_str()),
+                    dots.get(&track.id).copied(),
+                    &app,
+                )
+            })
+            .collect()
+    })
+    .track_scroll(&state.songs_scroll)
+    .size_full()
+    .p(px(COLUMN_PAD))
+    .into_any_element()
+}
+
+/// One song: its art, title, artist and tempo, its length and how many scores
+/// this venue holds for it, and its coverage dot. A press selects it; a
+/// right-click is the folder menu.
+fn song_row(
     track: &TrackBrowserRow,
-    folder: Option<&str>,
+    state: RowState,
     open: bool,
-    expanded: bool,
+    status: Option<ChatStatus>,
     app: &Entity<Luma>,
 ) -> AnyElement {
     let name = track_name(track);
@@ -766,60 +1029,23 @@ fn track_row(
     let raised = app.clone();
     let track_id = track.id.clone();
     let menu_track = track.id.clone();
-    let place = folder.map(str::to_string);
-    // A song listed in a folder is the same track twice on screen, so its
-    // element is keyed by the folder too.
-    let key = match folder {
-        Some(folder) => format!("{folder}/{}", track.id),
-        None => track.id.clone(),
-    };
-    let text = |value: String, alpha: f32| {
-        div()
-            .truncate()
-            .text_size(px(12.))
-            .text_color(glass::ink(alpha))
-            .child(value)
-    };
-    let number = |value: String| {
-        div()
-            .w(px(NUMBER))
-            .flex_none()
-            .text_size(px(11.))
-            .font_family(luma_ui::fonts::MONO)
-            .text_color(glass::ink(glass::TEXT_SECONDARY))
-            .child(value)
-    };
+    let key = SharedString::from(format!("song-{}", track.id));
     let artist = track
         .artist
         .clone()
         .unwrap_or_else(|| "Unknown artist".into());
-    let bpm = track
-        .bpm
-        .map_or_else(String::new, |bpm| format!("{bpm:.1}"));
-    let length = track
-        .duration_seconds
-        .map_or_else(String::new, |seconds| length(seconds));
-    div()
-        .id(SharedString::from(key))
+    let subtitle = sub_line(&artist, track.bpm);
+    let length = track.duration_seconds.map_or_else(String::new, length);
+    float::menu_row(state, key.clone())
+        .id(key)
         .w_full()
-        .h(px(ROW_HEIGHT))
-        .flex()
-        .items_center()
-        .gap(px(GAP))
-        .px(px(PAD_X))
-        .when(folder.is_some(), |row| row.pl(px(PAD_X + FOLDER_INDENT)))
-        .border_b_1()
-        .border_color(glass::inner_rule())
-        .when(open, |row| row.bg(glass::wash(glass::WASH_PRESSED)))
-        .when(!open, |row| {
-            row.bg(glass::wash(0.))
-                .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
-                .fade_hover()
-        })
-        .on_click(move |_, _, cx| {
-            let (track_id, place) = (track_id.clone(), place.clone());
+        .h(px(SONG_ROW))
+        .py(px(0.))
+        .on_click(move |_, window, cx| {
+            let track_id = track_id.clone();
             pressed.update(cx, |this, cx| {
-                this.toggle_track_scores(&track_id, place, cx)
+                this.focus_columns(window, cx);
+                this.select_track(&track_id, cx);
             });
         })
         .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
@@ -830,50 +1056,48 @@ fn track_row(
             };
             raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
         })
+        .child(album_art(track.album_art_path.as_deref(), ART))
+        .child(float::row_text_with(
+            name.clone(),
+            Some(
+                float::row_subtitle(subtitle.clone())
+                    .agent_node(Role::Text, subtitle)
+                    .into_any_element(),
+            ),
+        ))
+        .children(status.map(|status| crate::agent::status_dot(status, &name)))
         .child(
             div()
-                .w(px(DISCLOSURE + DOT + 4.))
                 .flex_none()
                 .flex()
-                .items_center()
-                .gap(px(4.))
+                .flex_col()
+                .items_end()
+                .gap(px(2.))
                 .child(
                     div()
-                        .w(px(DISCLOSURE))
-                        .flex()
-                        .justify_center()
-                        .text_color(glass::ink(glass::TEXT_TERTIARY))
-                        .child(
-                            gpui_component::Icon::new(if expanded {
-                                luma_ui::icons::IconName::ChevronDown
-                            } else {
-                                luma_ui::icons::IconName::ChevronRight
-                            })
-                            .size(px(11.)),
-                        ),
+                        .text_size(px(11.))
+                        .font_family(luma_ui::fonts::MONO)
+                        .text_color(glass::ink(if open { 0.95 } else { glass::TEXT_SECONDARY }))
+                        .child(length),
                 )
+                .child(score_count(track)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .size(px(DOT))
                 .children(coverage_dot(track)),
         )
-        .child(album_art(track.album_art_path.as_deref(), ART))
-        .child(text(name.clone(), 0.95).flex_1().min_w_0())
-        .child(
-            text(artist.clone(), glass::TEXT_SECONDARY)
-                .w(px(ARTIST))
-                .flex_none()
-                .agent_node(Role::Text, sub_line(&artist, track.bpm)),
-        )
-        .child(number(bpm))
-        .child(number(length))
-        .child(div().w(px(SCORES)).flex_none().child(score_count(track)))
         .agent_node(Role::Row, name)
         .into_any_element()
 }
 
-/// What a row said under its title before the list had columns — `artist ·
-/// bpm` — kept as the artist cell's name so a script reads one line.
+/// The line under a song's title: `artist · 128 BPM`, the tempo's fraction
+/// shown only when it has one.
 fn sub_line(artist: &str, bpm: Option<f64>) -> String {
     match bpm {
-        Some(bpm) => format!("{artist} · {bpm:.1}"),
+        Some(bpm) if bpm.fract().abs() < 0.05 => format!("{artist} · {bpm:.0} BPM"),
+        Some(bpm) => format!("{artist} · {bpm:.1} BPM"),
         None => artist.to_string(),
     }
 }
@@ -883,35 +1107,6 @@ fn length(seconds: f64) -> String {
     let total = seconds.max(0.).round() as u64;
     format!("{}:{:02}", total / 60, total % 60)
 }
-
-/// How far a folder's songs sit in from the folder.
-const FOLDER_INDENT: f32 = 14.;
-
-/// One line of the list, inset by the page's gutter. As tall as what it
-/// holds.
-fn slot(content: impl IntoElement) -> Div {
-    div().w_full().flex().px(px(PAD_X)).child(content)
-}
-
-/// The heading over every song, with how many the filters admit.
-fn all_songs(songs: usize) -> AnyElement {
-    slot(
-        div()
-            .w_full()
-            .flex()
-            .items_center()
-            .px(px(float::ROW_INSET))
-            .child(div().flex_1().child(float::label(ALL_SONGS)))
-            .child(luma_ui::caption(format!("{songs} songs"))),
-    )
-    .py(px(8.))
-    .border_b_1()
-    .border_color(glass::inner_rule())
-    .into_any_element()
-}
-
-/// What the heading over every song says.
-const ALL_SONGS: &str = "All songs";
 
 /// The row's cover thumbnail: a neutral plate, with the art painted over it
 /// when the track has any.
@@ -952,11 +1147,11 @@ fn score_count(track: &TrackBrowserRow) -> impl IntoElement {
     let count = track.venue_score_count;
     let (text, alpha) = match count {
         n if n <= 0 => ("No scores".to_string(), glass::TEXT_TERTIARY),
-        1 => ("1 score".to_string(), glass::TEXT_SECONDARY),
-        n => (format!("{n} scores"), glass::TEXT_SECONDARY),
+        1 => ("1 score".to_string(), glass::TEXT_TERTIARY),
+        n => (format!("{n} scores"), glass::TEXT_TERTIARY),
     };
     div()
-        .text_size(px(12.))
+        .text_size(px(10.5))
         .text_color(glass::ink(alpha))
         .child(text)
         // Track-scoped, because a script finds nodes across the whole tree
@@ -980,12 +1175,5 @@ fn coverage_dot(track: &TrackBrowserRow) -> Option<Div> {
     } else {
         ladder::status_warn()
     };
-    Some(
-        div()
-            .flex_shrink_0()
-            .w(px(DOT))
-            .h(px(DOT))
-            .rounded_full()
-            .bg(color),
-    )
+    Some(div().size(px(DOT)).rounded_full().bg(color))
 }

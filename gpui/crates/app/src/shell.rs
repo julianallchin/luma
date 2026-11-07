@@ -1033,7 +1033,8 @@ fn songs_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             .size_full()
             .flex()
             .when(holds_focus, |page| page.track_focus(&focus))
-            .child(tracks::page(app, songs, &statuses, &entity, window))
+            .on_key_down(tracks::on_key(&entity))
+            .child(tracks::page(app, songs, &statuses, &entity, window, cx))
             .into_any_element(),
         None => div().into_any_element(),
     }

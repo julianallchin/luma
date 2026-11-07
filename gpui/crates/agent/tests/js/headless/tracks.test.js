@@ -69,9 +69,11 @@ test("the browser filters a seeded library by venue, ownership and search", () =
   const read = () => {
     const shot = app.snapshot();
     return {
-      count: shot.find((node) => /^\d+ songs$/.test(node.label)).label,
-      // The songs.
-      rows: shot.findAll({ role: "row" }).map((node) => node.label),
+      // All songs' count, as `N songs`.
+      count: `${shot.find((node) => /^All songs songs: \d+$/.test(node.label)).label.split(": ")[1]} songs`,
+      // The songs: every row but the places column's.
+      rows: shot.findAll({ role: "row" }).map((node) => node.label)
+        .filter((label) => label !== "All songs" && !label.startsWith("Folder ")),
     };
   };
   const press = (role, label) => {

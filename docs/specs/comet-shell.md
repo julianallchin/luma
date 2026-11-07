@@ -77,14 +77,44 @@ chat is working, or finished unseen, carries a status dot on its toggle.
 
 ## 4. The song list
 
-Today's track browser as a page over Arrange: search, Mine/All, folders, add
-and import. A row expands in place to its scores in this venue and "New
-score"; choosing a score opens it and closes the page a double-click interval
-later (so a double-click on a score's name renames it instead). ⌘P and the
-stage's song / score menu open it; ⌘P and Escape close it. The list takes
-the window's width: the agent panel stands aside while it is up and comes
-back when it closes, unless it had been hidden by hand; ⌘B over the list
-shows it for that visit only.
+The venue's songs as a page over Arrange, laid out as Finder's column view
+(`tracks`). The head holds the title and count, the search, Mine/All and Add
+songs (add and import). Under it, three columns left to right, with hairlines
+(`panel_seam`) between them:
+
+1. **Places** (200 by default): "All songs", then a "Folders" heading over
+   the venue's folders, then "New folder". All songs lists every song, filed
+   or not; a folder holds links to songs and does not nest, so this is the
+   only column of places. Each place shows how many songs the filters admit
+   and a chevron; a folder also carries its songs' chat dots. Right-click a
+   folder to rename or delete it (delete asks when it holds songs).
+2. **Songs** (340 by default) in the selected place: art, title, `artist ·
+   bpm` under it, and at the row's end the length over the score count, the
+   chat dot and the coverage dot. A press selects a song. Right-click lists
+   the folders with checkboxes to file it in.
+3. **Scores** of the selected song, filling the rest: this venue's under its
+   name, "New score", then each other venue's under that venue's name — the
+   stage's song / score menu's order. The open score wears a check. A score
+   here opens on the spot and closes the page a double-click interval later
+   (so a double-click on its name renames it instead); another venue's asks
+   "Switch to <venue>?" first, the same question and path as the stage menu.
+   This venue's scores take a right-click Delete.
+
+Selecting in one column fills the next, and choosing another place empties
+the songs' selection. The path stays lit: the column with the keyboard
+wears the selected fill and ring, the others a plate. Up and Down move in a
+column, Right goes into the next, Left steps back (clearing the column it
+leaves), Enter opens the score under the cursor; Down in the search goes to
+the first match. The selection outlives the page closing, so it reopens on
+the folder and song it was left on. The first two columns' seams drag (the
+grip's 5px reach over the hairline; double-click resets), and the scores
+keep at least 260. A search lists matches from every place, with All songs
+selected, and choosing a place ends it.
+
+⌘P and the stage's song / score menu open the page; ⌘P and Escape close it.
+The list takes the window's width: the agent panel stands aside while it is
+up and comes back when it closes, unless it had been hidden by hand; ⌘B over
+the list shows it for that visit only.
 
 ## 5. Surfaces
 
@@ -98,7 +128,8 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 - **Inside the page, panels are flush.** A seam that drags — agent | content,
   stage / body, Live's decks | stage — is a 4px gutter of the trim, so the
   trim runs on into the page along it; the grip over it keeps its own 5px
-  reach. Panels that do not resize against each other take a 1px hairline
+  reach. The song list's columns are the one exception: Finder's hairlines,
+  with grips over them. Panels that do not resize against each other take a 1px hairline
   (`panel_seam`, `#ffffff12`); a hairline inside a panel is `inner_rule`
   (`#ffffff0a`). No panel corners.
 - **Corners** belong only to controls (6–8), clips and pads (4) and floating

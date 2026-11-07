@@ -1,11 +1,11 @@
 // A song's scores on the song list, driven end to end with motion snapped.
 //
-// - a song row is a door to the song's scores: pressing it unfolds them under
-//   the row, not straight onto a timeline the list guessed at;
+// - a song row is a door to the song's scores: pressing it lists them in the
+//   scores column, not straight onto a timeline the list guessed at;
 // - the scores list every score on the `(track, venue)`, and choosing one
 //   opens it and closes the list;
 // - `New score` mints another and opens it;
-// - pressing the row again folds the scores away.
+// - Left from the song puts the scores away again.
 
 // Two further scores on the seeded pair, so the song lists three.
 fixture({ seconds: 8, clips: [{ pattern: "pat-glow", name: "Glow", start: 1, end: 4 }], extra_scores: 2 });
@@ -13,7 +13,7 @@ fixture({ seconds: 8, clips: [{ pattern: "pat-glow", name: "Glow", start: 1, end
 const songList = (s) => s.find({ role: "card", label: "Song list" }) !== undefined;
 const unfolded = (s) => s.find({ role: "card", label: "Scores of Aurora" }) !== undefined;
 
-test("the row unfolds a song's scores, and they switch, mint and fold", () => {
+test("the row lists a song's scores, and they switch, mint and go away", () => {
   const ordinal = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"))?.label;
   const rows = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
   const ordinals = (labels) => labels.map((l) => l.split(" ")[0]).sort();
@@ -44,9 +44,10 @@ test("the row unfolds a song's scores, and they switch, mint and fold", () => {
   until("four scores listed", () => rows().length === 4);
   expect(ordinals(rows().map((n) => n.label))).toEqual(["#1", "#2", "#3", "#4"]);
 
-  // …and folded away again by the row.
+  // …and put away again: Left from the song steps back out of it.
   app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
-  until("the scores folded", (s) => songList(s) && !unfolded(s) && rows().length === 0);
+  app.key("left");
+  until("the scores put away", (s) => songList(s) && !unfolded(s) && rows().length === 0);
   expect(app.snapshot().find({ role: "row", label: "Aurora" }) !== undefined).toBe(true);
 });
 

@@ -8,14 +8,15 @@
 fixture({ clips: [{ pattern: "pat-glow", name: "Glow", start: 1, end: 4 }] });
 
 // The title bar's venue menu, open over the song list. A song row sits under
-// the press — pressing it expands that song's scores, which is loud and easy
-// to notice.
+// the press — pressing it fills the scores column with that song's scores,
+// which is loud and easy to notice.
 test("a press outside a menu closes it and does not reach what is under it", () => {
   nav.venue("Test Venue");
   nav.songs();
   const menu = (s) => s.find({ role: "row", label: "New venue…" });
   const expanded = (s) => s.find({ role: "card", label: "Scores of Aurora" });
 
+  until("the song", (s) => s.find({ role: "row", label: "Aurora" }));
   nav.venueMenu();
   const opened = until("the venue menu", (s) => menu(s) !== undefined ? s : undefined);
   expect(expanded(opened)).toBe(undefined);
@@ -23,9 +24,11 @@ test("a press outside a menu closes it and does not reach what is under it", () 
   // A point on the song's row clear of the menu.
   const row = opened.find({ role: "row", label: "Aurora" }).bounds;
   const box = opened.find({ role: "row", label: "New venue…" }).bounds;
-  app.drag({ x: Math.max(row.x + row.width - 40, box.x + box.width + 40), y: row.y + row.height / 2 }, { dx: 0, dy: 0 }, { steps: 1 });
+  const at = { x: Math.max(row.x + row.width - 40, box.x + box.width + 40), y: row.y + row.height / 2 };
+  assert(at.x < row.x + row.width, `no point on the song's row clears the menu: ${JSON.stringify({ row, box })}`);
+  app.drag(at, { dx: 0, dy: 0 }, { steps: 1 });
   app.frames(2);
   const after = app.snapshot();
   assert(menu(after) === undefined, "the menu stayed up through a press outside it");
-  assert(expanded(after) === undefined, "the dismissing press also expanded the song — the float shares its press");
+  assert(expanded(after) === undefined, "the dismissing press also selected the song — the float shares its press");
 });

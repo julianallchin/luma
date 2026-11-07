@@ -1,28 +1,29 @@
-//! The song list's folders: a venue's named sets of its songs
-//! (`docs/specs/comet-shell.md` §4).
+//! The song list's first column: "All songs", then the venue's folders — a
+//! venue's named sets of its songs (`docs/specs/comet-shell.md` §4).
 //!
-//! A folder holds links, not songs. A song in a folder is the same song as
-//! under All songs: pressing it opens the same scores level, so a song in two
-//! folders shows the same scores in both. Deleting a folder deletes only its
-//! links.
+//! A folder holds links, not songs, and folders do not nest. A song in a
+//! folder is the same song as under All songs, which lists every song filed or
+//! not: selecting it shows the same scores, so a song in two folders shows the
+//! same scores in both. Deleting a folder deletes only its links.
 //!
-//! A folder row opens and closes on a press. A right-click on it offers rename
-//! and delete; a right-click on a song offers the folders to put it in.
+//! A press on a place selects it and fills the songs column. A right-click on
+//! a folder offers rename and delete; a right-click on a song offers the
+//! folders to put it in.
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::glass;
+use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument, Role};
 use luma_ui::text_input::{self, TextInput, DRAFT_CONTEXT};
 
 use luma_lib::models::folders::Folder;
 
-use super::{slot, Tracks};
+use super::{Column, Place, Tracks};
 use crate::agent::ChatStatus;
 use crate::library::LibraryError;
 use crate::workspace::Target;
@@ -126,17 +127,6 @@ impl Luma {
             .ok();
         })
         .detach();
-    }
-
-    fn toggle_folder(&mut self, folder_id: &str, cx: &mut Context<Self>) {
-        let Some(state) = &mut self.songs else {
-            return;
-        };
-        if !state.expanded.remove(folder_id) {
-            state.expanded.insert(folder_id.to_string());
-        }
-        state.refilter();
-        cx.notify();
     }
 
     /// Make a folder and put the caret in its name.
@@ -293,9 +283,6 @@ impl Luma {
     }
 
     pub(crate) fn delete_folder(&mut self, folder_id: String, cx: &mut Context<Self>) {
-        if let Some(state) = &mut self.songs {
-            state.expanded.remove(&folder_id);
-        }
         let pending = self.library.delete_folder(&folder_id);
         self.change_folders(pending, cx);
     }
@@ -314,20 +301,64 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
-/// Each folder's status dot, by folder: the strongest dot among the score
-/// tabs of its songs, while the folder is closed. Open, it is the songs under
-/// it that are on screen.
-pub(super) fn statuses(
+/// The first column: All songs, the venue's folders, and the way to make
+/// another.
+pub(super) fn column(
     state: &Tracks,
     statuses: &HashMap<Target, ChatStatus>,
-) -> Rc<[Option<ChatStatus>]> {
+    app: &Entity<Luma>,
+) -> AnyElement {
+    let dots = folder_statuses(state, statuses);
+    let place = state.shown_place();
+    let renaming = state
+        .rename
+        .as_ref()
+        .map(|rename| (rename.folder_id.clone(), rename.field.clone()));
+    div()
+        .id("places-column")
+        .size_full()
+        .overflow_y_scroll()
+        .p(px(6.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(all_songs_row(
+            state.path_state(Column::Places, *place == Place::All),
+            state.all_count,
+            app,
+        ))
+        .when(!state.folders.is_empty(), |el| {
+            el.child(float::section_heading("Folders").pt(px(10.)))
+        })
+        .children(state.folders.iter().enumerate().map(|(index, folder)| {
+            let selected = matches!(place, Place::Folder(id) if *id == folder.id);
+            let field = renaming
+                .as_ref()
+                .filter(|(id, _)| *id == folder.id)
+                .map(|(_, field)| field);
+            folder_row(
+                folder,
+                state.counts.get(index).copied().unwrap_or_default(),
+                state.path_state(Column::Places, selected),
+                dots[index],
+                field,
+                app,
+            )
+        }))
+        .child(new_folder_row(app))
+        .into_any_element()
+}
+
+/// Each folder's status dot, by folder: the strongest dot among the score
+/// tabs of its songs.
+fn folder_statuses(
+    state: &Tracks,
+    statuses: &HashMap<Target, ChatStatus>,
+) -> Vec<Option<ChatStatus>> {
     state
         .folders
         .iter()
         .map(|folder| {
-            if state.expanded.contains(&folder.id) {
-                return None;
-            }
             statuses
                 .iter()
                 .filter_map(|(target, status)| match target {
@@ -343,72 +374,112 @@ pub(super) fn statuses(
         .collect()
 }
 
-/// One folder: the disclosure chevron, the name (or the field typing it), how
-/// many songs the filters admit, and the dot of its songs' tabs.
-pub(super) fn folder_row(
+/// A place's row: its glyph, its name, how many songs the filters admit in
+/// it, and the chevron that says selecting it opens a column.
+fn place_row(state: RowState, key: SharedString, icon: IconName) -> Stateful<Div> {
+    float::nav_row(state, key.clone()).id(key).w_full().child(
+        gpui_component::Icon::new(icon)
+            .size(px(14.))
+            .text_color(glass::ink(glass::TEXT_SECONDARY)),
+    )
+}
+
+/// The count and the chevron that end a place's row.
+fn place_tail(count: usize, label: String) -> [AnyElement; 2] {
+    [
+        div()
+            .flex_shrink_0()
+            .text_size(px(11.))
+            .text_color(glass::ink(glass::TEXT_TERTIARY))
+            .child(count.to_string())
+            .agent_node(Role::Text, label)
+            .into_any_element(),
+        gpui_component::Icon::new(IconName::ChevronRight)
+            .size(px(11.))
+            .text_color(glass::ink(glass::TEXT_TERTIARY))
+            .into_any_element(),
+    ]
+}
+
+/// Every song in the venue, in a folder or not.
+fn all_songs_row(state: RowState, songs: usize, app: &Entity<Luma>) -> AnyElement {
+    let app = app.clone();
+    place_row(state, "place-all".into(), IconName::Music)
+        .on_click(move |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.focus_columns(window, cx);
+                this.select_place(Place::All, cx);
+            });
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .truncate()
+                .text_color(glass::ink(0.9))
+                .child(ALL_SONGS),
+        )
+        .children(place_tail(songs, format!("{ALL_SONGS} songs: {songs}")))
+        .agent_node(Role::Row, ALL_SONGS)
+        .into_any_element()
+}
+
+/// What the first place is called.
+const ALL_SONGS: &str = "All songs";
+
+/// One folder: its name (or the field typing it), how many songs the filters
+/// admit, and the dot of its songs' tabs.
+fn folder_row(
     folder: &Folder,
     songs: usize,
-    open: bool,
+    state: RowState,
     status: Option<ChatStatus>,
     field: Option<&Entity<TextInput>>,
     app: &Entity<Luma>,
 ) -> AnyElement {
-    let key = SharedString::from(format!("folder-{}", folder.id));
-    let toggled = app.clone();
+    let selected = app.clone();
     let raised = app.clone();
-    let (toggle_id, menu_id) = (folder.id.clone(), folder.id.clone());
+    let (select_id, menu_id) = (folder.id.clone(), folder.id.clone());
     let label = format!("Folder {}", folder.name);
-    slot(
-        float::nav_row(RowState::Rest, key.clone())
-            .id(key)
-            .w_full()
-            .on_click(move |_, _, cx| {
-                toggled.update(cx, |this, cx| this.toggle_folder(&toggle_id, cx));
-            })
-            .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                let menu = Menu::Folder {
-                    at: event.position,
-                    folder_id: menu_id.clone(),
-                };
-                raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
-            })
-            .child(
-                gpui_component::Icon::new(if open {
-                    luma_ui::icons::IconName::ChevronDown
-                } else {
-                    luma_ui::icons::IconName::ChevronRight
-                })
-                .size(px(11.))
-                .text_color(glass::ink(0.55)),
-            )
-            .child(match field {
-                Some(field) => name_field(folder, field),
-                None => div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .truncate()
-                    .text_color(glass::ink(0.85))
-                    .child(folder.name.clone())
-                    .into_any_element(),
-            })
-            .children(status.map(|status| crate::agent::status_dot(status, &label)))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(11.))
-                    .text_color(glass::ink(0.45))
-                    .child(songs.to_string())
-                    .agent_node(Role::Text, format!("{label} songs: {songs}")),
-            )
-            .agent_node(Role::Row, label),
+    place_row(
+        state,
+        SharedString::from(format!("folder-{}", folder.id)),
+        IconName::Folder,
     )
+    .on_click(move |_, window, cx| {
+        let place = Place::Folder(select_id.clone());
+        selected.update(cx, |this, cx| {
+            this.focus_columns(window, cx);
+            this.select_place(place, cx);
+        });
+    })
+    .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
+        cx.stop_propagation();
+        let menu = Menu::Folder {
+            at: event.position,
+            folder_id: menu_id.clone(),
+        };
+        raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
+    })
+    .child(match field {
+        Some(field) => name_field(folder, field),
+        None => div()
+            .flex_1()
+            .min_w(px(0.))
+            .truncate()
+            .text_color(glass::ink(0.85))
+            .child(folder.name.clone())
+            .into_any_element(),
+    })
+    .children(status.map(|status| crate::agent::status_dot(status, &label)))
+    .children(place_tail(songs, format!("{label} songs: {songs}")))
+    .agent_node(Role::Row, label)
     .into_any_element()
 }
 
 /// The name as a live field. The draft context gives the field Enter and
 /// Escape ahead of the song list's own keys; presses inside it stop here, so
-/// placing the caret does not close the folder.
+/// placing the caret does not reselect the folder.
 fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
     float::field()
         .id(SharedString::from(format!(
@@ -425,24 +496,28 @@ fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
 }
 
 /// Make another folder.
-pub(super) fn new_folder_row(app: &Entity<Luma>) -> AnyElement {
+fn new_folder_row(app: &Entity<Luma>) -> AnyElement {
     let app = app.clone();
-    slot(
-        float::nav_row(RowState::Rest, "new-folder")
-            .id("new-folder")
-            .w_full()
-            .on_click(move |_, window, cx| {
-                app.update(cx, |this, cx| this.create_folder(window, cx));
-            })
-            .child(
-                gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
-                    .size(px(11.))
-                    .text_color(glass::ink(0.55)),
-            )
-            .child(div().flex_1().text_color(glass::ink(0.7)).child(NEW_FOLDER))
-            .agent_node(Role::Button, NEW_FOLDER),
-    )
-    .into_any_element()
+    float::nav_row(RowState::Rest, "new-folder")
+        .id("new-folder")
+        .w_full()
+        .mt(px(2.))
+        .on_click(move |_, window, cx| {
+            app.update(cx, |this, cx| this.create_folder(window, cx));
+        })
+        .child(
+            gpui_component::Icon::new(IconName::Plus)
+                .size(px(14.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
+                .child(NEW_FOLDER),
+        )
+        .agent_node(Role::Button, NEW_FOLDER)
+        .into_any_element()
 }
 
 /// The menu a right-click raised, if one is up.

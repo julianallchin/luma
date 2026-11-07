@@ -10,8 +10,10 @@
 // - the window is a venue in one of three modes — Rig (the venue page), Arrange
 //   (the open score) and Live (the Perform set) — switched by 1/2/3 or the
 //   title bar's segmented control;
-// - Arrange with no score open is the song list page; a song row expands to
-//   its scores in place, and choosing one opens it and closes the page;
+// - Arrange with no score open is the song list page, in Finder's column
+//   view: places (All songs, then folders), the songs in the selected place,
+//   and the selected song's scores; choosing a score opens it and closes the
+//   page;
 // - a double-click on a clip opens its graph where the timeline was;
 // - `luma::DismissOverlay` is what Escape means.
 //
@@ -101,9 +103,8 @@ globalThis.nav = {
 				&& s.find({ role: "input", label: "Search tracks" }) !== undefined);
 	},
 
-	// One song's scores, expanded under its row on the song list. Other
-	// songs may be expanded too, so what is in this one's card is
-	// `nav.inScores`.
+	// One song's scores, in the song list's scores column: the song selected
+	// in the songs column. What is in the column is `nav.inScores`.
 	scores(track) {
 		nav.songs();
 		if (app.snapshot().find({ role: "card", label: `Scores of ${track}` }) === undefined) {
@@ -113,7 +114,7 @@ globalThis.nav = {
 	},
 
 	// The `role` nodes (labelled `label`, when given) inside `track`'s
-	// expanded scores, top to bottom.
+	// scores column, top to bottom.
 	inScores(snapshot, track, role, label) {
 		const card = snapshot.find({ role: "card", label: `Scores of ${track}` })?.bounds;
 		if (card === undefined) return [];

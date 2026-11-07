@@ -1,21 +1,22 @@
-//! A song's scores, expanded in place under its row on the song list.
+//! The song list's third column: the selected song's scores.
 //!
 //! A score is a `(track, venue)` document owned by one principal, and a pair
 //! holds as many of them as there are principals who annotated it. One score
 //! is open at a time: choosing one opens it in Arrange and closes the list.
 //!
-//! # Why in place
+//! # Why a column
 //!
 //! Scores are *navigation*: choosing one is choosing what the timeline is a
-//! view of, which is the same kind of act as choosing the track. So they live
-//! where the track is, one press deeper, and the way back is the same press.
+//! view of, which is the same kind of act as choosing the track. So they sit
+//! one column right of the track, the way a file sits right of its folder.
 //!
-//! # This venue's scores are the list; the others are context
+//! # This venue's scores first; the others under their venue
 //!
 //! The listing is cross-venue ([`Library::scores_across_venues`]) because "the
 //! same track, scored in the warehouse too" is the fact the operator cannot
-//! otherwise find. Only the open venue's rows answer the pointer: another
-//! venue's score belongs to that venue.
+//! otherwise find. Another venue's score opens the way the stage's score menu
+//! opens one: after asking, by switching the window to that venue. Only this
+//! venue's scores take the right-click menu and a rename.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -130,24 +131,21 @@ fn short_uid(uid: &str) -> String {
     uid.chars().take(6).collect()
 }
 
-/// The level's whole state: the track it is about, and the listing for it.
-
-/// One song's expansion: the track it is about, where in the list it was
-/// expanded, and the listing for it.
+/// The selected song's scores: the track they are about, and the listing for
+/// it.
 ///
 /// The track is a *snapshot*, not an index into the page's rows: the filters
-/// behind it can admit a different set while it is open.
+/// behind it can admit a different set while it is selected.
 pub(crate) struct Scores {
     pub(crate) track: TrackBrowserRow,
-    /// The folder the song was expanded under, or none under All songs. A song
-    /// is listed once per place, and expands at the one that was pressed.
-    pub(crate) folder: Option<String>,
     pub(crate) rows: Rc<[ScoreRow]>,
     /// Whether the listing has come back. Written in the same assignment as
     /// [`Self::rows`] and [`Self::error`], so "still loading" and "no scores"
     /// can never be confused for one another.
     pub(crate) loaded: bool,
     pub(crate) error: Option<String>,
+    /// The keyboard's place in the column, an index into [`Self::items`].
+    pub(crate) cursor: Option<usize>,
     /// The context menu a right-click raised, or none. Held here and not by
     /// the row: a row is rebuilt every frame from the listing, and the menu
     /// has to outlive that.
@@ -155,6 +153,54 @@ pub(crate) struct Scores {
     /// The score whose name is being typed, or none. One caret is what a
     /// person has.
     rename: Option<Rename>,
+}
+
+/// One line of the column the keyboard can stand on: a score, by its index
+/// in [`Scores::rows`], or the way to mint another.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Item {
+    Score(usize),
+    New,
+}
+
+impl Scores {
+    pub(crate) fn new(track: TrackBrowserRow) -> Self {
+        Self {
+            track,
+            rows: Vec::new().into(),
+            loaded: false,
+            error: None,
+            cursor: None,
+            menu: None,
+            rename: None,
+        }
+    }
+
+    /// The column top to bottom, as the keyboard walks it: `venue`'s scores,
+    /// New score, then every other venue's, grouped as [`elsewhere`] groups
+    /// them. Empty until the listing has come back.
+    pub(crate) fn items(&self, venue: &str) -> Vec<Item> {
+        if !self.loaded {
+            return Vec::new();
+        }
+        let index = |row: &ScoreRow| {
+            self.rows
+                .iter()
+                .position(|other| other.id == row.id)
+                .map(Item::Score)
+        };
+        self.rows
+            .iter()
+            .filter(|row| row.venue_id == venue)
+            .filter_map(index)
+            .chain(std::iter::once(Item::New))
+            .chain(
+                elsewhere(&self.rows, venue)
+                    .flat_map(|(_, rows)| rows)
+                    .filter_map(index),
+            )
+            .collect()
+    }
 }
 
 /// An inline rename: the score, the live field, and what the name read when
@@ -199,77 +245,59 @@ impl ScoreRow {
 }
 
 impl super::Tracks {
-    /// Tell the list an expansion changed height: its entry is measured again
-    /// on the next draw, and the rows around it keep theirs.
-    fn remeasure(&mut self, track_id: &str) {
-        let Some(row) = self.rows.iter().position(|row| row.id == track_id) else {
-            return;
-        };
-        let at: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| matches!(entry, super::Entry::Scores { row: r, .. } if *r == row))
-            .map(|(index, _)| index)
-            .collect();
-        for index in at {
-            self.list.splice(index..index + 1, 1);
-        }
+    /// The scores column, while it is `track_id`'s.
+    fn scores_of(&self, track_id: &str) -> Option<&Scores> {
+        self.scores
+            .as_ref()
+            .filter(|level| level.track.id == track_id)
+    }
+
+    fn scores_of_mut(&mut self, track_id: &str) -> Option<&mut Scores> {
+        self.scores
+            .as_mut()
+            .filter(|level| level.track.id == track_id)
     }
 }
 
 // -- navigation and writes ----------------------------------------------------
 
 impl Luma {
-    /// Expand `track_id` to its scores under the row pressed at `folder`, or
-    /// fold them away. A song open in one place and pressed in another moves
-    /// there.
-    ///
-    /// The listing is read fresh on every expansion rather than cached with
-    /// the row: a score minted in another window is exactly the thing this
-    /// exists to show.
-    pub(crate) fn toggle_track_scores(
-        &mut self,
-        track_id: &str,
-        folder: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
+    /// Act on one line of the scores column: open a score of this venue on
+    /// the spot, ask before taking the window to another venue's — the stage
+    /// menu's own question, see [`Luma::ask_to_switch_venue`] — or mint a new
+    /// one.
+    pub(crate) fn choose_score_item(&mut self, track_id: &str, item: Item, cx: &mut Context<Self>) {
         let Some(songs) = &mut self.songs else {
             return;
         };
-        songs.menu = None;
-        if let Some(open) = songs.scores.get_mut(track_id) {
-            if open.folder == folder {
-                songs.scores.remove(track_id);
-            } else {
-                open.folder = folder;
-            }
-            songs.refilter();
-            cx.notify();
-            return;
-        }
-        let Some(track) = songs.find(track_id) else {
+        let here = songs.venue_id().to_string();
+        let Some(level) = songs.scores_of_mut(track_id) else {
             return;
         };
-        songs.scores.insert(
-            track_id.to_string(),
-            Scores {
-                track,
-                folder,
-                rows: Vec::new().into(),
-                loaded: false,
-                error: None,
-                menu: None,
-                rename: None,
-            },
-        );
-        songs.refilter();
-        cx.notify();
-        self.load_track_scores(track_id, cx);
+        let items = level.items(&here);
+        level.cursor = items.iter().position(|other| *other == item);
+        let row = match item {
+            Item::New => return self.create_listed_score(track_id, cx),
+            Item::Score(index) => level
+                .rows
+                .get(index)
+                .map(|row| (row.venue_id.clone(), row.venue.clone(), open_row(row))),
+        };
+        let Some((venue_id, venue, score)) = row else {
+            return;
+        };
+        if venue_id.as_ref() == here {
+            self.open_listed_score(track_id.to_string().into(), score, cx);
+        } else {
+            self.ask_to_switch_venue(venue_id, venue, track_id, score, cx);
+        }
     }
 
-    /// Read `track_id`'s listing into its expansion.
-    fn load_track_scores(&mut self, track_id: &str, cx: &mut Context<Self>) {
+    /// Read `track_id`'s listing into the scores column.
+    ///
+    /// Read fresh on every selection rather than cached with the row: a score
+    /// minted in another window is exactly the thing this exists to show.
+    pub(crate) fn load_track_scores(&mut self, track_id: &str, cx: &mut Context<Self>) {
         let pending = self.library.scores_across_venues(track_id);
         let user = self.library.user_id();
         let track_id = track_id.to_string();
@@ -292,14 +320,14 @@ impl Luma {
         .detach();
     }
 
-    /// Re-read the venue's songs, and every expanded song's scores.
+    /// Re-read the venue's songs, and the selected song's scores.
     pub(crate) fn refresh_score_listing(&mut self, cx: &mut Context<Self>) {
         let Some(songs) = &self.songs else {
             return;
         };
         let venue = songs.venue_id().to_owned();
         let generation = songs.load_generation();
-        let expanded: Vec<String> = songs.scores.keys().cloned().collect();
+        let selected = songs.scores.as_ref().map(|scores| scores.track.id.clone());
         let tracks = self.library.tracks(&venue);
         cx.spawn(async move |this, cx| {
             let result = tracks.await;
@@ -312,13 +340,13 @@ impl Luma {
             .ok();
         })
         .detach();
-        for track in expanded {
+        if let Some(track) = selected {
             self.load_track_scores(&track, cx);
         }
     }
 
-    /// Run `edit` against `track_id`'s expansion, while it is still open —
-    /// the same admission rule the venue's own reads take.
+    /// Run `edit` against `track_id`'s scores, while it is still the selected
+    /// song — the same admission rule the venue's own reads take.
     fn with_scores(
         &mut self,
         track_id: &str,
@@ -328,11 +356,14 @@ impl Luma {
         let Some(songs) = &mut self.songs else {
             return;
         };
-        let Some(level) = songs.scores.get_mut(track_id) else {
+        let Some(level) = songs
+            .scores
+            .as_mut()
+            .filter(|level| level.track.id == track_id)
+        else {
             return;
         };
         edit(level);
-        songs.remeasure(track_id);
         cx.notify();
     }
 
@@ -412,19 +443,17 @@ impl Luma {
     }
 
     /// Raise the score menu over the row that was right-clicked. Only rows in
-    /// the open venue get here — another venue's score is not this list's to
-    /// act on.
+    /// the open venue get here — another venue's score is that venue's to
+    /// delete or rename.
     fn open_score_menu(&mut self, track_id: &str, menu: ScoreMenu, cx: &mut Context<Self>) {
-        let Some(songs) = &mut self.songs else {
+        let Some(level) = self
+            .songs
+            .as_mut()
+            .and_then(|songs| songs.scores_of_mut(track_id))
+        else {
             return;
         };
-        for (track, level) in songs.scores.iter_mut() {
-            level.menu = None;
-            if track == track_id {
-                level.menu = Some(menu);
-                break;
-            }
-        }
+        level.menu = Some(menu);
         cx.notify();
     }
 
@@ -434,10 +463,10 @@ impl Luma {
         let Some(songs) = &mut self.songs else {
             return false;
         };
-        let mut closed = false;
-        for level in songs.scores.values_mut() {
-            closed |= level.menu.take().is_some();
-        }
+        let closed = songs
+            .scores
+            .as_mut()
+            .is_some_and(|level| level.menu.take().is_some());
         if closed {
             cx.notify();
         }
@@ -454,7 +483,7 @@ impl Luma {
         let Some(menu) = self
             .songs
             .as_ref()
-            .and_then(|songs| songs.scores.get(track_id.as_ref()))
+            .and_then(|songs| songs.scores_of(&track_id))
             .and_then(|level| level.menu.as_ref())
         else {
             return;
@@ -545,7 +574,7 @@ impl Luma {
         let Some(row) = self
             .songs
             .as_ref()
-            .and_then(|songs| songs.scores.get(track_id.as_ref()))
+            .and_then(|songs| songs.scores_of(&track_id))
             .and_then(|level| level.rows.iter().find(|row| row.id == score_id))
         else {
             return;
@@ -580,20 +609,18 @@ impl Luma {
                 .ok();
         });
         let focus = field.read(cx).focus_handle(cx);
-        if let Some(songs) = self.songs.as_mut() {
-            for level in songs.scores.values_mut() {
-                level.rename = None;
-            }
-            if let Some(level) = songs.scores.get_mut(track_id.as_ref()) {
-                level.menu = None;
-                level.rename = Some(Rename {
-                    score_id,
-                    field,
-                    opened_on,
-                    _subscriptions: vec![keys, blur],
-                });
-            }
-            songs.remeasure(&track_id);
+        if let Some(level) = self
+            .songs
+            .as_mut()
+            .and_then(|songs| songs.scores_of_mut(&track_id))
+        {
+            level.menu = None;
+            level.rename = Some(Rename {
+                score_id,
+                field,
+                opened_on,
+                _subscriptions: vec![keys, blur],
+            });
         }
         window.focus(&focus, cx);
         cx.notify();
@@ -615,12 +642,11 @@ impl Luma {
         };
         let Some((track_id, rename)) = songs
             .scores
-            .iter_mut()
-            .find_map(|(track, level)| Some((track.clone(), level.rename.take()?)))
+            .as_mut()
+            .and_then(|level| Some((level.track.id.clone(), level.rename.take()?)))
         else {
             return;
         };
-        songs.remeasure(&track_id);
         if let Some(window) = window {
             window.focus(&focus, cx);
         }
@@ -672,105 +698,117 @@ pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
 /// double-click interval: gpui does not publish it.
 const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// How far an expansion's rows sit in from the page's edge: under the song's
-/// title, past its disclosure and art.
-const INDENT: f32 = 16. + 16. + 10. + 12. + 36. + 12.;
-
-/// The expansion under `track_id`'s row: this venue's scores, the way to mint
-/// another, and — quietly — the other rooms the song is scored in.
-///
-/// Returned as a closure over its inputs because the list draws it on demand,
-/// once per frame it is in view.
-pub(super) fn expansion(
+/// The third column: the selected song's scores in this venue, the way to
+/// mint another, then each other venue's under its name. Says what to do when
+/// no song is selected.
+pub(super) fn column(
     shell: &Luma,
     state: &super::Tracks,
-    track_id: &str,
     statuses: &HashMap<Target, ChatStatus>,
     app: &Entity<Luma>,
-) -> Rc<dyn Fn() -> AnyElement> {
-    let Some(scores) = state.scores.get(track_id) else {
-        return Rc::new(|| div().into_any_element());
+) -> AnyElement {
+    let Some(scores) = &state.scores else {
+        return float::empty_row(if state.shown.is_empty() {
+            ""
+        } else {
+            "Select a song to see its scores"
+        })
+        .into_any_element();
     };
-    let venue = state.venue_id().to_string();
-    let venue_name = state.venue_name().to_string();
+    let venue = state.venue_id();
     let open = shell
         .workspace
         .of_mode(crate::workspace::Mode::Arrange)
         .map(|slot| slot.target.clone());
-    let statuses = statuses.clone();
-    let rows = Rc::clone(&scores.rows);
-    let (loaded, error) = (scores.loaded, scores.error.clone());
-    let track = scores.track.clone();
+    let track = &scores.track;
+    let items = scores.items(venue);
     let renaming = scores
         .rename
         .as_ref()
         .map(|rename| (rename.score_id.clone(), rename.field.clone()));
-    let app = app.clone();
-    Rc::new(move || {
-        let here: Vec<&ScoreRow> = rows.iter().filter(|row| row.venue_id == venue).collect();
-        div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .py(px(6.))
-            .pl(px(INDENT))
-            .pr(px(16.))
-            .bg(glass::wash(0x04 as f32 / 255.0))
-            .border_b_1()
-            .border_color(glass::inner_rule())
-            .children(error.clone().map(float::error_row))
-            .when(error.is_none() && !loaded, |el| {
-                el.child(float::empty_row("Loading scores…"))
-            })
-            .when(loaded && here.is_empty(), |el| {
-                el.child(float::empty_row(format!("No scores in {venue_name}")))
-            })
-            .children(here.into_iter().map(|row| {
-                let target = Target::Score {
-                    venue: venue.clone(),
-                    track: track.id.clone(),
-                    score: row.id.to_string(),
-                };
-                let rename = renaming
-                    .as_ref()
-                    .filter(|(id, _)| *id == row.id)
-                    .map(|(_, field)| field);
-                score_row(
-                    row,
-                    open.as_ref() == Some(&target),
-                    statuses.get(&target).copied(),
-                    Some((&app, &track)),
-                    rename,
-                )
-            }))
-            .when(loaded, |el| el.child(new_score(&app, &track.id)))
-            .children(elsewhere(&rows, &venue).map(|(venue, rows)| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .pt(px(6.))
-                    .child(float::section_heading(venue))
-                    .children(
-                        rows.into_iter()
-                            .map(|row| score_row(row, false, None, None, None)),
-                    )
-            }))
-            .agent_node(
-                Role::Card,
-                format!("Scores of {}", super::track_name(&track)),
-            )
-            .into_any_element()
-    })
+    // A row's paint: the cursor's, in the column's tint for whether the
+    // keyboard is here.
+    let row_state = |item: Item| {
+        let at = items.iter().position(|other| *other == item);
+        state.path_state(super::Column::Scores, at.is_some() && at == scores.cursor)
+    };
+    let draw = |row: &ScoreRow| {
+        let index = scores
+            .rows
+            .iter()
+            .position(|other| other.id == row.id)
+            .unwrap_or_default();
+        let here = row.venue_id == venue;
+        let target = Target::Score {
+            venue: row.venue_id.to_string(),
+            track: track.id.clone(),
+            score: row.id.to_string(),
+        };
+        let rename = renaming
+            .as_ref()
+            .filter(|(id, _)| here && *id == row.id)
+            .map(|(_, field)| field);
+        score_row(
+            row,
+            index,
+            row_state(Item::Score(index)),
+            here,
+            open.as_ref() == Some(&target),
+            statuses.get(&target).copied(),
+            app,
+            track,
+            rename,
+        )
+    };
+    let here: Vec<&ScoreRow> = scores
+        .rows
+        .iter()
+        .filter(|row| row.venue_id == venue)
+        .collect();
+    div()
+        .id("scores-column")
+        .size_full()
+        .overflow_y_scroll()
+        .p(px(6.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(float::section_heading(state.venue_name().to_string()).pt(px(6.)))
+        .children(scores.error.clone().map(float::error_row))
+        .when(scores.error.is_none() && !scores.loaded, |el| {
+            el.child(float::empty_row("Loading scores…"))
+        })
+        .when(scores.loaded && here.is_empty(), |el| {
+            el.child(float::empty_row(format!(
+                "No scores in {}",
+                state.venue_name()
+            )))
+        })
+        .children(here.into_iter().map(draw))
+        .when(scores.loaded, |el| {
+            el.child(new_score(row_state(Item::New), app, &track.id))
+        })
+        .children(elsewhere(&scores.rows, venue).map(|(name, rows)| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .pt(px(10.))
+                .child(float::section_heading(name))
+                .children(rows.into_iter().map(draw))
+        }))
+        .agent_node(
+            Role::Card,
+            format!("Scores of {}", super::track_name(track)),
+        )
+        .into_any_element()
 }
 
-/// The context menu over a right-clicked score, if one is up anywhere.
-pub(super) fn menus(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
-    let (track_id, open) = state
-        .scores
-        .iter()
-        .find_map(|(track, level)| Some((track.clone(), level.menu.as_ref()?)))?;
-    let track_id = SharedString::from(track_id);
+/// The context menu over a right-clicked score, if one is up.
+pub(super) fn menu(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
+    let level = state.scores.as_ref()?;
+    let open = level.menu.as_ref()?;
+    let track_id = SharedString::from(level.track.id.clone());
     let deleted = app.clone();
     let dismissed = app.clone();
     Some(
@@ -787,9 +825,10 @@ pub(super) fn menus(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyElem
     )
 }
 
-/// Every other venue's rows, grouped, in the order the venues first appear —
-/// which is newest-created first, so the room with the newest score leads.
-fn elsewhere<'a>(
+/// Every other venue's rows, grouped under the venue's name, in the order the
+/// venues first appear — which is newest-created first, so the room with the
+/// newest score leads. The stage's score menu groups them the same way.
+pub(crate) fn elsewhere<'a>(
     rows: &'a [ScoreRow],
     venue: &str,
 ) -> impl Iterator<Item = (SharedString, Vec<&'a ScoreRow>)> {
@@ -807,22 +846,26 @@ fn elsewhere<'a>(
     })
 }
 
-/// One score.
-///
-/// `press` present means the row is openable; `None` is another venue's
-/// score, which is readable here and openable only from that venue. The open
-/// score wears the selected wash.
+/// One score. A press opens it — here at once, in another venue after asking
+/// (see [`Luma::choose_score_item`]). `here` is whether it is this venue's:
+/// only those take the right-click menu and the rename. The open score wears a
+/// check.
 ///
 /// `rename` is the live field when this row's name is being typed, and
 /// `status` the dot of the score's chat.
+#[allow(clippy::too_many_arguments)]
 fn score_row(
     row: &ScoreRow,
+    index: usize,
+    state: RowState,
+    here: bool,
     open: bool,
     status: Option<ChatStatus>,
-    press: Option<(&Entity<Luma>, &TrackBrowserRow)>,
+    app: &Entity<Luma>,
+    track: &TrackBrowserRow,
     rename: Option<&Entity<TextInput>>,
 ) -> AnyElement {
-    let renamer = press.filter(|_| !row.read_only).map(|(app, track)| {
+    let renamer = (here && !row.read_only).then(|| {
         (
             app.clone(),
             SharedString::from(track.id.clone()),
@@ -831,87 +874,82 @@ fn score_row(
     });
     let id = SharedString::from(format!("score-{}", row.id));
     let label = format!(
-        "#{} · {} · {} patterns · {}{}{}",
+        "#{} · {} · {} patterns · {}{}{}{}",
         row.ordinal,
         row.author,
         row.clips,
         row.age,
         row.spend,
-        if row.read_only { " · read only" } else { "" }
-    );
-    float::menu_row(
-        if open {
-            RowState::Selected
+        if row.read_only { " · read only" } else { "" },
+        if here {
+            String::new()
         } else {
-            RowState::Rest
-        },
-        id.clone(),
-    )
-    .id(id)
-    .when(press.is_none(), |row| row.cursor_default().opacity(0.55))
-    .when_some(press, |el, (app, track)| {
-        let app = app.clone();
-        let track_id = SharedString::from(track.id.clone());
-        let menu_track = track.id.clone();
-        let score = open_row(row);
-        let raised = app.clone();
-        let (score_id, venue_id, ordinal, clips) =
-            (row.id.clone(), row.venue_id.clone(), row.ordinal, row.clips);
-        el.on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
-            cx.stop_propagation();
-            let menu = ScoreMenu {
-                at: event.position,
-                score_id: score_id.clone(),
-                ordinal,
-                venue_id: venue_id.clone(),
-                clips,
-            };
-            raised.update(cx, |this, cx| this.open_score_menu(&menu_track, menu, cx));
+            format!(" · {}", row.venue)
+        }
+    );
+    let pressed = app.clone();
+    let track_id = track.id.clone();
+    float::menu_row(state, id.clone())
+        .id(id)
+        .when(here, |el| {
+            let raised = app.clone();
+            let menu_track = track.id.clone();
+            let (score_id, venue_id, ordinal, clips) =
+                (row.id.clone(), row.venue_id.clone(), row.ordinal, row.clips);
+            el.on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let menu = ScoreMenu {
+                    at: event.position,
+                    score_id: score_id.clone(),
+                    ordinal,
+                    venue_id: venue_id.clone(),
+                    clips,
+                };
+                raised.update(cx, |this, cx| this.open_score_menu(&menu_track, menu, cx));
+            })
         })
-        .on_click(move |_, _, cx| {
-            let (track_id, score) = (
-                track_id.clone(),
-                crate::track_editor::Score {
-                    id: score.id.clone(),
-                    ordinal: score.ordinal,
-                    read_only: score.read_only,
-                },
-            );
-            app.update(cx, |this, cx| this.open_listed_score(track_id, score, cx));
+        .on_click(move |_, window, cx| {
+            let track_id = track_id.clone();
+            pressed.update(cx, |this, cx| {
+                this.focus_columns(window, cx);
+                this.choose_score_item(&track_id, Item::Score(index), cx);
+            });
         })
-    })
-    // The handle leads: a score's own name is usually absent and its uuid
-    // is unsayable, so `#2` is the only thing two people can both point at.
-    .child(
-        div()
-            .flex_shrink_0()
-            .w(px(28.))
-            .text_size(px(11.))
-            .font_weight(FontWeight::BOLD)
-            .text_color(glass::ink(if open { 0.95 } else { glass::TEXT_SECONDARY }))
-            .child(format!("#{}", row.ordinal)),
-    )
-    .child(
-        div()
-            .flex_1()
-            .min_w(px(0.))
-            .overflow_hidden()
-            .child(match rename {
-                Some(field) => name_field(row, field),
-                None => name_label(row, open, renamer),
-            }),
-    )
-    .child(
-        div()
-            .flex_shrink_0()
-            .text_size(px(11.))
-            .text_color(glass::ink(glass::TEXT_TERTIARY))
-            .child(row.detail()),
-    )
-    .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
-    .children(status.map(|status| crate::agent::status_dot(status, &format!("#{}", row.ordinal))))
-    .agent_node(Role::Row, label)
-    .into_any_element()
+        // The handle leads: a score's own name is usually absent and its uuid
+        // is unsayable, so `#2` is the only thing two people can both point at.
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(28.))
+                .text_size(px(11.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(glass::ink(if open { 0.95 } else { glass::TEXT_SECONDARY }))
+                .child(format!("#{}", row.ordinal)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .child(match rename {
+                    Some(field) => name_field(row, field),
+                    None => name_label(row, open, renamer),
+                }),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(11.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY))
+                .child(row.detail()),
+        )
+        .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
+        .children(
+            status.map(|status| crate::agent::status_dot(status, &format!("#{}", row.ordinal))),
+        )
+        .child(float::check(open))
+        .agent_node(Role::Row, label)
+        .into_any_element()
 }
 
 /// The score's name, or its owner when it has none. A double-click on it
@@ -966,14 +1004,17 @@ fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
 }
 
 /// Mint another score on this `(track, venue)`.
-fn new_score(app: &Entity<Luma>, track_id: &str) -> AnyElement {
+fn new_score(state: RowState, app: &Entity<Luma>, track_id: &str) -> AnyElement {
     let app = app.clone();
     let track_id = track_id.to_string();
-    float::menu_row(RowState::Rest, format!("new-score:{track_id}"))
+    float::menu_row(state, format!("new-score:{track_id}"))
         .id(SharedString::from(format!("new-score:{track_id}")))
-        .on_click(move |_, _, cx| {
+        .on_click(move |_, window, cx| {
             let track_id = track_id.clone();
-            app.update(cx, |this, cx| this.create_listed_score(&track_id, cx))
+            app.update(cx, |this, cx| {
+                this.focus_columns(window, cx);
+                this.choose_score_item(&track_id, Item::New, cx)
+            })
         })
         .child(
             gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
