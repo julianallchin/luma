@@ -1,4 +1,12 @@
-//! The settings screen: the app's key/value table, typed and editable.
+//! The settings page: the app's key/value table, typed and editable.
+//!
+//! # A page, not a dialog
+//!
+//! Settings takes the window's page the way the song list does — the agent
+//! panel stands aside and the stage and the mode's body give it their room —
+//! while the title bar stays. Back, Escape or a mode in the mode switch
+//! returns to what was there, untouched: nothing under the page is torn down
+//! to show it (`docs/specs/comet-shell.md` §6).
 //!
 //! # The write path
 //!
@@ -161,31 +169,38 @@ pub(crate) struct AccountAction {
 // impl lives here so the router stays a router.
 
 impl Luma {
-    /// Open settings over the whole shell. The regions persist beneath the
-    /// overlay, so closing it reveals them exactly as they were.
+    /// Put the settings page up in place of the page's content. The regions
+    /// it covers keep their state, so closing it shows them as they were. The
+    /// venue menu and the dialogs that open it have already closed by now.
     pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
-        if matches!(
-            self.overlay.as_open(),
-            Some(crate::shell::Overlay::Settings(_))
-        ) {
+        if self.settings.is_some() {
             return;
         }
-        let state = Settings::new(cx);
-        self.overlay.open(crate::shell::Overlay::Settings(state));
+        self.settings = Some(Settings::new(cx));
         cx.notify();
         self.reload_settings(cx);
     }
 
-    /// Dismiss the overlay. The Back button's handler; Escape lands in
-    /// [`Luma::dismiss_overlay`] and does the same thing.
-    pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
-        if matches!(
-            self.overlay.as_open(),
-            Some(crate::shell::Overlay::Settings(_))
-        ) {
-            self.close_overlay(cx);
-            cx.notify();
+    /// Take the page down: Back, Escape, or a mode chosen from the mode
+    /// switch. Reports whether it was up — Escape's rung.
+    pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.settings.take().is_none() {
+            return false;
         }
+        cx.notify();
+        true
+    }
+
+    /// Escape on the page: an open select first, then the page itself.
+    pub(crate) fn dismiss_settings(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &mut self.settings else {
+            return false;
+        };
+        if state.open_menu.take().is_some() {
+            cx.notify();
+            return true;
+        }
+        self.close_settings(cx)
     }
 
     fn show_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
@@ -290,9 +305,7 @@ impl Luma {
     /// The settings row `provider`'s key lives in, its field, and the trimmed
     /// draft in that field.
     fn key_draft(&self, provider: &str, cx: &App) -> Option<(String, Entity<TextInput>, String)> {
-        let Some(crate::shell::Overlay::Settings(state)) = self.overlay.as_open() else {
-            return None;
-        };
+        let state = self.settings.as_ref()?;
         let setting = state
             .values
             .as_ref()?
@@ -341,7 +354,7 @@ impl Luma {
     /// Put each stored key's hint in its field's placeholder. Here rather than
     /// in the render because a field's placeholder is the field's own state.
     fn show_key_hints(&self, values: &AppSettings, cx: &mut Context<Self>) {
-        let Some(crate::shell::Overlay::Settings(state)) = self.overlay.as_open() else {
+        let Some(state) = &self.settings else {
             return;
         };
         let updates: Vec<_> = state
@@ -419,11 +432,11 @@ impl Luma {
         }
     }
 
-    /// Run `edit` against the settings overlay's state, if it is still up. A
-    /// load that lands after it was dismissed is a no-op, not an overlay that
-    /// snaps back.
+    /// Run `edit` against the settings page's state, if it is still up. A
+    /// load that lands after it was closed is a no-op, not a page that snaps
+    /// back.
     fn with_settings(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
-        if let Some(crate::shell::Overlay::Settings(state)) = self.overlay.open_mut() {
+        if let Some(state) = &mut self.settings {
             edit(state);
             cx.notify();
         }
@@ -441,8 +454,8 @@ impl Luma {
 /// which is a working library and not a failure.
 pub(crate) const GUEST_ACCOUNT: &str = "Working locally";
 
-/// The nav's width, divided from the page by an inner hairline.
-const NAV_WIDTH: f32 = 196.;
+/// The nav's width, divided from the page by an inner hairline: zeron's 200.
+const NAV_WIDTH: f32 = 200.;
 /// The page column: zeron's settings measure.
 const PAGE_WIDTH: f32 = 640.;
 /// A row's floor; a row with help text grows past it.
@@ -452,18 +465,21 @@ const ROW_HEIGHT: f32 = 52.;
 const CONTROL_WIDTH: f32 = 240.;
 /// Air between the page's sections.
 const SECTION_GAP: f32 = 24.;
+/// Where the words of a card's rows start — the row's 16 and the card's 1px
+/// edge. The page's and the sections' titles start there too, so every word
+/// on the page lines up down one edge.
+const TEXT_INSET: f32 = 17.;
 /// A card's fill: zeron's `#ffffff08`.
 const CARD_ALPHA: f32 = 0x08 as f32 / 255.0;
 
-/// Render the screen. `app` is the root entity every control writes through;
+/// Render the page. `app` is the root entity every control writes through;
 /// `shell` is the app state the account section reads its identity from.
 pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>) -> Div {
     div()
         .size_full()
         .flex()
         .flex_row()
-        // The shared dialog host paints the card surface; route content stays
-        // transparent so a future renderer effect can be upgraded centrally.
+        .bg(ladder::background())
         .text_color(ladder::foreground())
         .child(nav(state, app))
         .child(
@@ -506,7 +522,11 @@ fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
             luma_ui::float::nav_row(RowState::Rest, "settings-back")
                 .id("settings-back")
                 .text_color(glass::ink(glass::TEXT_SECONDARY))
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_settings(cx)))
+                .on_click(move |_, _, cx| {
+                    back.update(cx, |this, cx| {
+                        this.close_settings(cx);
+                    })
+                })
                 .child(
                     gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(12.)),
                 )
@@ -551,10 +571,11 @@ fn page(
         .flex_col()
         .gap(px(SECTION_GAP))
         .px(px(24.))
-        .pt(px(32.))
-        .pb(px(40.))
+        .pt(px(40.))
+        .pb(px(48.))
         .child(
             div()
+                .px(px(TEXT_INSET))
                 .flex()
                 .flex_col()
                 .gap(px(4.))
@@ -575,6 +596,7 @@ fn page(
         .when_some(error, |el, message| {
             el.child(
                 div()
+                    .px(px(TEXT_INSET))
                     .text_size(px(12.))
                     .text_color(ladder::danger())
                     .child(format!("Failed to save: {message}"))
@@ -914,7 +936,7 @@ fn section(title: &str, rows: Vec<Div>, note: Option<&str>) -> Div {
         .gap(px(8.))
         .child(
             div()
-                .px(px(4.))
+                .px(px(TEXT_INSET))
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(glass::ink(glass::TEXT_SECONDARY))
@@ -936,7 +958,7 @@ fn section(title: &str, rows: Vec<Div>, note: Option<&str>) -> Div {
                 })),
         )
         .when_some(note, |el, note| {
-            el.child(div().px(px(4.)).child(help_text(note)))
+            el.child(div().px(px(TEXT_INSET)).child(help_text(note)))
         })
 }
 
@@ -961,7 +983,12 @@ fn row(label: &str, help: Option<&str>, control: AnyElement) -> Div {
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().text_size(px(13.)).child(label.to_string()))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
                 .when_some(help, |el, help| el.child(help_text(help))),
         )
         .child(control_slot(control))

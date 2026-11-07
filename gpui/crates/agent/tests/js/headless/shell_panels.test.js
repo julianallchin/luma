@@ -32,7 +32,10 @@ const toggle = (action) => {
   app.frames(2);
   return read();
 };
-const dialog = (s = app.snapshot()) => s.find({ role: "card", label: "Settings dialog" });
+// The dialogs these walk open: the thread's chat history over a score, and
+// adding tracks from the song list.
+const dialog = (s = app.snapshot()) =>
+  s.find({ role: "card", label: "Chat history dialog" }) ?? s.find({ role: "card", label: "Add tracks dialog" });
 
 // The window controls are the title bar's whether or not the agent is shown,
 // and the page sits inset from the window's edge under it.
@@ -101,8 +104,8 @@ test("the agent panel toggles both ways and the seam resizes it", () => {
   // 4. An overlay owns its pointer plane: pressing the covered agent
   //    toggle's coordinates lands on the scrim, which dismisses the dialog
   //    and toggles nothing.
-  app.action("luma::OpenSettings");
-  const shown = dialog(until("the settings dialog", dialog)).bounds;
+  app.click(app.snapshot().find({ role: "button", label: "Chat history" }));
+  const shown = dialog(until("the chat history dialog", dialog)).bounds;
   assert(shown.x >= 0 && shown.x + shown.width <= WINDOW[0] && shown.y + shown.height <= WINDOW[1],
     `the dialog does not fit its window: ${JSON.stringify(shown)}`);
   app.click(app.snapshot().find({ role: "button", label: "Hide agent" }));
@@ -111,13 +114,10 @@ test("the agent panel toggles both ways and the seam resizes it", () => {
   expect(dialog()).toBe(undefined);
 
   // The same modal boundary applies to key bindings, and the trap holds
-  // both ways; escape restores the search field that opened it.
-  nav.songs();
-  app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
-  app.action("luma::OpenSettings");
-  until("the reopened settings dialog", dialog);
-  // The song list has stood the panel aside; under the overlay ⌘B must not
-  // bring it back either.
+  // both ways; escape closes the dialog.
+  app.click(app.snapshot().find({ role: "button", label: "Chat history" }));
+  until("the reopened chat history dialog", dialog);
+  // Under the overlay ⌘B must not toggle the covered panel.
   const covered = read().agent;
   app.key("secondary-b");
   app.frames(2);
@@ -132,16 +132,17 @@ test("the agent panel toggles both ways and the seam resizes it", () => {
   assert(dialog()?.focused === true, "Shift-Tab escaped the modal focus trap");
   app.key("escape");
   app.frames(2);
-  expect(app.snapshot().find({ role: "input", label: "Search tracks" })?.focused).toBe(true);
+  expect(dialog()).toBe(undefined);
 });
 
 // The dialog clamps rather than crops on a compact window and leaves the
 // titlebar strip, whose window controls keep their corner. On macOS the
 // corner is AppKit's and holds no node of ours; elsewhere the painted lights
 // are in it and keep their hit targets.
-test("a compact window clamps the settings dialog below the titlebar", { fixture: { window: [640, 480] } }, () => {
-  open();
-  app.action("luma::OpenSettings");
+test("a compact window clamps a dialog below the titlebar", { fixture: { window: [640, 480] } }, () => {
+  nav.venue("Test Venue");
+  nav.songs();
+  app.click(node("button", "Add track"));
   const shot = until("the compact dialog", dialog);
   const box = dialog(shot).bounds;
   assert(box.x >= 0 && box.x + box.width <= 640 && box.y + box.height <= 480, `the dialog does not fit: ${JSON.stringify(box)}`);

@@ -16,7 +16,8 @@
 //!     │             the stage's song / score menu     (score_switcher.rs)
 //!     ├ song list  the venue's songs, over Arrange   (tracks.rs)
 //!     ├ status bar sync, output, the mode's line     (status_bar.rs)
-//!     ├ overlay    dialogs: settings, add tracks, …  (shell.rs)
+//!     ├ settings   a page in place of the content    (settings.rs)
+//!     ├ overlay    dialogs: add tracks, venues, …    (shell.rs)
 //!     └ library    the only door to Luma's data
 //! ```
 //!
@@ -163,6 +164,9 @@ pub struct Luma {
     /// The stage's song / score menu in Arrange while it is open or leaving —
     /// see [`score_switcher`].
     pub(crate) score_switcher: luma_ui::dialog::Popup<score_switcher::ScoreSwitcher>,
+    /// The settings page while it is up, in place of the page's content —
+    /// see [`settings`].
+    pub(crate) settings: Option<settings::Settings>,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
     pub(crate) session_refresh_error: Option<String>,
@@ -234,7 +238,7 @@ pub struct Luma {
     /// moves and wraps rather than merely retaining the container focus.
     pub(crate) dialog_first_focus: FocusHandle,
     pub(crate) dialog_last_focus: FocusHandle,
-    pub(crate) overlay_return_focus: Option<WeakFocusHandle>,
+    pub(crate) overlay_return_focus: Option<(FocusSlot, WeakFocusHandle)>,
     /// Which slot [`Self::focus`] was last taken for. A change of subject has
     /// to take the keyboard back; a field the user clicked into keeps it
     /// otherwise.
@@ -295,6 +299,7 @@ impl Luma {
             deck_width: session_store::Stored::new(shell::DECK_WIDTH_KEY),
             venue_menu: luma_ui::dialog::Popup::default(),
             score_switcher: luma_ui::dialog::Popup::default(),
+            settings: None,
             shell_presented: false,
             restoring_venue: false,
             session_refresh_error: None,
@@ -401,7 +406,9 @@ impl Luma {
     /// Whether the agent panel should be up: not put away by hand, and not
     /// stood aside for the song list unless asked for over it.
     pub(crate) fn agent_wanted(&self) -> bool {
-        !self.agent_hidden && (!self.song_list_shown() || self.agent_over_songs)
+        !self.agent_hidden
+            && self.settings.is_none()
+            && (!self.song_list_shown() || self.agent_over_songs)
     }
 
     /// Show or hide the agent panel, by its toggle or ⌘B. Over the song list

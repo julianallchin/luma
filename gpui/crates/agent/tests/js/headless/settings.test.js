@@ -103,3 +103,52 @@ test("the venue menu opens settings", () => {
   nav.settings();
   until("the settings screen", (s) => s.find({ role: "toggle", label: "AI" }));
 });
+
+// Settings is a page in place of the page's content, not a dialog over it:
+// the title bar stays, the agent panel and the mode's content give it their
+// room, and nothing floats over a scrim.
+const settingsPage = (s) => s.find({ role: "card", label: "Settings" });
+
+test("settings takes the page, under the title bar", { fixture: { track: true, seconds: 4 } }, () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  until("the agent panel", (s) => s.find({ role: "card", label: "Agent" }));
+  app.action("luma::OpenSettings");
+  const shot = until("the settings page", (s) =>
+    settingsPage(s) && s.find({ role: "toggle", label: "General" }) ? s : undefined);
+  const page = shot.find({ role: "card", label: "Page" }).bounds;
+  const settings = settingsPage(shot).bounds;
+  const bar = shot.find({ role: "card", label: "Title bar" }).bounds;
+  expect(shot.find({ role: "button", label: "Dismiss dialog" })).toBe(undefined);
+  until("the agent panel stood aside", (s) => s.find({ role: "card", label: "Agent" }) === undefined);
+  expect(shot.find({ role: "card", label: "Waveform" })).toBe(undefined);
+  assert(settings.y >= bar.y + bar.height - 1, "the settings page covers the title bar");
+  assert(Math.abs(settings.width - page.width) <= 1 && Math.abs(settings.x - page.x) <= 1,
+    `the settings page does not span the page: ${JSON.stringify({ settings, page })}`);
+});
+
+test("Escape leaves the settings page for where you were, keyboard and all", () => {
+  nav.venue("Test Venue");
+  nav.songs();
+  const search = (s) => s.find({ role: "input", label: "Search tracks" });
+  app.click(search(app.snapshot()));
+  expect(search(app.snapshot()).focused).toBe(true);
+  app.action("luma::OpenSettings");
+  until("the settings page", (s) => settingsPage(s) && !search(s));
+  app.key("escape");
+  const back = until("the song list again", (s) => !settingsPage(s) && search(s) ? s : undefined);
+  expect(search(back).focused).toBe(true);
+});
+
+test("Back and the mode switch leave the settings page", () => {
+  nav.venue("Test Venue");
+  app.action("luma::OpenSettings");
+  until("the settings page", settingsPage);
+  nav.step("Back", "button", "Back");
+  until("the settings page gone", (s) => !settingsPage(s));
+
+  app.action("luma::OpenSettings");
+  until("the settings page again", settingsPage);
+  app.click(node("toggle", "Rig"));
+  until("the venue page in its place", (s) =>
+    !settingsPage(s) && s.find({ role: "card", label: "Test Venue Venue" }));
+});

@@ -60,6 +60,8 @@ pub(crate) mod context {
 
     // Overlay contexts. One overlay is up at a time, over all three regions.
     pub const VENUES: &str = "Venues";
+    /// The settings page. Not an overlay but the page's content; it owns the
+    /// keyboard the way a dialog does, so it is listed with them.
     pub const SETTINGS: &str = "Settings";
     pub const ADD_TRACKS: &str = "AddTracks";
     /// The chat-history picker.

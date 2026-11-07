@@ -17,7 +17,7 @@
 //!
 //! # One overlay at a time
 //!
-//! [`Overlay`] is a single slot, not a stack: venues, settings and the rest
+//! [`Overlay`] is a single slot, not a stack: venues, add tracks and the rest
 //! are all "a plane over the shell, dismissed by Escape", and overlays that
 //! each invented their own dismissal would be several ways to do one thing.
 //! The venue picker re-opens itself whenever no venue is open and nothing
@@ -26,7 +26,6 @@
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, Context, Div, DragMoveEvent, Window};
 
-use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::node::{Instrument, Role};
 use luma_ui::pane;
 use luma_ui::{glass, ladder};
@@ -61,7 +60,6 @@ pub(crate) enum Overlay {
     /// morph, two text fields and their subscriptions, and an enum is as large
     /// as its largest variant — every overlay slot in the app would pay for it.
     Venues(Box<welcome::VenuePicker>),
-    Settings(settings::Settings),
     AddTracks(Box<add_tracks::AddTracks>),
     /// Every conversation in the room. Boxed for the same reason the others
     /// are: it carries a text field, a scroll handle and a subscription, and an
@@ -95,7 +93,6 @@ impl Overlay {
         match self {
             Self::ChatHistory(_) => keymap::context::CHAT_HISTORY,
             Self::Venues { .. } => keymap::context::VENUES,
-            Self::Settings(_) => keymap::context::SETTINGS,
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
@@ -125,6 +122,7 @@ pub(crate) enum Body {
 pub(crate) enum FocusSlot {
     Overlay(&'static str),
     VisualizerFullscreen,
+    Settings,
     Songs,
     Body(Target),
     Shell,
@@ -132,9 +130,9 @@ pub(crate) enum FocusSlot {
 
 impl Luma {
     /// Where the keyboard belongs this frame: the overlay when one is up,
-    /// else the song list when it is the content, else the body on screen,
-    /// else the shell root (whose dispatch path still reaches every
-    /// ROOT-scoped binding).
+    /// else the settings page or the song list when either is the content,
+    /// else the body on screen, else the shell root (whose dispatch path
+    /// still reaches every ROOT-scoped binding).
     pub(crate) fn focus_slot(&self) -> FocusSlot {
         if self.fullscreen_presented() {
             return FocusSlot::VisualizerFullscreen;
@@ -144,6 +142,9 @@ impl Luma {
         // the animation.
         if let Some(overlay) = self.overlay.as_open() {
             return FocusSlot::Overlay(overlay.key_context());
+        }
+        if self.settings.is_some() {
+            return FocusSlot::Settings;
         }
         if self.song_list_shown() {
             return FocusSlot::Songs;
@@ -161,12 +162,15 @@ impl Luma {
         if slot == self.focused_slot && self.keyboard_is_seated(window, cx) {
             return;
         }
-        let leaving_overlay = matches!(self.focused_slot, FocusSlot::Overlay(_))
-            && !matches!(slot, FocusSlot::Overlay(_));
-        let entering_overlay = !matches!(self.focused_slot, FocusSlot::Overlay(_))
-            && matches!(slot, FocusSlot::Overlay(_));
-        if entering_overlay {
-            self.overlay_return_focus = window.focused(cx).map(|focus| focus.downgrade());
+        // A dialog and the settings page are each a plane the keyboard goes
+        // to and comes back from: leaving one gives it back to the exact
+        // element that had it, if that is where the shell returns to.
+        let plane = |slot: &FocusSlot| matches!(slot, FocusSlot::Overlay(_) | FocusSlot::Settings);
+        let leaving_plane = plane(&self.focused_slot) && !plane(&slot);
+        if !plane(&self.focused_slot) && plane(&slot) {
+            self.overlay_return_focus = window
+                .focused(cx)
+                .map(|focus| (self.focused_slot.clone(), focus.downgrade()));
         }
         let leaving_fullscreen = matches!(self.focused_slot, FocusSlot::VisualizerFullscreen);
         self.focused_slot = slot;
@@ -180,13 +184,13 @@ impl Luma {
             window.focus(&self.dialog_focus, cx);
             return;
         }
-        let return_focus = leaving_overlay
-            .then(|| {
-                self.overlay_return_focus
-                    .take()
-                    .and_then(|focus| focus.upgrade())
-            })
-            .flatten();
+        // Only to the slot it was taken from: the settings page left by a
+        // mode switch lands on another body, where the opener is not drawn.
+        let return_focus = leaving_plane
+            .then(|| self.overlay_return_focus.take())
+            .flatten()
+            .filter(|(from, _)| *from == self.focused_slot)
+            .and_then(|(_, focus)| focus.upgrade());
         if let Some(focus) = return_focus {
             window.focus(&focus, cx);
             return;
@@ -246,6 +250,9 @@ impl Luma {
         if self.songs.is_none() {
             return;
         }
+        // A mode chosen from the mode switch is where the settings page goes
+        // back to.
+        self.close_settings(cx);
         self.workspace.set_mode(mode);
         if self.workspace.active().is_none() {
             match mode {
@@ -276,6 +283,7 @@ impl Luma {
         if self.songs.is_none() {
             return;
         }
+        self.close_settings(cx);
         if self.workspace.mode() != Mode::Arrange {
             self.workspace.set_mode(Mode::Arrange);
             self.song_list = true;
@@ -364,6 +372,11 @@ impl Luma {
         // Innermost first: a dialog showing a child's transcript steps back to
         // its list before the list itself closes.
         if self.subagents_to_list(cx) {
+            return;
+        }
+        // The settings page is the content while it is up: nothing under it
+        // is on screen to step out of.
+        if self.overlay.as_open().is_none() && self.dismiss_settings(cx) {
             return;
         }
         if self.overlay.as_open().is_none() {
@@ -862,6 +875,17 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
     if app.songs.is_none() {
         // The venue picker is up over this.
         return div().flex_1().into_any_element();
+    }
+    if let Some(state) = &app.settings {
+        let holds_focus = matches!(app.focus_slot(), FocusSlot::Settings);
+        return div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .key_context(keymap::context::SETTINGS)
+            .when(holds_focus, |page| page.track_focus(&app.focus))
+            .child(settings::settings(app, state, &cx.entity()).agent_node(Role::Card, "Settings"))
+            .into_any_element();
     }
     if app.song_list_shown() {
         let region = Regions::get(&mut app.regions.songs, "Songs", songs_body, true, cx);
@@ -1374,14 +1398,6 @@ fn overlay_layer(
                 "Venue dialog",
             )
         }
-        Overlay::Settings(state) => (
-            morph::fixed_card(
-                "Settings dialog",
-                MorphSize::new(900.0, 680.0),
-                settings::settings(app, state, entity).into_any_element(),
-            ),
-            "Settings dialog",
-        ),
         Overlay::AddTracks(state) => (
             add_tracks::render(
                 state,

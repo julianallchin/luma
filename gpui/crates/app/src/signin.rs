@@ -175,8 +175,8 @@ impl Luma {
     /// Show the sign-in screen. Whatever the shell was showing stays in state
     /// and comes back untouched when the screen leaves — except any dialog,
     /// which goes now rather than animating out later over a shell the user
-    /// has not looked at since (settings is the one route that gets here with
-    /// an overlay up).
+    /// has not looked at since, and the settings page, whose Account section
+    /// is the one route here besides the venue menu.
     ///
     /// `expired` is why: a session this machine held stopped proving anyone,
     /// as opposed to a sign-out or a first launch.
@@ -189,6 +189,7 @@ impl Luma {
         self.overlay = luma_ui::dialog::Popup::default();
         self.venue_menu = luma_ui::dialog::Popup::default();
         self.score_switcher = luma_ui::dialog::Popup::default();
+        self.settings = None;
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
         self.sign_in = Some(Box::new(SignIn::new(generation, expired, cx)));
