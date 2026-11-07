@@ -21,11 +21,11 @@
 //! `next_retry_at` has elapsed.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use once_cell::sync::OnceCell;
 use sqlx::SqlitePool;
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::database::local::tracks as tracks_db;
@@ -34,11 +34,11 @@ use crate::models::tracks::{
     StageOutcome, TrackAnalysisEvent, TrackImportPhase, TrackImportProgress,
 };
 use crate::preprocessing::artifact::Artifact;
+use crate::preprocessing::concurrency::{analysis_worker_count, run_bounded_track_jobs};
 use crate::preprocessing::failures;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext, PreprocessorRef};
 use crate::preprocessing::registry;
 use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
-use crate::services::tracks::analysis_worker_count;
 use crate::storage::StorageRoot;
 
 #[derive(Clone, Debug)]
@@ -455,8 +455,8 @@ async fn run_one(
     }
 }
 
-/// Multi-track entry point. Bounded parallelism via Semaphore; per-track
-/// scheduling delegates to [`run_for_track`].
+/// Multi-track entry point: per-track scheduling delegates to
+/// [`run_for_track`], at most [`analysis_worker_count`] tracks at a time.
 ///
 /// Under an import each track reports its stages as it runs; the terminal
 /// event is the caller's, because the DAG is not the only branch an import
@@ -470,33 +470,29 @@ pub async fn run_for_tracks(
     analysis: AnalysisGuard,
     import: Option<ImportEventContext>,
 ) -> AnalysisSummary {
-    let analyzable_total = track_ids.len();
     let max_parallel = analysis_worker_count();
-    let semaphore = Arc::new(Semaphore::new(max_parallel));
-    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(
+    let completed = Arc::new(AtomicUsize::new(
         import.as_ref().map_or(0, |import| import.done),
     ));
+    let errors = Arc::new(Mutex::new(Vec::new()));
 
-    let mut handles = Vec::with_capacity(analyzable_total);
-    for track_id in track_ids {
-        let pool = pool.clone();
-        let storage = storage.clone();
-        let workers = workers.clone();
-        let events = events.clone();
-        let sem = semaphore.clone();
-        let completed = completed.clone();
-        let analysis = analysis.clone();
-        let import = import.clone();
-
-        let task_track_id = track_id.clone();
-        let handle = tokio::spawn(async move {
-            let _permit = sem
-                .acquire()
-                .await
-                .map_err(|error| format!("analysis semaphore closed: {error}"))?;
+    run_bounded_track_jobs(&track_ids, &analysis, max_parallel, |track_id| {
+        let (pool, storage, workers, events) = (
+            pool.clone(),
+            storage.clone(),
+            workers.clone(),
+            events.clone(),
+        );
+        let (completed, errors, analysis, import) = (
+            completed.clone(),
+            errors.clone(),
+            analysis.clone(),
+            import.clone(),
+        );
+        async move {
             let report = import.map(|mut import| {
-                import.done = completed.load(std::sync::atomic::Ordering::Relaxed);
-                StageReport::new(import, events.clone(), track_id.clone())
+                import.done = completed.load(Ordering::Relaxed);
+                StageReport::new(import, events, track_id.clone())
             });
             let result = run_for_track(
                 &pool,
@@ -507,32 +503,29 @@ pub async fn run_for_tracks(
                 report.as_ref(),
             )
             .await;
-            if let Err(e) = &result {
+            if let Err(e) = result {
                 eprintln!("[preprocessing] track {track_id} failed: {e}");
                 sentry::capture_message(
                     &format!("Preprocessing failed for track {track_id}: {e}"),
                     sentry::Level::Error,
                 );
+                errors
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(format!("{track_id}: {e}"));
             }
-            completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            result
-        });
-        handles.push((task_track_id, handle));
-    }
-
-    let mut errors = Vec::new();
-    for (track_id, handle) in handles {
-        match handle.await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => errors.push(format!("{track_id}: {error}")),
-            Err(error) => errors.push(format!("{track_id}: analysis task failed: {error}")),
+            completed.fetch_add(1, Ordering::Relaxed);
         }
-    }
+    })
+    .await;
+
     eprintln!(
-        "[preprocessing] finished all {analyzable_total} tracks ({max_parallel} parallel workers)"
+        "[preprocessing] finished all {} tracks ({max_parallel} parallel workers)",
+        track_ids.len()
     );
+    let errors = std::mem::take(&mut *errors.lock().unwrap_or_else(PoisonError::into_inner));
     AnalysisSummary {
-        done: completed.load(std::sync::atomic::Ordering::Relaxed),
+        done: completed.load(Ordering::Relaxed),
         errors,
     }
 }

@@ -79,8 +79,9 @@ See [`scheduler.rs`](scheduler.rs). Two-tier parallelism:
 - **Intra-layer fan-out**: within one track, siblings in the same topo layer
   spawn into a `JoinSet` and run concurrently. Beats and stems both depend
   only on `Audio`, so they run in parallel for the same track.
-- **Cross-track**: a tokio `Semaphore` (size = `analysis_worker_count()`)
-  bounds how many tracks process at once. Big libraries don't OOM the GPU.
+- **Cross-track**: `run_bounded_track_jobs` (size = `analysis_worker_count()`,
+  both in [`concurrency.rs`](concurrency.rs)) bounds how many tracks process
+  at once. Big libraries don't OOM the GPU.
 
 `InflightSet` deduplicates concurrent calls for the same `(track,
 preprocessor)` so user-driven re-imports never race the startup reconcile.

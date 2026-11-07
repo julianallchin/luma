@@ -14,6 +14,7 @@
 //! exponential-backoff retry behaviour.
 
 pub mod artifact;
+pub mod concurrency;
 pub mod failures;
 pub mod preprocessor;
 pub mod registry;
