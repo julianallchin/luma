@@ -15,6 +15,9 @@ headless tools.
   tools and sandbox integration.
 - `src/bin/luma-cli/`: Luma without a window. `luma-cli rpc`, `agent`, `mcp`,
   `record`, `render` and `profile`; `luma-cli --help` lists them.
+- `examples/`: measuring instruments rather than tests. `profile_score_window`
+  prints a real score's per-frame eval cost across a time window, against a
+  copy of a library (its header lists the variables).
 - `crates/`: pattern evaluation, fixture kinematics, DJ protocols, MCP types and
   PowerSync SDK glue.
 - `python/`: analysis workers and their dependencies.

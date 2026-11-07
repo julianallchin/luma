@@ -444,11 +444,3 @@ pub fn bucketize_band_peaks(
     }
     peaks
 }
-
-// -----------------------------------------------------------------------------
-// Binary blob serialization helpers
-// -----------------------------------------------------------------------------
-
-#[cfg(test)]
-#[path = "waveforms_bench.rs"]
-mod bench;
