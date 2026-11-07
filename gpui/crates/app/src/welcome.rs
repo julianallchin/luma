@@ -430,12 +430,14 @@ impl Luma {
         let remembered = self.library.get_session_item(LAST_VENUE);
         let saved_venues = self.read_saved_venues();
         let saved_cameras = self.read_saved_cameras();
+        let deck_width = self.library.get_session_item(crate::shell::DECK_WIDTH_KEY);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let venues = venues.await;
             let remembered = remembered.await;
             let saved_venues = saved_venues.await;
             let saved_cameras = saved_cameras.await;
+            let deck_width = deck_width.await;
             this.update(cx, |this, cx| {
                 this.restoring_venue = false;
                 // Every venue's mode and score, restored as each venue is
@@ -445,6 +447,10 @@ impl Luma {
                 // The same for each venue's last camera pose.
                 this.saved_cameras =
                     crate::saved_cameras::read(saved_cameras.ok().flatten().as_deref());
+                this.deck_width = crate::session_store::Stored::read(
+                    crate::shell::DECK_WIDTH_KEY,
+                    deck_width.ok().flatten().as_deref(),
+                );
                 let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
                     return;
                 };
@@ -1142,7 +1148,7 @@ impl Luma {
 }
 
 /// The venue's name in the title bar: the menu's trigger, and the menu hung
-/// off it. Venues get no icon or swatch.
+/// off it. A muted stage glyph before the name marks it as the venue.
 pub(crate) fn venue_trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> AnyElement {
     let name = app.songs.as_ref().map_or_else(
         || "Venues".to_string(),
@@ -1158,6 +1164,12 @@ pub(crate) fn venue_trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> AnyE
         .text_size(px(13.))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| toggled.update(cx, |this, cx| this.toggle_venue_menu(cx)))
+        // A quiet stage glyph says the name is the venue's, not a song's.
+        .child(
+            gpui_component::Icon::new(IconName::Stage)
+                .size(px(14.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY)),
+        )
         .child(
             div()
                 .font_weight(FontWeight::MEDIUM)

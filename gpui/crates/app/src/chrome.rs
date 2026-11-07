@@ -221,16 +221,17 @@ pub(crate) fn agent_toggle(app: &Entity<Luma>, open: bool, lights: bool) -> impl
 /// How wide [`mode_switch`] is. Fixed, because the right anchor is reserved
 /// by width before anything is laid out — see [`band_insets`] — and its cells
 /// split it evenly, so the control does not change shape with the mode.
-const MODE_SWITCH_WIDTH: f32 = 246.;
+const MODE_SWITCH_WIDTH: f32 = 210.;
 
-/// Rig · Arrange · Live: the fixed right anchor. Each cell carries its key
-/// and, while that mode's agent is working or finished unseen, its dot.
+/// Rig · Arrange · Live: the fixed right anchor. Each cell carries, while
+/// that mode's agent is working or finished unseen, its dot. The keys
+/// (1 / 2 / 3) are the cells' order and are not drawn.
 pub(crate) fn mode_switch(app: &Luma, entity: &Entity<Luma>, cx: &App) -> impl IntoElement {
     let on = app.workspace.mode();
     let enabled = app.songs.is_some();
     let track = luma_ui::float::segmented()
         .w(px(MODE_SWITCH_WIDTH))
-        .children(Mode::ALL.into_iter().enumerate().map(|(index, mode)| {
+        .children(Mode::ALL.into_iter().map(|mode| {
             let label = mode.label();
             let status = app
                 .workspace
@@ -240,8 +241,11 @@ pub(crate) fn mode_switch(app: &Luma, entity: &Entity<Luma>, cx: &App) -> impl I
             luma_ui::float::segment(label, mode == on, label)
                 .id(label)
                 .gap(px(6.))
-                .child(luma_ui::float::key_cap().child(format!("{}", index + 1)))
                 .children(status.map(|status| crate::agent::status_dot(status, label)))
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(format!("{label} · {}", mode.key()))
+                        .build(window, cx)
+                })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .when(enabled, |cell| {
                     cell.on_click(move |_, _, cx| {

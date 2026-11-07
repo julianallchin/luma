@@ -55,6 +55,16 @@ impl Mode {
             Mode::Live => "Live",
         }
     }
+
+    /// The key that shows this mode (`keymap`'s `ShowRig` / `ShowArrange` /
+    /// `ShowLive`).
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Mode::Rig => "1",
+            Mode::Arrange => "2",
+            Mode::Live => "3",
+        }
+    }
 }
 
 /// What a mode body shows.
