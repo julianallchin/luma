@@ -145,17 +145,22 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 - **Settings** is a page, not a dialog: zeron's settings page in place of the
   page's whole content, swapped in one frame — the agent panel is not slid
   away, it is not drawn, and comes back at its width. The title bar keeps the
-  window's corner and Back, where the venue menu was; no agent toggle, no
-  mode switch. A 200 nav of sections, then a 640 column with a title and
+  window's corner and Back, one gap past the corner where the agent toggle
+  sits; no agent toggle, no mode switch, and no room held for them. A 200
+  nav: a search field, then the sections, each with a 16px Nucleo icon (page
+  titles carry none). The search matches every section's row labels and help
+  text; while it holds a query the nav's sections step aside and the column
+  lists the matching rows under their section's title, or says nothing
+  matched with a way to clear. Beside the nav, a 640 column with a title and
   description over sections, each a small title over a card of 52-high rows
   with hairlines between, each control at its row's end in a 240 slot;
   titles and row words share one 17px inset. Back or Escape returns to what
-  was there.
+  was there; Escape empties a search first.
 
 ## 7. Escape
 
 One ladder (`shell` `dismiss_overlay`), first match wins: the venue menu, the
 stage's song / score menu, score and song menus, subagents, the settings page
-(an open select first), visualizer settings, patch rungs, the stage's
+(an open select first, then a search), visualizer settings, patch rungs, the stage's
 own state, an open dialog, then the song list, a sheet menu, the clip graph,
 the pattern sheet, and finally the selection.

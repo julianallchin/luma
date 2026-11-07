@@ -184,3 +184,65 @@ test("Back leaves the settings page for the mode it was opened over", () => {
   until("the venue page again", (s) =>
     !settingsPage(s) && s.find({ role: "card", label: "Test Venue Venue" }));
 });
+
+// Back takes the agent toggle's place: one gap past the window's corner,
+// with no room held for the anchors the page puts away.
+test("Back sits right after the window controls", () => {
+  nav.venue("Test Venue");
+  const agentToggle = (s) =>
+    s.find({ role: "button", label: "Hide agent" }) ?? s.find({ role: "button", label: "Show agent" });
+  const shell = until("the agent toggle", (s) => agentToggle(s) ? s : undefined);
+  const corner = shell.find({ role: "card", label: "Window controls" }).bounds;
+  const toggle = agentToggle(shell).bounds;
+  const end = corner.x + corner.width;
+  app.action("luma::OpenSettings");
+  const shot = until("the settings page", (s) =>
+    settingsPage(s) && s.find({ role: "button", label: "Back" }) ? s : undefined);
+  const back = shot.find({ role: "button", label: "Back" }).bounds;
+  assert(back.x >= end, `Back overlaps the window controls: ${JSON.stringify({ back, corner })}`);
+  assert(back.x - end <= toggle.x - end + 1,
+    `Back sits further from the corner than the first control does: ${JSON.stringify({ back, toggle, corner })}`);
+});
+
+// The search looks through every section, not only the one showing.
+const searchField = (s) => s.find({ role: "input", label: "Search settings" });
+const hdr = (s) => s.find({ role: "checkbox", label: "HDR output" });
+const clearField = () => app.key("secondary-a backspace");
+
+test("searching shows a row from another section, and clearing restores the page", () => {
+  nav.venue("Test Venue");
+  const opened = openAiSettings("Claude Opus 5");
+  assert(hdr(opened) === undefined, "the AI section already shows a General row");
+  app.type(searchField(opened), "hdr");
+  const found = until("the HDR row from General", (s) => hdr(s) ? s : undefined);
+  // Only what matched: the AI section's own selects and the nav's sections
+  // step aside.
+  expect(selects(found)).toEqual([]);
+  expect(found.find({ role: "toggle", label: "AI" })).toBe(undefined);
+
+  // Help text is searched too: no label says "silent".
+  clearField();
+  app.type(searchField(until("the emptied search", searchField)), "silent");
+  until("the audio row, by its help", (s) =>
+    s.find({ role: "checkbox", label: "Enable Audio Output" }) && !hdr(s));
+
+  clearField();
+  const restored = until("the AI section again", (s) =>
+    searchField(s) && s.find({ role: "toggle", label: "AI" }) ? s : undefined);
+  expect(selects(restored)).toEqual(["API", "Vercel AI Gateway", "Claude Opus 5"]);
+  expect(hdr(restored)).toBe(undefined);
+});
+
+test("Escape empties the search before it leaves settings", () => {
+  nav.venue("Test Venue");
+  app.action("luma::OpenSettings");
+  const opened = until("the settings page", (s) => settingsPage(s) && searchField(s) ? s : undefined);
+  app.type(searchField(opened), "nothing says this");
+  until("the empty result", (s) => s.find({ role: "button", label: "Clear search" }));
+  app.key("escape");
+  const cleared = until("the page again", (s) =>
+    searchField(s) && s.find({ role: "toggle", label: "General" }) ? s : undefined);
+  assert(settingsPage(cleared), "the first escape left settings");
+  app.key("escape");
+  until("the shell again", (s) => !settingsPage(s));
+});

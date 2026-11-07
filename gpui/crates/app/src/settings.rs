@@ -2,11 +2,17 @@
 //!
 //! # A page, not a dialog
 //!
-//! Settings takes the window's page the way the song list does — the agent
-//! panel stands aside and the stage and the mode's body give it their room —
-//! while the title bar stays. Back, Escape or a mode in the mode switch
-//! returns to what was there, untouched: nothing under the page is torn down
-//! to show it (`docs/specs/comet-shell.md` §6).
+//! Settings takes the window's whole page in one frame, and the title bar
+//! keeps only the window's corner and Back. Back or Escape returns to what was
+//! there, untouched: nothing under the page is torn down to show it
+//! (`docs/specs/comet-shell.md` §6).
+//!
+//! # Search
+//!
+//! The nav's search field looks through every section at once. A row matches
+//! on its label and its help text; while there is a query the nav's sections
+//! step aside and the page column lists what matched, under the section each
+//! match lives in. Escape empties the query before it leaves the page.
 //!
 //! # The write path
 //!
@@ -19,6 +25,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::arg::select::luma_arg_select;
 use luma_ui::float::RowState;
+use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::Enabled;
@@ -42,6 +49,16 @@ pub enum Tab {
 
 impl Tab {
     const ALL: [Tab; 5] = [Tab::General, Tab::Account, Tab::Ai, Tab::Output, Tab::About];
+
+    fn icon(self) -> IconName {
+        match self {
+            Tab::General => IconName::Gear,
+            Tab::Account => IconName::User,
+            Tab::Ai => IconName::Bot,
+            Tab::Output => IconName::Network,
+            Tab::About => IconName::Info,
+        }
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -78,10 +95,30 @@ pub struct Settings {
     open_menu: Option<&'static str>,
     /// One key field per [`AGENT_PROVIDERS`] service, in that order.
     keys: Vec<KeyField>,
+    /// The nav's search field, and what it holds — cached from its edits for
+    /// the same reason as [`KeyField::has_draft`].
+    search: Entity<TextInput>,
+    query: String,
+    _search: Subscription,
 }
 
 impl Settings {
     fn new(cx: &mut Context<Luma>) -> Self {
+        let search = cx.new(|cx| {
+            let mut input = TextInput::search(SEARCH_PLACEHOLDER, cx);
+            input.set_text_size(12.5, cx);
+            input
+        });
+        let events = cx.subscribe(&search, |this, field, event, cx| match event {
+            text_input::Event::Edited => {
+                let query = field.read(cx).text().to_string();
+                this.with_settings(cx, |state| {
+                    state.query = query;
+                    state.open_menu = None;
+                });
+            }
+            _ => cx.notify(),
+        });
         Self {
             tab: Tab::General,
             values: None,
@@ -91,6 +128,9 @@ impl Settings {
                 .iter()
                 .map(|(provider, label)| KeyField::new(provider, label, cx))
                 .collect(),
+            search,
+            query: String::new(),
+            _search: events,
         }
     }
 }
@@ -181,8 +221,8 @@ impl Luma {
         self.reload_settings(cx);
     }
 
-    /// Take the page down: Back, Escape, or a mode chosen from the mode
-    /// switch. Reports whether it was up — Escape's rung.
+    /// Take the page down: Back or Escape. Reports whether it was up —
+    /// Escape's rung.
     pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) -> bool {
         if self.settings.take().is_none() {
             return false;
@@ -191,7 +231,8 @@ impl Luma {
         true
     }
 
-    /// Escape on the page: an open select first, then the page itself.
+    /// Escape on the page: an open select first, then a search, then the
+    /// page itself.
     pub(crate) fn dismiss_settings(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(state) = &mut self.settings else {
             return false;
@@ -200,7 +241,23 @@ impl Luma {
             cx.notify();
             return true;
         }
+        if !state.query.is_empty() {
+            self.clear_search(cx);
+            return true;
+        }
         self.close_settings(cx)
+    }
+
+    /// Empty the search, which puts the nav's sections and the shown page
+    /// back.
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = &mut self.settings else {
+            return;
+        };
+        state.query.clear();
+        let field = state.search.clone();
+        field.update(cx, |input, cx| input.set_text("", cx));
+        cx.notify();
     }
 
     fn show_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
@@ -527,9 +584,14 @@ pub(crate) fn back(app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// The sections, one row each. The way back is the title bar's
-/// ([`back`]).
+/// What the search field says while it is empty.
+const SEARCH_PLACEHOLDER: &str = "Search settings";
+
+/// The search field, then the sections, one row each — or, while there is a
+/// query, the field alone: its results stand in the page column. The way back
+/// is the title bar's ([`back`]).
 fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
+    let searching = Query::parse(&state.query).is_some();
     div()
         .w(px(NAV_WIDTH))
         .flex_none()
@@ -551,19 +613,62 @@ fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
                 .child("Settings")
                 .agent_node(Role::Text, "Settings"),
         )
-        .children(Tab::ALL.into_iter().map(|tab| {
+        .child(search_field(state))
+        .children(Tab::ALL.into_iter().filter(|_| !searching).map(|tab| {
             let app = app.clone();
             luma_ui::float::nav_row(RowState::of(tab == state.tab, false), tab.label())
                 .id(tab.label())
                 .tab_index(0)
                 .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_tab(tab, cx)))
+                .child(gpui_component::Icon::new(tab.icon()).size(px(16.)))
                 .child(tab.label())
                 .agent_node(Role::Toggle, tab.label())
         }))
 }
 
-/// The page column: the section's title and description, a refused write,
-/// and the section's own groups.
+/// The nav's search: a [`luma_ui::float::field`] around the text field.
+/// Escape is the page's ([`Luma::dismiss_settings`]), so it needs no key
+/// handling of its own.
+fn search_field(state: &Settings) -> impl IntoElement {
+    let label = if state.query.is_empty() {
+        SEARCH_PLACEHOLDER
+    } else {
+        &state.query
+    };
+    luma_ui::float::field()
+        .h(px(28.))
+        .mb(px(6.))
+        .gap(px(6.))
+        .child(
+            gpui_component::Icon::new(IconName::Search)
+                .size(px(14.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY)),
+        )
+        .child(div().flex_1().min_w_0().child(state.search.clone()))
+        // The label is the field's value once it has one, as the song list's
+        // search does: a driver asks what it says.
+        .agent_node(Role::Input, label.to_string())
+}
+
+/// A search's terms, lowercased. A row matches when its words hold every
+/// one, so word order and case do not matter.
+struct Query(Vec<String>);
+
+impl Query {
+    /// `None` for a query with no terms: a blank search shows the page.
+    fn parse(text: &str) -> Option<Self> {
+        let terms: Vec<String> = text.split_whitespace().map(str::to_lowercase).collect();
+        (!terms.is_empty()).then_some(Self(terms))
+    }
+
+    fn matches(&self, row: &Row) -> bool {
+        self.0.iter().all(|term| row.words.contains(term.as_str()))
+    }
+}
+
+/// The page column: a refused write, then the shown section's title,
+/// description and groups — or, while there is a search, every section's
+/// matching rows under their section's title.
 fn page(
     shell: &Luma,
     state: &Settings,
@@ -571,7 +676,7 @@ fn page(
     error: Option<&str>,
     app: &Entity<Luma>,
 ) -> Div {
-    div()
+    let column = div()
         .w_full()
         .max_w(px(PAGE_WIDTH))
         .flex()
@@ -580,26 +685,6 @@ fn page(
         .px(px(24.))
         .pt(px(40.))
         .pb(px(48.))
-        .child(
-            div()
-                .px(px(TEXT_INSET))
-                .flex()
-                .flex_col()
-                .gap(px(4.))
-                .child(
-                    div()
-                        .text_size(px(20.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(state.tab.label())
-                        .agent_node(Role::Text, state.tab.label()),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .text_color(glass::ink(glass::TEXT_SECONDARY))
-                        .child(state.tab.description()),
-                ),
-        )
         .when_some(error, |el, message| {
             el.child(
                 div()
@@ -609,17 +694,91 @@ fn page(
                     .child(format!("Failed to save: {message}"))
                     .agent_node(Role::Text, format!("Failed to save: {message}")),
             )
+        });
+    let sections = |tab| match tab {
+        Tab::General => general(values, app),
+        Tab::Account => account(shell, app),
+        Tab::Ai => ai(state, values, app),
+        Tab::Output => output(values, app),
+        Tab::About => about(shell, values, app),
+    };
+    let Some(query) = Query::parse(&state.query) else {
+        return column
+            .child(heading(state.tab))
+            .children(sections(state.tab).into_iter().map(Section::render));
+    };
+    let found: Vec<Div> = Tab::ALL
+        .into_iter()
+        .filter_map(|tab| {
+            let matched: Vec<Section> = sections(tab)
+                .into_iter()
+                .filter_map(|section| section.matching(&query))
+                .collect();
+            (!matched.is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SECTION_GAP))
+                    .child(heading(tab))
+                    .children(matched.into_iter().map(Section::render))
+            })
         })
-        .children(match state.tab {
-            Tab::General => general(values, app),
-            Tab::Account => account(shell, app),
-            Tab::Ai => ai(state, values, app),
-            Tab::Output => output(values, app),
-            Tab::About => about(shell, values, app),
-        })
+        .collect();
+    if found.is_empty() {
+        return column.child(nothing_matches(&state.query, app));
+    }
+    column.children(found)
 }
 
-fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+/// A section's title over its description, at the head of the page.
+fn heading(tab: Tab) -> Div {
+    div()
+        .px(px(TEXT_INSET))
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_size(px(20.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(tab.label())
+                .agent_node(Role::Text, tab.label()),
+        )
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
+                .child(tab.description()),
+        )
+}
+
+/// A search that found nothing: what was looked for, and the way back to
+/// the page.
+fn nothing_matches(query: &str, app: &Entity<Luma>) -> Div {
+    let message = format!("No settings match \u{201c}{}\u{201d}", query.trim());
+    let clear = app.clone();
+    div()
+        .px(px(TEXT_INSET))
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(12.))
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
+                .child(message.clone())
+                .agent_node(Role::Text, message),
+        )
+        .child(
+            luma_ui::button("Clear search", Enabled::Yes)
+                .id("settings-clear-search")
+                .on_click(move |_, _, cx| clear.update(cx, |this, cx| this.clear_search(cx)))
+                .agent_node(Role::Button, "Clear search"),
+        )
+}
+
+fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
     vec![
         section(
             "Audio",
@@ -646,7 +805,7 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     ]
 }
 
-fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
     use luma_lib::agent::engine::Engine;
     let engine = row(
         "Default agent engine",
@@ -720,7 +879,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 /// stored. The field's placeholder is the stored key's hint (see
 /// [`key_placeholder`]), so the row reads "saved, ending in …" at rest and a
 /// typed draft replaces it.
-fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Div {
+fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Row {
     let provider = key.provider;
     let label = format!("{} API key", key.label);
     let save = app.clone();
@@ -775,7 +934,7 @@ fn key_placeholder(status: &ApiKeyStatus) -> String {
     }
 }
 
-fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
     let (dimmer_low, dimmer_high) = (
         f32::from(*MAX_DIMMER_RANGE.start()),
         f32::from(*MAX_DIMMER_RANGE.end()),
@@ -842,7 +1001,7 @@ fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 }
 
 /// Who this library belongs to, and the one gesture that changes it.
-fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
+fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
     let account = shell.library.account();
     let signed_in = account.is_some();
     // The address where the session carries one, the principal where it does
@@ -882,7 +1041,7 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
         ),
     ];
     if let Some(error) = &shell.account_action.error {
-        rows.push(
+        rows.push(Row::new(
             card_row().child(
                 div()
                     .flex_1()
@@ -891,18 +1050,21 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
                     .child(error.clone())
                     .agent_node(Role::Text, error.clone()),
             ),
-        );
+            error,
+            None,
+        ));
     }
     vec![section("Account", rows, None)]
 }
 
-fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
+fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
     let channel = match luma_update::Channel::CURRENT {
         luma_update::Channel::Stable => String::new(),
         channel => format!(" ({})", channel.label()),
     };
     let (button, status) = crate::update::about(shell, app);
     let version = format!("Luma v{}{channel}", luma_lib::VERSION);
+    let words = (version.clone(), status.clone());
     let version_row = card_row()
         .child(
             div()
@@ -915,6 +1077,7 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
                 .when_some(status, |el, status| el.child(help_text(&status))),
         )
         .children(button.map(control_slot));
+    let version_row = Row::new(version_row, &words.0, words.1.as_deref());
     vec![
         section("Version", vec![version_row], None),
         section(
@@ -933,40 +1096,84 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 
 // -- the pieces every section is built from -----------------------------------
 
-/// A section: its small title over a card of rows, hairlines between them,
-/// and a footnote under the card when the section has one.
-fn section(title: &str, rows: Vec<Div>, note: Option<&str>) -> Div {
-    let count = rows.len();
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .child(
-            div()
-                .px(px(TEXT_INSET))
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(glass::ink(glass::TEXT_SECONDARY))
-                .child(title.to_string()),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .rounded(px(radius::CARD))
-                .bg(glass::ink(CARD_ALPHA))
-                .border_1()
-                .border_color(glass::inner_rule())
-                .overflow_hidden()
-                .children(rows.into_iter().enumerate().map(|(index, row)| {
-                    row.when(index + 1 < count, |row| {
-                        row.border_b_1().border_color(glass::inner_rule())
-                    })
-                })),
-        )
-        .when_some(note, |el, note| {
-            el.child(div().px(px(TEXT_INSET)).child(help_text(note)))
-        })
+/// A section: its small title over a card of rows, and a footnote under the
+/// card when it has one. Kept as rows until it is drawn, so a search can
+/// keep the ones it found.
+struct Section {
+    title: &'static str,
+    rows: Vec<Row>,
+    note: Option<&'static str>,
+}
+
+/// One row of a section, and the words a search finds it by: its label and
+/// its help, lowercased.
+struct Row {
+    words: String,
+    element: Div,
+}
+
+impl Row {
+    fn new(element: Div, label: &str, help: Option<&str>) -> Self {
+        let words = match help {
+            Some(help) => format!("{label}\n{help}"),
+            None => label.to_string(),
+        };
+        Self {
+            words: words.to_lowercase(),
+            element,
+        }
+    }
+}
+
+fn section(title: &'static str, rows: Vec<Row>, note: Option<&'static str>) -> Section {
+    Section { title, rows, note }
+}
+
+impl Section {
+    /// The rows `query` finds, or `None` if it finds none.
+    fn matching(self, query: &Query) -> Option<Self> {
+        let rows: Vec<Row> = self
+            .rows
+            .into_iter()
+            .filter(|row| query.matches(row))
+            .collect();
+        (!rows.is_empty()).then_some(Self { rows, ..self })
+    }
+
+    /// The title over the card, hairlines between its rows.
+    fn render(self) -> Div {
+        let count = self.rows.len();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .px(px(TEXT_INSET))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(glass::ink(glass::TEXT_SECONDARY))
+                    .child(self.title),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded(px(radius::CARD))
+                    .bg(glass::ink(CARD_ALPHA))
+                    .border_1()
+                    .border_color(glass::inner_rule())
+                    .overflow_hidden()
+                    .children(self.rows.into_iter().enumerate().map(|(index, row)| {
+                        row.element.when(index + 1 < count, |row| {
+                            row.border_b_1().border_color(glass::inner_rule())
+                        })
+                    })),
+            )
+            .when_some(self.note, |el, note| {
+                el.child(div().px(px(TEXT_INSET)).child(help_text(note)))
+            })
+    }
 }
 
 /// A row's frame: 52 high at least, square, its content on one line.
@@ -981,8 +1188,8 @@ fn card_row() -> Div {
 }
 
 /// One setting: its name and help, and its control at the end.
-fn row(label: &str, help: Option<&str>, control: AnyElement) -> Div {
-    card_row()
+fn row(label: &str, help: Option<&str>, control: AnyElement) -> Row {
+    let element = card_row()
         .child(
             div()
                 .flex_1()
@@ -998,7 +1205,8 @@ fn row(label: &str, help: Option<&str>, control: AnyElement) -> Div {
                 )
                 .when_some(help, |el, help| el.child(help_text(help))),
         )
-        .child(control_slot(control))
+        .child(control_slot(control));
+    Row::new(element, label, help)
 }
 
 /// The end of a row, where its control sits: [`CONTROL_WIDTH`] wide, the
@@ -1026,15 +1234,16 @@ fn checkbox(
     label: &str,
     checked: bool,
     help: Option<&str>,
-) -> Div {
+) -> Row {
     let app = app.clone();
-    let row = row(
+    let Row { words, element } = row(
         label,
         help,
         luma_ui::float::checkbox(checked).into_any_element(),
     );
-    div().child(
-        row.id(key)
+    let element = div().child(
+        element
+            .id(key)
             .cursor_pointer()
             .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
             .on_click(move |_, _, cx| {
@@ -1042,7 +1251,8 @@ fn checkbox(
                 app.update(cx, |this, cx| this.write_setting(key, value, cx));
             })
             .agent_node(Role::Checkbox, label),
-    )
+    );
+    Row { words, element }
 }
 
 /// The app's one select ([`luma_arg_select`]), over this screen's `(id, label)`
