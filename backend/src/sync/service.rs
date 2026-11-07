@@ -15,6 +15,7 @@ use luma_sync::powersync::{sdk::SyncOptions, Connections, Database, HttpClient};
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 
+use crate::database::local::venue_graph;
 use crate::events::{Event, Events};
 use crate::models::sync::SyncStatus;
 
@@ -429,6 +430,14 @@ async fn replicas(database: Arc<Database>, events: Events, mut shutdown: watch::
                     .into_iter()
                     .filter(|table| schema::table(table).is_some()),
             );
+        }
+        // After the drain, so a reader that refilled the rig cache from rows
+        // the download was replacing drops what it read.
+        if changed
+            .iter()
+            .any(|table| venue_graph::RIG_TABLES.contains(&table.as_str()))
+        {
+            venue_graph::rig_changed();
         }
         events.emit(Event::ReplicaChanged {
             tables: std::mem::take(&mut changed).into_iter().collect(),

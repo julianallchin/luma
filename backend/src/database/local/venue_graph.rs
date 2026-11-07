@@ -65,6 +65,17 @@ pub fn rig_changed() {
     RIG_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
+/// The tables a venue's rig is derived from: a write to any of them, local or
+/// downloaded by sync, moves [`rig_generation`].
+pub const RIG_TABLES: &[&str] = &[
+    "fixtures",
+    "fixture_groups",
+    "fixture_group_members",
+    "venue_nodes",
+    "venue_node_params",
+    "venue_constraints",
+];
+
 /// One `venue_nodes` row as SQLite hands it over: the placement as four
 /// nullable columns, which the schema's CHECK keeps all-or-nothing.
 #[derive(sqlx::FromRow)]

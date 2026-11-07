@@ -737,6 +737,15 @@ mod tests {
         }
     }
 
+    /// A download moves the rig only through tables this schema syncs; a rig
+    /// table missing here would leave the rig cache stale after sync.
+    #[test]
+    fn every_rig_table_is_synced() {
+        for name in crate::database::local::venue_graph::RIG_TABLES {
+            assert!(table(name).is_some(), "{name} is not a synced table");
+        }
+    }
+
     /// Every table's `uid` travels, or the server's `with check` has nothing to
     /// evaluate a PATCH against.
     #[test]
