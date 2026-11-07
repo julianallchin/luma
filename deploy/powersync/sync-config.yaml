@@ -76,3 +76,5 @@ streams:
       - SELECT * FROM laser_limits WHERE venue_id IN accessible_venues
       - SELECT * FROM perform_patterns WHERE venue_id IN accessible_venues
       - SELECT * FROM perform_layouts WHERE venue_id IN accessible_venues
+      - SELECT * FROM perform_controllers WHERE venue_id IN accessible_venues
+      - SELECT * FROM control_bindings WHERE venue_id IN accessible_venues

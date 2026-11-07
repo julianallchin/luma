@@ -94,6 +94,10 @@ const layout = JSON.stringify({
     },
   ],
 });
+// A controller with one pad, at the top left of its grid.
+const profile = JSON.stringify({
+  controls: [{ address: { kind: "midi_note", channel: 0, number: 0 }, column: 0, row: 0 }],
+});
 fixture({
   seconds: 1,
   rig: 2,
@@ -109,6 +113,8 @@ fixture({
                '{"expression":"all"}', 2, 'replace', '7', '${onTheBar}')`,
     `INSERT INTO perform_layouts (id, uid, venue_id, layout_json)
        VALUES ('venue-main', '$PRINCIPAL', 'venue-main', '${layout}')`,
+    `INSERT INTO perform_controllers (id, uid, venue_id, name, port, profile_json)
+       VALUES ('controller-pads', '$PRINCIPAL', 'venue-main', 'Pads', 'Pads MIDI 1', '${profile}')`,
   ],
 });
 
@@ -364,6 +370,17 @@ test("Learn waits for an input for the cell's control; Cancel stops it", () => {
     s.find((n) => n.role === "text" && n.label.startsWith("Not mapped")) ? s : undefined,
   );
   expect(app.snapshot().find({ role: "button", label: "Learn Master" }) !== undefined).toBe(true);
+});
+
+test("Setup shows the controller, and Map puts the page on its grid", () => {
+  setup();
+  until("the controller", (s) =>
+    s.find({ role: "text", label: "Controller Pads: Not connected: Pads MIDI 1" }),
+  );
+  nav.step("Map", "button", "Map this page");
+  // Front wash sits at the top left: its pad is on the controller's one pad.
+  nav.step("Front wash", "button", "Select Front wash");
+  until("its pad mapped", (s) => s.find({ role: "button", label: "Note 0 · ch 1 mode Hold" }));
 });
 
 // A value of the Colors list, published as `Colors Value 2, #0000FF`.

@@ -84,6 +84,7 @@ fn sample(column: &str) -> Option<Option<&'static str>> {
         "depth" | "message_count" => Some("0"),
         "parts_json" => Some("[]"),
         "role" => Some("member"),
+        "mode" => Some("momentary"),
         "principal_key" => Some("signed-in:user-1"),
         // A root message: depth 0 and no parent, which the CHECK pairs.
         "parent_message_id" | "head_message_id" => None,

@@ -233,7 +233,7 @@ impl PerformHost {
                 let Rebind { id, mode, invert } = decode(payload)?;
                 self.open_inputs().await?;
                 self.inputs
-                    .update(&self.venue_id, &id, mode, invert)
+                    .update(&self.venue_id, &id, mode, invert, self.actor.as_deref())
                     .await
                     .map_err(|error| HostCallError::new("not_found", error))?;
                 Ok(json!({ "inputs": self.inputs.state() }))
@@ -242,21 +242,107 @@ impl PerformHost {
                 let Id { id } = decode(payload)?;
                 self.open_inputs().await?;
                 self.inputs
-                    .unbind(&self.venue_id, &id)
+                    .unbind(&self.venue_id, &id, self.actor.as_deref())
                     .await
                     .map_err(|error| HostCallError::new("internal", error))?;
                 Ok(json!({ "inputs": self.inputs.state() }))
             }
             "perform.learn" => {
-                let Learn { control, mode } = decode(payload)?;
+                let Learn {
+                    control,
+                    mode,
+                    controller,
+                } = decode(payload)?;
                 control_name(&control)?;
                 self.open_inputs().await?;
                 let binding = self
                     .inputs
-                    .learn(&control, mode)
+                    .learn(&control, mode, controller.as_deref(), self.actor.as_deref())
                     .await
                     .map_err(|error| HostCallError::new("not_heard", error))?;
                 Ok(json!({ "binding": binding, "inputs": self.inputs.state() }))
+            }
+            "perform.add_controller" => {
+                let AddController { name, port } = decode(payload)?;
+                self.open_inputs().await?;
+                let controller = self
+                    .inputs
+                    .add_controller(&controller_name(&name)?, &port, self.actor.as_deref())
+                    .await
+                    .map_err(refused)?;
+                Ok(json!({ "id": controller.id, "inputs": self.inputs.state() }))
+            }
+            "perform.controller" => {
+                let ChangeController {
+                    id,
+                    name,
+                    port,
+                    profile,
+                } = decode(payload)?;
+                let name = name.as_deref().map(controller_name).transpose()?;
+                self.open_inputs().await?;
+                self.inputs
+                    .change_controller(&id, self.actor.as_deref(), |controller| {
+                        if let Some(name) = name {
+                            controller.name = name;
+                        }
+                        if let Some(port) = port {
+                            controller.port = port;
+                        }
+                        if let Some(profile) = profile {
+                            controller.profile = profile;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .map_err(refused)?;
+                Ok(json!({ "inputs": self.inputs.state() }))
+            }
+            "perform.remove_controller" => {
+                let Id { id } = decode(payload)?;
+                self.open_inputs().await?;
+                self.inputs
+                    .remove_controller(&id, self.actor.as_deref())
+                    .await
+                    .map_err(|error| HostCallError::new("not_found", error))?;
+                Ok(json!({ "inputs": self.inputs.state() }))
+            }
+            "perform.map_page" => {
+                let MapPage { id, page } = decode(payload)?;
+                self.open_inputs().await?;
+                let set = self.set().read().await?;
+                let page = match &page {
+                    Some(page) => set.layout.pages.iter().find(|one| &one.id == page),
+                    None => set.layout.pages.first(),
+                }
+                .ok_or_else(|| HostCallError::new("not_found", "no such page"))?;
+                let bindings = self
+                    .inputs
+                    .map_page(&id, page, &set.patterns, self.actor.as_deref())
+                    .await
+                    .map_err(refused)?;
+                Ok(json!({ "bound": bindings.len(), "inputs": self.inputs.state() }))
+            }
+            "perform.light" => {
+                let Lit {
+                    id,
+                    address,
+                    color,
+                    shine,
+                } = decode(payload)?;
+                if color.iter().any(|c| !(0.0..=1.0).contains(c)) {
+                    return Err(refused(format!(
+                        "a light's color is (r, g, b) each 0 to 1; got {color:?}"
+                    )));
+                }
+                self.open_inputs().await?;
+                let light = crate::controls::Light {
+                    color,
+                    bright: color.iter().any(|c| *c > 0.),
+                    shine,
+                };
+                self.inputs.light(&id, &address, light).map_err(refused)?;
+                Ok(json!({ "lit": true }))
             }
             _ => Err(HostCallError::new(
                 "unknown_method",
@@ -483,6 +569,13 @@ impl Update {
             pattern.seed = seed;
         }
         Ok(json!({ "id": self.id }))
+    }
+}
+
+fn controller_name(name: &str) -> Result<String, HostCallError> {
+    match name.trim() {
+        "" => Err(refused("a controller needs a name, such as \"Launchpad\"")),
+        name => Ok(name.to_owned()),
     }
 }
 
@@ -941,6 +1034,53 @@ struct Rebind {
 struct Learn {
     control: String,
     mode: Mode,
+    /// The controller to bind on; the venue's first, or a new one, when
+    /// absent.
+    #[serde(default)]
+    controller: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddController {
+    name: String,
+    #[serde(default)]
+    port: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChangeController {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    port: Option<String>,
+    #[serde(default)]
+    profile: Option<crate::inputs::Profile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MapPage {
+    id: String,
+    /// The page's id; the first page when absent.
+    #[serde(default)]
+    page: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Lit {
+    id: String,
+    address: crate::inputs::Address,
+    color: [f64; 3],
+    #[serde(default = "steady")]
+    shine: crate::controls::Shine,
+}
+
+fn steady() -> crate::controls::Shine {
+    crate::controls::Shine::Steady
 }
 
 #[cfg(test)]

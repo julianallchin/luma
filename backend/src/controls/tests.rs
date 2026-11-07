@@ -652,7 +652,7 @@ fn stage() -> Vec<Cell> {
 
 /// Where pattern `id` plays, sorted; none is its own selection.
 fn groups(controls: &VenueControls, id: &str) -> Vec<String> {
-    controls.effect(id).expect("a pattern of the set").0
+    controls.groups(id).expect("a pattern of the set")
 }
 
 fn names(groups: &[&str]) -> Vec<String> {
@@ -850,6 +850,8 @@ fn a_color_on_a_list_with_no_targets_is_the_base_color_of_the_groups_chosen() {
 #[test]
 fn select_gives_an_effect_its_own_color_then_the_color_below_again() {
     let controls = VenueControls::default();
+    let (restyles, mut restyled) = tokio::sync::mpsc::unbounded_channel();
+    controls.restyle_to(restyles);
     let graph = ClipGraph::from_json(
         r#"{"version": 3, "nodes": {
             "hue": {"kind": "control", "settings": {"name": "hue", "kind": "color"}},
@@ -868,8 +870,8 @@ fn select_gives_an_effect_its_own_color_then_the_color_below_again() {
         &layout(&[], stage()),
     );
     let at = Instant::now();
-    let blend = |controls: &VenueControls| controls.effect("wash").unwrap().1;
-    assert_eq!(blend(&controls), BlendMode::Below);
+    let below = |controls: &VenueControls| controls.playing().effects["wash"].below;
+    assert!(below(&controls));
 
     // Select held, the pad chooses the effect instead of playing it.
     controls.press(perform::SELECT, true, at);
@@ -879,50 +881,56 @@ fn select_gives_an_effect_its_own_color_then_the_color_below_again() {
     assert_eq!(controls.playing().selected, names(&["wash"]));
     assert!(!controls.playing().selecting, "a hold is no latch");
 
-    // Blue: its own color, at once, and the base is untouched.
-    let changed = controls.changed();
+    // Blue: its own color, at once, and the base is untouched. Its blend
+    // goes to be stored as a normal one; until the set is installed again,
+    // the bank plays the blend stored.
     choose(&controls, "base", 1, at);
     assert_eq!(
         controls.color_at(&perform::node("wash", "hue"), at),
         [0., 0., 1.]
     );
     assert_eq!(
-        blend(&controls),
-        BlendMode::Replace,
-        "own color, a normal blend"
+        restyled.try_recv().ok(),
+        Some(("wash".to_owned(), BlendMode::Replace)),
+        "own color, a normal blend, to store"
     );
-    assert!(controls.changed() > changed, "the engine sees it");
+    assert!(
+        below(&controls),
+        "the stored blend stands until stored anew"
+    );
     assert!(!controls.has_base());
     assert!(
         controls.playing().selected.is_empty(),
         "then no longer chosen"
     );
     assert_eq!(controls.playing().lists.get("base"), None);
+    let stored = PerformPattern {
+        blend_mode: BlendMode::Replace,
+        ..wash.clone()
+    };
+    install(
+        &controls,
+        std::slice::from_ref(&stored),
+        &layout(&[], stage()),
+    );
+    assert!(!below(&controls));
+
+    // Its own color again changes no blend: nothing to store.
+    tap(&controls, perform::SELECT, at);
+    tap(&controls, &own, at);
+    choose(&controls, "base", 0, at);
+    assert!(restyled.try_recv().is_err(), "already its own");
 
     // Tapped, Select latches: tap it, the effect, the color below.
     tap(&controls, perform::SELECT, at);
     assert!(controls.playing().selecting);
     tap(&controls, &own, at);
     choose(&controls, "base", 2, at);
-    assert_eq!(blend(&controls), BlendMode::Below);
-    assert!(!controls.playing().selecting, "the latch is spent");
-
-    // Kept over a recompile, until a blend is stored anew.
-    tap(&controls, perform::SELECT, at);
-    tap(&controls, &own, at);
-    choose(&controls, "base", 0, at);
-    install(
-        &controls,
-        std::slice::from_ref(&wash),
-        &layout(&[], stage()),
+    assert_eq!(
+        restyled.try_recv().ok(),
+        Some(("wash".to_owned(), BlendMode::Below))
     );
-    assert_eq!(blend(&controls), BlendMode::Replace);
-    let stored = PerformPattern {
-        blend_mode: BlendMode::Add,
-        ..wash
-    };
-    install(&controls, &[stored], &layout(&[], stage()));
-    assert_eq!(blend(&controls), BlendMode::Add, "the stored blend wins");
+    assert!(!controls.playing().selecting, "the latch is spent");
 }
 
 #[test]
@@ -1015,4 +1023,148 @@ fn a_recompile_keeps_where_each_effect_plays_and_what_is_chosen() {
     // A group cell gone takes its group from the choice.
     install(&controls, &[wash], &layout(&[], Vec::new()));
     assert!(chosen(&controls).is_empty());
+}
+
+/// How control `name` looks at `at`.
+fn look(controls: &VenueControls, name: &str, at: Instant) -> Look {
+    controls.surface_at(at)[name].clone()
+}
+
+#[test]
+fn an_effect_is_dim_off_bright_on_and_blinks_while_it_waits() {
+    let start = Instant::now();
+    let set = [quantised("bar", "toggle", "bar")];
+    let controls = tapped(&set, &layout(&[&["bar"]], vec![]), start);
+    let bar = pad(&set[0]);
+    let off = look(&controls, &bar, beat(start, 1.));
+    assert_eq!((off.job, off.on, off.waiting), (Job::Effect, false, false));
+    assert_eq!(off.light().bright, false, "dim while off");
+
+    controls.press(&bar, true, beat(start, 1.));
+    let waiting = look(&controls, &bar, beat(start, 2.));
+    assert!(waiting.waiting);
+    assert_eq!(waiting.light().shine, Shine::Blink);
+
+    let on = look(&controls, &bar, beat(start, 4.5));
+    assert!(on.on && !on.waiting);
+    assert_eq!((on.light().bright, on.light().shine), (true, Shine::Steady));
+}
+
+#[test]
+fn an_effect_shows_the_color_it_plays() {
+    let graph = ClipGraph::from_json(
+        r#"{"version": 3, "nodes": {
+            "hue": {"kind": "control", "settings": {"name": "hue", "kind": "color"}},
+            "color1": {"kind": "color", "inputs": {"color": {"node": "hue"}}}}}"#,
+    )
+    .unwrap();
+    let own = PerformPattern {
+        graph: with_pad_at_once(graph.clone()),
+        ..pattern("own")
+    };
+    let below = PerformPattern {
+        graph: with_pad_at_once(graph),
+        blend_mode: BlendMode::Below,
+        ..pattern("below")
+    };
+    let hit = faded("hit", "flash", 0.0, 0.0, "seconds");
+    let controls = VenueControls::default();
+    let set = [own.clone(), below.clone(), hit.clone()];
+    install(
+        &controls,
+        &set,
+        &layout(&[&[], &["own", "below", "hit"]], stage()),
+    );
+    let at = Instant::now();
+    assert_eq!(
+        look(&controls, &pad(&own), at).color,
+        UNSET_COLOR,
+        "white until set"
+    );
+
+    // Its own color as Select gave it.
+    tap(&controls, perform::SELECT, at);
+    tap(&controls, &pad(&own), at);
+    assert!(look(&controls, &pad(&own), at).selected);
+    assert_eq!(look(&controls, &pad(&own), at).light().shine, Shine::Pulse);
+    choose(&controls, "base", 1, at);
+    assert_eq!(look(&controls, &pad(&own), at).color, [0., 0., 1.]);
+
+    // Below: the base color where it plays, here on front alone.
+    tap(&controls, &perform::cell("front"), at);
+    choose(&controls, "base", 0, at);
+    tap(&controls, &pad(&below), at);
+    assert_eq!(look(&controls, &pad(&below), at).color, [1., 0., 0.]);
+
+    // A hit is amber, whatever it plays.
+    assert_eq!(look(&controls, &pad(&hit), at).color, AMBER);
+}
+
+#[test]
+fn groups_values_faders_and_utilities_look_as_they_stand() {
+    let controls = VenueControls::default();
+    let mut extra = stage();
+    extra.push(cell("tap", 6, 0, CellContent::Tap));
+    extra.push(cell("select", 6, 1, CellContent::Select));
+    extra.push(cell("master", 5, 0, CellContent::Master));
+    install(&controls, &[], &layout(&[], extra));
+    let at = Instant::now();
+    let front = perform::cell("front");
+
+    // A group is lit while chosen, and while held.
+    assert!(!look(&controls, &front, at).light().bright);
+    controls.press(&front, true, at);
+    assert!(look(&controls, &front, at).held);
+    assert!(look(&controls, &front, at).light().bright);
+    controls.press(&front, false, at);
+    assert!(look(&controls, &front, at).on, "tapped: chosen");
+
+    // A value shows its color, bright while on; Next while any is.
+    let blue = perform::value("base", 1);
+    assert_eq!(look(&controls, &blue, at).color, [0., 0., 1.]);
+    assert!(!look(&controls, &blue, at).light().bright);
+    assert!(!look(&controls, &perform::cell("base"), at).on);
+    choose(&controls, "base", 1, at);
+    assert!(look(&controls, &blue, at).light().bright);
+    assert!(!look(&controls, &perform::value("base", 0), at).on);
+    assert!(look(&controls, &perform::cell("base"), at).on);
+    // The group shows its base color now.
+    assert_eq!(look(&controls, &front, at).color, [0., 0., 1.]);
+
+    // A fader its position; Select lit while on; tap on each beat.
+    controls.set(perform::MASTER, 0.25);
+    assert_eq!(look(&controls, perform::MASTER, at).value, 0.25);
+    tap(&controls, perform::SELECT, at);
+    assert!(look(&controls, perform::SELECT, at).light().bright);
+    controls.press(perform::TAP, true, at);
+    controls.press(perform::TAP, false, at);
+    let tapped = look(&controls, perform::TAP, at);
+    assert_eq!(
+        (tapped.on, tapped.beat),
+        (true, Some(0)),
+        "a tap starts a bar"
+    );
+    let later = look(&controls, perform::TAP, beat(at, 1.5));
+    assert_eq!((later.on, later.beat), (false, Some(1)));
+}
+
+#[test]
+fn every_control_a_hand_plays_has_a_look() {
+    let controls = VenueControls::default();
+    let set = [faded("wash", "toggle", 0.0, 0.0, "seconds")];
+    let mut extra = stage();
+    extra.push(cell("clear", 6, 0, CellContent::Clear));
+    let layout = layout(&[&["wash"]], extra);
+    install(&controls, &set, &layout);
+    let surface = controls.surface_at(Instant::now());
+    for cell in layout.pages.iter().flat_map(|page| &page.cells) {
+        for part in perform::parts(cell, &set) {
+            assert_eq!(
+                surface.contains_key(&part.control),
+                part.kind.mode().is_some(),
+                "{}",
+                part.control
+            );
+        }
+    }
 }

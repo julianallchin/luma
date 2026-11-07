@@ -50,11 +50,10 @@ The list is `SYNCED_TABLES` in `backend/src/sync/schema.rs`:
 | Tracks | `tracks`, `track_beats`, `track_roots`, `track_stems`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, `track_beat_validations` |
 | Scores | `scores`, `clips`, `drafts`, `folders`, `folder_tracks` |
 | Lasers | `laser_zones`, `laser_limits` |
-| Perform | `perform_patterns`, `perform_layouts` |
+| Perform | `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings` |
 | Agents | `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` |
 
-Local-only tables include `settings`, `dmx_routes`, `control_bindings`
-(MIDI and OSC bindings belong to the computer),
+Local-only tables include `settings`, `dmx_routes`,
 `preprocessing_failures`, `track_waveforms` and `track_mert`. Some
 columns of synced tables are also local, such as `tracks.file_path`.
 

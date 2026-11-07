@@ -436,6 +436,58 @@ class BindingTests(unittest.TestCase):
             perform.learn("drop")
 
 
+class ControllerTests(unittest.TestCase):
+    PAD = {"kind": "midi_note", "channel": 0, "number": 81}
+
+    def inputs(self, profile=None):
+        controller = {"id": "c1", "name": "Pads", "port": "Pads MIDI 1", "connected": True,
+                      "profile": profile or {}}
+        binding = {"id": "b1", "controllerId": "c1", "control": f"perform_p{WASH}_n_button1",
+                   "mode": "momentary", "invert": False, "address": self.PAD}
+        return {"controllers": [controller], "bindings": [binding]}
+
+    def test_controllers_are_listed_added_renamed_and_removed(self) -> None:
+        host = Host()
+        host.answers["perform.bindings"] = {"inputs": self.inputs()}
+        host.answers["perform.add_controller"] = {"id": "c1", "inputs": self.inputs()}
+        host.answers["perform.controller"] = {"inputs": self.inputs()}
+        host.answers["perform.remove_controller"] = {"inputs": {"controllers": [], "bindings": []}}
+        perform = namespace(host).perform
+        (pads,) = perform.controllers()
+        self.assertTrue(pads.connected)
+        self.assertIn("connected", repr(pads))
+        added = perform.add_controller("Pads", port="Pads MIDI 1")
+        self.assertEqual(host.calls[-1], ("perform.add_controller", {"name": "Pads", "port": "Pads MIDI 1"}))
+        self.assertEqual(added.id, "c1")
+        perform.update_controller(added, name="Grid")
+        self.assertEqual(host.calls[-1], ("perform.controller", {"id": "c1", "name": "Grid"}))
+        perform.remove_controller("c1")
+        self.assertEqual(host.calls[-1], ("perform.remove_controller", {"id": "c1"}))
+        self.assertEqual(perform.bindings()[0].controller, "c1")
+
+    def test_a_profile_is_set_a_pad_lit_and_a_page_mapped(self) -> None:
+        host = Host()
+        profile = {"controls": [{"address": self.PAD, "column": 0, "row": 0}]}
+        host.answers["perform.controller"] = {"inputs": self.inputs(profile)}
+        host.answers["perform.light"] = {"lit": True}
+        host.answers["perform.map_page"] = {"bound": 1, "inputs": self.inputs(profile)}
+        perform = namespace(host).perform
+        pads = perform.set_profile("c1", profile)
+        self.assertEqual(host.calls[-1], ("perform.controller", {"id": "c1", "profile": profile}))
+        self.assertEqual(pads.profile, profile)
+        perform.light(pads, self.PAD, (1, 0, 0), shine="blink")
+        self.assertEqual(host.calls[-1], ("perform.light", {
+            "id": "c1", "address": self.PAD, "color": [1, 0, 0], "shine": "blink"}))
+        with self.assertRaises(PerformRefused):
+            perform.light(pads, self.PAD, (1, 0, 0), shine="flash")
+        bound = perform.map_page(pads)
+        self.assertEqual(host.calls[-1], ("perform.map_page", {"id": "c1"}))
+        self.assertEqual([b.address for b in bound], [self.PAD])
+        host.answers["perform.controller"] = LumaHostCallError("refused", "unreadable profile")
+        with self.assertRaises(PerformRefused):
+            perform.set_profile(pads, {"colour": {}})
+
+
 class RefreshTests(unittest.TestCase):
     def test_a_new_cell_keeps_the_facade_and_another_venue_revokes_it(self) -> None:
         host = Host()

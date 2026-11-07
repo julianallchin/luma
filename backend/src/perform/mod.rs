@@ -147,11 +147,12 @@ struct Running {
     ticker: JoinHandle<()>,
 }
 
-/// Follows one DJ source at a time. Cheap to share: clone the `Arc` it lives
-/// in.
+/// Follows one DJ source at a time. Cheap to clone: every clone is the same
+/// session.
+#[derive(Clone)]
 pub struct PerformSession {
     shared: Arc<Shared>,
-    running: tokio::sync::Mutex<Option<Running>>,
+    running: Arc<tokio::sync::Mutex<Option<Running>>>,
 }
 
 impl PerformSession {
@@ -187,7 +188,7 @@ impl PerformSession {
                 fixtures_root,
                 host,
             }),
-            running: tokio::sync::Mutex::new(None),
+            running: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -324,6 +325,9 @@ impl PerformSession {
         VenueAccess::<Read>::read(&self.shared.pool, VenueResource::Venue(&venue_id))
             .await
             .map_err(|error| error.to_string())?;
+        let (restyles, restyled) = tokio::sync::mpsc::unbounded_channel();
+        self.shared.controls.venue(&venue_id).restyle_to(restyles);
+        tokio::spawn(self.clone().restyle(venue_id.clone(), restyled));
         {
             let mut state = self.shared.lock();
             state.set_venue = Some(venue_id);
@@ -331,6 +335,37 @@ impl PerformSession {
         }
         Shared::recompile_set(self.shared.clone()).await;
         Ok(())
+    }
+
+    /// Store each blend Select gives an effect of `venue_id`'s set, the
+    /// way every change to the set is stored, until the set is opened
+    /// again, which drops the other end of `restyled`.
+    async fn restyle(
+        self,
+        venue_id: String,
+        mut restyled: tokio::sync::mpsc::UnboundedReceiver<(String, luma_patterns::BlendMode)>,
+    ) {
+        while let Some(first) = restyled.recv().await {
+            let mut blends = vec![first];
+            while let Ok(more) = restyled.try_recv() {
+                blends.push(more);
+            }
+            let set =
+                crate::services::perform_set::PerformSet::new(&self.shared.pool, &self, &venue_id);
+            let stored = set
+                .change(|set| {
+                    for (id, blend) in &blends {
+                        if let Ok(pattern) = set.pattern_mut(id) {
+                            pattern.blend_mode = *blend;
+                        }
+                    }
+                    Ok(())
+                })
+                .await;
+            if let Err(error) = stored {
+                log::warn!("Select's blend was not stored: {error}");
+            }
+        }
     }
 
     /// The bank of the open set's venue. No database read: the venue was
@@ -535,8 +570,8 @@ impl Shared {
         }
     }
 
-    /// Compile again each pattern the open set's bank moves (to other
-    /// groups, or another blend) into the set that `build` built: off the
+    /// Compile again each pattern the open set's bank moves to other
+    /// groups into the set that `build` built: off the
     /// frame path, so the set plays on meanwhile. Ends when that set is
     /// replaced, which drops the other end of `wanted`.
     async fn rebuild_set(

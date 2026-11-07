@@ -15,8 +15,7 @@
 //! no jump and on the bar.
 //!
 //! Each pattern is one layer, compiled on the groups the bank says it plays
-//! on (none: its own selection), with the blend the bank says (Select can
-//! put an effect on the color below or back on its own). When either
+//! on (none: its own selection), with its stored blend. When where it plays
 //! changes, the frame that sees it asks the set's [`Build`], which compiles
 //! that pattern again off the frame path and hands the engine the set's
 //! [`Layers`] anew. Until then the old layer plays on only if it already
@@ -308,9 +307,8 @@ impl Build {
         }))
     }
 
-    /// Bring each pattern to where and how the bank plays it: compile again
-    /// each whose groups changed, give each its blend. Answers whether
-    /// anything changed.
+    /// Bring each pattern to where the bank plays it: compile again each
+    /// whose groups changed. Answers whether anything changed.
     async fn refresh(
         &mut self,
         access: &mut impl AuthorizedVenue,
@@ -320,7 +318,7 @@ impl Build {
         let mut changed = false;
         for at in 0..self.patterns.len() {
             let pattern = &self.patterns[at];
-            let Some((groups, blend)) = self.controls.effect(&pattern.id) else {
+            let Some(groups) = self.controls.groups(&pattern.id) else {
                 continue;
             };
             if self
@@ -328,20 +326,11 @@ impl Build {
                 .get(at)
                 .is_some_and(|was| was.groups == groups)
             {
-                let layer = self.compiled[at].layer.as_mut();
-                if let Some(layer) = layer.filter(|layer| layer.blend_mode != blend) {
-                    layer.blend_mode = blend;
-                    changed = true;
-                }
                 continue;
             }
             let layer = self
                 .compile(access, fixtures_root, storage, pattern, &groups)
-                .await?
-                .map(|layer| CompiledAnnotation {
-                    blend_mode: blend,
-                    ..layer
-                });
+                .await?;
             let compiled = Compiled { groups, layer };
             match self.compiled.get_mut(at) {
                 Some(was) => *was = compiled,

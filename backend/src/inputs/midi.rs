@@ -1,4 +1,5 @@
-//! Every MIDI input port, opened as it appears and dropped as it goes.
+//! Every MIDI input port, opened as it appears and dropped as it goes, and
+//! the output of each device that has one, for its lights.
 //!
 //! One thread watches the ports for the life of the process, and a
 //! [`Listener`] only subscribes to it. CoreMIDI tells a process about ports
@@ -14,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, Once};
 use std::time::Duration;
 
-use midir::{MidiInput, MidiInputConnection};
+use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 
 use super::{Address, Event};
 
@@ -33,6 +34,23 @@ struct Subscriber {
 
 fn subscriber() -> MutexGuard<'static, Option<Subscriber>> {
     SUBSCRIBER.lock().expect("MIDI subscriber poisoned")
+}
+
+/// The output of each open input port that has one, by the port's name: a
+/// device's input and output share it. Our own input ports are outputs to
+/// the system too, and never inputs, so a light never loops back as a press.
+static OUTPUTS: Mutex<BTreeMap<String, MidiOutputConnection>> = Mutex::new(BTreeMap::new());
+
+fn outputs() -> MutexGuard<'static, BTreeMap<String, MidiOutputConnection>> {
+    OUTPUTS.lock().expect("MIDI outputs poisoned")
+}
+
+/// Send `message` to the output of port `port`. Answers whether it went.
+pub(super) fn send(port: &str, message: &[u8]) -> bool {
+    match outputs().get_mut(port) {
+        Some(output) => output.send(message).is_ok(),
+        None => false,
+    }
 }
 
 /// A subscription to the ports. Dropping it closes every port.
@@ -81,6 +99,7 @@ pub(super) fn parse(data: &[u8]) -> Option<Event> {
     Some(Event {
         address,
         value: f64::from(value) / 127.0,
+        port: None,
     })
 }
 
@@ -111,6 +130,7 @@ pub(super) fn listen(
 /// The watching thread: open the ports for whoever subscribes, forever.
 fn watch() {
     let mut scanner: Option<MidiInput> = None;
+    let mut out_scanner: Option<MidiOutput> = None;
     let mut open: BTreeMap<String, MidiInputConnection<()>> = BTreeMap::new();
     let mut serving: Option<u64> = None;
     let mut reported: Option<Vec<String>> = None;
@@ -120,6 +140,7 @@ fn watch() {
         let id = subscriber().as_ref().map(|s| s.id);
         if id != serving {
             open.clear();
+            outputs().clear();
             reported = None;
             serving = id;
         }
@@ -131,6 +152,12 @@ fn watch() {
                 scan(scanner, &mut open, id);
             }
             let names: Vec<String> = open.keys().cloned().collect();
+            if out_scanner.is_none() {
+                out_scanner = MidiOutput::new(CLIENT).ok();
+            }
+            if let Some(out_scanner) = &out_scanner {
+                scan_outputs(out_scanner, &names);
+            }
             if reported.as_ref() != Some(&names) {
                 if let Some(s) = subscriber().as_ref().filter(|s| s.id == id) {
                     (s.ports)(names.clone());
@@ -157,10 +184,14 @@ fn scan(scanner: &MidiInput, open: &mut BTreeMap<String, MidiInputConnection<()>
         let Ok(input) = MidiInput::new(CLIENT) else {
             continue;
         };
+        let port_name = name.clone();
         let heard = move |_: u64, data: &[u8], _: &mut ()| {
             if let Some(event) = parse(data) {
                 if let Some(s) = subscriber().as_ref().filter(|s| s.id == id) {
-                    (s.sink)(event);
+                    (s.sink)(Event {
+                        port: Some(port_name.clone()),
+                        ..event
+                    });
                 }
             }
         };
@@ -169,6 +200,32 @@ fn scan(scanner: &MidiInput, open: &mut BTreeMap<String, MidiInputConnection<()>
                 open.insert(name, connection);
             }
             Err(error) => log::warn!("[inputs] could not open MIDI {name}: {error}"),
+        }
+    }
+}
+
+/// Keep an output open for each of `inputs` that has one, and none other.
+fn scan_outputs(scanner: &MidiOutput, inputs: &[String]) {
+    let present: Vec<(String, midir::MidiOutputPort)> = scanner
+        .ports()
+        .into_iter()
+        .filter_map(|port| Some((scanner.port_name(&port).ok()?, port)))
+        .filter(|(name, _)| inputs.contains(name))
+        .collect();
+    let mut open = outputs();
+    open.retain(|name, _| present.iter().any(|(known, _)| known == name));
+    for (name, port) in present {
+        if open.contains_key(&name) {
+            continue;
+        }
+        let Ok(output) = MidiOutput::new(CLIENT) else {
+            continue;
+        };
+        match output.connect(&port, "luma-lights") {
+            Ok(connection) => {
+                open.insert(name, connection);
+            }
+            Err(error) => log::warn!("[inputs] could not open MIDI output {name}: {error}"),
         }
     }
 }

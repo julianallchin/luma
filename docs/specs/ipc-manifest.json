@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 134,
+    "commandCount": 135,
     "domainCount": 26
   },
   "domains": [
@@ -74,7 +74,7 @@
     },
     {
       "domain": "inputs",
-      "commandCount": 6,
+      "commandCount": 7,
       "handlers": "backend/src/dispatch/handlers/inputs.rs"
     },
     {
@@ -1517,9 +1517,35 @@
         {
           "name": "mode",
           "rust": "Mode"
+        },
+        {
+          "name": "controllerId",
+          "rust": "Option<String>"
         }
       ],
       "returns": "Binding"
+    },
+    {
+      "name": "input_map_page",
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "controllerId",
+          "rust": "String"
+        },
+        {
+          "name": "pageId",
+          "rust": "String"
+        }
+      ],
+      "returns": "Vec<Binding>"
     },
     {
       "name": "input_open",

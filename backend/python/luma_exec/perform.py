@@ -38,7 +38,11 @@ clear(effects=True) lets every effect go.
 
 Every verb is checked and saved at once, the same way the Perform tab saves,
 and answers what it made. A refusal raises PerformRefused and saves nothing.
-Bindings are hardware: each maps a MIDI or OSC input to a control.
+Bindings are hardware: each maps a MIDI or OSC input to a control, and
+belongs to a controller. A controller is a device: the MIDI port it matches
+and a profile (plain data: where its pads and faders sit on its grid, and
+how it shows a color). Its lights show what each bound control does now;
+map_page() puts a page's cells on its grid.
 """
 from __future__ import annotations
 
@@ -53,6 +57,8 @@ from .track import _blend
 
 #: What a binding's hardware sends.
 BINDING_MODES = ("fader", "momentary", "toggle")
+#: How a controller's light shines.
+SHINES = ("steady", "pulse", "blink")
 #: What a list's fade is counted in.
 FADE_UNITS = ("beats", "seconds")
 #: Not given, where None means something: update_list(step=None) stops stepping.
@@ -192,13 +198,14 @@ class Binding:
     """Hardware bound to a control: id, the control's name, its label, the
     input address (MIDI CC or note with channel and number, or an OSC address
     and argument), mode ("fader", "momentary" or "toggle": what the hardware
-    sends) and invert."""
+    sends), invert, and the id of the controller it belongs to."""
     id: str
     control: str
     label: str
     address: dict
     mode: str
     invert: bool
+    controller: str = ""
 
     def __repr__(self):
         address = self.address
@@ -209,6 +216,38 @@ class Binding:
             where = f"MIDI {kind} {address.get('number')} ch {int(address.get('channel', 0)) + 1}"
         inverted = ", inverted" if self.invert else ""
         return f"<Binding {where} -> {self.label} ({self.mode}{inverted}) {self.id}>"
+
+
+@dataclass(frozen=True)
+class Controller:
+    """A device: id, name, the MIDI port it matches ("" until one is heard,
+    when it hears every input), whether that port is open now, and its
+    profile, a dict:
+
+        {"controls": [{"address": {"kind": "midi_note", "channel": 0, "number": 81},
+                       "column": 0, "row": 0},
+                      {"address": {"kind": "midi_cc", "channel": 0, "number": 48},
+                       "column": 0, "row": 8, "fader": True}],
+         "color": {"palette": {"0": [0, 0, 0], "5": [255, 0, 0]}},
+         "modes": {"steady": {"channel": 0}, "blink": {"channel": 1}, "pulse": {"channel": 2}},
+         "dim": 0.15}
+
+    controls place each pad or fader on the device's grid, column and row
+    from the top left. color is a palette (each velocity it takes, to the
+    rgb 0-255 it shows) or {"sysex": "F0 ... {number} {r} {g} {b} F7"} for
+    full rgb (each 0-127); with none, a light is the control's own note at
+    127 lit, 0 dark. modes say how to shine: the channel to send on and an
+    offset added to the velocity; a blink a device lacks is drawn by turning
+    it on and off. dim is how bright a dim light is, 0-1."""
+    id: str
+    name: str
+    port: str
+    connected: bool
+    profile: dict
+
+    def __repr__(self):
+        state = "connected" if self.connected else "not connected"
+        return f"<Controller {self.name!r} port={self.port!r} {state} controls={len(self.profile.get('controls', []))} {self.id}>"
 
 
 class Live:
@@ -867,7 +906,8 @@ class Perform:
         labels.update((control.name, f"{pattern.name} {control.label}")
                       for pattern in self.patterns for control in pattern.controls)
         return tuple(Binding(b["id"], b["control"], labels.get(b["control"], b["control"]),
-                             dict(b["address"]), b["mode"], bool(b["invert"]))
+                             dict(b["address"]), b["mode"], bool(b["invert"]),
+                             b.get("controllerId", ""))
                      for b in answer["inputs"]["bindings"])
 
     def bindings(self):
@@ -891,20 +931,88 @@ class Perform:
         """Remove a binding."""
         self._call("perform.unbind", {"id": _id(binding, Binding)})
 
-    def learn(self, control, mode=None):
+    def learn(self, control, mode=None, controller=None):
         """Bind the next MIDI or OSC input heard to control: a Control, a
         Pattern's pad, or a control name. Waits up to 20 seconds for someone to
         move a fader or press a pad, so ask them to first. mode defaults to the
-        control's own ("fader" for a fader, "momentary" for a pad)."""
+        control's own ("fader" for a fader, "momentary" for a pad). It binds on
+        controller, or the venue's first, or a new one named after the port
+        heard."""
         if mode is None:
             mode = control.mode if isinstance(control, Control) else (
                 "momentary" if isinstance(control, Pattern) else "fader")
         if mode not in BINDING_MODES:
             raise PerformRefused(f"binding mode {mode!r}: expected one of {', '.join(BINDING_MODES)}")
         try:
-            answer = self._call("perform.learn", {"control": self._name(control), "mode": mode})
+            payload = {"control": self._name(control), "mode": mode}
+            if controller is not None:
+                payload["controller"] = _id(controller, Controller)
+            answer = self._call("perform.learn", payload)
         except LumaHostCallError as error:
             if error.code == "not_heard":
                 raise PerformRefused(str(error)) from None
             raise
         return next(b for b in self._bindings(answer) if b.id == answer["binding"]["id"])
+
+    # -- controllers -----------------------------------------------------
+
+    def _controllers(self, answer):
+        return tuple(Controller(c["id"], c["name"], c["port"], bool(c["connected"]),
+                                copy.deepcopy(c["profile"]))
+                     for c in answer["inputs"]["controllers"])
+
+    def _controller(self, answer, key):
+        return next(c for c in self._controllers(answer) if c.id == key)
+
+    def controllers(self):
+        """This venue's controllers, oldest first."""
+        return self._controllers(self._call("perform.bindings", {}))
+
+    def add_controller(self, name, port=""):
+        """Add a controller matching MIDI port port (its name exactly; "" for
+        one not heard yet) and return it."""
+        answer = self._call("perform.add_controller", {"name": str(name), "port": str(port)})
+        return self._controller(answer, answer["id"])
+
+    def update_controller(self, controller, *, name=None, port=None):
+        """Rename a controller, or match it to another port."""
+        key = _id(controller, Controller)
+        payload = {"id": key}
+        if name is not None:
+            payload["name"] = str(name)
+        if port is not None:
+            payload["port"] = str(port)
+        return self._controller(self._call("perform.controller", payload), key)
+
+    def set_profile(self, controller, profile):
+        """Give a controller its profile (see Controller). A profile that
+        cannot be drawn raises PerformRefused."""
+        key = _id(controller, Controller)
+        answer = self._call("perform.controller", {"id": key, "profile": _plain(profile)})
+        return self._controller(answer, key)
+
+    def remove_controller(self, controller):
+        """Remove a controller and its bindings."""
+        self._call("perform.remove_controller", {"id": _id(controller, Controller)})
+
+    def light(self, controller, address, color, shine="steady"):
+        """Show color ((r, g, b) 0-1 or "#RRGGBB"; black is off) on the control
+        at address of a connected controller, shining "steady", "pulse" or
+        "blink", through its profile: to check a profile with the person ("is
+        the top-left pad red?"). It stays until that control's look changes."""
+        if shine not in SHINES:
+            raise PerformRefused(f"shine {shine!r}: expected one of {', '.join(SHINES)}")
+        self._call("perform.light", {"id": _id(controller, Controller), "address": dict(address),
+                                     "color": _color(color, "light"), "shine": shine})
+
+    def map_page(self, controller, page=None):
+        """Put a page (the first when None) on a controller's grid by its
+        profile: each cell's controls on the pads and faders at its places,
+        a pad for a pad, a fader for a fader, in place of what the controller
+        had bound there. Returns the controller's bindings."""
+        payload = {"id": _id(controller, Controller)}
+        if page is not None:
+            payload["page"] = self.page(page).id
+        answer = self._call("perform.map_page", payload)
+        key = payload["id"]
+        return tuple(b for b in self._bindings(answer) if b.controller == key)

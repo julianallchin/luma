@@ -38,6 +38,10 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
     // No foreign key carries this one locally; see the folders migration.
     ("tracks", &[("folder_tracks", "track_id")]),
     ("scores", &[("clips", "score_id"), ("drafts", "score_id")]),
+    (
+        "perform_controllers",
+        &[("control_bindings", "controller_id")],
+    ),
 ];
 
 /// Delete every row of `table` matching `where_sql`, and answer how many.

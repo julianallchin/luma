@@ -641,6 +641,7 @@ async fn select_and_the_base_color_set_colors_as_told() {
     group(&services, &host, "front").await;
     let mut add = wash_starting("now");
     add["graph"] = with_color();
+    add["blend"] = json!("below");
     let added = call(&host, "perform.add", add).await.unwrap();
     let pattern = added["id"].as_str().unwrap().to_owned();
     let placed = call(
@@ -684,7 +685,34 @@ async fn select_and_the_base_color_set_colors_as_told() {
         .await
         .unwrap();
     assert_eq!(own["state"]["selected"], json!([]));
-    assert_eq!(own["state"]["effects"][&pattern]["below"], false);
+    // Its own color: the pattern is stored with a normal blend, the one
+    // place a blend lives, and the set plays that once installed again.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let stored = host.set().read().await.unwrap();
+        let blend = stored
+            .patterns
+            .iter()
+            .find(|one| one.id == pattern)
+            .unwrap()
+            .blend_mode;
+        if blend == luma_patterns::BlendMode::Replace {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the blend was never stored"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while services.perform.state().bank.effects[&pattern].below {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the set never played it"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     let hue = crate::controls::perform::node(&pattern, "hue");
     assert_eq!(
         own["state"]["colors"][&hue]["fade"]["to"],
@@ -822,4 +850,72 @@ async fn a_busk_page_is_added_beside_the_set_and_plays() {
         .open_set(host.venue_id.clone())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn controllers_are_added_given_a_profile_lit_mapped_and_removed() {
+    let (_dir, _services, host) = library().await;
+    let added = call(
+        &host,
+        "perform.add_controller",
+        json!({"name": "Pads", "port": "Pads MIDI 1"}),
+    )
+    .await
+    .unwrap();
+    let id = added["id"].as_str().unwrap().to_owned();
+    assert_eq!(added["inputs"]["controllers"][0]["name"], "Pads");
+    assert_eq!(added["inputs"]["controllers"][0]["connected"], false);
+    let unnamed = call(&host, "perform.add_controller", json!({"name": " "}))
+        .await
+        .unwrap_err();
+    assert_eq!(unnamed.code, "refused");
+
+    let pad = json!({"kind": "midi_note", "channel": 0, "number": 0});
+    let profile = json!({"controls": [{"address": pad, "column": 0, "row": 0}]});
+    let changed = call(
+        &host,
+        "perform.controller",
+        json!({"id": id, "name": "Grid", "profile": profile}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(changed["inputs"]["controllers"][0]["name"], "Grid");
+    assert_eq!(
+        changed["inputs"]["controllers"][0]["profile"]["controls"][0]["address"],
+        pad
+    );
+    let bad = call(
+        &host,
+        "perform.controller",
+        json!({"id": id, "profile": {"color": {"sysex": "F0 F7 zz"}}}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(bad.code, "refused", "{}", bad.message);
+
+    // Its port is not open here, so its light cannot be shown.
+    let dark = call(
+        &host,
+        "perform.light",
+        json!({"id": id, "address": pad, "color": [1, 0, 0], "shine": "blink"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(dark.message.contains("not connected"), "{}", dark.message);
+
+    // The first page's top left cell lands on the one pad.
+    call(&host, "perform.add", wash()).await.unwrap();
+    let mapped = call(&host, "perform.map_page", json!({"id": id}))
+        .await
+        .unwrap();
+    assert_eq!(mapped["bound"], 1);
+    assert_eq!(mapped["inputs"]["bindings"][0]["address"], pad);
+    assert_eq!(mapped["inputs"]["bindings"][0]["controllerId"], id);
+
+    call(&host, "perform.remove_controller", json!({"id": id}))
+        .await
+        .unwrap();
+    let listed = call(&host, "perform.bindings", json!({})).await.unwrap();
+    assert_eq!(listed["inputs"]["controllers"], json!([]));
+    assert_eq!(listed["inputs"]["bindings"], json!([]));
 }

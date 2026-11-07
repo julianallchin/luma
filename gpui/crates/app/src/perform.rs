@@ -48,14 +48,14 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Focusable as _, Hsla, SharedString, Window};
-use luma_lib::controls::{perform as names, Control, Played, UNSET_COLOR, UNTAPPED_BPM};
+pub(super) use luma_lib::controls::perform::{Part, PartKind};
+use luma_lib::controls::{perform as names, Control, Look, Played, UNSET_COLOR, UNTAPPED_BPM};
 use luma_lib::dispatch::handlers::inputs::{Address, Binding, InputState, Mode};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::perform::{
     Cell, CellContent, ListValue, PerformClock, PerformLayout, PerformPattern, PerformSource,
     PerformState,
 };
-use luma_patterns::clip_graph::LiveInputKind;
 use luma_patterns::press::Button;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::text_input::{self, TextInput};
@@ -90,6 +90,9 @@ pub(crate) struct Perform {
     /// that left before an edit would put back what the edit replaced, so it
     /// lands only if nothing was edited since it left.
     edits: u64,
+    /// The bank's count of sets installed, as of the last poll: when it
+    /// moves, the set as stored may have changed, and is read again.
+    installs: u64,
     /// The venue's own controls, for a fader cell to move.
     controls: Vec<Control>,
     /// The venue's named groups, for a pattern to light.
@@ -155,53 +158,6 @@ pub(super) struct ValueEditor {
     )>,
 }
 
-/// One thing of a cell a hand plays: a pad, a fader or a button, and the
-/// control it moves.
-pub(super) struct Part {
-    pub control: String,
-    pub label: String,
-    pub kind: PartKind,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum PartKind {
-    /// A pattern's pad: the button node its graph's alpha depends on.
-    Pad,
-    /// A fader, and what it reads before it is first moved.
-    Fader {
-        rest: f64,
-    },
-    /// Another button node of a pattern's graph.
-    Button,
-    Tap,
-    /// A live color node of a pattern's graph, which a list sets.
-    Color,
-    /// Value `index` of a list: pressed, it is tapped.
-    Value {
-        index: usize,
-    },
-    /// A list's own control: pressed, its next value is tapped.
-    Next,
-    /// A group cell: tapped, it is chosen or no longer; held, a press
-    /// meanwhile acts on it alone.
-    Group,
-    /// Select and Clear.
-    Select,
-    Clear,
-}
-
-impl PartKind {
-    /// The way a controller binds to it; `None` for a live color, which
-    /// only a list sets.
-    pub(super) fn mode(self) -> Option<Mode> {
-        match self {
-            Self::Fader { .. } => Some(Mode::Fader),
-            Self::Color => None,
-            _ => Some(Mode::Momentary),
-        }
-    }
-}
-
 impl Perform {
     /// Control `name` now: a button's envelope, played on from the last
     /// poll; else what was just moved here, or what the bank holds; `rest`
@@ -233,19 +189,21 @@ impl Perform {
             })
     }
 
-    /// The value on in list `id`, if one is.
-    pub(super) fn value_on(&self, id: &str) -> Option<usize> {
-        self.follow.as_ref()?.bank.lists.get(id).copied()
+    /// How control `name` looks, as the bank last said: what the screen
+    /// and the controllers both draw.
+    pub(super) fn look(&self, name: &str) -> Option<&Look> {
+        self.follow.as_ref()?.bank.surface.get(name)
     }
 
-    /// Whether button `name` is on: held, or toggled on.
-    fn on(&self, name: &str) -> bool {
-        self.button(name).is_some_and(|button| button.on())
-    }
-
-    /// Whether a press of button `name` waits for its beat or bar.
-    fn waiting(&self, name: &str) -> bool {
-        self.button(name).is_some_and(|button| button.waiting())
+    /// The value on in list cell `cell`, if one is.
+    pub(super) fn value_on(&self, cell: &Cell) -> Option<usize> {
+        let CellContent::List { values, .. } = &cell.content else {
+            return None;
+        };
+        (0..values.len()).find(|index| {
+            self.look(&names::value(&cell.id, *index))
+                .is_some_and(|look| look.on)
+        })
     }
 
     /// Whether any button's envelope or live color's fade is still moving,
@@ -290,31 +248,9 @@ impl Perform {
         self.follow.as_ref()?.bank.effects.get(id)
     }
 
-    /// Whether Select chose pattern `id`.
-    pub(super) fn selected(&self, id: &str) -> bool {
-        self.follow
-            .as_ref()
-            .is_some_and(|follow| follow.bank.selected.iter().any(|one| one == id))
-    }
-
-    /// Whether `group` is chosen, and whether it is held down.
-    pub(super) fn group(&self, group: &str) -> (bool, bool) {
-        let has = |groups: &[String]| groups.iter().any(|one| one == group);
-        self.follow.as_ref().map_or((false, false), |follow| {
-            (has(&follow.bank.chosen), has(&follow.bank.held))
-        })
-    }
-
     /// `group`'s base color, when its lights have one.
     pub(super) fn base(&self, group: &str) -> Option<[f64; 3]> {
         self.follow.as_ref()?.bank.base.get(group).copied()
-    }
-
-    /// Whether Select is down or latched.
-    pub(super) fn selecting(&self) -> bool {
-        self.follow
-            .as_ref()
-            .is_some_and(|follow| follow.bank.selecting)
     }
 
     fn pattern(&self, id: &str) -> Option<&PerformPattern> {
@@ -365,15 +301,21 @@ impl Perform {
         }
     }
 
-    /// A cell's colour: its pattern's, a list's color on, a group's base
-    /// color, or a quiet white.
+    /// A cell's colour: the color its pattern plays (as its pad looks), a
+    /// list's color on, a group's base color, or a quiet white.
     fn tint(&self, cell: &Cell) -> Hsla {
         let quiet = ladder::foreground_alpha(0.8);
         match &cell.content {
-            CellContent::Pattern { pattern_id } => ladder::pattern(pattern_id).into(),
+            CellContent::Pattern { pattern_id } => self
+                .pad(pattern_id)
+                .and_then(|pad| self.look(&pad))
+                .map_or_else(
+                    || ladder::pattern(pattern_id).into(),
+                    |look| paint(look.color),
+                ),
             CellContent::Fader { .. } => Hsla::from(ladder::accent()),
             CellContent::List { values, .. } => {
-                match self.value_on(&cell.id).and_then(|on| values.get(on)) {
+                match self.value_on(cell).and_then(|on| values.get(on)) {
                     Some(ListValue::Color(rgb)) => paint(*rgb),
                     _ => Hsla::from(ladder::accent()),
                 }
@@ -385,77 +327,19 @@ impl Perform {
         }
     }
 
-    /// What a hand plays in a cell: for a pattern its pad first, when its
-    /// graph has one, then its level and its graph's other faders and
-    /// buttons.
+    /// What a hand plays in a cell, each named: a cell's own control by
+    /// the cell's name.
     fn parts(&self, cell: &Cell) -> Vec<Part> {
-        let part = |control: String, label: &str, kind| Part {
-            control,
-            label: label.to_owned(),
-            kind,
-        };
-        match &cell.content {
-            CellContent::Pattern { pattern_id } => {
-                let level = part(
-                    names::level(pattern_id),
-                    "Level",
-                    PartKind::Fader { rest: 1. },
-                );
-                let Some(pattern) = self.pattern(pattern_id) else {
-                    return vec![level];
-                };
-                let pad = pattern.graph.pad().map(|pad| pad.node);
-                let mut parts: Vec<Part> = pad
-                    .iter()
-                    .map(|node| part(names::node(pattern_id, node), "Pad", PartKind::Pad))
-                    .collect();
-                parts.push(level);
-                parts.extend(
-                    pattern
-                        .graph
-                        .live_inputs()
-                        .into_iter()
-                        .filter(|input| pad.as_ref() != Some(&input.node))
-                        .map(|input| {
-                            let kind = match input.kind {
-                                LiveInputKind::Fader => PartKind::Fader { rest: 0. },
-                                LiveInputKind::Color => PartKind::Color,
-                                LiveInputKind::Button(_) => PartKind::Button,
-                            };
-                            part(names::node(pattern_id, &input.node), &input.name, kind)
-                        }),
-                );
-                parts
-            }
-            CellContent::Master => vec![part(
-                names::MASTER.into(),
-                "Master",
-                PartKind::Fader { rest: 1. },
-            )],
-            CellContent::Tap => vec![part(names::TAP.into(), "Tap", PartKind::Tap)],
-            CellContent::Select => vec![part(names::SELECT.into(), "Select", PartKind::Select)],
-            CellContent::Clear => vec![part(names::CLEAR.into(), "Clear", PartKind::Clear)],
-            CellContent::Fader { .. } => vec![part(
-                names::cell(&cell.id),
-                &self.title(cell),
-                PartKind::Fader { rest: 0. },
-            )],
-            CellContent::List { values, .. } => (0..values.len())
-                .map(|index| {
-                    part(
-                        names::value(&cell.id, index),
-                        &format!("Value {}", index + 1),
-                        PartKind::Value { index },
-                    )
-                })
-                .chain([part(names::cell(&cell.id), "Next", PartKind::Next)])
-                .collect(),
-            CellContent::Group { .. } => vec![part(
-                names::cell(&cell.id),
-                &self.title(cell),
-                PartKind::Group,
-            )],
-        }
+        names::parts(cell, self.patterns.as_deref().unwrap_or_default())
+            .into_iter()
+            .map(|part| match part.label.is_empty() {
+                true => Part {
+                    label: self.title(cell),
+                    ..part
+                },
+                false => part,
+            })
+            .collect()
     }
 
     /// The tempo the set plays at now, and where its beat is when known.
@@ -538,6 +422,7 @@ impl Luma {
             patterns: None,
             layout: None,
             edits: 0,
+            installs: 0,
             controls: Vec::new(),
             groups: Vec::new(),
             surface: surface::Surface::default(),
@@ -561,7 +446,12 @@ impl Luma {
         self.open_body(target.clone(), move || Body::Perform(Box::new(state)), cx);
         self.poll_perform(target.clone(), cx);
         self.reload_perform_set(&target, cx);
-        let opened = self.library.input_open(&venue_id);
+    }
+
+    /// Bind the venue's inputs, reading its controllers and bindings again.
+    fn open_inputs(&mut self, target: &Target, cx: &mut Context<Self>) {
+        let opened = self.library.input_open(target.venue());
+        let target = target.clone();
         cx.spawn(async move |this, cx| {
             let opened = opened.await;
             this.update(cx, |this, cx| {
@@ -628,12 +518,15 @@ impl Luma {
                     }
                     // A failed read keeps what we knew: dropping to `None` would
                     // flash the chooser to Off until the next poll.
+                    let mut installed = false;
                     if let Ok(follow) = follow {
                         if state.choosing.as_ref().is_some_and(|choice| {
                             same_source(choice.as_ref(), follow.source.as_ref())
                         }) {
                             state.choosing = None;
                         }
+                        installed = follow.bank.installs != state.installs;
+                        state.installs = follow.bank.installs;
                         state.follow = Some(follow);
                         state.polled_at = Instant::now();
                     }
@@ -662,8 +555,14 @@ impl Luma {
                         .map(str::to_owned)
                         .collect();
                     state.fetching.extend(wanted.iter().cloned());
+                    // The set was installed anew: read it, for what changed
+                    // in it without this tab, such as Select's blends.
+                    let reread = installed && state.patterns.is_some();
                     for track_id in wanted {
                         this.load_deck_track(&target, track_id, cx);
+                    }
+                    if reread {
+                        this.read_perform_set(&target, false, cx);
                     }
                     cx.notify();
                     Some(this.library.debounce(POLL))
@@ -783,6 +682,33 @@ impl Luma {
                 self.after_request(target.clone(), cancel, cx);
             }
         }
+    }
+
+    /// Put the page on screen on controller `controller_id`'s grid, by its
+    /// profile, in place of what it had bound there.
+    fn map_page(&mut self, target: &Target, controller_id: &str, cx: &mut Context<Self>) {
+        let Some(page) = self
+            .perform_mut(target)
+            .and_then(|state| state.page())
+            .map(|page| page.id.clone())
+        else {
+            return;
+        };
+        let map = self
+            .library
+            .input_map_page(target.venue(), controller_id, &page);
+        let target = target.clone();
+        cx.spawn(async move |this, cx| {
+            let mapped = map.await;
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.perform_mut(&target) {
+                    state.error = mapped.err().map(|error| error.to_string());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Change the surface or the layout from the screen. Leaving the cell or
@@ -924,11 +850,18 @@ impl Luma {
         .detach();
     }
 
-    /// Read the venue's Perform set, layout, controls and groups, and have
-    /// the backend play the set: when the tab opens, after a change here,
-    /// and when a sync brings one. A venue with no layout yet gets one laid
-    /// out from its set.
+    /// Read the venue's Perform set, layout, controls, groups, controllers
+    /// and bindings, and have the backend play the set: when the tab opens,
+    /// after a failed change here, and when a sync or an agent brings one. A
+    /// venue with no layout yet gets one laid out from its set.
     pub(crate) fn reload_perform_set(&mut self, target: &Target, cx: &mut Context<Self>) {
+        self.open_inputs(target, cx);
+        self.read_perform_set(target, true, cx);
+    }
+
+    /// Read the venue's Perform set, layout, controls and groups; with
+    /// `open`, have the backend play the set.
+    fn read_perform_set(&mut self, target: &Target, open: bool, cx: &mut Context<Self>) {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
@@ -938,13 +871,16 @@ impl Luma {
         let layout = self.library.perform_layout(&venue_id);
         let controls = self.library.control_list(&venue_id);
         let groups = self.library.venue_groups(&venue_id);
-        let open = self.library.perform_open_set(&venue_id);
+        let open = open.then(|| self.library.perform_open_set(&venue_id));
         let target = target.clone();
         cx.spawn(async move |this, cx| {
             let (patterns, layout) = (patterns.await, layout.await);
             let controls = controls.await.unwrap_or_default();
             let groups = groups.await.unwrap_or_default();
-            let opened = open.await;
+            let opened = match open {
+                Some(open) => open.await,
+                None => Ok(()),
+            };
             this.update(cx, |this, cx| {
                 let Some(state) = this.perform_mut(&target) else {
                     return;
@@ -1704,15 +1640,26 @@ fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElem
     } else {
         ("Edit layout", View::Setup)
     };
+    // There is nothing to arrange until the layout is read.
+    let loaded = state.layout.is_some();
     let (pressed, edited) = (app.clone(), target.clone());
-    let toggle = luma_ui::button(label, luma_ui::Enabled::Yes)
-        .id("perform-edit-layout")
-        .on_click(move |_, _, cx| {
+    let toggle = luma_ui::button(
+        label,
+        if loaded {
+            luma_ui::Enabled::Yes
+        } else {
+            luma_ui::Enabled::No
+        },
+    )
+    .id("perform-edit-layout")
+    .when(loaded, |button| {
+        button.on_click(move |_, _, cx| {
             pressed.update(cx, |this, cx| {
                 this.edit_surface(&edited, Edit::View(next), cx)
             });
         })
-        .agent_node(Role::Button, label);
+    })
+    .agent_node(Role::Button, label);
     div()
         .flex_shrink_0()
         .h(px(44.))

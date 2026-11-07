@@ -450,6 +450,38 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         ]
     ),
     table!(
+        "perform_controllers",
+        "@.id",
+        "uid",
+        [
+            "id",
+            "uid",
+            "venue_id",
+            "name",
+            "port",
+            "profile_json",
+            "created_at",
+            "updated_at"
+        ]
+    ),
+    table!(
+        "control_bindings",
+        "@.id",
+        "uid",
+        [
+            "id",
+            "uid",
+            "venue_id",
+            "controller_id",
+            "control",
+            "address_json",
+            "mode",
+            "invert",
+            "created_at",
+            "updated_at"
+        ]
+    ),
+    table!(
         "laser_limits",
         "@.id",
         "uid",
@@ -560,7 +592,7 @@ pub fn table(name: &str) -> Option<&'static SyncedTable> {
 /// They need coercion in both directions. PostgREST will not accept a JSON `0`
 /// for a boolean, and `CAST('true' AS INTEGER)` is 0 in SQLite — so neither end
 /// can be left to convert implicitly.
-pub const BOOLEAN_COLUMNS: &[&str] = &["address_pinned"];
+pub const BOOLEAN_COLUMNS: &[&str] = &["address_pinned", "invert"];
 
 /// The column a `*_updated_at` trigger writes and nothing else means.
 ///

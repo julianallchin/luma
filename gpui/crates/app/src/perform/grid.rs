@@ -140,7 +140,8 @@ fn tabs(
             .cells
             .iter()
             .filter_map(Cell::pattern_id)
-            .filter(|id| state.pad(id).is_some_and(|pad| state.on(&pad)))
+            .filter_map(|id| state.pad(id))
+            .filter(|pad| state.look(pad).is_some_and(|look| look.on))
             .count();
         format!("{} · {on} on", page.name)
     };
@@ -562,8 +563,7 @@ fn face(state: &Perform, cell: &Cell, rect: Rect, live: Live) -> AnyElement {
         CellContent::Pattern { pattern_id } => pattern_face(state, cell, pattern_id, rect, live),
         CellContent::Master | CellContent::Fader { .. } => fader_face(state, cell, rect, live),
         CellContent::Tap => tap_face(state, cell, live),
-        CellContent::Select => utility_face(state, cell, state.selecting(), live),
-        CellContent::Clear => utility_face(state, cell, false, live),
+        CellContent::Select | CellContent::Clear => utility_face(state, cell, live),
         CellContent::List { values, .. } => list_face(state, cell, values, rect, live),
         CellContent::Group { group, .. } => group_face(state, cell, group, live),
     }
@@ -630,12 +630,13 @@ fn pattern_face(
         Some((pad, controls)) if pad.kind == PartKind::Pad => (Some(pad), controls),
         _ => (None, &parts[..]),
     };
-    // It glows by its pad's envelope, and is on while its pad is.
+    // It glows by its pad's envelope, and stands as its pad looks.
     let level = pad.map_or(0., |pad| state.value(&pad.control, 0.) as f32);
-    let on = pad.is_some_and(|pad| state.on(&pad.control));
-    let waiting = pad.is_some_and(|pad| state.waiting(&pad.control));
+    let look = pad.and_then(|pad| state.look(&pad.control));
+    let on = look.is_some_and(|look| look.on);
+    let waiting = look.is_some_and(|look| look.waiting);
+    let chosen = look.is_some_and(|look| look.selected);
     let effect = state.effect(pattern_id);
-    let chosen = state.selected(pattern_id);
     // Where it plays, when that is more than its own selection.
     let places = effect
         .filter(|effect| !effect.groups.is_empty())
@@ -885,8 +886,9 @@ fn button(
     tint: Hsla,
     live: Live,
 ) -> AnyElement {
-    let on = state.on(&part.control);
-    let waiting = state.waiting(&part.control);
+    let look = state.look(&part.control);
+    let on = look.is_some_and(|look| look.on);
+    let waiting = look.is_some_and(|look| look.waiting);
     let plate = div()
         .id(SharedString::from(format!(
             "perform-button-{}-{}",
@@ -1129,7 +1131,7 @@ fn list_face(
     live: Live,
 ) -> AnyElement {
     let title = state.title(cell);
-    let on = state.value_on(&cell.id);
+    let on = state.value_on(cell);
     let parts = state.parts(cell);
     if (rect.width, rect.height) == (1, 1) {
         let Some(next) = parts.last() else {
@@ -1256,7 +1258,11 @@ fn list_face(
 fn group_face(state: &Perform, cell: &Cell, group: &str, live: Live) -> AnyElement {
     let title = state.title(cell);
     let control = luma_lib::controls::perform::cell(&cell.id);
-    let (chosen, held) = state.group(group);
+    let look = state.look(&control);
+    let (chosen, held) = (
+        look.is_some_and(|look| look.on),
+        look.is_some_and(|look| look.held),
+    );
     let base = state.base(group);
     let lit = chosen || held;
     let body = div()
@@ -1323,12 +1329,15 @@ fn group_face(state: &Perform, cell: &Cell, group: &str, live: Live) -> AnyEleme
     plate().child(body).into_any_element()
 }
 
-/// Select or Clear: its name and what it does, lit while `lit`.
-fn utility_face(state: &Perform, cell: &Cell, lit: bool, live: Live) -> AnyElement {
+/// Select or Clear: its name and what it does, lit while on or held.
+fn utility_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
     let title = state.title(cell);
     let Some(part) = state.parts(cell).pop() else {
         return plate().into_any_element();
     };
+    let lit = state
+        .look(&part.control)
+        .is_some_and(|look| look.on || look.held);
     let hint = match part.kind {
         PartKind::Select => "Hold or tap, then an effect",
         _ => "Tap: choose nothing · hold: all off",
@@ -1370,9 +1379,10 @@ fn tap_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
     let tempo = state.tempo();
     let held = state.pressed.as_deref() == Some(luma_lib::controls::perform::TAP);
     let bar = luma_lib::controls::TAPPED_BEATS_PER_BAR;
-    let lit = tempo
-        .and_then(|(_, beat)| beat)
-        .map(|beat| beat.rem_euclid(bar).floor() as usize);
+    let lit = state
+        .look(luma_lib::controls::perform::TAP)
+        .and_then(|look| look.beat)
+        .map(usize::from);
     // The bar's first beat, the one a run of taps starts on, is the larger.
     let beats = div()
         .flex()

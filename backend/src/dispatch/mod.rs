@@ -360,10 +360,16 @@ commands! {
 
     inputs::input_open(venue_id: String) -> InputState;
     inputs::input_state() -> InputState;
-    inputs::input_learn(venue_id: String, control: String, mode: Mode) -> Binding;
+    inputs::input_learn(
+        venue_id: String,
+        control: String,
+        mode: Mode,
+        controller_id: Option<String>,
+    ) -> Binding;
     inputs::input_cancel_learn() -> ();
     inputs::input_update_binding(venue_id: String, binding_id: String, mode: Mode, invert: bool) -> ();
     inputs::input_unbind(venue_id: String, binding_id: String) -> ();
+    inputs::input_map_page(venue_id: String, controller_id: String, page_id: String) -> Vec<Binding>;
 
     controls::control_list(venue_id: String) -> Vec<Control>;
 

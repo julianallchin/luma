@@ -51,8 +51,10 @@
 //! latches it), an effect is chosen instead of played; the next color tapped
 //! on a list with no targets sets its own color, or with the color below
 //! sets it back to taking the color under it (the blend
-//! [`luma_patterns::BlendMode::Below`]). Clear tapped chooses nothing;
-//! held, it lets every effect go.
+//! [`luma_patterns::BlendMode::Below`]). The blend is the pattern's, as
+//! stored: the bank hands the new one to the set's write path
+//! ([`VenueControls::restyle_to`]) and plays it once the set is installed
+//! again. Clear tapped chooses nothing; held, it lets every effect go.
 //!
 //! The bank keeps each fade (from, to, when and how long), so a color too is
 //! a pure function of time. A list that steps moves on to its next value
@@ -66,9 +68,8 @@
 //! Values are live state, like the render engine's, so they live here
 //! rather than in the database: every scene an app compiles for a venue
 //! reads that app's one bank of the venue ([`ControlBanks`]), and setting a
-//! value never recompiles. Where an effect plays and whether it takes the
-//! color below change what the engine plays; it sees each change by
-//! [`VenueControls::changed`].
+//! value never recompiles. Where an effect plays changes what the engine
+//! plays; it sees each change by [`VenueControls::changed`].
 //!
 //! [`install`]: VenueControls::install
 
@@ -84,11 +85,15 @@ use serde::Serialize;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::perform::{CellContent, ListValue, PerformLayout, PerformPattern, Step, Tempo};
 use crate::models::universe::UniverseState;
+pub use surface::{Job, Light, Look, Shine, Surface, AMBER};
 
-/// The names the Perform set plays under, all `perform_…`. Nothing lists
-/// them as the venue's own.
+/// The names the Perform set plays under, all `perform_…`, and which of
+/// them each cell has ([`perform::parts`]). Nothing lists them as the
+/// venue's own.
 pub mod perform {
-    use crate::models::perform::{ControlTarget, PerformPattern};
+    use luma_patterns::clip_graph::LiveInputKind;
+
+    use crate::models::perform::{Cell, CellContent, ControlTarget, PerformPattern};
 
     /// Scales every Perform pattern, 1 until moved.
     pub const MASTER: &str = "perform_master";
@@ -143,6 +148,113 @@ pub mod perform {
     /// Whether `name` is one of the Perform set's, not the venue's own.
     pub fn owns(name: &str) -> bool {
         name.starts_with("perform_")
+    }
+
+    /// One thing of a cell a hand plays, and the control it moves. An
+    /// empty label is the cell's own name.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Part {
+        pub control: String,
+        pub label: String,
+        pub kind: PartKind,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub enum PartKind {
+        /// A pattern's pad: the button node its graph's alpha depends on.
+        Pad,
+        /// A fader, and what it reads before it is first moved.
+        Fader {
+            rest: f64,
+        },
+        /// Another button node of a pattern's graph.
+        Button,
+        Tap,
+        /// A live color node of a pattern's graph, which a list sets.
+        Color,
+        /// Value `index` of a list: pressed, it is tapped.
+        Value {
+            index: usize,
+        },
+        /// A list's own control: pressed, its next value is tapped.
+        Next,
+        /// A group cell: tapped, it is chosen or no longer; held, a press
+        /// meanwhile acts on it alone.
+        Group,
+        Select,
+        Clear,
+    }
+
+    impl PartKind {
+        /// The way a controller binds to it; `None` for a live color,
+        /// which only a list sets.
+        pub fn mode(self) -> Option<crate::inputs::Mode> {
+            match self {
+                Self::Fader { .. } => Some(crate::inputs::Mode::Fader),
+                Self::Color => None,
+                _ => Some(crate::inputs::Mode::Momentary),
+            }
+        }
+    }
+
+    /// What a hand plays in `cell`, of a set of `patterns`: for a pattern
+    /// its pad first, when its graph has one, then its level and its
+    /// graph's other faders, buttons and live colors; for a list each
+    /// value, then its Next.
+    pub fn parts(cell: &Cell, patterns: &[PerformPattern]) -> Vec<Part> {
+        let part = |control: String, label: &str, kind| Part {
+            control,
+            label: label.to_owned(),
+            kind,
+        };
+        match &cell.content {
+            CellContent::Pattern { pattern_id } => {
+                let level = part(level(pattern_id), "Level", PartKind::Fader { rest: 1. });
+                let Some(pattern) = patterns.iter().find(|one| &one.id == pattern_id) else {
+                    return vec![level];
+                };
+                let pad = pattern.graph.pad().map(|pad| pad.node);
+                let mut parts: Vec<Part> = pad
+                    .iter()
+                    .map(|id| part(node(pattern_id, id), "Pad", PartKind::Pad))
+                    .collect();
+                parts.push(level);
+                parts.extend(
+                    pattern
+                        .graph
+                        .live_inputs()
+                        .into_iter()
+                        .filter(|input| pad.as_ref() != Some(&input.node))
+                        .map(|input| {
+                            let kind = match input.kind {
+                                LiveInputKind::Fader => PartKind::Fader { rest: 0. },
+                                LiveInputKind::Color => PartKind::Color,
+                                LiveInputKind::Button(_) => PartKind::Button,
+                            };
+                            part(node(pattern_id, &input.node), &input.name, kind)
+                        }),
+                );
+                parts
+            }
+            CellContent::Master => vec![part(MASTER.into(), "", PartKind::Fader { rest: 1. })],
+            CellContent::Tap => vec![part(TAP.into(), "", PartKind::Tap)],
+            CellContent::Select => vec![part(SELECT.into(), "", PartKind::Select)],
+            CellContent::Clear => vec![part(CLEAR.into(), "", PartKind::Clear)],
+            CellContent::Fader { .. } => {
+                vec![part(self::cell(&cell.id), "", PartKind::Fader { rest: 0. })]
+            }
+            CellContent::List { values, .. } => (0..values.len())
+                .map(|index| {
+                    part(
+                        value(&cell.id, index),
+                        &format!("Value {}", index + 1),
+                        PartKind::Value { index },
+                    )
+                })
+                .chain([part(self::cell(&cell.id), "Next", PartKind::Next)])
+                .collect(),
+            CellContent::Group { .. } => vec![part(self::cell(&cell.id), "", PartKind::Group)],
+        }
     }
 
     /// An id as a control-name part: lowercase letters and digits only, so
@@ -202,10 +314,17 @@ struct Bank {
     selected: BTreeSet<String>,
     /// When Clear went down, while it is.
     clearing: Option<Instant>,
+    /// Where Select sends an effect's new blend, to be stored: the set's
+    /// one write path stores it and installs the set again.
+    restyle: Option<tokio::sync::mpsc::UnboundedSender<(String, BlendMode)>>,
     /// Each light's base color.
     base: HashMap<String, Fading>,
-    /// Bumped whenever an effect's groups or blend change, for the engine.
+    /// Each control on the layout's pages, and what it is.
+    faces: BTreeMap<String, surface::Face>,
+    /// Bumped whenever an effect's groups change, for the engine.
     changed: u64,
+    /// Bumped whenever a set is installed: the set as stored may differ.
+    installs: u64,
     tempo: TapTempo,
     /// The deck the set follows, while it follows one.
     deck: Option<Deck>,
@@ -232,33 +351,10 @@ struct Effect {
     groups: Vec<String>,
     /// Its own color: the first live color node of its graph.
     color: Option<String>,
-    /// Its blend as stored.
+    /// Its blend as stored. Select changes it by storing another.
     blend: BlendMode,
-    /// Where Select put its color, and the blend it was stored with then.
-    /// A blend stored since wins.
-    source: Option<(Source, BlendMode)>,
-}
-
-/// Where an effect's color comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Source {
-    /// The color under it: the blend [`BlendMode::Below`].
-    Below,
-    /// Its own color control, and a blend that lights its own color.
-    Own,
-}
-
-impl Effect {
-    /// The blend it plays by: as stored, or as Select set its color. Own
-    /// color over a stored Below is Replace.
-    fn blend(&self) -> BlendMode {
-        match self.source {
-            Some((Source::Below, _)) => BlendMode::Below,
-            Some((Source::Own, _)) if self.blend == BlendMode::Below => BlendMode::Replace,
-            _ => self.blend,
-        }
-    }
+    /// Its selection's expression, where it plays on no groups.
+    selection: String,
 }
 
 /// The deck the set follows: its tempo, and its beat as the engine last
@@ -730,7 +826,10 @@ impl Bank {
     }
 
     /// Value `index` of list `id` tapped at `at`: with effects chosen by
-    /// Select and no targets, their color; else what [`Self::put`] sets.
+    /// Select and no targets, their color; else what [`Self::put`] sets. A
+    /// color is an effect's own: its live color fades to it here, and one
+    /// stored as Below is stored again as Replace. The color below is
+    /// stored as Below.
     fn tap_value(&mut self, id: &str, index: usize, at: Instant) {
         let Some(list) = self.lists.get(id) else {
             return;
@@ -742,20 +841,22 @@ impl Bank {
             return self.put(id, index, None, at);
         }
         let (length, unit) = (list.fade, list.unit);
-        let source = match value {
-            ListValue::Color(_) => Source::Own,
-            _ => Source::Below,
-        };
         for pattern in std::mem::take(&mut self.selected) {
-            let Some(effect) = self.effects.get_mut(&pattern) else {
+            let Some(effect) = self.effects.get(&pattern) else {
                 continue;
             };
-            let before = effect.blend();
-            effect.source = Some((source, effect.blend));
-            if effect.blend() != before {
-                self.changed += 1;
+            let blend = match value {
+                ListValue::Below => BlendMode::Below,
+                _ if effect.blend == BlendMode::Below => BlendMode::Replace,
+                _ => effect.blend,
+            };
+            let color = effect.color.clone();
+            if blend != effect.blend {
+                if let Some(restyle) = &self.restyle {
+                    let _ = restyle.send((pattern.clone(), blend));
+                }
             }
-            if let (ListValue::Color(to), Some(color)) = (value, effect.color.clone()) {
+            if let (ListValue::Color(to), Some(color)) = (value, color) {
                 self.fade(&color, to, length, unit, at);
             }
         }
@@ -1018,14 +1119,7 @@ impl VenueControls {
             .lights
             .iter()
             .filter(|(_, lights)| lights.iter().any(|light| bank.base.contains_key(light)))
-            .map(|(group, lights)| {
-                let mut sum = [0.0; 3];
-                for light in lights.iter() {
-                    let rgb = bank.base_at(light, now);
-                    (0..3).for_each(|c| sum[c] += rgb[c]);
-                }
-                (group.clone(), sum.map(|c| c / lights.len() as f64))
-            })
+            .map(|(group, _)| (group.clone(), bank.base_of(group, now)))
             .collect();
         Playing {
             controls: bank.values.clone(),
@@ -1058,27 +1152,35 @@ impl VenueControls {
                 .map(|(id, effect)| {
                     let played = Played {
                         groups: effect.groups.clone(),
-                        below: effect.blend() == BlendMode::Below,
+                        below: effect.blend == BlendMode::Below,
                     };
                     (id.clone(), played)
                 })
                 .collect(),
             base,
+            surface: bank.surface(now),
+            installs: bank.installs,
         }
     }
 
-    /// Bumped whenever an effect's groups or blend change: the engine
-    /// compares it at each frame.
+    /// Bumped whenever an effect's groups change: the engine compares it
+    /// at each frame.
     pub(crate) fn changed(&self) -> u64 {
         self.read().changed
     }
 
-    /// Where pattern `id` plays, sorted (none is its own selection), and
-    /// the blend it plays by; `None` for a pattern the bank does not hold.
-    pub(crate) fn effect(&self, id: &str) -> Option<(Vec<String>, BlendMode)> {
-        let bank = self.read();
-        let effect = bank.effects.get(id)?;
-        Some((effect.groups.clone(), effect.blend()))
+    /// Where pattern `id` plays, sorted (none is its own selection);
+    /// `None` for a pattern the bank does not hold.
+    pub(crate) fn groups(&self, id: &str) -> Option<Vec<String>> {
+        Some(self.read().effects.get(id)?.groups.clone())
+    }
+
+    /// Store the blends Select gives effects through `restyle`.
+    pub(crate) fn restyle_to(
+        &self,
+        restyle: tokio::sync::mpsc::UnboundedSender<(String, BlendMode)>,
+    ) {
+        self.write().restyle = Some(restyle);
     }
 
     /// Whether pattern `id` plays on `groups` now.
@@ -1136,8 +1238,7 @@ impl VenueControls {
     /// cell to its targets, give each list its values, know each group
     /// cell's group, and make each one-at-a-time row's pads take from each
     /// other. What already plays holds, so recompiling the set changes
-    /// nothing that is playing: where each effect plays, its color as Select
-    /// set it (unless its blend was stored anew since), what is chosen and
+    /// nothing that is playing: where each effect plays, what is chosen and
     /// each list's value on.
     pub(crate) fn install(
         &self,
@@ -1241,15 +1342,14 @@ impl VenueControls {
                         .unwrap_or_default(),
                     color,
                     blend: pattern.blend_mode,
-                    source: was
-                        .and_then(|was| was.source)
-                        .filter(|(_, over)| *over == pattern.blend_mode),
+                    selection: pattern.selection.expression.clone(),
                 };
                 (pattern.id.clone(), effect)
             })
             .collect();
         bank.effects = effects;
         bank.changed += 1;
+        bank.installs += 1;
         for pattern in patterns {
             bank.values
                 .entry(perform::level(&pattern.id))
@@ -1271,6 +1371,7 @@ impl VenueControls {
             })
             .collect();
         bank.lists = lists;
+        bank.faces = surface::faces(layout, patterns);
         let known: BTreeSet<&String> = groups.values().collect();
         let chosen = std::mem::take(&mut bank.chosen);
         bank.chosen = chosen.into_iter().filter(|g| known.contains(g)).collect();
@@ -1352,6 +1453,13 @@ pub struct Playing {
     /// Each group's base color now, the mean of its lights'; a group none
     /// of whose lights has one is absent.
     pub base: BTreeMap<String, [f64; 3]>,
+    /// How every control on the surface looks: what the screen and the
+    /// controllers draw.
+    pub surface: Surface,
+    /// How many sets the bank has had installed. It moves whenever the set
+    /// as stored may have changed, Select's blends among them, so a reader
+    /// that keeps a copy reads it again.
+    pub installs: u64,
 }
 
 /// One pattern as the bank plays it.
@@ -1558,6 +1666,8 @@ pub(crate) async fn list(
         })
         .collect())
 }
+
+mod surface;
 
 #[cfg(test)]
 pub(crate) mod tests;

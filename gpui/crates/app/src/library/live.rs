@@ -200,7 +200,7 @@ impl Library {
     ) -> impl Future<Output = Result<Binding, LibraryError>> + use<> {
         let (venue_id, control) = (venue_id.to_owned(), control.to_owned());
         self.call("input_learn", move |services| async move {
-            handlers::inputs::input_learn(&services, venue_id, control, mode).await
+            handlers::inputs::input_learn(&services, venue_id, control, mode, None).await
         })
     }
 
@@ -223,6 +223,24 @@ impl Library {
         self.call("input_update_binding", move |services| async move {
             handlers::inputs::input_update_binding(&services, venue_id, binding_id, mode, invert)
                 .await
+        })
+    }
+
+    pub(crate) fn input_map_page(
+        &self,
+        venue_id: &str,
+        controller_id: &str,
+        page_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (venue_id, controller_id, page_id) = (
+            venue_id.to_owned(),
+            controller_id.to_owned(),
+            page_id.to_owned(),
+        );
+        self.call("input_map_page", move |services| async move {
+            handlers::inputs::input_map_page(&services, venue_id, controller_id, page_id)
+                .await
+                .map(|_| ())
         })
     }
 

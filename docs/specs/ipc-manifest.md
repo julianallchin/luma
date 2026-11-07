@@ -6,7 +6,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command
 prose in it is the only hand-written part and is carried across by name.
 
-**134 commands** across **26 domains**
+**135 commands** across **26 domains**
 
 ## Domains
 
@@ -25,7 +25,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 6 | `backend/src/dispatch/handlers/host_audio.rs` |
-| `inputs` | 6 | `backend/src/dispatch/handlers/inputs.rs` |
+| `inputs` | 7 | `backend/src/dispatch/handlers/inputs.rs` |
 | `lasers` | 1 | `backend/src/dispatch/handlers/lasers.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
 | `perform` | 14 | `backend/src/dispatch/handlers/perform.rs` |
@@ -38,7 +38,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **134** | |
+| **total** | **135** | |
 
 ## Commands
 
@@ -177,10 +177,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `input_open` | `venueId: String` | `InputState` |
 | `input_state` | — | `InputState` |
-| `input_learn` | `venueId: String`<br>`control: String`<br>`mode: Mode` | `Binding` |
+| `input_learn` | `venueId: String`<br>`control: String`<br>`mode: Mode`<br>`controllerId: Option<String>` | `Binding` |
 | `input_cancel_learn` | — | `()` |
 | `input_update_binding` | `venueId: String`<br>`bindingId: String`<br>`mode: Mode`<br>`invert: bool` | `()` |
 | `input_unbind` | `venueId: String`<br>`bindingId: String` | `()` |
+| `input_map_page` | `venueId: String`<br>`controllerId: String`<br>`pageId: String` | `Vec<Binding>` |
 
 ### `lasers`
 

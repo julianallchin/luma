@@ -44,6 +44,9 @@ A new migration adds its line here.
   `perform_layouts`
 - `20261105120000_perform_pad_in_graph.sql` — after every client runs a
   build that no longer uploads `perform_patterns.pad_json`
+- `20261107120000_perform_controllers.sql` — then redeploy
+  `powersync/sync-config.yaml`, which names `perform_controllers` and
+  `control_bindings`; before shipping the client that uploads them
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

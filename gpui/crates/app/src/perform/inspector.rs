@@ -220,7 +220,86 @@ fn page_sections(
                 })
             }))
             .into_any_element(),
+        controllers(state, target, app).into_any_element(),
     ]
+}
+
+/// The venue's controller: whether it is connected, and putting this page
+/// on its grid. Learn, on a cell, binds one control at a time.
+fn controllers(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
+    let controller = state
+        .inputs
+        .as_ref()
+        .and_then(|inputs| inputs.controllers.first());
+    let Some(controller) = controller else {
+        return column().child(float::label("Controller")).child(note(
+            "None yet. Select a cell and press Learn, then touch your controller.",
+        ));
+    };
+    let status = match (controller.connected, controller.controller.port.is_empty()) {
+        (true, _) => "Connected".to_owned(),
+        (false, true) => "Not heard yet".to_owned(),
+        (false, false) => format!("Not connected: {}", controller.controller.port),
+    };
+    let profiled = !controller.controller.profile.controls.is_empty();
+    let map = {
+        let (app, target, id) = (
+            app.clone(),
+            target.clone(),
+            controller.controller.id.clone(),
+        );
+        luma_ui::button(
+            "Map this page",
+            if profiled { Enabled::Yes } else { Enabled::No },
+        )
+        .id("perform-map-page")
+        .when(profiled, |button| {
+            button.on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| this.map_page(&target, &id, cx));
+            })
+        })
+        .agent_node(Role::Button, "Map this page")
+    };
+    column()
+        .child(float::label("Controller"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(controller.controller.name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.5))
+                        .text_color(if controller.connected {
+                            Hsla::from(ladder::accent())
+                        } else {
+                            ladder::foreground_alpha(0.5)
+                        })
+                        .child(status.clone()),
+                )
+                .agent_node(
+                    Role::Text,
+                    format!("Controller {}: {status}", controller.controller.name),
+                ),
+        )
+        .child(div().flex().child(map))
+        .child(note(if profiled {
+            "Map puts this page's cells on the controller's pads and faders, \
+             each where it sits on the grid."
+        } else {
+            "It has no profile yet, so nothing says where its pads are. Learn \
+             still binds one control at a time."
+        }))
 }
 
 /// What a cell is, as the inspector heads it.

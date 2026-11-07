@@ -126,13 +126,15 @@ is an upsert.
 
 venues, venue_members, fixtures, fixture_groups, fixture_group_members,
 venue_nodes, venue_edges, venue_node_params, venue_constraints, folders,
-folder_tracks, laser_zones, laser_limits, perform_patterns, perform_layouts, tracks,
+folder_tracks, laser_zones, laser_limits, perform_patterns, perform_layouts,
+perform_controllers, control_bindings, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
 clips, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts.
 
-Local only: settings, control_bindings, dmx_routes, preprocessing_failures,
+Local only: settings, control_bindings_unsynced (the bindings a machine kept
+before they synced, until its venue's inputs move them), dmx_routes, preprocessing_failures,
 track_waveforms, track_mert, agent_thread_runs,
 agent_thread_usage, sync_rejections, auth_write_admission, the
 auth session, and the columns `tracks.file_path`, `tracks.album_art_path`,

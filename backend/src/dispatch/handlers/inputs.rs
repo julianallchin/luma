@@ -3,7 +3,9 @@
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
-pub use crate::inputs::{Address, Binding, InputState, LastInput, Mode};
+pub use crate::inputs::{
+    Address, Binding, Controller, ControllerState, InputState, LastInput, Mode,
+};
 
 async fn open(services: &AppServices, venue_id: &str) -> Result<(), CommandError> {
     let _access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue_id)).await?;
@@ -26,13 +28,15 @@ pub async fn input_state(services: &AppServices) -> Result<InputState, CommandEr
     Ok(services.inputs.state())
 }
 
-/// Wait up to 20 s for the next input, and bind it to `control`. Fails when
-/// nothing is heard or another learn replaces this one.
+/// Wait up to 20 s for the next input, and bind it to `control` on
+/// controller `controller_id` (none: the venue's first, or a new one).
+/// Fails when nothing is heard or another learn replaces this one.
 pub async fn input_learn(
     services: &AppServices,
     venue_id: String,
     control: String,
     mode: Mode,
+    controller_id: Option<String>,
 ) -> Result<Binding, CommandError> {
     if !luma_patterns::clip_graph::is_control_name(&control) {
         return Err(CommandError::Invalid(format!(
@@ -42,7 +46,10 @@ pub async fn input_learn(
     if services.inputs.state().venue_id.as_deref() != Some(venue_id.as_str()) {
         open(services, &venue_id).await?;
     }
-    Ok(services.inputs.learn(&control, mode).await?)
+    Ok(services
+        .inputs
+        .learn(&control, mode, controller_id.as_deref(), None)
+        .await?)
 }
 
 /// Stop waiting for an input to learn.
@@ -62,7 +69,7 @@ pub async fn input_update_binding(
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(services
         .inputs
-        .update(&venue_id, &binding_id, mode, invert)
+        .update(&venue_id, &binding_id, mode, invert, None)
         .await?)
 }
 
@@ -73,5 +80,33 @@ pub async fn input_unbind(
 ) -> Result<(), CommandError> {
     let _access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(services.inputs.unbind(&venue_id, &binding_id).await?)
+    Ok(services.inputs.unbind(&venue_id, &binding_id, None).await?)
+}
+
+/// Put page `page_id` of the venue's layout on controller `controller_id`'s
+/// grid, by its profile. Answers the bindings made.
+pub async fn input_map_page(
+    services: &AppServices,
+    venue_id: String,
+    controller_id: String,
+    page_id: String,
+) -> Result<Vec<Binding>, CommandError> {
+    let set =
+        crate::services::perform_set::PerformSet::new(&services.db.0, &services.perform, &venue_id)
+            .read()
+            .await?;
+    let page = set
+        .layout
+        .pages
+        .iter()
+        .find(|page| page.id == page_id)
+        .ok_or_else(|| CommandError::NotFound("No such page".into()))?;
+    if services.inputs.state().venue_id.as_deref() != Some(venue_id.as_str()) {
+        open(services, &venue_id).await?;
+    }
+    services
+        .inputs
+        .map_page(&controller_id, page, &set.patterns, None)
+        .await
+        .map_err(CommandError::Invalid)
 }
