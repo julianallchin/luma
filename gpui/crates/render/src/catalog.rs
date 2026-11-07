@@ -503,6 +503,27 @@ pub fn node_params(family: Family, params: &Params) -> Procedural {
     }
 }
 
+/// What a node naming `catalog_ref` draws as, at its own `params`: a bundled
+/// GLB, an assembly, or a generator standing at those parameters.
+///
+/// `None` for a `catalog_ref` the catalog does not hold — a row from an older
+/// or newer catalog than this build's, or a typo in an AI-authored venue. Such
+/// a node draws nothing, exactly as it has no sockets to host by and no box to
+/// collide by; the resolver reports it as `Warning::UnknownCatalogRef`, which
+/// is what tells the operator why. Guessing a mesh path from the ref instead
+/// would send the frame builder after a GLB that is not there, and one missing
+/// asset fails the whole frame rather than the one piece.
+#[must_use]
+pub fn geometry(catalog_ref: &str, params: &Params) -> Option<crate::scene_desc::Geometry> {
+    use crate::scene_desc::Geometry as Drawn;
+    Some(match luma_scene::catalog::piece(catalog_ref)?.geometry {
+        Geometry::Mesh { path } => Drawn::mesh(path),
+        Geometry::Procedural(family) => Drawn::Procedural(node_params(family, params)),
+        // An assembly is named, not pathed: its parts are looked up by id.
+        Geometry::Assembly(_) => Drawn::Assembly(catalog_ref.to_string()),
+    })
+}
+
 /// A [`FaceSet`] out of the number `venue_node_params` holds, and back.
 ///
 /// One bit per [`Face`], in [`Face::ALL`] order. Out-of-range bits are dropped
@@ -950,6 +971,34 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// A node draws as its catalog entry says, at its own parameters, and a
+    /// `catalog_ref` the catalog does not hold draws nothing rather than a
+    /// guessed GLB path the frame builder would fail on.
+    #[test]
+    fn a_node_draws_its_catalog_entry_and_an_unknown_ref_draws_nothing() {
+        use crate::scene_desc::Geometry as Drawn;
+        let mut params = Params::default();
+        params.set("span", 6.0);
+        assert!(matches!(
+            geometry("truss/straight", &params),
+            Some(Drawn::Procedural(Procedural::Truss { span })) if (span - 6.0).abs() < 1e-6
+        ));
+        assert!(matches!(
+            geometry("stage_lab/speaker_dbr15.glb", &Params::default()),
+            Some(Drawn::MeshPath(path)) if path == "stage_lab/speaker_dbr15.glb"
+        ));
+        let booth = pieces()
+            .iter()
+            .find(|p| matches!(p.geometry, Geometry::Assembly(_)))
+            .expect("the catalog has an assembly");
+        assert!(matches!(
+            geometry(booth.id, &Params::default()),
+            Some(Drawn::Assembly(id)) if id == booth.id
+        ));
+        assert!(geometry("stage_lab/truss_q30_1.22m.glb", &Params::default()).is_none());
+        assert!(geometry("truss/stright", &Params::default()).is_none());
     }
 
     /// Only the stick has mount faces: a corner block's faces are its ways and

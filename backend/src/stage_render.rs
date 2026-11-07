@@ -262,8 +262,9 @@ impl VenueGeometry {
 
 /// One solved node as the piece the renderer draws, or `None` when the pose is
 /// a frame rather than an object — the room, a fixture (drawn from
-/// [`scene_desc::Scene::fixtures`]), an array anchor, a node with no geometry.
-/// Which of those it is, is [`luma_scene::venue::NodePose::is_set_piece`]'s
+/// [`scene_desc::Scene::fixtures`]), an array anchor, a node with no geometry
+/// (see [`luma_render::catalog::geometry`] for a `catalog_ref` the catalog does
+/// not hold). Which of those it is, is [`luma_scene::venue::NodePose::is_set_piece`]'s
 /// answer, carried across the boundary as [`ResolvedNode::set_piece`] so this
 /// path and the agent binding cannot disagree.
 ///
@@ -285,7 +286,7 @@ pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
         .collect();
     Some(scene_desc::Piece {
         id: node.id.clone(),
-        geometry: geometry_of(catalog_ref, &params),
+        geometry: luma_render::catalog::geometry(catalog_ref, &params)?,
         kind: catalog_kind(Some(catalog_ref)).to_string(),
         pos: node.position.map(|v| v as f32),
         rot: node.rotation.map(|v| v as f32),
@@ -305,25 +306,6 @@ pub fn catalog_kind(catalog_ref: Option<&str>) -> &'static str {
     catalog_ref
         .and_then(luma_scene::catalog::piece)
         .map_or("", |p| p.kind.as_str())
-}
-
-/// A node's geometry: a bundled GLB, or a generator standing at the node's own
-/// parameters.
-fn geometry_of(catalog_ref: &str, params: &luma_scene::venue::Params) -> scene_desc::Geometry {
-    match luma_scene::catalog::piece(catalog_ref).map(|p| p.geometry) {
-        Some(luma_scene::catalog::Geometry::Procedural(family)) => {
-            scene_desc::Geometry::Procedural(luma_render::catalog::node_params(family, params))
-        }
-        // A `catalog_ref` the catalog has dropped still names a mesh on disk,
-        // and drawing it is better than drawing nothing: the four ripped truss
-        // GLBs left the palette but not the venues that already used them.
-        // An assembly is named, not pathed: falling through to the mesh arm
-        // would send the renderer looking for a GLB called `assembly/...`.
-        Some(luma_scene::catalog::Geometry::Assembly(_)) => {
-            scene_desc::Geometry::Assembly(catalog_ref.to_string())
-        }
-        _ => scene_desc::Geometry::mesh(catalog_ref.to_string()),
-    }
 }
 
 /// One head's state out of an evaluated universe.
@@ -1048,6 +1030,29 @@ mod tests {
             .map(|piece| piece.id)
             .collect();
         assert_eq!(drawn, ["wall#0", "wall#1", "wall#2"]);
+    }
+
+    /// A row naming a piece this catalog does not hold is left out of the
+    /// scene rather than handed to the frame builder as a GLB path to fail on,
+    /// so one stale or mistyped row cannot blank the whole room.
+    #[test]
+    fn a_piece_the_catalog_does_not_hold_is_not_drawn() {
+        let node = |catalog_ref: &str| ResolvedNode {
+            id: catalog_ref.into(),
+            kind: "piece".into(),
+            catalog_ref: Some(catalog_ref.into()),
+            label: None,
+            parent_id: None,
+            position: [0.0; 3],
+            rotation: [0.0; 3],
+            facing: [0.0, 0.0, -1.0],
+            array_index: None,
+            set_piece: true,
+            params: BTreeMap::new(),
+        };
+        assert!(piece_of(&node("stage_lab/speaker_dbr15.glb")).is_some());
+        assert!(piece_of(&node("stage_lab/truss_q30_1.22m.glb")).is_none());
+        assert!(piece_of(&node("truss/stright")).is_none());
     }
 
     /// A venue holding one node per `(id, catalog piece, floor position)`,
