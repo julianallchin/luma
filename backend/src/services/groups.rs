@@ -965,108 +965,6 @@ pub async fn solve(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{or_expression, or_terms, venue_cache_key};
-    use std::path::Path;
-
-    #[test]
-    fn interactive_selection_names_accept_empty_sets_and_check_boolean_expressions() {
-        let tree = vec![crate::models::groups::GroupTreeNode {
-            id: "empty".into(),
-            name: "empty".into(),
-            label: "Empty".into(),
-            parent_id: None,
-            origin: crate::models::groups::GroupOrigin::Manual,
-            role: None,
-            fixtures: vec![],
-        }];
-        assert!(super::validate_selection_names("empty | ALL", &tree).is_ok());
-        assert!(super::validate_selection_names("empty & ~empty", &tree).is_ok());
-        let error = super::validate_selection_names("missing | empty", &tree).unwrap_err();
-        assert!(error.contains("missing") && error.contains("Available groups: empty"));
-        assert!(super::validate_selection_names("empty |", &tree).is_err());
-    }
-
-    /// The bug this key exists to prevent: two libraries holding a venue of the
-    /// same id are two venues, and a cache that cannot tell them apart serves
-    /// the first one's rig to the second.
-    #[test]
-    fn one_venue_id_in_two_libraries_is_two_keys() {
-        let venue = "venue-main";
-        assert_ne!(
-            venue_cache_key(Path::new("/tmp/luma-a"), venue),
-            venue_cache_key(Path::new("/tmp/luma-b"), venue),
-        );
-    }
-
-    /// And the other half: the same venue in the same library must stay one
-    /// entry, or the cache stops being a cache.
-    #[test]
-    fn the_same_venue_in_the_same_library_is_one_key() {
-        assert_eq!(
-            venue_cache_key(Path::new("/tmp/luma-a"), "venue-main"),
-            venue_cache_key(Path::new("/tmp/luma-a"), "venue-main"),
-        );
-    }
-
-    /// The separator is NUL because a path cannot contain one. Without that,
-    /// a library directory named to look like `library + separator + venue`
-    /// could collide with a different library's venue.
-    #[test]
-    fn a_path_cannot_spell_another_venues_key() {
-        assert_ne!(
-            venue_cache_key(Path::new("/tmp/luma"), "a/venue-main"),
-            venue_cache_key(Path::new("/tmp/luma/a"), "venue-main"),
-        );
-    }
-
-    /// A union of bare tokens is what a set of checkboxes means; anything
-    /// else has no checkbox spelling.
-    #[test]
-    fn or_terms_reads_back_only_plain_unions() {
-        assert_eq!(or_terms("front_wash"), Some(vec!["front_wash".into()]));
-        assert_eq!(
-            or_terms("front_wash | back_movers|spots"),
-            Some(vec![
-                "front_wash".into(),
-                "back_movers".into(),
-                "spots".into()
-            ])
-        );
-        assert_eq!(
-            or_terms("(front_wash) | (spots)"),
-            or_terms("front_wash | spots")
-        );
-        assert_eq!(
-            or_terms("front_wash | front_wash"),
-            Some(vec!["front_wash".into()])
-        );
-
-        for opaque in [
-            "front_wash & left",
-            "~spots",
-            "a ^ b",
-            "a ? b",
-            "a & (b | c)",
-        ] {
-            assert_eq!(or_terms(opaque), None, "{opaque}");
-        }
-        assert_eq!(or_terms("front_wash |"), None);
-    }
-
-    /// Nothing checked and the whole venue are the same state, both ways.
-    #[test]
-    fn the_whole_venue_is_the_empty_term_list() {
-        assert_eq!(or_terms(""), Some(vec![]));
-        assert_eq!(or_terms("  ALL "), Some(vec![]));
-        assert_eq!(or_terms("all | spots"), Some(vec!["spots".into()]));
-        assert_eq!(or_expression(&[]), "all");
-        assert_eq!(or_expression(&["a".to_string(), "b".to_string()]), "a | b");
-        assert_eq!(or_terms(&or_expression(&[])), Some(vec![]));
-    }
-}
-
 /// Check the one selector namespace inside the caller's write transaction.
 pub async fn require_unique_name(
     resource_path: &Path,
@@ -1266,4 +1164,106 @@ pub fn replace_selection_name(expression: &str, from: &str, to: &str) -> Result<
     }
     flush(&mut token, &mut result);
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{or_expression, or_terms, venue_cache_key};
+    use std::path::Path;
+
+    #[test]
+    fn interactive_selection_names_accept_empty_sets_and_check_boolean_expressions() {
+        let tree = vec![crate::models::groups::GroupTreeNode {
+            id: "empty".into(),
+            name: "empty".into(),
+            label: "Empty".into(),
+            parent_id: None,
+            origin: crate::models::groups::GroupOrigin::Manual,
+            role: None,
+            fixtures: vec![],
+        }];
+        assert!(super::validate_selection_names("empty | ALL", &tree).is_ok());
+        assert!(super::validate_selection_names("empty & ~empty", &tree).is_ok());
+        let error = super::validate_selection_names("missing | empty", &tree).unwrap_err();
+        assert!(error.contains("missing") && error.contains("Available groups: empty"));
+        assert!(super::validate_selection_names("empty |", &tree).is_err());
+    }
+
+    /// The bug this key exists to prevent: two libraries holding a venue of the
+    /// same id are two venues, and a cache that cannot tell them apart serves
+    /// the first one's rig to the second.
+    #[test]
+    fn one_venue_id_in_two_libraries_is_two_keys() {
+        let venue = "venue-main";
+        assert_ne!(
+            venue_cache_key(Path::new("/tmp/luma-a"), venue),
+            venue_cache_key(Path::new("/tmp/luma-b"), venue),
+        );
+    }
+
+    /// And the other half: the same venue in the same library must stay one
+    /// entry, or the cache stops being a cache.
+    #[test]
+    fn the_same_venue_in_the_same_library_is_one_key() {
+        assert_eq!(
+            venue_cache_key(Path::new("/tmp/luma-a"), "venue-main"),
+            venue_cache_key(Path::new("/tmp/luma-a"), "venue-main"),
+        );
+    }
+
+    /// The separator is NUL because a path cannot contain one. Without that,
+    /// a library directory named to look like `library + separator + venue`
+    /// could collide with a different library's venue.
+    #[test]
+    fn a_path_cannot_spell_another_venues_key() {
+        assert_ne!(
+            venue_cache_key(Path::new("/tmp/luma"), "a/venue-main"),
+            venue_cache_key(Path::new("/tmp/luma/a"), "venue-main"),
+        );
+    }
+
+    /// A union of bare tokens is what a set of checkboxes means; anything
+    /// else has no checkbox spelling.
+    #[test]
+    fn or_terms_reads_back_only_plain_unions() {
+        assert_eq!(or_terms("front_wash"), Some(vec!["front_wash".into()]));
+        assert_eq!(
+            or_terms("front_wash | back_movers|spots"),
+            Some(vec![
+                "front_wash".into(),
+                "back_movers".into(),
+                "spots".into()
+            ])
+        );
+        assert_eq!(
+            or_terms("(front_wash) | (spots)"),
+            or_terms("front_wash | spots")
+        );
+        assert_eq!(
+            or_terms("front_wash | front_wash"),
+            Some(vec!["front_wash".into()])
+        );
+
+        for opaque in [
+            "front_wash & left",
+            "~spots",
+            "a ^ b",
+            "a ? b",
+            "a & (b | c)",
+        ] {
+            assert_eq!(or_terms(opaque), None, "{opaque}");
+        }
+        assert_eq!(or_terms("front_wash |"), None);
+    }
+
+    /// Nothing checked and the whole venue are the same state, both ways.
+    #[test]
+    fn the_whole_venue_is_the_empty_term_list() {
+        assert_eq!(or_terms(""), Some(vec![]));
+        assert_eq!(or_terms("  ALL "), Some(vec![]));
+        assert_eq!(or_terms("all | spots"), Some(vec!["spots".into()]));
+        assert_eq!(or_expression(&[]), "all");
+        assert_eq!(or_expression(&["a".to_string(), "b".to_string()]), "a | b");
+        assert_eq!(or_terms(&or_expression(&[])), Some(vec![]));
+    }
 }

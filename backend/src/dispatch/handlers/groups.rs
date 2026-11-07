@@ -90,6 +90,46 @@ pub async fn list_group_tree(
         .tree())
 }
 
+/// One venue edit, including the name and all membership changes, commits
+/// together. A bad fixture or a name conflict cannot leave half a group saved.
+pub async fn save_venue_group(
+    services: &AppServices,
+    venue_id: String,
+    group_id: Option<String>,
+    label: String,
+    added: Vec<String>,
+    removed: Vec<String>,
+) -> Result<(), CommandError> {
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    groups_service::save_group_changes(
+        &services.fixtures_root,
+        &mut access,
+        group_id.as_deref(),
+        &label,
+        &added,
+        &removed,
+    )
+    .await
+    .map_err(CommandError::Invalid)?;
+    access.commit().await?;
+    rig_changed();
+    Ok(())
+}
+
+pub async fn generate_venue_groups(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<(), CommandError> {
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    crate::services::groups::snapshot_generated_groups(&services.fixtures_root, &mut access)
+        .await?;
+    access.commit().await?;
+    rig_changed();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -559,44 +599,4 @@ mod tests {
         let fixtures_root = crate::resources::source_fixtures_root().expect("the shipped bundle");
         crate::test_support::signed_in(directory, fixtures_root).await
     }
-}
-
-/// One venue edit, including the name and all membership changes, commits
-/// together. A bad fixture or a name conflict cannot leave half a group saved.
-pub async fn save_venue_group(
-    services: &AppServices,
-    venue_id: String,
-    group_id: Option<String>,
-    label: String,
-    added: Vec<String>,
-    removed: Vec<String>,
-) -> Result<(), CommandError> {
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    groups_service::save_group_changes(
-        &services.fixtures_root,
-        &mut access,
-        group_id.as_deref(),
-        &label,
-        &added,
-        &removed,
-    )
-    .await
-    .map_err(CommandError::Invalid)?;
-    access.commit().await?;
-    rig_changed();
-    Ok(())
-}
-
-pub async fn generate_venue_groups(
-    services: &AppServices,
-    venue_id: String,
-) -> Result<(), CommandError> {
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    crate::services::groups::snapshot_generated_groups(&services.fixtures_root, &mut access)
-        .await?;
-    access.commit().await?;
-    rig_changed();
-    Ok(())
 }

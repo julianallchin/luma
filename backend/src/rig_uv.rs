@@ -124,6 +124,19 @@ fn centroid_xy(positions: &[[f32; 3]]) -> (f32, f32) {
     (sx / n, sy / n)
 }
 
+fn bounds(positions: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
+    positions.iter().fold(
+        ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]),
+        |(mut lo, mut hi), p| {
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+            (lo, hi)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,17 +251,4 @@ mod tests {
         assert_eq!(horizontal(&one), vec![0.0]);
         assert_eq!(vertical(&one), vec![0.5]);
     }
-}
-
-fn bounds(positions: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
-    positions.iter().fold(
-        ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]),
-        |(mut lo, mut hi), p| {
-            for i in 0..3 {
-                lo[i] = lo[i].min(p[i]);
-                hi[i] = hi[i].max(p[i]);
-            }
-            (lo, hi)
-        },
-    )
 }

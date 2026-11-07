@@ -387,6 +387,171 @@ fn count(value: &Value, key: &str) -> u64 {
     value[key].as_u64().unwrap_or(0)
 }
 
+fn start_process(cwd: &std::path::Path) -> Result<Process, AgentError> {
+    let mut cmd = command("codex", cwd);
+    cmd.args(["app-server", "--stdio"]);
+    for (key, value) in isolated_config().as_object().expect("config object") {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    Process::start(cmd)
+}
+
+async fn initialize(process: &mut Process) -> Result<(), AgentError> {
+    process
+        .send(json!({"id":1,"method":"initialize","params":{
+            "clientInfo":{"name":"luma","version":env!("CARGO_PKG_VERSION")},
+            "capabilities":{"experimentalApi":true}
+        }}))
+        .await
+}
+
+pub(super) async fn models(
+    cwd: &std::path::Path,
+) -> Result<Vec<super::catalog::ModelChoice>, AgentError> {
+    let mut process = start_process(cwd)?;
+    initialize(&mut process).await?;
+    let mut models = vec![super::catalog::ModelChoice {
+        id: None,
+        label: "Default".into(),
+        resolved_model: None,
+        effort_levels: Vec::new(),
+        context_window: None,
+        price: None,
+    }];
+    loop {
+        let frame = process.read().await?;
+        if let Some(error) = frame.get("error") {
+            return Err(protocol(format!("Codex: {error}")));
+        }
+        match frame.get("id").and_then(Value::as_u64) {
+            Some(1) => {
+                process.send(json!({"method":"initialized"})).await?;
+                process
+                    .send(json!({"id":2,"method":"model/list","params":{}}))
+                    .await?;
+            }
+            Some(2) => {
+                let page = frame
+                    .pointer("/result/data")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| protocol("Codex did not return its model catalog"))?;
+                for model in page.iter().filter(|model| model["hidden"] != true) {
+                    models.push(super::catalog::ModelChoice {
+                        id: Some(text(model, "model")?),
+                        label: text(model, "displayName")?,
+                        resolved_model: Some(text(model, "model")?),
+                        effort_levels: model["supportedReasoningEfforts"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|value| value["reasoningEffort"].as_str())
+                            .map(str::to_string)
+                            .collect(),
+                        context_window: None,
+                        price: None,
+                    });
+                }
+                if let Some(default) = page.iter().find(|model| model["isDefault"] == true) {
+                    if let Some(choice) = models
+                        .iter()
+                        .find(|choice| choice.id.as_deref() == default["model"].as_str())
+                        .cloned()
+                    {
+                        models[0] = super::catalog::ModelChoice {
+                            id: None,
+                            label: format!("Default · {}", choice.label),
+                            ..choice
+                        };
+                    }
+                }
+                if let Some(cursor) = frame.pointer("/result/nextCursor").and_then(Value::as_str) {
+                    process
+                        .send(json!({"id":2,"method":"model/list","params":{"cursor":cursor}}))
+                        .await?;
+                } else {
+                    // `model/list` carries no window. A list without windows
+                    // is still a list, so a failure here only costs the line.
+                    match windows(cwd).await {
+                        Ok(windows) => {
+                            for model in &mut models {
+                                model.context_window = model
+                                    .resolved_model
+                                    .as_deref()
+                                    .and_then(|id| windows.get(id))
+                                    .copied();
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("[agent] Codex model windows unavailable: {error}");
+                        }
+                    }
+                    return Ok(models);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Each model's window from `codex debug models`, the same catalog
+/// `model/list` reads, run under the same config as the app server.
+async fn windows(cwd: &std::path::Path) -> Result<HashMap<String, u32>, AgentError> {
+    let mut cmd = command("codex", cwd);
+    cmd.args(["debug", "models"]).kill_on_drop(true);
+    for (key, value) in isolated_config().as_object().expect("config object") {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    let output = cmd
+        .output()
+        .await
+        .map_err(|error| protocol(format!("Codex debug models: {error}")))?;
+    if !output.status.success() {
+        return Err(protocol(format!(
+            "Codex debug models exited with {}",
+            output.status
+        )));
+    }
+    let catalog: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| protocol(format!("Codex debug models: {error}")))?;
+    Ok(catalog_windows(&catalog))
+}
+
+/// The window a Codex turn reports as `modelContextWindow`: the catalog's
+/// `context_window` scaled by its `effective_context_window_percent`
+/// (272,000 at 95% is the 258,400 a GPT-6-Astra turn reports), so the picker
+/// and the usage ring show one number.
+fn catalog_windows(catalog: &Value) -> HashMap<String, u32> {
+    catalog["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let slug = model["slug"].as_str()?;
+            let window = model["context_window"].as_u64().filter(|w| *w > 0)?;
+            let window = match model["effective_context_window_percent"].as_u64() {
+                Some(percent) => window * percent / 100,
+                None => window,
+            };
+            Some((slug.to_string(), u32::try_from(window).ok()?))
+        })
+        .collect()
+}
+
+pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
+    let (blocks, failed) = content(outcome);
+    let items: Vec<_> = blocks
+        .into_iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text(text) => Some(json!({"type":"inputText","text":text})),
+            ContentBlock::Image { media_type, data } => Some(
+                json!({"type":"inputImage","imageUrl":format!("data:{media_type};base64,{data}")}),
+            ),
+            _ => None,
+        })
+        .collect();
+    json!({"id":id,"result":{"contentItems":items,"success":!failed}})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,169 +724,4 @@ send({'method':'turn/completed','params':{'turn':{'id':'turn-2','status':'comple
         assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s2"]));
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
-}
-
-fn start_process(cwd: &std::path::Path) -> Result<Process, AgentError> {
-    let mut cmd = command("codex", cwd);
-    cmd.args(["app-server", "--stdio"]);
-    for (key, value) in isolated_config().as_object().expect("config object") {
-        cmd.arg("-c").arg(format!("{key}={value}"));
-    }
-    Process::start(cmd)
-}
-
-async fn initialize(process: &mut Process) -> Result<(), AgentError> {
-    process
-        .send(json!({"id":1,"method":"initialize","params":{
-            "clientInfo":{"name":"luma","version":env!("CARGO_PKG_VERSION")},
-            "capabilities":{"experimentalApi":true}
-        }}))
-        .await
-}
-
-pub(super) async fn models(
-    cwd: &std::path::Path,
-) -> Result<Vec<super::catalog::ModelChoice>, AgentError> {
-    let mut process = start_process(cwd)?;
-    initialize(&mut process).await?;
-    let mut models = vec![super::catalog::ModelChoice {
-        id: None,
-        label: "Default".into(),
-        resolved_model: None,
-        effort_levels: Vec::new(),
-        context_window: None,
-        price: None,
-    }];
-    loop {
-        let frame = process.read().await?;
-        if let Some(error) = frame.get("error") {
-            return Err(protocol(format!("Codex: {error}")));
-        }
-        match frame.get("id").and_then(Value::as_u64) {
-            Some(1) => {
-                process.send(json!({"method":"initialized"})).await?;
-                process
-                    .send(json!({"id":2,"method":"model/list","params":{}}))
-                    .await?;
-            }
-            Some(2) => {
-                let page = frame
-                    .pointer("/result/data")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| protocol("Codex did not return its model catalog"))?;
-                for model in page.iter().filter(|model| model["hidden"] != true) {
-                    models.push(super::catalog::ModelChoice {
-                        id: Some(text(model, "model")?),
-                        label: text(model, "displayName")?,
-                        resolved_model: Some(text(model, "model")?),
-                        effort_levels: model["supportedReasoningEfforts"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|value| value["reasoningEffort"].as_str())
-                            .map(str::to_string)
-                            .collect(),
-                        context_window: None,
-                        price: None,
-                    });
-                }
-                if let Some(default) = page.iter().find(|model| model["isDefault"] == true) {
-                    if let Some(choice) = models
-                        .iter()
-                        .find(|choice| choice.id.as_deref() == default["model"].as_str())
-                        .cloned()
-                    {
-                        models[0] = super::catalog::ModelChoice {
-                            id: None,
-                            label: format!("Default · {}", choice.label),
-                            ..choice
-                        };
-                    }
-                }
-                if let Some(cursor) = frame.pointer("/result/nextCursor").and_then(Value::as_str) {
-                    process
-                        .send(json!({"id":2,"method":"model/list","params":{"cursor":cursor}}))
-                        .await?;
-                } else {
-                    // `model/list` carries no window. A list without windows
-                    // is still a list, so a failure here only costs the line.
-                    match windows(cwd).await {
-                        Ok(windows) => {
-                            for model in &mut models {
-                                model.context_window = model
-                                    .resolved_model
-                                    .as_deref()
-                                    .and_then(|id| windows.get(id))
-                                    .copied();
-                            }
-                        }
-                        Err(error) => {
-                            log::warn!("[agent] Codex model windows unavailable: {error}");
-                        }
-                    }
-                    return Ok(models);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Each model's window from `codex debug models`, the same catalog
-/// `model/list` reads, run under the same config as the app server.
-async fn windows(cwd: &std::path::Path) -> Result<HashMap<String, u32>, AgentError> {
-    let mut cmd = command("codex", cwd);
-    cmd.args(["debug", "models"]).kill_on_drop(true);
-    for (key, value) in isolated_config().as_object().expect("config object") {
-        cmd.arg("-c").arg(format!("{key}={value}"));
-    }
-    let output = cmd
-        .output()
-        .await
-        .map_err(|error| protocol(format!("Codex debug models: {error}")))?;
-    if !output.status.success() {
-        return Err(protocol(format!(
-            "Codex debug models exited with {}",
-            output.status
-        )));
-    }
-    let catalog: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| protocol(format!("Codex debug models: {error}")))?;
-    Ok(catalog_windows(&catalog))
-}
-
-/// The window a Codex turn reports as `modelContextWindow`: the catalog's
-/// `context_window` scaled by its `effective_context_window_percent`
-/// (272,000 at 95% is the 258,400 a GPT-6-Astra turn reports), so the picker
-/// and the usage ring show one number.
-fn catalog_windows(catalog: &Value) -> HashMap<String, u32> {
-    catalog["models"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|model| {
-            let slug = model["slug"].as_str()?;
-            let window = model["context_window"].as_u64().filter(|w| *w > 0)?;
-            let window = match model["effective_context_window_percent"].as_u64() {
-                Some(percent) => window * percent / 100,
-                None => window,
-            };
-            Some((slug.to_string(), u32::try_from(window).ok()?))
-        })
-        .collect()
-}
-
-pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
-    let (blocks, failed) = content(outcome);
-    let items: Vec<_> = blocks
-        .into_iter()
-        .filter_map(|b| match b {
-            ContentBlock::Text(text) => Some(json!({"type":"inputText","text":text})),
-            ContentBlock::Image { media_type, data } => Some(
-                json!({"type":"inputImage","imageUrl":format!("data:{media_type};base64,{data}")}),
-            ),
-            _ => None,
-        })
-        .collect();
-    json!({"id":id,"result":{"contentItems":items,"success":!failed}})
 }

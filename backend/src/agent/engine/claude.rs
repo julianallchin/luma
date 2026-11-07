@@ -626,6 +626,21 @@ fn usage_of(usage: &Value) -> Usage {
     }
 }
 
+pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
+    let (blocks, failed) = content(outcome);
+    let blocks: Vec<_> = blocks
+        .into_iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text(text) => Some(json!({"type":"text","text":text})),
+            ContentBlock::Image { media_type, data } => {
+                Some(json!({"type":"image","mimeType":media_type,"data":data}))
+            }
+            _ => None,
+        })
+        .collect();
+    json!({"type":"control_response","response":{"subtype":"success","request_id":id["control"],"response":{"mcp_response":{"jsonrpc":"2.0","id":id["mcp"],"result":{"content":blocks,"isError":failed}}}}})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,19 +861,4 @@ send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_t
         assert_eq!(steer_frame(&blocks, "id", false)["priority"], "next");
         assert_eq!(steer_frame(&blocks, "id", true)["priority"], "now");
     }
-}
-
-pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
-    let (blocks, failed) = content(outcome);
-    let blocks: Vec<_> = blocks
-        .into_iter()
-        .filter_map(|b| match b {
-            ContentBlock::Text(text) => Some(json!({"type":"text","text":text})),
-            ContentBlock::Image { media_type, data } => {
-                Some(json!({"type":"image","mimeType":media_type,"data":data}))
-            }
-            _ => None,
-        })
-        .collect();
-    json!({"type":"control_response","response":{"subtype":"success","request_id":id["control"],"response":{"mcp_response":{"jsonrpc":"2.0","id":id["mcp"],"result":{"content":blocks,"isError":failed}}}}})
 }
