@@ -26,8 +26,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use uuid::Uuid;
-
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
@@ -182,32 +180,14 @@ pub async fn root_id(access: &mut impl AuthorizedVenue) -> Result<Option<String>
 // Writes
 // -----------------------------------------------------------------------------
 
-/// Insert a node where it hangs, and return its generated id.
-///
-/// The placement is part of the row: a node is never written without one,
-/// and the schema refuses one that tries.
-///
-/// # Errors
-/// Fails if the insert is refused.
-pub async fn insert_node(
-    access: &mut VenueAccess<'_, Write>,
-    kind: &str,
-    catalog_ref: Option<&str>,
-    label: Option<&str>,
-    placement: &NodePlacement,
-) -> Result<String, String> {
-    let id = Uuid::new_v4().to_string();
-    insert_node_with_id(access, &id, kind, catalog_ref, label, Some(placement)).await?;
-    Ok(id)
-}
-
 /// Insert a node under an id the caller chose: a fixture (whose node id is
 /// its patch-row id) or a restored row.
 ///
-/// `placement` is `None` for the root and only for the root.
+/// `placement` is `None` for the root and only for the root: a node is never
+/// written without one, and the schema refuses one that tries.
 ///
 /// # Errors
-/// As [`insert_node`].
+/// Fails if the insert is refused.
 pub async fn insert_node_with_id(
     access: &mut VenueAccess<'_, Write>,
     id: &str,

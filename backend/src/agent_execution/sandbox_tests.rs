@@ -106,8 +106,7 @@ fn fixture(name: &str) -> Option<Fixture> {
 
 /// One revision holding a beats tensor, so the "inputs are readable" test reads
 /// a real artifact through the `luma` namespace. Returns the manifest's
-/// workspace-relative path — `Workspace::installed_revision` only reports it
-/// once a cell has actually installed it.
+/// workspace-relative path.
 fn install(workspace: &Workspace) -> String {
     let desc = workspace
         .with_store(|store| store.write_raw_f32(&BEATS))

@@ -67,7 +67,7 @@ pub fn search_fixtures(
 /// a person's head — "rogue spot" and "spot rogue" find the same fixture, and
 /// an empty query matches everything.
 #[must_use]
-pub fn matches(entry: &FixtureEntry, query: &str) -> bool {
+fn matches(entry: &FixtureEntry, query: &str) -> bool {
     let haystack = format!("{} {}", entry.manufacturer, entry.model).to_lowercase();
     query
         .split_whitespace()

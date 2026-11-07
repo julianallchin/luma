@@ -1029,23 +1029,25 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
         .await
         .unwrap()
         .expect("the venue has a root");
-    let array = venue_graph_db::insert_node(
+    let array = "pa-array";
+    venue_graph_db::insert_node_with_id(
         &mut access,
+        array,
         "array",
         Some("stage_lab/speaker_dbr15.glb"),
         Some("PA"),
-        &crate::models::venue_graph::NodePlacement {
+        Some(&crate::models::venue_graph::NodePlacement {
             parent,
             my_socket: "mount".into(),
             their_socket: "floor".into(),
             roll: 0.0,
-        },
+        }),
     )
     .await
     .unwrap();
     venue_graph_db::set_params(
         &mut access,
-        &array,
+        array,
         &BTreeMap::from([
             ("count".to_string(), Some(3.0)),
             ("span".to_string(), Some(2.0)),
@@ -1065,7 +1067,7 @@ async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
         .map(|p| p["id"].as_str().unwrap())
         .filter(|id| id.starts_with(&array))
         .collect();
-    assert_eq!(ids, vec![array.as_str()]);
+    assert_eq!(ids, vec![array]);
     let array_row = pieces
         .as_array()
         .unwrap()

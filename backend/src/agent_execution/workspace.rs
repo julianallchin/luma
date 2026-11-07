@@ -207,11 +207,6 @@ impl Workspace {
         Ok(rel)
     }
 
-    /// The revision the live kernel is running, if any.
-    pub fn installed_revision(&self) -> Option<String> {
-        self.kernel.lock().unwrap().installed_rel.clone()
-    }
-
     pub fn kernel_generation(&self) -> u64 {
         self.kernel.lock().unwrap().generation
     }
@@ -648,7 +643,8 @@ impl PythonWorkspaceService {
         }
     }
 
-    /// Stop every kernel (app shutdown). Directories survive.
+    /// Stop every kernel. Directories survive.
+    #[cfg(test)]
     pub fn shutdown_all(&self) {
         let workspaces: Vec<Arc<Workspace>> =
             self.workspaces.lock().unwrap().values().cloned().collect();

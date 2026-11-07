@@ -333,6 +333,7 @@ pub async fn get_thread(
 }
 
 /// All messages of a thread, in seq order.
+#[cfg(test)]
 pub async fn list_messages(
     pool: &SqlitePool,
     thread_id: &str,
