@@ -13,8 +13,6 @@ mod support;
 
 mod add_tracks_pixels;
 mod pixel_suite_guard;
-mod track_editor_budget;
 mod track_editor_waveform_pixels;
 mod venues_pixels;
-mod visualizer_capture;
 mod visualizer_playback_soak;

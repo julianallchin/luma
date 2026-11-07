@@ -3,15 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{AnyView, App, AppContext as _, Window};
-use gpui_agent::{Config, Harness, Mode};
+use gpui_agent::{Config, Harness, Mode, NAV};
 use luma_ui::runtime::Runtime;
 use serde_json::Value;
-
-/// The suite's `until` and `nav.*` helpers, spliced ahead of each script.
-const NAV: &str = concat!(
-    include_str!("../../tests/support/until.js"),
-    include_str!("../../tests/support/nav.js")
-);
 
 fn env(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("{key} must be set"))

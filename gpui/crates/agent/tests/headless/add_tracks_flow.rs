@@ -7,32 +7,11 @@
 use super::support;
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
 use serde_json::{json, Value};
 use support::Fixture;
-
-fn silent_wav(path: &Path) {
-    let frames = 8_000_u32;
-    let data_len = frames * 2;
-    let mut bytes = Vec::with_capacity((44 + data_len) as usize);
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16_u32.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&8_000_u32.to_le_bytes());
-    bytes.extend_from_slice(&16_000_u32.to_le_bytes());
-    bytes.extend_from_slice(&2_u16.to_le_bytes());
-    bytes.extend_from_slice(&16_u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
-    bytes.resize((44 + data_len) as usize, 0);
-    std::fs::write(path, bytes).unwrap();
-}
 
 fn harness() -> Harness {
     let external = std::env::temp_dir().join(format!(
@@ -42,7 +21,7 @@ fn harness() -> Harness {
     std::fs::remove_dir_all(&external).ok();
     std::fs::create_dir_all(&external).unwrap();
     let audio = external.join("needle.wav");
-    silent_wav(&audio);
+    support::silent_wav(&audio, 8_000);
     let cache = external.join("cache");
     support::install_fake_analysis(&cache, 0.4);
     std::env::set_var("LUMA_CACHE_DIR", cache);

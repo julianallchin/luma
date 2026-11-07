@@ -1,28 +1,14 @@
-//! Capture the 3D view's shots, and time its frames.
-//!
-//! ```sh
-//! cargo test --release -p gpui-agent --features pixel --test visualizer_capture -- --ignored --nocapture
-//! ```
-//!
-//! `#[ignore]` because this asserts nothing — it is the eye and the stopwatch,
-//! run when the viewport's look or its cost is the question. `LUMA_SHOTS`
-//! names the directory the frames are copied into.
-#![cfg(all(feature = "app", feature = "pixel"))]
-
-use super::support;
-
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui_agent::{Harness, Mode};
+use gpui_agent::fixture::{Clip, Fixture, TRACK_NAME, VENUE_NAME};
+use gpui_agent::{Harness, Mode, NAV};
 use serde_json::Value;
-use support::{Clip, Fixture, NAV, TRACK_NAME, VENUE_NAME};
 
 const SECONDS: u32 = 20;
 
 fn shots_dir() -> PathBuf {
-    let dir =
-        PathBuf::from(std::env::var("LUMA_SHOTS").unwrap_or_else(|_| "/tmp/luma-shots".into()));
+    let dir = gpui_agent::shots_root().join("visualizer");
     std::fs::create_dir_all(&dir).expect("could not make the shots directory");
     dir
 }
@@ -68,9 +54,7 @@ fn mean_level(path: &std::path::Path) -> f64 {
     sum / f64::from(image.width() * image.height() * 3)
 }
 
-#[test]
-#[ignore = "capture, not a gate"]
-fn capture() {
+pub fn main() {
     let mut harness = Fixture::new(
         "visualizer-capture",
         SECONDS,

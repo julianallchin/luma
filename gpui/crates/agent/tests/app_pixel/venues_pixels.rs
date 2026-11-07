@@ -85,26 +85,12 @@ fn run(harness: &mut Harness, script: &str) -> Value {
     result.result
 }
 
-fn capture_dir() -> PathBuf {
-    let dir = PathBuf::from(
-        std::env::var("LUMA_SHOTS").unwrap_or_else(|_| "/tmp/luma-venue-review".into()),
-    );
-    fs::create_dir_all(&dir).expect("failed to create venue capture directory");
-    dir
-}
-
 fn preserve(source: &str, name: &str) -> PathBuf {
-    let destination = capture_dir().join(name);
+    let destination = support::image::shots_dir("venues").join(name);
     fs::copy(source, &destination)
         .unwrap_or_else(|error| panic!("failed to preserve {}: {error}", destination.display()));
     println!("venue capture {}", destination.display());
     destination
-}
-
-fn pixels(path: impl AsRef<Path>) -> image::RgbaImage {
-    image::open(path.as_ref())
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.as_ref().display()))
-        .to_rgba8()
 }
 
 /// The shared diff at the shared noise floor — see `support::image`.
@@ -338,12 +324,12 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         ),
     ];
 
-    let loading_pixels = pixels(&loading);
-    let base_pixels = pixels(&base);
-    let browse_pixels = pixels(&browse);
-    let create_pixels = pixels(&create);
-    let error_loading_pixels = pixels(&error_loading);
-    let error_pixels = pixels(&error);
+    let loading_pixels = support::image::decode(&loading);
+    let base_pixels = support::image::decode(&base);
+    let browse_pixels = support::image::decode(&browse);
+    let create_pixels = support::image::decode(&create);
+    let error_loading_pixels = support::image::decode(&error_loading);
+    let error_pixels = support::image::decode(&error);
     let shell_edge_before = edge_energy(&base_pixels, 300, 850, 2, 34);
     let shell_edge_after = edge_energy(&browse_pixels, 300, 850, 2, 34);
     let sidebar_edge_before = edge_energy(&base_pixels, 8, 250, 2, 34);
@@ -380,7 +366,7 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     );
     for path in card_paths {
         assert!(
-            luma_range(&pixels(path)) > 24,
+            luma_range(&support::image::decode(path)) > 24,
             "venue route card is a flat placeholder"
         );
     }
@@ -418,36 +404,6 @@ fn paced_harness(dir: &Path) -> Harness {
         root,
     )
     .expect("failed to start paced venue harness")
-}
-
-fn percentile(sample: &mut Vec<f64>, fraction: f64) -> f64 {
-    sample.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    if sample.is_empty() {
-        return f64::NAN;
-    }
-    sample[(((sample.len() - 1) as f64) * fraction).round() as usize]
-}
-
-fn summarize(frames: &[Value], from: u64, to: u64, label: &str) -> f64 {
-    let mut draw: Vec<f64> = Vec::new();
-    let mut parked: Vec<f64> = Vec::new();
-    for frame in frames {
-        let number = frame["frame"].as_u64().unwrap();
-        if number > from && number <= to {
-            draw.push(frame["drawMs"].as_f64().unwrap());
-            parked.push(frame["parkedMs"].as_f64().unwrap());
-        }
-    }
-    let count = draw.len();
-    let mean = draw.iter().sum::<f64>() / count.max(1) as f64;
-    let p50 = percentile(&mut draw.clone(), 0.50);
-    let p95 = percentile(&mut draw, 0.95);
-    println!(
-        "{label:<22} n={count:<4} drawMs mean={mean:6.2} p50={p50:6.2} p95={p95:6.2}  \
-         parkedMs p50={:5.2}",
-        percentile(&mut parked, 0.50)
-    );
-    p50
 }
 
 /// Per-frame CPU cost of the production venue dialog: the shell behind it, the
@@ -490,19 +446,19 @@ fn venue_dialog_frame_cost() {
     let frames = out["frames"].as_array().unwrap();
     let number = |key: &str| out[key].as_u64().unwrap();
     println!("\n--- venue dialog frame cost (pixel, motion on, 1280x800) ---");
-    let shell = summarize(
+    let shell = support::cost::summarize(
         frames,
         number("shellFrom"),
         number("shellTo"),
         "shell, no dialog",
     );
-    let settled = summarize(
+    let settled = support::cost::summarize(
         frames,
         number("settledFrom"),
         number("settledTo"),
         "settled dialog",
     );
-    let morphing = summarize(
+    let morphing = support::cost::summarize(
         frames,
         number("settledTo"),
         number("morphTo"),
@@ -627,25 +583,25 @@ fn venue_dialog_frame_cost_with_a_long_list() {
     let frames = out["frames"].as_array().unwrap();
     let number = |key: &str| out[key].as_u64().unwrap();
     println!("\n--- venue dialog frame cost, {VENUES} venues (pixel, motion on, 1280x800) ---");
-    let shell = summarize(
+    let shell = support::cost::summarize(
         frames,
         number("shellFrom"),
         number("shellTo"),
         "shell, no dialog",
     );
-    let browse = summarize(
+    let browse = support::cost::summarize(
         frames,
         number("settledFrom"),
         number("settledTo"),
         "browse route (list)",
     );
-    let flight = summarize(
+    let flight = support::cost::summarize(
         frames,
         number("settledTo"),
         number("flightTo"),
         "browse->create flight",
     );
-    let create = summarize(
+    let create = support::cost::summarize(
         frames,
         number("flightTo"),
         number("afterTo"),

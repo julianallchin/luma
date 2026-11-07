@@ -1,8 +1,8 @@
 //! Pixel proof for the real backdrop primitive used by the shared dialog host.
 #![cfg(feature = "pixel")]
 
+use std::fs;
 use std::sync::Arc;
-use std::{fs, path::PathBuf};
 
 use gpui::{div, prelude::*, px, AnyView, App, Context, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
@@ -104,22 +104,8 @@ fn run(harness: &mut Harness, code: &str) -> Value {
     result.result
 }
 
-fn pixels(path: &str) -> image::RgbaImage {
-    image::open(path)
-        .unwrap_or_else(|error| panic!("could not read {path}: {error}"))
-        .to_rgba8()
-}
-
-fn capture_dir() -> PathBuf {
-    let dir = PathBuf::from(
-        std::env::var("LUMA_SHOTS").unwrap_or_else(|_| "/tmp/luma-dialog-blur".into()),
-    );
-    fs::create_dir_all(&dir).expect("could not create dialog capture directory");
-    dir
-}
-
 fn preserve(source: &str, name: &str) {
-    let destination = capture_dir().join(name);
+    let destination = super::support::image::shots_dir("dialog-blur").join(name);
     fs::copy(source, &destination)
         .unwrap_or_else(|error| panic!("could not preserve {}: {error}", destination.display()));
     println!("dialog blur capture {}", destination.display());
@@ -144,7 +130,7 @@ fn edge_energy(image: &image::RgbaImage) -> f32 {
 }
 
 #[test]
-#[ignore = "gap: the wgpu headless renderer draws no backdrop or content blur"]
+#[ignore = "bug: the wgpu headless renderer draws no backdrop or content blur"]
 fn the_card_frost_and_the_filtered_layer_reduce_real_pixel_edges() {
     let mut harness = harness();
     let shots = run(
@@ -178,11 +164,19 @@ fn the_card_frost_and_the_filtered_layer_reduce_real_pixel_edges() {
         shots["scaledContent"].as_str().unwrap(),
         "content-filter-scaled.png",
     );
-    let plain = edge_energy(&pixels(shots["plain"].as_str().unwrap()));
-    let card = edge_energy(&pixels(shots["card"].as_str().unwrap()));
-    let sharp_content = edge_energy(&pixels(shots["sharpContent"].as_str().unwrap()));
-    let blurred_content = edge_energy(&pixels(shots["blurredContent"].as_str().unwrap()));
-    let scaled_content = pixels(shots["scaledContent"].as_str().unwrap());
+    let plain = edge_energy(&super::support::image::decode(
+        shots["plain"].as_str().unwrap(),
+    ));
+    let card = edge_energy(&super::support::image::decode(
+        shots["card"].as_str().unwrap(),
+    ));
+    let sharp_content = edge_energy(&super::support::image::decode(
+        shots["sharpContent"].as_str().unwrap(),
+    ));
+    let blurred_content = edge_energy(&super::support::image::decode(
+        shots["blurredContent"].as_str().unwrap(),
+    ));
+    let scaled_content = super::support::image::decode(shots["scaledContent"].as_str().unwrap());
     println!("dialog blur edge energy: plain={plain:.3}, card={card:.3}");
 
     // The card's own frost is the ONLY backdrop blur the modal plane paints

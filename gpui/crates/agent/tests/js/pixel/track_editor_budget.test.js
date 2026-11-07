@@ -9,8 +9,8 @@
 // The stage is off, so `drawMs` is the timeline plus the shell's chrome. The
 // clips are lit because an unlit clip has no heatmap to resample. Stated as a
 // ratio against this run's own still stretch: only the ratio survives a
-// loaded host. (The absolute scroll/scrub budget stays in
-// `app_pixel/track_editor_budget.rs`, ignored.)
+// loaded host. (The absolute scroll/scrub budget is
+// `--example track_editor_budget`.)
 
 const CLIP_SECONDS = 12;
 fixture({

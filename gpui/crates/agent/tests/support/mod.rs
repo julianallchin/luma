@@ -18,14 +18,8 @@ pub use gpui_agent::fixture::{
     VENUE, VENUE_NAME,
 };
 
-/// `until(what, pred)` in a script — see `until.js`.
-pub const UNTIL: &str = include_str!("until.js");
-
-/// `nav.*` in a script — the suite's one description of how to reach a view.
-///
-/// Carries [`UNTIL`] with it, because every step polls: a test that spliced
-/// this alone would get a `nav` whose first call died on an undefined `until`.
-pub const NAV: &str = concat!(include_str!("until.js"), include_str!("nav.js"));
+#[allow(unused_imports)] // each binary uses a different subset
+pub use gpui_agent::{NAV, UNTIL};
 
 /// `body`, with the navigation helpers in front of it.
 #[must_use]
@@ -57,6 +51,27 @@ pub fn stub_genre_model(storage_root: &Path) {
     let models = storage_root.join("models");
     std::fs::create_dir_all(&models).unwrap();
     std::fs::write(models.join(luma_lib::GENRE_MODEL_FILE_NAME), b"").unwrap();
+}
+
+/// `frames` of silent 16-bit mono PCM at 8 kHz, as a WAV file at `path`: the
+/// smallest file an import decodes, for tests that only need a song to exist.
+pub fn silent_wav(path: &Path, frames: u32) {
+    let data_len = frames * 2;
+    let mut bytes = Vec::with_capacity((44 + data_len) as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&8_000_u32.to_le_bytes());
+    bytes.extend_from_slice(&16_000_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    bytes.resize((44 + data_len) as usize, 0);
+    std::fs::write(path, bytes).unwrap();
 }
 
 /// A fake Python at `cache` (what `LUMA_CACHE_DIR` points the worker

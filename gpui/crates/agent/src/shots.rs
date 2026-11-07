@@ -193,6 +193,14 @@ fn tint(args: Tint) -> Result<Value, HarnessError> {
     Ok(json!(tinted as f64 / f64::from(width * height)))
 }
 
+/// Where kept shots go: `$LUMA_SHOTS`, else `<temp>/luma-shots`.
+pub fn shots_root() -> std::path::PathBuf {
+    std::env::var_os("LUMA_SHOTS").map_or_else(
+        || std::env::temp_dir().join("luma-shots"),
+        std::path::PathBuf::from,
+    )
+}
+
 /// Copy a shot out of the harness's own directory, which goes with the
 /// process, to `$LUMA_SHOTS/<name>.png` (default `<temp>/luma-shots`), and
 /// say where. `name` may carry a drawer (`"sidebar/push-01"`) but may not
@@ -210,10 +218,7 @@ fn keep(args: Keep) -> Result<Value, HarnessError> {
             args.name
         )));
     }
-    let root = std::env::var_os("LUMA_SHOTS").map_or_else(
-        || std::env::temp_dir().join("luma-shots"),
-        std::path::PathBuf::from,
-    );
+    let root = shots_root();
     let kept = root.join(format!("{}.png", args.name));
     let failed = |error: std::io::Error| {
         HarnessError::BadCall(format!("image.keep: {}: {error}", kept.display()))

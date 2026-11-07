@@ -70,6 +70,21 @@ use std::time::Duration;
 pub use error::HarnessError;
 pub use interp::{ExecResult, Interpreter, API_DTS};
 pub use pump::{Config, Mode, PumpClient, RootFactory, GPU_LIVENESS_TIMEOUT};
+#[cfg(feature = "pixel")]
+pub use shots::shots_root;
+
+/// `until(what, pred)` in a script — see `tests/support/until.js`.
+pub const UNTIL: &str = include_str!("../tests/support/until.js");
+
+/// `nav.*` in a script — the suites' one description of how to reach a view.
+///
+/// Carries [`UNTIL`] with it, because every step polls: a script that spliced
+/// `nav.js` alone would get a `nav` whose first call died on an undefined
+/// `until`. `luma-test` loads the same two files by name.
+pub const NAV: &str = concat!(
+    include_str!("../tests/support/until.js"),
+    include_str!("../tests/support/nav.js")
+);
 
 /// How many threads may be driving an app at once in one process.
 ///

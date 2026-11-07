@@ -473,16 +473,8 @@ fn run(harness: &mut Harness, code: &str) -> Value {
     result.result
 }
 
-fn capture_dir() -> PathBuf {
-    let directory = PathBuf::from(
-        std::env::var("LUMA_SHOTS").unwrap_or_else(|_| "/tmp/luma-dialog-morph-review".into()),
-    );
-    fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
 fn preserve(source: &str, name: &str) -> PathBuf {
-    let destination = capture_dir().join(name);
+    let destination = super::support::image::shots_dir("dialog-morph").join(name);
     fs::copy(source, &destination).unwrap();
     println!("dialog morph capture {}", destination.display());
     destination
@@ -557,8 +549,10 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
     );
     let sharp = crop(&sharp_frame, &out["opening"]);
     let faded = crop(&faded_frame, &out["middle"]);
-    let sharp_crop = capture_dir().join("dialog-morph-sharp-a.png");
-    let faded_crop = capture_dir().join("dialog-morph-mid-a.png");
+    let sharp_crop =
+        super::support::image::shots_dir("dialog-morph").join("dialog-morph-sharp-a.png");
+    let faded_crop =
+        super::support::image::shots_dir("dialog-morph").join("dialog-morph-mid-a.png");
     sharp.save(&sharp_crop).unwrap();
     faded.save(&faded_crop).unwrap();
     println!("dialog morph capture {}", sharp_crop.display());
@@ -849,39 +843,6 @@ fn paced_harness() -> Harness {
     .expect("failed to start paced morph harness")
 }
 
-/// Percentile of a sorted-in-place sample, nearest-rank.
-fn percentile(sorted: &mut Vec<f64>, fraction: f64) -> f64 {
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    if sorted.is_empty() {
-        return f64::NAN;
-    }
-    let rank = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
-    sorted[rank]
-}
-
-/// What one stretch of frames cost, as the pump measured it.
-fn summarize(frames: &[Value], from: u64, to: u64, label: &str) -> f64 {
-    let mut draw: Vec<f64> = Vec::new();
-    let mut parked: Vec<f64> = Vec::new();
-    for frame in frames {
-        let number = frame["frame"].as_u64().unwrap();
-        if number > from && number <= to {
-            draw.push(frame["drawMs"].as_f64().unwrap());
-            parked.push(frame["parkedMs"].as_f64().unwrap());
-        }
-    }
-    let count = draw.len();
-    let mean = draw.iter().sum::<f64>() / count.max(1) as f64;
-    let p50 = percentile(&mut draw.clone(), 0.50);
-    let p95 = percentile(&mut draw, 0.95);
-    let parked_p50 = percentile(&mut parked, 0.50);
-    println!(
-        "{label:<22} n={count:<4} drawMs mean={mean:6.2} p50={p50:6.2} p95={p95:6.2}  \
-         parkedMs p50={parked_p50:5.2}",
-    );
-    p50
-}
-
 /// Per-frame CPU cost of a morph, split from the idle cost of the same card.
 ///
 /// `#[ignore]` because it is an instrument, not a gate: the numbers are the
@@ -912,7 +873,7 @@ fn morph_frame_cost() {
     let idle_to = out["idleTo"].as_u64().unwrap();
     let morph_to = out["morphTo"].as_u64().unwrap();
     println!("\n--- morph frame cost (pixel, motion_scale 1) ---");
-    let idle = summarize(frames, idle_from, idle_to, "settled card");
-    let morphing = summarize(frames, idle_to, morph_to, "morphing card");
+    let idle = super::support::cost::summarize(frames, idle_from, idle_to, "settled card");
+    let morphing = super::support::cost::summarize(frames, idle_to, morph_to, "morphing card");
     println!("morph adds {:.2} ms/frame at p50\n", morphing - idle);
 }

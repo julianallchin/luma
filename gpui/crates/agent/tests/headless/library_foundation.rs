@@ -44,42 +44,6 @@ fn open_library(config: &std::path::Path) -> luma_app::Library {
     luma_app::Library::open().unwrap()
 }
 
-fn write_silent_wav(path: &std::path::Path, frames: u32) {
-    let data_len = frames * 2;
-    let mut bytes = Vec::with_capacity((44 + data_len) as usize);
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16_u32.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&8_000_u32.to_le_bytes());
-    bytes.extend_from_slice(&16_000_u32.to_le_bytes());
-    bytes.extend_from_slice(&2_u16.to_le_bytes());
-    bytes.extend_from_slice(&16_u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
-    bytes.resize((44 + data_len) as usize, 0);
-    std::fs::write(path, bytes).unwrap();
-}
-
-#[cfg(unix)]
-fn install_slow_failing_python(cache: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let bin = luma_lib::runtime::python::venv_dir(cache).join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let python = bin.join("python3");
-    std::fs::write(
-        &python,
-        "#!/bin/sh\nsleep 0.5\ncase \"$1\" in\n  *beat_worker.py) printf '%s\\n' '{\"beats\":[0.0,0.5,1.0],\"downbeats\":[0.0,1.0],\"bpm\":120.0,\"downbeat_offset\":0.0,\"beats_per_bar\":4}' ;;\n  *) exit 1 ;;\nesac\n",
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&python).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(python, permissions).unwrap();
-}
-
 #[test]
 fn library_creates_idempotent_empty_membership_and_persists_session_items() {
     let config = disposable_config_dir("membership");
@@ -237,13 +201,13 @@ fn both_dj_sources_import_through_the_same_library_request_contract() {
     let config = disposable_config_dir("sources");
     sign_in(&config);
     let cache = config.join("cache");
-    install_slow_failing_python(&cache);
+    super::support::install_fake_analysis(&cache, 0.5);
     super::support::stub_genre_model(&config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let engine_audio = config.join("engine.wav");
     let rekordbox_audio = config.join("rekordbox.wav");
-    write_silent_wav(&engine_audio, 4_000);
-    write_silent_wav(&rekordbox_audio, 5_000);
+    super::support::silent_wav(&engine_audio, 4_000);
+    super::support::silent_wav(&rekordbox_audio, 5_000);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -305,11 +269,11 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
     let config = disposable_config_dir("progress");
     sign_in(&config);
     let cache = config.join("cache");
-    install_slow_failing_python(&cache);
+    super::support::install_fake_analysis(&cache, 0.5);
     super::support::stub_genre_model(&config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let audio = config.join("tiny.wav");
-    write_silent_wav(&audio, 8_000);
+    super::support::silent_wav(&audio, 8_000);
     let missing = config.join("missing.wav");
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -426,11 +390,11 @@ fn dropping_import_future_does_not_cancel_service_owned_analysis() {
     let config = disposable_config_dir("detached");
     sign_in(&config);
     let cache = config.join("cache");
-    install_slow_failing_python(&cache);
+    super::support::install_fake_analysis(&cache, 0.5);
     super::support::stub_genre_model(&config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let audio = config.join("detached.wav");
-    write_silent_wav(&audio, 8_000);
+    super::support::silent_wav(&audio, 8_000);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

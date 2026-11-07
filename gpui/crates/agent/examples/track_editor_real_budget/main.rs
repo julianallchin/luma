@@ -8,7 +8,7 @@
 //!     --example track_editor_real_budget
 //! ```
 //!
-//! # Why this exists next to `app_pixel track_editor_budget`
+//! # Why this exists next to `--example track_editor_budget`
 //!
 //! The synthetic budget sweeps a *shape* — lanes, clips, one length — and
 //! answers "what does a busy score cost". It cannot answer "why is this one

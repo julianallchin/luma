@@ -151,12 +151,12 @@ This invalidates the whole tree once.
 ## Test suites
 
 Keep integration tests in as few binaries as possible, because each
-binary links the whole crate graph. `crates/agent/tests/` has 5 test targets,
+binary links the whole crate graph. `crates/agent/tests/` has 4 test targets,
 each a directory that groups many test files. Filter by test name to run one
 file:
 
 ```sh
-cargo test -p gpui-agent --test headless tab_chrome
+cargo test -p gpui-agent --test headless venues
 cargo test -p gpui-agent --test unit
 CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --test app_pixel
 CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --test ui_pixel
@@ -165,16 +165,19 @@ CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --tes
 | target | contents |
 |---|---|
 | `headless` | outside-in app tests, no GPU |
-| `chat` | the agent panel |
 | `app_pixel` | outside-in app tests with a real renderer; `pixel_suite_guard` in it is not feature-gated, so a run without `pixel` still reports something |
 | `ui_pixel` | `luma-ui` surfaces with a renderer, no app |
 | `unit` | tests of the harness itself: no library, no renderer |
 
-Two measurement tools for a copy of a real library (`LUMA_REAL_CONFIG`) are
-examples, not tests: `cargo run -p gpui-agent --features pixel --example
-track_editor_real_budget` (frame cost while the editor moves) and `--example
-visualizer_real_score_window` (a real score through the renderer, second by
-second).
+Instruments that measure or capture rather than assert are examples, not
+tests, all run with `cargo run -p gpui-agent --features pixel --example …`:
+`track_editor_budget` (the editor's frame cost while it scrolls and scrubs at
+full zoom-out), `visualizer_capture` (the 3D view's shots and orbit frame
+cost, into `$LUMA_SHOTS/visualizer`), and, against a copy of a real library
+(`LUMA_REAL_CONFIG`), `track_editor_real_budget` and
+`visualizer_real_score_window` (a real score through the renderer, second by
+second). The dialog frame-cost tests in `app_pixel` and `ui_pixel` are still
+`#[ignore]` tests.
 
 `luma-render` has one binary, `--test render`, plus four that change
 process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
@@ -234,9 +237,6 @@ CPU misses a deadline and fails an unrelated assertion.
 sets it to its `-j`). This limit protects a loaded machine. On a quiet machine,
 results with and without the limit are the same.
 
-`chat` is a separate target because it streams a reply at a fixed rate and
-checks that the transcript grows between frames.
-
 Two rules follow:
 
 - Group tests by what they need from the process, not by subject.
@@ -251,22 +251,17 @@ and `app_pixel/add_tracks_pixels.rs` set `LUMA_CACHE_DIR` with
 `support::environment_lock()` while they do. The variable stays set for the
 rest of the process.
 
-### Known issue: order-dependent failures in `headless`
+### Process-wide state
 
-Last confirmed on 2026-08-23. Not checked since. `headless` failed
-intermittently. The cause was state left in the process by an earlier test,
-not timing: more serial runs failed more often. This command failed
-`track_editor`, `track_editor_ux` and `track_editor_waveform` every time, and
-each passed when run alone:
-
-```sh
-cargo test -p gpui-agent --no-fail-fast --test headless track_editor -- --test-threads=1
-```
-
-Look for process-wide state that a new `Fixture` does not reset, for example
-`STAGE_IMAGE_ID` (`crates/app/src/visualizer.rs`) and the glass `GENERATION`
-counter (`crates/ui/src/glass.rs`). The `HOVER_FADES` thread-local this list
-used to name is gone: hover fades live in each element's state now. Changing `HARNESS_CONCURRENCY` does not fix it.
+The tests of one process (a cargo target, or every file of one `gpui/test`
+run) share what is process-wide, and a new `Fixture` resets none of it:
+`LUMA_CACHE_DIR` above, the Perform control banks (`backend/src/controls.rs`,
+keyed by venue id, and every fixture's venue is `venue-main`, so two tests
+that move the same control at once see each other's values),
+`STAGE_IMAGE_ID` (`crates/app/src/visualizer/gpu.rs`) and the glass
+`GENERATION` counter (`crates/ui/src/glass.rs`). A test that fails only
+alongside others, and more often in serial runs, points here; changing
+`HARNESS_CONCURRENCY` does not fix it.
 
 ## Measuring frame cost in the harness
 
