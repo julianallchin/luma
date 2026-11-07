@@ -224,6 +224,12 @@ impl Luma {
         if matches!(self.focused_slot, FocusSlot::VisualizerFullscreen) {
             return self.visualizer_focus.contains_focused(window, cx);
         }
+        // The settings page owns the keyboard as a dialog does. A control on
+        // it that took focus and then went away (a row's Reset, once pressed)
+        // leaves focus on nothing drawn, and Escape with it.
+        if matches!(self.focused_slot, FocusSlot::Settings) {
+            return self.focus.contains_focused(window, cx);
+        }
         window.focused(cx).is_some()
     }
 
