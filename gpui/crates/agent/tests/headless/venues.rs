@@ -89,7 +89,7 @@ fn fixture_dir(
     dir
 }
 
-fn session_item(dir: &Path) -> Option<String> {
+fn session_item(dir: &Path, key: &str) -> Option<String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -98,9 +98,9 @@ fn session_item(dir: &Path) -> Option<String> {
             let state = luma_lib::database::local::state::init_state_db_at(dir)
                 .await
                 .expect("failed to reopen fixture state database");
-            let value = luma_lib::database::local::auth::get_session_item(&state.0, LAST_VENUE)
+            let value = luma_lib::database::local::auth::get_session_item(&state.0, key)
                 .await
-                .expect("failed to read remembered venue");
+                .expect("failed to read a session item");
             state.0.close().await;
             value
         })
@@ -419,7 +419,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     assert_eq!(out["picker"], true);
     assert_eq!(out["onboarding"], true);
     drop(stale);
-    assert_eq!(session_item(&stale_dir), None);
+    assert_eq!(session_item(&stale_dir, LAST_VENUE), None);
 
     // Zero venues is a focused create state. Submission goes through the real
     // create_venue command, opens the result, and the next launch restores it.
@@ -514,7 +514,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     assert_eq!(out, Value::Bool(true));
     drop(fifo);
-    assert_eq!(session_item(&fifo_dir).as_deref(), Some("beta"));
+    assert_eq!(session_item(&fifo_dir, LAST_VENUE).as_deref(), Some("beta"));
     let mut fifo_restore = harness(
         &fifo_dir,
         luma_app::NavigationFixture {
@@ -689,4 +689,59 @@ fn the_deck_panel_width_survives_a_relaunch() {
         (dragged - restored).abs() < 1.0,
         "dragged to {dragged}, relaunched at {restored}"
     );
+}
+
+/// A rebound shortcut is this machine's, and still bound after a relaunch:
+/// the new key works once the stored rebinds land, and the old one does not.
+#[test]
+fn a_rebound_shortcut_survives_a_relaunch() {
+    let dir = fixture_dir("shortcuts", &[("alpha", "Alpha Hall")], None, true);
+    let mut first = harness(&dir, luma_app::NavigationFixture::default());
+    first.run(
+        &support::script(
+            r#"
+        nav.venue("Alpha Hall");
+        app.action("luma::OpenSettings");
+        nav.step("the Shortcuts section", "toggle", "Shortcuts");
+        nav.step("the agent panel's recorder", "button", "View: Show or hide the agent panel");
+        until("the recorder listening", (s) => s.find({ role: "text", label: "Press a key…" }));
+        app.key("secondary-shift-k");
+        until("the rebind", (s) => s.find({ role: "button", label: "Reset View: Show or hide the agent panel" }));
+        // Long enough for the debounced save to land.
+        app.frames(30, { waitMs: 50 });
+        true
+        "#,
+        ),
+        Duration::from_secs(90),
+    );
+    drop(first);
+    let stored = session_item(&dir, "shortcuts").expect("no shortcuts were stored");
+    assert!(stored.contains("view.agent"), "stored {stored}");
+
+    let mut second = harness(&dir, luma_app::NavigationFixture::default());
+    let out = second.run(
+        &support::script(
+            r#"
+        // The agent panel's toggle: `true` up, `false` away.
+        const up = (s) => s.find({ role: "button", label: "Hide agent" }) !== undefined ? true
+          : s.find({ role: "button", label: "Show agent" }) !== undefined ? false : undefined;
+        until("Alpha, restored", (s) => s.find({ role: "button", label: "Alpha Hall" })?.bounds.y < 44);
+        // The stored rebinds have landed once Settings shows the row rebound.
+        app.action("luma::OpenSettings");
+        nav.step("the Shortcuts section", "toggle", "Shortcuts");
+        until("the stored rebind", (s) => s.find({ role: "button", label: "Reset View: Show or hide the agent panel" }));
+        nav.dismiss();
+        const start = up(until("the shell", (s) => up(s) !== undefined ? s : undefined));
+        app.key("secondary-shift-k");
+        until("the new key, after a relaunch", (s) => up(s) === !start);
+        app.key("secondary-shift-k");
+        until("the panel back", (s) => up(s) === start);
+        app.key("secondary-b");
+        app.frames(6);
+        ({ oldKeyIgnored: up(app.snapshot()) === start })
+        "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(out["oldKeyIgnored"], true);
 }
