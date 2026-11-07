@@ -1214,7 +1214,8 @@ pub async fn set_thread_selection(
     .await
     .map_err(|error| format!("Failed to change agent engine: {error}"))?
     .ok_or_else(|| thread_not_found(thread_id))?;
-    sqlx::query("INSERT INTO settings (key, value) VALUES ('agent_selection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(crate::settings::key::AGENT_SELECTION)
         .bind(serde_json::to_string(selection).map_err(|error| error.to_string())?)
         .execute(&mut *tx)
         .await
@@ -1515,6 +1516,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(Selection::from_thread(&next).unwrap(), selected);
+    }
+
+    /// The composer's pick seeds new threads until the settings page names a
+    /// default; then the default does.
+    #[tokio::test]
+    async fn a_settings_default_written_after_a_pick_seeds_new_threads() {
+        use crate::agent::engine::catalog::{Selection, Service};
+        use crate::settings::key;
+        let (_dir, pool) = test_pool().await;
+        let first = create_thread(&pool, track_thread("first"), None)
+            .await
+            .unwrap();
+        let picked = Selection {
+            service: Service::Codex,
+            model: Some("test-model".into()),
+            effort: None,
+        };
+        set_thread_selection(&pool, &first.id, &picked, None)
+            .await
+            .unwrap();
+        crate::settings::write(&pool, key::AGENT_ENGINE, "claude")
+            .await
+            .unwrap();
+        let next = create_thread(&pool, track_thread("next"), None)
+            .await
+            .unwrap();
+        assert_eq!(next.engine, "claude");
+        assert_eq!(
+            get_thread_row(&pool, &first.id, None).await.unwrap().engine,
+            "codex",
+            "a default is for new threads, not the ones already running"
+        );
     }
 
     #[tokio::test]

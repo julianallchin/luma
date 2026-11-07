@@ -33,3 +33,13 @@ pub async fn update_setting(pool: &SqlitePool, key: &str, value: &str) -> Result
 
     Ok(())
 }
+
+/// Remove a single setting, if it is set.
+pub async fn delete_setting(pool: &SqlitePool, key: &str) -> Result<(), String> {
+    sqlx::query("DELETE FROM settings WHERE key = ?")
+        .bind(key)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete setting: {}", e))?;
+    Ok(())
+}

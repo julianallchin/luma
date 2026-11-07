@@ -655,7 +655,7 @@ impl AgentService {
             crate::database::local::settings::get_all_settings(&self.services.db().0)
                 .await
                 .map_err(AgentError::Storage)?;
-        settings.remove("agent_selection");
+        settings.remove(crate::settings::key::AGENT_SELECTION);
         settings.insert(
             crate::settings::key::AGENT_ENGINE.into(),
             engine.key().into(),
@@ -673,7 +673,7 @@ impl AgentService {
         let settings = crate::database::local::settings::get_all_settings(&self.services.db().0)
             .await
             .map_err(AgentError::Storage)?;
-        if settings.contains_key("agent_selection") {
+        if settings.contains_key(crate::settings::key::AGENT_SELECTION) {
             engine::catalog::Selection::configured(&settings).map(Some)
         } else {
             Ok(None)

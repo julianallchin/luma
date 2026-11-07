@@ -83,7 +83,7 @@ impl Selection {
     }
 
     pub fn configured(settings: &HashMap<String, String>) -> Result<Self, AgentError> {
-        if let Some(saved) = settings.get("agent_selection") {
+        if let Some(saved) = settings.get(crate::settings::key::AGENT_SELECTION) {
             let selection: Self = serde_json::from_str(saved).map_err(|error| {
                 AgentError::Storage(format!("Invalid saved model selection: {error}"))
             })?;
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn a_saved_anthropic_selection_loads_on_the_default_gateway() {
         let settings = HashMap::from([(
-            "agent_selection".to_string(),
+            crate::settings::key::AGENT_SELECTION.to_string(),
             r#"{"service":"anthropic","model":"claude-opus-5","effort":null}"#.to_string(),
         )]);
         let selection = Selection::configured(&settings).expect("loads");

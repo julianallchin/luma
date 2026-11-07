@@ -52,7 +52,26 @@ pub mod key {
     pub const AGENT_ENGINE: &str = "agent_engine";
     pub const AGENT_PROVIDER: &str = "agent_provider";
     pub const AGENT_MODEL: &str = "agent_model";
+    /// The composer's last model pick, as a serialized selection.
+    pub const AGENT_SELECTION: &str = "agent_selection";
     pub const AUTO_UPDATE: &str = "auto_update";
+}
+
+/// Write one setting.
+///
+/// The settings page's agent defaults and the composer's last pick
+/// ([`key::AGENT_SELECTION`]) both name the model a new thread starts on, and
+/// the pick is read first. The later choice wins: writing a default drops the
+/// pick, or the settings page would stop mattering after one composer change.
+///
+/// # Errors
+/// Fails if a row cannot be written.
+pub async fn write(pool: &SqlitePool, name: &str, value: &str) -> Result<(), String> {
+    db::update_setting(pool, name, value).await?;
+    if [key::AGENT_ENGINE, key::AGENT_PROVIDER, key::AGENT_MODEL].contains(&name) {
+        db::delete_setting(pool, key::AGENT_SELECTION).await?;
+    }
+    Ok(())
 }
 
 /// The retired checkbox [`ViewMode`] falls back to. Read, never written.

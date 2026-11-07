@@ -1,7 +1,6 @@
 //! Application settings: a string key/value table plus the live effects a
 //! write has on the two subsystems that read it.
 
-use crate::database::local::settings as settings_db;
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::settings::{load_settings, AppSettings};
@@ -24,6 +23,6 @@ pub async fn set_setting(
     key: String,
     value: String,
 ) -> Result<(), CommandError> {
-    settings_db::update_setting(&services.db.0, &key, &value).await?;
+    crate::settings::write(&services.db.0, &key, &value).await?;
     services.apply_persisted_settings().await
 }
