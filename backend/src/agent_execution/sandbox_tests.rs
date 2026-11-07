@@ -45,8 +45,11 @@ const BEATS: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
 const ALLOWED_ENV: &[&str] = &[
     "HOME",
     "LC_ALL",
+    "MKL_NUM_THREADS",
     "MPLBACKEND",
     "MPLCONFIGDIR",
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
     "PATH",
     "PYTHONDONTWRITEBYTECODE",
     "PYTHONUNBUFFERED",
