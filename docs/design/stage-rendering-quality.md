@@ -64,7 +64,7 @@ Release Vulkan on RTX 5090, 1920×1080 output, half-resolution haze, 8 samples, 
 | Close-up 128 lights | 5.67 ms | 4.72 ms |
 | 120 lights, 2,057 opaque draws, 16 shadow maps (two runs) | 6.12–6.43 ms | 5.94–6.87 ms |
 
-The dense case varies between runs; there is no consistent measured regression or established speedup there. No claim is made about other GPUs, actual venue datasets, or higher-resolution output. The extra third density lookup and the tripled light bounds were removed. Detailed measurements and artifact hashes were in `gpui/crates/render/goldens/render-refinement-perf-rtx5090.json` (deleted from the tree on 2026-10-24; git history has it).
+The dense case varies between runs; there is no consistent measured regression or established speedup there. No claim is made about other GPUs, actual venue datasets, or higher-resolution output. The extra third density lookup and the tripled light bounds were removed.
 
 ## Longer-range correction after venue review
 
@@ -122,7 +122,7 @@ LUMA_GEOMETRY_SHADOWS=0 cargo run --release --manifest-path gpui/Cargo.toml -p l
 LUMA_GEOMETRY_SHADOWS=1 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
 ```
 
-Add `--surface-only` or `--haze-only` for isolation; `--image=/tmp/capture.png` captures the measured setup after the timing loop. Synthetic modes also accept `--cones=450`, so shadow workloads are no longer accidentally fixed at 120 emitters. Raw JSON, the saved catalogue, and inspected images are under `/tmp/luma-harness-visibility/`. Compact results were in `gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json` (deleted from the tree on 2026-10-24; git history has it).
+Add `--surface-only` or `--haze-only` for isolation; `--image=/tmp/capture.png` captures the measured setup after the timing loop. Synthetic modes also accept `--cones=450`, so shadow workloads are no longer accidentally fixed at 120 emitters. Raw JSON, the saved catalogue, and inspected images are under `/tmp/luma-harness-visibility/`.
 
 
 ## Gasworks retained shadows and sampled fog
@@ -193,8 +193,7 @@ Add `--moving-cones=32`, `--moving-cones=470`, or `--blackout` for the stress ca
 `--image=PATH` writes a standalone 16-subframe image after timing;
 `--image-subframes=1` checks fresh-frame quality instead of hiding it behind
 accumulation. These cases rotate cone directions only, not fixture housing,
-and do not replay a score. Measured results and provenance were in
-`gpui/crates/render/goldens/gasworks-sampled-perf-rtx5090.json` (deleted from the tree on 2026-10-24; git history has it).
+and do not replay a score.
 
 Validation: 121 renderer unit tests and seven volumetric transport tests pass,
 including reservoir colour/energy, partial groups, cue history reset, cache
@@ -267,8 +266,7 @@ capture remains byte-identical to the previous accepted capture (RGBA SHA-256
 `de0bebe56604ac668eb44ffabf305b19899a62d1325cbaf810ee9e0ef11ccf98`).
 
 The review images were fresh frames from the full-red harness cue, not a
-score replay or automatic hash goldens: `gasworks-per-ray-fresh.png` and
-`gasworks-grid-fresh.png` in `gpui/crates/render/goldens/` (deleted from the tree on 2026-10-24; git history has them).
+score replay or automatic hash goldens.
 
 
 Final rebuilt-binary comparison (RTX 5090 / Vulkan, driver 595.84):
@@ -287,9 +285,7 @@ still spends 12.22 ms CPU p95 submitting shadows, which limits application
 headroom independently of the faster GPU work.
 
 Both native debug and release apps were rebuilt on `agent-code-execution-linux`;
-neither was launched. The release harness executable, code provenance, raw
-summaries, quality measurements, and limitations were recorded in
-`gpui/crates/render/goldens/gasworks-grid-perf-rtx5090.json` (deleted from the tree on 2026-10-24; git history has it).
+neither was launched.
 
 ## Sky visibility and ambient occlusion
 

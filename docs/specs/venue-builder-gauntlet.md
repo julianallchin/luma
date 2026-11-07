@@ -151,7 +151,7 @@ universes, replacing the `(net<<8)|(sub<<4)|(u&0xF)` arithmetic; an add-N dialog
 morphing from picker to count/mode in the shared dialog container. **Out of
 scope:** anything positional — no u/v/yaw/trim column, no "move to truss".
 
-**Evidence and acceptance.** `tests/headless/venue_patch.rs`; pixels of the
+**Evidence and acceptance.** `tests/js/headless/venue_patch.test.js`; pixels of the
 strip with and without a collision and of both add-N dialog states; an
 `app.painted()` sweep proving the picker→count morph never flashes an empty
 table. A colliding address edit is refused, shows red, and leaves the stored
