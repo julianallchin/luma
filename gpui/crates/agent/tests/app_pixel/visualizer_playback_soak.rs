@@ -82,8 +82,7 @@ fn playing_does_not_get_slower_the_longer_it_plays() {
             r#"
             {NAV}
             nav.trackEditor({VENUE_NAME:?}, {TRACK_NAME:?});
-            // The editor labels a clip by its form, not its preset.
-            until("the clip", (s) => s.find({{ role: "card", label: "Constant color" }}) !== undefined);
+            until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
             nav.program();
             app.frames(10, {{ waitMs: 60 }});
             nav.step("the Play button", "button", "Play");
