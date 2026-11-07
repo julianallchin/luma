@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::support::image::{inner_edge_energy, preserve};
+use super::support::image::{decode, inner_edge_energy, preserve};
 use gpui::prelude::*;
 use gpui::{actions, div, px, AnyView, App, Context, FocusHandle, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
@@ -465,7 +465,7 @@ globalThis.settle = (pred) => {
 "#;
 
 fn crop(path: &PathBuf, bounds: &Value) -> image::RgbaImage {
-    let image = image::open(path).unwrap().to_rgba8();
+    let image = decode(path);
     let scale = image.width() as f64 / 800.0;
     let number = |key: &str| bounds[key].as_f64().unwrap();
     image::imageops::crop_imm(
