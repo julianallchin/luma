@@ -1,5 +1,6 @@
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
+use crate::database::local::venue_graph::rig_changed;
 use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
@@ -8,7 +9,7 @@ use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups as groups_service;
-use crate::services::groups::{invalidate_venue_fixture_cache, GroupSources};
+use crate::services::groups::GroupSources;
 use crate::stage_render;
 
 // -----------------------------------------------------------------------------
@@ -28,7 +29,7 @@ pub async fn delete_group(services: &AppServices, id: String) -> Result<(), Comm
     let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&id)).await?;
     require_changed(groups_db::delete_group(&mut access, &id).await?)?;
     access.commit().await?;
-    invalidate_venue_fixture_cache();
+    rig_changed();
     Ok(())
 }
 
@@ -591,7 +592,7 @@ pub async fn save_venue_group(
     .await
     .map_err(CommandError::Invalid)?;
     access.commit().await?;
-    invalidate_venue_fixture_cache();
+    rig_changed();
     Ok(())
 }
 
@@ -604,6 +605,6 @@ pub async fn generate_venue_groups(
     crate::services::groups::snapshot_generated_groups(&services.fixtures_root, &mut access)
         .await?;
     access.commit().await?;
-    invalidate_venue_fixture_cache();
+    rig_changed();
     Ok(())
 }

@@ -642,7 +642,7 @@
         "returns": "void",
         "sideEffects": [
           "VenueAccess::<Write> on the group; require_changed -> 'Venue resource not found' if not exactly 1 row",
-          "Membership rows go away with the group (FK cascade); invalidate_venue_fixture_cache()"
+          "Membership rows go away with the group (FK cascade); rig_changed()"
         ]
       }
     },
@@ -2245,7 +2245,7 @@
         "returns": "void",
         "sideEffects": [
           "VenueAccess::<Write> on the fixture + require_venue; require_changed (1 row or error)",
-          "Deletes the fixture row (group membership rows presumably cascade); re-pushes patch to ArtNet; invalidate_venue_fixture_cache()"
+          "Deletes the fixture row (group membership rows presumably cascade); re-pushes patch to ArtNet; rig_changed()"
         ]
       }
     },
@@ -2333,7 +2333,7 @@
         "returns": "void",
         "sideEffects": [
           "VenueAccess::<Write> on the fixture + require_venue; require_changed",
-          "Re-pushes patch to ArtNet; invalidate_venue_fixture_cache()"
+          "Re-pushes patch to ArtNet; rig_changed()"
         ]
       }
     },

@@ -1,12 +1,12 @@
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
+use crate::database::local::venue_graph::rig_changed;
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::patch::{AutoPatchReport, UniverseCell};
 use crate::services::fixture_create;
 use crate::services::fixtures as fixture_service;
-use crate::services::groups::invalidate_venue_fixture_cache;
 use crate::services::patch as patch_service;
 
 /// Publish patch changes when the desktop has enabled physical output.
@@ -196,7 +196,7 @@ async fn commit_and_publish(
     let patch = fixtures_db::get_patched_fixtures(&mut access).await?;
     access.commit().await?;
     publish_patch(services, patch);
-    invalidate_venue_fixture_cache();
+    rig_changed();
     Ok(())
 }
 

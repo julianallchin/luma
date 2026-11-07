@@ -14,7 +14,14 @@
 //! answering with the old split. The one place that can promise the cache is
 //! not stale is the place the rows change.
 //!
-//! Twice, though: see [`graph_changed`] and [`graph_committed`].
+//! Twice, though. Early — before the transaction commits — because the cache
+//! is a pure read cache: dropping it when a write might still roll back costs
+//! one reload, and keeping it when a write lands costs a wrong answer. And
+//! again by whoever owns the transaction once it commits
+//! ([`crate::venue_graph::commit_graph`]): dropping the cache inside the
+//! transaction closes the window *before* the write and opens one after it — a
+//! reader arriving between the last write and the commit sees the old rows and
+//! refills the cache with an answer already wrong when it lands.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,32 +31,6 @@ use uuid::Uuid;
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
-
-/// Tell the derived-group cache the rig moved.
-///
-/// Called from every write in this module. Early — before the transaction
-/// commits — because the cache is a pure read cache: dropping it when a write
-/// might still roll back costs one reload, and keeping it when a write lands
-/// costs a wrong answer.
-///
-/// Early is not enough on its own; see [`graph_committed`].
-fn graph_changed() {
-    rig_changed();
-}
-
-/// Tell it again, once the rows are visible.
-///
-/// Dropping the cache inside the transaction closes the window *before* the
-/// write and opens one after it: a reader arriving between the last write and
-/// the commit sees the old rows, cannot see the new ones, and repopulates the
-/// cache with an answer that is already wrong by the time it lands. The second
-/// drop is the one that makes "the tree is derived from these rows" true again.
-///
-/// Called by whoever owns the transaction, because that is who knows when it
-/// committed — this module never commits.
-pub fn graph_committed() {
-    rig_changed();
-}
 
 static RIG_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -256,7 +237,7 @@ pub async fn insert_node_with_id(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to insert venue node: {e}"))?;
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -286,7 +267,7 @@ pub async fn update_node(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to restore venue node: {e}"))?;
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -304,7 +285,7 @@ pub async fn delete_constraint(
     )
     .await
     .map_err(|e| format!("Failed to remove venue constraint: {e}"))?;
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -332,7 +313,7 @@ pub async fn set_placement(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to place venue node: {e}"))?;
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -376,7 +357,7 @@ pub async fn upsert_constraint(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to record venue constraint: {e}"))?;
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -426,7 +407,7 @@ pub async fn set_params(
             }
         }
     }
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -445,7 +426,7 @@ pub async fn set_label(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename venue node: {e}"))?;
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 
@@ -469,7 +450,7 @@ pub async fn delete_nodes(
             .await
             .map_err(|e| format!("Failed to delete venue node: {e}"))?;
     }
-    graph_changed();
+    rig_changed();
     Ok(())
 }
 

@@ -127,7 +127,7 @@ pub async fn tiles(
 /// Fails if the transaction cannot be committed.
 pub async fn commit_graph(access: VenueAccess<'_, Write>) -> Result<(), String> {
     access.commit().await?;
-    local::venue_graph::graph_committed();
+    local::venue_graph::rig_changed();
     Ok(())
 }
 

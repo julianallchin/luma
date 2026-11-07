@@ -13,7 +13,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
-use crate::database::local::venue_graph::{rig_changed, rig_generation};
+use crate::database::local::venue_graph::rig_generation;
 use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::models::fixtures::{FixtureDefinition, Mode, PatchedFixture};
 use crate::models::groups::{
@@ -64,11 +64,6 @@ static VENUE_FIXTURE_CACHE: Lazy<std::sync::Mutex<VenueFixtureCacheInner>> = Laz
         loading: HashMap::new(),
     })
 });
-
-/// Invalidate the venue fixture cache (call when fixtures/groups change).
-pub fn invalidate_venue_fixture_cache() {
-    rig_changed();
-}
 
 /// This cache's identity for one venue: the library it lives in, and its id.
 ///

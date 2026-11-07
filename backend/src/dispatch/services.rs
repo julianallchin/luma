@@ -425,7 +425,7 @@ impl AppServices {
         self.perform.stop().await;
         self.inputs.close().await;
         crate::controls::clear();
-        crate::services::groups::invalidate_venue_fixture_cache();
+        crate::database::local::venue_graph::rig_changed();
         self.render_engine.reset_for_identity_switch();
         workspaces
     }

@@ -495,7 +495,7 @@ impl VenueHost {
             .commit()
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
-        groups::invalidate_venue_fixture_cache();
+        crate::database::local::venue_graph::rig_changed();
         let rows = crate::agent_execution::bindings::providers::venue::group_rows(&[group]);
         Ok(json!({ "group": rows.into_iter().next() }))
     }
@@ -512,7 +512,7 @@ impl VenueHost {
             .commit()
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
-        groups::invalidate_venue_fixture_cache();
+        crate::database::local::venue_graph::rig_changed();
         self.groups().await
     }
 

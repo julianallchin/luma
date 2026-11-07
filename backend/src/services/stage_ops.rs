@@ -716,7 +716,6 @@ impl<'a> Stage<'a> {
         // a transaction; committing an empty one is cheaper than branching.
         let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
         venue_graph::commit_graph(access).await?;
-        crate::services::groups::invalidate_venue_fixture_cache();
         Ok(Distributed { report, patch })
     }
 
@@ -814,7 +813,6 @@ impl<'a> Stage<'a> {
         }
         let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
         venue_graph::commit_graph(access).await?;
-        crate::services::groups::invalidate_venue_fixture_cache();
         Ok(Distributed { report, patch })
     }
 
@@ -955,7 +953,6 @@ impl<'a> Stage<'a> {
         let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
         let out = ResolvedVenue::from(&solved);
         venue_graph::commit_graph(access).await?;
-        crate::services::groups::invalidate_venue_fixture_cache();
         Ok(out)
     }
 
