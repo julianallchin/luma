@@ -75,6 +75,16 @@ impl SavedVenues {
     pub(crate) fn restoring(&self, venue_id: &str) -> bool {
         self.unopened.contains_key(venue_id)
     }
+
+    /// Drop `venue_id`'s saved score before it is restored: the window is
+    /// arriving for another one.
+    pub(crate) fn forget_score(&mut self, venue_id: &str) {
+        if let Some(saved) = self.unopened.get_mut(venue_id) {
+            saved
+                .bodies
+                .retain(|body| !matches!(body.target, Target::Score { .. }));
+        }
+    }
 }
 
 impl Luma {

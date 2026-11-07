@@ -134,7 +134,7 @@ globalThis.nav = {
 	track(name) {
 		const already = app.snapshot();
 		if (already.find({ role: "card", label: "Song list" }) === undefined
-			&& already.findAll({ role: "button" }).some((n) => n.label.startsWith(`${name} · #`))) {
+			&& nav.openScore(already, name) !== undefined) {
 			until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }));
 			return;
 		}
@@ -151,7 +151,7 @@ globalThis.nav = {
 	// is what was stored. Arrange holds one score, so opening another one —
 	// a sibling, or a new one when there is none — drops the open body.
 	reopen(track) {
-		const title = (s) => s.findAll({ role: "button" }).find((n) => n.label.startsWith(`${track} · #`))?.label;
+		const title = (s) => nav.openScore(s, track);
 		const open = title(app.snapshot());
 		if (open === undefined) throw new Error(`no score of ${track} is open`);
 		const ordinal = open.slice(`${track} · `.length);
@@ -167,6 +167,18 @@ globalThis.nav = {
 			&& s.find({ role: "card", label: "Song list" }) === undefined
 			&& s.find({ role: "card", label: "Waveform" }) !== undefined);
 		app.frames(2);
+	},
+
+	// The open score of `track`, as `Aurora · #2`, or undefined when none is.
+	// Read off the stage's song / score trigger, or — with the stage put
+	// away, which takes the trigger with it — off the timeline's own
+	// readouts: its song's name and `Score #2`.
+	openScore(snapshot, track) {
+		const trigger = snapshot.findAll({ role: "button" }).find((n) => n.label.startsWith(`${track} · #`));
+		if (trigger) return trigger.label;
+		const score = snapshot.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"));
+		if (score === undefined || snapshot.find({ role: "text", label: track }) === undefined) return undefined;
+		return `${track} · ${score.label.slice("Score ".length)}`;
 	},
 
 	// Both halves of the commonest walk in the suite.

@@ -47,7 +47,7 @@
 //! not move, and nor do they.
 //!
 //! ```text
-//! [lights][◧] venue ▾ ………… subject ………… [Rig · Arrange · Live]
+//! [lights][◧] venue ▾ ………………………………………… [Rig · Arrange · Live]
 //!  \___ fixed ___/                         \______ fixed ______/
 //! ```
 //!
@@ -59,7 +59,7 @@ use gpui::*;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 
-use crate::workspace::{Mode, Target};
+use crate::workspace::Mode;
 use crate::Luma;
 
 /// Height of the title bar, and of the chat's own header at the top of the
@@ -223,92 +223,6 @@ fn anchor(left: Pixels, right: Option<Pixels>) -> Div {
             Some(right) => slot.right(right),
             None => slot.left(left),
         })
-}
-
-/// The middle of the title bar: what the mode is working on. In Arrange, the
-/// open song and score — the door to the song list. In Live, what is being
-/// followed. In Rig, nothing.
-pub(crate) fn subject(app: &Luma, entity: &Entity<Luma>) -> Option<AnyElement> {
-    match app.workspace.active() {
-        Some(Target::Score { .. }) | None if app.workspace.mode() == Mode::Arrange => {
-            Some(song_title(app, entity))
-        }
-        Some(Target::Perform { .. }) => {
-            let line = app.live_line()?;
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_size(px(12.))
-                    .text_color(luma_ui::glass::ink(0.6))
-                    .child(
-                        div()
-                            .size(px(6.))
-                            .rounded_full()
-                            .bg(luma_ui::ladder::status_ok()),
-                    )
-                    .child(line.clone())
-                    .agent_node(Role::Text, line)
-                    .into_any_element(),
-            )
-        }
-        _ => None,
-    }
-}
-
-/// Arrange's song title: the open score's track and score, or the offer to
-/// pick one. A press opens or closes the song list.
-fn song_title(app: &Luma, entity: &Entity<Luma>) -> AnyElement {
-    let open = app.song_list_shown();
-    let (art, title, score) = match app.workspace.active_body() {
-        Some(crate::shell::Body::TrackEditor(editor)) => (
-            app.songs
-                .as_ref()
-                .and_then(|songs| songs.find(editor.track_id()))
-                .and_then(|track| track.album_art_path),
-            editor.track_name().to_string(),
-            editor.score_label(),
-        ),
-        _ => (None, "Songs".to_string(), String::new()),
-    };
-    let pressed = entity.clone();
-    let label = if score.is_empty() {
-        title.clone()
-    } else {
-        format!("{title} · {score}")
-    };
-    luma_ui::float::nav_row(luma_ui::float::RowState::of(open, false), "song-title")
-        .id("song-title")
-        .flex_none()
-        .gap(px(10.))
-        .px(px(10.))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_song_list(cx)))
-        .children(
-            art.is_some()
-                .then(|| crate::tracks::album_art(art.as_deref(), 20.)),
-        )
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(luma_ui::glass::ink(0.95))
-                .child(title),
-        )
-        .when(!score.is_empty(), |row| {
-            row.child(div().text_color(luma_ui::glass::ink(0.6)).child(score))
-        })
-        .child(
-            gpui_component::Icon::new(if open {
-                IconName::ChevronUp
-            } else {
-                IconName::ChevronDown
-            })
-            .size(px(11.))
-            .text_color(luma_ui::glass::ink(0.42)),
-        )
-        .agent_node(Role::Button, label)
-        .into_any_element()
 }
 
 /// The window's traffic-light corner: AppKit's slot on macOS, our three dots

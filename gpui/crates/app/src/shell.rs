@@ -353,6 +353,9 @@ impl Luma {
             self.close_venue_menu(cx);
             return;
         }
+        if self.close_score_switcher(cx) {
+            return;
+        }
         // The song list's menus are on the same rung: floats over the shell,
         // closed before anything under them is.
         if self.close_score_menu(cx) || self.close_song_menu(cx) {
@@ -689,6 +692,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if app.venue_menu.tick_close() {
         window.request_animation_frame();
     }
+    if app.score_switcher.tick_close() {
+        window.request_animation_frame();
+    }
     // `open_mut`, not `get_mut`: every tick here takes the keyboard, and a
     // dialog playing its exit has already handed the keyboard back to whatever
     // opened it (see [`Luma::focus_slot`]). Ticking a leaving dialog re-focused
@@ -833,9 +839,10 @@ fn agent_panel(app: &Luma) -> AnyElement {
 /// What the agent panel says while the mode on screen has nothing open.
 const NO_CHAT: &str = "Open a score to talk about it.";
 
-/// The window's head, on the trim above the page: the venue menu, what the
-/// mode is working on, and — reserved by the band's insets — the agent toggle
-/// and the mode switch anchored over its two ends.
+/// The window's head, on the trim above the page: the venue menu and —
+/// reserved by the band's insets — the agent toggle and the mode switch
+/// anchored over its two ends. Its middle is empty in every mode: what the
+/// mode is working on is the page's to say.
 fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
     chrome::band(lights)
         .child(
@@ -846,8 +853,6 @@ fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) ->
                 .items_center()
                 .child(welcome::venue_trigger(app, entity, cx)),
         )
-        .children(chrome::subject(app, entity))
-        .child(div().flex_1().min_w_0())
         .agent_node(Role::Card, "Title bar")
 }
 
@@ -918,6 +923,9 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
         _ => None,
     };
     let stage = stage_region(app, cx);
+    // Arrange names its song and score over the stage's top edge, between
+    // the corner controls: the door to the song's other scores.
+    let switcher = crate::score_switcher::trigger(app, &cx.entity());
     let mut band = div()
         .h(px(stage_height))
         .flex_none()
@@ -931,7 +939,9 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
             .child(seam())
             .child(deck_grip(width + SEAM_WIDTH / 2.0, cx));
     }
-    let band = band.child(stage_slot(stage)).children(environment);
+    let band = band
+        .child(stage_slot(stage).relative().children(switcher))
+        .children(environment);
     div()
         .flex_1()
         .min_h_0()

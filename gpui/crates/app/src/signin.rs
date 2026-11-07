@@ -188,6 +188,7 @@ impl Luma {
         // to play its exit over a shell that is no longer rendered.
         self.overlay = luma_ui::dialog::Popup::default();
         self.venue_menu = luma_ui::dialog::Popup::default();
+        self.score_switcher = luma_ui::dialog::Popup::default();
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
         self.sign_in = Some(Box::new(SignIn::new(generation, expired, cx)));

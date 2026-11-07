@@ -170,6 +170,27 @@ test("a pattern's pad turns it on and off", () => {
   until("off", (s) => (pad(s)?.label === "Pad: Front wash" ? s : undefined));
 });
 
+// Edit layout is not a row of its own: it ends the row of page tabs, after
+// the page's line, and so does Done.
+test("Edit layout ends the page tabs' row", () => {
+  const onRow = (s, label) => {
+    const tab = s.findAll((n) => n.role === "toggle" && n.label.startsWith("Page "))[0].bounds;
+    const button = s.find({ role: "button", label }).bounds;
+    const line = s.find((n) => n.role === "text" && / · \d+ on$|^Double-click a page/.test(n.label)).bounds;
+    const middle = (b) => b.y + b.height / 2;
+    assert(Math.abs(middle(button) - middle(tab)) <= 1 && Math.abs(middle(line) - middle(tab)) <= 1,
+      `${label} is not on the tabs' row: ${JSON.stringify({ tab, button, line })}`);
+    assert(button.x > line.x + line.width - 1 && line.x > tab.x,
+      `${label} does not end the row: ${JSON.stringify({ tab, button, line })}`);
+    // Nothing of the grid's sits above the tabs any more.
+    expect(s.findAll((n) => n.role === "button" && n.bounds.y + n.bounds.height <= tab.y
+      && n.bounds.y > s.find({ role: "slider", label: "Stage height" }).bounds.y).length).toBe(0);
+  };
+  onRow(open(), "Edit layout");
+  nav.step("Edit layout", "button", "Edit layout");
+  onRow(until("the grid to arrange", (s) => s.find({ role: "button", label: "Select Master" }) ? s : undefined), "Done");
+});
+
 test("a pad that starts on the bar waits for it, then lights", () => {
   const bar = (s) => pad(s, "Bar wash");
   expect(bar(open()).label).toBe("Pad: Bar wash");
@@ -306,7 +327,16 @@ test("a source picked in the deck panel is followed, and disconnecting returns t
   expect(source(followed).label).toMatch(/^Source: Virtual deck/);
   assert(followed.find({ role: "card", label: "Source picker" }) === undefined, "the picker stayed open after a pick");
   assert(followed.find({ role: "button", label: "Add source" }) === undefined, "a followed source still offers Add source");
-  until("the title bar says so", (s) => s.find((n) => n.role === "text" && n.label.startsWith("Virtual deck")));
+  // The status bar says so; the title bar's middle says nothing, in Live
+  // as everywhere.
+  const said = until("the status bar says so", (s) => {
+    const bar = s.find({ role: "card", label: "Status bar" })?.bounds;
+    return bar && s.find((n) => n.role === "text" && n.label.startsWith("Virtual deck")
+      && n.bounds.y >= bar.y && n.bounds.y < bar.y + bar.height) ? s : undefined;
+  });
+  const title = said.find({ role: "card", label: "Title bar" }).bounds;
+  expect(said.findAll((n) => n.role === "text" && n.bounds.width > 0 && n.bounds.y >= title.y
+    && n.bounds.y + n.bounds.height <= title.y + title.height).map((n) => n.label)).toEqual([]);
 
   // Disconnecting puts the set back on the tapped tempo.
   nav.step("disconnect", "button", "Disconnect source");

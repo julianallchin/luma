@@ -155,6 +155,10 @@ pub struct Tracks {
     /// The row list's measured heights and scroll position, one item per
     /// entry.
     list: ListState,
+    /// A score chosen from another venue's menu, to open here once this
+    /// venue's catalogue has landed — it needs its track's row. Taken in
+    /// place of the score saved for this venue.
+    pub(crate) arrival: Option<(String, crate::track_editor::Score)>,
 }
 
 impl Tracks {
@@ -345,6 +349,7 @@ impl Luma {
             user: self.library.user_id(),
             search_focus,
             list: ListState::new(0, ListAlignment::Top, px(0.)),
+            arrival: None,
         });
         self.song_list = false;
         self.song_list_close = None;
@@ -367,8 +372,22 @@ impl Luma {
                     }
                 });
                 // A saved score needs its track's row, so it reopens once the
-                // catalogue is here.
+                // catalogue is here — unless another venue's menu sent the
+                // window here for a score of its own choosing.
+                let arrival = this
+                    .songs
+                    .as_mut()
+                    .filter(|songs| {
+                        songs.venue_id == venue_id && songs.load_generation == generation
+                    })
+                    .and_then(|songs| songs.arrival.take());
+                if arrival.is_some() {
+                    this.saved_venues.forget_score(&venue_id);
+                }
                 this.restore_venue_score(&venue_id, cx);
+                if let Some((track, score)) = arrival {
+                    this.open_score(&track, score, None, cx);
+                }
             })
             .ok();
         })

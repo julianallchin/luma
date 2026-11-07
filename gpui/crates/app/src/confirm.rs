@@ -28,8 +28,9 @@ use crate::Luma;
 
 /// What pressing the confirming button does.
 ///
-/// One variant per destructive act the app can raise a dialog for — see the
-/// module docs for why this is a closed list.
+/// One variant per act the app asks about first — every destructive one, and
+/// the few that only change everything on screen — see the module docs for
+/// why this is a closed list.
 #[derive(Clone)]
 pub(crate) enum Action {
     DeleteGroup {
@@ -73,6 +74,21 @@ pub(crate) enum Action {
         venue_id: SharedString,
         pattern_id: SharedString,
     },
+    /// Switch the window to another venue and open one of its scores there:
+    /// nothing is lost, but everything on screen changes.
+    SwitchVenue {
+        venue_id: SharedString,
+        track_id: SharedString,
+        score: crate::track_editor::Score,
+    },
+}
+
+impl Action {
+    /// Whether the act destroys something — what puts the confirming verb in
+    /// the danger tone.
+    fn destructive(&self) -> bool {
+        !matches!(self, Self::SwitchVenue { .. })
+    }
 }
 
 /// A question the user has to answer before something is destroyed.
@@ -135,6 +151,11 @@ impl Luma {
                 venue_id,
                 pattern_id,
             } => self.delete_perform_pattern(&venue_id, &pattern_id, cx),
+            Action::SwitchVenue {
+                venue_id,
+                track_id,
+                score,
+            } => self.open_score_in_venue(venue_id, track_id, score, cx),
         }
     }
 }
@@ -202,7 +223,9 @@ pub(crate) fn render(
                         .id("confirm-act")
                         .track_focus(confirm_focus)
                         .tab_stop(true)
-                        .text_color(luma_ui::ladder::danger())
+                        .when(state.action.destructive(), |verb| {
+                            verb.text_color(luma_ui::ladder::danger())
+                        })
                         .on_click(move |_, _, cx| {
                             confirmed.update(cx, |this, cx| this.confirmed(cx));
                         })

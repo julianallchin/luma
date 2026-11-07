@@ -10,9 +10,10 @@
 //! main         window + chrome, one root entity      (main.rs)
 //!  └ Luma      the persistent shell, one open venue  (this file + shell.rs)
 //!     ├ agent      the chat, full height on the left (luma-chat, agent.rs)
-//!     ├ title bar  venue menu · subject · modes      (chrome.rs, welcome.rs)
+//!     ├ title bar  venue menu · modes                (chrome.rs, welcome.rs)
 //!     ├ content    the stage over the mode's body:   (shell.rs, workspace.rs)
-//!     │             Rig, Arrange or Live
+//!     │             Rig, Arrange or Live; in Arrange
+//!     │             the stage's song / score menu     (score_switcher.rs)
 //!     ├ song list  the venue's songs, over Arrange   (tracks.rs)
 //!     ├ status bar sync, output, the mode's line     (status_bar.rs)
 //!     ├ overlay    dialogs: settings, add tracks, …  (shell.rs)
@@ -54,6 +55,7 @@ mod perform;
 mod picker_preview;
 mod saved_cameras;
 mod saved_venues;
+mod score_switcher;
 mod session_store;
 mod settings;
 mod shell;
@@ -158,6 +160,9 @@ pub struct Luma {
     /// The title bar's venue menu while it is open or leaving — see
     /// [`welcome::VenueMenu`].
     pub(crate) venue_menu: luma_ui::dialog::Popup<welcome::VenueMenu>,
+    /// The stage's song / score menu in Arrange while it is open or leaving —
+    /// see [`score_switcher`].
+    pub(crate) score_switcher: luma_ui::dialog::Popup<score_switcher::ScoreSwitcher>,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
     pub(crate) session_refresh_error: Option<String>,
@@ -289,6 +294,7 @@ impl Luma {
             saved_cameras: saved_cameras::empty(),
             deck_width: session_store::Stored::new(shell::DECK_WIDTH_KEY),
             venue_menu: luma_ui::dialog::Popup::default(),
+            score_switcher: luma_ui::dialog::Popup::default(),
             shell_presented: false,
             restoring_venue: false,
             session_refresh_error: None,
