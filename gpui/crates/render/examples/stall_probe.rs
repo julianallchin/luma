@@ -20,6 +20,7 @@ use luma_render::build_frame_with;
 use luma_render::frame::{FixtureCone, Frame};
 use luma_render::scene_desc::{CameraPose, DebugView, Environment, RenderSettings, Scene};
 use luma_render::viewport::AsyncViewport;
+use luma_render::MetricSummary;
 
 const WIDTH: u32 = 2558;
 const HEIGHT: u32 = 1357;
@@ -103,12 +104,8 @@ fn lone_lit_frames_report_their_latency() {
                 draws.push(presented.draw_time.as_secs_f64() * 1000.0);
             }
         }
-        draws.sort_by(f64::total_cmp);
-        println!(
-            "lone {label}: draw p50={:.2}ms p95={:.2}ms",
-            draws[draws.len() / 2],
-            draws[draws.len() * 95 / 100]
-        );
+        let (p50, p95) = p50_p95(draws);
+        println!("lone {label}: draw p50={p50:.2}ms p95={p95:.2}ms");
     }
 }
 
@@ -158,16 +155,9 @@ fn pipelined_lit_frames_report_their_latency() {
                 ));
             }
         }
-        let mut draws: Vec<f64> = delivered.iter().map(|d| d.0).collect();
-        draws.sort_by(f64::total_cmp);
-        let mut signalled: Vec<f64> = delivered.iter().map(|d| d.1).collect();
-        signalled.sort_by(f64::total_cmp);
-        intervals.sort_by(f64::total_cmp);
-        let pct = |v: &[f64], q: f64| {
-            v.get(((v.len() as f64 * q) as usize).min(v.len().saturating_sub(1)))
-                .copied()
-                .unwrap_or(-1.0)
-        };
+        let draws = p50_p95(delivered.iter().map(|d| d.0));
+        let signalled = p50_p95(delivered.iter().map(|d| d.1));
+        let intervals = p50_p95(intervals);
         let gpu: Vec<f64> = delivered
             .iter()
             .map(|d| d.2)
@@ -178,14 +168,19 @@ fn pipelined_lit_frames_report_their_latency() {
             "{label} lights={lights}: delivered={} draw p50/p95={:.2}/{:.2}ms \
              until_signalled p50/p95={:.2}/{:.2}ms interval p50/p95={:.2}/{:.2}ms gpu_mean={gpu_mean:.2}ms shadow_redraws={shadow_redraws}",
             delivered.len(),
-            pct(&draws, 0.5),
-            pct(&draws, 0.95),
-            pct(&signalled, 0.5),
-            pct(&signalled, 0.95),
-            pct(&intervals, 0.5),
-            pct(&intervals, 0.95),
+            draws.0,
+            draws.1,
+            signalled.0,
+            signalled.1,
+            intervals.0,
+            intervals.1,
         );
     }
+}
+
+/// Median and p95 of `samples` in ms, or -1 for none.
+fn p50_p95(samples: impl IntoIterator<Item = f64>) -> (f64, f64) {
+    MetricSummary::of(samples).map_or((-1.0, -1.0), |s| (s.p50_ms, s.p95_ms))
 }
 
 fn main() {

@@ -26,6 +26,7 @@ use luma_render::build_frame_with;
 use luma_render::frame::{FixtureCone, Frame};
 use luma_render::scene_desc::{CameraPose, DebugView, Environment, RenderSettings, Scene};
 use luma_render::viewport::AsyncViewport;
+use luma_render::MetricSummary;
 
 /// A workspace panel on a retina 16" window, with the sidebar shut.
 /// `LUMA_RESIZE_WINDOW=WxH` runs the same sweep at another size: the cost is
@@ -105,13 +106,6 @@ fn lit_frame(lights: usize) -> Frame {
     frame
 }
 
-fn pct(sorted: &[f64], q: f64) -> f64 {
-    sorted
-        .get(((sorted.len() as f64 * q) as usize).min(sorted.len().saturating_sub(1)))
-        .copied()
-        .unwrap_or(f64::NAN)
-}
-
 /// One unpipelined pass: submit, wait, measure. Pipelining would hide the
 /// reallocation behind the previous frame's GPU work, which is exactly the
 /// term being measured.
@@ -138,18 +132,12 @@ fn sweep(label: &str, lights: usize, widths: impl Fn(u32) -> u32) {
             totals.push(presented.cpu.total.as_secs_f64() * 1000.0);
         }
     }
-    draws.sort_by(f64::total_cmp);
-    targets.sort_by(f64::total_cmp);
-    totals.sort_by(f64::total_cmp);
+    let [draws, totals, targets] =
+        [draws, totals, targets].map(|v| MetricSummary::of(v).expect("frames measured"));
     println!(
         "{label:<22} lights={lights:<4} draw p50/p95 {:>7.2}/{:>7.2}ms  \
          cpu_total p50/p95 {:>6.2}/{:>6.2}ms  targets p50/p95 {:>6.2}/{:>6.2}ms",
-        pct(&draws, 0.5),
-        pct(&draws, 0.95),
-        pct(&totals, 0.5),
-        pct(&totals, 0.95),
-        pct(&targets, 0.5),
-        pct(&targets, 0.95),
+        draws.p50_ms, draws.p95_ms, totals.p50_ms, totals.p95_ms, targets.p50_ms, targets.p95_ms,
     );
 }
 

@@ -1,11 +1,13 @@
-//! Millisecond distributions, and the one place a percentile is defined.
+//! Millisecond distributions: this crate's one definition of a percentile.
 //!
 //! Every acceptance number this crate publishes — GPU pass timings, CPU encode
 //! spans, the presentation interval — is a distribution rather than a mean,
 //! because the thing a show notices is the worst frame and an average cannot
 //! express one. Having a single definition of "p95" matters more than which
 //! definition it is: two nearest-rank conventions differing by one sample look
-//! like a regression when the code has not changed.
+//! like a regression when the code has not changed. `gpui_agent::percentile`
+//! is the same nearest-rank rule for the UI harness, which reaches this crate
+//! only through its optional `luma-app` dependency.
 
 /// Nearest-rank summary of a set of millisecond samples.
 ///
