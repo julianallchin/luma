@@ -170,7 +170,8 @@ CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --tes
 | `unit` | tests of the harness itself: no library, no renderer |
 
 Instruments that measure or capture rather than assert are examples, not
-tests, all run with `cargo run -p gpui-agent --features pixel --example …`:
+tests, all run with `cargo run -p gpui-agent --features pixel --example …`
+(their `required-features` keep them out of a build without `pixel`):
 `track_editor_budget` (the editor's frame cost while it scrolls and scrubs at
 full zoom-out), `visualizer_capture` (the 3D view's shots and orbit frame
 cost, into `$LUMA_SHOTS/visualizer`), and, against a copy of a real library

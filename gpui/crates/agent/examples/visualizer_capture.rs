@@ -1,3 +1,15 @@
+//! Capture the 3D view's shots, and time its frames.
+//!
+//! ```sh
+//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo run --release -p gpui-agent --features pixel \
+//!     --example visualizer_capture
+//! ```
+//!
+//! An example, not a test, because it asserts nothing: it is the eye and the
+//! stopwatch, run when the viewport's look or its cost is the question. The
+//! frames are copied into `<shots>/visualizer` (`LUMA_SHOTS`, else
+//! `<temp>/luma-shots`).
+
 use std::time::Duration;
 
 use gpui_agent::fixture::{Fixture, TRACK_NAME, VENUE_NAME};
@@ -47,7 +59,7 @@ fn mean_level(path: &std::path::Path) -> f64 {
     sum / f64::from(image.width() * image.height() * 3)
 }
 
-pub fn main() {
+fn main() {
     let mut harness = Fixture::from_json(
         "visualizer-capture",
         json!({

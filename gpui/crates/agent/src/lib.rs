@@ -84,6 +84,22 @@ pub const NAV: &str = concat!(
     include_str!("../tests/support/nav.js")
 );
 
+/// Nearest-rank percentile: the smallest sample at or above `q` of the way
+/// through the sorted run, or NaN for no samples. No interpolation: with
+/// fifty-odd frames an interpolated value sits between two real frames and is
+/// not one, and the question a frame budget asks is whether a real frame
+/// missed the deadline.
+#[must_use]
+pub fn percentile(samples: &[f64], q: f64) -> f64 {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let rank = (q * sorted.len() as f64).ceil() as usize;
+    sorted
+        .get(rank.clamp(1, sorted.len().max(1)) - 1)
+        .copied()
+        .unwrap_or(f64::NAN)
+}
+
 /// How many threads may be driving an app at once in one process.
 ///
 /// A *deadline* limit, not a CPU limit: a script polls for a rendered frame
@@ -247,5 +263,20 @@ impl Harness {
         function: impl Fn(String) -> Result<String, String> + 'static,
     ) -> Result<(), HarnessError> {
         self.interpreter.bind(name, std::rc::Rc::new(function))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percentile;
+
+    #[test]
+    fn a_percentile_is_one_of_the_samples() {
+        let frames: Vec<f64> = (1..=20).rev().map(f64::from).collect();
+        assert_eq!(percentile(&frames, 0.5), 10.0);
+        assert_eq!(percentile(&frames, 0.95), 19.0);
+        assert_eq!(percentile(&frames, 1.0), 20.0);
+        assert_eq!(percentile(&frames, 0.0), 1.0);
+        assert!(percentile(&[], 0.5).is_nan());
     }
 }

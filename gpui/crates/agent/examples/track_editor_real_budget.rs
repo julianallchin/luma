@@ -1,9 +1,35 @@
+//! What one frame of the track editor costs on a real score, while the view
+//! is moving.
+//!
+//! ```sh
+//! LUMA_REAL_CONFIG=/path/to/a/library/copy \
+//! LUMA_REAL_VENUE=Club LUMA_REAL_TRACK="Black Hole" \
+//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo run -p gpui-agent --features pixel \
+//!     --example track_editor_real_budget
+//! ```
+//!
+//! # Why this exists next to `--example track_editor_budget`
+//!
+//! The synthetic budget sweeps a *shape* — lanes, clips, one length — and
+//! answers "what does a busy score cost". It cannot answer "why is this one
+//! slow", because what differs between two scores is content: how many clips
+//! carry a decoded preview, how short they are, how many rows a venue puts in
+//! each heatmap. Only the user's own library has that, so this opens it.
+//!
+//! # Read-only, and why the copy is not optional
+//!
+//! Opening a library runs migrations, so `LUMA_REAL_CONFIG` must be a COPY.
+//! See `examples/visualizer_real_score_window.rs`, which this mirrors.
+//!
+//! An example rather than a test: it measures and reports, and it needs a
+//! library that only exists on one machine.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{AnyView, App, AppContext as _, Window};
-use gpui_agent::{Config, Harness, Mode, NAV};
+use gpui_agent::{percentile, Config, Harness, Mode, NAV};
 use luma_ui::runtime::Runtime;
 use serde_json::Value;
 
@@ -57,34 +83,32 @@ fn harness() -> Harness {
 
 /// Frame-time percentiles of one gesture, from `app.timings()`.
 fn leg(frames: &Value) -> String {
-    let mut total: Vec<f64> = frames
+    let total: Vec<f64> = frames
         .as_array()
         .expect("frames")
         .iter()
         .map(|f| f["total"].as_f64().unwrap_or(0.))
         .collect();
-    let mut draw: Vec<f64> = frames
+    let draw: Vec<f64> = frames
         .as_array()
         .expect("frames")
         .iter()
         .map(|f| f["draw"].as_f64().unwrap_or(0.))
         .collect();
-    total.sort_by(|a, b| a.total_cmp(b));
-    draw.sort_by(|a, b| a.total_cmp(b));
-    let pct = |v: &[f64], p: f64| v[((v.len() as f64 * p) as usize).min(v.len() - 1)];
+    let max = |v: &[f64]| v.iter().copied().fold(0., f64::max);
     format!(
         "{} frames  total p50 {:.2} p95 {:.2} max {:.2}  draw p50 {:.2} p95 {:.2} max {:.2}",
         total.len(),
-        pct(&total, 0.5),
-        pct(&total, 0.95),
-        total.last().copied().unwrap_or(0.),
-        pct(&draw, 0.5),
-        pct(&draw, 0.95),
-        draw.last().copied().unwrap_or(0.),
+        percentile(&total, 0.5),
+        percentile(&total, 0.95),
+        max(&total),
+        percentile(&draw, 0.5),
+        percentile(&draw, 0.95),
+        max(&draw),
     )
 }
 
-pub fn main() {
+fn main() {
     let venue = env("LUMA_REAL_VENUE");
     let track = env("LUMA_REAL_TRACK");
     // The stage above the editor is on by default in the app, and it repaints

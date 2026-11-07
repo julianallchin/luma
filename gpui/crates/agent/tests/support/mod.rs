@@ -145,22 +145,13 @@ pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
 #[cfg(feature = "pixel")]
 pub mod image;
 
-/// Reading `app.timings()` — shared so two suites cannot disagree about what a
-/// percentile means.
+/// Reading `app.timings()`.
 ///
 /// These are the CPU half of a frame (scene build), never the GPU: see
 /// `app.timings()` in `api.d.ts`.
 pub mod cost {
+    use gpui_agent::percentile;
     use serde_json::Value;
-
-    /// Nearest-rank percentile. Sorts in place.
-    pub fn percentile(sample: &mut Vec<f64>, fraction: f64) -> f64 {
-        sample.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        if sample.is_empty() {
-            return f64::NAN;
-        }
-        sample[(((sample.len() - 1) as f64) * fraction).round() as usize]
-    }
 
     /// Print what the frames in `(from, to]` cost, and hand back the median.
     ///
@@ -178,12 +169,12 @@ pub mod cost {
         }
         let count = draw.len();
         let mean = draw.iter().sum::<f64>() / count.max(1) as f64;
-        let p50 = percentile(&mut draw.clone(), 0.50);
-        let p95 = percentile(&mut draw, 0.95);
+        let p50 = percentile(&draw, 0.50);
+        let p95 = percentile(&draw, 0.95);
         println!(
             "{label:<26} n={count:<4} drawMs mean={mean:6.2} p50={p50:6.2} p95={p95:6.2}  \
              parkedMs p50={:5.2}",
-            percentile(&mut parked, 0.50)
+            percentile(&parked, 0.50)
         );
         p50
     }
