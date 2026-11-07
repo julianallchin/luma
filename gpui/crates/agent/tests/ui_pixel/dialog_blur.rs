@@ -6,7 +6,6 @@ use super::support::image::{decode, inner_edge_energy, preserve};
 use gpui::{div, prelude::*, px, AnyView, App, Context, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use luma_ui::node::{Instrument, Role};
-use serde_json::Value;
 
 struct BlurProof;
 
@@ -97,18 +96,11 @@ fn harness() -> Harness {
     .expect("failed to start the pixel harness")
 }
 
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let result = harness.exec(code, GPU_LIVENESS_TIMEOUT);
-    assert_eq!(result.error, None, "script failed:\n{code}");
-    result.result
-}
-
 #[test]
 #[ignore = "bug: the wgpu headless renderer draws no backdrop or content blur"]
 fn the_card_frost_and_the_filtered_layer_reduce_real_pixel_edges() {
     let mut harness = harness();
-    let shots = run(
-        &mut harness,
+    let shots = harness.run(
         r#"
         const capture = (label) => app.screenshot({
             node: app.snapshot().find({ role: "card", label })
@@ -122,6 +114,7 @@ fn the_card_frost_and_the_filtered_layer_reduce_real_pixel_edges() {
             scaledContent: capture("Scaled content layer"),
         })
         "#,
+        GPU_LIVENESS_TIMEOUT,
     );
     preserve(
         shots["full"].as_str().unwrap(),

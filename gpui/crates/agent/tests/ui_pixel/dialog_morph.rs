@@ -464,13 +464,6 @@ globalThis.settle = (pred) => {
 };
 "#;
 
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let code = format!("{SETTLE}\n{code}");
-    let result = harness.exec(&code, GPU_LIVENESS_TIMEOUT);
-    assert_eq!(result.error, None, "script failed:\n{code}");
-    result.result
-}
-
 fn crop(path: &PathBuf, bounds: &Value) -> image::RgbaImage {
     let image = image::open(path).unwrap().to_rgba8();
     let scale = image.width() as f64 / 800.0;
@@ -488,9 +481,10 @@ fn crop(path: &PathBuf, bounds: &Value) -> image::RgbaImage {
 #[test]
 fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
     let mut harness = harness();
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &format!(
+            "{SETTLE}\n{}",
+            r#"
         settle();
         const openingShot = app.snapshot();
         const opening = openingShot.find({ role: "card", label: "Morph container" });
@@ -511,7 +505,9 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
         ({ opening: opening.bounds, openingWrap: openingWrap.bounds,
            middle: middle.bounds, middleWrap: middleWrap.bounds, settled: settled.bounds,
            nextDuring, backDuring, back, sharp, midFade })
-        "#,
+        "#
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
 
     let sharp_frame = preserve(
@@ -582,9 +578,7 @@ fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
 #[test]
 fn production_card_reversal_and_replacement_preserve_the_visible_rect_then_prune() {
     let mut harness = harness();
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(&format!("{SETTLE}\n{}", r#"
         settle();
         app.click(app.snapshot().find({ role: "button", label: "Next" }));
         app.frames(3, { waitMs: 70 });
@@ -616,8 +610,7 @@ fn production_card_reversal_and_replacement_preserve_the_visible_rect_then_prune
            settledA: settled.find({ role: "card", label: "Route A" }),
            settledB: settled.find({ role: "card", label: "Route B" }),
            settledC: settled.find({ role: "card", label: "Route C" }) })
-        "#,
-    );
+        "#), GPU_LIVENESS_TIMEOUT);
 
     for (before, after) in [
         (&out["beforeReverse"], &out["afterReverse"]),
@@ -650,9 +643,10 @@ fn production_card_reversal_and_replacement_preserve_the_visible_rect_then_prune
 #[test]
 fn production_card_reduced_motion_toggle_snaps_the_active_intrinsic_target() {
     let mut harness = harness();
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &format!(
+            "{SETTLE}\n{}",
+            r#"
         settle();
         app.click(app.snapshot().find({ role: "button", label: "Next" }));
         app.frames(3, { waitMs: 70 });
@@ -665,7 +659,9 @@ fn production_card_reduced_motion_toggle_snaps_the_active_intrinsic_target() {
            routeA: settled.find({ role: "card", label: "Route A" }),
            routeB: settled.find({ role: "card", label: "Route B" }),
            back: settled.find({ role: "button", label: "Back" }) })
-        "#,
+        "#
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
     assert!(out["middle"]["width"].as_f64().unwrap() < 520.0, "{out:#}");
     assert_eq!(
@@ -683,9 +679,10 @@ fn production_card_reduced_motion_toggle_snaps_the_active_intrinsic_target() {
 #[test]
 fn production_card_ignores_a_stale_intrinsic_result_after_target_replacement() {
     let mut harness = harness();
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &format!(
+            "{SETTLE}\n{}",
+            r#"
         settle();
         app.action("dialog_morph_proof::HoldMeasurements");
         app.action("dialog_morph_proof::GoB");
@@ -707,7 +704,9 @@ fn production_card_ignores_a_stale_intrinsic_result_after_target_replacement() {
            settledA: settled.find({ role: "card", label: "Route A" }),
            settledB: settled.find({ role: "card", label: "Route B" }),
            settledC: settled.find({ role: "card", label: "Route C" }) })
-        "#,
+        "#
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
     assert_eq!(
         (
@@ -737,10 +736,11 @@ fn production_card_ignores_a_stale_intrinsic_result_after_target_replacement() {
 fn scale_crossfade_and_custom_transitions_render_through_the_production_card() {
     for action in ["GoBScale", "GoBCrossFade", "GoBCustom"] {
         let mut harness = harness();
-        let out = run(
-            &mut harness,
+        let out = harness.run(
             &format!(
-                r#"
+                "{SETTLE}\n{}",
+                &format!(
+                    r#"
                 app.frames(2, {{ waitMs: 2100 }});
                 app.action("dialog_morph_proof::{action}");
                 app.frames(3, {{ waitMs: 70 }});
@@ -758,7 +758,9 @@ fn scale_crossfade_and_custom_transitions_render_through_the_production_card() {
                    container: settled.find({{ role: "card", label: "Morph container" }}).bounds,
                    pixel }})
                 "#
+                )
             ),
+            GPU_LIVENESS_TIMEOUT,
         );
         preserve(
             out["pixel"].as_str().unwrap(),
@@ -826,9 +828,10 @@ fn paced_harness() -> Harness {
 #[ignore = "measurement, not a gate"]
 fn morph_frame_cost() {
     let mut harness = paced_harness();
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &format!(
+            "{SETTLE}\n{}",
+            r#"
         // 16ms a frame, so the samples walk the real timeline rather than
         // bunching at the start of a flight that has barely progressed.
         app.frames(6, { waitMs: 40 });
@@ -839,7 +842,9 @@ fn morph_frame_cost() {
         app.frames(24, { waitMs: 16 });
         const morphTo = app.frames(1).frame;
         ({ idleFrom, idleTo, morphTo, frames: app.timings().frames })
-        "#,
+        "#
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
     let frames = out["frames"].as_array().unwrap();
     let idle_from = out["idleFrom"].as_u64().unwrap();

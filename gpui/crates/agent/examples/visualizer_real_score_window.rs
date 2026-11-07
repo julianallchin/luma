@@ -107,12 +107,6 @@ fn harness() -> Harness {
     Harness::headless(config, root).expect("failed to start the harness")
 }
 
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let result = harness.exec(code, Duration::from_secs(900));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    result.result
-}
-
 /// Open the venue's track and put the stage on screen with the lab reporting.
 ///
 /// Shared by both measurements so "which screen was measured" cannot differ between
@@ -124,9 +118,7 @@ fn open_the_stage(harness: &mut Harness) {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
-    run(
-        harness,
-        &format!(
+    harness.run(&format!(
             r#"
             {NAV}
             // A library that already has this venue open lands straight on its
@@ -156,8 +148,7 @@ fn open_the_stage(harness: &mut Harness) {
             }}
             app.frames(10, {{ waitMs: 60 }});
         "#
-        ),
-    );
+        ), Duration::from_secs(900));
 }
 
 fn main() {
@@ -176,8 +167,7 @@ fn a_real_score_reports_where_each_second_goes() {
     // Sampling is driven from the script so each reading is one frame's worth
     // of toolbar state, taken with the transport running rather than paused —
     // a paused stage re-renders the same frame and reports a cost no viewer pays.
-    let report = run(
-        &mut harness,
+    let report = harness.run(
         &format!(
             r#"
             (() => {{
@@ -217,6 +207,7 @@ fn a_real_score_reports_where_each_second_goes() {
             }})()
         "#
         ),
+        Duration::from_secs(900),
     );
 
     let samples = report["samples"].as_array().cloned().unwrap_or_default();
@@ -281,8 +272,7 @@ fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
     let mut harness = harness();
     open_the_stage(&mut harness);
 
-    let report = run(
-        &mut harness,
+    let report = harness.run(
         &format!(
             r#"
             (() => {{
@@ -355,6 +345,7 @@ fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
             }})()
         "#
         ),
+        Duration::from_secs(900),
     );
 
     let steps = report["steps"].as_array().cloned().unwrap_or_default();

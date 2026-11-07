@@ -21,7 +21,7 @@ use super::support;
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
-use serde_json::{json, Value};
+use serde_json::json;
 use support::{Fixture, NAV, TRACK_NAME, VENUE_NAME};
 
 const SECONDS: u32 = 240;
@@ -56,12 +56,6 @@ fn harness() -> Harness {
     .open(Mode::Pixel)
 }
 
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let result = harness.exec(code, Duration::from_secs(900));
-    assert_eq!(result.error, None, "script failed:\n{code}");
-    result.result
-}
-
 /// Resident set size of this process, in megabytes.
 ///
 /// The harness runs the app in-process, so our own footprint is the app's.
@@ -81,8 +75,7 @@ fn resident_mb() -> f64 {
 #[test]
 fn playing_does_not_get_slower_the_longer_it_plays() {
     let mut harness = harness();
-    run(
-        &mut harness,
+    harness.run(
         &format!(
             r#"
             {NAV}
@@ -94,14 +87,13 @@ fn playing_does_not_get_slower_the_longer_it_plays() {
             app.frames(20, {{ waitMs: 55 }});
         "#
         ),
+        Duration::from_secs(900),
     );
 
     let mut medians = Vec::new();
     let mut resident = Vec::new();
     for chunk in 0..CHUNKS {
-        let report = run(
-            &mut harness,
-            &format!(
+        let report = harness.run(&format!(
                 // The eval context persists between calls, so each chunk runs in
                 // its own scope rather than redeclaring the same names.
                 r#"
@@ -114,8 +106,7 @@ fn playing_does_not_get_slower_the_longer_it_plays() {
                     return {{ frames: draw.length, median: at(0.5), p95: at(0.95), max: draw[draw.length - 1] }};
                 }})()
             "#
-            ),
-        );
+            ), Duration::from_secs(900));
         let median = report["median"].as_f64().unwrap_or_default();
         let mb = resident_mb();
         medians.push(median);

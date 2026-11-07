@@ -10,16 +10,6 @@ use gpui_agent::Mode;
 use serde_json::{json, Value};
 use support::Fixture;
 
-fn run(harness: &mut gpui_agent::Harness, script: &str) -> Value {
-    let result = harness.exec(&support::script(script), Duration::from_secs(180));
-    assert_eq!(
-        result.error, None,
-        "pixel script failed:\n{}",
-        result.stdout
-    );
-    result.result
-}
-
 // ---------------------------------------------------------------------------
 // Frame cost
 // ---------------------------------------------------------------------------
@@ -121,7 +111,10 @@ fn route_morph_frame_cost() {
     // Newest first, and the list is virtualized: the row on screen is the
     // last one seeded, not the first.
     let newest = format!("Padding Track {:05}", tracks - 1);
-    let out = run(&mut fixture, &SCRIPT.replace("__NEWEST__", &newest));
+    let out = fixture.run(
+        &support::script(&SCRIPT.replace("__NEWEST__", &newest)),
+        Duration::from_secs(180),
+    );
     let frames = out["frames"].as_array().unwrap();
     let mark = |key: &str| out[key].as_u64().unwrap();
     let art_label = match art.as_str() {
@@ -195,9 +188,9 @@ fn route_morph_gpu_cost() {
     )
     .unwrap()
     .open(Mode::Pixel);
-    run(
-        &mut fixture,
-        r#"
+    fixture.run(
+        &support::script(
+            r#"
         nav.venue("Test Venue");
         nav.step("the add-track affordance", "button", "Add track");
         until("the populated all-Luma route", (s) =>
@@ -205,6 +198,8 @@ fn route_morph_gpu_cost() {
         app.frames(8, { waitMs: 16 });
         ({})
         "#,
+        ),
+        Duration::from_secs(180),
     );
 
     // Only `app.screenshot()` rasterizes. Pumping frames in this harness builds
@@ -212,9 +207,9 @@ fn route_morph_gpu_cost() {
     // the renderer do the work a real window does every frame — and therefore
     // the only way to see a content-filter pass at all. Run with
     // LUMA_FILTER_PROFILE=1 for the per-pass GPU numbers on stderr.
-    run(
-        &mut fixture,
-        r#"
+    fixture.run(
+        &support::script(
+            r#"
         // Settled: no filtered layer exists, so these are the card's floor.
         app.screenshot();
         app.screenshot();
@@ -232,6 +227,8 @@ fn route_morph_gpu_cost() {
         }
         ({})
         "#,
+        ),
+        Duration::from_secs(180),
     );
     println!(
         "\n(FILTER_PROFILE lines are on stderr: filters=0 is the settled card, \
@@ -294,9 +291,7 @@ fn analysis_view_mid_analysis() {
     .open(Mode::Pixel);
     support::stub_genre_model(&support::config_dir("add-tracks-analysis-pixels"));
 
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(&support::script(r#"
         const card = (s) => s.find({ role: "card", label: "Add tracks dialog" });
         nav.venue("Test Venue");
         nav.step("the add-track affordance", "button", "Add track");
@@ -330,8 +325,7 @@ fn analysis_view_mid_analysis() {
             .find((n) => /^(Imported|\d+ of \d+ failed)/.test(n.label))?.label;
         ({ midRow: row(mid).label, midHeader, doneRow: row(done).label, doneHeader,
            changed: image.diff(midShot, doneShot) })
-        "#,
-    );
+        "#), Duration::from_secs(180));
     std::env::remove_var("LUMA_CACHE_DIR");
     println!("analysis view: {out}");
     assert_eq!(out["midHeader"], "Analyzing 1 song…", "{out}");

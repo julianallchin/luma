@@ -245,6 +245,23 @@ impl Harness {
         self.interpreter.exec(code, timeout)
     }
 
+    /// [`Self::exec`] for a caller that can only go on if the script
+    /// succeeded: its value, or a panic showing the error, what the script
+    /// printed, and the script.
+    ///
+    /// # Panics
+    /// If the script throws or does not finish within `timeout`.
+    pub fn run(&mut self, code: &str, timeout: Duration) -> serde_json::Value {
+        let result = self.exec(code, timeout);
+        if let Some(error) = result.error {
+            panic!(
+                "script failed: {error}\n--- stdout\n{}\n--- script\n{code}",
+                result.stdout
+            );
+        }
+        result.result
+    }
+
     /// [`Self::exec`], with `filename` in the stack traces — so an error in a
     /// test file points at that file's own lines.
     pub fn exec_named(&mut self, code: &str, filename: &str, timeout: Duration) -> ExecResult {

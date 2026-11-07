@@ -14,15 +14,9 @@ use std::time::Duration;
 
 use gpui_agent::fixture::{Fixture, TRACK_NAME, VENUE_NAME};
 use gpui_agent::{Harness, Mode, NAV};
-use serde_json::{json, Value};
+use serde_json::json;
 
 const SECONDS: u32 = 20;
-
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let result = harness.exec(code, Duration::from_secs(300));
-    assert_eq!(result.error, None, "script failed:\n{code}");
-    result.result
-}
 
 /// The brightest of several successive frames, copied out under `name`.
 ///
@@ -33,7 +27,10 @@ fn run(harness: &mut Harness, code: &str) -> Value {
 fn shot(harness: &mut Harness, name: &str) {
     let mut best: Option<(f64, std::path::PathBuf)> = None;
     for _ in 0..8 {
-        let value = run(harness, "app.frames(3, { waitMs: 30 }); app.screenshot()");
+        let value = harness.run(
+            "app.frames(3, { waitMs: 30 }); app.screenshot()",
+            Duration::from_secs(300),
+        );
         let from =
             std::path::PathBuf::from(value["path"].as_str().expect("a screenshot has a path"));
         let mean = mean_level(&from);
@@ -71,8 +68,7 @@ fn main() {
     .unwrap()
     .open(Mode::Pixel);
 
-    run(
-        &mut harness,
+    harness.run(
         &format!(
             r#"
             {NAV}
@@ -82,63 +78,63 @@ fn main() {
             app.frames(12, {{ waitMs: 60 }});
         "#
         ),
+        Duration::from_secs(300),
     );
     shot(&mut harness, "L01-open");
 
     // Let the transport run, then shoot the same lit frame the gate called P05.
-    run(
-        &mut harness,
+    harness.run(
         r#"
             nav.step("the Play button", "button", "Play");
             app.frames(30, { waitMs: 55 });
         "#,
+        Duration::from_secs(300),
     );
     shot(&mut harness, "P05");
 
     // The frame-stats panel unfolded: the graph and the per-phase numbers.
     // Folded back before the camera walk so it occludes nothing there.
-    run(
-        &mut harness,
+    harness.run(
         r#"
             nav.step("the frame-stats panel", "toggle", "Frame stats");
             app.frames(6, { waitMs: 30 });
         "#,
+        Duration::from_secs(300),
     );
     shot(&mut harness, "P06-frame-stats");
-    run(
-        &mut harness,
+    harness.run(
         r#"nav.step("the frame-stats panel", "toggle", "Frame stats");"#,
+        Duration::from_secs(300),
     );
 
     // The orbit that used to end in a flat red field: five 200 px pulls up.
     for i in 1..=5 {
-        run(
-            &mut harness,
+        harness.run(
             r#"
                 var stage = app.snapshot().find({ role: "card", label: "Stage" });
                 app.drag(stage, { dx: 0, dy: -200 }, { steps: 20, restale: "match" });
                 app.frames(4, { waitMs: 30 });
             "#,
+            Duration::from_secs(300),
         );
         shot(&mut harness, &format!("C01-up-{i}"));
     }
 
     // ...and the same walk downward, which the polar clamp also owns.
     for i in 1..=3 {
-        run(
-            &mut harness,
+        harness.run(
             r#"
                 var stage = app.snapshot().find({ role: "card", label: "Stage" });
                 app.drag(stage, { dx: 60, dy: 200 }, { steps: 20, restale: "match" });
                 app.frames(4, { waitMs: 30 });
             "#,
+            Duration::from_secs(300),
         );
         shot(&mut harness, &format!("C02-down-{i}"));
     }
 
     // Zoom all the way in: the near bound is what keeps this out of the beams.
-    run(
-        &mut harness,
+    harness.run(
         r#"
             for (let i = 0; i < 8; i++) {
                 app.scroll(app.snapshot().find({ role: "card", label: "Stage" }), { dy: -200 });
@@ -146,12 +142,12 @@ fn main() {
             }
             app.frames(6, { waitMs: 30 });
         "#,
+        Duration::from_secs(300),
     );
     shot(&mut harness, "C03-zoomed-in");
 
     // Back to the opening pose for the shot that shows the default framing.
-    run(
-        &mut harness,
+    harness.run(
         &format!(
             r#"
             // Toggling the stage off drops it, so bringing it back is a fresh
@@ -167,14 +163,14 @@ fn main() {
             app.frames(30, {{ waitMs: 55 }});
         "#
         ),
+        Duration::from_secs(300),
     );
     shot(&mut harness, "D01-default-framing");
 
     // Frame cost, orbiting continuously — the gate's own measurement, reduced
     // here rather than dumped: two hundred frame records say less than four
     // quantiles do.
-    let timings = run(
-        &mut harness,
+    let timings = harness.run(
         r#"
             var snapshot = app.snapshot();
             var stage = snapshot.find({ role: "card", label: "Stage" });
@@ -191,6 +187,7 @@ fn main() {
                 max: draw[draw.length - 1],
             })
         "#,
+        Duration::from_secs(300),
     );
     println!("orbit frame cost {timings}");
 }

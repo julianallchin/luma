@@ -75,16 +75,6 @@ fn harness(dir: &Path, fixture: luma_app::NavigationFixture) -> Harness {
     .expect("failed to start venue pixel harness")
 }
 
-fn run(harness: &mut Harness, script: &str) -> Value {
-    let result = harness.exec(&support::script(script), GPU_LIVENESS_TIMEOUT);
-    assert_eq!(
-        result.error, None,
-        "pixel script failed:\n{}",
-        result.stdout
-    );
-    result.result
-}
-
 fn luma_range(image: &image::RgbaImage) -> u8 {
     let (mut low, mut high) = (u8::MAX, u8::MIN);
     for pixel in image.pixels() {
@@ -134,9 +124,9 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
             ..Default::default()
         },
     );
-    let shots = run(
-        &mut routes,
-        r#"
+    let shots = routes.run(
+        &support::script(
+            r#"
         // A remembered venue opens straight onto its shell (behind the boot
         // splash); the picker, and its loading route, open from the switcher.
         const baseState = until("the restored venue shell", (s) =>
@@ -170,6 +160,8 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
            createCardShot: app.screenshot({ node: createCard }).path,
            createBounds: createCard.bounds })
         "#,
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
 
     let error_dir = fixture_dir("error", true);
@@ -193,9 +185,7 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
             ..Default::default()
         },
     );
-    let error_shots = run(
-        &mut error,
-        r#"
+    let error_shots = error.run(&support::script(r#"
         const shell = until("the restored venue shell", (s) =>
             s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
         app.click(shell.find({ role: "button", label: "Pixel Venue" }));
@@ -214,8 +204,7 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
            errorViewportBounds: errorViewport.bounds,
            errorTextBounds: errorText.bounds,
            errorLabelLength: errorText.label.length })
-        "#,
-    );
+        "#), GPU_LIVENESS_TIMEOUT);
 
     for (label, bounds) in [
         ("loading", &shots["loadingBounds"]),
@@ -386,9 +375,9 @@ fn paced_harness(dir: &Path) -> Harness {
 fn venue_dialog_frame_cost() {
     let dir = fixture_dir("frame-cost", true);
     let mut harness = paced_harness(&dir);
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &support::script(
+            r#"
         until("the restored venue shell", (s) =>
             s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
         const shellFrom = app.frames(1).frame;
@@ -410,6 +399,8 @@ fn venue_dialog_frame_cost() {
         ({ shellFrom, shellTo, settledFrom, settledTo, morphTo,
            frames: app.timings().frames })
         "#,
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
     let frames = out["frames"].as_array().unwrap();
     let number = |key: &str| out[key].as_u64().unwrap();
@@ -446,9 +437,9 @@ fn venue_dialog_frame_cost() {
     // see it from here is wall clock across a free-running pump.
     println!("--- wall clock, free-running pump (includes the GPU) ---");
     let create = pump_wall(&mut harness, 60, "create route up");
-    run(
-        &mut harness,
-        r#"app.key("escape"); app.frames(20, { waitMs: 16 });"#,
+    harness.run(
+        &support::script(r#"app.key("escape"); app.frames(20, { waitMs: 16 });"#),
+        GPU_LIVENESS_TIMEOUT,
     );
     let none = pump_wall(&mut harness, 60, "no dialog");
     println!("dialog costs {:.2} ms/frame of wall\n", create - none);
@@ -458,9 +449,15 @@ fn venue_dialog_frame_cost() {
 /// only number here that has the GPU in it.
 fn pump_wall(harness: &mut Harness, frames: usize, label: &str) -> f64 {
     // Once to warm whatever the first frame allocates, then the measured run.
-    run(harness, &format!("app.frames({frames})"));
+    harness.run(
+        &support::script(&format!("app.frames({frames})")),
+        GPU_LIVENESS_TIMEOUT,
+    );
     let start = Instant::now();
-    run(harness, &format!("app.frames({frames})"));
+    harness.run(
+        &support::script(&format!("app.frames({frames})")),
+        GPU_LIVENESS_TIMEOUT,
+    );
     let per = start.elapsed().as_secs_f64() * 1000.0 / frames as f64;
     println!("{label:<22} wall {per:6.2} ms/frame over {frames} frames");
     per
@@ -520,9 +517,9 @@ fn venue_dialog_frame_cost_with_a_long_list() {
     const VENUES: usize = 200;
     let dir = heavy_fixture_dir(VENUES);
     let mut harness = paced_harness(&dir);
-    let out = run(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &support::script(
+            r#"
         until("the restored venue shell", (s) =>
             s.find({ role: "button", label: "Pixel Venue 0000" }) !== undefined);
         const shellFrom = app.frames(1).frame;
@@ -547,6 +544,8 @@ fn venue_dialog_frame_cost_with_a_long_list() {
         ({ shellFrom, shellTo, settledFrom, settledTo, flightTo, afterTo,
            frames: app.timings().frames })
         "#,
+        ),
+        GPU_LIVENESS_TIMEOUT,
     );
     let frames = out["frames"].as_array().unwrap();
     let number = |key: &str| out[key].as_u64().unwrap();

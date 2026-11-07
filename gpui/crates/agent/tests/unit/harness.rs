@@ -389,24 +389,22 @@ fn harness_with(seed: u64, timeout: Duration, stall: Duration) -> Harness {
 
 /// The gesture canvas's recording, as one comparable line.
 fn pointer(harness: &mut Harness) -> String {
-    run(
-        harness,
-        r#"app.snapshot().find((n) => n.label.startsWith("pointer")).label"#,
-    )
-    .as_str()
-    .unwrap()
-    .to_string()
+    harness
+        .run(
+            r#"app.snapshot().find((n) => n.label.startsWith("pointer")).label"#,
+            SCRIPT_TIMEOUT,
+        )
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn harness() -> Harness {
     harness_with(7, Duration::from_secs(10), Duration::ZERO)
 }
 
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let result = harness.exec(code, Duration::from_secs(10));
-    assert_eq!(result.error, None, "script failed:\n{code}");
-    result.result
-}
+/// Every script here is a few frames of a tiny view.
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Reads the counter out of a snapshot without depending on where it sits.
 const COUNT_LABEL: &str = r#"app.snapshot().find((node) => node.label.startsWith("count")).label"#;
@@ -430,7 +428,7 @@ const CLICK_SCRIPT: &str = r#"
 #[test]
 fn a_snapshot_names_every_instrumented_control() {
     let mut harness = harness();
-    let shot = run(&mut harness, "app.snapshot()");
+    let shot = harness.run("app.snapshot()", SCRIPT_TIMEOUT);
     let labels: Vec<&str> = shot["nodes"]
         .as_array()
         .unwrap()
@@ -467,7 +465,7 @@ fn a_snapshot_names_every_instrumented_control() {
 #[test]
 fn clicking_a_button_found_by_label_changes_the_next_snapshot() {
     let mut harness = harness();
-    let result = run(&mut harness, CLICK_SCRIPT);
+    let result = harness.run(CLICK_SCRIPT, SCRIPT_TIMEOUT);
     assert_eq!(result["clicked"], "Increment");
     assert_eq!(result["changed"], true);
     assert_eq!(result["count"], "count 1");
@@ -505,15 +503,14 @@ fn acting_on_a_stale_frame_errors_instead_of_clicking() {
     );
 
     // And nothing landed: one click, one increment.
-    let after = run(&mut harness, COUNT_LABEL);
+    let after = harness.run(COUNT_LABEL, SCRIPT_TIMEOUT);
     assert_eq!(after, "count 1");
 }
 
 #[test]
 fn restale_match_reacquires_the_node_by_role_and_label() {
     let mut harness = harness();
-    let result = run(
-        &mut harness,
+    let result = harness.run(
         r#"
             const stale = app.snapshot();
             const button = stale.find({ label: "Increment" });
@@ -521,6 +518,7 @@ fn restale_match_reacquires_the_node_by_role_and_label() {
             app.click(button, { restale: "match" });
             app.snapshot().find((n) => n.label.startsWith("count")).label
         "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(result, "count 2");
 }
@@ -546,13 +544,13 @@ fn a_node_reference_that_does_not_match_its_frame_is_refused() {
 #[test]
 fn a_drag_walks_the_pointer_and_lands_on_the_target() {
     let mut harness = harness();
-    let result = run(
-        &mut harness,
+    let result = harness.run(
         r#"
             const shot = app.snapshot();
             app.drag(shot.find({ label: "Source" }), shot.find({ label: "Target" }));
             app.snapshot().find((n) => n.label.startsWith("dropped")).label
         "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(result, "dropped 1");
 }
@@ -563,8 +561,7 @@ fn a_drag_walks_the_pointer_and_lands_on_the_target() {
 #[test]
 fn a_drag_can_name_its_destination_as_a_displacement() {
     let mut harness = harness();
-    let result = run(
-        &mut harness,
+    let result = harness.run(
         r#"
             const shot = app.snapshot();
             const source = shot.find({ label: "Source" });
@@ -572,6 +569,7 @@ fn a_drag_can_name_its_destination_as_a_displacement() {
             app.drag(source, { dx: 0, dy: target.bounds.y - source.bounds.y });
             app.snapshot().find((n) => n.label.startsWith("dropped")).label
         "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(result, "dropped 1");
 }
@@ -598,13 +596,13 @@ fn a_displacement_that_leaves_the_window_is_refused() {
 fn an_action_can_be_dispatched_by_name_and_by_keystroke() {
     let mut harness = harness();
     assert_eq!(
-        run(
-            &mut harness,
+        harness.run(
             r#"
                 app.action("gpui_agent_test::Bump");
                 app.key("ctrl-b");
                 app.snapshot().find((n) => n.label.startsWith("count")).label
             "#,
+            SCRIPT_TIMEOUT
         ),
         "count 2"
     );
@@ -620,7 +618,10 @@ fn an_unparseable_keystroke_is_rejected_rather_than_panicking() {
     let error = result.error.expect("a bad keystroke should fail");
     assert!(error.contains("BadCall"), "unexpected error: {error}");
     // And the pump survived it.
-    assert_eq!(run(&mut harness, "app.snapshot().nodes.length > 0"), true);
+    assert_eq!(
+        harness.run("app.snapshot().nodes.length > 0", SCRIPT_TIMEOUT),
+        true
+    );
 }
 
 /// A silently-ignored option is worse than a broken one: the script would
@@ -638,7 +639,7 @@ fn a_misspelt_option_is_refused() {
     // The spelling that exists still works, and so does the wire translation
     // for the one member whose option is not spelled the same on both sides.
     assert_eq!(
-        run(&mut harness, "app.frames(2, { waitMs: 0 }).frame > 0"),
+        harness.run("app.frames(2, { waitMs: 0 }).frame > 0", SCRIPT_TIMEOUT),
         true
     );
 }
@@ -663,10 +664,10 @@ fn drag_options_folded_into_the_target_are_refused() {
 
     // The spelling that exists still works.
     assert_eq!(
-        run(
-            &mut harness,
+        harness.run(
             r#"app.drag(app.snapshot().find({ label: "Source" }),
                         { dx: 0, dy: 4 }, { modifiers: ["alt"] }).frame > 0"#,
+            SCRIPT_TIMEOUT
         ),
         true
     );
@@ -682,8 +683,7 @@ fn a_painted_control_outside_its_mask_is_seen_but_not_clickable() {
     // Compared as numbers, not as JSON: a whole float makes the round trip
     // through JavaScript as an integer, so `40.0` comes back `40`.
     let area = |harness: &mut Harness, label: &str| -> (f64, f64) {
-        let box_ = run(
-            harness,
+        let box_ = harness.run(
             // Scoped, because `globalThis` persists between `exec` calls and a
             // bare `const` would be a redeclaration the second time round.
             &format!(
@@ -692,6 +692,7 @@ fn a_painted_control_outside_its_mask_is_seen_but_not_clickable() {
                     return [n.bounds.width, n.bounds.height];
                 }})()"#
             ),
+            SCRIPT_TIMEOUT,
         );
         (
             box_[0].as_f64().expect("width"),
@@ -719,9 +720,9 @@ fn a_painted_control_outside_its_mask_is_seen_but_not_clickable() {
 
     // The one inside the mask is clickable, so the guard is not just refusing
     // everything painted.
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Painted" }))"#,
+        SCRIPT_TIMEOUT,
     );
 }
 
@@ -732,22 +733,24 @@ fn a_painted_control_outside_its_mask_is_seen_but_not_clickable() {
 fn every_settled_frame_is_timed_and_readable() {
     let mut harness = harness();
 
-    let before = run(&mut harness, "app.timings().frames.length")
+    let before = harness
+        .run("app.timings().frames.length", SCRIPT_TIMEOUT)
         .as_u64()
         .unwrap();
 
     // A drag is the shape a scrub has: one settle per pointer step. If only
     // `frames` were instrumented this would add nothing, which is the failure
     // this test exists to catch.
-    let after = run(
-        &mut harness,
-        r#"
+    let after = harness
+        .run(
+            r#"
             app.drag(app.snapshot().find({ label: "Source" }), { dx: 0, dy: 4 }, { steps: 6 });
             app.timings().frames.length
         "#,
-    )
-    .as_u64()
-    .unwrap();
+            SCRIPT_TIMEOUT,
+        )
+        .as_u64()
+        .unwrap();
     // mouse-down, six moves, mouse-up, plus the two snapshots either side.
     assert!(
         after >= before + 8,
@@ -755,8 +758,7 @@ fn every_settled_frame_is_timed_and_readable() {
         after - before
     );
 
-    let report = run(
-        &mut harness,
+    let report = harness.run(
         r#"
             const t = app.timings();
             const last = t.frames[t.frames.length - 1];
@@ -768,6 +770,7 @@ fn every_settled_frame_is_timed_and_readable() {
                 current: last.frame,
             })
         "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(report["mode"], "headless");
     assert_eq!(
@@ -779,10 +782,13 @@ fn every_settled_frame_is_timed_and_readable() {
 
     // The frame numbers are the same ones a snapshot reports, which is what
     // makes "filter to the frames my drag produced" possible at all.
-    let snapshot_frame = run(&mut harness, "app.snapshot().frame").as_u64().unwrap();
-    let timed = run(
-        &mut harness,
+    let snapshot_frame = harness
+        .run("app.snapshot().frame", SCRIPT_TIMEOUT)
+        .as_u64()
+        .unwrap();
+    let timed = harness.run(
         &format!("app.timings().frames.some((f) => f.frame === {snapshot_frame})"),
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(
         timed, true,
@@ -790,9 +796,9 @@ fn every_settled_frame_is_timed_and_readable() {
     );
 
     // Reading is free: it neither settles nor clears.
-    let twice = run(
-        &mut harness,
+    let twice = harness.run(
         "const a = app.timings(); JSON.stringify(a) === JSON.stringify(app.timings())",
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(twice, true, "reading timings changed them");
 }
@@ -801,12 +807,13 @@ fn every_settled_frame_is_timed_and_readable() {
 #[test]
 fn the_timing_history_is_capped() {
     let mut harness = harness();
-    let count = run(
-        &mut harness,
-        "app.frames(600, { waitMs: 0 }); app.timings().frames.length",
-    )
-    .as_u64()
-    .unwrap();
+    let count = harness
+        .run(
+            "app.frames(600, { waitMs: 0 }); app.timings().frames.length",
+            SCRIPT_TIMEOUT,
+        )
+        .as_u64()
+        .unwrap();
     assert_eq!(count, 512);
 }
 
@@ -817,23 +824,23 @@ fn the_timing_history_is_capped() {
 fn the_wheel_reaches_a_handler_that_clicks_cannot() {
     let mut harness = harness();
     let wheel = |harness: &mut Harness| {
-        run(
-            harness,
+        harness.run(
             r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#,
+            SCRIPT_TIMEOUT,
         )
     };
     assert_eq!(wheel(&mut harness), "wheel 0,0 pan");
 
     // Clicking the same canvas does nothing, so the wheel is doing the work.
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Wheel" }))"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(wheel(&mut harness), "wheel 0,0 pan");
 
-    run(
-        &mut harness,
+    harness.run(
         r#"app.scroll(app.snapshot().find({ label: "Wheel" }), { dx: 30, dy: 60 })"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(wheel(&mut harness), "wheel 30,60 pan");
 }
@@ -843,14 +850,11 @@ fn the_wheel_reaches_a_handler_that_clicks_cannot() {
 #[test]
 fn a_scroll_can_hold_a_modifier() {
     let mut harness = harness();
-    run(
-        &mut harness,
-        r#"app.scroll(app.snapshot().find({ label: "Wheel" }), { dy: 10, modifiers: ["secondary"] })"#,
-    );
+    harness.run(r#"app.scroll(app.snapshot().find({ label: "Wheel" }), { dy: 10, modifiers: ["secondary"] })"#, SCRIPT_TIMEOUT);
     assert_eq!(
-        run(
-            &mut harness,
-            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#
+        harness.run(
+            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#,
+            SCRIPT_TIMEOUT
         ),
         "wheel 0,10 zoom"
     );
@@ -869,19 +873,21 @@ fn a_scroll_can_hold_a_modifier() {
 #[test]
 fn a_scroll_walks_in_steps_and_each_one_is_timed() {
     let mut harness = harness();
-    let before = run(&mut harness, "app.timings().frames.length")
+    let before = harness
+        .run("app.timings().frames.length", SCRIPT_TIMEOUT)
         .as_u64()
         .unwrap();
     // Addressed by point, not by node — but the point is taken from the node,
     // so this also proves the two ways of naming a spot agree.
-    run(
-        &mut harness,
+    harness.run(
         r#"
             const b = app.snapshot().find({ label: "Wheel" }).bounds;
             app.scroll({ x: b.x + b.width / 2, y: b.y + b.height / 2 }, { dy: 100, steps: 10 });
         "#,
+        SCRIPT_TIMEOUT,
     );
-    let after = run(&mut harness, "app.timings().frames.length")
+    let after = harness
+        .run("app.timings().frames.length", SCRIPT_TIMEOUT)
         .as_u64()
         .unwrap();
     assert!(
@@ -893,9 +899,9 @@ fn a_scroll_walks_in_steps_and_each_one_is_timed() {
     // Scrolling at a bare point reaches the same handler as scrolling a node,
     // which is what makes a canvas with no control at the spot addressable.
     assert_eq!(
-        run(
-            &mut harness,
-            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#
+        harness.run(
+            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#,
+            SCRIPT_TIMEOUT
         ),
         "wheel 0,100 pan"
     );
@@ -906,15 +912,15 @@ fn a_scroll_walks_in_steps_and_each_one_is_timed() {
 #[test]
 fn a_click_can_name_its_button() {
     let mut harness = harness();
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Gesture" }), { button: "right" })"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(pointer(&mut harness), "pointer right x1 down:- drag:-");
 
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Gesture" }), { button: "middle" })"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(pointer(&mut harness), "pointer middle x1 down:- drag:-");
 }
@@ -925,9 +931,9 @@ fn a_click_can_name_its_button() {
 #[test]
 fn a_double_click_arrives_as_a_second_press_with_the_count() {
     let mut harness = harness();
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Gesture" }), { count: 2 })"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(pointer(&mut harness), "pointer left x2 down:- drag:-");
 }
@@ -938,9 +944,9 @@ fn a_double_click_arrives_as_a_second_press_with_the_count() {
 #[test]
 fn a_click_can_hold_modifiers() {
     let mut harness = harness();
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Gesture" }), { modifiers: ["shift", "alt"] })"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(
         pointer(&mut harness),
@@ -960,8 +966,7 @@ fn a_click_can_hold_modifiers() {
 #[test]
 fn a_drag_holds_its_modifiers_and_button_for_every_step() {
     let mut harness = harness();
-    run(
-        &mut harness,
+    harness.run(
         r#"
             app.drag(
                 app.snapshot().find({ label: "Gesture" }),
@@ -969,6 +974,7 @@ fn a_drag_holds_its_modifiers_and_button_for_every_step() {
                 { modifiers: ["alt"], button: "right", steps: 4 },
             )
         "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(pointer(&mut harness), "pointer right x1 down:alt drag:alt");
 }
@@ -997,8 +1003,7 @@ fn an_unknown_button_is_refused() {
 #[test]
 fn the_declared_roles_and_the_registry_are_the_same_set() {
     let mut harness = harness();
-    let declared = run(
-        &mut harness,
+    let declared = harness.run(
         r#"
             const dts = app.help();
             const union = dts.slice(dts.indexOf("type Role ="));
@@ -1006,6 +1011,7 @@ fn the_declared_roles_and_the_registry_are_the_same_set() {
                 .map((match) => match[1]);
             roles.sort()
         "#,
+        SCRIPT_TIMEOUT,
     );
     let declared: Vec<String> = serde_json::from_value(declared).unwrap();
 
@@ -1031,9 +1037,9 @@ fn the_declared_roles_and_the_registry_are_the_same_set() {
 #[test]
 fn a_disabled_control_says_so() {
     let mut harness = harness();
-    let result = run(
-        &mut harness,
+    let result = harness.run(
         r#"app.snapshot().findAll({ role: "button" }).map((n) => [n.label, n.enabled])"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(
         result,
@@ -1049,9 +1055,9 @@ fn a_disabled_control_says_so() {
 #[test]
 fn a_virtualized_list_names_only_the_rows_it_built() {
     let mut harness = harness();
-    let rows: Vec<String> = serde_json::from_value(run(
-        &mut harness,
+    let rows: Vec<String> = serde_json::from_value(harness.run(
         r#"app.snapshot().findAll({ role: "row" }).map((n) => n.label)"#,
+        SCRIPT_TIMEOUT,
     ))
     .unwrap();
     assert!(!rows.is_empty(), "the list built no rows at all");
@@ -1063,9 +1069,9 @@ fn a_virtualized_list_names_only_the_rows_it_built() {
     assert_eq!(rows[0], "row 0");
 
     // Every named row is somewhere you could actually click.
-    let clickable = run(
-        &mut harness,
+    let clickable = harness.run(
         r#"app.snapshot().findAll({ role: "row" }).every((n) => n.bounds.height > 0)"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(clickable, true);
 }
@@ -1075,19 +1081,19 @@ fn an_app_modal_prompt_does_not_deadlock() {
     let mut harness = harness();
     // The click returns, the app keeps answering, and the prompt is simply
     // outstanding — which is the shape a driver has to be able to observe.
-    let result = run(
-        &mut harness,
+    let result = harness.run(
         r#"
             app.click(app.snapshot().find({ label: "Modal" }));
             app.frames(2);
             app.snapshot().findAll({ role: "text" }).map((n) => n.label)
         "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(result[2], "unanswered");
 
-    let after = run(
-        &mut harness,
+    let after = harness.run(
         r#"app.snapshot().find({ label: "Increment" }) !== undefined"#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(after, true);
 }
@@ -1115,14 +1121,14 @@ fn a_runaway_script_is_interrupted() {
     assert!(error.contains("Timeout"), "unexpected error: {error}");
 
     // The interpreter is still usable afterwards.
-    assert_eq!(run(&mut harness, "1 + 1"), 2);
+    assert_eq!(harness.run("1 + 1", SCRIPT_TIMEOUT), 2);
 }
 
 #[test]
 fn globals_persist_across_exec_and_reset_clears_them() {
     let mut harness = harness();
-    run(&mut harness, "globalThis.remembered = 41");
-    assert_eq!(run(&mut harness, "remembered + 1"), 42);
+    harness.run("globalThis.remembered = 41", SCRIPT_TIMEOUT);
+    assert_eq!(harness.run("remembered + 1", SCRIPT_TIMEOUT), 42);
 
     harness.reset().expect("reset failed");
     let result = harness.exec("typeof remembered", Duration::from_secs(10));
@@ -1133,12 +1139,12 @@ fn globals_persist_across_exec_and_reset_clears_them() {
 #[test]
 fn reset_rebuilds_the_app() {
     let mut harness = harness();
-    run(
-        &mut harness,
+    harness.run(
         r#"app.click(app.snapshot().find({ label: "Increment" }))"#,
+        SCRIPT_TIMEOUT,
     );
     harness.reset().expect("reset failed");
-    assert_eq!(run(&mut harness, COUNT_LABEL), "count 0");
+    assert_eq!(harness.run(COUNT_LABEL, SCRIPT_TIMEOUT), "count 0");
 }
 
 #[test]
@@ -1186,11 +1192,10 @@ fn an_unknown_action_names_itself_in_the_error() {
 #[test]
 fn help_matches_the_bound_surface() {
     let mut harness = harness();
-    let bound = run(&mut harness, "Object.keys(app).sort()");
+    let bound = harness.run("Object.keys(app).sort()", SCRIPT_TIMEOUT);
     let bound: Vec<String> = serde_json::from_value(bound).unwrap();
 
-    let declared = run(
-        &mut harness,
+    let declared = harness.run(
         r#"
             const dts = app.help();
             const body = dts.slice(dts.indexOf("interface App {") + "interface App {".length);
@@ -1198,6 +1203,7 @@ fn help_matches_the_bound_surface() {
             for (const match of body.matchAll(/^  ([a-zA-Z]+)[(<]/gm)) members.add(match[1]);
             [...members].sort()
         "#,
+        SCRIPT_TIMEOUT,
     );
     let declared: Vec<String> = serde_json::from_value(declared).unwrap();
 
@@ -1205,7 +1211,7 @@ fn help_matches_the_bound_surface() {
     assert!(!bound.is_empty(), "the .d.ts scrape found nothing");
     // And `help` really is the file, not a summary of it.
     assert_eq!(
-        run(&mut harness, "app.help()"),
+        harness.run("app.help()", SCRIPT_TIMEOUT),
         Value::String(gpui_agent::API_DTS.to_string())
     );
 }
@@ -1232,12 +1238,12 @@ fn frames_deliver_callbacks_scheduled_during_render() {
     }
     let root: gpui_agent::RootFactory = Arc::new(|_, cx| cx.new(|_| NextFrame(false)).into());
     let mut harness = Harness::headless(Config::default(), root).unwrap();
-    let result = run(
-        &mut harness,
+    let result = harness.run(
         r#"
         app.frames(2);
         app.snapshot().find({role: "text", label: "Advanced"}).label
     "#,
+        SCRIPT_TIMEOUT,
     );
     assert_eq!(result, "Advanced");
 }

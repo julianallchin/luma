@@ -13,7 +13,6 @@ use std::sync::Arc;
 use gpui::{div, prelude::*, px, AnyView, App, Context, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use luma_ui::node::{Instrument, Role};
-use serde_json::Value;
 
 struct Swatch;
 
@@ -47,26 +46,20 @@ fn harness() -> Harness {
     .expect("failed to start the harness")
 }
 
-fn run(harness: &mut Harness, code: &str) -> Value {
-    let result = harness.exec(code, GPU_LIVENESS_TIMEOUT);
-    assert_eq!(result.error, None, "script failed:\n{code}");
-    result.result
-}
-
 #[test]
 fn the_window_and_one_node_can_both_be_captured() {
     let mut harness = harness();
 
-    let whole = run(&mut harness, "app.screenshot()");
+    let whole = harness.run("app.screenshot()", GPU_LIVENESS_TIMEOUT);
     let path = whole["path"].as_str().unwrap();
     assert!(std::path::Path::new(path).exists(), "no file at {path}");
     assert!(whole["width"].as_u64().unwrap() >= 1200);
 
     // Cropping to a node's bounds gives back exactly that node's box, scaled
     // to physical pixels — which is what makes "show me this button" cheap.
-    let swatch = run(
-        &mut harness,
+    let swatch = harness.run(
         r#"app.screenshot({ node: app.snapshot().find({ label: "Swatch" }) })"#,
+        GPU_LIVENESS_TIMEOUT,
     );
     let scale = whole["width"].as_u64().unwrap() as f64 / 1200.;
     assert_eq!(swatch["width"].as_u64().unwrap() as f64, 200. * scale);
@@ -79,13 +72,13 @@ fn the_window_and_one_node_can_both_be_captured() {
 #[test]
 fn timings_report_the_mode_that_produced_them() {
     let mut harness = harness();
-    let report = run(
-        &mut harness,
+    let report = harness.run(
         r#"
             app.frames(3, { waitMs: 0 });
             const t = app.timings();
             ({ mode: t.mode, timed: t.frames.length > 0 })
         "#,
+        GPU_LIVENESS_TIMEOUT,
     );
     assert_eq!(report["mode"], "pixel");
     assert_eq!(report["timed"], true);
@@ -95,15 +88,18 @@ fn timings_report_the_mode_that_produced_them() {
 /// tree has to be identical to what headless mode reports.
 #[test]
 fn the_node_tree_is_the_same_as_headless() {
-    let pixel = run(
-        &mut harness(),
+    let pixel = harness().run(
         r#"app.snapshot().nodes.map((n) => n.label)"#,
+        GPU_LIVENESS_TIMEOUT,
     );
 
     let root: gpui_agent::RootFactory =
         Arc::new(|_: &mut Window, cx: &mut App| -> AnyView { cx.new(|_| Swatch).into() });
     let mut plain = Harness::headless(Config::default(), root).unwrap();
-    let headless = run(&mut plain, r#"app.snapshot().nodes.map((n) => n.label)"#);
+    let headless = plain.run(
+        r#"app.snapshot().nodes.map((n) => n.label)"#,
+        GPU_LIVENESS_TIMEOUT,
+    );
 
     assert_eq!(pixel, headless);
 }
