@@ -29,6 +29,7 @@ mod post_look;
 mod procedural_haze;
 mod reflection_probes;
 mod renderer_contract_goldens;
+mod serde_records;
 mod sky_clouds;
 mod sun_shadow_contact;
 mod sun_shadow_export_views;
