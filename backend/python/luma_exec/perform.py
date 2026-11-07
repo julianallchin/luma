@@ -234,15 +234,23 @@ class Controller:
                        "column": 0, "row": 8, "fader": True}],
          "color": {"palette": {"0": [0, 0, 0], "5": [255, 0, 0]}},
          "modes": {"steady": {"channel": 0}, "blink": {"channel": 1}, "pulse": {"channel": 2}},
-         "dim": 0.15}
+         "dim": 0.15,
+         "lights": {"buttons": {"modes": {"steady": {"velocity": 1}, "blink": {"velocity": 2}}}}}
 
     controls place each pad or fader on the device's grid, column and row
     from the top left. color is a palette (each velocity it takes, to the
     rgb 0-255 it shows) or {"sysex": "F0 ... {number} {r} {g} {b} F7"} for
     full rgb (each 0-127); with none, a light is the control's own note at
-    127 lit, 0 dark. modes say how to shine: the channel to send on and an
-    offset added to the velocity; a blink a device lacks is drawn by turning
-    it on and off. dim is how bright a dim light is, 0-1."""
+    127 lit, 0 dark. modes say how to shine: the channel to send on, the
+    velocity a lit light is sent whatever its color (for a one-color LED),
+    and an offset added to the velocity; a blink a device lacks is drawn by
+    turning it on and off. dim is how bright a dim light is, 0-1. lights
+    are named rules for controls that light another way than the rest, such
+    as single-LED buttons beside rgb pads: each has its own color, modes and
+    dim, and what it leaves out is the default, not the device's (no color:
+    echoed). A control with "light": "buttons" lights by that rule; the
+    others by the device's. The rule above sends a button 1 on, 2 blinking
+    and 0 dark, on the button's own channel."""
     id: str
     name: str
     port: str

@@ -10,14 +10,16 @@
 //!   ],
 //!   "color": {"palette": {"0": [0, 0, 0], "5": [255, 0, 0], "21": [0, 255, 0]}},
 //!   "modes": {"steady": {"channel": 0}, "blink": {"channel": 1}, "pulse": {"channel": 2}},
-//!   "dim": 0.15
+//!   "dim": 0.15,
+//!   "lights": {"buttons": {"modes": {"steady": {"velocity": 1}, "blink": {"velocity": 2}}}}
 //! }
 //! ```
 //!
 //! - `controls`: each pad or fader (`"fader": true`) by its MIDI address, at
 //!   its place on the device's grid, `column` and `row` from the top left.
 //!   Mapping a page puts the page's cell at (column, row) on the control
-//!   there.
+//!   there. `"light": "buttons"` lights a control by that rule of `lights`
+//!   instead of the device's.
 //! - `color`: how to send a color. `palette` maps each velocity the device
 //!   takes to the color it shows (rgb 0–255); a light is sent as the nearest.
 //!   `sysex` is a message of hex bytes for a device that takes full rgb, with
@@ -26,10 +28,15 @@
 //!   With no `color`, a light is echoed: the control's own note or CC, at
 //!   127 lit and 0 dark.
 //! - `modes`: how a palette or echoed light shows steady, pulsing and
-//!   blinking: the MIDI `channel` to send on, and an `offset` added to the
-//!   velocity. A mode the device lacks: a blink is drawn by turning the
-//!   light on and off, a pulse is steady.
+//!   blinking: the MIDI `channel` to send on, the `velocity` a lit light is
+//!   sent whatever its color (for a light of one color), and an `offset`
+//!   added to the velocity. A mode the device lacks: a blink is drawn by
+//!   turning the light on and off, a pulse is steady.
 //! - `dim`: how bright a dim light is, 0–1 of a lit one (0.15 when absent).
+//! - `lights`: named rules for controls that light another way than the
+//!   rest, such as single-color buttons beside rgb pads. A rule has its own
+//!   `color`, `modes` and `dim`, each as above. What it leaves out is the
+//!   default, not the device's: a rule with no `color` is echoed.
 
 use std::collections::BTreeMap;
 
@@ -48,6 +55,34 @@ pub struct Profile {
     pub color: Option<ColorOut>,
     pub modes: Modes,
     pub dim: Option<f64>,
+    pub lights: BTreeMap<String, Lighting>,
+}
+
+/// How some controls show a light, when not the device's way.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Lighting {
+    pub color: Option<ColorOut>,
+    pub modes: Modes,
+    pub dim: Option<f64>,
+}
+
+/// A way of lighting: the device's own or one of its `lights`.
+#[derive(Clone, Copy)]
+struct Rule<'a> {
+    color: Option<&'a ColorOut>,
+    modes: &'a Modes,
+    dim: Option<f64>,
+}
+
+impl<'a> From<&'a Lighting> for Rule<'a> {
+    fn from(lighting: &'a Lighting) -> Self {
+        Rule {
+            color: lighting.color.as_ref(),
+            modes: &lighting.modes,
+            dim: lighting.dim,
+        }
+    }
 }
 
 /// A pad or fader, where it sits on the device's grid.
@@ -59,6 +94,9 @@ pub struct Place {
     pub row: u16,
     #[serde(default)]
     pub fader: bool,
+    /// The rule of the profile's `lights` this control lights by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light: Option<String>,
 }
 
 /// How a device takes a color.
@@ -85,6 +123,8 @@ pub struct Modes {
 pub struct ModeOut {
     /// The MIDI channel to send on, from 0; the control's own when absent.
     pub channel: Option<u8>,
+    /// The velocity a lit light is sent, whatever its color.
+    pub velocity: Option<u8>,
     /// Added to the velocity.
     pub offset: u8,
 }
@@ -141,26 +181,38 @@ impl Profile {
                 ));
             }
         }
-        let modes = [self.modes.steady, self.modes.pulse, self.modes.blink];
-        if modes
-            .iter()
-            .flatten()
-            .any(|mode| mode.channel.is_some_and(|c| c > 15) || mode.offset > 127)
-        {
-            return Err("a mode's channel is 0–15 and its offset 0–127".into());
+        if let Some((place, name)) = self.controls.iter().find_map(|place| {
+            let name = place.light.as_ref()?;
+            (!self.lights.contains_key(name)).then_some((place, name))
+        }) {
+            return Err(format!(
+                "control {:?} lights by {name:?}, which is not one of the profile's lights",
+                place.address
+            ));
         }
-        if self.dim.is_some_and(|dim| !(0.0..=1.0).contains(&dim)) {
-            return Err("a profile's dim is 0 to 1".into());
+        self.rule(None).check()?;
+        for (name, lighting) in &self.lights {
+            Rule::from(lighting)
+                .check()
+                .map_err(|why| format!("light {name:?}: {why}"))?;
         }
-        match &self.color {
-            Some(ColorOut::Palette(palette))
-                if palette.is_empty() || palette.keys().any(|v| *v > 127) =>
-            {
-                Err("a palette maps velocities 0–127 to colors, and has at least one".into())
-            }
-            Some(ColorOut::Sysex(template)) => sysex(template, 0, [0; 3]).map(|_| ()),
-            _ => Ok(()),
-        }
+        Ok(())
+    }
+
+    /// The rule the control at `address` lights by: its own, or the
+    /// device's.
+    fn rule(&self, address: Option<&Address>) -> Rule<'_> {
+        address
+            .and_then(|address| self.controls.iter().find(|place| &place.address == address))
+            .and_then(|place| self.lights.get(place.light.as_ref()?))
+            .map_or(
+                Rule {
+                    color: self.color.as_ref(),
+                    modes: &self.modes,
+                    dim: self.dim,
+                },
+                Rule::from,
+            )
     }
 
     /// The message that shows `look` on the control at `address`, `phase`
@@ -178,49 +230,10 @@ impl Profile {
         }
     }
 
-    /// The message that shows `light` on the control at `address`.
+    /// The message that shows `light` on the control at `address`, by the
+    /// rule it lights by.
     pub fn show(&self, address: &Address, light: Light, phase: bool) -> Option<Vec<u8>> {
-        let (status, channel, number) = match *address {
-            Address::MidiNote { channel, number } => (0x90, channel, number),
-            Address::MidiCc { channel, number } => (0xb0, channel, number),
-            Address::Osc { .. } => return None,
-        };
-        let mode = match (&self.color, light.shine) {
-            (Some(ColorOut::Sysex(_)), _) => None,
-            (_, Shine::Steady) => self.modes.steady,
-            (_, Shine::Pulse) => self.modes.pulse,
-            (_, Shine::Blink) => self.modes.blink,
-        };
-        // A blink the device cannot show is drawn here, dark half the time;
-        // a pulse it cannot show is steady.
-        let dark = light.shine == Shine::Blink && mode.is_none() && !phase;
-        let rgb = if dark {
-            [0.; 3]
-        } else if light.bright {
-            light.color
-        } else {
-            light.color.map(|c| c * self.dim.unwrap_or(DIM))
-        };
-        let sent = mode.or(self.modes.steady).unwrap_or_default();
-        let (channel, offset) = (sent.channel.unwrap_or(channel), sent.offset);
-        let velocity = match &self.color {
-            None => {
-                if light.bright && !dark {
-                    127
-                } else {
-                    0
-                }
-            }
-            Some(ColorOut::Palette(palette)) => nearest(palette, device(rgb, 255.)),
-            Some(ColorOut::Sysex(template)) => {
-                return sysex(template, number, device(rgb, 127.)).ok();
-            }
-        };
-        Some(vec![
-            status | channel,
-            number,
-            velocity.saturating_add(offset).min(127),
-        ])
+        self.rule(Some(address)).show(address, light, phase)
     }
 
     /// What putting `page` on this controller binds: each control of the
@@ -265,6 +278,73 @@ impl Profile {
             }
         }
         bound
+    }
+}
+
+impl Rule<'_> {
+    /// Why this rule cannot be drawn, if it cannot.
+    fn check(&self) -> Result<(), String> {
+        let modes = [self.modes.steady, self.modes.pulse, self.modes.blink];
+        if modes.iter().flatten().any(|mode| {
+            mode.channel.is_some_and(|c| c > 15)
+                || mode.velocity.is_some_and(|v| v > 127)
+                || mode.offset > 127
+        }) {
+            return Err("a mode's channel is 0–15, its velocity and offset 0–127".into());
+        }
+        if self.dim.is_some_and(|dim| !(0.0..=1.0).contains(&dim)) {
+            return Err("a dim is 0 to 1".into());
+        }
+        match self.color {
+            Some(ColorOut::Palette(palette))
+                if palette.is_empty() || palette.keys().any(|v| *v > 127) =>
+            {
+                Err("a palette maps velocities 0–127 to colors, and has at least one".into())
+            }
+            Some(ColorOut::Sysex(template)) => sysex(template, 0, [0; 3]).map(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
+    fn show(&self, address: &Address, light: Light, phase: bool) -> Option<Vec<u8>> {
+        let (status, channel, number) = match *address {
+            Address::MidiNote { channel, number } => (0x90, channel, number),
+            Address::MidiCc { channel, number } => (0xb0, channel, number),
+            Address::Osc { .. } => return None,
+        };
+        let mode = match (self.color, light.shine) {
+            (Some(ColorOut::Sysex(_)), _) => None,
+            (_, Shine::Steady) => self.modes.steady,
+            (_, Shine::Pulse) => self.modes.pulse,
+            (_, Shine::Blink) => self.modes.blink,
+        };
+        // A blink the device cannot show is drawn here, dark half the time;
+        // a pulse it cannot show is steady.
+        let dark = light.shine == Shine::Blink && mode.is_none() && !phase;
+        let lit = light.bright && !dark;
+        let rgb = if dark {
+            [0.; 3]
+        } else if light.bright {
+            light.color
+        } else {
+            light.color.map(|c| c * self.dim.unwrap_or(DIM))
+        };
+        let sent = mode.or(self.modes.steady).unwrap_or_default();
+        let channel = sent.channel.unwrap_or(channel);
+        let velocity = match (self.color, sent.velocity) {
+            (Some(ColorOut::Sysex(template)), _) => {
+                return sysex(template, number, device(rgb, 127.)).ok();
+            }
+            (_, Some(velocity)) if lit => velocity,
+            (None, _) if lit => 127,
+            (None, _) => 0,
+            (Some(ColorOut::Palette(palette)), _) => nearest(palette, device(rgb, 255.)),
+        };
+        Some(vec![
+            status | channel,
+            number,
+            velocity.saturating_add(sent.offset).min(127),
+        ])
     }
 }
 

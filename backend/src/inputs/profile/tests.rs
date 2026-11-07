@@ -101,11 +101,11 @@ fn palette() -> Profile {
             steady: None,
             pulse: Some(ModeOut {
                 channel: Some(2),
-                offset: 0,
+                ..ModeOut::default()
             }),
             blink: Some(ModeOut {
                 channel: Some(1),
-                offset: 0,
+                ..ModeOut::default()
             }),
         },
         ..Profile::default()
@@ -136,8 +136,8 @@ fn a_palette_device_is_sent_the_nearest_color_on_the_channel_of_its_mode() {
     let offset = Profile {
         modes: Modes {
             blink: Some(ModeOut {
-                channel: None,
                 offset: 64,
+                ..ModeOut::default()
             }),
             ..Modes::default()
         },
@@ -205,6 +205,110 @@ fn a_fader_on_a_cc_is_sent_its_position() {
     assert_eq!(palette().draw(&cc, &look, true), Some(vec![0xb0, 48, 64]));
 }
 
+/// Shaped like an Akai APC mini mk2: rgb pads that take a palette velocity
+/// and shine by channel (6 steady, 9 pulse, 13 blink), and single-LED
+/// buttons on channel 0 that take 0 off, 1 on and 2 blink, whatever color.
+const MIXED: &str = r#"{
+    "controls": [
+        {"address": {"kind": "midi_note", "channel": 0, "number": 0}, "column": 0, "row": 0},
+        {"address": {"kind": "midi_note", "channel": 0, "number": 100}, "column": 0, "row": 1, "light": "buttons"},
+        {"address": {"kind": "midi_note", "channel": 0, "number": 101}, "column": 1, "row": 1, "light": "plain"}],
+    "color": {"palette": {"0": [0, 0, 0], "5": [255, 0, 0], "7": [60, 0, 0], "21": [0, 255, 0]}},
+    "modes": {"steady": {"channel": 6}, "pulse": {"channel": 9}, "blink": {"channel": 13}},
+    "lights": {
+        "buttons": {"modes": {"steady": {"velocity": 1}, "pulse": {"velocity": 2}, "blink": {"velocity": 2}}},
+        "plain": {}}
+}"#;
+
+#[test]
+fn a_control_lights_by_its_own_rule_beside_the_devices() {
+    let profile = Profile::parse(MIXED).unwrap();
+    let green = [0., 1., 0.];
+    let (pad, button, plain) = (note(0), note(100), note(101));
+
+    // A pad: the nearest palette color, on its mode's channel.
+    let lit = |shine| light(RED, true, shine);
+    assert_eq!(
+        profile.show(&pad, lit(Shine::Steady), true),
+        Some(vec![0x96, 0, 5])
+    );
+    assert_eq!(
+        profile.show(&pad, lit(Shine::Pulse), true),
+        Some(vec![0x99, 0, 5])
+    );
+    assert_eq!(
+        profile.show(&pad, lit(Shine::Blink), false),
+        Some(vec![0x9d, 0, 5])
+    );
+    let dim_pad = profile.show(&pad, light(RED, false, Shine::Steady), true);
+    assert_ne!(dim_pad.unwrap()[2], 0, "a dim pad is a dim color");
+
+    // A button: on, blink or off on its own channel, whatever the color.
+    let on = profile.show(&button, lit(Shine::Steady), true);
+    assert_eq!(on, Some(vec![0x90, 100, 1]));
+    assert_eq!(
+        profile.show(&button, light(green, true, Shine::Steady), true),
+        on,
+        "one color"
+    );
+    assert_eq!(
+        profile.show(&button, lit(Shine::Blink), false),
+        Some(vec![0x90, 100, 2]),
+        "it blinks by itself: never drawn dark"
+    );
+    assert_eq!(
+        profile.show(&button, lit(Shine::Pulse), true),
+        Some(vec![0x90, 100, 2])
+    );
+    for dark in [Shine::Steady, Shine::Blink] {
+        assert_eq!(
+            profile.show(&button, light(RED, false, dark), true),
+            Some(vec![0x90, 100, 0]),
+            "dim is dark"
+        );
+    }
+
+    // A rule is whole: one with nothing in it is echoed, not the palette.
+    assert_eq!(
+        profile.show(&plain, lit(Shine::Steady), true),
+        Some(vec![0x90, 101, 127])
+    );
+
+    let again = Profile::parse(&serde_json::to_string(&profile).unwrap()).unwrap();
+    assert_eq!(again, profile, "it round-trips");
+}
+
+#[test]
+fn a_control_naming_no_light_or_a_bad_one_is_refused() {
+    let control = |light: &str| {
+        format!(
+            r#"{{"controls": [{{"address": {{"kind": "midi_note", "channel": 0, "number": 1}}, "column": 0, "row": 0, "light": "{light}"}}],"#
+        )
+    };
+    for (bad, why) in [
+        (format!(r#"{} "lights": {{}}}}"#, control("lamps")), "lamps"),
+        (
+            r#"{"lights": {"buttons": {"modes": {"steady": {"velocity": 200}}}}}"#.into(),
+            "\"buttons\"",
+        ),
+        (
+            r#"{"lights": {"buttons": {"dim": 3}}}"#.into(),
+            "\"buttons\"",
+        ),
+        (
+            r#"{"lights": {"buttons": {"color": {"palette": {}}}}}"#.into(),
+            "\"buttons\"",
+        ),
+        (
+            r#"{"lights": {"buttons": {"colour": {}}}}"#.into(),
+            "unknown field",
+        ),
+    ] {
+        let error = Profile::parse(&bad).unwrap_err();
+        assert!(error.contains(why), "{bad}: {error}");
+    }
+}
+
 fn grid(columns: u16, rows: u16, fader_row: Option<u16>) -> Profile {
     let mut controls: Vec<Place> = (0..rows)
         .flat_map(|row| (0..columns).map(move |column| (column, row)))
@@ -213,6 +317,7 @@ fn grid(columns: u16, rows: u16, fader_row: Option<u16>) -> Profile {
             column,
             row,
             fader: false,
+            light: None,
         })
         .collect();
     if let Some(row) = fader_row {
@@ -224,6 +329,7 @@ fn grid(columns: u16, rows: u16, fader_row: Option<u16>) -> Profile {
             column,
             row,
             fader: true,
+            light: None,
         }));
     }
     Profile {
