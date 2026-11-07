@@ -692,18 +692,20 @@ impl AgentChat {
         cx.notify();
         cx.spawn(async move |this, cx| {
             // Applied before the fresh read, so the fresh read always wins.
-            if let Some(models) = match saved {
+            let saved = match saved {
                 Some(saved) => saved.await,
                 None => None,
-            } {
-                this.update(cx, |this, cx| {
+            };
+            this.update(cx, |this, cx| {
+                this.model_picker.looked_up.insert(service);
+                if let Some(models) = saved {
                     if !matches!(this.model_picker.catalogs.get(&service), Some(Ok(_))) {
                         this.model_picker.receive(service, Ok(models), cx);
-                        cx.notify();
                     }
-                })
-                .ok();
-            }
+                }
+                cx.notify();
+            })
+            .ok();
             let result = pending.await;
             this.update(cx, |this, cx| {
                 this.model_picker.loading.remove(&service);
@@ -1760,9 +1762,15 @@ impl AgentChat {
             )
         });
         let error = self.error.clone();
-        // Whether the composer's row is complete: the thread's read has landed
-        // (and with it the model picker), or it failed and will not.
-        let ready = !matches!(self.conversation, Conversation::Loading(_)) || error.is_some();
+        // Whether the composer's row is complete: the thread's read has landed,
+        // and with it the model picker, whose label is the one it keeps — or
+        // the read failed and nothing more is coming.
+        let ready = error.is_some()
+            || (!matches!(self.conversation, Conversation::Loading(_))
+                && self
+                    .selection
+                    .as_ref()
+                    .is_none_or(|selection| self.model_picker.label_settled(selection)));
         let resumable = self.resumable();
         let this = cx.entity();
         let gauge = self

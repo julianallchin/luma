@@ -683,16 +683,22 @@ pub fn composer(
     // Frosted so the transcript blurs under it instead of stopping at a seam;
     // the radius matches the pill's, or the blur would square off at its
     // corners.
-    let mut plate = div().flex().flex_col().pt(px(theme::SPACE_MD));
-    if !layout.settled {
-        // Laid out, so the field is measured, but not painted.
-        plate.style().visibility = Some(gpui::Visibility::Hidden);
-    }
-    plate.child(dialog::frosted(
-        luma_ui::radius::PILL,
-        theme::PILL_BLUR,
-        body.opacity(entrance),
-    ))
+    let plate = div()
+        .flex()
+        .flex_col()
+        .pt(px(theme::SPACE_MD))
+        .child(dialog::frosted(
+            luma_ui::radius::PILL,
+            theme::PILL_BLUR,
+            body.opacity(entrance),
+        ));
+    // Unplaced, the pill is laid out — so its field is measured at the width
+    // it will have — inside a box of no height: nothing of it is painted,
+    // takes the pointer or stands in the automation tree, and the footer
+    // measured around it does not claim its room yet.
+    div()
+        .when(!layout.settled, |slot| slot.h_0().overflow_hidden())
+        .child(plate)
 }
 
 /// Send, steer, or stop.

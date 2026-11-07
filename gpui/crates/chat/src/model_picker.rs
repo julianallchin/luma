@@ -42,6 +42,9 @@ pub(crate) struct Picker {
     pub service: Service,
     pub catalogs: HashMap<Service, Result<Vec<ModelChoice>, String>>,
     pub loading: HashSet<Service>,
+    /// The services whose list saved on disk has been looked for, found or
+    /// not: past that, the chip's label changes only when a fresh read lands.
+    pub looked_up: HashSet<Service>,
     /// The search over a gateway's list. Shown only for services that
     /// [`Service::lists_models`]; the others list a handful.
     search: Entity<TextInput>,
@@ -83,6 +86,7 @@ impl Picker {
             service: Service::Claude,
             catalogs: HashMap::new(),
             loading: HashSet::new(),
+            looked_up: HashSet::new(),
             search,
             _search: subscription,
             list: float::Picker::new(matches).with_limit(LIST_LIMIT),
@@ -159,6 +163,17 @@ impl Picker {
             String::new()
         };
         self.list.set_query(query);
+    }
+
+    /// Whether the chip's label for `selection` is the one it shows until a
+    /// fresh read of the service's list lands: a list is held, none is being
+    /// read, or the one saved on disk has been looked for. Before then the
+    /// chip shows a stand-in name of another width.
+    pub(crate) fn label_settled(&self, selection: &Selection) -> bool {
+        let service = &selection.service;
+        self.catalogs.contains_key(service)
+            || !self.loading.contains(service)
+            || self.looked_up.contains(service)
     }
 
     fn model(&self, selection: &Selection) -> Option<&ModelChoice> {
