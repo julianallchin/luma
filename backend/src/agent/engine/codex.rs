@@ -372,7 +372,7 @@ fn isolated_config() -> Value {
         "features.browser_use":false, "features.computer_use":false,
         "features.image_generation":false, "features.view_image":false,
         "features.code_mode":false, "features.skip_host_skill_discovery":true,
-        "features.remote_control":false, "web_search":"disabled",
+        "features.remote_control":false, "web_search":"live",
         "model_provider":"openai", "forced_login_method":"chatgpt"
     })
 }

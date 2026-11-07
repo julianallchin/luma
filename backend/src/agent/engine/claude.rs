@@ -170,15 +170,17 @@ impl Session {
                         }
                         "can_use_tool" => {
                             let allowed = request["tool_name"].as_str().is_some_and(|name| {
-                                self.request
-                                    .tools
-                                    .iter()
-                                    .any(|tool| name == format!("mcp__luma__{}", tool.name))
+                                WEB_TOOLS.split(',').any(|web| web == name)
+                                    || self
+                                        .request
+                                        .tools
+                                        .iter()
+                                        .any(|tool| name == format!("mcp__luma__{}", tool.name))
                             });
                             let response = if allowed {
                                 json!({"behavior":"allow","updatedInput":request["input"]})
                             } else {
-                                json!({"behavior":"deny","message":"Only Luma tools are available in this session"})
+                                json!({"behavior":"deny","message":"Only Luma tools and the web are available in this session"})
                             };
                             self.control_reply(id, response).await?;
                         }
@@ -374,6 +376,9 @@ fn steer_frame(blocks: &[String], id: &str, immediate: bool) -> Value {
         "message":{"role":"user","content":text_blocks(blocks)}, "parent_tool_use_id":null})
 }
 
+/// The CLI's own tools a Luma session may use: its web search and fetch.
+const WEB_TOOLS: &str = "WebSearch,WebFetch";
+
 fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
     let mut cmd = claude_command(cwd);
     cmd.args([
@@ -388,7 +393,7 @@ fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
         // signal that says where a steer joined the conversation.
         "--replay-user-messages",
         "--tools",
-        "",
+        WEB_TOOLS,
         "--strict-mcp-config",
         "--permission-prompt-tool",
         "stdio",
@@ -739,6 +744,8 @@ assert read()['type']=='user'
 send({'type':'system','subtype':'init','session_id':'native'})
 control('deny',{'subtype':'can_use_tool','tool_name':'Bash','input':{'command':'touch forbidden'}})
 assert read()['response']['response']['behavior']=='deny'
+control('web',{'subtype':'can_use_tool','tool_name':'WebSearch','input':{'query':'apc mini mk2 protocol'}})
+assert read()['response']['response']['behavior']=='allow'
 control('call',{'subtype':'mcp_message','server_name':'luma','message':{'id':2,'method':'tools/call','params':{'name':'echo','arguments':{'value':'hi'}}}})
 reply=read()['response']['response']['mcp_response']
 assert reply['id']==2
