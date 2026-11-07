@@ -39,7 +39,7 @@ function read() {
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   // The editor's own geometry: give it the whole column.
   nav.stageOff();
   return read();
@@ -65,7 +65,7 @@ test("a clip edge dragged on the timeline moves, stays moved, and the playhead r
   expect(moved.clips[1]).toEqual(opened.clips[1]);
 
   // Leave the screen and come back: what returns is what was written.
-  nav.closeTab();
+  nav.reopen("Aurora");
   app.frames(6);
   const reopened = open();
   expect(reopened.status).toContain("2 patterns");
@@ -87,7 +87,7 @@ test("beat grid approval survives reopening and can be undone", () => {
   const button = (label) => app.snapshot().find({ role: "button", label });
   const select = (label) => app.snapshot().find({ role: "select", label });
   const reopen = () => {
-    nav.closeTab();
+    nav.reopen("Aurora");
     nav.track("Aurora");
   };
   nav.venue("Test Venue");

@@ -188,61 +188,20 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         r#"
         const initial = app.snapshot();
         const loading = initial.find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
-        const ready = until("the venue catalogue", (s) =>
+        const dialog = until("the venue catalogue", (s) =>
             s.find({ role: "card", label: "Alpha Hall" }) !== undefined
-                && s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        const search = ready.find({ role: "input", label: "Search venues…" });
-        app.type(search, "beta");
-        const filtered = until("the filtered venue", (s) =>
-            s.find({ role: "card", label: "Beta Room" }) !== undefined
-                && s.find({ role: "card", label: "Alpha Hall" }) === undefined);
-        app.click(filtered.find({ role: "card", label: "Beta Room" }));
-        const beta = until("Beta's browser", (s) =>
-            s.find({ role: "button", label: "Beta Room" }) !== undefined
-                && s.find({ role: "row", label: "Beta initial" }) !== undefined);
-
-        // Start Alpha, then leave it before its delayed result lands.
-        app.click(beta.find({ role: "button", label: "Beta Room" }));
-        let picker = until("the reopened venue picker", (s) =>
-            s.find({ role: "card", label: "Alpha Hall" }) !== undefined);
-        app.click(picker.find({ role: "card", label: "Alpha Hall" }));
-        let alpha = until("Alpha's loading browser", (s) =>
-            s.find({ role: "button", label: "Alpha Hall" }) !== undefined);
-        app.click(alpha.find({ role: "button", label: "Alpha Hall" }));
-        picker = until("the picker over Alpha", (s) =>
-            s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        app.click(picker.find({ role: "card", label: "Beta Room" }));
-        until("Beta after the replacement", (s) =>
-            s.find({ role: "row", label: "Beta current" }) !== undefined);
-        app.frames(20, { waitMs: 60 });
-        let settled = app.snapshot();
-
-        // A dismissed slow catalogue request cannot overwrite the next picker.
-        app.click(settled.find({ role: "button", label: "Beta Room" }));
-        const staleLoading = until("the stale catalogue loading route", (s) =>
-            s.find({ role: "text", label: "Loading venues…" }) !== undefined);
-        app.action("luma::DismissOverlay");
-        const returnedBetween = until("focus returned between catalogue requests", (s) =>
-            s.find({ role: "button", label: "Beta Room" })?.focused === true);
-        app.click(returnedBetween.find({ role: "button", label: "Beta Room" }));
-        const dialog = until("the current venue picker", (s) =>
-            s.find({ role: "input", label: "Search venues…" })?.focused === true
-                && s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        app.frames(10, { waitMs: 50 });
-        const afterStaleCatalogue = app.snapshot();
+                && s.find({ role: "card", label: "Beta Room" }) !== undefined
+                && s.find({ role: "input", label: "Search venues…" })?.focused === true ? s : undefined);
 
         // Name the complete venue-dialog ring. Every focused leaf must be one
         // of these controls and geometrically inside the dialog card; the
-        // sidebar opener is deliberately not a member while the modal exists.
+        // title bar behind the modal is deliberately not a member.
         const focusOrder = [
             "input:Search venues…",
-            // Patterns left this dialog: picking a room and picking a light
-            // pattern are different questions, and only one of them is what
-            // the venue switcher is for.
             "button:Join a venue",
             "button:Create venue",
             // The palette's header carries its own dismissal cap, so the ring
-            // now passes through it on the way to the list.
+            // passes through it on the way to the list.
             "button:Close",
             // A venue this account owns carries its Share chip inside the row.
             "card:Alpha Hall",
@@ -257,9 +216,6 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
                 && inner.x + inner.width <= outer.x + outer.width + 0.5
                 && inner.y + inner.height <= outer.y + outer.height + 0.5;
         const focusedLeaf = (frame) => {
-            if (frame.find({ role: "button", label: "Beta Room" })?.focused === true) {
-                throw new Error("the sidebar opener received focus through the modal");
-            }
             const leaves = frame.findAll((node) => node.focused)
                 .filter((node) => !(node.role === "card" && node.label === "Venue dialog"));
             if (leaves.length !== 1) {
@@ -298,33 +254,66 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         app.frames(2);
         const forwardFirst = focusedLeaf(app.snapshot());
         focusTrace.push(...forwardLeaves, forwardFirst);
-        // Coordinate activation of the shell control behind the modal lands
-        // on the optional scrim: the venue dialog dismisses, but the covered
-        // account action must not run.
-        const occludedAccount = app.snapshot().find({ role: "button", label: "Account" });
-        app.click(occludedAccount);
+        // Coordinate activation of the title bar's venue trigger behind the
+        // modal lands on the scrim: the covered menu must not open.
+        const occludedTrigger = app.snapshot().find({ role: "button", label: "Venues" });
+        app.click(occludedTrigger);
         app.frames(2);
         const afterOccludedClick = app.snapshot();
-        app.key("escape");
-        const restoredOpener = until("the exact venue opener after Escape", (s) =>
-            s.find({ role: "button", label: "Beta Room" })?.focused === true);
+
+        // With no venue open the picker stays up.
+        const ready = until("the venue catalogue again", (s) =>
+            s.find({ role: "card", label: "Beta Room" }) !== undefined
+                && s.find({ role: "input", label: "Search venues…" }) !== undefined ? s : undefined);
+        const search = ready.find({ role: "input", label: "Search venues…" });
+        app.type(search, "beta");
+        const filtered = until("the filtered venue", (s) =>
+            s.find({ role: "card", label: "Beta Room" }) !== undefined
+                && s.find({ role: "card", label: "Alpha Hall" }) === undefined);
+        app.click(filtered.find({ role: "card", label: "Beta Room" }));
+        until("Beta's song list", (s) =>
+            s.find({ role: "button", label: "Beta Room" }) !== undefined
+                && s.find({ role: "row", label: "Beta initial" }) !== undefined);
+
+        // The title bar's venue menu: open it, and pick a row once its
+        // catalogue has landed.
+        const menuRow = (name) => {
+            nav.venueMenu();
+            const menu = until(`${name} in the venue menu`, (s) =>
+                s.find({ role: "row", label: name }) !== undefined ? s : undefined);
+            app.click(menu.find({ role: "row", label: name }));
+        };
+
+        // Start Alpha, then leave it before its delayed result lands.
+        menuRow("Alpha Hall");
+        until("Alpha's loading song list", (s) =>
+            s.find({ role: "button", label: "Alpha Hall" }) !== undefined);
+        menuRow("Beta Room");
+        until("Beta after the replacement", (s) =>
+            s.find({ role: "row", label: "Beta current" }) !== undefined);
+        app.frames(20, { waitMs: 60 });
+
+        // A dismissed slow catalogue request cannot overwrite the next menu.
+        nav.venueMenu();
+        until("the stale catalogue loading menu", (s) =>
+            s.find({ role: "text", label: "Loading venues…" }) !== undefined);
+        app.action("luma::DismissOverlay");
+        until("the menu gone", (s) => s.find({ role: "row", label: "New venue…" }) === undefined);
+        nav.venueMenu();
+        until("the current venue menu", (s) => s.find({ role: "row", label: "Beta Room" }) !== undefined);
+        app.frames(10, { waitMs: 50 });
+        const afterStaleCatalogue = app.snapshot();
+        app.action("luma::DismissOverlay");
 
         // Two reads of the same venue: the second answer must win even though
         // the first lands later.
-        app.click(restoredOpener.find({ role: "button", label: "Beta Room" }));
-        picker = until("the same-id stale picker", (s) =>
-            s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        app.click(picker.find({ role: "card", label: "Beta Room" }));
-        let same = until("the same-id stale load", (s) =>
-            s.find({ role: "button", label: "Beta Room" }) !== undefined);
-        app.click(same.find({ role: "button", label: "Beta Room" }));
-        picker = until("the same-id latest picker", (s) =>
-            s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        app.click(picker.find({ role: "card", label: "Beta Room" }));
+        menuRow("Beta Room");
+        app.frames(2);
+        menuRow("Beta Room");
         until("the same-id latest row", (s) =>
             s.find({ role: "row", label: "Beta same-id latest" }) !== undefined);
         app.frames(10, { waitMs: 50 });
-        settled = app.snapshot();
+        const settled = app.snapshot();
         ({ loading,
            searched: filtered.findAll({ role: "card" })
                .map((n) => n.label).filter((label) => label === "Beta Room"),
@@ -334,15 +323,12 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
                && settled.find({ role: "row", label: "Alpha stale" }) === undefined,
            staleCatalogueRejected:
                afterStaleCatalogue.find((n) => n.role === "text" && n.label.includes("stale catalogue failure")) === undefined,
-           returnedBetween: returnedBetween.find({ role: "button", label: "Beta Room" })?.focused === true,
            focusContract: focusTrace[0] === focusOrder[0]
                && reverseLast === focusOrder[focusOrder.length - 1]
                && reverseFirst === focusOrder[0]
                && forwardFirst === focusOrder[0],
            focusTrace,
-           occluded: afterOccludedClick.find({ role: "card", label: "Venue dialog" }) === undefined
-               && afterOccludedClick.find({ role: "row", label: "Settings" }) === undefined,
-           restoredOpener: restoredOpener.find({ role: "button", label: "Beta Room" })?.focused === true })
+           occluded: afterOccludedClick.find({ role: "row", label: "New venue…" }) === undefined })
     "#,
     );
     assert_eq!(out["loading"], true);
@@ -355,9 +341,6 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             // shift-tab from the first stop wraps to the last…
             "button:Share Beta Room",
             "input:Search venues…",
-            // Patterns left this dialog: picking a room and picking a light
-            // pattern are different questions, and only one of them is what
-            // the venue switcher is for.
             "button:Join a venue",
             "button:Create venue",
             "button:Close",
@@ -368,13 +351,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             "input:Search venues…"
         ])
     );
-    for key in [
-        "staleCatalogueRejected",
-        "returnedBetween",
-        "focusContract",
-        "occluded",
-        "restoredOpener",
-    ] {
+    for key in ["staleCatalogueRejected", "focusContract", "occluded"] {
         assert_eq!(
             out[key], true,
             "venue focus/race contract failed at {key}: {out:#}"
@@ -471,15 +448,15 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         until("the created venue", (s) =>
             s.find({ role: "button", label: "Morning Room" }) !== undefined);
         app.frames(4, { waitMs: 50 });
-        // The venue opening and its (empty) track list arriving are two
-        // different frames — read the list after both have landed.
-        const opened = until("the new venue's empty track list", (s) =>
-            s.find({ role: "text", label: "No tracks imported" }) !== undefined ? s : undefined);
         // A new venue has no rig, so creating it closes the dialog onto its
-        // setup page.
+        // setup page: Rig.
         const setup = until("the new venue's setup page", (s) =>
             s.find({ role: "card", label: "Venue dialog" }) === undefined
                 && s.find({ role: "card", label: "Morning Room Venue" }) !== undefined);
+        // Arrange is its (empty) song list.
+        nav.mode("Arrange");
+        const opened = until("the new venue's empty song list", (s) =>
+            s.find({ role: "text", label: "No tracks imported" }) !== undefined ? s : undefined);
         ({ loading,
            focused: create.find({ role: "input", label: "Venue name" }).focused,
            opened: opened.find({ role: "text", label: "No tracks imported" }) !== undefined,
@@ -525,12 +502,9 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         let picker = until("the FIFO venue picker", (s) =>
             s.find({ role: "card", label: "Alpha Hall" }) !== undefined);
         app.click(picker.find({ role: "card", label: "Alpha Hall" }));
-        const alpha = until("the FIFO Alpha opener", (s) =>
+        until("the FIFO Alpha venue", (s) =>
             s.find({ role: "button", label: "Alpha Hall" }) !== undefined);
-        app.click(alpha.find({ role: "button", label: "Alpha Hall" }));
-        picker = until("the FIFO replacement picker", (s) =>
-            s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        app.click(picker.find({ role: "card", label: "Beta Room" }));
+        nav.switchVenue("Beta Room");
         const beta = until("the FIFO Beta opener", (s) =>
             s.find({ role: "button", label: "Beta Room" }) !== undefined);
         app.frames(12, { waitMs: 50 });
@@ -611,13 +585,13 @@ fn delete_score(dir: &Path, id: &str) {
         });
 }
 
-/// `docs/specs/venue-tabs.md` rule 8: a launch reopens the last venue, each
-/// venue's tabs with the front tab in front, and drops a tab whose score is
-/// gone.
+/// `docs/specs/comet-shell.md`: a launch reopens the last venue, and each
+/// venue comes back in the mode it was left in with the score it had open —
+/// unless that score is gone, when Arrange is the song list again.
 #[test]
-fn open_tabs_come_back_at_launch() {
+fn each_venue_keeps_its_mode_and_score_across_a_relaunch() {
     let dir = fixture_dir(
-        "tabs",
+        "modes",
         &[("alpha", "Alpha Hall"), ("beta", "Beta Room")],
         None,
         true,
@@ -626,16 +600,14 @@ fn open_tabs_come_back_at_launch() {
     exec(
         &mut first,
         r#"
-        const chip = (s, label) => s.find({ role: "button", label }) !== undefined;
+        const titled = (s, label) => s.find({ role: "button", label }) !== undefined;
         nav.venue("Alpha Hall");
         nav.track("Alpha Hall Track");
-        until("Alpha's score tab", (s) => chip(s, "Alpha Hall Track · #1"));
-        nav.venuePage("Alpha Hall");
-        until("Alpha's venue tab", (s) => chip(s, "Venue"));
-        nav.step("the venue switcher", "button", "Alpha Hall");
-        nav.venue("Beta Room");
+        until("Alpha's score", (s) => titled(s, "Alpha Hall Track · #1"));
+        nav.mode("Rig");
+        nav.switchVenue("Beta Room");
         nav.track("Beta Room Track");
-        until("Beta's score tab", (s) => chip(s, "Beta Room Track · #1"));
+        until("Beta's score", (s) => titled(s, "Beta Room Track · #1"));
         // Long enough for the debounced save to land.
         app.frames(30, { waitMs: 50 });
         true
@@ -648,19 +620,23 @@ fn open_tabs_come_back_at_launch() {
     let out = exec(
         &mut second,
         r#"
-        const chip = (s, label) => s.find({ role: "button", label }) !== undefined;
-        // Beta was the last venue; its one tab's score is gone.
-        until("Beta, restored", (s) => s.find({ role: "row", label: "Venue setup" }) !== undefined);
-        // Long enough for a restore that wrongly kept the tab to open it.
+        const titled = (s, label) => s.find({ role: "button", label }) !== undefined;
+        // Beta was the last venue, in Arrange; its score is gone.
+        until("Beta, restored", (s) => s.find({ role: "button", label: "Beta Room" })?.bounds.y < 44
+            && s.find({ role: "card", label: "Song list" }) !== undefined);
+        // Long enough for a restore that wrongly kept the score to open it.
         app.frames(20, { waitMs: 50 });
-        const betaTab = chip(app.snapshot(), "Beta Room Track · #1");
-        nav.step("the venue switcher", "button", "Beta Room");
-        nav.venue("Alpha Hall");
-        const alpha = until("Alpha's tabs, restored", (s) =>
-            chip(s, "Alpha Hall Track · #1") && chip(s, "Venue") ? s : undefined);
-        ({ betaTab, venueInFront: alpha.find({ role: "card", label: "Alpha Hall Venue" }) !== undefined })
+        const betaScore = titled(app.snapshot(), "Beta Room Track · #1");
+        nav.switchVenue("Alpha Hall");
+        const alpha = until("Alpha, restored in Rig", (s) =>
+            s.find({ role: "card", label: "Alpha Hall Venue" }) !== undefined ? s : undefined);
+        nav.mode("Arrange");
+        const score = until("Alpha's score, restored", (s) =>
+            titled(s, "Alpha Hall Track · #1") && s.find({ role: "card", label: "Song list" }) === undefined);
+        ({ betaScore, rig: nav.shownMode(alpha) === "Rig", score: !!score })
         "#,
     );
-    assert_eq!(out["betaTab"], false);
-    assert_eq!(out["venueInFront"], true);
+    assert_eq!(out["betaScore"], false);
+    assert_eq!(out["rig"], true);
+    assert_eq!(out["score"], true);
 }

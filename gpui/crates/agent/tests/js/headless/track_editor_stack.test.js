@@ -45,7 +45,7 @@ function stack() {
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
 }
 
@@ -69,7 +69,7 @@ test("a group dragged up takes one lane each, however many moves it took", () =>
   const lifted = stack();
   // Outwait the debounce and the write's round trip.
   app.frames(20, { waitMs: 40 });
-  nav.closeTab();
+  nav.reopen("Aurora");
   app.frames(6);
   open();
   const stored = stack();

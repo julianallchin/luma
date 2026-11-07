@@ -30,10 +30,10 @@ async fn seed(dir: &Path, stored: Stored) {
     // admission was armed for the right identity.
     //
     sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Sign-in Venue')")
-    .bind(session::owner(stored))
-    .execute(&db.0)
-    .await
-    .expect("failed to seed venue");
+        .bind(session::owner(stored))
+        .execute(&db.0)
+        .await
+        .expect("failed to seed venue");
     db.0.close().await;
     session::seed(dir, stored).await;
 }
@@ -101,8 +101,8 @@ fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
             venues: gate.find({ role: "card", label: "Venue dialog" }) !== undefined,
             // A state, not a plane: the shell is not behind it, so neither
             // corner control is there to be pressed through it.
-            shell: gate.find({ role: "button", label: "sidebar-toggle" }) !== undefined
-                || gate.find({ role: "card", label: "View mode" }) !== undefined,
+            shell: gate.find({ role: "button", label: "Hide agent" }) !== undefined
+                || gate.find({ role: "card", label: "Modes" }) !== undefined,
             // …and the window still moves and closes.
             lights: gate.find({ role: "card", label: "Window controls" }) !== undefined,
             // Nothing failed. A launch that could not verify a session is a
@@ -158,15 +158,15 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
     assert_eq!(out["gate"], false, "a proven session skips the gate");
 }
 
-/// Sign out from the sidebar foot's account menu — the door a person actually
+/// Sign out from the title bar's venue menu — the door a person actually
 /// presses — and land at the gate: signed out is not a state the shell shows.
 ///
 /// The principal's one row is already durable, so the cloud flush sign-out
 /// begins with has nothing to send and the whole boundary runs offline. That
-/// is the point: what is under test is the *gesture*, from the foot to the end
+/// is the point: what is under test is the *gesture*, from the menu to the end
 /// state, not the sync it fronts.
 #[test]
-fn signing_out_from_the_account_foot_lands_at_the_gate() {
+fn signing_out_from_the_venue_menu_lands_at_the_gate() {
     let dir = fixture_dir("signout", Stored::Proven { expires_in: 3600 });
     let mut harness = harness(&dir);
     let out = exec(
@@ -174,11 +174,11 @@ fn signing_out_from_the_account_foot_lands_at_the_gate() {
         r#"
         nav.venue("Sign-in Venue");
         until("the shell", (s) =>
-            s.find({ role: "button", label: "Account" }) !== undefined
+            s.find({ role: "card", label: "Title bar" }) !== undefined
                 && s.find({ role: "card", label: "Venue dialog" }) === undefined);
-        // Signed in, so the foot does not name the guest namespace yet.
+        // Signed in, so nothing names the guest namespace yet.
         const before = app.snapshot().find({ role: "text", label: "Working locally" }) === undefined;
-        nav.step("the account foot", "button", "Account");
+        nav.venueMenu();
         nav.step("the sign-out row", "row", "Sign out");
         // Either the gesture lands — the gate is the next screen — or it
         // failed, and the failure has to be readable from right here, because
@@ -206,6 +206,5 @@ fn signing_out_from_the_account_foot_lands_at_the_gate() {
         out["failure"]
     );
     assert_eq!(out["gate"], true, "signing out must land at the gate");
-    assert_eq!(out["menu"], false, "the account menu stayed open");
+    assert_eq!(out["menu"], false, "the venue menu stayed open");
 }
-

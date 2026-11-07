@@ -7,23 +7,25 @@
 
 fixture({ clips: [{ pattern: "pat-glow", name: "Glow", start: 1, end: 4 }] });
 
-// The workspace's `+` box, hung at a window point. The sidebar's track row
-// sits under the press — pressing it pushes the column to that track's
-// scores, which is loud and easy to notice.
+// The title bar's venue menu, open over the song list. A song row sits under
+// the press — pressing it expands that song's scores, which is loud and easy
+// to notice.
 test("a press outside a menu closes it and does not reach what is under it", () => {
-  // The `+` lives in the workspace panel's band, so a tab must be open first.
-  // `nav.track` leaves the sidebar on the track list.
-  nav.trackEditor("Test Venue", "Aurora");
-  const menu = (s) => s.find({ role: "card", label: "New tab" });
-  const level = (s) => s.find({ role: "card", label: "Scores level" });
+  nav.venue("Test Venue");
+  nav.songs();
+  const menu = (s) => s.find({ role: "row", label: "New venue…" });
+  const expanded = (s) => s.find({ role: "card", label: "Scores of Aurora" });
 
-  app.action("luma::NewTab");
-  const opened = until("the + box", (s) => menu(s) !== undefined);
-  expect(level(opened)).toBe(undefined);
+  nav.venueMenu();
+  const opened = until("the venue menu", (s) => menu(s) !== undefined ? s : undefined);
+  expect(expanded(opened)).toBe(undefined);
 
-  app.click(opened.find({ role: "row", label: "Aurora" }));
+  // A point on the song's row clear of the menu.
+  const row = opened.find({ role: "row", label: "Aurora" }).bounds;
+  const box = opened.find({ role: "row", label: "New venue…" }).bounds;
+  app.click({ x: Math.max(row.x + row.width - 40, box.x + box.width + 40), y: row.y + row.height / 2 });
   app.frames(2);
   const after = app.snapshot();
   assert(menu(after) === undefined, "the menu stayed up through a press outside it");
-  assert(level(after) === undefined, "the dismissing press also pushed the sidebar — the float shares its press");
+  assert(expanded(after) === undefined, "the dismissing press also expanded the song — the float shares its press");
 });

@@ -52,7 +52,7 @@ let ZOOM = null;
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   // The editor's own geometry: give it the whole column.
   nav.stageOff();
   until("the clips", (s) => s.find({ role: "card", label: WASH }) !== undefined);
@@ -61,7 +61,7 @@ function open() {
 
 function reopen() {
   settled();
-  nav.closeTab();
+  nav.reopen("Aurora");
   app.frames(6);
   open();
 }

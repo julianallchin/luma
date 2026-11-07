@@ -16,7 +16,7 @@ const nodes = () => graphClip().graph.nodes;
 function open({ page = true } = {}) {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Wash"));
   until("the graph", (s) => s.find({ role: "row", label: "Brightness" }));
@@ -231,7 +231,7 @@ const GRADIENT = { pattern: "graph-clip", name: "Gradient", start: 1, end: 3, pr
 test("a strip across space marks where each head falls", { fixture: { clips: [GRADIENT] } }, () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Gradient"));
   nav.graphPage();

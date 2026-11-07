@@ -30,7 +30,7 @@ test(
       return frames;
     };
     nav.trackEditor("Test Venue", "Aurora");
-    nav.program();
+    nav.agentOff();
     until("the clip", () => node("card", CARD));
     until("the presets", () => node("card", "Presets"));
     const empty = read();
@@ -58,7 +58,7 @@ test(
 test("the inspector stays beside the timeline and pickers accept keyboard input", () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   until("the clip", () => node("card", CARD));
   app.click(node("card", CARD));
   until("the clip's controls", () => node("button", "Pick fixtures"));

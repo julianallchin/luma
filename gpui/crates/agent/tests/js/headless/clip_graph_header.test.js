@@ -9,7 +9,7 @@ const node = (role, label) => until(label, (s) => s.find({ role, label })).find(
 
 function open() {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Sparkle rain"));
   nav.graphPage();

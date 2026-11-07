@@ -4,7 +4,7 @@
 //   are findable by role and label like every other control.
 // - Deleting a score that holds clips asks first, quoting the row's count,
 //   and the row survives a cancel.
-// - Confirming removes it; when it was the score on the timeline, its tab
+// - Confirming removes it; when it was the score on the timeline, it
 //   closes.
 // - An empty score goes without a dialog: a confirmation that can only be
 //   answered one way is one nobody reads.
@@ -46,10 +46,10 @@ test(`a right-click on a score raises a findable menu and escape takes it away`,
   const item = shot.find({ role: "button", label: "Delete score" });
 
   // A node's bounds are clipped to its content mask, so a card cut off by
-  // the sidebar's clip would have no area — and nothing could click it.
+  // the list's clip would have no area — and nothing could click it.
   expect(card.bounds.width * card.bounds.height).toBeGreaterThan(0);
   expect(item.bounds.width * item.bounds.height).toBeGreaterThan(0);
-  // It hangs at the pointer, not at the top of the column.
+  // It hangs at the pointer, not at the top of the list.
   expect(card.bounds.y).toBeGreaterThan(row.bounds.y - 1);
 
   // Escape is the other door out.
@@ -76,19 +76,17 @@ test(`deleting a score with clips asks first and the answer decides`, () => {
   expect(labels(after).length).toBe(listed.length - 1);
 });
 
-test(`deleting the open score closes its tab`, () => {
+test(`deleting the open score closes it`, () => {
   const ordinal = (s) => s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"));
   const level = toScores();
   const before = labels(level);
 
-  // Choosing a score from this level opens it and puts the sidebar away a
-  // double-click interval later; bring it back to have the list and the
-  // editor on the same document.
+  // Choosing a score from the list opens it and closes the list; open the
+  // list again to have it and the open score on the same document.
   app.click(withClips(level));
   until("the timeline on the chosen score", (s) => ordinal(s) !== undefined);
-  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
-  app.action("luma::ToggleSidebar");
-  const open = until("the level back", (s) => withClips(s) !== undefined);
+  nav.scores("Aurora");
+  const open = until("the list back", (s) => withClips(s) !== undefined ? s : undefined);
 
   // `#N` is a position and renumbers on delete; the clip count names the
   // score across the deletion — the fixture's one clip is on this one.
@@ -96,9 +94,9 @@ test(`deleting the open score closes its tab`, () => {
   const next = app.snapshot();
   // Either door: a score with clips asks, an empty one does not.
   if (dialog(next) !== undefined) app.click(lastDelete(next));
-  // The score's tab closes at once; the list is re-read when the seam answers.
-  const gone = until("the tab closed and the list re-read", (s) =>
-    s.find({ role: "card", label: "Empty panel" }) !== undefined
+  // The score closes at once; the list is re-read when the seam answers.
+  const gone = until("the score closed and the list re-read", (s) =>
+    !s.findAll({ role: "button" }).some((n) => n.label.startsWith("Aurora · #"))
       && rows(s).length === before.length - 1);
 
   expect(ordinal(gone)).toBe(undefined);

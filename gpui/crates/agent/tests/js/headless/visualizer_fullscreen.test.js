@@ -17,7 +17,7 @@ test(
     const LAYOUT = ["Sidebar", "Waveform", "Pattern graph", "Stage"];
     nav.trackEditor("Test Venue", "Aurora");
     // Program: the layout with an inspector to restore.
-    nav.program();
+    nav.agentOff();
     until("the clip", () => node("card", CLIP));
     // In the track editor the stage carries no visualizer toolbar.
     expect(node("card", "Visualizer toolbar")).toBe(undefined);

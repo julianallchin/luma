@@ -17,7 +17,7 @@ const node = (role, label) => until(label, (s) => s.find({ role, label })).find(
 
 function open(preset = "Pulse") {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", preset));
   nav.graphPage();

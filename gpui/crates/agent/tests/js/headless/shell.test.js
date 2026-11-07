@@ -30,9 +30,8 @@ test("1, 2 and 3 switch between Rig, Arrange and Live", () => {
 test("a key in a text field types instead of switching mode", () => {
   nav.venue("Test Venue");
   nav.songs();
-  const search = app.snapshot().find({ role: "input", label: "Search tracks" });
-  app.click(search);
-  app.type(search, "2");
+  app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
+  app.type(app.snapshot().find({ role: "input", label: "Search tracks" }), "2");
   app.frames(4);
   const after = app.snapshot();
   expect(nav.shownMode(after)).toBe("Arrange");

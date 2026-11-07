@@ -4,7 +4,7 @@
 // environment record, so it is only offered where there is a sky, and it is
 // still there when the venue page is opened again.
 
-fixture({ seconds: 20, rig: 4, window: [1500, 950] });
+fixture({ seconds: 20, rig: 4, window: [1500, 950], sql: ["INSERT INTO venues (id, uid, name) VALUES ('venue-spare', '$PRINCIPAL', 'Spare Venue')"] });
 
 const PRESETS = ["Clear", "Fair weather", "Scattered", "Overcast", "Storm"];
 
@@ -41,7 +41,7 @@ test("cloud presets are outdoor only and survive reopening the venue", () => {
 
   // Let the write land, then leave the venue and come back.
   app.frames(20);
-  nav.closeTab();
+  nav.leaveVenue("Test Venue");
   nav.venuePage("Test Venue");
   until("the reopened environment", (s) => s.find({ role: "card", label: "Venue environment" }));
   expect(clouds(until("the saved clouds", (s) => clouds(s) !== null))).toBe("Overcast");

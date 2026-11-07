@@ -19,7 +19,7 @@ const settle = () => app.frames(6, { waitMs: 30 });
 
 function open() {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Pulse"));
   nav.graphPage();

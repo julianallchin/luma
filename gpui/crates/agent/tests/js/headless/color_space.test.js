@@ -14,7 +14,7 @@ const nodes = () => stored().graph.nodes;
 function open() {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Wash"));
   until("the graph", (s) => s.find({ role: "card", label: "Pattern graph" }) && s.find({ role: "card", label: "Color 1" }));

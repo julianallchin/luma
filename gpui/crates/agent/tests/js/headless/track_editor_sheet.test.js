@@ -33,7 +33,7 @@ const BRIGHTNESS = "Color 1 brightness";
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   // The waveform lands before the score does.
   until("the clips", (s) => s.findAll({ role: "card", label: FORM }).length === 2);
@@ -110,7 +110,7 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
   retype(BRIGHTNESS, next);
   const edited = readSheet();
   expect(edited.inputs[BRIGHTNESS]).toBe(next);
-  nav.closeTab();
+  nav.reopen("Aurora");
   app.frames(6);
   open();
   app.click(clip(FORM, 0));
