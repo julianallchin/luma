@@ -41,6 +41,10 @@ test("a song unfolds its scores in place and folds back", { timeoutMs: 180000 },
 
   app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
   until("the scores folded", (s) => !unfolded(s));
+  // The click leaves the pointer on the row, which wears its hover fill; the
+  // folded picture had the pointer off the list, so take it off again.
+  const rest = page().bounds;
+  app.scroll({ x: rest.x + rest.width / 2, y: rest.y + rest.height - 20 }, { dy: 0 });
   app.frames(6, { waitMs: 16 });
   const refoldedBounds = page().bounds;
   const refolded = app.screenshot({ node: page() });
