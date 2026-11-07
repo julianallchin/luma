@@ -31,9 +31,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::*;
-use luma_ui::float::{self, RowState};
+use luma_ui::float;
 use luma_ui::glass;
 use luma_ui::ladder;
+use luma_ui::motion::FadeHover as _;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::pane;
 
@@ -296,13 +297,14 @@ impl Tracks {
             .collect()
     }
 
-    /// How a row in `column` that is on the selection path is painted: the
-    /// stronger tint in the column the keyboard is in, a plate in the others.
-    fn path_state(&self, column: Column, on_path: bool) -> RowState {
+    /// How a row in `column` that is on the selection path is lit: the
+    /// stronger fill in the column the keyboard is in, the weaker in the
+    /// others.
+    fn path_state(&self, column: Column, on_path: bool) -> Lit {
         match (on_path, self.column == column) {
-            (false, _) => RowState::Rest,
-            (true, true) => RowState::Selected,
-            (true, false) => RowState::Cursor,
+            (false, _) => Lit::Rest,
+            (true, true) => Lit::Focused,
+            (true, false) => Lit::Path,
         }
     }
 }
@@ -717,8 +719,12 @@ const GAP: f32 = 12.;
 /// The page head's height: the title, the search, the filter and Add songs.
 const HEAD_HEIGHT: f32 = 52.;
 /// A song row: art over its padding.
-const SONG_ROW: f32 = 46.;
-const ART: f32 = 32.;
+/// Every row in every column, places, songs and scores alike: one height,
+/// so a row in one column lines up with its neighbours in the next. A song's
+/// art is this square.
+pub(crate) const ROW: f32 = 36.;
+/// How far a row's words sit in from the column's edge.
+pub(crate) const ROW_INSET: f32 = 12.;
 /// The coverage dot's box.
 const DOT: f32 = 6.;
 /// The search field's width in the head.
@@ -730,8 +736,6 @@ const COLUMN_MIN: f32 = 140.;
 const SCORES_MIN: f32 = 260.;
 /// The rule between two columns.
 const HAIRLINE: f32 = 1.;
-/// The inset of a column's rows from its edges.
-const COLUMN_PAD: f32 = 6.;
 
 /// The song list page: the head, then the three columns.
 ///
@@ -1000,7 +1004,7 @@ fn songs_column(
                 let chosen = selected.as_deref() == Some(track.id.as_str());
                 song_row(
                     track,
-                    if chosen { path } else { RowState::Rest },
+                    if chosen { path } else { Lit::Rest },
                     open.as_deref() == Some(track.id.as_str()),
                     dots.get(&track.id).copied(),
                     &app,
@@ -1010,7 +1014,6 @@ fn songs_column(
     })
     .track_scroll(&state.songs_scroll)
     .size_full()
-    .p(px(COLUMN_PAD))
     .into_any_element()
 }
 
@@ -1019,7 +1022,7 @@ fn songs_column(
 /// right-click is the folder menu.
 fn song_row(
     track: &TrackBrowserRow,
-    state: RowState,
+    state: Lit,
     open: bool,
     status: Option<ChatStatus>,
     app: &Entity<Luma>,
@@ -1036,11 +1039,8 @@ fn song_row(
         .unwrap_or_else(|| "Unknown artist".into());
     let subtitle = sub_line(&artist, track.bpm);
     let length = track.duration_seconds.map_or_else(String::new, length);
-    float::menu_row(state, key.clone())
-        .id(key)
-        .w_full()
-        .h(px(SONG_ROW))
-        .py(px(0.))
+    column_row(state, key)
+        .pr(px(ROW_INSET))
         .on_click(move |_, window, cx| {
             let track_id = track_id.clone();
             pressed.update(cx, |this, cx| {
@@ -1056,15 +1056,30 @@ fn song_row(
             };
             raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
         })
-        .child(album_art(track.album_art_path.as_deref(), ART))
-        .child(float::row_text_with(
-            name.clone(),
-            Some(
-                float::row_subtitle(subtitle.clone())
-                    .agent_node(Role::Text, subtitle)
-                    .into_any_element(),
-            ),
-        ))
+        .child(album_art(track.album_art_path.as_deref(), ROW).rounded_none())
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(12.5))
+                        .line_height(px(16.))
+                        .child(name.clone()),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(10.5))
+                        .line_height(px(14.))
+                        .text_color(glass::ink(glass::TEXT_SECONDARY))
+                        .child(subtitle.clone())
+                        .agent_node(Role::Text, subtitle),
+                ),
+        )
         .children(status.map(|status| crate::agent::status_dot(status, &name)))
         .child(
             div()
@@ -1072,10 +1087,10 @@ fn song_row(
                 .flex()
                 .flex_col()
                 .items_end()
-                .gap(px(2.))
                 .child(
                     div()
                         .text_size(px(11.))
+                        .line_height(px(16.))
                         .font_family(luma_ui::fonts::MONO)
                         .text_color(glass::ink(if open { 0.95 } else { glass::TEXT_SECONDARY }))
                         .child(length),
@@ -1090,6 +1105,39 @@ fn song_row(
         )
         .agent_node(Role::Row, name)
         .into_any_element()
+}
+
+/// How lit a column row is: at rest, on the selection path in a column
+/// without the keyboard, or on it in the column with the keyboard.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Lit {
+    Rest,
+    Path,
+    Focused,
+}
+
+/// One row of any column, [`ROW`] tall and the column's full width. Lit by a
+/// plain fill, edge to edge: no rounding, no inset, no ring. A row at rest
+/// takes the hover fill, which is lighter than either path fill.
+pub(crate) fn column_row(lit: Lit, id: impl Into<SharedString>) -> Stateful<Div> {
+    let row = div()
+        .id(id.into())
+        .w_full()
+        .h(px(ROW))
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .text_size(px(12.5))
+        .cursor_pointer();
+    match lit {
+        Lit::Focused => row.bg(glass::wash(glass::WASH_EMPHASIS)),
+        Lit::Path => row.bg(glass::wash(glass::WASH_PRESSED)),
+        Lit::Rest => row
+            .bg(glass::wash(0.))
+            .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
+            .fade_hover(),
+    }
 }
 
 /// The line under a song's title: `artist · 128 BPM`, the tempo's fraction
@@ -1152,6 +1200,7 @@ fn score_count(track: &TrackBrowserRow) -> impl IntoElement {
     };
     div()
         .text_size(px(10.5))
+        .line_height(px(14.))
         .text_color(glass::ink(alpha))
         .child(text)
         // Track-scoped, because a script finds nodes across the whole tree

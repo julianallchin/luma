@@ -16,6 +16,8 @@ use std::future::Future;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use luma_ui::float::{self, Dismiss, RowState};
+
+use super::{column_row, Lit, ROW_INSET};
 use luma_ui::glass;
 use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument, Role};
@@ -318,17 +320,19 @@ pub(super) fn column(
         .id("places-column")
         .size_full()
         .overflow_y_scroll()
-        .p(px(6.))
         .flex()
         .flex_col()
-        .gap(px(2.))
         .child(all_songs_row(
             state.path_state(Column::Places, *place == Place::All),
             state.all_count,
             app,
         ))
         .when(!state.folders.is_empty(), |el| {
-            el.child(float::section_heading("Folders").pt(px(10.)))
+            el.child(
+                float::section_heading("Folders")
+                    .px(px(ROW_INSET))
+                    .pt(px(12.)),
+            )
         })
         .children(state.folders.iter().enumerate().map(|(index, folder)| {
             let selected = matches!(place, Place::Folder(id) if *id == folder.id);
@@ -376,8 +380,8 @@ fn folder_statuses(
 
 /// A place's row: its glyph, its name, how many songs the filters admit in
 /// it, and the chevron that says selecting it opens a column.
-fn place_row(state: RowState, key: SharedString, icon: IconName) -> Stateful<Div> {
-    float::nav_row(state, key.clone()).id(key).w_full().child(
+fn place_row(state: Lit, key: SharedString, icon: IconName) -> Stateful<Div> {
+    column_row(state, key).px(px(ROW_INSET)).child(
         gpui_component::Icon::new(icon)
             .size(px(14.))
             .text_color(glass::ink(glass::TEXT_SECONDARY)),
@@ -402,7 +406,7 @@ fn place_tail(count: usize, label: String) -> [AnyElement; 2] {
 }
 
 /// Every song in the venue, in a folder or not.
-fn all_songs_row(state: RowState, songs: usize, app: &Entity<Luma>) -> AnyElement {
+fn all_songs_row(state: Lit, songs: usize, app: &Entity<Luma>) -> AnyElement {
     let app = app.clone();
     place_row(state, "place-all".into(), IconName::Music)
         .on_click(move |_, window, cx| {
@@ -432,7 +436,7 @@ const ALL_SONGS: &str = "All songs";
 fn folder_row(
     folder: &Folder,
     songs: usize,
-    state: RowState,
+    state: Lit,
     status: Option<ChatStatus>,
     field: Option<&Entity<TextInput>>,
     app: &Entity<Luma>,
@@ -498,10 +502,8 @@ fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
 /// Make another folder.
 fn new_folder_row(app: &Entity<Luma>) -> AnyElement {
     let app = app.clone();
-    float::nav_row(RowState::Rest, "new-folder")
-        .id("new-folder")
-        .w_full()
-        .mt(px(2.))
+    column_row(Lit::Rest, "new-folder")
+        .px(px(ROW_INSET))
         .on_click(move |_, window, cx| {
             app.update(cx, |this, cx| this.create_folder(window, cx));
         })

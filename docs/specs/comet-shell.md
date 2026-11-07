@@ -88,8 +88,8 @@ songs (add and import). Under it, three columns left to right, with hairlines
    only column of places. Each place shows how many songs the filters admit
    and a chevron; a folder also carries its songs' chat dots. Right-click a
    folder to rename or delete it (delete asks when it holds songs).
-2. **Songs** (340 by default) in the selected place: art, title, `artist ·
-   bpm` under it, and at the row's end the length over the score count, the
+2. **Songs** (340 by default) in the selected place: square art the row's
+   full height, flush left, then the title over `artist · bpm`, and at the row's end the length over the score count, the
    chat dot and the coverage dot. A press selects a song. Right-click lists
    the folders with checkboxes to file it in.
 3. **Scores** of the selected song, filling the rest: this venue's under its
@@ -101,8 +101,11 @@ songs (add and import). Under it, three columns left to right, with hairlines
    This venue's scores take a right-click Delete.
 
 Selecting in one column fills the next, and choosing another place empties
-the songs' selection. The path stays lit: the column with the keyboard
-wears the selected fill and ring, the others a plate. Up and Down move in a
+the songs' selection. Every row in every column is one height (36,
+`tracks::ROW`) and full column width; hover and selection are plain fills
+edge to edge, no corners, inset or ring. The path stays lit: the column with
+the keyboard wears the stronger fill (`WASH_EMPHASIS`), the others the
+weaker (`WASH_PRESSED`); hover is `WASH_SUBTLE`. Up and Down move in a
 column, Right goes into the next, Left steps back (clearing the column it
 leaves), Enter opens the score under the cursor; Down in the search goes to
 the first match. The selection outlives the page closing, so it reopens on

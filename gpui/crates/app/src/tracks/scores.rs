@@ -23,7 +23,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use luma_ui::float::{self, RowState};
+use luma_ui::float;
+
+use super::{column_row, Lit, ROW_INSET};
 use luma_ui::glass;
 use luma_ui::node::{Instrument, Role};
 use luma_ui::text_input::{self, TextInput, DRAFT_CONTEXT};
@@ -769,11 +771,13 @@ pub(super) fn column(
         .id("scores-column")
         .size_full()
         .overflow_y_scroll()
-        .p(px(6.))
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .child(float::section_heading(state.venue_name().to_string()).pt(px(6.)))
+        .child(
+            float::section_heading(state.venue_name().to_string())
+                .px(px(ROW_INSET))
+                .pt(px(10.)),
+        )
         .children(scores.error.clone().map(float::error_row))
         .when(scores.error.is_none() && !scores.loaded, |el| {
             el.child(float::empty_row("Loading scores…"))
@@ -792,9 +796,8 @@ pub(super) fn column(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
                 .pt(px(10.))
-                .child(float::section_heading(name))
+                .child(float::section_heading(name).px(px(ROW_INSET)))
                 .children(rows.into_iter().map(draw))
         }))
         .agent_node(
@@ -857,7 +860,7 @@ pub(crate) fn elsewhere<'a>(
 fn score_row(
     row: &ScoreRow,
     index: usize,
-    state: RowState,
+    state: Lit,
     here: bool,
     open: bool,
     status: Option<ChatStatus>,
@@ -889,8 +892,8 @@ fn score_row(
     );
     let pressed = app.clone();
     let track_id = track.id.clone();
-    float::menu_row(state, id.clone())
-        .id(id)
+    column_row(state, id)
+        .px(px(ROW_INSET))
         .when(here, |el| {
             let raised = app.clone();
             let menu_track = track.id.clone();
@@ -1004,11 +1007,11 @@ fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
 }
 
 /// Mint another score on this `(track, venue)`.
-fn new_score(state: RowState, app: &Entity<Luma>, track_id: &str) -> AnyElement {
+fn new_score(state: Lit, app: &Entity<Luma>, track_id: &str) -> AnyElement {
     let app = app.clone();
     let track_id = track_id.to_string();
-    float::menu_row(state, format!("new-score:{track_id}"))
-        .id(SharedString::from(format!("new-score:{track_id}")))
+    column_row(state, format!("new-score:{track_id}"))
+        .px(px(ROW_INSET))
         .on_click(move |_, window, cx| {
             let track_id = track_id.clone();
             app.update(cx, |this, cx| {
