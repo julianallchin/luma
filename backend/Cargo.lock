@@ -2404,7 +2404,6 @@ dependencies = [
  "bytemuck",
  "core-foundation 0.10.1",
  "core-video",
- "fixture-kinematics",
  "glam",
  "half",
  "image",

@@ -538,7 +538,7 @@ fn housing_worlds(
             let unscale = scale.inverse();
             // Three space is data space with Y and Z swapped, a reflection:
             // data `Rz(-pan)` is three `Ry(+pan)`, data `Rx(+tilt)` is three
-            // `Rx(-tilt)` (see `fixture_kinematics`' module note).
+            // `Rx(-tilt)` (see the backend `fixture-kinematics` crate's module note).
             let turns = [
                 (arm, Mat4::from_rotation_y(pan.to_radians())),
                 (head, Mat4::from_rotation_x(-tilt.to_radians())),

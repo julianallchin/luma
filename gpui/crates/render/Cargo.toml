@@ -22,11 +22,6 @@ test = false
 
 [dependencies]
 luma-scene = { path = "../scene" }
-# Reaches across into the backend workspace, the same direction `luma-app`
-# already goes. It is glam-only by policy precisely so that crossing is cheap:
-# beam origins have to be one implementation or they drift, and the app cannot
-# depend on anything in `gpui/`.
-fixture-kinematics = { path = "../../../backend/crates/fixture-kinematics" }
 glam = "0.30"
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
@@ -58,6 +53,10 @@ objc2-metal = { version = "0.3", features = [
 ] }
 objc2-io-surface = { version = "0.3", features = ["objc2"] }
 
-# The material presets test reads glTF material names straight from the file.
 [dev-dependencies]
+# `fixture_kinematics_contract` checks beams against the backend crate that
+# owns fixture kinematics. It is glam-only by policy, so reaching across into
+# the backend workspace is cheap.
+fixture-kinematics = { path = "../../../backend/crates/fixture-kinematics" }
+# The material presets test reads glTF material names straight from the file.
 gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }
