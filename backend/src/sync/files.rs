@@ -80,9 +80,7 @@ where
             }
         },
         Err(e) => {
-            let msg = format!("upload {what}: {e}");
-            errors.push(msg.clone());
-            sentry::capture_message(&msg, sentry::Level::Error);
+            errors.push(format!("upload {what}: {e}"));
             false
         }
     }

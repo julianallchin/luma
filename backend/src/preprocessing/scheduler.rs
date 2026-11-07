@@ -14,7 +14,7 @@
 //! 6. Startup reconciliation — each preprocessor returns its own pending
 //!    set via one bulk SQL query; the union is queued.
 //!
-//! On preprocessor failure: log + Sentry capture, record a row in
+//! On preprocessor failure: log, record a row in
 //! `preprocessing_failures` with exponential backoff, skip downstream
 //! preprocessors for this track in this run, then continue with other tracks.
 //! Reconcile on the next startup will pick the track up again once its
@@ -234,10 +234,6 @@ async fn drain_layer(
             Ok((_name, _output, Ok(()))) => {}
             Ok((name, output, Err(error))) => {
                 eprintln!("[preprocessing] {name} failed for track {track_id}: {error}");
-                sentry::capture_message(
-                    &format!("Preprocessor {name} failed for track {track_id}: {error}"),
-                    sentry::Level::Error,
-                );
                 failed_outputs.insert(output);
                 errors.push(format!("{name}: {error}"));
             }
@@ -505,10 +501,6 @@ pub async fn run_for_tracks(
             .await;
             if let Err(e) = result {
                 eprintln!("[preprocessing] track {track_id} failed: {e}");
-                sentry::capture_message(
-                    &format!("Preprocessing failed for track {track_id}: {e}"),
-                    sentry::Level::Error,
-                );
                 errors
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
