@@ -54,7 +54,7 @@ impl Build {
             // the same body seen before and after the count is set, and two
             // spellings of "a light goes here" would be one too many.
             Holding::Fixture { path, .. } => vec![GhostBody {
-                geometry: Geometry::Procedural(luma_render::catalog::default_params(
+                geometry: Geometry::Procedural(luma_scene::catalog::default_params(
                     luma_scene::catalog::Family::Corner,
                 )),
                 fixture: Some(path.clone()),
@@ -120,7 +120,7 @@ impl Build {
                     .and_then(geometry_of)
                     .unwrap_or_else(|| {
                         luma_render::scene_desc::Geometry::Procedural(
-                            luma_render::catalog::default_params(
+                            luma_scene::catalog::default_params(
                                 luma_scene::catalog::Family::Corner,
                             ),
                         )
@@ -213,7 +213,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                 let (pos, rot) = luma_scene::coords::data_pose_of_d(*station);
                 out.ghosts.push(Ghost {
                     geometry: luma_render::scene_desc::Geometry::Procedural(
-                        luma_render::catalog::default_params(luma_scene::catalog::Family::Corner),
+                        luma_scene::catalog::default_params(luma_scene::catalog::Family::Corner),
                     ),
                     fixture: match &row.what {
                         Holding::Fixture { path, .. } => Some(path.clone()),
@@ -247,7 +247,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                 let params = luma_scene::truss::Procedural::Truss {
                     span: run.length_m as f32,
                 };
-                let held = luma_render::catalog::procedural_sockets(params);
+                let held = luma_scene::catalog::procedural_sockets(params);
                 if let Some(end) = held.iter().find(|s| s.name == "end_a") {
                     let world = luma_scene::venue::place_on(
                         pose,
@@ -328,7 +328,7 @@ fn geometry_of(catalog_ref: &str) -> Option<luma_render::scene_desc::Geometry> {
     match luma_scene::catalog::piece(catalog_ref)?.geometry {
         luma_scene::catalog::Geometry::Mesh { path } => Some(Geometry::mesh(path)),
         luma_scene::catalog::Geometry::Procedural(family) => Some(Geometry::Procedural(
-            luma_render::catalog::default_params(family),
+            luma_scene::catalog::default_params(family),
         )),
         luma_scene::catalog::Geometry::Assembly(_) => {
             Some(Geometry::Assembly(catalog_ref.to_string()))
@@ -346,7 +346,7 @@ fn geometry_with(
     match luma_scene::catalog::piece(catalog_ref)?.geometry {
         luma_scene::catalog::Geometry::Mesh { path } => Some(Geometry::mesh(path)),
         luma_scene::catalog::Geometry::Procedural(family) => Some(Geometry::Procedural(
-            luma_render::catalog::node_params(family, &params_of(params)),
+            luma_scene::catalog::node_params(family, &params_of(params)),
         )),
         // An assembly has no parameters to hold at, so the palette default and
         // the held shape are the same shape.

@@ -1909,7 +1909,7 @@ mod tests {
 mod goldens {
     use std::collections::{BTreeMap, HashMap};
 
-    use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
+    use luma_scene::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
     use luma_scene::venue::{resolve, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET};
     use serde_json::{json, Value};
 
@@ -1937,7 +1937,7 @@ mod goldens {
         SOCKETS.get_or_init(|| {
             VenueSockets::load(
                 repo_root().join("resources/meshes"),
-                std::sync::Arc::new(luma_render::catalog::NoFixtures),
+                std::sync::Arc::new(luma_scene::catalog::NoFixtures),
             )
             .expect("the catalog resolves against the shipped meshes")
         })

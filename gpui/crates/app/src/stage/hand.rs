@@ -35,7 +35,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use glam::{DMat4, DVec3};
-use luma_render::catalog::{VenueSockets, BASE_SOCKET, SEAT_SOCKET};
+use luma_scene::catalog::{VenueSockets, BASE_SOCKET, SEAT_SOCKET};
 use luma_scene::coords;
 use luma_scene::snap::{
     attach_radius, detach_radius, solve_snap, Aim, ScenePiece, SnapInput, SnapMatch,
@@ -314,7 +314,7 @@ pub(crate) enum Holding {
         display_name: String,
         /// The socket a free drop rests on, when the palette row names one:
         /// a tower and a stick are the same generator put down on different
-        /// footings (`luma_render::catalog::footings`). `None` leaves it to
+        /// footings (`luma_scene::catalog::footings`). `None` leaves it to
         /// [`Room::seat_socket`], which finds an authored underside by its
         /// geometry rather than by a table of names.
         footing: Option<&'static str>,
@@ -953,8 +953,8 @@ fn piece_bounds(
             sockets.catalog().bounds(reference)
         }
         luma_scene::catalog::Geometry::Procedural(family) => {
-            Some(luma_render::catalog::procedural_bounds(
-                luma_render::catalog::node_params(family, &node.params),
+            Some(luma_scene::catalog::procedural_bounds(
+                luma_scene::catalog::node_params(family, &node.params),
             ))
         }
     }

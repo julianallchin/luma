@@ -2406,7 +2406,6 @@ dependencies = [
  "core-video",
  "fixture-kinematics",
  "glam",
- "gltf",
  "half",
  "image",
  "io-surface",

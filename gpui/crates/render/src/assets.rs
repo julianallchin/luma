@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use luma_scene::mesh::{load, Glb, MeshData};
+use glam::Vec3;
+use luma_scene::mesh::{load, Glb, MeshBounds, MeshData};
 
 /// Decoded linear RGB pixels from a Radiance HDR environment.
 #[derive(Clone)]
@@ -118,5 +119,11 @@ impl Library {
                 .insert(rel.to_string(), HdrImage { width, height, rgb });
         }
         Ok(&self.environments[rel])
+    }
+}
+
+impl MeshBounds for Library {
+    fn bounds(&mut self, mesh: &str) -> anyhow::Result<(Vec3, Vec3)> {
+        Ok(self.get(mesh)?.bounds())
     }
 }

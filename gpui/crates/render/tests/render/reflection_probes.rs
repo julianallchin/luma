@@ -28,7 +28,7 @@ const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
 
 fn library() -> Library {
-    Library::new(luma_render::meshes_root())
+    Library::new(luma_scene::meshes_root())
 }
 
 /// A frame of `pieces` in `environment`, from `eye` toward `target` (world

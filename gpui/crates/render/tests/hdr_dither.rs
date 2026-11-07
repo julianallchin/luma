@@ -31,7 +31,7 @@ const HEIGHT: u32 = 160;
 
 /// A dusk sky, just after sunset, with one hazy beam grazing across it.
 fn frame() -> Frame {
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::room(
         VenueEnvironment::outdoor(-1.8),

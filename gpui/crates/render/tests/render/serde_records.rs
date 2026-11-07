@@ -13,10 +13,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use luma_render::catalog::{default_params, StatedHousing};
 use luma_render::scene_desc::Scene;
-use luma_render::{repo_root, Catalogue};
+use luma_render::Catalogue;
 use luma_scene::catalog::Family;
+use luma_scene::catalog::{default_params, StatedHousing};
+use luma_scene::repo_root;
 use luma_scene::{
     definition::Definition,
     environment::{CloudCover, Floor, HazeAppearance, SkyParams, VenueEnvironment, VenueHaze},

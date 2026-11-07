@@ -30,8 +30,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use glam::{DMat4, DVec3};
-use luma_render::catalog::VenueSockets;
 use luma_scene::build;
+use luma_scene::catalog::VenueSockets;
 use luma_scene::sockets::{ResolvedSocket, SocketType};
 use luma_scene::venue::{
     root_socket, Constraint, Edge, Node, NodeKind, NodeSockets as _, Params,

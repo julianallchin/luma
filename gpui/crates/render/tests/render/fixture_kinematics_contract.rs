@@ -95,7 +95,7 @@ fn characterization_frame() -> Frame {
     let mut definitions = BTreeMap::new();
     definitions.insert("mover.qxf".to_string(), mover_definition());
 
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     build_frame(&scene, &definitions, 0.0, &mut Library::new(meshes))
         .expect("characterization scene should build")
 }
@@ -103,7 +103,7 @@ fn characterization_frame() -> Frame {
 /// The bundled moving-head mesh's tilt pivot below the clamp, in the mount's
 /// own data frame (`-Z` is the rest beam), at the mover definition's size.
 fn mesh_pivot_offset() -> Vec3 {
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let mut library = Library::new(meshes);
     let glb = library.get("qlc/moving_head.glb").unwrap();
     let (lo, hi) = glb.bounds();

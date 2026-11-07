@@ -425,7 +425,7 @@ pub(crate) fn piece_draws(
         // makes a booth one thing to click, select and drag.
         Geometry::Assembly(_) => {
             let mut draws = Vec::new();
-            for placement in crate::catalog::assembly_placements(geometry.parts(), lib)? {
+            for placement in luma_scene::catalog::assembly_placements(geometry.parts(), lib)? {
                 draws.extend(piece_draws(
                     &Geometry::MeshPath(placement.mesh.to_string()),
                     root * placement.transform,
@@ -1418,7 +1418,7 @@ mod tests {
     }
 
     fn library() -> Library {
-        Library::new(crate::meshes_root())
+        Library::new(luma_scene::meshes_root())
     }
 
     fn lit() -> PrimitiveState {

@@ -34,7 +34,7 @@ const KNEE: f32 = 0.6;
 /// A dark stage with one bright hazy beam, so the frame has both a range the
 /// two transforms share and highlights AgX compresses into white.
 fn frame() -> Frame {
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::dark_stage(48.0, 0.5);
     render.environment = Environment::DARK;

@@ -65,7 +65,7 @@ fn render_all() {
         let geometry = match piece.geometry {
             luma_scene::catalog::Geometry::Mesh { path } => Geometry::mesh(path),
             luma_scene::catalog::Geometry::Procedural(family) => {
-                Geometry::Procedural(luma_render::catalog::default_params(family))
+                Geometry::Procedural(luma_scene::catalog::default_params(family))
             }
             luma_scene::catalog::Geometry::Assembly(_) => Geometry::Assembly(piece.id.to_string()),
         };
@@ -77,11 +77,11 @@ fn render_all() {
                 Err(_) => continue,
             },
             Geometry::Procedural(params) => {
-                let bounds = luma_render::catalog::procedural_bounds(*params);
+                let bounds = luma_scene::catalog::procedural_bounds(*params);
                 (bounds.min.as_vec3(), bounds.max.as_vec3())
             }
             Geometry::Assembly(_) => {
-                match luma_render::catalog::assembly_bounds(geometry.parts(), &mut library) {
+                match luma_scene::catalog::assembly_bounds(geometry.parts(), &mut library) {
                     Ok(bounds) => (bounds.min.as_vec3(), bounds.max.as_vec3()),
                     Err(_) => continue,
                 }

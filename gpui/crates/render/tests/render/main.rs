@@ -1,7 +1,7 @@
 //! The `luma-render` integration tests, as one binary.
 //!
 //! `cargo test -p luma-render --test render <filter>`; a filter such as
-//! `venue_poses::` runs one file.
+//! `serde_records::` runs one file.
 //!
 //! Four tests stay in their own binaries next to this directory, because each
 //! changes process-wide state that every other test here would then see:
@@ -36,6 +36,4 @@ mod sun_shadow_export_views;
 mod sun_shadow_orbit;
 mod sun_shadow_stage_orbit;
 mod timestamp_query_contract;
-mod venue_build;
-mod venue_poses;
 mod volumetric_transport;

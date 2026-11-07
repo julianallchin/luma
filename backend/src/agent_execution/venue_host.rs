@@ -41,8 +41,8 @@ use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
-use luma_render::venue_tiles::TileMap;
 use luma_scene::environment::{HazeAppearance, SkyParams, VenueEnvironment, VenueHaze};
+use luma_scene::venue_tiles::TileMap;
 use luma_scene::View;
 
 /// One cell's venue capability table. Construct only from host-resolved scope.
@@ -825,7 +825,7 @@ impl VenueHost {
     // -- drafts ----------------------------------------------------------
 
     /// The geometry supply, resolved once per process.
-    fn supply(&self) -> Result<&'static luma_render::catalog::VenueSockets, HostCallError> {
+    fn supply(&self) -> Result<&'static luma_scene::catalog::VenueSockets, HostCallError> {
         crate::venue_graph::sockets(&self.resource_root)
             .map_err(|error| HostCallError::new("internal", error))
     }

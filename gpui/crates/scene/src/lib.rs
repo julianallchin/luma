@@ -1,7 +1,13 @@
-//! Scene math and editor logic for the wgpu renderer — no GPU, no windowing.
+//! The venue model, and the scene math and editor logic for the wgpu renderer
+//! — no GPU, no windowing.
 //!
-//! The retained scene graph, the camera, CPU raycasting, and the socket/snap
-//! solver.
+//! The venue graph and its resolver, the stage catalog and the sockets it
+//! resolves against the shipped meshes ([`catalog`], [`truss`], [`mesh`]), the
+//! stored venue and fixture records ([`environment`], [`definition`]), the
+//! retained scene graph, the camera, CPU raycasting, and the socket/snap
+//! solver. The backend's models, database and DMX output depend on this crate
+//! for venue types, so nothing here may link a GPU; `luma-render` draws what
+//! this describes.
 //!
 //! # Two conventions live here, deliberately
 //!
@@ -30,6 +36,7 @@ pub mod coords;
 pub mod definition;
 pub mod distribute;
 pub mod environment;
+pub mod face;
 pub mod framing;
 pub mod gesture;
 pub mod gizmo;
@@ -45,6 +52,7 @@ pub mod sockets;
 pub mod strobe;
 pub mod truss;
 pub mod venue;
+pub mod venue_tiles;
 
 pub use aabb::Aabb;
 pub use build::{Extent, Footprint, MODULE_M};
@@ -71,3 +79,22 @@ pub use sockets::{
 // its `Node` is a node of the *relation* tree and `graph::Node` is a node of the
 // *scene* tree, and flattening both into one namespace would make the two
 // indistinguishable at every call site.
+
+/// The repository root, for the bins and tests that read tracked data.
+///
+/// The crate sits at `<repo>/gpui/crates/scene`.
+#[must_use]
+pub fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("crate is three levels below the repo root")
+        .to_path_buf()
+}
+
+/// The repository's mesh catalog, `resources/meshes`, for the bins and tests
+/// that draw tracked assets.
+#[must_use]
+pub fn meshes_root() -> std::path::PathBuf {
+    repo_root().join("resources/meshes")
+}

@@ -107,7 +107,7 @@ fn shadow_centroid(shadowed: &[u8], direct: &[u8], width: usize) -> (f64, f64) {
 fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
     const WIDTH: u32 = 192;
     const HEIGHT: u32 = 144;
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let piece = || Piece {
         id: "shadow-caster".into(),
         geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
@@ -185,7 +185,7 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
 fn gpu_shadow_softness_is_stable_distinct_bounded_and_sun_independent() {
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 192;
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let piece = || Piece {
         id: "softness-caster".into(),
         geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
@@ -266,7 +266,7 @@ fn gpu_shadow_softness_is_stable_distinct_bounded_and_sun_independent() {
 fn gpu_far_cascade_keeps_directional_occlusion() {
     const WIDTH: u32 = 160;
     const HEIGHT: u32 = 120;
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let definitions = BTreeMap::new();
     let mut library = Library::new(meshes);
     let mut renderer = luma_render::Renderer::new().unwrap();
@@ -405,7 +405,7 @@ fn frame_resolves_sun_environment_and_haze_independently() {
 
 #[test]
 fn textured_pbr_proof_scene_resolves_deterministically() {
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let proof_piece = || Piece {
         id: "proof-cdj".into(),
         geometry: Geometry::mesh("stage_lab/cdj_3000x.glb"),
@@ -706,7 +706,7 @@ fn hdr_ibl_is_resident_deterministic_and_energy_monotonic() {
 #[test]
 fn procedural_emissive_survives_the_absent_texture_identity() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens/scenes.json");
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let mut catalogue = luma_render::Catalogue::load(&path).unwrap();
     let scene = catalogue
         .scenes
@@ -748,7 +748,7 @@ fn procedural_emissive_survives_the_absent_texture_identity() {
 fn live_async_presentation_matches_deterministic_capture_without_ui_polling() {
     const WIDTH: u32 = 96;
     const HEIGHT: u32 = 72;
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let proof_piece = || Piece {
         id: "async-proof".into(),
         geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),

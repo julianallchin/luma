@@ -15,7 +15,7 @@
 //!
 //! | question | whose answer |
 //! |---|---|
-//! | how long is the face, which way does it run | [`luma_render::face`] |
+//! | how long is the face, which way does it run | [`luma_scene::face`] |
 //! | where along it does each fixture sit | [`luma_scene::distribute`] |
 //! | what pose is that | [`luma_scene::venue::place_on`], through the resolver |
 //! | which universe and address | [`luma_scene::patch`] |
@@ -49,8 +49,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use luma_render::face::host_face;
 use luma_scene::distribute::{offsets, Fit, Layout};
+use luma_scene::face::host_face;
 use luma_scene::patch::{allocate_run, next_addresses, Footprint};
 use luma_scene::venue::{Edge, EdgeError, Node, NodeKind, ResolvedVenue, VenueGraph, FLOOR_SOCKET};
 
@@ -143,7 +143,7 @@ pub async fn distribute(
     // with, and what the edge is called. The standoff belongs to the housing
     // and reaches the pose through the node's own supply lookup, so this
     // probe deliberately asks for none.
-    let clamp = luma_render::catalog::fixture_clamp(0.0);
+    let clamp = luma_scene::catalog::fixture_clamp(0.0);
     if !clamp.socket_type.mates(face.socket.socket_type) {
         return Err(EdgeError::Polarity {
             held: clamp.socket_type,

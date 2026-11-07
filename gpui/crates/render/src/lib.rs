@@ -27,11 +27,9 @@ pub mod assets;
 pub mod atmosphere;
 pub(crate) mod cables;
 pub mod camera_export;
-pub mod catalog;
 pub mod colour;
 pub mod device;
 mod environment;
-pub mod face;
 pub mod floor;
 mod fog_grid;
 pub mod footage;
@@ -60,7 +58,6 @@ mod shadow_hierarchy;
 mod share;
 mod sky_visibility;
 mod sun_shafts;
-pub mod venue_tiles;
 pub mod viewport;
 pub mod warmup;
 pub mod waveform;
@@ -90,24 +87,5 @@ pub use warmup::{warm, warming, Warming};
 ///
 /// The live path has its own, much smaller, budget: [`LIVE_SUBFRAMES`].
 pub const DEFAULT_SUBFRAMES: u32 = 16;
-
-/// The repository root, for the bins and tests that read tracked data.
-///
-/// The crate sits at `<repo>/gpui/crates/render`.
-#[must_use]
-pub fn repo_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("crate is three levels below the repo root")
-        .to_path_buf()
-}
-
-/// The repository's mesh catalog, `resources/meshes`, for the bins and tests
-/// that draw tracked assets.
-#[must_use]
-pub fn meshes_root() -> std::path::PathBuf {
-    repo_root().join("resources/meshes")
-}
 
 mod visibility;

@@ -627,7 +627,7 @@ mod tests {
     }
 
     /// A host with one socket per face, at `±1` on each axis — the shape a
-    /// generated corner block has (`luma_render::catalog::procedural_sockets`
+    /// generated corner block has (`crate::catalog::procedural_sockets`
     /// names one `face_*` socket per *open* face), which is what makes "point
     /// at the face you want" expressible at all.
     fn faced_host() -> (Vec<ScenePiece>, HashMap<String, Vec<ResolvedSocket>>) {

@@ -16,12 +16,12 @@ use luma_scene::truss::{Face, FaceSet};
 const TIME: f32 = 1.37;
 
 fn main() -> anyhow::Result<()> {
-    let repo = luma_render::repo_root();
+    let repo = luma_scene::repo_root();
     let source = Catalogue::load(&repo.join("gpui/crates/render/goldens/scenes.json"))?;
     let output = repo.join("gpui/crates/render/goldens/contracts");
     std::fs::create_dir_all(&output)?;
     let mut renderer = Renderer::new()?;
-    let mut library = assets::Library::new(luma_render::meshes_root());
+    let mut library = assets::Library::new(luma_scene::meshes_root());
     let requested = std::env::args().skip(1).collect::<Vec<_>>();
 
     for scene in material_scenes() {

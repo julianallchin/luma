@@ -31,7 +31,6 @@ glam = "0.30"
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
-gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = "0.17"
@@ -58,3 +57,7 @@ objc2-metal = { version = "0.3", features = [
     "objc2-io-surface",
 ] }
 objc2-io-surface = { version = "0.3", features = ["objc2"] }
+
+# The material presets test reads glTF material names straight from the file.
+[dev-dependencies]
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }

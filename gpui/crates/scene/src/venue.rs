@@ -244,7 +244,7 @@ pub struct Constraint {
 /// Not [`crate::snap::SocketLookup`], which keys on a catalog id alone: a
 /// generated piece's sockets are a function of its **parameters** (a 3 m truss
 /// and a 6 m truss have different end frames), so the node is the key. The
-/// implementation lives in `luma_render::catalog`, which is the only module
+/// implementation lives in `crate::catalog`, which is the only module
 /// that knows both the catalog and the geometry.
 pub trait NodeSockets {
     /// `node`'s sockets in its own local (Y-up) frame.
@@ -1463,7 +1463,7 @@ const VERTICAL_HOST_EPSILON: f64 = 1e-9;
 ///
 /// A **fixture** lands the same way, and that is the point: *beam = mount
 /// normal* falls out of the ordinary face mate rather than being written here.
-/// Its clamp socket faces `+Y` (see `luma_render::catalog::fixture_clamp`), so
+/// Its clamp socket faces `+Y` (see `crate::catalog::fixture_clamp`), so
 /// opposing the normals turns the fixture's `-Y` — `-Z` once in data space,
 /// the rest direction its stored `Mount` means — onto the host normal, and a
 /// floor light points up while an under-truss light points down with no

@@ -599,7 +599,7 @@ pub(crate) fn build_layer(
             let span = params
                 .get("span")
                 .copied()
-                .unwrap_or(f64::from(luma_render::catalog::DEFAULT_TRUSS_SPAN_M));
+                .unwrap_or(f64::from(luma_scene::catalog::DEFAULT_TRUSS_SPAN_M));
             let set = app.clone();
             layer = layer.child(
                 div()

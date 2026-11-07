@@ -471,7 +471,7 @@ pub struct CatalogSocket {
 /// and the placed ones have to be one computation. A piece with no resting pose
 /// (a truss stands on its ends) reads its own box out along its own axes.
 fn placed_size(
-    supply: &luma_render::catalog::VenueSockets,
+    supply: &luma_scene::catalog::VenueSockets,
     probe: &luma_scene::venue::Node,
 ) -> [f64; 3] {
     use luma_scene::venue::NodeSockets as _;
@@ -493,7 +493,7 @@ impl StageCatalog {
     /// its ends are the generator's frames, and the supply is the one place
     /// both cases are already answered.
     #[must_use]
-    pub fn build(supply: &luma_render::catalog::VenueSockets) -> Self {
+    pub fn build(supply: &luma_scene::catalog::VenueSockets) -> Self {
         use luma_scene::sockets::SocketKind;
         use luma_scene::venue::{Node, NodeKind, NodeSockets as _, Params};
 
@@ -716,9 +716,9 @@ mod tests {
 
     #[test]
     fn catalog_reports_canonical_generator_families() {
-        let supply = luma_render::catalog::VenueSockets::load(
+        let supply = luma_scene::catalog::VenueSockets::load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/meshes"),
-            std::sync::Arc::new(luma_render::catalog::NoFixtures),
+            std::sync::Arc::new(luma_scene::catalog::NoFixtures),
         )
         .unwrap();
         let catalog = StageCatalog::build(&supply);

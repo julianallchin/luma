@@ -5,9 +5,9 @@ use super::*;
 /// The builder's catalog: the same supply the backend solves with, fixture
 /// bundle included. A builder that could not measure a housing would preview
 /// every light half-buried in the truss it is being dropped on.
-fn load_sockets() -> Option<luma_render::catalog::VenueSockets> {
+fn load_sockets() -> Option<luma_scene::catalog::VenueSockets> {
     let fixtures_root = crate::library::fixtures_root().ok();
-    luma_render::catalog::VenueSockets::load(
+    luma_scene::catalog::VenueSockets::load(
         luma_lib::resources::meshes_root(fixtures_root.as_deref()),
         std::sync::Arc::new(luma_lib::venue_graph::BundledFixtures(
             fixtures_root.unwrap_or_default(),
@@ -287,7 +287,7 @@ impl Visualizer {
     fn rig_loaded(
         &mut self,
         loaded: Result<Rig, LibraryError>,
-        sockets: Option<luma_render::catalog::VenueSockets>,
+        sockets: Option<luma_scene::catalog::VenueSockets>,
     ) {
         let rig = match loaded {
             Ok(rig) => rig,

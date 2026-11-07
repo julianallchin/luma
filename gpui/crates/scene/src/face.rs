@@ -2,8 +2,8 @@
 //!
 //! [`crate::catalog`] answers *where* a socket is; this answers *how much of
 //! the piece it spans*. They are the same knowledge — the measured GLB, the
-//! generator's parameters — so this module sits beside the catalog rather than
-//! in [`luma_scene`], which has no geometry of its own and must not grow one.
+//! generator's parameters — so this module reads both through the catalog's
+//! own measurement rather than measuring again.
 //!
 //! # One rule for every host
 //!
@@ -18,15 +18,15 @@
 //! bound, kept separate from the socket supply on purpose: a resolver that
 //! never needed bounds still does not take them.
 
+use crate::catalog::Geometry;
+use crate::distribute::Feature;
+use crate::sockets::ResolvedSocket;
+use crate::venue::{root_socket, Node, NodeKind, NodeSockets};
 use glam::DVec3;
-use luma_scene::catalog::Geometry;
-use luma_scene::distribute::Feature;
-use luma_scene::sockets::ResolvedSocket;
-use luma_scene::venue::{root_socket, Node, NodeKind, NodeSockets};
 
 use crate::catalog::{node_params, VenueSockets};
-use luma_scene::truss::Procedural;
-use luma_scene::truss::{Truss, OUTER_M, PANEL_PITCH_M};
+use crate::truss::Procedural;
+use crate::truss::{Truss, OUTER_M, PANEL_PITCH_M};
 
 /// A host face, ready to lay a row of fixtures along.
 #[derive(Clone, Debug)]
@@ -42,7 +42,7 @@ pub struct HostFace {
 
 /// The named face of a host node, or `None` if the node has no such socket.
 ///
-/// The root's two synthesized planes ([`luma_scene::venue::root_socket`]) are
+/// The root's two synthesized planes ([`crate::venue::root_socket`]) are
 /// answered here too, so "on the floor" and "on this truss" are one call.
 #[must_use]
 pub fn host_face(sockets: &VenueSockets, node: &Node, name: &str) -> Option<HostFace> {
@@ -69,7 +69,7 @@ fn extent_along(sockets: &VenueSockets, node: &Node, tangent: DVec3) -> Feature 
     let Some(catalog_ref) = node.catalog_ref.as_deref() else {
         return Feature::unbounded();
     };
-    match luma_scene::catalog::piece(catalog_ref).map(|p| p.geometry) {
+    match crate::catalog::piece(catalog_ref).map(|p| p.geometry) {
         // A generated piece is the size its node's parameters make it, so the
         // catalog's palette-default measurement would be the wrong number for
         // every truss anybody has resized.
@@ -123,7 +123,7 @@ fn project(size: DVec3, direction: DVec3) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luma_scene::venue::Params;
+    use crate::venue::Params;
 
     fn sockets() -> VenueSockets {
         VenueSockets::load(

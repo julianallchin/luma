@@ -6,20 +6,20 @@
 //! GPU; this answers "is every piece where the graph says" in a diff a human
 //! can read.
 //!
-//! It is captured **here** rather than in `luma-scene` because a resolved pose
-//! is the resolver *and* the geometry: a truss end frame comes from the
+//! It runs against the shipped meshes rather than stubs because a resolved
+//! pose is the resolver *and* the geometry: a truss end frame comes from the
 //! generator and a deck's corners come from a measured GLB, so a golden that
 //! stubbed either would pin half the answer. That makes this the one place the
 //! whole chain — catalog, generator, sockets, solve — is pinned numerically.
 //!
-//! Run `cargo test -p luma-render --test render venue_poses::`. A stale golden
+//! Run `cargo test -p luma-scene --test scene venue_poses::`. A stale golden
 //! fails; `LUMA_UPDATE_GOLDENS=1` rewrites it for review.
 
-use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
-use luma_render::venue_tiles::TileMap;
+use luma_scene::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
 use luma_scene::venue::{
     resolve, ConstraintStatus, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET, RIG_SOCKET,
 };
+use luma_scene::venue_tiles::TileMap;
 use serde_json::{json, Value};
 
 fn node(id: &str, kind: NodeKind, catalog_ref: &str, params: &[(&str, f64)]) -> Node {
@@ -265,7 +265,7 @@ fn venue() -> VenueGraph {
 /// so these poses pin the housing standing off its host rather than through it.
 ///
 /// This golden has no fixture bundle, so every `fixture:*` ref is answered with
-/// [`luma_render::catalog::StatedHousing::stock_head`].
+/// [`luma_scene::catalog::StatedHousing::stock_head`].
 struct Sockets(VenueSockets);
 
 impl luma_scene::venue::NodeSockets for Sockets {
@@ -283,8 +283,8 @@ fn catalog() -> &'static Sockets {
     SOCKETS.get_or_init(|| {
         Sockets(
             VenueSockets::load(
-                luma_render::meshes_root(),
-                std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
+                luma_scene::meshes_root(),
+                std::sync::Arc::new(luma_scene::catalog::StatedHousing::stock_head()),
             )
             .expect("the catalog resolves against the shipped meshes"),
         )
@@ -382,7 +382,7 @@ fn golden() -> String {
 #[test]
 fn venue_poses_golden_is_current() {
     luma_scene::golden::assert_golden(
-        &luma_render::repo_root().join("harness/goldens/venue-poses.json"),
+        &luma_scene::repo_root().join("harness/goldens/venue-poses.json"),
         &golden(),
     );
 }
@@ -510,7 +510,7 @@ fn a_fixture_hangs_off_its_host_by_its_housing() {
 #[test]
 fn venue_tiles_golden_is_current() {
     luma_scene::golden::assert_golden(
-        &luma_render::repo_root().join("harness/goldens/venue-tiles.json"),
+        &luma_scene::repo_root().join("harness/goldens/venue-tiles.json"),
         &tiles_golden(),
     );
 }

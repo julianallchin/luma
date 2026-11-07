@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use luma_render::catalog::{FixtureDefinitions, VenueSockets};
-use luma_render::venue_tiles::TileMap;
+use luma_scene::catalog::{FixtureDefinitions, VenueSockets};
 use luma_scene::venue::{
     resolve as resolve_graph, Node, NodeKind, Params, ResolvedVenue, VenueGraph,
 };
+use luma_scene::venue_tiles::TileMap;
 
 use crate::database::local;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
@@ -102,7 +102,7 @@ pub async fn resolved(
 ///
 /// Beside [`resolved`] because it is the same two inputs: the graph, and the
 /// catalog geometry it resolves against. The map itself is
-/// [`luma_render::venue_tiles`], which is where a piece's measured extent is
+/// [`luma_scene::venue_tiles`], which is where a piece's measured extent is
 /// already read.
 ///
 /// # Errors
@@ -169,7 +169,7 @@ pub fn root_id(venue_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luma_render::catalog::FIXTURE_CLAMP_SOCKET;
+    use luma_scene::catalog::FIXTURE_CLAMP_SOCKET;
     use luma_scene::venue::{FLOOR_SOCKET, RIG_SOCKET};
 
     const FIXTURES_ROOT: &str = "resources/fixtures";
@@ -199,7 +199,7 @@ mod tests {
     fn golden_supply() -> VenueSockets {
         VenueSockets::load(
             crate::resources::meshes_root(Some(Path::new(FIXTURES_ROOT))),
-            std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
+            std::sync::Arc::new(luma_scene::catalog::StatedHousing::stock_head()),
         )
         .expect("the catalog resolves")
     }

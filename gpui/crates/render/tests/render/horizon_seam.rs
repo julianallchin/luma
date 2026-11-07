@@ -57,7 +57,7 @@ fn frame_in(environment: VenueEnvironment, haze: Option<VenueHaze>, eye_y: f32) 
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(luma_render::meshes_root()),
+        &mut Library::new(luma_scene::meshes_root()),
     )
     .unwrap()
 }
@@ -223,7 +223,7 @@ fn low_sun(clouds: CloudCover, haze: Option<f32>, fov: f32) -> Frame {
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(luma_render::meshes_root()),
+        &mut Library::new(luma_scene::meshes_root()),
     )
     .unwrap()
 }
@@ -388,7 +388,7 @@ fn gasworks() -> (Frame, u32, u32) {
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(luma_render::meshes_root()),
+        &mut Library::new(luma_scene::meshes_root()),
     )
     .unwrap();
     export.apply(&mut frame);

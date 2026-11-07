@@ -724,9 +724,9 @@ mod tests {
                 ..Default::default()
             },
         };
-        let sockets = luma_render::catalog::VenueSockets::load(
+        let sockets = luma_scene::catalog::VenueSockets::load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
-            Arc::new(luma_render::catalog::NoFixtures),
+            Arc::new(luma_scene::catalog::NoFixtures),
         )
         .unwrap();
         let mut build = crate::stage::Build::new("venue", &rig, sockets).unwrap();

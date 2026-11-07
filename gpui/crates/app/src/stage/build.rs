@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use luma_lib::models::venue_graph::ResolvedVenue;
-use luma_render::catalog::VenueSockets;
+use luma_scene::catalog::VenueSockets;
 use luma_scene::coords;
 use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
 
@@ -176,7 +176,7 @@ impl Build {
     /// Re-solve the row being configured, in place.
     ///
     /// The preview and the commit share both halves of the arithmetic —
-    /// [`luma_render::face::host_face`] for how long the face is, and
+    /// [`luma_scene::face::host_face`] for how long the face is, and
     /// [`luma_scene::distribute::offsets`] for where the bodies land — so a
     /// row that previews as fitting cannot come back refused, and the
     /// "Extend to X m" the popover offers is the number the backend would
@@ -191,7 +191,7 @@ impl Build {
         let Some((face, pose)) = self
             .graph
             .node(&row.host_node)
-            .and_then(|node| luma_render::face::host_face(&self.sockets, node, &row.host_socket))
+            .and_then(|node| luma_scene::face::host_face(&self.sockets, node, &row.host_socket))
             .zip(self.room.pose(&row.host_node))
         else {
             return;
@@ -281,8 +281,8 @@ impl Build {
                     self.sockets.catalog().bounds(catalog_ref)
                 }
                 luma_scene::catalog::Geometry::Procedural(family) => {
-                    Some(luma_render::catalog::procedural_bounds(
-                        luma_render::catalog::node_params(family, &params_of(params)),
+                    Some(luma_scene::catalog::procedural_bounds(
+                        luma_scene::catalog::node_params(family, &params_of(params)),
                     ))
                 }
             },
@@ -490,7 +490,7 @@ impl Build {
                 // so the row shows the default rather than nothing.
                 stored.or_else(|| {
                     (family == Some(luma_scene::catalog::Family::Truss))
-                        .then(|| f64::from(luma_render::catalog::DEFAULT_TRUSS_SPAN_M))
+                        .then(|| f64::from(luma_scene::catalog::DEFAULT_TRUSS_SPAN_M))
                 })
             },
             angle: (family == Some(luma_scene::catalog::Family::Hinge)).then(|| {
@@ -500,7 +500,7 @@ impl Build {
                         .iter()
                         .find(|n| &n.id == node)
                         .and_then(|n| n.params.get("angle").copied())
-                        .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
+                        .unwrap_or(f64::from(luma_scene::catalog::DEFAULT_HINGE_ANGLE_DEG))
                 })
             }),
             roll_step: self
@@ -654,7 +654,7 @@ impl Freedom {
 ///
 /// The face's own frame, in the host's: tangent forward, normal up — which is
 /// what makes "hanging under" and "standing on" the same call with a different
-/// socket, exactly as [`luma_render::face::HostFace`] describes.
+/// socket, exactly as [`luma_scene::face::HostFace`] describes.
 fn station_pose(
     socket: &luma_scene::sockets::ResolvedSocket,
     host: glam::DMat4,
@@ -734,9 +734,9 @@ pub(super) mod tests {
     /// else — the poses are the *renderer's* half of a duplicate, and the rows
     /// it plans are decided before anything is solved.
     pub(in crate::stage) fn build_of(graph: VenueGraph) -> Build {
-        let sockets = luma_render::catalog::VenueSockets::load(
+        let sockets = luma_scene::catalog::VenueSockets::load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
-            std::sync::Arc::new(luma_render::catalog::NoFixtures),
+            std::sync::Arc::new(luma_scene::catalog::NoFixtures),
         )
         .expect("the shipped meshes");
         Build {

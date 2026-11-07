@@ -31,7 +31,7 @@ fn frame(intensity: f32, aim: f32, look: Look) -> Frame {
 }
 
 fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
@@ -380,7 +380,7 @@ fn sun_frame(away_deg: f32, look: Look) -> Frame {
         pieces: Vec::<Piece>::new(),
         state: BTreeMap::new(),
     };
-    let meshes = luma_render::meshes_root();
+    let meshes = luma_scene::meshes_root();
     let mut frame = build_frame_with(
         &scene,
         &BTreeMap::new(),

@@ -7,18 +7,18 @@
 //! measured GLB, so "does `direction=(0, 0, 1)` build a tower" cannot be
 //! answered without both.
 //!
-//! Run `cargo test -p luma-render --test render venue_build::`.
+//! Run `cargo test -p luma-scene --test scene venue_build::`.
 
 use glam::DVec3;
-use luma_render::catalog::VenueSockets;
-use luma_render::meshes_root;
 use luma_scene::build::{compile, Refusal, Request, Scene, Tip};
+use luma_scene::catalog::VenueSockets;
+use luma_scene::meshes_root;
 use luma_scene::venue::{resolve, Node, NodeKind, Params, ResolvedVenue, VenueGraph};
 
 fn supply() -> VenueSockets {
     VenueSockets::load(
         meshes_root(),
-        std::sync::Arc::new(luma_render::catalog::NoFixtures),
+        std::sync::Arc::new(luma_scene::catalog::NoFixtures),
     )
     .expect("the catalog resolves")
 }

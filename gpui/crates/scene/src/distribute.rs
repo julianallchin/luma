@@ -41,7 +41,7 @@
 /// change to that length the host admits.
 ///
 /// Not a socket and not a node — the geometry is upstream's
-/// (`luma_render::face`), and what the arithmetic needs from it is one length.
+/// (`crate::face`), and what the arithmetic needs from it is one length.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Feature {
     /// Metres along the feature, or `None` where it is unbounded — the venue

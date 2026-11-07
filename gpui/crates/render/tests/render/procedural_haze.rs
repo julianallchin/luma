@@ -212,7 +212,7 @@ fn narrow_beams_retain_bright_origins_at_viewport_resolution() {
         state.dimmer = 1.0;
         state.strobe = 0.0;
     }
-    let mut library = Library::new(luma_render::meshes_root());
+    let mut library = Library::new(luma_scene::meshes_root());
     let mut f = luma_render::build_frame(scene, &catalogue.definitions, 0.0, &mut library).unwrap();
     let mut renderer = Renderer::new().unwrap();
     for resolution in [0.5, 1.0] {

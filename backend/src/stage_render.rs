@@ -272,7 +272,7 @@ impl VenueGeometry {
 /// One solved node as the piece the renderer draws, or `None` when the pose is
 /// a frame rather than an object — the room, a fixture (drawn from
 /// [`scene_desc::Scene::fixtures`]), an array anchor, a node with no geometry
-/// (see [`luma_render::catalog::geometry`] for a `catalog_ref` the catalog does
+/// (see [`luma_render::scene_desc::Geometry::of`] for a `catalog_ref` the catalog does
 /// not hold). Which of those it is, is [`luma_scene::venue::NodePose::is_set_piece`]'s
 /// answer, carried across the boundary as [`ResolvedNode::set_piece`] so this
 /// path and the agent binding cannot disagree.
@@ -295,7 +295,7 @@ pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
         .collect();
     Some(scene_desc::Piece {
         id: node.id.clone(),
-        geometry: luma_render::catalog::geometry(catalog_ref, &params)?,
+        geometry: luma_render::scene_desc::Geometry::of(catalog_ref, &params)?,
         kind: catalog_kind(Some(catalog_ref)).to_string(),
         pos: node.position.map(|v| v as f32),
         rot: node.rotation.map(|v| v as f32),

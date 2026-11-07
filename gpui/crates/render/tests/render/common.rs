@@ -8,7 +8,7 @@ use luma_scene::mesh::{MeshData, Vertex};
 
 /// A mesh library over the repository's meshes.
 pub fn library() -> Library {
-    Library::new(luma_render::meshes_root())
+    Library::new(luma_scene::meshes_root())
 }
 
 /// With `LUMA_RENDER_CAPTURE_DIR` set, saves an RGBA8 picture a test looked

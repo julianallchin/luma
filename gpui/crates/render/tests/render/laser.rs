@@ -28,7 +28,7 @@ fn frame(haze: f32) -> Frame {
 
 /// [`frame`], with `settings` changed last.
 fn frame_with(haze: f32, settings: impl FnOnce(&mut RenderSettings)) -> Frame {
-    let mut library = Library::new(luma_render::meshes_root());
+    let mut library = Library::new(luma_scene::meshes_root());
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
     render.sun = None;
@@ -332,7 +332,7 @@ fn piece(id: &str, mesh: &str, pos: [f32; 3], scale: f32) -> Piece {
 
 /// A dark stage with `pieces` on it, seen from `camera`.
 fn staged(haze: f32, camera: CameraPose, pieces: Vec<Piece>, lasers: Vec<LaserScan>) -> Frame {
-    let mut library = Library::new(luma_render::meshes_root());
+    let mut library = Library::new(luma_scene::meshes_root());
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
     render.sun = None;

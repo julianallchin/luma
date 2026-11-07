@@ -26,15 +26,15 @@
 //! a transcript carries its own convention.
 //!
 //! A free placement's `v` runs *against* data `y`
-//! (`luma_scene::venue::place_on`): `+v` is toward the house, so a piece
+//! (`crate::venue::place_on`): `+v` is toward the house, so a piece
 //! written at `v = 8` reads eight metres **below** the origin on this map.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use crate::catalog::{Family, Geometry, PieceKind};
+use crate::venue::{NodeKind, NodePose, ResolvedVenue};
 use glam::{DVec2, DVec3};
-use luma_scene::catalog::{Family, Geometry, PieceKind};
-use luma_scene::venue::{NodeKind, NodePose, ResolvedVenue};
 
 use crate::catalog::{node_params, procedural_sockets, CatalogSockets};
 
@@ -201,7 +201,7 @@ impl Mark {
         let catalog_ref = pose.catalog_ref.as_deref()?;
         // A venue outlives a catalog: a row naming a piece that has since been
         // dropped still has a pose, and a `?` on the map is the honest answer.
-        let Some(piece) = luma_scene::catalog::piece(catalog_ref) else {
+        let Some(piece) = crate::catalog::piece(catalog_ref) else {
             return Some(Self {
                 layer: Layer::Structure,
                 glyph: UNKNOWN,
@@ -320,10 +320,10 @@ fn origin_of(pose: &NodePose) -> DVec2 {
 
 /// A three-space point (Y-up) as data-space plan metres.
 ///
-/// `luma_scene::coords::three_from_data` is an involution, so it is also
+/// `crate::coords::three_from_data` is an involution, so it is also
 /// `data <- three`; the plan is that point's `x` and `y`.
 fn plan(three: DVec3) -> DVec2 {
-    let data = luma_scene::coords::three_from_data_d(three);
+    let data = crate::coords::three_from_data_d(three);
     DVec2::new(data.x, data.y)
 }
 
@@ -351,7 +351,7 @@ fn truss_ends(pose: &NodePose) -> (DVec2, DVec2) {
 ///
 /// The projection of a convex body is convex, so the hull of the projected
 /// corners *is* the outline — exact for a box under any rotation, not just yaw.
-fn hull_of(pose: &NodePose, bounds: Option<luma_scene::aabb::DAabb>) -> Vec<DVec2> {
+fn hull_of(pose: &NodePose, bounds: Option<crate::aabb::DAabb>) -> Vec<DVec2> {
     let Some(b) = bounds else {
         return Vec::new();
     };

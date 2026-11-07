@@ -1651,7 +1651,7 @@ fn articulated_roll(
 /// The way a chained corner block enters by, and the way it leaves by.
 ///
 /// The block offers all six plates, but a chain turns through its two open
-/// ways — the palette's default L (`luma_render::catalog::DEFAULT_CORNER_FACES`).
+/// ways — the palette's default L (`crate::catalog::DEFAULT_CORNER_FACES`).
 /// Its exit is the free end a chain grows from; `exit_roll` then turns it to
 /// the next piece's direction. Picking the exit by the incoming run instead
 /// picks the plate straight through, which no roll can turn.
@@ -2059,7 +2059,7 @@ mod tests {
     /// authored sockets, resolved against a measured box. Only the measurement
     /// is a stand-in, so a question asked here is asked of the same pieces a
     /// venue holds. Procedural pieces have no authored sockets by design and
-    /// are therefore not answerable here — see `luma_render::catalog`.
+    /// are therefore not answerable here — see `crate::catalog`.
     struct Meshes(HashMap<&'static str, DAabb>);
 
     impl Meshes {

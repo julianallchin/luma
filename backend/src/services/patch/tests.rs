@@ -69,7 +69,7 @@ async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
 /// run at `along` metres.
 ///
 /// The catalog's straight truss carries one host socket at its origin whose
-/// tangent runs along the span (`luma_render::catalog::procedural_sockets`), so
+/// tangent runs along the span (`luma_scene::catalog::procedural_sockets`), so
 /// `u` *is* `along(t)` in metres, which is the number the rule sorts by.
 struct Hung {
     id: &'static str,

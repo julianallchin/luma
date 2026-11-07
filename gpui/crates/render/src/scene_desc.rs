@@ -1056,6 +1056,27 @@ impl Geometry {
         Self::MeshPath(path.into())
     }
 
+    /// What a node naming `catalog_ref` draws as, at its own `params`: a bundled
+    /// GLB, an assembly, or a generator standing at those parameters.
+    ///
+    /// `None` for a `catalog_ref` the catalog does not hold — a row from an older
+    /// or newer catalog than this build's, or a typo in an AI-authored venue. Such
+    /// a node draws nothing, exactly as it has no sockets to host by and no box to
+    /// collide by; the resolver reports it as `Warning::UnknownCatalogRef`, which
+    /// is what tells the operator why. Guessing a mesh path from the ref instead
+    /// would send the frame builder after a GLB that is not there, and one missing
+    /// asset fails the whole frame rather than the one piece.
+    #[must_use]
+    pub fn of(catalog_ref: &str, params: &luma_scene::venue::Params) -> Option<Self> {
+        use luma_scene::catalog::{node_params, piece, Geometry as Catalogued};
+        Some(match piece(catalog_ref)?.geometry {
+            Catalogued::Mesh { path } => Self::mesh(path),
+            Catalogued::Procedural(family) => Self::Procedural(node_params(family, params)),
+            // An assembly is named, not pathed: its parts are looked up by id.
+            Catalogued::Assembly(_) => Self::Assembly(catalog_ref.to_string()),
+        })
+    }
+
     /// The parts of an assembly, or an empty slice for anything else.
     #[must_use]
     pub fn parts(&self) -> &'static [luma_scene::catalog::Part] {
@@ -1127,7 +1148,7 @@ impl Piece {
             // offset plus a part's own reach. A booth framed as a 0.25 m box
             // would sit half out of shot.
             Geometry::Assembly(_) => {
-                self.scale.abs() * crate::catalog::assembly_half_extent(self.geometry.parts())
+                self.scale.abs() * luma_scene::catalog::assembly_half_extent(self.geometry.parts())
             }
         }
     }
@@ -1317,7 +1338,7 @@ impl Scene {
 /// Shared by camera framing and house-lighting bounds.
 fn piece_box(piece: &Piece) -> luma_scene::Aabb {
     if let Geometry::Procedural(params) = piece.geometry {
-        let local = crate::catalog::procedural_bounds(params);
+        let local = luma_scene::catalog::procedural_bounds(params);
         let transform = glam::Mat4::from_mat3(luma_scene::coords::three_to_world_basis())
             * luma_scene::coords::three_pose_from_data(piece.pos, piece.rot)
             * glam::Mat4::from_scale(glam::Vec3::splat(piece.scale));
@@ -1580,5 +1601,35 @@ mod tests {
             vertical.size().x < 0.2 && vertical.size().y < 0.2,
             "{vertical:?}"
         );
+    }
+
+    /// A node draws as its catalog entry says, at its own parameters, and a
+    /// `catalog_ref` the catalog does not hold draws nothing rather than a
+    /// guessed GLB path the frame builder would fail on.
+    #[test]
+    fn a_node_draws_its_catalog_entry_and_an_unknown_ref_draws_nothing() {
+        use luma_scene::catalog::pieces;
+        use luma_scene::venue::Params;
+        use Geometry as Drawn;
+        let mut params = Params::default();
+        params.set("span", 6.0);
+        assert!(matches!(
+            Geometry::of("truss/straight", &params),
+            Some(Drawn::Procedural(Procedural::Truss { span })) if (span - 6.0).abs() < 1e-6
+        ));
+        assert!(matches!(
+            Geometry::of("stage_lab/speaker_dbr15.glb", &Params::default()),
+            Some(Drawn::MeshPath(path)) if path == "stage_lab/speaker_dbr15.glb"
+        ));
+        let booth = pieces()
+            .iter()
+            .find(|p| matches!(p.geometry, luma_scene::catalog::Geometry::Assembly(_)))
+            .expect("the catalog has an assembly");
+        assert!(matches!(
+            Geometry::of(booth.id, &Params::default()),
+            Some(Drawn::Assembly(id)) if id == booth.id
+        ));
+        assert!(Geometry::of("stage_lab/truss_q30_1.22m.glb", &Params::default()).is_none());
+        assert!(Geometry::of("truss/stright", &Params::default()).is_none());
     }
 }

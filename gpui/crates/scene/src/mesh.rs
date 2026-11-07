@@ -218,6 +218,20 @@ impl Glb {
     }
 }
 
+/// Something that can say how big a mesh is: the local bounds of the GLB at a
+/// path under the mesh root.
+///
+/// The catalog measures with it and the renderer's asset cache answers it, so
+/// an assembly's layout ([`crate::catalog::assembly_placements`]) is one rule
+/// whichever of the two is holding the meshes.
+pub trait MeshBounds {
+    /// The bounds of the mesh at `mesh`, as [`Glb::bounds`] measures them.
+    ///
+    /// # Errors
+    /// Fails if the mesh cannot be read.
+    fn bounds(&mut self, mesh: &str) -> anyhow::Result<(Vec3, Vec3)>;
+}
+
 /// Depth-first append. Pushing before recursing is what guarantees
 /// `parent < child` in `nodes`, which the world-matrix pass relies on.
 fn walk(

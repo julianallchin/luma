@@ -22,7 +22,7 @@ enum Mode {
 }
 
 fn main() -> anyhow::Result<()> {
-    let repo = luma_render::repo_root();
+    let repo = luma_scene::repo_root();
     let catalogue = Catalogue::load(&repo.join("gpui/crates/render/goldens/scenes.json"))?;
     let mut mode = Mode::Capture;
     let mut requested: Vec<String> = Vec::new();
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
 
     let (width, height) = catalogue.frame_size();
     let mut renderer = Renderer::new()?;
-    let mut library = luma_render::assets::Library::new(luma_render::meshes_root());
+    let mut library = luma_render::assets::Library::new(luma_scene::meshes_root());
 
     let mut drifted = 0usize;
     for scene in &catalogue.scenes {
