@@ -94,7 +94,7 @@ test("a row dragged onto the timeline shows where it lands and lands there", () 
   until("the clip inputs", (s) => s.find({ role: "card", label: "Pattern graph" }));
   expect(app.snapshot().find({ role: "card", label: "Pulse drop preview" })).toBe(undefined);
   // The placed clip is written after a round trip.
-  app.frames(8, { waitMs: 80 });
+  until("the placed clip stored", () => library.query("SELECT count(*) AS n FROM clips")[0].n === 1);
 
   const clip = onlyClip();
   expect(clip.graph).toEqual(shipped("Pulse").graph);

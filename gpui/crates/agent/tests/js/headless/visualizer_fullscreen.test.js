@@ -36,8 +36,7 @@ test(
     assert(node("button", "Pause") && node("card", "Visualizer toolbar"), "fullscreen lost the transport");
     const time = () => app.snapshot().findAll({ role: "text" }).find((n) => /^\d+:\d\d \/ \d+:\d\d$/.test(n.label))?.label;
     const firstTime = time();
-    app.frames(16, { waitMs: 80 });
-    assert(time() !== firstTime, `playback did not advance: ${firstTime}`);
+    until(`playback to advance past ${firstTime}`, () => time() !== undefined && time() !== firstTime);
     app.key("space");
     until("paused", () => node("button", "Play"));
     app.key("space");

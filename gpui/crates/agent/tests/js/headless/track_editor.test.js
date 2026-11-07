@@ -74,13 +74,9 @@ test("a clip edge dragged on the timeline moves, stays moved, and the playhead r
   // Playing moves the playhead on its own, and the button says so.
   app.click(app.snapshot().find({ role: "button", label: "Play" }));
   until("the transport to report playing", (s) => s.find({ role: "button", label: "Pause" }));
-  // The first poll that reads `isPlaying` can still read ~0; a few more.
-  app.frames(4, { waitMs: 60 });
-  const playing = read();
-  expect(playing.playhead).toBeGreaterThan(reopened.playhead);
+  until("the playhead to move", () => read().playhead > reopened.playhead);
   app.click(app.snapshot().find({ role: "button", label: "Pause" }));
-  app.frames(4, { waitMs: 60 });
-  expect(read().buttons).toContain("Play");
+  until("the transport to report paused", () => read().buttons.includes("Play"));
 });
 
 test("beat grid approval survives reopening and can be undone", () => {

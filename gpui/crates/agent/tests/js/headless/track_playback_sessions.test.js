@@ -9,8 +9,7 @@ test("returning to a parked song plays its own audio", () => {
   function play(duration) {
     nav.step("a ready player", "button", "Play");
     until("playing the selected song", (s) => s.find({ role: "button", label: "Pause" }));
-    app.frames(4, { waitMs: 60 });
-    expect(time()).toMatch(` / ${duration}$`);
+    until(`its own length, ${duration}`, () => (time() ?? "").endsWith(` / ${duration}`));
   }
   const waveform = (track) => until(`${track}'s waveform`, (s) => s.find({ role: "card", label: "Waveform" }));
   nav.venue("Test Venue");

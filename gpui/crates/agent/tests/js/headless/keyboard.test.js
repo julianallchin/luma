@@ -55,8 +55,7 @@ test("keys and actions route to the focused screen and a text field keeps its ow
   // 1. Space plays. Nothing was clicked, so this is focus routing a binding.
   app.key("space");
   transport("Pause");
-  app.frames(4, { waitMs: 60 });
-  expect(read().playhead).toBeGreaterThan(opened.playhead);
+  until("the playhead to move", () => read().playhead > opened.playhead);
 
   // 2. Space again stops it, and a stopped playhead stays put.
   app.key("space");

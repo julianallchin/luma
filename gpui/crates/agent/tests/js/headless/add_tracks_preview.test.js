@@ -152,8 +152,7 @@ test("closing the dialog stops the preview and gives the song its player back", 
   // its own 20 s audio, not the 40 s preview's.
   nav.step("the song's player", "button", "Play");
   until("Aurora playing again", (s) => button(s, "Pause"));
-  app.frames(4, { waitMs: 60 });
-  expect(time()).toMatch(/ \/ 0:20$/);
+  until("its own length", () => / \/ 0:20$/.test(time() ?? ""));
 });
 
 test("leaving the source stops its preview", () => {

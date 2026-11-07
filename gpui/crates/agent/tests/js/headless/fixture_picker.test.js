@@ -48,7 +48,8 @@ test("ticking groups writes the union and escape writes nothing", () => {
   app.click(app.snapshot().find({ role: "button", label: "Apply" }));
   until("the picker to close", (s) => !pickerOpen(s));
   // The live edit lands at once; the write trails a 250 ms debounce.
-  app.frames(8, { waitMs: 80 });
+  until("the selection stored", () =>
+    library.score().clips["pat-glow"].selection.expression === "left_movers | right_movers");
   expect(expression()).toBe("left_movers | right_movers");
 
   // Escape is not a quiet Apply: reopen, untick one, dismiss.

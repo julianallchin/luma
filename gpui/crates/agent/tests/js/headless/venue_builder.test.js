@@ -313,23 +313,20 @@ function placeAndType() {
   expect(gizmoModes()).toBe(2);
   expect(height()).toBe(0);
   app.drag(heightNode(), { dx: 80, dy: 0 }, { steps: 8 });
-  app.frames(12, { waitMs: 40 });
+  until("the placement lifted", () => height() > 0);
   const lifted = height();
-  expect(lifted).toBeGreaterThan(0);
   // A click turns the box into a text field; enter commits it.
   app.click(heightNode());
   app.key("ctrl-a 3 . 2 5");
   app.key("enter");
-  app.frames(12, { waitMs: 40 });
-  expect(height()).toBe(3.25);
+  until("the typed height", () => height() === 3.25);
   return lifted;
 }
 
 test("height drags, types and undoes a free placement", () => {
   const lifted = placeAndType();
   app.action("luma::UndoStage");
-  app.frames(12, { waitMs: 40 });
-  expect(height()).toBe(lifted);
+  until("the dragged height back", () => height() === lifted);
   expect(one("Edge: ")).toContain("venue floor");
 });
 

@@ -26,7 +26,7 @@ test("overlapping clips have separate clickable rows and independent edits", () 
   app.click(clips()[1]);
   app.key("backspace");
   until("only the selected clip removed", (s) => s.findAll({ role: "card", label: "Chase" }).length === 2);
-  app.frames(10, { waitMs: 50 });
+  until("the removal stored", () => Object.keys(library.score().clips).length === 2);
   nav.closeTab();
   nav.track("Aurora");
   until("the edit persisted", (s) => s.findAll({ role: "card", label: "Chase" }).length === 2);
