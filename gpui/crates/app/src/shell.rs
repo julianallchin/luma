@@ -873,7 +873,7 @@ const NO_CHAT: &str = "Open a score to talk about it.";
 /// anchored over its two ends. Its middle is empty in every mode: what the
 /// mode is working on is the page's to say.
 fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
-    chrome::band(lights)
+    chrome::band(lights, app.settings.is_none())
         .child(
             div()
                 .flex_1()
@@ -1536,8 +1536,24 @@ mod tests {
     /// A corner with no lights in it (a macOS fullscreen space) is given back.
     #[test]
     fn a_corner_without_lights_gives_its_room_back() {
-        let lead = |lights| chrome::band_insets(lights).0;
-        assert!(lead(false) < lead(true));
-        assert_eq!(chrome::band_insets(false).1, chrome::band_insets(true).1);
+        for anchored in [false, true] {
+            let lead = |lights| chrome::band_insets(lights, anchored).0;
+            assert!(lead(false) < lead(true));
+            assert_eq!(
+                chrome::band_insets(false, anchored).1,
+                chrome::band_insets(true, anchored).1
+            );
+        }
+    }
+
+    /// Putting the anchors away gives their room back at both ends.
+    #[test]
+    fn a_band_without_anchors_gives_their_room_back() {
+        for lights in [false, true] {
+            let (left, right) = chrome::band_insets(lights, false);
+            let (anchored_left, anchored_right) = chrome::band_insets(lights, true);
+            assert!(left < anchored_left);
+            assert!(right < anchored_right);
+        }
     }
 }

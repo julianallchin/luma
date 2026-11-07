@@ -515,7 +515,7 @@ fn ground(window: &Window, body: impl IntoElement) -> Div {
         .bg(ladder::background())
         .font_family(luma_ui::fonts::FAMILY)
         .text_color(ladder::foreground())
-        .child(chrome::band(chrome::corner_lit(window)))
+        .child(chrome::band(chrome::corner_lit(window), false))
         .child(body)
         .children(chrome::window_controls(window))
 }

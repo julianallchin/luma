@@ -52,7 +52,9 @@
 //! ```
 //!
 //! [`band_insets`] is the one statement of the room each edge owes them,
-//! read by [`band`] when it pads itself.
+//! read by [`band`] when it pads itself. A screen that puts the anchors away
+//! (the settings page) gives their room back with them: its first control
+//! sits where the agent toggle would, one gap past the lights.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -123,17 +125,22 @@ const RIGHT_ANCHOR: f32 = BAND_PAD + MODE_SWITCH_WIDTH + BAND_GAP;
 
 /// What the title bar owes each of its edges: the single statement of the
 /// anchors' room. `lights` is whether the window's corner holds traffic
-/// lights — [`corner_lit`].
-pub(crate) fn band_insets(lights: bool) -> (f32, f32) {
-    (left_anchor_end(lights), RIGHT_ANCHOR)
+/// lights — [`corner_lit`]; `anchored` is whether the agent toggle and the
+/// mode switch are up over the band's ends.
+pub(crate) fn band_insets(lights: bool, anchored: bool) -> (f32, f32) {
+    if anchored {
+        (left_anchor_end(lights), RIGHT_ANCHOR)
+    } else {
+        (left_toggle_x(lights), BAND_PAD)
+    }
 }
 
 /// The title bar: the drag strip its controls sit in.
 ///
 /// No fill of its own: it is drawn on the window's trim, and the page below
 /// is set apart by its own edge.
-pub(crate) fn band(lights: bool) -> Div {
-    let (left, right) = band_insets(lights);
+pub(crate) fn band(lights: bool, anchored: bool) -> Div {
+    let (left, right) = band_insets(lights, anchored);
     div()
         .flex()
         .flex_shrink_0()
