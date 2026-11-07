@@ -5,25 +5,20 @@
 //! nothing downstream may hold a live handle to a node's matrix and mutate it
 //! mid-drag, which is the arrangement this replaces.
 
-use crate::aabb::Aabb;
 use crate::bvh::{MeshSource, Ray, RayHit};
 use glam::{Mat4, Quat, Vec3};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct NodeId(pub u32);
 
-/// Handle into `luma-assets`' mesh arena. Opaque here — this crate never loads
-/// anything, it only routes the handle to a [`MeshSource`] at raycast time.
+/// Handle to a mesh the caller owns. Opaque here: the graph only routes it to
+/// a [`MeshSource`] at raycast time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct MeshHandle(pub u32);
 
-/// Handle into `luma-assets`' material arena.
+/// Handle to a material the caller owns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct MaterialHandle(pub u32);
-
-/// Identifies a light-emitting fixture head to the render side.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct EmitterId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
@@ -62,7 +57,6 @@ pub enum NodeContent {
         mesh: MeshHandle,
         material: MaterialHandle,
     },
-    Emitter(EmitterId),
 }
 
 /// Bit flags on a node. A newtype rather than a `bitflags` dependency —
@@ -73,7 +67,6 @@ pub struct NodeFlags(pub u8);
 impl NodeFlags {
     pub const VISIBLE: NodeFlags = NodeFlags(1 << 0);
     pub const PICKABLE: NodeFlags = NodeFlags(1 << 1);
-    pub const NONE: NodeFlags = NodeFlags(0);
     /// What a piece of stage geometry gets by default.
     pub const DEFAULT: NodeFlags = NodeFlags(0b11);
 
@@ -83,10 +76,6 @@ impl NodeFlags {
 
     pub fn with(self, other: NodeFlags) -> NodeFlags {
         NodeFlags(self.0 | other.0)
-    }
-
-    pub fn without(self, other: NodeFlags) -> NodeFlags {
-        NodeFlags(self.0 & !other.0)
     }
 }
 
@@ -105,14 +94,12 @@ pub struct Node {
 #[derive(Clone, Copy, Debug)]
 pub struct PickFilter {
     pub required: NodeFlags,
-    pub exclude: Option<NodeId>,
 }
 
 impl Default for PickFilter {
     fn default() -> Self {
         Self {
             required: NodeFlags::VISIBLE.with(NodeFlags::PICKABLE),
-            exclude: None,
         }
     }
 }
@@ -194,42 +181,17 @@ impl SceneGraph {
         self.nodes[id.0 as usize].world
     }
 
-    /// World-space bounds of every mesh node the filter admits. Used by the
-    /// camera framing and the marquee.
-    pub fn bounds(&self, meshes: &dyn MeshSource, filter: PickFilter) -> Aabb {
-        let mut bounds = Aabb::EMPTY;
-        for (id, node) in self.iter() {
-            let Some(mesh) = self.pickable_mesh(id, node, meshes, filter) else {
-                continue;
-            };
-            let local = mesh.bounds();
-            // Transforming the 8 corners is exact enough and cheap at this
-            // scene size.
-            for i in 0..8 {
-                let c = Vec3::new(
-                    if i & 1 == 0 { local.min.x } else { local.max.x },
-                    if i & 2 == 0 { local.min.y } else { local.max.y },
-                    if i & 4 == 0 { local.min.z } else { local.max.z },
-                );
-                bounds.expand(node.world.transform_point3(c));
-            }
-        }
-        bounds
-    }
-
     fn pickable_mesh<'a>(
-        &self,
-        id: NodeId,
         node: &Node,
         meshes: &'a dyn MeshSource,
         filter: PickFilter,
     ) -> Option<&'a crate::bvh::TriMesh> {
-        if filter.exclude == Some(id) || !node.flags.contains(filter.required) {
+        if !node.flags.contains(filter.required) {
             return None;
         }
         match node.content {
             NodeContent::Mesh { mesh, .. } => meshes.mesh(mesh),
-            _ => None,
+            NodeContent::Empty => None,
         }
     }
 
@@ -241,7 +203,7 @@ impl SceneGraph {
     pub fn raycast(&self, ray: Ray, filter: PickFilter, meshes: &dyn MeshSource) -> Vec<RayHit> {
         let mut hits = Vec::new();
         for (id, node) in self.iter() {
-            let Some(mesh) = self.pickable_mesh(id, node, meshes, filter) else {
+            let Some(mesh) = Self::pickable_mesh(node, meshes, filter) else {
                 continue;
             };
             let inv = node.world.inverse();

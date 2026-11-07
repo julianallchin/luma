@@ -9,8 +9,8 @@ use crate::aabb::Aabb;
 use crate::graph::{MeshHandle, NodeId};
 use glam::{Mat4, Vec3};
 
-/// Where `luma-assets` mesh geometry comes from at raycast time. Implemented
-/// by the asset store; this crate only holds the handle.
+/// Where mesh geometry comes from at raycast time. Implemented by whoever owns
+/// the meshes; the graph only holds the handle.
 pub trait MeshSource {
     fn mesh(&self, handle: MeshHandle) -> Option<&TriMesh>;
 }
@@ -220,8 +220,7 @@ impl MeshBvh {
     }
 }
 
-/// A CPU triangle mesh with its BVH. `luma-assets` owns these; this crate
-/// consumes them.
+/// A CPU triangle mesh with its BVH.
 #[derive(Clone, Debug)]
 pub struct TriMesh {
     positions: Vec<Vec3>,
