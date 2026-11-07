@@ -603,12 +603,15 @@ fn cached(region: gpui::Entity<Region>, style: gpui::StyleRefinement) -> AnyElem
     luma_ui::node::cached_view(region, style).into_any_element()
 }
 
-/// The whole window: the agent panel down the left, the content column
-/// beside it under its title bar, the status bar along the foot, the overlay
-/// over all of it, and the traffic lights over that.
+/// The whole window: the dark trim, carrying the title bar across its top and
+/// the status bar along its foot, and between them the page — one rounded
+/// card inset from the window's edge that holds the agent panel and the
+/// content beside it. The overlay sits over all of it, and the traffic lights
+/// over that.
 ///
-/// **Panels are flush.** They touch, a hairline between each, with no gaps,
-/// no insets and no rounded panel corners (`docs/specs/comet-shell.md` §6).
+/// **Inside the page, panels are flush.** They touch, a hairline between
+/// each, with no gaps and no rounded corners of their own; only the page
+/// rounds (`docs/specs/comet-shell.md` §6).
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
     let viewport = f32::from(window.viewport_size().width);
@@ -631,17 +634,6 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     app.shell_presented = true;
     let agent_w = f32::from(app.agent_width.eval(window));
     let show_agent = agent_w > 0.0;
-    let main_x = if show_agent {
-        agent_w + SEAM_WIDTH
-    } else {
-        0.0
-    };
-    let span = chrome::BandSpan {
-        x: main_x,
-        width: viewport - main_x,
-        viewport,
-        lights,
-    };
 
     let mut row = div()
         .flex_1()
@@ -659,7 +651,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         // re-wrapping it.
         row = row
             .child(
-                pane::pane(px(agent_w), px(open_width), agent_panel(app, open_width))
+                pane::pane(px(agent_w), px(open_width), agent_panel(app))
                     .agent_node(Role::Card, "Agent"),
             )
             .child(seam());
@@ -671,33 +663,14 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             .min_w_0()
             .flex()
             .flex_col()
-            .bg(glass::panel_opaque())
-            .child(title_bar(app, span, &entity, cx))
-            .child(hairline())
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .bg(ladder::background())
-                    .key_context(keymap::context::WORKSPACE)
-                    .child(content(app, window, cx)),
-            ),
+            .bg(ladder::background())
+            .key_context(keymap::context::WORKSPACE)
+            .child(content(app, window, cx)),
     );
     if show_agent {
         // After both panels it divides, so it owns the strip it overhangs.
         row = row.child(agent_grip(agent_w + SEAM_WIDTH / 2.0, cx));
     }
-
-    // The window's two fixed corners. Above every region — a toggle inside one
-    // rides that region's animated pane and gets clipped by it — but *below*
-    // the overlay, unlike the traffic lights: a control reachable through a
-    // scrim would move the regions behind a modal that is meant to own the
-    // window. See [`crate::chrome`] for the anchor rule.
-    row = row
-        .child(chrome::agent_toggle(&entity, app.agent_wanted(), lights))
-        .child(chrome::mode_switch(app, &entity, cx));
 
     // Reap a dismissed dialog once its out-animation has played, and keep
     // frames coming until it has. Frame-driven rather than timer-driven —
@@ -752,22 +725,40 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         true,
         cx,
     );
+    let page = div()
+        .flex_1()
+        .min_h_0()
+        .mx(px(glass::WINDOW_TRIM))
+        .flex()
+        .flex_col()
+        .relative()
+        .bg(ladder::background())
+        .child(row)
+        .child(page_corners())
+        .agent_node(Role::Card, "Page");
     let mut window_root = div()
         .size_full()
         .flex()
         .flex_col()
         .relative()
-        // The one surface the desktop shows through.
-        .bg(glass::glass())
-        .child(row)
-        .child(hairline())
+        .bg(glass::window_trim())
+        // The title bar spans the window: it is on the trim, not on the
+        // page, so the agent panel's coming and going never moves it.
+        .child(title_bar(app, lights, &entity, cx))
+        .child(page)
         .child(cached(
             status_bar,
             gpui::StyleRefinement::default()
                 .w_full()
                 .h(px(STATUS_BAR_HEIGHT))
                 .flex_none(),
-        ));
+        ))
+        // The title bar's two fixed ends. Above the page, but *below* the
+        // overlay, unlike the traffic lights: a control reachable through a
+        // scrim would move the regions behind a modal that is meant to own
+        // the window. See [`crate::chrome`] for the anchor rule.
+        .child(chrome::agent_toggle(&entity, app.agent_wanted(), lights))
+        .child(chrome::mode_switch(app, &entity, cx));
     if let Some(overlay) = app.overlay.get() {
         window_root = window_root.child(overlay_layer(app, overlay, &entity, window, cx));
     }
@@ -776,10 +767,28 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     window_root.children(chrome::window_controls(window))
 }
 
-/// The agent panel: the chat of the body on screen, unchanged, with the
-/// window's drag strip over its head. With nothing open — Arrange before a
-/// score is picked — it says where a conversation comes from.
-fn agent_panel(app: &Luma, width: f32) -> AnyElement {
+/// The page's rounded corners. gpui clips to rectangles, so the panels inside
+/// would paint square corners over a rounded page; instead a ring of trim is
+/// drawn over the page's edge — outer radius flush with the trim, inner radius
+/// the page's — and covers what lies outside the curve. It carries no
+/// handlers, so it takes no hitbox and the pointer passes through it.
+fn page_corners() -> Div {
+    let trim = glass::WINDOW_TRIM;
+    div()
+        .absolute()
+        .top(px(-trim))
+        .bottom(px(-trim))
+        .left(px(-trim))
+        .right(px(-trim))
+        .border(px(trim))
+        .border_color(glass::window_trim())
+        .rounded(px(glass::PAGE_RADIUS + trim))
+}
+
+/// The agent panel: the chat of the body on screen, unchanged, flush at the
+/// page's left. With nothing open — Arrange before a score is picked — it
+/// says where a conversation comes from.
+fn agent_panel(app: &Luma) -> AnyElement {
     let chat = app.front_chat().cloned().map(|chat| {
         luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
             .into_any_element()
@@ -799,7 +808,6 @@ fn agent_panel(app: &Luma, width: f32) -> AnyElement {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(div().h(px(chrome::HEIGHT)).flex_none())
                 .child(
                     div()
                         .flex_1()
@@ -814,29 +822,17 @@ fn agent_panel(app: &Luma, width: f32) -> AnyElement {
                 )
                 .into_any_element()
         }))
-        // Over the head's empty left, clear of the chat's own buttons at its
-        // right: the window moves by its top edge here too.
-        .child(chrome::head_drag_strip(width - HEAD_BUTTONS))
         .into_any_element()
 }
 
 /// What the agent panel says while the mode on screen has nothing open.
 const NO_CHAT: &str = "Open a score to talk about it.";
 
-/// The room the chat header's own buttons take at its right end, which the
-/// window's drag strip leaves to them.
-const HEAD_BUTTONS: f32 = 96.0;
-
-/// The content column's head: the venue menu, what the mode is working on,
-/// and — reserved by the band's insets — the mode switch anchored over its
-/// right end.
-fn title_bar(
-    app: &Luma,
-    span: chrome::BandSpan,
-    entity: &gpui::Entity<Luma>,
-    cx: &App,
-) -> impl IntoElement {
-    chrome::band(span)
+/// The window's head, on the trim above the page: the venue menu, what the
+/// mode is working on, and — reserved by the band's insets — the agent toggle
+/// and the mode switch anchored over its two ends.
+fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
+    chrome::band(lights)
         .child(
             div()
                 .flex_1()
@@ -945,14 +941,19 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
         .into_any_element()
 }
 
-/// How tall the content column is: the window less the title bar, the status
-/// bar, the hairlines between them, and a seam grip's reach.
+/// How tall the content column is: the page — the window less the title bar
+/// and the status bar on the trim — less a seam grip's reach.
 fn content_height(window: &Window) -> f32 {
     f32::from(window.viewport_size().height)
         - chrome::HEIGHT
         - STATUS_BAR_HEIGHT
-        - 2.0 * SEAM_WIDTH
         - pane::HANDLE_WIDTH
+}
+
+/// How wide the page is in a window `viewport` wide: the window less the
+/// trim either side.
+fn page_width(viewport: f32) -> f32 {
+    viewport - 2.0 * glass::WINDOW_TRIM
 }
 
 /// The song list page, in its cached region.
@@ -1114,13 +1115,15 @@ struct AgentResize;
 impl Luma {
     /// The agent panel's width when it is shown, in a window `viewport` wide.
     fn agent_open_width(&self, viewport: f32) -> f32 {
-        self.agent_split.resolve(viewport - SEAM_WIDTH).0
+        self.agent_split
+            .resolve(page_width(viewport) - SEAM_WIDTH)
+            .0
     }
 
     /// Whether the agent panel is on screen: not put away by hand, and a
-    /// window wide enough to seat it beside a usable content column.
+    /// page wide enough to seat it beside a usable content column.
     fn agent_shown(&self, viewport: f32) -> bool {
-        self.agent_wanted() && viewport - SEAM_WIDTH >= AGENT_MIN + CONTENT_MIN
+        self.agent_wanted() && page_width(viewport) - SEAM_WIDTH >= AGENT_MIN + CONTENT_MIN
     }
 
     /// Track the pointer while the agent seam is dragged. A drag is already
@@ -1128,12 +1131,14 @@ impl Luma {
     fn drag_agent_seam(
         &mut self,
         event: &DragMoveEvent<AgentResize>,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let room = f32::from(window.viewport_size().width) - SEAM_WIDTH;
-        self.agent_split
-            .drag_to(f32::from(event.event.position.x), room);
+        // Measured against the row the seam divides — the page, inset from
+        // the window's edge by the trim.
+        let room = f32::from(event.bounds.size.width) - SEAM_WIDTH;
+        let at = f32::from(event.event.position.x - event.bounds.left());
+        self.agent_split.drag_to(at, room);
         cx.notify();
     }
 }
@@ -1149,14 +1154,14 @@ const DECK_MIN: f32 = 240.0;
 const DECK_MAX: f32 = 560.0;
 const DECK_STAGE_MIN: f32 = 320.0;
 
-/// How wide the content column is: the window less the agent panel and its
+/// How wide the content column is: the page less the agent panel and its
 /// seam when the panel is up.
 fn content_width(app: &Luma, window: &Window) -> f32 {
     let viewport = f32::from(window.viewport_size().width);
     if app.agent_shown(viewport) {
-        viewport - app.agent_open_width(viewport) - SEAM_WIDTH
+        page_width(viewport) - app.agent_open_width(viewport) - SEAM_WIDTH
     } else {
-        viewport
+        page_width(viewport)
     }
 }
 
@@ -1256,9 +1261,9 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         let available = content_height(window);
-        // The column starts below the title bar and its hairline, and the
-        // pointer holds the seam.
-        let offset = f32::from(event.event.position.y) - chrome::HEIGHT - SEAM_WIDTH;
+        // The column starts at the top of the row that listens — the page's
+        // top edge, under the title bar.
+        let offset = f32::from(event.event.position.y - event.bounds.top());
         self.active_visualizer_split().drag_to(offset, available);
         cx.notify();
     }
@@ -1467,63 +1472,11 @@ mod tests {
         }
     }
 
-    /// The anchors' room is stated once: a title bar's first child starts
-    /// where its leading inset ends, wherever the bar starts.
-    #[test]
-    fn a_bands_first_child_starts_where_its_inset_ends() {
-        for (x, lights) in [(0.0, true), (0.0, false), (321.0, true), (40.0, true)] {
-            let span = chrome::BandSpan {
-                x,
-                width: 1280.0 - x,
-                viewport: 1280.0,
-                lights,
-            };
-            let (left, _) = chrome::band_insets(span);
-            assert_eq!(chrome::band_origin(span), x + left);
-        }
-    }
-
-    /// The rule the agent's hide is: the toggle holds still and the title
-    /// bar's cluster moves. While the panel's edge is left of the anchors the
-    /// cluster stays clear of them, then it rides the edge — monotonically,
-    /// with no step.
-    #[test]
-    fn a_sliding_agent_panel_pushes_the_title_bar_without_pulling_it_back() {
-        let cluster_x = |agent: f32| {
-            let seam = if agent > 0.0 { SEAM_WIDTH } else { 0.0 };
-            chrome::band_origin(chrome::BandSpan {
-                x: agent + seam,
-                width: 1280.0 - agent - seam,
-                viewport: 1280.0,
-                lights: true,
-            })
-        };
-        let mut previous = cluster_x(0.0);
-        // Hidden, the venue menu clears the lights and the toggle.
-        assert_eq!(previous, chrome::left_anchor_end(true));
-        for step in 1..=64 {
-            let agent = 320.0 * step as f32 / 64.0;
-            let x = cluster_x(agent);
-            assert!(x >= previous, "moved left at {agent}: {x} < {previous}");
-            previous = x;
-        }
-        // Shown, it sits just past the panel's seam.
-        assert_eq!(previous, 320.0 + SEAM_WIDTH + 12.0);
-    }
-
     /// A corner with no lights in it (a macOS fullscreen space) is given back.
     #[test]
     fn a_corner_without_lights_gives_its_room_back() {
-        let origin = |x: f32, lights: bool| {
-            chrome::band_origin(chrome::BandSpan {
-                x,
-                width: 1280.0 - x,
-                viewport: 1280.0,
-                lights,
-            })
-        };
-        assert!(origin(0.0, false) < origin(0.0, true));
-        let open = 320.0 + SEAM_WIDTH;
-        assert_eq!(origin(open, false), origin(open, true));
+        let lead = |lights| chrome::band_insets(lights).0;
+        assert!(lead(false) < lead(true));
+        assert_eq!(chrome::band_insets(false).1, chrome::band_insets(true).1);
     }
 }

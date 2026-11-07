@@ -34,6 +34,24 @@ const toggle = (action) => {
 };
 const dialog = (s = app.snapshot()) => s.find({ role: "card", label: "Settings dialog" });
 
+// The window controls are the title bar's whether or not the agent is shown,
+// and the page sits inset from the window's edge under it.
+function framed(toggleLabel) {
+  const shot = app.snapshot();
+  const at = (role, label) => shot.find({ role, label })?.bounds;
+  const bar = at("card", "Title bar");
+  const page = at("card", "Page");
+  for (const [role, label] of [["button", toggleLabel], ["card", "Modes"], ["button", "Test Venue"]]) {
+    const control = at(role, label);
+    assert(control && control.y >= bar.y - 1 && control.y + control.height <= bar.y + bar.height + 1
+      && control.x >= bar.x - 1 && control.x + control.width <= bar.x + bar.width + 1,
+      `${label} is not in the title bar: ${JSON.stringify({ control, bar })}`);
+  }
+  assert(page.x > 1 && page.x + page.width < WINDOW[0] - 1 && page.y >= bar.y + bar.height - 1
+    && page.y + page.height < WINDOW[1] - 1,
+    `the page is not inset from the window's edge: ${JSON.stringify({ page, bar })}`);
+}
+
 test("the agent panel toggles both ways and the seam resizes it", () => {
   open();
   const opened = read();
@@ -42,12 +60,16 @@ test("the agent panel toggles both ways and the seam resizes it", () => {
   // 1. Twice, because a toggle that breaks the keyboard's home breaks on the
   //    second press. Hidden, the panel takes its seam with it and the body
   //    gets the room.
+  framed("Hide agent");
   const hidden = toggle("luma::ToggleAgent");
   expect(hidden.agent).toBe(null);
   expect(hidden.seam).toBe(null);
   expect(hidden.body).toBeGreaterThan(opened.body);
+  until("the agent hidden", (s) => s.find({ role: "button", label: "Show agent" }));
+  framed("Show agent");
   const reopened = toggle("luma::ToggleAgent");
   expect(reopened.seam).toBe(opened.seam);
+  framed("Hide agent");
 
   // 2. The seam, dragged, moves the body's edge by what the pointer moved.
   const seamDrag = (dx) => {

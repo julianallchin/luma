@@ -506,7 +506,6 @@ pub(crate) fn splash(window: &Window, line: &'static str) -> AnyElement {
 /// [`crate::chrome`] — and the window controls go last, so nothing can cover
 /// the only things that move and close the window.
 fn ground(window: &Window, body: impl IntoElement) -> Div {
-    let viewport = f32::from(window.viewport_size().width);
     div()
         .size_full()
         .flex()
@@ -514,12 +513,7 @@ fn ground(window: &Window, body: impl IntoElement) -> Div {
         .bg(ladder::background())
         .font_family(luma_ui::fonts::FAMILY)
         .text_color(ladder::foreground())
-        .child(chrome::band(chrome::BandSpan {
-            x: 0.0,
-            width: viewport,
-            viewport,
-            lights: chrome::corner_lit(window),
-        }))
+        .child(chrome::band(chrome::corner_lit(window)))
         .child(body)
         .children(chrome::window_controls(window))
 }

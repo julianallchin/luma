@@ -2,18 +2,47 @@
 // the agent panel beside them (`docs/specs/comet-shell.md`).
 //
 // The claims are relations a person sees: which body is up after a key, what
-// closes what, and which side of the agent panel the window's corner
-// controls sit on.
+// closes what, and that the window's frame — the title bar, the inset page,
+// the status bar — holds still while the agent panel comes and goes.
 
+const WINDOW = [1400, 900];
 fixture({
   seconds: 8,
   rig: 4,
   clips: [{ pattern: "shell-clip", name: "Chase", start: 1, end: 3, preset: "Chase" }],
-  window: [1400, 900],
+  window: WINDOW,
 });
 
 const box = (shot, role, label) => shot.find({ role, label })?.bounds;
 const songList = (shot) => box(shot, "card", "Song list") !== undefined;
+const inside = (inner, outer) => inner.x >= outer.x - 1 && inner.y >= outer.y - 1
+  && inner.x + inner.width <= outer.x + outer.width + 1 && inner.y + inner.height <= outer.y + outer.height + 1;
+
+// The window's frame: the title bar across the top holding the corner
+// controls, the page inset from the window's edge below it, and the status
+// bar under the page. Asserted, then returned for comparison.
+function frame(shot, toggleLabel) {
+  const parts = {
+    bar: box(shot, "card", "Title bar"),
+    page: box(shot, "card", "Page"),
+    status: box(shot, "card", "Status bar"),
+    toggle: box(shot, "button", toggleLabel),
+    modes: box(shot, "card", "Modes"),
+    venue: box(shot, "button", "Test Venue"),
+  };
+  const { bar, page, status, toggle, modes, venue } = parts;
+  assert(bar.x <= 1 && bar.width >= WINDOW[0] - 1, `the title bar does not span the window: ${JSON.stringify(bar)}`);
+  for (const [name, control] of [["agent toggle", toggle], ["mode switch", modes], ["venue menu", venue]]) {
+    assert(inside(control, bar), `the ${name} is not in the title bar: ${JSON.stringify({ control, bar })}`);
+  }
+  assert(venue.x >= toggle.x + toggle.width, `the venue menu sits under the agent toggle: ${JSON.stringify({ venue, toggle })}`);
+  assert(page.x > 1 && page.x + page.width < WINDOW[0] - 1,
+    `the page is not inset from the window's sides: ${JSON.stringify(page)}`);
+  assert(page.y >= bar.y + bar.height - 1, `the page overlaps the title bar: ${JSON.stringify({ page, bar })}`);
+  assert(status.y >= page.y + page.height - 1 && status.y + status.height <= WINDOW[1] + 1,
+    `the status bar is not under the page: ${JSON.stringify({ status, page })}`);
+  return parts;
+}
 
 test("1, 2 and 3 switch between Rig, Arrange and Live", () => {
   nav.trackEditor("Test Venue", "Aurora");
@@ -86,28 +115,25 @@ test("Escape backs out of the clip graph, then the song list", () => {
   assert(!songList(app.snapshot()), "Escape on the timeline opened the song list");
 });
 
-test("hiding the agent panel moves the window's corner controls into the title bar", () => {
+test("hiding the agent panel leaves the title bar and its controls where they are", () => {
   nav.trackEditor("Test Venue", "Aurora");
   const shown = until("the agent panel", (s) => box(s, "card", "Agent") && box(s, "button", "Hide agent") ? s : undefined);
+  const before = frame(shown, "Hide agent");
   const panel = box(shown, "card", "Agent");
-  const bar = box(shown, "card", "Title bar");
-  const toggle = box(shown, "button", "Hide agent");
-  // Over the agent panel: the toggle sits in the panel's head, and the title
-  // bar starts where the panel ends.
-  assert(toggle.x + toggle.width <= panel.x + panel.width, `the toggle is not over the agent panel: ${JSON.stringify({ toggle, panel })}`);
-  assert(bar.x >= panel.x + panel.width - 1, `the title bar overlaps the agent panel: ${JSON.stringify({ bar, panel })}`);
+  // The chat sits flush at the page's left, under the title bar.
+  assert(Math.abs(panel.x - before.page.x) <= 1 && panel.y >= before.bar.y + before.bar.height - 1,
+    `the agent panel is not at the page's left under the title bar: ${JSON.stringify({ panel, page: before.page })}`);
 
   app.action("luma::ToggleAgent");
   const hidden = until("the agent panel hidden", (s) =>
     !box(s, "card", "Agent") && box(s, "button", "Show agent") ? s : undefined);
-  const wide = box(hidden, "card", "Title bar");
-  const moved = box(hidden, "button", "Show agent");
-  expect(wide.x).toBeLessThan(bar.x);
-  // The toggle now sits inside the title bar, ahead of everything it holds.
-  assert(moved.x >= wide.x && moved.x + moved.width <= wide.x + wide.width,
-    `the toggle is not in the title bar: ${JSON.stringify({ moved, wide })}`);
-  const venue = box(hidden, "button", "Test Venue");
-  assert(venue.x >= moved.x + moved.width, `the venue name sits under the corner controls: ${JSON.stringify({ venue, moved })}`);
+  const after = frame(hidden, "Show agent");
+  // Hiding the chat takes its panel off the page and nothing else.
+  for (const part of ["bar", "toggle", "modes", "venue", "page"]) {
+    const [was, is] = [before[part], after[part]];
+    assert(Math.abs(was.x - is.x) <= 1 && Math.abs(was.y - is.y) <= 1 && Math.abs(was.width - is.width) <= 1,
+      `hiding the agent moved the ${part}: ${JSON.stringify({ was, is })}`);
+  }
 
   app.action("luma::ToggleAgent");
   until("the agent panel back", (s) => box(s, "card", "Agent") && box(s, "button", "Hide agent"));
@@ -122,7 +148,8 @@ test("the song list takes the agent panel's room and gives it back", () => {
   app.action("luma::ToggleSongList");
   const listed = until("the song list, full width", (s) => songList(s) && !agent(s) ? s : undefined);
   const list = box(listed, "card", "Song list");
-  assert(list.x <= 1, `the song list does not start at the window's edge: ${JSON.stringify(list)}`);
+  const page = box(listed, "card", "Page");
+  assert(list.x <= page.x + 1, `the song list does not start at the page's edge: ${JSON.stringify({ list, page })}`);
   app.action("luma::ToggleSongList");
   until("the agent back", (s) => !songList(s) && agent(s));
 

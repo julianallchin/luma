@@ -6,13 +6,14 @@
 //! (`docs/specs/comet-shell.md` §6): the agent toggle, the venue menu's
 //! trigger, the mode switch and, off macOS, our own traffic lights.
 //!
-//! # Two head bands, one line
+//! # One title bar, on the trim
 //!
-//! The window splits vertically first: the agent panel runs the window's full
-//! height on the left, and the content column beside it carries the title bar
-//! across its own width. The agent panel's head is the chat's own header; the
-//! title bar is [`band`]. They align because they share one height,
-//! [`HEIGHT`], which is also the chat header's.
+//! The window is a dark trim with one rounded page inset in it. The title bar
+//! is [`band`], drawn on the trim across the window's whole width above the
+//! page; the status bar runs along the trim below it. Everything inside the
+//! page — the agent panel, the stage, the bodies — is the shell's, and the
+//! chat's own header sits at the top of the page, under the bar. The bar
+//! shares one height, [`HEIGHT`], with that header.
 //!
 //! # The traffic lights are the topmost layer
 //!
@@ -35,29 +36,23 @@
 //!
 //! **In a macOS fullscreen space the corner is given back.** AppKit hides the
 //! buttons until the menu bar drops over the top edge, so a reserved corner
-//! would be an empty gap at rest. [`corner_lit`] says so, [`BandSpan::lights`]
-//! carries it, and the left anchor slides into the corner.
+//! would be an empty gap at rest. [`corner_lit`] says so, [`band`] is told
+//! it, and the left anchor slides into the corner.
 //!
-//! # The corner controls are anchors, not controls a region carries
+//! # The corner controls are anchors
 //!
 //! [`agent_toggle`] beside the lights and [`mode_switch`] at the trailing edge
-//! are painted in window space, and the window's two corners are the only
-//! place they appear. A control rendered *by* the agent panel rides its pane,
-//! and a pane whose width is animating clips its own content, so the toggle
-//! would vanish part-way through a hide. A fixed point cannot live on a moving
-//! thing. So with the agent shown the lights and its toggle sit over the
-//! panel's head; with it hidden the title bar starts at the window's edge and
-//! they sit at its start, ahead of the venue menu:
+//! are painted in window space, over the title bar's two ends. Hiding the
+//! agent panel takes the panel off the page and nothing else: the bar does
+//! not move, and nor do they.
 //!
 //! ```text
 //! [lights][◧] venue ▾ ………… subject ………… [Rig · Arrange · Live]
 //!  \___ fixed ___/                         \______ fixed ______/
 //! ```
 //!
-//! The anchors hold still and the *clusters* move: [`band_insets`] is the one
-//! statement of the room each edge owes them, read by [`band`] when it pads
-//! itself. A panel opening pushes the title bar's cluster inward because the
-//! bar starts where the panel's edge is this frame.
+//! [`band_insets`] is the one statement of the room each edge owes them,
+//! read by [`band`] when it pads itself.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -67,8 +62,8 @@ use luma_ui::node::{AgentNode, Instrument, Role};
 use crate::workspace::{Mode, Target};
 use crate::Luma;
 
-/// Height of the title bar, and of the agent panel's head (the chat's
-/// header) beside it.
+/// Height of the title bar, and of the chat's own header at the top of the
+/// page under it.
 pub const HEIGHT: f32 = luma_chat::theme::HEADER_HEIGHT;
 /// One icon-button box in the band.
 pub(crate) const CONTROL: f32 = 24.;
@@ -116,57 +111,29 @@ fn left_toggle_x(lights: bool) -> f32 {
     }
 }
 
-/// Where the window's left anchor block ends — the first pixel a band's own
-/// content may use.
-pub(crate) fn left_anchor_end(lights: bool) -> f32 {
+/// The room the window's left anchors — the lights and the agent toggle —
+/// take: the first pixel the title bar's own content may use.
+fn left_anchor_end(lights: bool) -> f32 {
     left_toggle_x(lights) + CONTROL + BAND_GAP
 }
 
-/// Where the window's right anchor block begins, measured back from the
-/// trailing edge.
-fn right_anchor_start(viewport: f32) -> f32 {
-    viewport - BAND_PAD - MODE_SWITCH_WIDTH - BAND_GAP
-}
+/// The room the window's right anchor — the mode switch — takes, measured
+/// back from the trailing edge.
+const RIGHT_ANCHOR: f32 = BAND_PAD + MODE_SWITCH_WIDTH + BAND_GAP;
 
-/// Where a band sits in window space: what it needs to know to stay clear of
-/// the anchors.
-#[derive(Clone, Copy)]
-pub(crate) struct BandSpan {
-    pub x: f32,
-    pub width: f32,
-    pub viewport: f32,
-    /// Whether the window's corner holds traffic lights — [`corner_lit`].
-    pub lights: bool,
-}
-
-/// What a band owes each of its edges — the single statement of the anchors'
-/// room.
-///
-/// Stated against the band's **position**, not against "am I the leftmost
-/// region?": a panel one pixel open stops being leftmost while the bar beside
-/// it still starts under the lights, so a band that asked the boolean would
-/// snap its cluster on the first frame of the slide. Reserving by span makes
-/// the cluster hold at the anchor until the panel's edge passes it, and ride
-/// the edge after that.
-pub(crate) fn band_insets(span: BandSpan) -> (f32, f32) {
-    (
-        (left_anchor_end(span.lights) - span.x).max(BAND_PAD),
-        (span.x + span.width - right_anchor_start(span.viewport)).max(BAND_PAD),
-    )
-}
-
-/// Window-space origin of a band's first child: where its leading inset ends.
-#[cfg(test)]
-pub(crate) fn band_origin(span: BandSpan) -> f32 {
-    span.x + band_insets(span).0
+/// What the title bar owes each of its edges: the single statement of the
+/// anchors' room. `lights` is whether the window's corner holds traffic
+/// lights — [`corner_lit`].
+pub(crate) fn band_insets(lights: bool) -> (f32, f32) {
+    (left_anchor_end(lights), RIGHT_ANCHOR)
 }
 
 /// The title bar: the drag strip its controls sit in.
 ///
-/// No fill of its own, and a hairline under it: the bar is the content
-/// column's head, and the stage below is a different panel.
-pub(crate) fn band(span: BandSpan) -> Div {
-    let (left, right) = band_insets(span);
+/// No fill of its own: it is drawn on the window's trim, and the page below
+/// is set apart by its own edge.
+pub(crate) fn band(lights: bool) -> Div {
+    let (left, right) = band_insets(lights);
     div()
         .flex()
         .flex_shrink_0()
@@ -177,21 +144,6 @@ pub(crate) fn band(span: BandSpan) -> Div {
         .pr(px(right))
         // The whole band is the drag region; every control stops propagation
         // so a press doesn't also start a move.
-        .on_mouse_down(MouseButton::Left, |_, window, _| {
-            window.start_window_move();
-        })
-}
-
-/// A drag strip over the agent panel's head, left of the chat's own
-/// buttons: the panel has no band of its own, and the window still has to be
-/// movable by its top edge there.
-pub(crate) fn head_drag_strip(width: f32) -> Div {
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .w(px(width.max(0.0)))
-        .h(px(HEIGHT))
         .on_mouse_down(MouseButton::Left, |_, window, _| {
             window.start_window_move();
         })

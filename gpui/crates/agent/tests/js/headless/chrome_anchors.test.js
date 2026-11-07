@@ -1,11 +1,12 @@
-// The window's two fixed corners: the anchors hold still, the title moves.
+// The window's two fixed corners: the anchors and the title bar between them
+// hold still.
 //
-// The agent toggle is the left anchor and the mode switch the right one. A
-// toggle rendered inside the panel it hides would be clipped away with it,
-// and a title that reserved its room by asking "is the panel open?" would
-// snap on the first frame of a slide — both read as "a button moved on its
-// own". What is asserted is *position across a state change*: an anchor whose
-// x moves at all has stopped being an anchor.
+// The agent toggle is the left anchor and the mode switch the right one, on
+// the title bar that spans the window above the page. A toggle rendered
+// inside the panel it hides would be clipped away with it, and a venue name
+// that rode the panel's edge would read as "a button moved on its own". What
+// is asserted is *position across a state change*: an anchor whose x moves at
+// all has stopped being an anchor.
 
 const WIDTH = 1280;
 
@@ -15,7 +16,7 @@ fixture({
   window: [WIDTH, 800],
 });
 
-// Both anchors, and the title bar's venue name, which the panel pushes.
+// Both anchors, and the title bar's venue name beside the left one.
 function read() {
   const shot = app.snapshot();
   const toggle = shot.find({ role: "button", label: "Hide agent" }) ?? shot.find({ role: "button", label: "Show agent" });
@@ -57,17 +58,15 @@ test("the anchors do not move when the panel and the mode they change do", () =>
   for (const [name, state] of Object.entries(states)) {
     assert(state.agentToggle === open.agentToggle, `the agent toggle moved in ${name}: ${JSON.stringify(state)}`);
     assert(state.modeSwitch === open.modeSwitch, `the mode switch moved in ${name}: ${JSON.stringify(state)}`);
+    assert(state.venue === open.venue, `the venue name moved in ${name}: ${JSON.stringify(state)}`);
   }
   // The right anchor sits at the window's trailing edge, inside a margin.
   const margin = WIDTH - open.modeSwitchRight;
   assert(margin >= 0 && margin <= 16, `the right anchor is not at the window's edge: ${open.modeSwitchRight}`);
 
-  // The title is what moves. The open panel pushes the venue name right;
-  // closing it returns the name against the left anchor.
-  expect(open.venue).toBeGreaterThan(closed.venue);
-  expect(reopened.venue).toBe(open.venue);
-  assert(closed.venue >= closed.agentToggleRight && closed.venue - closed.agentToggleRight <= 16,
-    `the title does not rest against the left anchor when the panel is shut: ${JSON.stringify(closed)}`);
+  // The venue name rests against the left anchor, panel open or shut.
+  assert(open.venue >= open.agentToggleRight && open.venue - open.agentToggleRight <= 16,
+    `the title does not rest against the left anchor: ${JSON.stringify(open)}`);
 });
 
 // One frame per step of the slide, so a control clipped away part-way
@@ -90,14 +89,7 @@ test("neither anchor blinks out part way through a slide", { fixture: { motion: 
       assert(frame.modeSwitch !== null, `the mode switch vanished on frame ${i} of ${phase}`);
       assert(frame.agentToggle === frames[0].agentToggle, `the agent toggle drifted on frame ${i} of ${phase}`);
       assert(frame.modeSwitch === frames[0].modeSwitch, `the mode switch drifted on frame ${i} of ${phase}`);
+      assert(frame.venue === frames[0].venue, `the venue name drifted on frame ${i} of ${phase}`);
     });
-  }
-  // The pushed title tracks the panel's edge, one way per slide: a jump is a
-  // single frame going backwards.
-  for (const [phase, forward] of [["closing", false], ["opening", true]]) {
-    const xs = phases[phase].map((frame) => frame.venue).filter((x) => x !== null);
-    for (let i = 1; i < xs.length; i++) {
-      assert(forward ? xs[i] >= xs[i - 1] : xs[i] <= xs[i - 1], `the title reversed during ${phase}: ${xs}`);
-    }
   }
 });

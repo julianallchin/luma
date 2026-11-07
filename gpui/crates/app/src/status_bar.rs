@@ -1,5 +1,5 @@
-//! The status bar along the window's foot: what the app is doing in the
-//! background, and one line about the mode on screen.
+//! The status bar on the window's trim, under the page: what the app is
+//! doing in the background, and one line about the mode on screen.
 //!
 //! Left, the quiet states — sync, DMX output, an import running, an update
 //! ready, a sign-out that failed — each one [`Item`], drawn one way. Right,
@@ -62,7 +62,8 @@ pub(crate) fn bar(app: &mut Luma, _: &mut Window, cx: &mut Context<Luma>) -> Any
         .items_center()
         .gap(px(16.))
         .px(px(12.))
-        .bg(glass::panel_opaque())
+        // On the trim under the page, like the title bar: no card of its own.
+        .bg(glass::window_trim())
         .text_size(px(11.))
         .text_color(glass::ink(glass::TEXT_TERTIARY))
         .children(
@@ -93,7 +94,7 @@ fn render(item: Item, app: &Entity<Luma>) -> AnyElement {
         .text_color(if item.danger {
             Hsla::from(ladder::danger())
         } else {
-            glass::ink(glass::TEXT_SECONDARY)
+            glass::ink(glass::TEXT_TERTIARY)
         })
         .when(item.ok, |row| {
             row.child(div().size(px(6.)).rounded_full().bg(ladder::status_ok()))

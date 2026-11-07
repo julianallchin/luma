@@ -296,6 +296,21 @@ pub const INNER_RULE_ALPHA: f32 = 0x0a as f32 / 255.0;
 pub const TEXT_SECONDARY: f32 = 0.60;
 pub const TEXT_TERTIARY: f32 = 0.42;
 
+/// The window's trim: the dark ground the title bar is drawn on, and the thin
+/// margin it leaves around the page on the left, right and bottom — zeron's
+/// inset gap.
+pub const WINDOW_TRIM: f32 = 5.0;
+/// The page's corner radius on the trim. Only the page rounds; everything
+/// inside it is flush and square.
+pub const PAGE_RADIUS: f32 = 10.0;
+
+/// The trim's colour: darker than the page's ground, so the page reads as one
+/// card sitting on it.
+#[must_use]
+pub fn window_trim() -> Hsla {
+    gpui::rgb(0x0e0e10).into()
+}
+
 /// The hairline between two panels: the agent panel and the content, the
 /// title bar and the stage, the stage and the mode under it.
 #[must_use]
