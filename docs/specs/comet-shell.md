@@ -37,7 +37,7 @@ another mode is up, and each venue keeps its modes while another venue is up.
 |---|---|---|
 | Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it; stands aside while the song list is up | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
 | Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, venue menu, the mode's subject, the mode switch | `shell::title_bar`, `chrome` |
-| Page | the inset card on the trim, rounded `PAGE_RADIUS` (10), `WINDOW_TRIM` (5) from the window's sides; holds the agent panel and the content | `shell::regions`, `glass::window_trim` |
+| Page | the inset card on the trim, rounded `PAGE_RADIUS` (12), `WINDOW_TRIM` (8) from the window's sides; holds the agent panel and the content | `shell::regions`, `glass::window_trim` |
 | Stage | the venue, lit by the mode's body; collapsible, height-resizable. In Live a deck panel sits at its left, drag-resizable, its width kept per device (`deck-panel-width`) | `shell::stage_body`, `perform::deck_panel` |
 | Body | the mode's body, or the song list in Arrange | `shell::content` |
 | Status bar | 24 high, cached, on the trim under the page in muted text; sync, DMX output, import, update, account failure, and the mode's context line | `status_bar` |
@@ -89,18 +89,25 @@ shows it for that visit only.
 
 Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 
-- **The trim** (`window_trim`, `#0e0e10`) is darker than the page's ground.
-  The title bar and the status bar are drawn on it with no card of their own;
-  the page is the one rounded thing on it.
-- **Inside the page, panels are flush.** They touch, a 1px hairline between
-  them (`panel_seam`, `#ffffff12`); a hairline inside a panel is `inner_rule`
-  (`#ffffff0a`). No gaps between panels and no panel corners.
+- **The trim** (`window_trim` = `ladder::frame`, `#0e0e0e`) is the grey
+  ladder's one rung under the page's ground (`#181818`), by zeron's own step
+  from window to page (`#0e0e10` under `#18181b`), kept achromatic like every
+  other rung. The title bar and the status bar are drawn on it with no card of
+  their own; the page is the one rounded thing on it.
+- **Inside the page, panels are flush.** A seam that drags — agent | content,
+  stage / body, Live's decks | stage — is a 4px gutter of the trim, so the
+  trim runs on into the page along it; the grip over it keeps its own 5px
+  reach. Panels that do not resize against each other take a 1px hairline
+  (`panel_seam`, `#ffffff12`); a hairline inside a panel is `inner_rule`
+  (`#ffffff0a`). No panel corners.
 - **Corners** belong only to controls (6–8), clips and pads (4) and floating
   things — menus, popovers, settings cards (12). See `luma_ui::radius`.
 - **Washes:** hover `WASH_SUBTLE` (`0x0d`), pressed `WASH_PRESSED` (`0x17`),
   selected `WASH_REST` (`0x1a`). A button's plate is the pressed wash and
-  lifts to selected on hover. The segmented control is a `#ffffff08` track
-  with no edge; the chosen cell takes the selected wash.
+  lifts to selected on hover. Every one-of-N switch is `float::segmented`:
+  a `#ffffff08` track with no edge, the chosen cell at the selected wash —
+  both laid over the page's ground once and painted opaque, so the mode
+  switch on the trim and a toggle on a panel are the same colours.
 - **Muted text** is the primary at 60% (`TEXT_SECONDARY`,
   `ladder::muted_foreground`) and 42% (`TEXT_TERTIARY`).
 

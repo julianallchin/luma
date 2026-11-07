@@ -43,9 +43,11 @@ use crate::{
 /// both gives the content the room and the panel comes back when it widens.
 const AGENT_MIN: f32 = 300.0;
 const CONTENT_MIN: f32 = 480.0;
-/// How wide a seam between two panels is: one hairline, and the only
-/// structural line the shell draws.
-const SEAM_WIDTH: f32 = 1.0;
+/// How wide a resizable seam between two panels is: a narrow gutter of the
+/// window's trim, so the trim runs on into the page along every split a
+/// person can drag. Inside the pane grip's reach, so the hit area is the
+/// grip's, not the gutter's.
+const SEAM_WIDTH: f32 = 4.0;
 /// The status bar along the window's foot.
 pub(crate) const STATUS_BAR_HEIGHT: f32 = 24.0;
 
@@ -935,18 +937,20 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
         // The grip below is placed against this column's own top edge.
         .relative()
         .child(band)
-        .child(hairline())
+        .child(seam_across())
         .child(body_region(app, cx))
         .child(grip)
         .into_any_element()
 }
 
-/// How tall the content column is: the page — the window less the title bar
-/// and the status bar on the trim — less a seam grip's reach.
+/// How tall the stage and the body share: the page — the window less the
+/// title bar and the status bar on the trim — less the gutter between them
+/// and a seam grip's reach.
 fn content_height(window: &Window) -> f32 {
     f32::from(window.viewport_size().height)
         - chrome::HEIGHT
         - STATUS_BAR_HEIGHT
+        - SEAM_WIDTH
         - pane::HANDLE_WIDTH
 }
 
@@ -1063,22 +1067,24 @@ fn stage_slot(stage: AnyElement) -> Div {
         .child(stage)
 }
 
-/// The rule between two panels side by side: full height, one hairline.
+/// The gutter between two panels side by side, on a seam that drags: full
+/// height, in the trim's colour.
 fn seam() -> Div {
     div()
         .h_full()
         .flex_none()
         .w(px(SEAM_WIDTH))
-        .bg(glass::panel_seam())
+        .bg(glass::window_trim())
 }
 
-/// The rule between two panels stacked: full width, one hairline.
-fn hairline() -> Div {
+/// The gutter between two panels stacked, on a seam that drags: full width,
+/// in the trim's colour.
+fn seam_across() -> Div {
     div()
         .w_full()
         .flex_none()
         .h(px(SEAM_WIDTH))
-        .bg(glass::panel_seam())
+        .bg(glass::window_trim())
 }
 
 /// How the window divides between the agent panel and the content, and the
@@ -1136,8 +1142,9 @@ impl Luma {
     ) {
         // Measured against the row the seam divides — the page, inset from
         // the window's edge by the trim.
+        // The pointer holds the gutter by its middle.
         let room = f32::from(event.bounds.size.width) - SEAM_WIDTH;
-        let at = f32::from(event.event.position.x - event.bounds.left());
+        let at = f32::from(event.event.position.x - event.bounds.left()) - SEAM_WIDTH / 2.0;
         self.agent_split.drag_to(at, room);
         cx.notify();
     }
@@ -1204,7 +1211,7 @@ impl Luma {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let width = f32::from(event.event.position.x - event.bounds.left());
+        let width = f32::from(event.event.position.x - event.bounds.left()) - SEAM_WIDTH / 2.0;
         let room = f32::from(event.bounds.size.width);
         let ceiling = (room - SEAM_WIDTH - DECK_STAGE_MIN)
             .min(DECK_MAX)
@@ -1262,8 +1269,9 @@ impl Luma {
     ) {
         let available = content_height(window);
         // The column starts at the top of the row that listens — the page's
-        // top edge, under the title bar.
-        let offset = f32::from(event.event.position.y - event.bounds.top());
+        // top edge, under the title bar — and the pointer holds the gutter by
+        // its middle.
+        let offset = f32::from(event.event.position.y - event.bounds.top()) - SEAM_WIDTH / 2.0;
         self.active_visualizer_split().drag_to(offset, available);
         cx.notify();
     }

@@ -25,9 +25,9 @@ fixture({
     { pattern: "pattern-wash", name: "Wash", start: 14, end: 18, lane: 1, preset: "Random heads" },
   ],
   // The pixel premises below were authored against a timeline about 1000
-  // wide; the agent panel takes a quarter of the page, which is the window
-  // less its trim either side.
-  window: [1344, 818],
+  // wide: the agent panel takes a quarter of the page (the window less its
+  // trim either side) less its seam, and the content the rest.
+  window: [1353, 818],
 });
 const HAZE_SECONDS = 4;
 

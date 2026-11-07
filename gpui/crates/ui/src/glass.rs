@@ -296,23 +296,24 @@ pub const INNER_RULE_ALPHA: f32 = 0x0a as f32 / 255.0;
 pub const TEXT_SECONDARY: f32 = 0.60;
 pub const TEXT_TERTIARY: f32 = 0.42;
 
-/// The window's trim: the dark ground the title bar is drawn on, and the thin
-/// margin it leaves around the page on the left, right and bottom — zeron's
-/// inset gap.
-pub const WINDOW_TRIM: f32 = 5.0;
+/// The window's trim either side of the page: the margin the dark ground
+/// shows between the window's edge and the page.
+pub const WINDOW_TRIM: f32 = 8.0;
 /// The page's corner radius on the trim. Only the page rounds; everything
 /// inside it is flush and square.
-pub const PAGE_RADIUS: f32 = 10.0;
+pub const PAGE_RADIUS: f32 = 12.0;
 
-/// The trim's colour: darker than the page's ground, so the page reads as one
-/// card sitting on it.
+/// The trim's colour: [`ladder::frame`], the rung under the page's ground, so
+/// the page reads as one card sitting on it. The title bar and the status
+/// bar are drawn on it, and the page's draggable seams are gutters of it.
 #[must_use]
 pub fn window_trim() -> Hsla {
-    gpui::rgb(0x0e0e10).into()
+    ladder::frame().into()
 }
 
-/// The hairline between two panels: the agent panel and the content, the
-/// title bar and the stage, the stage and the mode under it.
+/// The hairline between two panels that do not resize against each other —
+/// a page's head over its body. A seam that drags is a gutter of
+/// [`window_trim`] instead.
 #[must_use]
 pub fn panel_seam() -> Hsla {
     hairline(PANEL_RULE_ALPHA)
