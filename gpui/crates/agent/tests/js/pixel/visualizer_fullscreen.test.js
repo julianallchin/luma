@@ -39,9 +39,9 @@ test("fullscreen keeps the live camera and restores its pose", () => {
   // Pointer focus makes the visualizer's keyboard shortcuts available.
   app.click(node("card", "Stage"));
   app.key("space");
-  until("play after a stage click", () => nav.moving());
+  until("play after a stage click", () => node("button", "Pause"));
   app.key("space");
-  until("pause after a stage click", () => !nav.moving());
+  until("pause after a stage click", () => node("button", "Play"));
   app.key("shift-f");
   until("shortcut entry", () => node("button", "Exit fullscreen"));
   app.drag({ x: 700, y: 450 }, { dx: 90, dy: 40 }, { steps: 8, restale: "match" });

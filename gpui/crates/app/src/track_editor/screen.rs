@@ -54,6 +54,10 @@ pub fn track_editor(
         .playback_surface
         .get_or_insert_with(|| cx.new(|_| playback_surface::Surface::new(app.downgrade())))
         .clone();
+    let readout = state
+        .transport_readout
+        .get_or_insert_with(|| cx.new(|cx| toolbar::Readout::new(app.downgrade(), &surface, cx)))
+        .clone();
     if state
         .beat_reason_menu
         .tick_close(luma_ui::motion::reduced_motion(cx))
@@ -71,7 +75,7 @@ pub fn track_editor(
         .flex_col()
         .bg(ladder::background())
         .text_color(ladder::foreground())
-        .child(toolbar(state, app))
+        .child(toolbar(state, app, readout))
         // An error only takes the screen when there is nothing behind it to
         // show. A *write* that came back refused — an overlap the seam
         // forbids, a document it would not validate — leaves a perfectly

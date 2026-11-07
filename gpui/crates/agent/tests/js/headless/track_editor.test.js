@@ -51,6 +51,7 @@ test("a clip edge dragged on the timeline moves, stays moved, and the playhead r
   const opened = open();
   expect(opened.status).toContain("2 patterns");
   expect(opened.clips.length).toBe(2);
+  expect(opened.buttons).toContain("Play");
 
   // Drag the first clip's end handle, not the clip: a drag starts at a
   // node's centre.
@@ -70,10 +71,16 @@ test("a clip edge dragged on the timeline moves, stays moved, and the playhead r
   expect(reopened.status).toContain("2 patterns");
   expect(reopened.clips).toEqual(moved.clips);
 
-  // Playing moves the playhead on its own, and pausing holds it.
-  nav.play();
-  expect(read().playhead).toBeGreaterThan(reopened.playhead);
-  nav.pause();
+  // Playing moves the playhead on its own, and the button says so.
+  app.click(app.snapshot().find({ role: "button", label: "Play" }));
+  until("the transport to report playing", (s) => s.find({ role: "button", label: "Pause" }));
+  // The first poll that reads `isPlaying` can still read ~0; a few more.
+  app.frames(4, { waitMs: 60 });
+  const playing = read();
+  expect(playing.playhead).toBeGreaterThan(reopened.playhead);
+  app.click(app.snapshot().find({ role: "button", label: "Pause" }));
+  app.frames(4, { waitMs: 60 });
+  expect(read().buttons).toContain("Play");
 });
 
 test("beat grid approval survives reopening and can be undone", () => {

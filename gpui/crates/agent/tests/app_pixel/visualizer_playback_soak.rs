@@ -86,7 +86,7 @@ fn playing_does_not_get_slower_the_longer_it_plays() {
             until("the clip", (s) => s.find({{ role: "card", label: "Constant color" }}) !== undefined);
             nav.agentOff();
             app.frames(10, {{ waitMs: 60 }});
-            nav.play();
+            nav.step("the Play button", "button", "Play");
             app.frames(20, {{ waitMs: 55 }});
         "#
         ),

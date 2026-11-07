@@ -60,7 +60,7 @@ function openPlaying(clip) {
   const middle = { x: stage.width * 0.2, y: stage.height * 0.2, width: stage.width * 0.6, height: stage.height * 0.6 };
   const shot = app.screenshot({ node: app.snapshot().find({ role: "card", label: "Stage" }) });
   expect(image.stats(shot, middle).max).toBeGreaterThan(20);
-  nav.play();
+  nav.step("the Play button", "button", "Play");
   // Past the first frames, which carry the score's cold caches.
   app.frames(20, { waitMs: 55 });
   return app.snapshot().find({ role: "card", label: "Stage" });

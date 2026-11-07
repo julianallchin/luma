@@ -97,7 +97,7 @@ fn capture() {
     run(
         &mut harness,
         r#"
-            nav.play();
+            nav.step("the Play button", "button", "Play");
             app.frames(30, { waitMs: 55 });
         "#,
     );
@@ -171,7 +171,7 @@ fn capture() {
             until("the stage", (s) => s.find({{ role: "card", label: "Stage" }}) !== undefined);
             nav.agentOff();
             app.frames(12, {{ waitMs: 60 }});
-            nav.play();
+            nav.step("the Play button", "button", "Play");
             app.frames(30, {{ waitMs: 55 }});
         "#
         ),

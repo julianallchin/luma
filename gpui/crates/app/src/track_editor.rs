@@ -242,6 +242,8 @@ pub struct Editor {
     view: View,
     transport: Transport,
     playback_surface: Option<Entity<playback_surface::Surface>>,
+    /// The toolbar's transport, repainting with the surface.
+    transport_readout: Option<Entity<toolbar::Readout>>,
     gesture: Option<Gesture>,
     /// The part of an alpha line the pointer is over, for the cursor.
     alpha_hover: Option<fades::Part>,

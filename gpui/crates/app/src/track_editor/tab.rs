@@ -118,6 +118,7 @@ impl Luma {
             },
             transport: Transport::default(),
             playback_surface: None,
+            transport_readout: None,
             gesture: None,
             alpha_hover: None,
             canvas: Rc::new(Cell::new(Bounds::default())),

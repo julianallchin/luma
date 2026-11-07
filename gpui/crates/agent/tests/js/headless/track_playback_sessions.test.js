@@ -4,10 +4,14 @@
 fixture({ seconds: 20, second_track_seconds: 8, equal_timestamp_track: true, seeded_threads: true });
 
 test("returning to a parked song plays its own audio", () => {
-  // The playhead only runs on a player reading that names the open song, so
-  // a running playhead is that song's own audio. Opening the next song
-  // while one plays lets the playing one go.
-  const play = () => nav.play();
+  const time = () => app.snapshot().findAll({ role: "text" }).find((n) => /^\d+:\d+ \/ \d+:\d+$/.test(n.label))?.label;
+  // The player reads `elapsed / duration`; each song's duration is its own.
+  function play(duration) {
+    nav.step("a ready player", "button", "Play");
+    until("playing the selected song", (s) => s.find({ role: "button", label: "Pause" }));
+    app.frames(4, { waitMs: 60 });
+    expect(time()).toMatch(` / ${duration}$`);
+  }
   const waveform = (track) => until(`${track}'s waveform`, (s) => s.find({ role: "card", label: "Waveform" }));
   nav.venue("Test Venue");
   // Zulu is in the library but not in the venue: venue membership is
@@ -21,16 +25,17 @@ test("returning to a parked song plays its own audio", () => {
     s.find({ role: "button", label: "Close" }) === undefined);
   nav.track("Aurora");
   waveform("Aurora");
-  play();
+  play("0:20");
   nav.track("Zulu");
   waveform("Zulu");
-  play();
+  play("0:08");
   nav.track("Aurora");
-  play();
+  play("0:20");
   // Repeated switches exercise old poll loops as well as the cached tab.
   nav.track("Zulu");
-  play();
+  play("0:08");
   nav.track("Aurora");
-  play();
-  nav.pause();
+  play("0:20");
+  nav.step("pause", "button", "Pause");
+  until("stopped", (s) => s.find({ role: "button", label: "Play" }));
 });
