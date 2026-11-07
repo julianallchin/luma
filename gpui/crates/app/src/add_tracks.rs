@@ -451,5 +451,5 @@ fn route_content(
         Route::SourceLibrary => source_library(state, ambient, mode, app, cx),
         Route::Progress => import_progress(activity, app, cx),
     };
-    palette(state, activity, route, mode, app, window, body)
+    palette(state, activity, route, mode, app, window, body, cx)
 }

@@ -503,7 +503,7 @@ pub fn nav_legend(open: impl Into<SharedString>) -> Div {
         .child(key_hint(IconName::ArrowRight, open))
 }
 
-fn hint_row() -> Div {
+pub(crate) fn hint_row() -> Div {
     div()
         .flex()
         .flex_row()

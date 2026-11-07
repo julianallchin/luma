@@ -957,7 +957,7 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
     let stage = stage_region(app, cx);
     // Arrange names its song and score over the stage's top edge, between
     // the corner controls: the door to the song's other scores.
-    let switcher = crate::score_switcher::trigger(app, &cx.entity());
+    let switcher = crate::score_switcher::trigger(app, &cx.entity(), cx);
     let mut band = div()
         .h(px(stage_height))
         .flex_none()
@@ -1001,7 +1001,7 @@ fn settings_page(app: &Luma, cx: &mut Context<Luma>) -> Div {
         .flex()
         .key_context(keymap::context::SETTINGS)
         .when(holds_focus, |page| page.track_focus(&app.focus))
-        .child(settings::settings(app, state, &cx.entity()).agent_node(Role::Card, "Settings"))
+        .child(settings::settings(app, state, &cx.entity(), cx).agent_node(Role::Card, "Settings"))
 }
 
 /// How tall the stage and the body share: the page — the window less the

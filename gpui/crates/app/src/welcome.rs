@@ -42,7 +42,17 @@ use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::{glass, ladder, radius};
 
-use crate::{shell::Overlay, Luma};
+use crate::{keymap, shell::Overlay, Luma};
+use luma_ui::shortcut;
+
+/// The venue dialog's chords — see [`Luma::venue_chord`].
+#[derive(Clone, Copy)]
+enum VenueChord {
+    Create,
+    Join,
+    Share,
+    CopyCode,
+}
 
 pub(crate) const LAST_VENUE: &str = "last-venue";
 /// The one size every route takes. Like the track palette, the routes are the
@@ -604,9 +614,10 @@ impl Luma {
         });
     }
 
-    /// The picker's keyboard, in the same navigator shape as the track
-    /// palette: arrows walk the list, Enter acts, ⌘⏎ commits, ⌫ on an empty
-    /// field steps back.
+    /// The picker's navigator keys, in the same shape as the track palette:
+    /// arrows walk the list, Enter acts, ⌫ on an empty field steps back. The
+    /// chords (create, join, share, copy) are actions in the keymap's table,
+    /// handled by [`Luma::venue_chord`].
     fn venue_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let Some(Overlay::Venues(state)) = self.overlay.as_open() else {
             return;
@@ -619,7 +630,6 @@ impl Luma {
             Route::Share => true,
         };
         let key = event.keystroke.key.as_str();
-        let modified = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
 
         match (route, key) {
             // Escape is refused while onboarding has no venue to fall back to
@@ -630,17 +640,31 @@ impl Luma {
             // On the create route Enter alone commits: there is no list under
             // the cursor for it to mean anything else.
             (Route::Create, "enter") => self.create_venue(cx),
-            (Route::Create | Route::Browse, "j") if modified => self.show_join_venue(cx),
             // A code is edited, so ← only leaves an empty field.
             (Route::Join, "left" | "backspace") if field_empty => self.cancel_join_venue(cx),
             (Route::Join, "enter") => self.join_venue(cx),
             (Route::Share, "left" | "backspace") => self.close_share_venue(cx),
-            (Route::Share, "c") if modified => self.copy_share_code(cx),
             (Route::Browse, "up") => self.step_venue(-1, cx),
             (Route::Browse, "down") => self.step_venue(1, cx),
-            (Route::Browse, "i") if modified => self.share_active_venue(cx),
-            (Route::Browse, "enter") if modified => self.show_create_venue(cx),
             (Route::Browse, "enter" | "right") => self.open_active_venue(cx),
+            _ => {}
+        }
+    }
+
+    /// One of the dialog's chords, by the route it lands on. Each means
+    /// nothing on a route it has no business on.
+    fn venue_chord(&mut self, chord: VenueChord, cx: &mut Context<Self>) {
+        let Some(Overlay::Venues(state)) = self.overlay.as_open() else {
+            return;
+        };
+        match (chord, state.route()) {
+            (VenueChord::Create, Route::Browse) => self.show_create_venue(cx),
+            // The commit chord commits the route's own form too, as Enter does.
+            (VenueChord::Create, Route::Create) => self.create_venue(cx),
+            (VenueChord::Create, Route::Join) => self.join_venue(cx),
+            (VenueChord::Join, Route::Browse | Route::Create) => self.show_join_venue(cx),
+            (VenueChord::Share, Route::Browse) => self.share_active_venue(cx),
+            (VenueChord::CopyCode, Route::Share) => self.copy_share_code(cx),
             _ => {}
         }
     }
@@ -1251,7 +1275,7 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
         })
         .filter(|venue| shareable(venue))
         .map(|venue| (venue.id.clone(), venue.name.clone()));
-    let act = |key: &'static str, label: SharedString, chord: Option<&'static str>, act: Act| {
+    let act = |key: &'static str, label: SharedString, chord: Option<&dyn Action>, act: Act| {
         let pressed = entity.clone();
         row(key.to_string(), label.clone())
             .when(pressable, |row| {
@@ -1267,7 +1291,7 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
                     })
                 })
             })
-            .children(chord.map(|chord| float::key_cap().child(chord)))
+            .children(chord.and_then(|chord| luma_ui::shortcut::cap(chord, cx)))
             .agent_node(Role::Row, label)
     };
     card = card
@@ -1296,7 +1320,7 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
         .child(act(
             "venue-menu-settings",
             "Settings…".into(),
-            Some("⌘,"),
+            Some(&crate::keymap::OpenSettings),
             Act::Settings,
         ))
         .child(act(
@@ -1454,16 +1478,31 @@ fn route_body(
             let event = event.clone();
             keys.update(cx, |this, cx| this.venue_key(&event, cx));
         });
+        let chord = |chord: VenueChord| {
+            let app = app.clone();
+            move |cx: &mut gpui::App| app.update(cx, |this, cx| this.venue_chord(chord, cx))
+        };
+        let (create, join, share, copy) = (
+            chord(VenueChord::Create),
+            chord(VenueChord::Join),
+            chord(VenueChord::Share),
+            chord(VenueChord::CopyCode),
+        );
+        frame = frame
+            .on_action(move |_: &crate::keymap::CreateVenue, _, cx| create(cx))
+            .on_action(move |_: &crate::keymap::JoinVenue, _, cx| join(cx))
+            .on_action(move |_: &crate::keymap::ShareVenue, _, cx| share(cx))
+            .on_action(move |_: &crate::keymap::CopyShareCode, _, cx| copy(cx));
     }
     frame
-        .child(header(state, route, mode, app, window))
+        .child(header(state, route, mode, app, window, cx))
         .child(div().flex_1().min_h_0().flex().child(match route {
             Route::Browse => browser(state, statuses, mode, app, window, cx),
             Route::Create => create(state, mode, app),
             Route::Join => join(state),
             Route::Share => share(state, mode, app, window),
         }))
-        .child(footer(state, route))
+        .child(footer(state, route, cx))
         .into_any_element()
 }
 
@@ -1477,6 +1516,7 @@ fn header(
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
+    cx: &App,
 ) -> Div {
     let interactive = mode == ContentMode::Interactive;
     let mut band = float::header_band();
@@ -1531,9 +1571,9 @@ fn header(
     });
 
     if route == Route::Browse && state.loaded && state.error.is_none() {
-        band = band.child(join_entry(state, interactive, app, window));
+        band = band.child(join_entry(state, interactive, app, window, cx));
     }
-    if let Some(chip) = commit_chip(state, route, mode, app, window) {
+    if let Some(chip) = commit_chip(state, route, mode, app, window, cx) {
         band = band.child(chip);
     }
 
@@ -1652,6 +1692,7 @@ fn join_entry(
     interactive: bool,
     app: &Entity<Luma>,
     window: &Window,
+    cx: &App,
 ) -> AnyElement {
     let go = app.clone();
     quiet_chip()
@@ -1661,12 +1702,14 @@ fn join_entry(
                 .tab_index(0)
                 .on_click(move |_, _, cx| go.update(cx, |this, cx| this.show_join_venue(cx)))
         })
-        .child(
-            div()
-                .font_family(luma_ui::fonts::MONO)
-                .text_size(px(11.0))
-                .text_color(ladder::foreground_alpha(0.5))
-                .child("⌘J"),
+        .children(
+            luma_ui::shortcut::text(&crate::keymap::JoinVenue, cx).map(|keys| {
+                div()
+                    .font_family(luma_ui::fonts::MONO)
+                    .text_size(px(11.0))
+                    .text_color(ladder::foreground_alpha(0.5))
+                    .child(keys)
+            }),
         )
         .child("Join")
         .agent_node(Role::Button, "Join a venue")
@@ -1704,13 +1747,19 @@ fn commit_chip(
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
+    cx: &App,
 ) -> Option<AnyElement> {
     let interactive = mode == ContentMode::Interactive;
     let (glyph, label, enabled, act): (_, _, _, fn(&mut Luma, &mut Context<Luma>)) = match route {
         Route::Browse if !state.loaded || state.error.is_some() => return None,
-        Route::Browse => ("⌘↵", "Create venue", true, Luma::show_create_venue),
+        Route::Browse => (
+            luma_ui::shortcut::text(&crate::keymap::CreateVenue, cx),
+            "Create venue",
+            true,
+            Luma::show_create_venue,
+        ),
         Route::Create => (
-            "↵",
+            Some("↵".to_string()),
             if state.creating {
                 "Creating…"
             } else {
@@ -1720,7 +1769,7 @@ fn commit_chip(
             Luma::create_venue,
         ),
         Route::Join => (
-            "↵",
+            Some("↵".to_string()),
             if state.joining { "Joining…" } else { "Join" },
             !state.join_code.trim().is_empty() && !state.joining,
             Luma::join_venue,
@@ -1741,7 +1790,7 @@ fn commit_chip(
                 chip.on_click(move |_, _, cx| go.update(cx, |this, cx| act(this, cx)))
             })
             // The glyph must match the chord the footer legend promises.
-            .child(glyph)
+            .children(glyph)
             .child(label)
             .agent_node(Role::Button, label)
             .agent_disabled(!enabled || !interactive)
@@ -1750,7 +1799,7 @@ fn commit_chip(
     )
 }
 
-fn footer(state: &VenuePicker, route: Route) -> Div {
+fn footer(state: &VenuePicker, route: Route, cx: &App) -> Div {
     let mut band = float::footer_band();
     band = match route {
         Route::Browse => band
@@ -1760,11 +1809,11 @@ fn footer(state: &VenuePicker, route: Route) -> Div {
                 "Navigate",
             ))
             .child(float::key_hint(IconName::ArrowRight, "Open"))
-            .child(float::key_hint_text("⌘↵", "Create"))
-            .child(float::key_hint_text("⌘J", "Join"))
+            .children(shortcut::hint(&keymap::CreateVenue, "Create", cx))
+            .children(shortcut::hint(&keymap::JoinVenue, "Join", cx))
             .when(
                 state.shown.get(state.active).is_some_and(shareable),
-                |band| band.child(float::key_hint_text("⌘I", "Share")),
+                |band| band.children(shortcut::hint(&keymap::ShareVenue, "Share", cx)),
             ),
         Route::Create => band
             .when(!state.venues.is_empty(), |band| {
@@ -1781,7 +1830,7 @@ fn footer(state: &VenuePicker, route: Route) -> Div {
                     .sharing
                     .as_ref()
                     .is_some_and(|sharing| sharing.venue.share_code.is_some()),
-                |band| band.child(float::key_hint_text("⌘C", "Copy code")),
+                |band| band.children(shortcut::hint(&keymap::CopyShareCode, "Copy code", cx)),
             ),
     };
     band.child(div().flex_1().min_w_0())

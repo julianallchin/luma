@@ -70,10 +70,21 @@ impl Luma {
             Some(float::Nav::Dismiss) => self.dismiss_overlay(cx),
             Some(float::Nav::Back) => self.add_tracks_back(route, cx),
             Some(float::Nav::Step(delta)) => self.add_tracks_step(route, delta, cx),
-            Some(float::Nav::Submit) => self.add_tracks_submit(route, cx),
             Some(float::Nav::Open) => self.add_tracks_activate(route, cx),
-            None => {}
+            // The commit chord is [`crate::keymap::ImportTracks`], wherever
+            // the shortcut table puts it: a rebind leaves ⌘↵ meaning nothing.
+            Some(float::Nav::Submit) | None => {}
         }
+    }
+
+    /// The import chord ([`crate::keymap::ImportTracks`]): the route's
+    /// committing action, as its lit chip does.
+    pub(super) fn add_tracks_chord(&mut self, cx: &mut Context<Self>) {
+        let Some(crate::shell::Overlay::AddTracks(state)) = self.overlay.as_open() else {
+            return;
+        };
+        let route = *state.morph.target_key();
+        self.add_tracks_submit(route, cx);
     }
 
     /// Space in the source list: preview the cursor row. `false` — so the

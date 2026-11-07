@@ -60,6 +60,7 @@ mod score_switcher;
 mod session_store;
 mod settings;
 mod shell;
+mod shortcuts;
 mod signin;
 mod stage;
 mod status_bar;
@@ -158,6 +159,8 @@ pub struct Luma {
     /// Live's deck panel width as last dragged on this device; `None` is the
     /// default — see [`shell::DeckWidth`].
     pub(crate) deck_width: shell::DeckWidth,
+    /// This machine's rebound shortcuts — see [`keymap::Overrides`].
+    pub(crate) shortcuts: session_store::Stored<keymap::Overrides>,
     /// The title bar's venue menu while it is open or leaving — see
     /// [`welcome::VenueMenu`].
     pub(crate) venue_menu: luma_ui::dialog::Popup<welcome::VenueMenu>,
@@ -297,6 +300,7 @@ impl Luma {
             saved_venues: saved_venues::SavedVenues::default(),
             saved_cameras: saved_cameras::empty(),
             deck_width: session_store::Stored::new(shell::DECK_WIDTH_KEY),
+            shortcuts: session_store::Stored::new(keymap::OVERRIDES_KEY),
             venue_menu: luma_ui::dialog::Popup::default(),
             score_switcher: luma_ui::dialog::Popup::default(),
             settings: None,
@@ -350,6 +354,7 @@ impl Luma {
             app.show_sign_in(false, cx);
         }
         app.load_display_settings(cx);
+        app.load_shortcuts(cx);
         app.watch_session(cx);
         app.watch_sync(cx);
         app.watch_replica(cx);

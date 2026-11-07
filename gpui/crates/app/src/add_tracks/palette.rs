@@ -28,6 +28,7 @@ pub(super) fn palette(
     app: &Entity<Luma>,
     window: &Window,
     body: AnyElement,
+    cx: &App,
 ) -> AnyElement {
     let interactive = mode == ContentMode::Interactive;
     let keys = app.clone();
@@ -44,6 +45,10 @@ pub(super) fn palette(
         // Bound above the search field (`keymap::init_field_overrides`), so
         // each one hands the key back to the field when it is not about a
         // preview.
+        let import = app.clone();
+        frame = frame.on_action(move |_: &crate::keymap::ImportTracks, _, cx| {
+            import.update(cx, |this, cx| this.add_tracks_chord(cx))
+        });
         let space = app.clone();
         let back = app.clone();
         let forward = app.clone();
@@ -69,9 +74,9 @@ pub(super) fn palette(
             });
     }
     frame
-        .child(header(state, activity, route, mode, app, window))
+        .child(header(state, activity, route, mode, app, window, cx))
         .child(div().flex_1().min_h_0().flex().child(body))
-        .child(footer(activity, route))
+        .child(footer(activity, route, cx))
         .into_any_element()
 }
 
@@ -82,6 +87,7 @@ fn header(
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
+    cx: &App,
 ) -> Div {
     let interactive = mode == ContentMode::Interactive;
     let mut band = float::header_band();
@@ -112,7 +118,7 @@ fn header(
 
     band = band.child(filter_field(state, activity, route, mode, window));
 
-    if let Some(chip) = submit_chip(state, route, mode, app, window) {
+    if let Some(chip) = submit_chip(state, route, mode, app, window, cx) {
         band = band.child(chip);
     }
 
@@ -212,6 +218,7 @@ fn submit_chip(
     mode: ContentMode,
     app: &Entity<Luma>,
     window: &Window,
+    cx: &App,
 ) -> Option<AnyElement> {
     // Choosing a song to play imports nothing.
     if matches!(state.purpose, Purpose::PlayVirtual(_)) {
@@ -256,9 +263,9 @@ fn submit_chip(
                     submit.update(cx, |this, cx| this.add_tracks_submit(route, cx))
                 })
             })
-            // The ⌘ glyph rather than an icon: this chip's whole job is to say
-            // "the chord in the legend below does this".
-            .child("⌘")
+            // The chord's keys rather than an icon: this chip's whole job is
+            // to say "the chord in the legend below does this".
+            .children(luma_ui::shortcut::text(&crate::keymap::ImportTracks, cx))
             .child(label)
             .children(menu)
             .agent_node(Role::Button, node)
@@ -333,12 +340,16 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
 /// flight. Import status lives *here* rather than in a band of its own: a
 /// strip that appears and disappears mid-flow shifts everything under it, and
 /// the footer is already reserved space on every route.
-fn footer(activity: Option<&TrackImportActivity>, route: Route) -> Div {
+fn footer(activity: Option<&TrackImportActivity>, route: Route, cx: &App) -> Div {
     if route == Route::Progress {
         // The page is the progress, so the footer does not repeat it.
         return float::footer_band()
             .child(float::key_hint(IconName::ArrowLeft, "Add more"))
-            .child(float::key_hint_text("⌘↵", "Done"));
+            .children(luma_ui::shortcut::hint(
+                &crate::keymap::ImportTracks,
+                "Done",
+                cx,
+            ));
     }
     let mut band = float::nav_legend(match route {
         Route::SourceLibrary => "Select",
@@ -347,7 +358,11 @@ fn footer(activity: Option<&TrackImportActivity>, route: Route) -> Div {
     if route == Route::SourceLibrary {
         band = band.child(float::key_hint_text("space", "Preview"));
     }
-    band = band.child(float::key_hint_text("⌘↵", "Import"));
+    band = band.children(luma_ui::shortcut::hint(
+        &crate::keymap::ImportTracks,
+        "Import",
+        cx,
+    ));
     band = band.child(div().flex_1().min_w_0());
     // A route's own failure is shown where its rows would have been, by
     // `retry_body` — the footer would be a second copy of the same sentence.

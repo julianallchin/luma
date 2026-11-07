@@ -14,6 +14,15 @@
 //! step aside and the page column lists what matched, under the section each
 //! match lives in. Escape empties the query before it leaves the page.
 //!
+//! # Shortcuts
+//!
+//! The Shortcuts section lists [`crate::keymap::SHORTCUTS`] under its groups,
+//! each row's keys read back from the keymap. Clicking a row's keys records
+//! the next keystroke (Escape cancels) through a keystroke interceptor, so a
+//! key some command already holds is heard rather than run. One that another
+//! command holds where this one would be live is refused, naming it.
+//! Rebinds are this machine's ([`crate::shortcuts`]), not settings rows.
+//!
 //! # The write path
 //!
 //! Every control writes through `set_setting` on the seam and then re-reads
@@ -35,6 +44,7 @@ use luma_lib::settings::{
     agent_models, key, ApiKeyStatus, AppSettings, AGENT_PROVIDERS, MAX_DIMMER_RANGE,
 };
 
+use crate::keymap::{self, Shortcut};
 use crate::Luma;
 
 /// Which section is showing.
@@ -44,11 +54,19 @@ pub enum Tab {
     Account,
     Ai,
     Output,
+    Shortcuts,
     About,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [Tab::General, Tab::Account, Tab::Ai, Tab::Output, Tab::About];
+    const ALL: [Tab; 6] = [
+        Tab::General,
+        Tab::Account,
+        Tab::Ai,
+        Tab::Output,
+        Tab::Shortcuts,
+        Tab::About,
+    ];
 
     fn icon(self) -> IconName {
         match self {
@@ -56,6 +74,7 @@ impl Tab {
             Tab::Account => IconName::User,
             Tab::Ai => IconName::Bot,
             Tab::Output => IconName::Network,
+            Tab::Shortcuts => IconName::Keyboard,
             Tab::About => IconName::Info,
         }
     }
@@ -66,6 +85,7 @@ impl Tab {
             Tab::Account => "Account",
             Tab::Ai => "AI",
             Tab::Output => "DMX Output",
+            Tab::Shortcuts => "Shortcuts",
             Tab::About => "About",
         }
     }
@@ -77,6 +97,9 @@ impl Tab {
             Tab::Account => "Who this library belongs to.",
             Tab::Ai => "The agent that works beside you, and the keys it uses.",
             Tab::Output => "How light leaves this machine.",
+            Tab::Shortcuts => {
+                "The keys that ask for each command. Click a shortcut to record a new one."
+            }
             Tab::About => "This copy of Luma, and how it stays current.",
         }
     }
@@ -100,6 +123,11 @@ pub struct Settings {
     search: Entity<TextInput>,
     query: String,
     _search: Subscription,
+    /// The shortcut whose next keystroke is being recorded, and the
+    /// interceptor hearing it — dropped, it stops listening.
+    recording: Option<(&'static str, Subscription)>,
+    /// The last refused key, on the row that refused it.
+    refused: Option<(&'static str, String)>,
 }
 
 impl Settings {
@@ -131,6 +159,8 @@ impl Settings {
             search,
             query: String::new(),
             _search: events,
+            recording: None,
+            refused: None,
         }
     }
 }
@@ -489,6 +519,79 @@ impl Luma {
         }
     }
 
+    /// Listen for `row`'s next keystroke. Every key goes to the recorder
+    /// while it listens — ⌘P records as ⌘P rather than opening the song
+    /// list — and nothing does once it stops.
+    fn record_shortcut(&mut self, row: &'static Shortcut, cx: &mut Context<Self>) {
+        let this = cx.weak_entity();
+        let heard = cx.intercept_keystrokes(move |event, _, cx| {
+            let stroke = event.keystroke.clone();
+            if this
+                .update(cx, |this, cx| this.recorded_key(stroke, cx))
+                .unwrap_or(false)
+            {
+                cx.stop_propagation();
+            }
+        });
+        self.with_settings(cx, |state| {
+            state.recording = Some((row.id, heard));
+            state.refused = None;
+        });
+    }
+
+    /// One keystroke while recording: Escape stops, a key no other command
+    /// holds becomes the row's, one another holds is refused by name.
+    /// `false` when nothing is recording, so the key goes on as usual.
+    fn recorded_key(&mut self, mut stroke: Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some(row) = self
+            .settings
+            .as_ref()
+            .and_then(|state| state.recording.as_ref())
+            .and_then(|(id, _)| Shortcut::by_id(id))
+        else {
+            return false;
+        };
+        if MODIFIER_KEYS.contains(&stroke.key.as_str()) {
+            return true;
+        }
+        let cancel = stroke.key == "escape" && !stroke.modifiers.modified();
+        let stopped = |state: &mut Settings| state.recording = None;
+        if cancel {
+            self.with_settings(cx, stopped);
+            return true;
+        }
+        stroke.key_char = None;
+        stroke.modifiers.function = false;
+        let key = stroke.unparse();
+        match keymap::holder(row, &key, cx) {
+            Some(holder) => {
+                let shown = luma_ui::shortcut::keystroke_text(&stroke.modifiers, &stroke.key);
+                self.with_settings(cx, |state| {
+                    state.recording = None;
+                    state.refused = Some((row.id, format!("{shown} is already {holder}")));
+                });
+            }
+            None => {
+                self.with_settings(cx, stopped);
+                self.rebind_shortcut(row, Some(vec![key]), cx);
+            }
+        }
+        true
+    }
+
+    fn reset_shortcut(&mut self, row: &'static Shortcut, cx: &mut Context<Self>) {
+        self.with_settings(cx, |state| state.refused = None);
+        self.rebind_shortcut(row, None, cx);
+    }
+
+    fn reset_all_shortcuts(&mut self, cx: &mut Context<Self>) {
+        self.with_settings(cx, |state| {
+            state.refused = None;
+            state.recording = None;
+        });
+        self.reset_shortcuts(cx);
+    }
+
     /// Run `edit` against the settings page's state, if it is still up. A
     /// load that lands after it was closed is a no-op, not a page that snaps
     /// back.
@@ -531,7 +634,7 @@ const CARD_ALPHA: f32 = 0x08 as f32 / 255.0;
 
 /// Render the page. `app` is the root entity every control writes through;
 /// `shell` is the app state the account section reads its identity from.
-pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>) -> Div {
+pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>, cx: &App) -> Div {
     div()
         .size_full()
         .flex()
@@ -556,7 +659,7 @@ pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>) -> Div {
                         ladder::danger(),
                     ),
                     (Some(values), error) => {
-                        page(shell, state, values, error.as_deref(), app).into_any_element()
+                        page(shell, state, values, error.as_deref(), app, cx).into_any_element()
                     }
                 }),
         )
@@ -675,6 +778,7 @@ fn page(
     values: &AppSettings,
     error: Option<&str>,
     app: &Entity<Luma>,
+    cx: &App,
 ) -> Div {
     let column = div()
         .w_full()
@@ -700,6 +804,7 @@ fn page(
         Tab::Account => account(shell, app),
         Tab::Ai => ai(state, values, app),
         Tab::Output => output(values, app),
+        Tab::Shortcuts => shortcuts(shell, state, app, cx),
         Tab::About => about(shell, values, app),
     };
     let Some(query) = Query::parse(&state.query) else {
@@ -1092,6 +1197,151 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Section>
             None,
         ),
     ]
+}
+
+/// Keys a recorder hears go down without being a shortcut of their own.
+const MODIFIER_KEYS: [&str; 6] = [
+    "shift", "control", "alt", "platform", "function", "capslock",
+];
+
+/// Settings → Shortcuts: the way back to every default, then the table's
+/// groups, each row its title and keys.
+fn shortcuts(shell: &Luma, state: &Settings, app: &Entity<Luma>, cx: &App) -> Vec<Section> {
+    let reset = app.clone();
+    let any = !shell.shortcuts.value().is_empty();
+    let button = luma_ui::button("Reset all", if any { Enabled::Yes } else { Enabled::No })
+        .id("shortcuts-reset-all")
+        .when(any, |button| {
+            button
+                .on_click(move |_, _, cx| reset.update(cx, |this, cx| this.reset_all_shortcuts(cx)))
+        })
+        .agent_node(Role::Button, "Reset all shortcuts")
+        .agent_disabled(!any);
+    let mut sections = vec![section(
+        "Defaults",
+        vec![row(
+            "Reset all shortcuts",
+            Some("Put every shortcut back to the key it came with."),
+            button.into_any_element(),
+        )],
+        None,
+    )];
+    for row in keymap::SHORTCUTS {
+        let entry = shortcut_row(shell, state, row, app, cx);
+        match sections.last_mut() {
+            Some(section) if section.title == row.group => section.rows.push(entry),
+            _ => sections.push(section(row.group, vec![entry], None)),
+        }
+    }
+    sections
+}
+
+/// One shortcut: its title, and at the end its keys — the recorder — with
+/// Reset beside them once it is rebound.
+fn shortcut_row(
+    shell: &Luma,
+    state: &Settings,
+    shortcut: &'static Shortcut,
+    app: &Entity<Luma>,
+    cx: &App,
+) -> Row {
+    let action = shortcut.action();
+    let mut keys: Vec<String> = Vec::new();
+    for binding in luma_ui::shortcut::bindings(action.as_ref(), cx) {
+        let text = luma_ui::shortcut::binding_text(&binding);
+        if keymap::from_table(&binding) && !keys.contains(&text) {
+            keys.push(text);
+        }
+    }
+    let name = format!("{}: {}", shortcut.group, shortcut.title);
+    let recording = state
+        .recording
+        .as_ref()
+        .is_some_and(|(id, _)| *id == shortcut.id);
+    let refused = state
+        .refused
+        .as_ref()
+        .filter(|(id, _)| *id == shortcut.id)
+        .map(|(_, message)| message.clone());
+    let customized = shell.shortcuts.value().contains_key(shortcut.id);
+
+    let record = app.clone();
+    let caps: Vec<AnyElement> = if recording {
+        vec![luma_ui::float::key_cap()
+            .child("Press a key…")
+            .agent_node(Role::Text, "Press a key…")
+            .into_any_element()]
+    } else if keys.is_empty() {
+        vec![luma_ui::float::key_cap().child("None").into_any_element()]
+    } else {
+        keys.iter()
+            .cloned()
+            .map(luma_ui::shortcut::cap_of)
+            .collect()
+    };
+    let recorder = div()
+        .id(SharedString::from(format!("shortcut-{}", shortcut.id)))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .p(px(3.))
+        .rounded(px(radius::CONTROL))
+        .cursor_pointer()
+        .when(recording, |el| el.bg(glass::wash(glass::WASH_SUBTLE)))
+        .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
+        .on_click(move |_, _, cx| record.update(cx, |this, cx| this.record_shortcut(shortcut, cx)))
+        .children(caps)
+        .agent_node(Role::Button, name.clone());
+    let reset = customized.then(|| {
+        let reset = app.clone();
+        luma_ui::button("Reset", Enabled::Yes)
+            .id(SharedString::from(format!(
+                "shortcut-reset-{}",
+                shortcut.id
+            )))
+            .on_click(move |_, _, cx| {
+                reset.update(cx, |this, cx| this.reset_shortcut(shortcut, cx))
+            })
+            .agent_node(Role::Button, format!("Reset {name}"))
+    });
+    let control = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.))
+        .children(reset)
+        .child(recorder)
+        .into_any_element();
+    let element = card_row()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(shortcut.title),
+                )
+                .when_some(refused, |el, message| {
+                    el.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(ladder::danger())
+                            .child(message.clone())
+                            .agent_node(Role::Text, message),
+                    )
+                }),
+        )
+        .child(control_slot(control));
+    Row {
+        words: format!("{}\n{}\n{}", shortcut.title, shortcut.group, keys.join(" ")).to_lowercase(),
+        element,
+    }
 }
 
 // -- the pieces every section is built from -----------------------------------

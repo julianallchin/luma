@@ -58,6 +58,7 @@ pub mod rem_scale;
 pub mod runtime;
 pub mod scrub_number;
 pub mod sheet;
+pub mod shortcut;
 pub mod split;
 pub mod text_input;
 

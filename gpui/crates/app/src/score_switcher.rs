@@ -213,7 +213,7 @@ impl Luma {
 /// The trigger, centred along the top of the stage, with the menu hung off
 /// it: the open score's song and `#n`, and its album art when it has some.
 /// `None` unless Arrange has a score open.
-pub(crate) fn trigger(app: &Luma, entity: &Entity<Luma>) -> Option<AnyElement> {
+pub(crate) fn trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
     if app.workspace.mode() != Mode::Arrange {
         return None;
     }
@@ -267,7 +267,7 @@ pub(crate) fn trigger(app: &Luma, entity: &Entity<Luma>) -> Option<AnyElement> {
             .size(px(11.))
             .text_color(glass::ink(0.42)),
         )
-        .children(menu(app, editor.target(), entity))
+        .children(menu(app, editor.target(), entity, cx))
         .agent_node(Role::Button, format!("{title} · {score}"));
     Some(
         div()
@@ -284,7 +284,7 @@ pub(crate) fn trigger(app: &Luma, entity: &Entity<Luma>) -> Option<AnyElement> {
 
 /// The menu: the song list, then the song's scores — this venue's first,
 /// then each other venue's under its name — with the open one checked.
-fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
+fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
     let menu = app.score_switcher.get()?;
     let closing = app.score_switcher.closing_since();
     let pressable = closing.is_none();
@@ -303,7 +303,7 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
                 })
             })
             .child(div().flex_1().child("Song list"))
-            .child(float::key_cap().child("⌘P"))
+            .children(luma_ui::shortcut::cap(&crate::keymap::ToggleSongList, cx))
             .agent_node(Role::Row, "Song list")
     };
     let row = |row: &ScoreRow, elsewhere: bool| {
