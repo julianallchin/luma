@@ -4637,6 +4637,7 @@ dependencies = [
  "async-trait",
  "base64 0.21.7",
  "chrono",
+ "core-foundation-sys",
  "cpal",
  "dirs 5.0.1",
  "fixture-kinematics",
