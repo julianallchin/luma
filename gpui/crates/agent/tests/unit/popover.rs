@@ -56,7 +56,7 @@ fn popover_exit_moves_toward_the_resolved_trigger_side() {
         Arc::new(|_: &mut Window, cx: &mut App| cx.new(|_| Popovers).into()),
     )
     .expect("harness");
-    let result = harness.exec(
+    let results = harness.run(
         r#"
         app.frames(3);
         const bounds = (label) => {
@@ -77,8 +77,6 @@ fn popover_exit_moves_toward_the_resolved_trigger_side() {
     "#,
         Duration::from_secs(15),
     );
-    assert_eq!(result.error, None, "{}", result.stdout);
-    let results = result.result;
     for (name, axis, direction) in [
         ("above", "dy", 1.),
         ("above-flipped", "dy", -1.),

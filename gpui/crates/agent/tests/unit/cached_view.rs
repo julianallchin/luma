@@ -80,19 +80,14 @@ fn cached_nodes_survive_parent_frames_and_update_on_child_notifications() {
         }),
     )
     .unwrap();
-    let run = |harness: &mut Harness, code: &str| {
-        let result = harness.exec(code, Duration::from_secs(10));
-        assert_eq!(result.error, None, "{}", result.stdout);
-        result.result
-    };
-    run(&mut harness, "app.frames(3)");
+    harness.run("app.frames(3)", Duration::from_secs(10));
     let initial = renders.load(Ordering::Relaxed);
-    let nodes = run(
-        &mut harness,
+    let nodes = harness.run(
         r#"
         app.frames(10);
         app.snapshot().nodes
     "#,
+        Duration::from_secs(10),
     );
     assert_eq!(
         renders.load(Ordering::Relaxed),
@@ -110,13 +105,13 @@ fn cached_nodes_survive_parent_frames_and_update_on_child_notifications() {
     for (id, node) in nodes.iter().enumerate() {
         assert_eq!(node["id"].as_u64(), Some(id as u64));
     }
-    let updated = run(
-        &mut harness,
+    let updated = harness.run(
         r#"
         app.click(app.snapshot().find({role: "button", label: "count 0"}));
         app.frames(3);
         app.snapshot().nodes.map(n => n.label)
     "#,
+        Duration::from_secs(10),
     );
     assert!(renders.load(Ordering::Relaxed) > initial);
     let labels = updated.as_array().unwrap();

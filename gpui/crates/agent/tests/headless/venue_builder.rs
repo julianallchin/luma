@@ -39,7 +39,7 @@ fn height_row_is_inline_and_drag_previews_before_one_commit() {
         cx.new(|_| Probe(root_samples.clone())).into()
     });
     let mut harness = gpui_agent::Harness::headless(gpui_agent::Config::default(), root).unwrap();
-    let out = harness.exec(r#"
+    let out = harness.run(r#"
         app.frames(3);
         const row = app.snapshot().find({role:"row", label:"Height property"}).bounds;
         const value = app.snapshot().findAll({role:"slider"}).find(n => n.label.startsWith("height-probe"));
@@ -47,9 +47,8 @@ fn height_row_is_inline_and_drag_previews_before_one_commit() {
         app.drag(value, {dx:80,dy:0}, {steps:8});
         ({row,bounds})
     "#, std::time::Duration::from_secs(30));
-    assert_eq!(out.error, None, "{}", out.stdout);
-    let row = &out.result["row"];
-    let value = &out.result["bounds"];
+    let row = &out["row"];
+    let value = &out["bounds"];
     assert!((row["height"].as_f64().unwrap() - value["height"].as_f64().unwrap()).abs() < 2.);
     let samples = samples.lock().unwrap();
     assert!(

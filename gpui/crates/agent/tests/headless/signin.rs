@@ -71,19 +71,12 @@ fn harness(dir: &Path) -> Harness {
     .expect("failed to start harness")
 }
 
-fn exec(harness: &mut Harness, script: &str) -> Value {
-    let result = harness.exec(&support::script(script), Duration::from_secs(90));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    result.result
-}
-
 #[test]
 fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
     let dir = fixture_dir("unproven", Stored::Unproven);
     let mut harness = harness(&dir);
-    let out = exec(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &support::script(r#"
         const failure = until("the refresh failure", s =>
             s.find({ role: "button", label: "Retry" }) !== undefined);
         if (failure.find(n => n.role === "text" && n.label.startsWith("Your session expired"))) {
@@ -116,7 +109,8 @@ fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
                 return app.snapshot().find({ role: "text", label: "Sign in to Luma" }) !== undefined;
             })(),
         })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["field"], true, "the gate shows an email field");
     assert_eq!(out["submit"], true, "the gate offers its primary capsule");
@@ -145,13 +139,15 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
     // reaches for the token, so the app opens where a signed-in app opens.
     let dir = fixture_dir("proven", Stored::Proven { expires_in: -3600 });
     let mut harness = harness(&dir);
-    let out = exec(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &support::script(
+            r#"
         const shown = until("the venue picker", (s) =>
             s.find({ role: "card", label: "Sign-in Venue" }) !== undefined);
         ({ gate: shown.find({ role: "text", label: "Sign in to Luma" }) !== undefined })
     "#,
+        ),
+        Duration::from_secs(90),
     );
     assert_eq!(out["gate"], false, "a proven session skips the gate");
 }
@@ -167,9 +163,8 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
 fn signing_out_from_the_account_foot_lands_at_the_gate() {
     let dir = fixture_dir("signout", Stored::Proven { expires_in: 3600 });
     let mut harness = harness(&dir);
-    let out = exec(
-        &mut harness,
-        r#"
+    let out = harness.run(
+        &support::script(r#"
         nav.venue("Sign-in Venue");
         until("the shell", (s) =>
             s.find({ role: "button", label: "Account" }) !== undefined
@@ -194,7 +189,8 @@ fn signing_out_from_the_account_foot_lands_at_the_gate() {
             // The menu went with the gesture rather than sitting open over it.
             menu: settled.find({ role: "row", label: "Sign out" }) !== undefined,
         })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["before"], true, "the fixture launched signed in");
     assert_eq!(

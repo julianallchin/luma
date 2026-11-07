@@ -196,9 +196,7 @@ const SCRIPT: &str = r#"
 /// if either leg's p95 is over the budget.
 fn main() {
     let mut harness = harness();
-    let result = harness.exec(&format!("{NAV}\n{}", script()), Duration::from_secs(600));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out: Value = result.result;
+    let out: Value = harness.run(&format!("{NAV}\n{}", script()), Duration::from_secs(600));
 
     assert_eq!(
         out["mode"], "pixel",

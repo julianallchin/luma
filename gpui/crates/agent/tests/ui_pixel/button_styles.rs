@@ -90,7 +90,7 @@ fn shared_buttons_use_comet_styles() {
         root,
     )
     .unwrap();
-    let result = harness.exec(
+    let result = harness.run(
         r#"app.frames(3); const shot = app.snapshot(); ({
             play: shot.find({role: "button", label: "Play"}),
             approve: shot.find({role: "button", label: "Beat grid correct"}),
@@ -98,8 +98,7 @@ fn shared_buttons_use_comet_styles() {
         })"#,
         GPU_LIVENESS_TIMEOUT,
     );
-    assert_eq!(result.error, None, "{}", result.stdout);
-    let bounds = |name: &str| &result.result[name]["bounds"];
+    let bounds = |name: &str| &result[name]["bounds"];
     for name in ["play", "approve", "disabled"] {
         assert!(bounds(name)["width"].as_f64().unwrap() > 0.);
         assert!(bounds(name)["height"].as_f64().unwrap() > 0.);
@@ -111,9 +110,8 @@ fn shared_buttons_use_comet_styles() {
     // GPUI's pinned platform supplies an offscreen renderer only on macOS.
     #[cfg(target_os = "macos")]
     {
-        let capture = harness.exec("app.screenshot()", GPU_LIVENESS_TIMEOUT);
-        assert_eq!(capture.error, None);
-        let source = capture.result["path"].as_str().expect("screenshot path");
+        let capture = harness.run("app.screenshot()", GPU_LIVENESS_TIMEOUT);
+        let source = capture["path"].as_str().expect("screenshot path");
         let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../harness/shots/gpui/comet-buttons.png");
         std::fs::create_dir_all(output.parent().unwrap()).unwrap();

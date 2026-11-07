@@ -193,9 +193,7 @@ fn source_import_survives_close_reconciles_newest_and_joins_the_venue() {
     // `LUMA_CACHE_DIR`, which the library reads when it opens.
     let _environment = support::environment_lock();
     let mut harness = harness();
-    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out: Value = result.result;
+    let out: Value = harness.run(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(out["closed"], true);
     assert_eq!(out["initialRows"], json!(["Zulu", "Aurora"]));
     assert_eq!(out["globalSearch"], true);
@@ -252,9 +250,7 @@ const PROGRESS_SCRIPT: &str = r#"
 fn progress_rows_and_header_finish_together() {
     let _environment = support::environment_lock();
     let mut harness = harness();
-    let result = harness.exec(&support::script(PROGRESS_SCRIPT), Duration::from_secs(300));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out = result.result;
+    let out = harness.run(&support::script(PROGRESS_SCRIPT), Duration::from_secs(300));
     println!("progress statuses seen: {}", out["seen"]);
     assert_eq!(out["violations"], json!([]), "seen: {}", out["seen"]);
     let seen: Vec<&str> = out["seen"]

@@ -25,8 +25,7 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
         true;
     "#
     );
-    let result = harness.exec(&script, Duration::from_secs(30));
-    assert_eq!(result.error, None, "{result:?}");
+    harness.run(&script, Duration::from_secs(30));
 
     // A transport fault reads on the row itself. PowerSync retries on its own,
     // so there is nothing to press — what the row owes the user is the reason,
@@ -36,7 +35,7 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
         error: Some("Sync rejected this sign-in. 401 from the endpoint".into()),
         ..Default::default()
     };
-    let result = harness.exec(
+    harness.run(
         &format!(
             "{}\n{}",
             super::support::UNTIL,
@@ -49,13 +48,12 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
         ),
         Duration::from_secs(10),
     );
-    assert_eq!(result.error, None, "{result:?}");
 
     *status.lock().unwrap() = SyncStatus {
         connected: true,
         ..Default::default()
     };
-    let result = harness.exec(
+    harness.run(
         &format!(
             "{}\n{}",
             super::support::UNTIL,
@@ -68,5 +66,4 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
         ),
         Duration::from_secs(10),
     );
-    assert_eq!(result.error, None, "{result:?}");
 }

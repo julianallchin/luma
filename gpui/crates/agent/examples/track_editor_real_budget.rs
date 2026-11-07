@@ -115,7 +115,7 @@ fn main() {
     // with every editor frame; `LUMA_REAL_STAGE=1` keeps it in the measurement.
     let stage = std::env::var("LUMA_REAL_STAGE").is_ok_and(|v| v == "1");
     let mut harness = harness();
-    let result = harness.exec(
+    let out = harness.run(
         &format!(
             r#"
             {NAV}
@@ -195,8 +195,6 @@ fn main() {
         ),
         Duration::from_secs(900),
     );
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out = result.result;
     println!(
         "\n{venue} / {track} (stage {stage}): {} clips, {} previews ({})\n  scroll @ zoom-out : {}\n  zoom in           : {}\n  scroll @ zoom-in  : {}\n  zoom out          : {}\n",
         out["clips"],

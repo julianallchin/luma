@@ -1131,9 +1131,8 @@ fn globals_persist_across_exec_and_reset_clears_them() {
     assert_eq!(harness.run("remembered + 1", SCRIPT_TIMEOUT), 42);
 
     harness.reset().expect("reset failed");
-    let result = harness.exec("typeof remembered", Duration::from_secs(10));
-    assert_eq!(result.error, None);
-    assert_eq!(result.result, "undefined");
+    let result = harness.run("typeof remembered", Duration::from_secs(10));
+    assert_eq!(result, "undefined");
 }
 
 #[test]

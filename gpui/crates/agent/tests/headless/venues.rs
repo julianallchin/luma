@@ -128,12 +128,6 @@ fn harness(dir: &Path, fixture: luma_app::NavigationFixture) -> Harness {
     .expect("failed to start harness")
 }
 
-fn exec(harness: &mut Harness, script: &str) -> Value {
-    let result = harness.exec(&support::script(script), Duration::from_secs(90));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    result.result
-}
-
 #[test]
 fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     // No preference: first paint is loading, every venue is searchable, and a
@@ -181,9 +175,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut browse,
-        r#"
+    let out = browse.run(
+        &support::script(r#"
         const initial = app.snapshot();
         const loading = initial.find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         const ready = until("the venue catalogue", (s) =>
@@ -341,7 +334,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
            occluded: afterOccludedClick.find({ role: "card", label: "Venue dialog" }) === undefined
                && afterOccludedClick.find({ role: "row", label: "Settings" }) === undefined,
            restoredOpener: restoredOpener.find({ role: "button", label: "Beta Room" })?.focused === true })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
     assert_eq!(out["searched"], serde_json::json!(["Beta Room"]));
@@ -388,9 +382,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut restored,
-        r#"
+    let out = restored.run(
+        &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         let pickerSeen = false;
         const shot = until("the restored Beta venue", (s) => {
@@ -401,7 +394,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         ({ loading, pickerSeen,
            restored: shot.find({ role: "card", label: "Beta Room" }) === undefined,
            track: shot.find({ role: "row", label: "Beta Room Track" }) !== undefined })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
     assert_eq!(
@@ -427,9 +421,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut stale,
-        r#"
+    let out = stale.run(
+        &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         const shot = until("the stale preference fallback", (s) =>
             s.find({ role: "card", label: "Present Venue" }) !== undefined);
@@ -437,7 +430,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         ({ loading,
            picker: shot.find({ role: "input", label: "Search venues…" }) !== undefined,
            onboarding: shot.find({ role: "text", label: "Create your first venue" }) === undefined })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
     assert_eq!(out["picker"], true);
@@ -455,9 +449,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut empty,
-        r#"
+    let out = empty.run(
+        &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         const create = until("first venue onboarding", (s) =>
             s.find({ role: "input", label: "Venue name" })?.focused === true);
@@ -482,7 +475,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
            focused: create.find({ role: "input", label: "Venue name" }).focused,
            opened: opened.find({ role: "text", label: "No tracks imported" }) !== undefined,
            setup: !!setup })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
     assert_eq!(out["focused"], true);
@@ -490,13 +484,15 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     assert_eq!(out["setup"], true);
     drop(empty);
     let mut created_restore = harness(&empty_dir, luma_app::NavigationFixture::default());
-    let out = exec(
-        &mut created_restore,
-        r#"
+    let out = created_restore.run(
+        &support::script(
+            r#"
         const shot = until("the created venue restore", (s) =>
             s.find({ role: "button", label: "Morning Room" }) !== undefined);
         shot.find({ role: "card", label: "Morning Room" }) === undefined
     "#,
+        ),
+        Duration::from_secs(90),
     );
     assert_eq!(out, Value::Bool(true));
     drop(created_restore);
@@ -517,9 +513,9 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut fifo,
-        r#"
+    let out = fifo.run(
+        &support::script(
+            r#"
         let picker = until("the FIFO venue picker", (s) =>
             s.find({ role: "card", label: "Alpha Hall" }) !== undefined);
         app.click(picker.find({ role: "card", label: "Alpha Hall" }));
@@ -534,6 +530,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         app.frames(12, { waitMs: 50 });
         beta.find({ role: "button", label: "Beta Room" }) !== undefined
         "#,
+        ),
+        Duration::from_secs(90),
     );
     assert_eq!(out, Value::Bool(true));
     drop(fifo);
@@ -545,16 +543,16 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut fifo_restore,
-        r#"
+    let out = fifo_restore.run(
+        &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         const shot = until("the FIFO final selection restore", (s) =>
             s.find({ role: "button", label: "Beta Room" }) !== undefined);
         ({ loading,
            beta: shot.find({ role: "button", label: "Beta Room" }) !== undefined,
            picker: shot.find({ role: "card", label: "Beta Room" }) !== undefined })
-        "#,
+        "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
     assert_eq!(out["beta"], true);
@@ -572,9 +570,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
             ..Default::default()
         },
     );
-    let out = exec(
-        &mut failed,
-        r#"
+    let out = failed.run(
+        &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         const shot = until("the venue error", (s) =>
             s.find((n) => n.role === "text" && n.label.includes("fixture catalogue failure")) !== undefined);
@@ -582,7 +579,8 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
            error: shot.find((n) => n.role === "text" && n.label.includes("fixture catalogue failure")) !== undefined,
            retry: shot.find({ role: "button", label: "Retry" }) !== undefined,
            empty: shot.find({ role: "text", label: "Create your first venue" }) !== undefined })
-    "#,
+    "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
     assert_eq!(out["error"], true);
@@ -621,9 +619,9 @@ fn open_tabs_come_back_at_launch() {
         true,
     );
     let mut first = harness(&dir, luma_app::NavigationFixture::default());
-    exec(
-        &mut first,
-        r#"
+    first.run(
+        &support::script(
+            r#"
         const chip = (s, label) => s.find({ role: "button", label }) !== undefined;
         nav.venue("Alpha Hall");
         nav.track("Alpha Hall Track");
@@ -638,14 +636,15 @@ fn open_tabs_come_back_at_launch() {
         app.frames(30, { waitMs: 50 });
         true
         "#,
+        ),
+        Duration::from_secs(90),
     );
     drop(first);
     delete_score(&dir, "score-beta");
 
     let mut second = harness(&dir, luma_app::NavigationFixture::default());
-    let out = exec(
-        &mut second,
-        r#"
+    let out = second.run(
+        &support::script(r#"
         const chip = (s, label) => s.find({ role: "button", label }) !== undefined;
         // Beta was the last venue; its one tab's score is gone.
         until("Beta, restored", (s) => s.find({ role: "row", label: "Venue setup" }) !== undefined);
@@ -657,7 +656,8 @@ fn open_tabs_come_back_at_launch() {
         const alpha = until("Alpha's tabs, restored", (s) =>
             chip(s, "Alpha Hall Track · #1") && chip(s, "Venue") ? s : undefined);
         ({ betaTab, venueInFront: alpha.find({ role: "card", label: "Alpha Hall Venue" }) !== undefined })
-        "#,
+        "#),
+        Duration::from_secs(90),
     );
     assert_eq!(out["betaTab"], false);
     assert_eq!(out["venueInFront"], true);

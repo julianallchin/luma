@@ -50,9 +50,7 @@ fn the_probe_switches_change_what_the_renderer_draws() {
         ({before, balls, off})
     "#,
     );
-    let result = harness.exec(&script, Duration::from_secs(300));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out = result.result;
+    let out = harness.run(&script, Duration::from_secs(300));
     // The start-up view: probes on, balls off.
     assert_eq!(out["before"]["probes"], true, "{out:#}");
     assert_eq!(out["before"]["balls"], false, "{out:#}");

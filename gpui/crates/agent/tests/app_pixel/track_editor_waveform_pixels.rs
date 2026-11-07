@@ -58,12 +58,10 @@ const SCRIPT: &str = r#"
 #[test]
 fn waveform_and_minimap_keep_pixel_coverage_across_zoom() {
     let mut harness = harness();
-    let result = harness.exec(
+    let out: Value = harness.run(
         &support::script(&SCRIPT.replace("NOTCH", &NOTCH.to_string())),
         Duration::from_secs(600),
     );
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out: Value = result.result;
 
     let below = support::image::keep(&out["below"], "waveform-zoom/lower-zoom");
     let above = support::image::keep(&out["above"], "waveform-zoom/higher-zoom");
