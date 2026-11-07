@@ -244,6 +244,19 @@ impl Library {
         })
     }
 
+    pub(crate) fn input_rename_controller(
+        &self,
+        venue_id: &str,
+        controller_id: &str,
+        name: String,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (venue_id, controller_id) = (venue_id.to_owned(), controller_id.to_owned());
+        self.call("input_rename_controller", move |services| async move {
+            handlers::inputs::input_rename_controller(&services, venue_id, controller_id, name)
+                .await
+        })
+    }
+
     pub(crate) fn input_unbind(
         &self,
         venue_id: &str,

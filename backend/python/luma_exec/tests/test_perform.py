@@ -439,23 +439,29 @@ class BindingTests(unittest.TestCase):
 class ControllerTests(unittest.TestCase):
     PAD = {"kind": "midi_note", "channel": 0, "number": 81}
 
-    def inputs(self, profile=None):
-        controller = {"id": "c1", "name": "Pads", "port": "Pads MIDI 1", "connected": True,
-                      "profile": profile or {}}
+    def answer(self, profile=None):
+        """What the host answers a controller verb: the polled inputs, and
+        the controllers with their profiles."""
         binding = {"id": "b1", "controllerId": "c1", "control": f"perform_p{WASH}_n_button1",
                    "mode": "momentary", "invert": False, "address": self.PAD}
-        return {"controllers": [controller], "bindings": [binding]}
+        inputs = {"midiPorts": ["Pads MIDI 1"], "bindings": [binding],
+                  "controllers": [{"id": "c1", "name": "Pads", "port": "Pads MIDI 1",
+                                   "connected": True, "controls": 0}]}
+        return {"inputs": inputs, "controllers": [
+            {"id": "c1", "name": "Pads", "port": "Pads MIDI 1", "profile": profile or {}}]}
 
     def test_controllers_are_listed_added_renamed_and_removed(self) -> None:
         host = Host()
-        host.answers["perform.bindings"] = {"inputs": self.inputs()}
-        host.answers["perform.add_controller"] = {"id": "c1", "inputs": self.inputs()}
-        host.answers["perform.controller"] = {"inputs": self.inputs()}
+        host.answers["perform.controllers"] = self.answer()
+        host.answers["perform.bindings"] = {"inputs": self.answer()["inputs"]}
+        host.answers["perform.add_controller"] = dict(self.answer(), id="c1")
+        host.answers["perform.controller"] = self.answer()
         host.answers["perform.remove_controller"] = {"inputs": {"controllers": [], "bindings": []}}
         perform = namespace(host).perform
         (pads,) = perform.controllers()
         self.assertTrue(pads.connected)
         self.assertIn("connected", repr(pads))
+        self.assertEqual(perform.ports(), ("Pads MIDI 1",))
         added = perform.add_controller("Pads", port="Pads MIDI 1")
         self.assertEqual(host.calls[-1], ("perform.add_controller", {"name": "Pads", "port": "Pads MIDI 1"}))
         self.assertEqual(added.id, "c1")
@@ -465,12 +471,26 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(host.calls[-1], ("perform.remove_controller", {"id": "c1"}))
         self.assertEqual(perform.bindings()[0].controller, "c1")
 
+    def test_a_controllers_repr_sums_up_its_profile(self) -> None:
+        host = Host()
+        profile = {"controls": [{"address": self.PAD, "column": 0, "row": 0},
+                                {"address": {"kind": "midi_cc", "channel": 0, "number": 48},
+                                 "column": 0, "row": 8, "fader": True}],
+                   "color": {"palette": {"0": [0, 0, 0]}}}
+        host.answers["perform.controllers"] = self.answer(profile)
+        (pads,) = namespace(host).perform.controllers()
+        self.assertIn("port='Pads MIDI 1' connected, 1 pads, 1 faders, color palette", repr(pads))
+        host.answers["perform.controllers"] = self.answer()
+        (bare,) = namespace(host).perform.controllers()
+        self.assertIn("0 pads, 0 faders, color echo", repr(bare))
+
     def test_a_profile_is_set_a_pad_lit_and_a_page_mapped(self) -> None:
         host = Host()
         profile = {"controls": [{"address": self.PAD, "column": 0, "row": 0}]}
-        host.answers["perform.controller"] = {"inputs": self.inputs(profile)}
+        host.answers["perform.controller"] = self.answer(profile)
         host.answers["perform.light"] = {"lit": True}
-        host.answers["perform.map_page"] = {"bound": 1, "inputs": self.inputs(profile)}
+        host.answers["perform.clear_lights"] = {"cleared": True}
+        host.answers["perform.map_page"] = {"bound": 1, "inputs": self.answer(profile)["inputs"]}
         perform = namespace(host).perform
         pads = perform.set_profile("c1", profile)
         self.assertEqual(host.calls[-1], ("perform.controller", {"id": "c1", "profile": profile}))
@@ -478,8 +498,22 @@ class ControllerTests(unittest.TestCase):
         perform.light(pads, self.PAD, (1, 0, 0), shine="blink")
         self.assertEqual(host.calls[-1], ("perform.light", {
             "id": "c1", "address": self.PAD, "color": [1, 0, 0], "shine": "blink"}))
+        # A place on the grid, and a color by name, the same as its hex.
+        perform.light(pads, (0, 0), "red")
+        named = host.calls[-1][1]
+        self.assertEqual(named["at"], [0, 0])
+        perform.light(pads, (0, 0), "#ff0000")
+        self.assertEqual(host.calls[-1][1]["color"], named["color"])
+        perform.light(pads, (0, 0), "off")
+        self.assertEqual(host.calls[-1][1]["color"], [0, 0, 0])
         with self.assertRaises(PerformRefused):
             perform.light(pads, self.PAD, (1, 0, 0), shine="flash")
+        with self.assertRaises(PerformRefused):
+            perform.light(pads, 81, "red")
+        with self.assertRaises(PerformRefused):
+            perform.light(pads, (0, 0), "mauve")
+        perform.clear_lights(pads)
+        self.assertEqual(host.calls[-1], ("perform.clear_lights", {"id": "c1"}))
         bound = perform.map_page(pads)
         self.assertEqual(host.calls[-1], ("perform.map_page", {"id": "c1"}))
         self.assertEqual([b.address for b in bound], [self.PAD])

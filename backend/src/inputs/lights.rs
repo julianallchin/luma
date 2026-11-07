@@ -92,10 +92,15 @@ impl Lights {
         }
         sent
     }
+
+    /// Draw `controllers` whole at the next frame, as if from nothing.
+    pub(super) fn forget(&mut self, controllers: &[String]) {
+        self.drawn.retain(|(id, _), _| !controllers.contains(id));
+    }
 }
 
 /// A light that shows nothing.
-const DARK: Light = Light {
+pub(super) const DARK: Light = Light {
     color: [0.; 3],
     bright: false,
     shine: Shine::Steady,
@@ -110,15 +115,17 @@ pub(super) async fn run(shared: Arc<Shared>) {
     let start = Instant::now();
     loop {
         ticks.tick().await;
-        let (venue, controllers, bindings, ports) = {
-            let state = shared.lock();
+        let (venue, controllers, bindings, ports, cleared) = {
+            let mut state = shared.lock();
             (
                 state.venue_id.clone(),
                 state.controllers.clone(),
                 state.bindings.clone(),
                 state.midi_ports.clone(),
+                std::mem::take(&mut state.cleared),
             )
         };
+        lights.forget(&cleared);
         let now = Instant::now();
         let surface = match &venue {
             Some(venue) => shared.controls.venue(venue).surface_at(now),

@@ -33,6 +33,7 @@
 
 use std::collections::BTreeMap;
 
+use luma_patterns::color_space;
 use serde::{Deserialize, Serialize};
 
 use super::{Address, Mode};
@@ -94,10 +95,25 @@ const DIM: f64 = 0.15;
 impl Profile {
     /// Read a profile from JSON, refusing one that cannot be drawn.
     pub fn parse(json: &str) -> Result<Self, String> {
+        Self::read(
+            serde_json::from_str(json).map_err(|error| format!("unreadable profile: {error}"))?,
+        )
+    }
+
+    /// [`Profile::parse`], from JSON already parsed.
+    pub fn read(json: serde_json::Value) -> Result<Self, String> {
         let profile: Self =
-            serde_json::from_str(json).map_err(|error| format!("unreadable profile: {error}"))?;
+            serde_json::from_value(json).map_err(|error| format!("unreadable profile: {error}"))?;
         profile.check()?;
         Ok(profile)
+    }
+
+    /// The address of the control at (`column`, `row`).
+    pub fn at(&self, column: u16, row: u16) -> Option<&Address> {
+        self.controls
+            .iter()
+            .find(|place| (place.column, place.row) == (column, row))
+            .map(|place| &place.address)
     }
 
     /// Why this profile cannot be used, if it cannot.
@@ -252,10 +268,10 @@ impl Profile {
     }
 }
 
-/// A light color (linear Rec. 2020) as a device's channels 0–`top`,
-/// roughly as a screen shows it.
+/// A light color (linear Rec. 2020) as a device's channels 0–`top`, as a
+/// screen shows it.
 fn device(rgb: [f64; 3], top: f64) -> [u8; 3] {
-    rgb.map(|c| (c.clamp(0., 1.).powf(1. / 2.2) * top).round() as u8)
+    color_space::to_display_srgb(rgb).map(|c| (c.clamp(0., 1.) * top).round() as u8)
 }
 
 /// The palette's velocity whose color is nearest `rgb`.

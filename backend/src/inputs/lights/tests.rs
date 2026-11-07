@@ -112,3 +112,24 @@ fn a_blink_drawn_here_turns_on_and_off_with_the_phase() {
     assert_eq!(lit, vec![("Pads".to_owned(), vec![0x90, 1, 127])]);
     assert_eq!(dark, vec![("Pads".to_owned(), vec![0x90, 1, 0])]);
 }
+
+#[test]
+fn a_controller_forgotten_is_drawn_whole_again() {
+    let controllers = [controller("pads", "Pads"), controller("keys", "Keys")];
+    let bindings = [binding("pads", "a", 1), binding("keys", "a", 1)];
+    let ports = ["Pads".to_owned(), "Keys".to_owned()];
+    let mut lights = Lights::default();
+    let shown = surface(&[("a", look(true))]);
+    assert_eq!(
+        lights
+            .frame(&controllers, &bindings, &shown, &ports, true)
+            .len(),
+        2
+    );
+    lights.forget(&["pads".to_owned()]);
+    assert_eq!(
+        lights.frame(&controllers, &bindings, &shown, &ports, true),
+        vec![("Pads".to_owned(), vec![0x90, 1, 127])],
+        "its lights again, after a light set by hand or cleared; the other's not"
+    );
+}

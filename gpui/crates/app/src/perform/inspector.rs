@@ -24,7 +24,7 @@ use super::surface::Edit;
 use super::{binding_chip, draft_field, group_label, Named, Perform};
 use crate::workspace::Target;
 use crate::Luma;
-use luma_lib::dispatch::handlers::inputs::Mode;
+use luma_lib::dispatch::handlers::inputs::{ControllerState, Mode};
 
 const WIDTH: f32 = 316.;
 
@@ -224,30 +224,38 @@ fn page_sections(
     ]
 }
 
-/// The venue's controller: whether it is connected, and putting this page
-/// on its grid. Learn, on a cell, binds one control at a time.
+/// The venue's controller: its name, whether it is connected, putting this
+/// page on its grid, and setting it up with the agent. Learn, on a cell,
+/// binds one control at a time.
 fn controllers(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
-    let controller = state
-        .inputs
-        .as_ref()
-        .and_then(|inputs| inputs.controllers.first());
-    let Some(controller) = controller else {
-        return column().child(float::label("Controller")).child(note(
-            "None yet. Select a cell and press Learn, then touch your controller.",
-        ));
+    let inputs = state.inputs.as_ref();
+    let controller = inputs.and_then(|inputs| inputs.controllers.first());
+    let ask = {
+        let prompt = setup_prompt(controller, inputs.map_or(&[][..], |i| &i.midi_ports));
+        let (app, target) = (app.clone(), target.clone());
+        luma_ui::button("Set up with the agent", Enabled::Yes)
+            .id("perform-controller-agent")
+            .on_click(move |_, window, cx| {
+                app.update(cx, |this, cx| this.ask_agent(&target, &prompt, window, cx));
+            })
+            .agent_node(Role::Button, "Set up with the agent")
     };
-    let status = match (controller.connected, controller.controller.port.is_empty()) {
+    let Some(controller) = controller else {
+        return column()
+            .child(float::label("Controller"))
+            .child(note(
+                "None yet. Select a cell and press Learn, then touch your controller.",
+            ))
+            .child(div().flex().child(ask));
+    };
+    let status = match (controller.connected, controller.port.is_empty()) {
         (true, _) => "Connected".to_owned(),
         (false, true) => "Not heard yet".to_owned(),
-        (false, false) => format!("Not connected: {}", controller.controller.port),
+        (false, false) => format!("Not connected: {}", controller.port),
     };
-    let profiled = !controller.controller.profile.controls.is_empty();
+    let profiled = controller.controls > 0;
     let map = {
-        let (app, target, id) = (
-            app.clone(),
-            target.clone(),
-            controller.controller.id.clone(),
-        );
+        let (app, target, id) = (app.clone(), target.clone(), controller.id.clone());
         luma_ui::button(
             "Map this page",
             if profiled { Enabled::Yes } else { Enabled::No },
@@ -260,6 +268,31 @@ fn controllers(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl Int
         })
         .agent_node(Role::Button, "Map this page")
     };
+    let of = Named::Controller(controller.id.clone());
+    let title = match state.draft.as_ref().filter(|draft| draft.of == of) {
+        Some(draft) => {
+            draft_field(draft, "Controller name", gpui::relative(1.).into()).into_any_element()
+        }
+        None => {
+            let (app, target) = (app.clone(), target.clone());
+            div()
+                .id("perform-controller-name")
+                .min_w_0()
+                .truncate()
+                .rounded(px(radius::CONTROL))
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .cursor_text()
+                .hover(|style| style.bg(glass::ink(0.06)))
+                .child(controller.name.clone())
+                .on_click(move |_, window, cx| {
+                    let of = of.clone();
+                    app.update(cx, |this, cx| this.start_draft(&target, of, window, cx));
+                })
+                .agent_node(Role::Button, format!("Rename {}", controller.name))
+                .into_any_element()
+        }
+    };
     column()
         .child(float::label("Controller"))
         .child(
@@ -268,14 +301,7 @@ fn controllers(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl Int
                 .items_center()
                 .justify_between()
                 .gap(px(8.))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(13.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(controller.controller.name.clone()),
-                )
+                .child(title)
                 .child(
                     div()
                         .flex_none()
@@ -289,17 +315,40 @@ fn controllers(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl Int
                 )
                 .agent_node(
                     Role::Text,
-                    format!("Controller {}: {status}", controller.controller.name),
+                    format!("Controller {}: {status}", controller.name),
                 ),
         )
-        .child(div().flex().child(map))
+        .child(div().flex().gap(px(6.)).child(map).child(ask))
         .child(note(if profiled {
             "Map puts this page's cells on the controller's pads and faders, \
              each where it sits on the grid."
         } else {
-            "It has no profile yet, so nothing says where its pads are. Learn \
-             still binds one control at a time."
+            "It has no profile yet, so nothing says where its pads are. The \
+             agent can write one with you; Learn still binds one control at a time."
         }))
+}
+
+/// What "Set up with the agent" puts in the chat: the controller and the
+/// port it is on, or the MIDI ports Luma sees when there is none yet.
+fn setup_prompt(controller: Option<&ControllerState>, ports: &[String]) -> String {
+    match controller {
+        Some(controller) if controller.port.is_empty() => format!(
+            "Set up my controller \"{}\". Luma has not heard it yet.",
+            controller.name
+        ),
+        Some(controller) => format!(
+            "Set up my controller \"{}\" on MIDI port \"{}\".",
+            controller.name, controller.port
+        ),
+        None if ports.is_empty() => "Set up my controller. Luma sees no MIDI port yet.".into(),
+        None => {
+            let ports: Vec<String> = ports.iter().map(|port| format!("\"{port}\"")).collect();
+            format!(
+                "Set up my controller. Luma sees these MIDI ports: {}.",
+                ports.join(", ")
+            )
+        }
+    }
 }
 
 /// What a cell is, as the inspector heads it.

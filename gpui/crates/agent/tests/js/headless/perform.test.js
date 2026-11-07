@@ -383,6 +383,32 @@ test("Setup shows the controller, and Map puts the page on its grid", () => {
   until("its pad mapped", (s) => s.find({ role: "button", label: "Note 0 · ch 1 mode Hold" }));
 });
 
+test("Set up with the agent opens the chat with the controller and its port written in", () => {
+  setup();
+  until("the controller", (s) => s.find({ role: "button", label: "Set up with the agent" }));
+  // From a hidden panel, so the button is what brings it up.
+  app.action("luma::ToggleAgent");
+  until("the agent hidden", (s) => s.find({ role: "button", label: "Show agent" }));
+  nav.step("Set up", "button", "Set up with the agent");
+  const asked = 'Set up my controller "Pads" on MIDI port "Pads MIDI 1".';
+  const shot = until("the request in the composer", (s) =>
+    s.findAll({ role: "input" }).some((n) => n.label === asked) ? s : undefined,
+  );
+  assert(shot.find({ role: "button", label: "Hide agent" }), "the agent panel is not up");
+  assert(!shot.find({ role: "card", label: asked }), "the request was sent, not offered");
+});
+
+test("a controller is renamed in place", () => {
+  setup();
+  nav.step("its name", "button", "Rename Pads");
+  const field = () => app.snapshot().find({ role: "input", label: "Controller name" });
+  until("the name field", () => field() !== undefined);
+  app.key("ctrl-a backspace");
+  app.type(field(), "Grid");
+  app.key("enter");
+  until("renamed", (s) => s.find({ role: "text", label: "Controller Grid: Not connected: Pads MIDI 1" }));
+});
+
 // A value of the Colors list, published as `Colors Value 2, #0000FF`.
 const swatch = (s, number) => value(s, "Colors", number);
 test("pressing a list's value sets the live colors it targets", () => {

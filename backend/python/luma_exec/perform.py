@@ -59,6 +59,10 @@ from .track import _blend
 BINDING_MODES = ("fader", "momentary", "toggle")
 #: How a controller's light shines.
 SHINES = ("steady", "pulse", "blink")
+#: The colors light() takes by name, to ask a person what they see.
+LIGHT_COLORS = {"off": "#000000", "white": "#ffffff", "red": "#ff0000", "green": "#00ff00",
+                "blue": "#0000ff", "yellow": "#ffff00", "cyan": "#00ffff",
+                "magenta": "#ff00ff", "orange": "#ff8000"}
 #: What a list's fade is counted in.
 FADE_UNITS = ("beats", "seconds")
 #: Not given, where None means something: update_list(step=None) stops stepping.
@@ -247,7 +251,11 @@ class Controller:
 
     def __repr__(self):
         state = "connected" if self.connected else "not connected"
-        return f"<Controller {self.name!r} port={self.port!r} {state} controls={len(self.profile.get('controls', []))} {self.id}>"
+        controls = self.profile.get("controls", [])
+        faders = sum(1 for control in controls if control.get("fader"))
+        color = next(iter(self.profile.get("color") or {}), "echo")
+        return (f"<Controller {self.name!r} port={self.port!r} {state}, "
+                f"{len(controls) - faders} pads, {faders} faders, color {color} {self.id}>")
 
 
 class Live:
@@ -957,16 +965,22 @@ class Perform:
     # -- controllers -----------------------------------------------------
 
     def _controllers(self, answer):
-        return tuple(Controller(c["id"], c["name"], c["port"], bool(c["connected"]),
+        connected = {c["id"]: bool(c["connected"]) for c in answer["inputs"]["controllers"]}
+        return tuple(Controller(c["id"], c["name"], c["port"], connected.get(c["id"], False),
                                 copy.deepcopy(c["profile"]))
-                     for c in answer["inputs"]["controllers"])
+                     for c in answer["controllers"])
 
     def _controller(self, answer, key):
         return next(c for c in self._controllers(answer) if c.id == key)
 
     def controllers(self):
         """This venue's controllers, oldest first."""
-        return self._controllers(self._call("perform.bindings", {}))
+        return self._controllers(self._call("perform.controllers", {}))
+
+    def ports(self):
+        """The names of the MIDI input ports open now: the devices plugged in.
+        A controller matches one by its name exactly."""
+        return tuple(self._call("perform.controllers", {})["inputs"]["midiPorts"])
 
     def add_controller(self, name, port=""):
         """Add a controller matching MIDI port port (its name exactly; "" for
@@ -995,15 +1009,29 @@ class Perform:
         """Remove a controller and its bindings."""
         self._call("perform.remove_controller", {"id": _id(controller, Controller)})
 
-    def light(self, controller, address, color, shine="steady"):
-        """Show color ((r, g, b) 0-1 or "#RRGGBB"; black is off) on the control
-        at address of a connected controller, shining "steady", "pulse" or
-        "blink", through its profile: to check a profile with the person ("is
-        the top-left pad red?"). It stays until that control's look changes."""
+    def light(self, controller, at, color, shine="steady"):
+        """Show color on one control of a connected controller, through its
+        profile, to check the profile with the person ("is the top-left pad
+        red?"). at is a (column, row) place of the profile or a MIDI address
+        dict; color a name in LIGHT_COLORS, (r, g, b) 0-1 or "#RRGGBB" ("off"
+        or black is dark); shine "steady", "pulse" or "blink". It stays until
+        that control's look changes or clear_lights()."""
         if shine not in SHINES:
             raise PerformRefused(f"shine {shine!r}: expected one of {', '.join(SHINES)}")
-        self._call("perform.light", {"id": _id(controller, Controller), "address": dict(address),
+        if isinstance(at, dict):
+            spot = {"address": dict(at)}
+        elif isinstance(at, (list, tuple)) and len(at) == 2:
+            spot = {"at": [int(at[0]), int(at[1])]}
+        else:
+            raise PerformRefused(f"a light goes at (column, row) or a MIDI address dict; got {at!r}")
+        color = LIGHT_COLORS.get(color, color) if isinstance(color, str) else color
+        self._call("perform.light", {"id": _id(controller, Controller), **spot,
                                      "color": _color(color, "light"), "shine": shine})
+
+    def clear_lights(self, controller):
+        """Turn every control of a controller's profile dark, then show the
+        set's lights on it again: after checking a profile with light()."""
+        self._call("perform.clear_lights", {"id": _id(controller, Controller)})
 
     def map_page(self, controller, page=None):
         """Put a page (the first when None) on a controller's grid by its

@@ -283,14 +283,14 @@ async fn a_controller_is_named_after_its_port_and_hears_only_it() {
     assert_eq!(state.controllers.len(), 1, "both on one controller");
     let pads = &state.controllers[0];
     assert_eq!(
-        (pads.controller.name.as_str(), pads.controller.port.as_str()),
+        (pads.name.as_str(), pads.port.as_str()),
         ("Pads MIDI 1", "Pads MIDI 1")
     );
     assert!(!pads.connected, "a headless hub opens no port");
     assert!(state
         .bindings
         .iter()
-        .all(|binding| binding.controller_id == pads.controller.id));
+        .all(|binding| binding.controller_id == pads.id));
 
     services.inputs.receive(on("Other", cc(7, 0.4)));
     assert_eq!(value(&services, &venue, "drop"), 0.0, "another port's CC 7");
@@ -411,7 +411,7 @@ async fn bindings_kept_here_move_into_one_controller() {
     services.inputs.open(&venue).await.unwrap();
     let state = services.inputs.state();
     assert_eq!(state.controllers.len(), 1);
-    assert_eq!(state.controllers[0].controller.name, "Controller");
+    assert_eq!(state.controllers[0].name, "Controller");
     let mut kept: Vec<(String, Mode, bool)> = state
         .bindings
         .iter()
@@ -511,4 +511,44 @@ async fn bindings_from_before_controllers_upload_as_they_move() {
     assert_eq!(bindings[0].controller_id, controllers[0].id);
     assert_eq!(queued("perform_controllers").await, vec!["PUT"]);
     assert_eq!(queued("control_bindings").await, vec!["PUT"]);
+}
+
+#[tokio::test]
+async fn controllers_synced_from_another_device_reach_the_hub() {
+    let (_dir, services, venue) = library().await;
+    // Written under the hub, as a download writes it.
+    super::store::add_controller(&services.db.0, &venue, None, "Pads", "Pads MIDI 1")
+        .await
+        .unwrap();
+    assert!(services.inputs.state().controllers.is_empty());
+    super::synced();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while services.inputs.state().controllers.is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the hub never read the synced controller"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(services.inputs.controllers()[0].name, "Pads");
+}
+
+#[tokio::test]
+async fn a_controller_is_renamed_and_never_to_nothing() {
+    let (_dir, services, venue) = library().await;
+    let id = services
+        .inputs
+        .add_controller("Pads", "", None)
+        .await
+        .unwrap()
+        .id;
+    let rename = |name: &str| json!({ "venueId": venue, "controllerId": id, "name": name });
+    dispatch(&services, "input_rename_controller", &rename("  Grid "))
+        .await
+        .unwrap();
+    assert_eq!(services.inputs.state().controllers[0].name, "Grid");
+    assert!(dispatch(&services, "input_rename_controller", &rename(" "))
+        .await
+        .is_err());
+    assert_eq!(services.inputs.state().controllers[0].name, "Grid");
 }

@@ -158,13 +158,21 @@ fn an_rgb_device_is_sent_its_sysex_with_the_color_filled_in() {
         )),
         ..Profile::default()
     };
+    // The red a screen shows as pure red is sent as pure red.
+    let screen_red = color_space::from_srgb([1., 0., 0.]);
     let sent = profile
-        .show(&note(81), light(RED, true, Shine::Steady), true)
+        .show(&note(81), light(screen_red, true, Shine::Steady), true)
         .unwrap();
     assert_eq!(
         sent,
         vec![0xf0, 0x00, 0x20, 0x29, 0x02, 0x0c, 0x03, 0x03, 81, 127, 0, 0, 0xf7]
     );
+    // A color past what a screen shows is sent as the screen shows it.
+    let deep = profile
+        .show(&note(81), light(RED, true, Shine::Steady), true)
+        .unwrap();
+    let shown = color_space::to_display_srgb(RED).map(|c| (c * 127.).round() as u8);
+    assert_eq!(&deep[9..12], &shown);
     let dim = profile
         .show(&note(81), light(RED, false, Shine::Steady), true)
         .unwrap();

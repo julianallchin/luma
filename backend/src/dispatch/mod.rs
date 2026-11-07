@@ -370,6 +370,7 @@ commands! {
     inputs::input_update_binding(venue_id: String, binding_id: String, mode: Mode, invert: bool) -> ();
     inputs::input_unbind(venue_id: String, binding_id: String) -> ();
     inputs::input_map_page(venue_id: String, controller_id: String, page_id: String) -> Vec<Binding>;
+    inputs::input_rename_controller(venue_id: String, controller_id: String, name: String) -> ();
 
     controls::control_list(venue_id: String) -> Vec<Control>;
 

@@ -32,7 +32,7 @@ use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::error::CommandError;
-use crate::inputs::{InputHub, Mode};
+use crate::inputs::{InputHub, Mode, Profile, Spot};
 use crate::models::perform::{
     Cell, CellContent, ControlTarget, LayoutPage, ListValue, PerformLayout, PerformPattern, Step,
 };
@@ -262,15 +262,21 @@ impl PerformHost {
                     .map_err(|error| HostCallError::new("not_heard", error))?;
                 Ok(json!({ "binding": binding, "inputs": self.inputs.state() }))
             }
+            "perform.controllers" => {
+                self.open_inputs().await?;
+                Ok(self.controllers())
+            }
             "perform.add_controller" => {
                 let AddController { name, port } = decode(payload)?;
                 self.open_inputs().await?;
                 let controller = self
                     .inputs
-                    .add_controller(&controller_name(&name)?, &port, self.actor.as_deref())
+                    .add_controller(&name, &port, self.actor.as_deref())
                     .await
                     .map_err(refused)?;
-                Ok(json!({ "id": controller.id, "inputs": self.inputs.state() }))
+                let mut answer = self.controllers();
+                answer["id"] = json!(controller.id);
+                Ok(answer)
             }
             "perform.controller" => {
                 let ChangeController {
@@ -279,7 +285,7 @@ impl PerformHost {
                     port,
                     profile,
                 } = decode(payload)?;
-                let name = name.as_deref().map(controller_name).transpose()?;
+                let profile = profile.map(Profile::read).transpose().map_err(refused)?;
                 self.open_inputs().await?;
                 self.inputs
                     .change_controller(&id, self.actor.as_deref(), |controller| {
@@ -296,7 +302,7 @@ impl PerformHost {
                     })
                     .await
                     .map_err(refused)?;
-                Ok(json!({ "inputs": self.inputs.state() }))
+                Ok(self.controllers())
             }
             "perform.remove_controller" => {
                 let Id { id } = decode(payload)?;
@@ -327,6 +333,7 @@ impl PerformHost {
                 let Lit {
                     id,
                     address,
+                    at,
                     color,
                     shine,
                 } = decode(payload)?;
@@ -335,20 +342,40 @@ impl PerformHost {
                         "a light's color is (r, g, b) each 0 to 1; got {color:?}"
                     )));
                 }
+                let spot = match (address, at) {
+                    (Some(address), None) => Spot::Address(address),
+                    (None, Some((column, row))) => Spot::Place(column, row),
+                    _ => {
+                        return Err(refused(
+                            "a light goes at one address or one place (column, row)",
+                        ))
+                    }
+                };
                 self.open_inputs().await?;
                 let light = crate::controls::Light {
                     color,
                     bright: color.iter().any(|c| *c > 0.),
                     shine,
                 };
-                self.inputs.light(&id, &address, light).map_err(refused)?;
+                self.inputs.light(&id, &spot, light).map_err(refused)?;
                 Ok(json!({ "lit": true }))
+            }
+            "perform.clear_lights" => {
+                let Id { id } = decode(payload)?;
+                self.open_inputs().await?;
+                self.inputs.clear_lights(&id).map_err(refused)?;
+                Ok(json!({ "cleared": true }))
             }
             _ => Err(HostCallError::new(
                 "unknown_method",
                 format!("unknown perform host method {method:?}"),
             )),
         }
+    }
+
+    /// The inputs, and the open venue's controllers with their profiles.
+    fn controllers(&self) -> Value {
+        json!({ "inputs": self.inputs.state(), "controllers": self.inputs.controllers() })
     }
 
     /// What plays now. The control values and the clock are the open set's,
@@ -569,13 +596,6 @@ impl Update {
             pattern.seed = seed;
         }
         Ok(json!({ "id": self.id }))
-    }
-}
-
-fn controller_name(name: &str) -> Result<String, HostCallError> {
-    match name.trim() {
-        "" => Err(refused("a controller needs a name, such as \"Launchpad\"")),
-        name => Ok(name.to_owned()),
     }
 }
 
@@ -1056,8 +1076,10 @@ struct ChangeController {
     name: Option<String>,
     #[serde(default)]
     port: Option<String>,
+    /// Read by [`Profile::read`], so a profile that cannot be read is
+    /// refused with why.
     #[serde(default)]
-    profile: Option<crate::inputs::Profile>,
+    profile: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -1073,7 +1095,11 @@ struct MapPage {
 #[serde(deny_unknown_fields)]
 struct Lit {
     id: String,
-    address: crate::inputs::Address,
+    #[serde(default)]
+    address: Option<crate::inputs::Address>,
+    /// A place on the controller's grid, (column, row).
+    #[serde(default)]
+    at: Option<(u16, u16)>,
     color: [f64; 3],
     #[serde(default = "steady")]
     shine: crate::controls::Shine,

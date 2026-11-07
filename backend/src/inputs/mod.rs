@@ -26,12 +26,12 @@ mod store;
 
 pub use profile::Profile;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use crate::models::perform::{LayoutPage, PerformPattern};
 
@@ -39,6 +39,17 @@ use crate::models::perform::{LayoutPage, PerformPattern};
 pub const OSC_ADDRESS: &str = "0.0.0.0:8000";
 /// How long learning waits for an input.
 const LEARN_FOR: Duration = Duration::from_secs(20);
+
+/// The synced tables the hub reads its venue from.
+pub const TABLES: &[&str] = &["perform_controllers", "control_bindings"];
+
+/// Moves when sync writes [`TABLES`]: every hub reads its venue again.
+static SYNCED: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::channel(()).0);
+
+/// Rows of [`TABLES`] arrived from another device.
+pub fn synced() {
+    SYNCED.send_replace(());
+}
 
 /// One input that can move a control.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -111,14 +122,34 @@ impl Controller {
     }
 }
 
-/// A controller as the Perform screen and the agent see it.
+/// A controller's name, trimmed; refused when empty.
+fn named(name: &str) -> Result<String, String> {
+    match name.trim() {
+        "" => Err("a controller needs a name, such as \"Launchpad\"".into()),
+        name => Ok(name.to_owned()),
+    }
+}
+
+/// Where on a controller a light goes: an address, or a place on its grid.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Spot {
+    Address(Address),
+    /// Column and row from the top left, as its profile places them.
+    Place(u16, u16),
+}
+
+/// A controller as the Perform screen polls it. Its profile stays behind:
+/// [`InputHub::controllers`] reads that.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllerState {
-    #[serde(flatten)]
-    pub controller: Controller,
+    pub id: String,
+    pub name: String,
+    pub port: String,
     /// Whether its port is open now.
     pub connected: bool,
+    /// How many pads and faders its profile places.
+    pub controls: usize,
 }
 
 /// One input arriving: its address, its value 0–1, and the MIDI port it
@@ -172,6 +203,8 @@ struct State {
     last: Option<(Event, Instant)>,
     midi_ports: Vec<String>,
     osc: String,
+    /// Controllers whose lights the next frame draws from nothing.
+    cleared: Vec<String>,
 }
 
 impl State {
@@ -277,6 +310,16 @@ pub struct InputHub {
     /// does; a harness binds and applies, and hears nothing.
     devices: bool,
     listeners: tokio::sync::Mutex<Option<Listeners>>,
+    /// Reads the venue again when sync writes its controllers or bindings.
+    follow: OnceLock<tokio::task::AbortHandle>,
+}
+
+impl Drop for InputHub {
+    fn drop(&mut self) {
+        if let Some(follow) = self.follow.get() {
+            follow.abort();
+        }
+    }
 }
 
 struct Listeners {
@@ -305,6 +348,7 @@ impl InputHub {
             pool,
             devices,
             listeners: tokio::sync::Mutex::new(None),
+            follow: OnceLock::new(),
         }
     }
 
@@ -322,6 +366,21 @@ impl InputHub {
             state.controllers = controllers.into();
             state.bindings = bindings.into();
         }
+        self.follow.get_or_init(|| {
+            let (shared, pool) = (self.shared.clone(), self.pool.clone());
+            let mut synced = SYNCED.subscribe();
+            tokio::spawn(async move {
+                while synced.changed().await.is_ok() {
+                    let venue = shared.lock().venue_id.clone();
+                    if let Some(venue) = venue {
+                        if let Err(error) = reload(&shared, &pool, &venue).await {
+                            log::warn!("[inputs] synced controllers were not read: {error}");
+                        }
+                    }
+                }
+            })
+            .abort_handle()
+        });
         let mut listeners = self.listeners.lock().await;
         if self.devices && listeners.is_none() {
             let shared = self.shared.clone();
@@ -378,12 +437,20 @@ impl InputHub {
                 .controllers
                 .iter()
                 .map(|controller| ControllerState {
+                    id: controller.id.clone(),
+                    name: controller.name.clone(),
+                    port: controller.port.clone(),
                     connected: state.midi_ports.contains(&controller.port),
-                    controller: controller.clone(),
+                    controls: controller.profile.controls.len(),
                 })
                 .collect(),
             bindings: state.bindings.to_vec(),
         }
+    }
+
+    /// The open venue's controllers, each with its profile, oldest first.
+    pub(crate) fn controllers(&self) -> Vec<Controller> {
+        self.shared.lock().controllers.to_vec()
     }
 
     /// The open venue, or why there is none.
@@ -491,7 +558,8 @@ impl InputHub {
         actor: Option<&str>,
     ) -> Result<Controller, String> {
         let venue_id = self.venue()?;
-        let controller = store::add_controller(&self.pool, &venue_id, actor, name, port).await?;
+        let controller =
+            store::add_controller(&self.pool, &venue_id, actor, &named(name)?, port).await?;
         self.reload(&venue_id).await?;
         Ok(controller)
     }
@@ -507,6 +575,7 @@ impl InputHub {
         let venue_id = self.venue()?;
         let mut controller = self.controller(id)?;
         change(&mut controller)?;
+        controller.name = named(&controller.name)?;
         controller.profile.check()?;
         store::save_controller(&self.pool, &venue_id, actor, &controller).await?;
         self.reload(&venue_id).await?;
@@ -554,21 +623,46 @@ impl InputHub {
         Ok(bindings)
     }
 
-    /// Show `light` on the control at `address` of controller `id`, until
-    /// the look of a control bound there changes. Fails unless its port is
-    /// open.
+    /// Show `light` on the control at `spot` of controller `id`, until the
+    /// look of a control bound there changes. Fails unless its port is open.
     pub(crate) fn light(
         &self,
         id: &str,
-        address: &Address,
+        spot: &Spot,
         light: crate::controls::Light,
     ) -> Result<(), String> {
         let controller = self.controller(id)?;
+        let address = match spot {
+            Spot::Address(address) => address,
+            Spot::Place(column, row) => controller.profile.at(*column, *row).ok_or_else(|| {
+                format!(
+                    "{}'s profile has no control at ({column}, {row})",
+                    controller.name
+                )
+            })?,
+        };
         let message = controller
             .profile
             .show(address, light, true)
             .ok_or("An OSC address has no light")?;
-        if midi::send(&controller.port, &message) {
+        self.send(&controller, &message)
+    }
+
+    /// Turn every control controller `id`'s profile places dark, then show
+    /// the set's lights again.
+    pub(crate) fn clear_lights(&self, id: &str) -> Result<(), String> {
+        let controller = self.controller(id)?;
+        for place in &controller.profile.controls {
+            if let Some(dark) = controller.profile.show(&place.address, lights::DARK, true) {
+                self.send(&controller, &dark)?;
+            }
+        }
+        self.shared.lock().cleared.push(controller.id);
+        Ok(())
+    }
+
+    fn send(&self, controller: &Controller, message: &[u8]) -> Result<(), String> {
+        if midi::send(&controller.port, message) {
             Ok(())
         } else {
             Err(format!("{} is not connected", controller.name))
@@ -576,19 +670,24 @@ impl InputHub {
     }
 
     async fn reload(&self, venue_id: &str) -> Result<(), String> {
-        let (controllers, bindings) = store::read(&self.pool, venue_id).await?;
-        let mut state = self.shared.lock();
-        if state.venue_id.as_deref() == Some(venue_id) {
-            state.controllers = controllers.into();
-            state.bindings = bindings.into();
-        }
-        Ok(())
+        reload(&self.shared, &self.pool, venue_id).await
     }
 
     #[cfg(test)]
     pub(crate) fn receive(&self, event: Event) {
         self.shared.receive(event);
     }
+}
+
+/// Read `venue_id`'s controllers and bindings again, if it is still open.
+async fn reload(shared: &Shared, pool: &SqlitePool, venue_id: &str) -> Result<(), String> {
+    let (controllers, bindings) = store::read(pool, venue_id).await?;
+    let mut state = shared.lock();
+    if state.venue_id.as_deref() == Some(venue_id) {
+        state.controllers = controllers.into();
+        state.bindings = bindings.into();
+    }
+    Ok(())
 }
 
 #[cfg(test)]

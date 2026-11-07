@@ -439,6 +439,12 @@ async fn replicas(database: Arc<Database>, events: Events, mut shutdown: watch::
         {
             venue_graph::rig_changed();
         }
+        if changed
+            .iter()
+            .any(|table| crate::inputs::TABLES.contains(&table.as_str()))
+        {
+            crate::inputs::synced();
+        }
         events.emit(Event::ReplicaChanged {
             tables: std::mem::take(&mut changed).into_iter().collect(),
         });

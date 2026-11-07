@@ -50,7 +50,7 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Focusable as _, Hsla, SharedString, Window};
 pub(super) use luma_lib::controls::perform::{Part, PartKind};
 use luma_lib::controls::{perform as names, Control, Look, Played, UNSET_COLOR, UNTAPPED_BPM};
-use luma_lib::dispatch::handlers::inputs::{Address, Binding, InputState, Mode};
+use luma_lib::dispatch::handlers::inputs::{Address, Binding, ControllerState, InputState, Mode};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::perform::{
     Cell, CellContent, ListValue, PerformClock, PerformLayout, PerformPattern, PerformSource,
@@ -145,6 +145,8 @@ enum Named {
     Pattern(String),
     /// A fader, list or group cell's label, by cell id.
     Label(String),
+    /// A controller's name, by its id.
+    Controller(String),
 }
 
 /// A list's value open in Setup: a color in the picker, which stays open
@@ -258,6 +260,14 @@ impl Perform {
             .as_ref()?
             .iter()
             .find(|pattern| pattern.id == id)
+    }
+
+    fn controller(&self, id: &str) -> Option<&ControllerState> {
+        self.inputs
+            .as_ref()?
+            .controllers
+            .iter()
+            .find(|controller| controller.id == id)
     }
 
     fn page(&self) -> Option<&luma_lib::models::perform::LayoutPage> {
@@ -1194,6 +1204,10 @@ impl Luma {
                     .map(|page| page.name.clone()),
             ),
             Named::Pattern(id) => ("Pattern name", state.pattern(id).map(|p| p.name.clone())),
+            Named::Controller(id) => (
+                "Controller name",
+                state.controller(id).map(|c| c.name.clone()),
+            ),
             Named::Label(id) => (
                 "Name",
                 state.cell(id).and_then(|cell| match &cell.content {
@@ -1303,7 +1317,32 @@ impl Luma {
                     self.apply_surface(target, Edit::SetContent(id, content), cx);
                 }
             }
+            Named::Controller(id) => {
+                let rename = self
+                    .library
+                    .input_rename_controller(target.venue(), &id, typed);
+                self.after_request(target.clone(), rename, cx);
+            }
         }
+    }
+
+    /// Open the Perform chat with `prompt` in its composer, to send or edit.
+    fn ask_agent(
+        &mut self,
+        target: &Target,
+        prompt: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.perform_mut(target) else {
+            return;
+        };
+        let chat = state.chat.panel.clone();
+        if !self.agent_wanted() {
+            self.toggle_agent();
+        }
+        chat.update(cx, |chat, cx| chat.suggest(prompt, window, cx));
+        cx.notify();
     }
 
     /// Open value `index` of list `cell` in Setup, a color in the picker,

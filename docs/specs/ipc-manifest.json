@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 135,
+    "commandCount": 136,
     "domainCount": 26
   },
   "domains": [
@@ -74,7 +74,7 @@
     },
     {
       "domain": "inputs",
-      "commandCount": 7,
+      "commandCount": 8,
       "handlers": "backend/src/dispatch/handlers/inputs.rs"
     },
     {
@@ -1560,6 +1560,28 @@
         }
       ],
       "returns": "InputState"
+    },
+    {
+      "name": "input_rename_controller",
+      "domain": "inputs",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/inputs.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "controllerId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        }
+      ],
+      "returns": "()"
     },
     {
       "name": "input_state",

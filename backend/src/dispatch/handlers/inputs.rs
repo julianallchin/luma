@@ -12,6 +12,14 @@ async fn open(services: &AppServices, venue_id: &str) -> Result<(), CommandError
     Ok(services.inputs.open(venue_id).await?)
 }
 
+/// [`open`], unless `venue_id` is the venue open already.
+async fn open_unless_open(services: &AppServices, venue_id: &str) -> Result<(), CommandError> {
+    if services.inputs.state().venue_id.as_deref() == Some(venue_id) {
+        return Ok(());
+    }
+    open(services, venue_id).await
+}
+
 /// Bind inputs to `venue_id`'s controls, opening every MIDI port and the OSC
 /// socket the first time.
 pub async fn input_open(
@@ -43,9 +51,7 @@ pub async fn input_learn(
             "expected a control name in snake_case, such as drop or front_level; got \"{control}\""
         )));
     }
-    if services.inputs.state().venue_id.as_deref() != Some(venue_id.as_str()) {
-        open(services, &venue_id).await?;
-    }
+    open_unless_open(services, &venue_id).await?;
     Ok(services
         .inputs
         .learn(&control, mode, controller_id.as_deref(), None)
@@ -83,6 +89,25 @@ pub async fn input_unbind(
     Ok(services.inputs.unbind(&venue_id, &binding_id, None).await?)
 }
 
+/// Rename controller `controller_id` of the venue.
+pub async fn input_rename_controller(
+    services: &AppServices,
+    venue_id: String,
+    controller_id: String,
+    name: String,
+) -> Result<(), CommandError> {
+    open_unless_open(services, &venue_id).await?;
+    services
+        .inputs
+        .change_controller(&controller_id, None, |controller| {
+            controller.name = name;
+            Ok(())
+        })
+        .await
+        .map(|_| ())
+        .map_err(CommandError::Invalid)
+}
+
 /// Put page `page_id` of the venue's layout on controller `controller_id`'s
 /// grid, by its profile. Answers the bindings made.
 pub async fn input_map_page(
@@ -101,9 +126,7 @@ pub async fn input_map_page(
         .iter()
         .find(|page| page.id == page_id)
         .ok_or_else(|| CommandError::NotFound("No such page".into()))?;
-    if services.inputs.state().venue_id.as_deref() != Some(venue_id.as_str()) {
-        open(services, &venue_id).await?;
-    }
+    open_unless_open(services, &venue_id).await?;
     services
         .inputs
         .map_page(&controller_id, page, &set.patterns, None)

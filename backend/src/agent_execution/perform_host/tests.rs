@@ -880,28 +880,69 @@ async fn controllers_are_added_given_a_profile_lit_mapped_and_removed() {
     .await
     .unwrap();
     assert_eq!(changed["inputs"]["controllers"][0]["name"], "Grid");
+    // The polled inputs count the profile's controls; the profile itself
+    // comes with the controllers.
+    assert_eq!(changed["inputs"]["controllers"][0]["controls"], 1);
+    assert_eq!(changed["inputs"]["controllers"][0].get("profile"), None);
     assert_eq!(
-        changed["inputs"]["controllers"][0]["profile"]["controls"][0]["address"],
+        changed["controllers"][0]["profile"]["controls"][0]["address"],
         pad
     );
-    let bad = call(
-        &host,
-        "perform.controller",
-        json!({"id": id, "profile": {"color": {"sysex": "F0 F7 zz"}}}),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(bad.code, "refused", "{}", bad.message);
+    let listed = call(&host, "perform.controllers", json!({})).await.unwrap();
+    assert_eq!(listed["controllers"], changed["controllers"]);
+    // A profile that cannot be read or drawn is refused, saying why.
+    for (profile, why) in [
+        (json!({"color": {"sysex": "F0 F7 zz"}}), "SysEx"),
+        (json!({"colour": {}}), "unknown field `colour`"),
+    ] {
+        let bad = call(
+            &host,
+            "perform.controller",
+            json!({"id": id, "profile": profile}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(bad.code, "refused", "{}", bad.message);
+        assert!(bad.message.contains(why), "{}", bad.message);
+    }
 
     // Its port is not open here, so its light cannot be shown.
-    let dark = call(
+    for spot in [json!({"address": pad}), json!({"at": [0, 0]})] {
+        let mut lit = json!({"id": id, "color": [1, 0, 0], "shine": "blink"});
+        lit.as_object_mut()
+            .unwrap()
+            .extend(spot.as_object().unwrap().clone());
+        let dark = call(&host, "perform.light", lit).await.unwrap_err();
+        assert!(dark.message.contains("not connected"), "{}", dark.message);
+    }
+    let nowhere = call(
         &host,
         "perform.light",
-        json!({"id": id, "address": pad, "color": [1, 0, 0], "shine": "blink"}),
+        json!({"id": id, "at": [3, 3], "color": [1, 0, 0]}),
     )
     .await
     .unwrap_err();
-    assert!(dark.message.contains("not connected"), "{}", dark.message);
+    assert!(
+        nowhere.message.contains("no control at (3, 3)"),
+        "{}",
+        nowhere.message
+    );
+    let both = call(
+        &host,
+        "perform.light",
+        json!({"id": id, "address": pad, "at": [0, 0], "color": [1, 0, 0]}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(both.code, "refused");
+    let cleared = call(&host, "perform.clear_lights", json!({"id": id}))
+        .await
+        .unwrap_err();
+    assert!(
+        cleared.message.contains("not connected"),
+        "{}",
+        cleared.message
+    );
 
     // The first page's top left cell lands on the one pad.
     call(&host, "perform.add", wash()).await.unwrap();
