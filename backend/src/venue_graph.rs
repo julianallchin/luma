@@ -185,7 +185,7 @@ mod tests {
 
     /// The `venue-poses` rig, spelled as rows.
     ///
-    /// The same room `luma-render`'s `venue_poses` golden builds through
+    /// The same room `luma-scene`'s `venue_poses` golden builds through
     /// `VenueGraph::attach` — deliberately asymmetric, one of every way a node
     /// can be placed and a violated far end. It is written
     /// here as rows because that is the shape a document stores, and

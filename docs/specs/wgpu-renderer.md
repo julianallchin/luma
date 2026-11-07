@@ -8,12 +8,14 @@ contract.
 
 | Crate | Path | Purpose |
 |---|---|---|
-| `luma-scene` | `gpui/crates/scene` | Scene math and editor logic. No GPU, no window. Scene graph, camera, framing, BVH raycast, sockets and the snap solver, gizmo, selection, the venue graph resolver, patch allocation and distribute. |
+| `luma-scene` | `gpui/crates/scene` | The venue model, scene math and editor logic. No GPU, no window. The venue graph resolver, the stage catalog and its socket resolution (`catalog.rs`), the truss generator, the GLB decoder (`mesh.rs`), the stored venue and fixture records (`environment.rs`, `definition.rs`), cone geometry (`luminaire.rs`), the strobe clock, face lengths and the venue tile map; scene graph, camera, framing, BVH raycast, sockets and the snap solver, gizmo, selection, patch allocation and distribute. |
 | `luma-render` | `gpui/crates/render` | Offscreen wgpu rendering for the stage and waveform strips. No GPUI dependency. |
 | `luma-app` | `gpui/crates/app` | The GPUI element that shows frames (`visualizer.rs`, `stage/`), input, and the View settings card. |
 
-The backend uses `luma-render` too: `backend/src/stage_render.rs` renders one venue at
-one moment, and `backend/src/recording.rs` records a score to video.
+The backend uses `luma-render` only to draw: `backend/src/stage_render.rs` renders one
+venue at one moment, and `backend/src/recording.rs` records a score to video. Its
+models, database, DMX output and services take venue types from `luma-scene`, which
+links no GPU.
 
 ## 2. Coordinates
 

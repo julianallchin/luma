@@ -73,7 +73,7 @@ time it is read. Nothing else reads them.
     edge could only name the anchor, which would seat one child on every copy
     through the same socket, at a seat with no geometry.
 - **Truss is fully procedural — one generator, one family, everything mates.**
-  Straight (any span in 0.5 m steps — landed in `gpui/crates/render/src/truss.rs`),
+  Straight (any span in 0.5 m steps — landed in `gpui/crates/scene/src/truss.rs`),
   corner box (2/3/4/5/6-way), hinge (two half-boxes on a pin, 0–180°, where the
   angle is the socket's roll freedom and is draggable), arc later. Ripped truss GLBs
   get deleted; ripped **product** GLBs — decks, CDJs, speakers — stay, they are real

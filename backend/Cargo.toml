@@ -80,9 +80,11 @@ rbox = "0.1.7"
 prodjlink = { path = "crates/prodjlink" }
 # The offscreen renderer, so `luma.venue.render(...)` in an agent's Python
 # workspace produces a PNG of the stage from the same renderer the desktop
-# viewport uses. It reaches across into the `gpui/` workspace; that direction is
-# safe because `luma-render` and `luma-scene` depend on nothing here but
-# `fixture-kinematics`.
+# viewport uses. Only the rendering modules (`stage_render`, `recording`) and
+# the CLI's render commands use it: it links wgpu, and everything else reaches
+# venue types through `luma-scene`. It reaches across into the `gpui/`
+# workspace; that direction is safe because `luma-render` and `luma-scene`
+# depend on nothing here but `fixture-kinematics`.
 luma-render = { path = "../gpui/crates/render" }
 # Where a fixture's light comes from and where it points — the single
 # implementation the renderer, the eval engine and the agent bindings share.
@@ -90,6 +92,8 @@ fixture-kinematics = { path = "crates/fixture-kinematics" }
 # The vector type those two speak. Pinned to their version by definition: a
 # second glam here would be a second, incompatible `Vec3`.
 glam = "0.30"
+# The venue model without a GPU: the venue graph and its resolver, the stage
+# catalog and its sockets, the stored environment, haze and fixture records.
 luma-scene = { path = "../gpui/crates/scene" }
 chrono = "0.4"
 dirs = "5"

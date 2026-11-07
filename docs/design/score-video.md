@@ -147,7 +147,7 @@ impl Sequence {
     /// framing does not depend on t.
     pub fn install(
         scene: scene_desc::Scene,
-        definitions: BTreeMap<String, scene_desc::Definition>,
+        definitions: BTreeMap<String, definition::Definition>,
         meshes_root: PathBuf,
         view: View, booth: Option<Vec3>, size: (u32, u32),
     ) -> Result<Self, String>;
@@ -443,7 +443,7 @@ and only the fixed passes are paid four times.
 one moment, live, in the show export and in `luma-cli record` alike
 (`luma_render::footage::moment`, `stage_render::Sequence::frame_at`). A strobe
 flashes on the free-running clock, not on transport time or the beat, at one
-rate mapping for every fixture (`luma_render::strobe`, 20 Hz per unit). Each
+rate mapping for every fixture (`luma_scene::strobe`, 20 Hz per unit). Each
 frame covers the slice of that clock since the frame before, and shows a
 strobing light at full brightness when a flash begins in its slice and dark
 otherwise. The slices tile the clock, so every flash lands in exactly one

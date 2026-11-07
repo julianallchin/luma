@@ -178,7 +178,9 @@ second).
 
 `luma-render` has one binary, `--test render`, plus four that change
 process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
-`shared_presentation` and `waveform`. `luma-ui` has one, `--test ui`.
+`shared_presentation` and `waveform`. `luma-scene` has one, `--test scene`, with
+the venue-graph goldens (`venue_poses`) and the build-against-real-geometry tests
+(`venue_build`); it needs no GPU. `luma-ui` has one, `--test ui`.
 Set `LUMA_RENDER_CAPTURE_DIR=dir` to save the pictures the `render` tests look
 at, one subdirectory per test file.
 The `luma-render` GPU timing instruments are examples, not tests, because a

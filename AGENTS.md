@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`. GPUI consumes the shared Rust backend in `backend/` through its dispatch seam. `www/` is a separate documentation website.
+Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`; the GPU-free venue model it draws (venue graph, stage catalog, venue records, scene math) is in `gpui/crates/scene`, which the backend uses too. GPUI consumes the shared Rust backend in `backend/` through its dispatch seam. `www/` is a separate documentation website.
 
 ## Shared checkout
 
