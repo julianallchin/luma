@@ -33,11 +33,13 @@ pub fn script(body: &str) -> String {
     format!("{NAV}\n{body}")
 }
 
-/// Held by every test that sets `LUMA_CONFIG_DIR` or `LUMA_CACHE_DIR`.
+/// Held by every test that sets `LUMA_CACHE_DIR`.
 ///
-/// The backend reads both from the process environment when a library opens,
-/// and one binary runs its tests on parallel threads. Without one lock, a test
-/// can open its library on another test's fake Python or config.
+/// The app reads it from the process environment when a library opens (a
+/// library's config directory comes from its thread's `Runtime`, but its cache
+/// directory has no such seam yet), and one binary runs its tests on parallel
+/// threads. Without one lock, a test can open its library on another test's
+/// fake Python.
 pub fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))

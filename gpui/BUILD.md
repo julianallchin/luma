@@ -243,10 +243,13 @@ Two rules follow:
 - When a grouped suite fails, run the failing test alone before you trust the
   failure.
 
-`headless/library_foundation.rs` and `headless/add_tracks_flow.rs` still call
-`std::env::set_var` for `LUMA_CONFIG_DIR` and `LUMA_CACHE_DIR`. They drive
-`Library` on the test thread. If one of these files adds a parallel test, the
-tests can race on those variables.
+A test that opens a `Library` itself names its config directory through
+`Runtime::install` on its own thread, as the harness does. Its cache directory
+has no such seam: `headless/library_foundation.rs`, `headless/add_tracks_flow.rs`
+and `app_pixel/add_tracks_pixels.rs` set `LUMA_CACHE_DIR` with
+`std::env::set_var` to point analysis at a fake Python, and hold
+`support::environment_lock()` while they do. The variable stays set for the
+rest of the process.
 
 ### Known issue: order-dependent failures in `headless`
 

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use luma_ui::runtime::Runtime;
 use serde_json::json;
 
 /// Sign the disposable library in, on its own runtime: these tests build the
@@ -19,14 +20,28 @@ fn sign_in(config: &std::path::Path) {
         .block_on(super::support::session::signed_in(config));
 }
 
-fn disposable_config_dir() -> PathBuf {
+/// A library directory of the test's own, so tests on parallel threads do not
+/// clear each other's.
+fn disposable_config_dir(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "luma-gpui-library-foundation-{}",
+        "luma-gpui-library-foundation-{test}-{}",
         std::process::id()
     ));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// Open the library in `config`, named by this thread's [`Runtime`] rather
+/// than the process environment, with the cloud off as the harness has it.
+fn open_library(config: &std::path::Path) -> luma_app::Library {
+    Runtime {
+        config_dir: Some(config.to_path_buf()),
+        cloud: false,
+        ..Runtime::default()
+    }
+    .install();
+    luma_app::Library::open().unwrap()
 }
 
 fn write_silent_wav(path: &std::path::Path, frames: u32) {
@@ -67,9 +82,7 @@ fn install_slow_failing_python(cache: &std::path::Path) {
 
 #[test]
 fn library_creates_idempotent_empty_membership_and_persists_session_items() {
-    let _environment = super::support::environment_lock();
-    let config = disposable_config_dir();
-    std::env::set_var("LUMA_CONFIG_DIR", &config);
+    let config = disposable_config_dir("membership");
     // Nothing in Luma writes a synced row without a principal, and importing
     // tracks writes plenty — see `AppServices::require_session`.
     sign_in(&config);
@@ -93,7 +106,7 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
         db.0.close().await;
     });
 
-    let library = luma_app::Library::open().unwrap();
+    let library = open_library(&config);
     runtime.block_on(async {
         let venue = library.create_venue("Venue", None).await.unwrap();
         let first = library
@@ -172,9 +185,7 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
 
 #[test]
 fn both_dj_adapters_normalize_every_browser_read_through_library() {
-    let _environment = super::support::environment_lock();
-    let config = disposable_config_dir();
-    std::env::set_var("LUMA_CONFIG_DIR", &config);
+    let config = disposable_config_dir("adapters");
     // Nothing in Luma writes a synced row without a principal, and importing
     // tracks writes plenty — see `AppServices::require_session`.
     sign_in(&config);
@@ -183,7 +194,7 @@ fn both_dj_adapters_normalize_every_browser_read_through_library() {
         .build()
         .unwrap();
 
-    let mut library = luma_app::Library::open().unwrap();
+    let mut library = open_library(&config);
     library.set_source_adapter_fixture(luma_app::SourceAdapterFixture {
         library: json!({"databaseUuid": "engine-db", "libraryPath": "/engine", "trackCount": 1}),
         playlists: json!([{"id": 7, "title": "Engine crate", "parentId": null, "trackCount": 1}]),
@@ -223,12 +234,11 @@ fn both_dj_adapters_normalize_every_browser_read_through_library() {
 #[test]
 fn both_dj_sources_import_through_the_same_library_request_contract() {
     let _environment = super::support::environment_lock();
-    let config = disposable_config_dir();
+    let config = disposable_config_dir("sources");
     sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
     super::support::stub_genre_model(&config);
-    std::env::set_var("LUMA_CONFIG_DIR", &config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let engine_audio = config.join("engine.wav");
     let rekordbox_audio = config.join("rekordbox.wav");
@@ -238,7 +248,7 @@ fn both_dj_sources_import_through_the_same_library_request_contract() {
         .enable_all()
         .build()
         .unwrap();
-    let mut library = luma_app::Library::open().unwrap();
+    let mut library = open_library(&config);
 
     let mut engine = engine_track();
     engine["path"] = json!(engine_audio);
@@ -292,12 +302,11 @@ fn both_dj_sources_import_through_the_same_library_request_contract() {
 #[test]
 fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progress() {
     let _environment = super::support::environment_lock();
-    let config = disposable_config_dir();
+    let config = disposable_config_dir("progress");
     sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
     super::support::stub_genre_model(&config);
-    std::env::set_var("LUMA_CONFIG_DIR", &config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let audio = config.join("tiny.wav");
     write_silent_wav(&audio, 8_000);
@@ -307,7 +316,7 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
         .enable_all()
         .build()
         .unwrap();
-    let library = luma_app::Library::open().unwrap();
+    let library = open_library(&config);
     let mut progress = library.import_progress();
     runtime.block_on(async {
         let result = tokio::time::timeout(
@@ -414,12 +423,11 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
 #[test]
 fn dropping_import_future_does_not_cancel_service_owned_analysis() {
     let _environment = super::support::environment_lock();
-    let config = disposable_config_dir();
+    let config = disposable_config_dir("detached");
     sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
     super::support::stub_genre_model(&config);
-    std::env::set_var("LUMA_CONFIG_DIR", &config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let audio = config.join("detached.wav");
     write_silent_wav(&audio, 8_000);
@@ -428,7 +436,7 @@ fn dropping_import_future_does_not_cancel_service_owned_analysis() {
         .enable_all()
         .build()
         .unwrap();
-    let library = luma_app::Library::open().unwrap();
+    let library = open_library(&config);
     let mut progress = library.import_progress();
     let request = library.import_tracks(luma_app::TrackImportRequest::Files(vec![audio]));
     drop(request);
