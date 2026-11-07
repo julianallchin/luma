@@ -25,6 +25,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Folder | folder | 1524 |
 | Gear | gear-2 | 1574 |
 | Info | circle-info | 1570 |
+| Keyboard | keyboard | 1506 |
 | Minimize | reduce | 1006 |
 | Minus | minus | 5945 |
 | Music | music-note | 6574 |
