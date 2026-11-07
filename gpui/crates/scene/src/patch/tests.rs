@@ -935,50 +935,25 @@ fn refusals() -> serde_json::Value {
     })
 }
 
-/// Rebuilds every object with its keys sorted, so the golden's bytes do not
-/// depend on whether a workspace build turned on serde_json's
-/// `preserve_order` for everyone.
-fn sorted_keys(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut entries: Vec<_> = map.into_iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            serde_json::Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(k, v)| (k, sorted_keys(v)))
-                    .collect(),
-            )
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.into_iter().map(sorted_keys).collect())
-        }
-        other => other,
-    }
-}
-
+/// Keys sorted, so the golden's bytes do not depend on whether a workspace
+/// build turned on serde_json's `preserve_order` for everyone.
 fn golden() -> String {
-    let mut out = serde_json::to_string_pretty(&sorted_keys(serde_json::json!({
+    let mut value = serde_json::json!({
         "twoRuns": capture(&two_runs()),
         "crowdedRun": capture(&crowded()),
         "refusals": refusals(),
-    })))
-    .expect("the capture serializes");
+    });
+    value.sort_all_objects();
+    let mut out = serde_json::to_string_pretty(&value).expect("the capture serializes");
     out.push('\n');
     out
 }
 
 #[test]
 fn patch_allocation_golden_is_current() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../harness/goldens/patch-allocation.json");
-    let contents = golden();
-    let same = std::fs::read_to_string(&path).is_ok_and(|old| old == contents);
-    if !same {
-        std::fs::write(&path, &contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    }
-    assert!(
-        same,
-        "the patch-allocation golden was stale and has been rewritten — review and commit it"
+    crate::golden::assert_golden(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../harness/goldens/patch-allocation.json"),
+        &golden(),
     );
 }

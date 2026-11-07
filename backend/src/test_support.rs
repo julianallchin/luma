@@ -41,3 +41,20 @@ async fn open(directory: &Path, fixtures_root: PathBuf) -> AppServices {
     .unwrap()
     .services
 }
+
+/// The repository root: this crate sits at `<repo>/backend`.
+pub(crate) fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crate has a parent directory")
+        .to_path_buf()
+}
+
+/// `value` as a JSON golden's text: keys sorted, because this crate's
+/// serde_json keeps insertion order and a golden's bytes must not depend on it.
+pub(crate) fn golden_text(mut value: serde_json::Value) -> String {
+    value.sort_all_objects();
+    let mut out = serde_json::to_string_pretty(&value).expect("the capture serializes");
+    out.push('\n');
+    out
+}

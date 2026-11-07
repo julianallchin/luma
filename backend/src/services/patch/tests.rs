@@ -5,23 +5,20 @@
 //! because that is where the pieces are wired together and where a wrong
 //! column or a lost pin would actually show up.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
 use super::*;
 use crate::database::local::venue_access::{Read, VenueResource};
+use crate::test_support::{golden_text, repo_root};
 
 const VENUE: &str = "venue-under-test";
 
 /// The shipped fixture library; the real mesh catalog is its sibling.
 fn fixtures_root() -> PathBuf {
     crate::resources::source_fixtures_root().expect("the shipped bundle")
-}
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
 async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
@@ -245,29 +242,16 @@ async fn seeded_venue_patch_golden_is_current() {
             })
         })
         .collect();
-    let mut contents = serde_json::to_string_pretty(&serde_json::json!({
-        "patch": rows,
-        "notes": allocation
-            .notes
-            .iter()
-            .map(|n| crate::models::patch::PatchNote::from(n).message)
-            .collect::<Vec<_>>(),
-    }))
-    .expect("serializes");
-    contents.push('\n');
-
-    let path = repo_root().join("harness/goldens/patch/seeded-venue.json");
-    std::fs::create_dir_all(path.parent().expect("a parent")).expect("golden directory");
-    let same = std::fs::read_to_string(&path).is_ok_and(|old| {
-        serde_json::from_str::<serde_json::Value>(&old).ok()
-            == serde_json::from_str::<serde_json::Value>(&contents).ok()
-    });
-    if !same {
-        std::fs::write(&path, &contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    }
-    assert!(
-        same,
-        "the seeded-venue patch golden was stale and has been rewritten — review and commit it"
+    luma_scene::golden::assert_golden(
+        &repo_root().join("harness/goldens/patch/seeded-venue.json"),
+        &golden_text(serde_json::json!({
+            "patch": rows,
+            "notes": allocation
+                .notes
+                .iter()
+                .map(|n| crate::models::patch::PatchNote::from(n).message)
+                .collect::<Vec<_>>(),
+        })),
     );
 }
 

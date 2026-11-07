@@ -4,7 +4,7 @@
 //! the host boundary. They are derived from the parent module's `commands!`
 //! table rather than written by hand, so the surface cannot drift from the
 //! documentation of it: [`check`] rebuilds both files and fails if what is on
-//! disk differs, having written the new version first.
+//! disk differs.
 //!
 //! The one thing the table cannot know, the per-command prose (`prose`), is
 //! carried across by name from the previous file. Host events are not listed:
@@ -34,15 +34,14 @@ pub(super) struct Command {
 const JSON_PATH: &str = "../docs/specs/ipc-manifest.json";
 const MD_PATH: &str = "../docs/specs/ipc-manifest.md";
 
-/// Rebuild both files from `table` and report whether the tree already matched.
-/// With `LUMA_UPDATE_GOLDENS` set, a stale file is rewritten.
+/// Rebuild both files from `table` and check them against the tree, as
+/// goldens: `LUMA_UPDATE_GOLDENS` rewrites a stale one.
 ///
 /// # Panics
 ///
-/// If a table row has no handler function, or the previous manifest is missing
-/// or unreadable — both mean the generator's inputs are wrong, not that the
-/// manifest is stale.
-pub(super) fn check(table: &[Command]) -> Result<(), String> {
+/// If either file is stale, a table row has no handler function, or the
+/// previous manifest is missing or unreadable.
+pub(super) fn check(table: &[Command]) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let previous: Value = serde_json::from_str(
         &fs::read_to_string(root.join(JSON_PATH)).expect("previous ipc-manifest.json"),
@@ -51,26 +50,8 @@ pub(super) fn check(table: &[Command]) -> Result<(), String> {
 
     let json = render_json(table, &root, &previous);
     let markdown = render_markdown(table);
-
-    // Check-only unless asked, so a first run on a clean tree never rewrites
-    // a tracked file and then fails.
-    let update = std::env::var_os("LUMA_UPDATE_GOLDENS").is_some();
-    let mut stale = Vec::new();
-    for (path, contents) in [(JSON_PATH, &json), (MD_PATH, &markdown)] {
-        let path = root.join(path);
-        if fs::read_to_string(&path).ok().as_ref() != Some(contents) {
-            if update {
-                fs::write(&path, contents).expect("write manifest");
-            }
-            stale.push(path.display().to_string());
-        }
-    }
-
-    if stale.is_empty() {
-        Ok(())
-    } else {
-        Err(stale.join(", "))
-    }
+    luma_scene::golden::assert_golden(&root.join(JSON_PATH), &json);
+    luma_scene::golden::assert_golden(&root.join(MD_PATH), &markdown);
 }
 
 // -----------------------------------------------------------------------------

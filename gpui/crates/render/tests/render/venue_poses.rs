@@ -12,11 +12,8 @@
 //! stubbed either would pin half the answer. That makes this the one place the
 //! whole chain — catalog, generator, sockets, solve — is pinned numerically.
 //!
-//! Run `cargo test -p luma-render --test render venue_poses::`. It rewrites the golden
-//! and then fails if it changed, so a stale capture cannot be committed
-//! silently.
-
-use std::path::PathBuf;
+//! Run `cargo test -p luma-render --test render venue_poses::`. A stale golden
+//! fails; `LUMA_UPDATE_GOLDENS=1` rewrites it for review.
 
 use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
 use luma_render::venue_tiles::TileMap;
@@ -310,24 +307,13 @@ fn round(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
 }
 
-/// Rebuilds every object with its keys sorted, so a golden's bytes do not
-/// depend on whether a workspace build turned on serde_json's
-/// `preserve_order` for everyone.
-fn sorted_keys(value: Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut entries: Vec<_> = map.into_iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(k, v)| (k, sorted_keys(v)))
-                    .collect(),
-            )
-        }
-        Value::Array(items) => Value::Array(items.into_iter().map(sorted_keys).collect()),
-        other => other,
-    }
+/// `value` as a golden's text: keys sorted, so the bytes do not depend on
+/// whether a workspace build turned on serde_json's `preserve_order`.
+fn golden_text(mut value: Value) -> String {
+    value.sort_all_objects();
+    let mut out = serde_json::to_string_pretty(&value).expect("the capture serializes");
+    out.push('\n');
+    out
 }
 
 fn golden() -> String {
@@ -385,33 +371,19 @@ fn golden() -> String {
         .map(|d| json!({ "node": d.node, "socket": d.socket, "type": d.socket_type.as_str() }))
         .collect();
 
-    let mut out = serde_json::to_string_pretty(&sorted_keys(json!({
+    golden_text(json!({
         "nodes": nodes,
         "constraints": constraints,
         "dangling": dangling,
         "warnings": solved.warnings().len(),
-    })))
-    .expect("the capture serializes");
-    out.push('\n');
-    out
-}
-
-/// Whether `path` differs from `contents`. With `LUMA_UPDATE_GOLDENS` set, a
-/// stale golden is rewritten.
-fn golden_is_stale(path: PathBuf, contents: &str) -> bool {
-    let same = std::fs::read_to_string(&path).is_ok_and(|old| old == contents);
-    if !same && std::env::var_os("LUMA_UPDATE_GOLDENS").is_some() {
-        std::fs::write(&path, contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    }
-    !same
+    }))
 }
 
 #[test]
 fn venue_poses_golden_is_current() {
-    let path = luma_render::repo_root().join("harness/goldens/venue-poses.json");
-    assert!(
-        !golden_is_stale(path, &golden()),
-        "the venue-pose golden is stale; regenerate with LUMA_UPDATE_GOLDENS=1, review and commit it"
+    luma_scene::golden::assert_golden(
+        &luma_render::repo_root().join("harness/goldens/venue-poses.json"),
+        &golden(),
     );
 }
 
@@ -481,13 +453,10 @@ fn tiles_golden() -> String {
             "map": text.lines().collect::<Vec<_>>(),
         })
     };
-    let mut out = serde_json::to_string_pretty(&sorted_keys(json!({
+    golden_text(json!({
         "venue-poses": map(0.5),
         "venue-poses-coarse": map(1.0),
-    })))
-    .expect("the capture serializes");
-    out.push('\n');
-    out
+    }))
 }
 
 /// A light hangs *off* what it is clamped to, never through it.
@@ -540,10 +509,9 @@ fn a_fixture_hangs_off_its_host_by_its_housing() {
 
 #[test]
 fn venue_tiles_golden_is_current() {
-    let path = luma_render::repo_root().join("harness/goldens/venue-tiles.json");
-    assert!(
-        !golden_is_stale(path, &tiles_golden()),
-        "the tile-map golden is stale; regenerate with LUMA_UPDATE_GOLDENS=1, review and commit it"
+    luma_scene::golden::assert_golden(
+        &luma_render::repo_root().join("harness/goldens/venue-tiles.json"),
+        &tiles_golden(),
     );
 }
 

@@ -1908,7 +1908,6 @@ mod tests {
 #[cfg(test)]
 mod goldens {
     use std::collections::{BTreeMap, HashMap};
-    use std::path::{Path, PathBuf};
 
     use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
     use luma_scene::venue::{resolve, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET};
@@ -1931,9 +1930,7 @@ mod goldens {
     const BAR: (&str, &str) = ("Chauvet/Chauvet-COLORband-T3-BT.qxf", "13 Channel");
     const MOVER: (&str, &str) = ("Chauvet/Chauvet-Rogue-R2-Spot.qxf", "18 Channel");
 
-    fn repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
-    }
+    use crate::test_support::{golden_text, repo_root};
 
     fn catalog() -> &'static VenueSockets {
         static SOCKETS: std::sync::OnceLock<VenueSockets> = std::sync::OnceLock::new();
@@ -2357,53 +2354,16 @@ mod goldens {
         }
     }
 
-    /// Set this to rewrite the capture instead of checking it — the same split
-    /// `render-goldens` draws between `--check` and a capture run, except that
-    /// checking is what a plain `cargo test` does. A test that rewrote a shared
-    /// checkout's golden and then failed left the next agent unable to tell a
-    /// stale capture from a fresh one.
-    const REGENERATE: &str = "LUMA_UPDATE_GOLDENS";
-
     #[test]
     fn the_venue_groups_golden_is_current() {
-        let path = repo_root().join("harness/goldens/venue-groups.json");
-        let mut want = serde_json::to_string_pretty(&json!({
-            "ledBarsWall": led_bars_wall(1.0).capture(),
-            "spotWings": spot_wings(1.0).capture(),
-            "spotTowers": spot_towers(1.0).capture(),
-        }))
-        .expect("the capture serializes");
-        want.push('\n');
-
-        if std::env::var_os(REGENERATE).is_some() {
-            std::fs::write(&path, &want).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            return;
-        }
-        let have = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(
-            serde_json::from_str::<serde_json::Value>(&have).ok()
-                == serde_json::from_str::<serde_json::Value>(&want).ok(),
-            "{} is stale.\n{}\nRerun with {REGENERATE}=1 to recapture.",
-            path.display(),
-            first_difference(&have, &want),
+        luma_scene::golden::assert_golden(
+            &repo_root().join("harness/goldens/venue-groups.json"),
+            &golden_text(json!({
+                "ledBarsWall": led_bars_wall(1.0).capture(),
+                "spotWings": spot_wings(1.0).capture(),
+                "spotTowers": spot_towers(1.0).capture(),
+            })),
         );
-    }
-
-    /// The first line that differs, with its neighbours — enough to name the
-    /// rule that moved without printing two hundred lines of JSON.
-    fn first_difference(have: &str, want: &str) -> String {
-        let (have, want): (Vec<&str>, Vec<&str>) = (have.lines().collect(), want.lines().collect());
-        let at = (0..have.len().max(want.len()))
-            .find(|i| have.get(*i) != want.get(*i))
-            .unwrap_or(0);
-        let line =
-            |lines: &[&str], i: usize| lines.get(i).copied().unwrap_or("<end of file>").to_string();
-        format!(
-            "line {}:\n  on disk: {}\n  derived: {}",
-            at + 1,
-            line(&have, at),
-            line(&want, at),
-        )
     }
 
     #[test]

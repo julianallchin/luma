@@ -31,6 +31,7 @@ pub mod distribute;
 pub mod framing;
 pub mod gesture;
 pub mod gizmo;
+pub mod golden;
 pub mod graph;
 pub mod navigate;
 pub mod patch;

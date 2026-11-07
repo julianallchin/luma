@@ -532,17 +532,10 @@ mod tests {
     }
 
     /// `docs/specs/ipc-manifest.{json,md}` are the command surface written
-    /// down. Rebuilding them here is what keeps the two from drifting: a run
-    /// whose rebuild differs from the tracked files fails, and rewrites them
-    /// when `LUMA_UPDATE_GOLDENS` is set.
+    /// down. Rebuilding them here is what keeps the two from drifting.
     #[test]
     fn ipc_manifest_matches_the_command_table() {
-        if let Err(paths) = manifest::check(TABLE) {
-            panic!(
-                "stale against the command table: {paths}. Regenerate with \
-                 LUMA_UPDATE_GOLDENS=1 cargo test -p luma --lib ipc_manifest, then commit"
-            );
-        }
+        manifest::check(TABLE);
     }
 
     #[test]

@@ -181,12 +181,7 @@ mod tests {
     use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
     use std::collections::BTreeMap;
 
-    fn repo_root() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the crate has a parent directory")
-            .to_path_buf()
-    }
+    use crate::test_support::repo_root;
 
     /// The `venue-poses` rig, spelled as rows.
     ///
@@ -382,14 +377,6 @@ mod tests {
         ));
     }
 
-    fn write_if_changed(path: &Path, contents: &[u8]) -> bool {
-        let same = std::fs::read(path).is_ok_and(|old| old == contents);
-        if !same {
-            std::fs::write(path, contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        }
-        !same
-    }
-
     /// The rows and the `VenueGraph` the render crate builds by hand are the
     /// same room, so a change to either rig fails here rather than leaving two
     /// goldens describing different venues.
@@ -448,12 +435,9 @@ mod tests {
     /// everyone's history.
     #[test]
     fn venue_graph_canonical_golden_is_current() {
-        assert!(
-            !write_if_changed(
-                &repo_root().join("harness/goldens/venue-graph-canonical.json"),
-                &golden_rows().to_canonical_json(),
-            ),
-            "the canonical venue golden was stale and has been rewritten — review and commit it"
+        luma_scene::golden::assert_golden(
+            &repo_root().join("harness/goldens/venue-graph-canonical.json"),
+            &String::from_utf8(golden_rows().to_canonical_json()).expect("canonical JSON is UTF-8"),
         );
     }
 }
