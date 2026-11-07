@@ -66,7 +66,12 @@ const key = PATTERN.replaceAll("-", "");
 function open() {
   nav.venue("Test Venue");
   nav.step("the Perform row", "row", "Perform");
-  return until("the pad", (s) => (pad(s) ? s : undefined));
+  // The layout and the first read of the follow session land apart, and the
+  // tempo strip the read brings moves the grid down: wait for both before
+  // pointing at a cell.
+  return until("the pad, under the tempo strip", (s) =>
+    pad(s) && s.find({ role: "card", label: "Tapped tempo: 120.0 BPM" }) ? s : undefined,
+  );
 }
 
 function setup() {
