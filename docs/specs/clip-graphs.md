@@ -218,6 +218,62 @@ shows only its name. Deleting a value writes its value back into the inputs
 it fed. Saved clips are unchanged; presets that use one quantity twice share
 it (Circle and Pinwheel: the swing; Ballyhoo: speed, scale and swing).
 
+### Clocks of presses, one live event, and a random's clock (2026-11-07)
+
+1. **A clock of presses.** `time.on`, a wire from a `button` node
+   (`InputType::Button`, wire only, never with `every`), makes the time
+   node count the button's presses. Event k is born at the k-th turn-on,
+   at the beat its start lands it on: a press waiting for the bar is born
+   on the bar. It lives `duration` beats, so presses closer than that
+   overlap; with no duration it lives until the next press, with progress
+   0, so `delay` and `phase` need a duration. Before the first press there
+   is no event and the clip is transparent. A score, a preview or a render
+   has no presses, so a press clock is dark there. The bank counts each
+   button's turn-ons and keeps the beats of the last 16
+   (`controls::Bank::presses`, `press::Presses`). `ControlSource::presses`
+   reads them on the frame path, as it reads a fader (`runtime::Live`), so
+   a press never recompiles. `Kernel::Events` takes the presses as a second
+   source of births (its `on` port is the live input, or −1 for `every`). A
+   step whose clock counts presses plays live, never baked
+   (`Step::plays_live`). The clock key is the button and the duration
+   (`on<button>/<duration or next>`): time nodes on one button with one
+   duration share their events.
+2. **One live event carries no event axis.** A clock carries `E` only when
+   its events can overlap (`ClipGraph::overlaps`): an `every` clock whose
+   duration is not its every, or a press clock with a duration. A clock of
+   one live event at a time (no duration, or a duration equal to its every;
+   a press clock with no duration) gives one value per head and time: its
+   `present` multiplies the output's alpha, and its wires meet any other
+   wire (the one-clock rule binds only clocks that overlap). This holds for
+   every clock, not only presses. It changes no output: a layer of one live
+   event is that event, and `present` is the alpha 0 of the gaps; the
+   version-2 parity tests hold. `curve(time(every=1), "Drop") *
+   curve(time(every=4), "Ramp up")` is right.
+3. **Random takes a clock.** `random.time`, a time wire as `shuffle.time`,
+   replaces `random.every`: each event of the clock draws anew, on turns =
+   index + progress, glided as before; with no wire, one value that never
+   changes. `random(every=4)` is `random(time=time(every=4))`, bit for bit;
+   `random(time=time(on=hit))` draws at each press.
+4. **Hits are press events.** A hit is `k = time(on=button("pad", "flash",
+   start="now"), duration=1)` with its fade a curve over k
+   (`alpha=curve(k, "Ramp down")`), not an envelope at sustain 0: each press
+   is its own event, so hits pressed fast overlap, and a shuffle or random
+   over k draws anew per press. Its pad is still the button
+   (`ClipGraph::pad` follows `time.on`), but the pad does not gate it
+   (`ClipGraph::pad_gates` is false): the set plays it on after the pad is
+   let go, while it fades. The busk page's White and Blinder are such hits;
+   Strobe and Black stay holds.
+5. **Migration** `20261107130000_random_time.sql`, the same file in
+   `backend/migrations` and `supabase/migrations`: every saved random (in
+   clips, Perform patterns and both draft documents) loses its `every` and
+   reads a new time node of that every (4 when empty), the lowest free
+   `time<n>`, one per random, in id order. Node ids stay, so each random
+   keeps its draw. Presets, builders, prompts and skills say
+   `random(time=...)`.
+
+Python: `time(every=None, duration=None, delay=None, phase=None, on=None)`,
+`random(heads=None, time=None, glide=None, scale=None, contrast=None)`.
+
 ---
 
 ## 1. Grammar in 10 lines
@@ -294,7 +350,7 @@ Axes. A wire carries a set of axes: `T` (time), `H` (heads), `E(k)` (the
 events of clock `k`). A value carries none. Some inputs refuse an axis; see
 each node. `E` is internal: users never see it, the output node resolves it
 (section 5.3). An input that sets a clock's period (`time.every`,
-`time.duration`, `random.every`) resolves it too: it takes the newest begun
+`time.duration`) resolves it too: it takes the newest begun
 event's value, so `period=curve(time(every=1), …)` sets a speed that repeats
 each beat while the clock keeps counting up.
 
@@ -473,12 +529,12 @@ Random gives a value, Shuffle gives an order.
 | Input | Type | Unit | Range | Promotable | Empty |
 |---|---|---|---|---|---|
 | heads | heads | | | wire only | all clip heads |
-| every | number | beats | > 0 | yes | 4 |
+| time | time | | | wire only | one value, never drawn again |
 | glide | number | share | 0–1 | yes | 0 |
 | scale | number | share | > 0 | yes | uniform (one value for all heads) |
 | contrast | number | share | 0–1 | yes | 0 |
 
-Each turn of `every` draws a new value per head. `glide` 0 jumps to it on
+Each event of its `time` (section 0, 2026-11-07) draws a new value per head. `glide` 0 jumps to it on
 the turn and holds it the whole turn; `glide` 1 drifts the whole turn;
 between, it holds for the first 1 − glide of the turn and eases to the next
 value over the rest. Output 0–1 = coherent value noise sampled at
@@ -838,7 +894,7 @@ Prepare time (cells known):
 3. `time`: `ClipProgress`, or the clock's `progress`, then
    `Shift(delay, length, phase)`.
 4. `space`: constant `a` field (or `Axis`).
-5. `random`: `ClockTable(every)` → `Clock` turns → `Random(u,v,z, turns, glide, scale, contrast, salt)`.
+5. `random`: its time wire's events, turns = `index + progress` (0 with no wire) → `Random(u,v,z, turns, glide, scale, contrast, salt)`.
 6. `audio`: `band_energy` → `clip_range` → `Normalize` → 0–1.
    `control` and `button`: a `control` kernel per number of the node's
    value, at its place among the numbers of the graph's live inputs (its
@@ -867,8 +923,9 @@ instead of `(library, form id, inputs, frame)`.
 
 ### 5.3 Overlap
 
-A wire downstream of a clock carries one value per live event. At the
-output node each clock's live events become one layer (`Combine`, audit 4),
+A wire downstream of a clock whose events overlap carries one value per
+live event (a clock of one live event carries none: its `present`
+multiplies alpha; section 0, 2026-11-07). At the output node each clock's live events become one layer (`Combine`, audit 4),
 for each head and time:
 
 1. Color and strobe: each output part (r, g, b; rate) is the product of
@@ -954,7 +1011,7 @@ mirror, shuffle, group, split, color, aim, strobe, preset`.
 clock(every, duration=None) -> Clock
 time(clock=None, delay=0, length=1, phase=0) -> Coordinate
 space(heads=None, direction=None, centre=None, at=None, shift=0, scale=1, kind="line", wrap=None) -> Coordinate
-random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate
+random(heads=None, time=None, glide=None, scale=None, contrast=None) -> Coordinate
 audio(low_hz=None, high_hz=None) -> Coordinate
 control(name="fader", kind="number") -> Coordinate  # kind="color": Value
 button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats", shape="smooth", start="now") -> Coordinate
@@ -1354,7 +1411,7 @@ Sunset, B/W. Bands: sub 20–60, low 60–300, mid 300–4000, high
 | Sparkle | `k = clock(every=0.125, duration=0.5); order = shuffle(clock=k); rank = space(order, kind="order"); pick = curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]); t = time(k); spike = curve(t, "Spike"); color(brightness=[pick, spike])` | one clock; a random 30% × a spike over time |
 | Build | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp up"), kind="order"); color(brightness=curve(rank, "Step down"))` | shuffle → space(order) shifted by progress over the clip → step; stretches with the clip |
 | Dissolve | `clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, "Ramp down"), kind="order"); color(brightness=curve(rank, "Step down"))` | as Build, heads go off in a random order |
-| Clouds | `cloud = random(every=8, glide=1, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)` | one random → two curves |
+| Clouds | `t = time(every=8); cloud = random(time=t, glide=1, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)` | one random → two curves |
 | Sparkle rain | `k = clock(every=0.25, duration=1); bars = group(); order = shuffle(bars, clock=k); columns = split(); t = time(k); fall = curve(t, "Ramp up", low=-0.3, high=1); drop = space(columns, direction=(0, 0, -1), shift=fall, length=0.3); streak = curve(drop, "Comet"); rank = space(order, kind="order"); pick = curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]); color(brightness=streak, alpha=pick)` | needs vertical bars; each event's fall is a shift down each bar; the pick is a random 20% per bar |
 
 ### Movement
@@ -1401,7 +1458,7 @@ Sunset, B/W. Bands: sub 20–60, low 60–300, mid 300–4000, high
 | Pinwheel | `k = clock(every=4); turn = space(kind="angle"); lag = curve(turn, "Ramp up", high=360); t = time(k, phase=lag); across = curve(t, "Cosine", low=-20, high=20); up = curve(t, "Sine", low=-20, high=20); aim(direction=D, yaw=across, pitch=up)` | Circle with phase by angle |
 | Scissor | `k = clock(every=4); halves = mirror(); t = time(k); swing = curve(t, "Sine", low=-30, high=30); aim(heads=halves, direction=D, yaw=swing)` | mirrored heads yaw the other way |
 | Up/down flip | `k = clock(every=2); t = time(k); flip = curve(t, "Square", low=-30, high=30); aim(direction=D, pitch=flip)` | held pitch |
-| Ballyhoo | `drift = random(every=4, glide=1, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = random(every=4, glide=1, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two random nodes, two streams |
+| Ballyhoo | `t = time(every=4); drift = random(time=t, glide=1, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = random(time=t, glide=1, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two random nodes, two streams |
 
 Motion presets ship with blend `offset` and a Position underneath is the
 usual pairing.
@@ -1594,3 +1651,4 @@ One line each; the alternative after "alt:".
 50. A wrapped space tiles like a shader texture: `x = fract((a − shift) / scale)`, scale first, then repeat, so a curve over time on scale zooms (0.5 → 0.125: 2 copies → 8); the ring spacing applies to `a` first (changed 2026-09-30; before, `((a − shift) mod 1) / scale`, one copy). Migrated clips move the scale into their curve points. alt: keep one copy and zoom by curve points.
 51. Audit (2026-09-30, section 0): replace is the top light; lighten and value go; overlapping events combine per channel (aim: newest on top); gaps and outside the clip are alpha 0; a phase always wraps; audio is normalised over the whole track; best fit is a stage axis; Bézier handles may overshoot; radial and angle measure around `at`, radial as d / max. alt: keep each old rule.
 52. Geometry model (2026-09-30, section 0): three shared kinds, direction (u, v, z), selection number 0–1 and selection point (u, v, z) each 0–1, checked through their kind (`aim.point` in metres is the exception); `space(heads, direction, centre, at, shift, scale)` gives `x = at + (a − at − shift) / scale` as a CSS transform with origin `at`; `mirror.normal` is `mirror.direction`; a space's ruler is always measured on the selection before any fold, and a mirror moves heads, never the ruler. alt: a line after a mirror measures from its plane (the rule it replaces); `at` as a point.
+53. Clocks of presses (2026-11-07, section 0): `time.on` counts a button's presses, each an event born on the beat its start lands it on; a clock of one live event carries no event axis, for every clock; random reads a time wire, `random.every` is gone; a hit is a press clock with a fade over it. alt: a press-only node, `E` on every clock, a hit as an envelope at sustain 0.
