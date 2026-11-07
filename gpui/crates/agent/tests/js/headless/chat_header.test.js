@@ -63,6 +63,26 @@ test("the header's icons sit over the transcript and take the pointer", () => {
   until("a new conversation", (s) => paragraphs(s).length === 0 && !prompt(s));
 });
 
+// The tail is the head's mirror: text scrolled down under the composer
+// dissolves above it, and nothing of the transcript shows beside or below
+// the pill. The tree lists covered text too, so what is asserted is that the
+// cover spans the conversation's width from above the composer to its bottom
+// while text is actually passing under it.
+test("no transcript text shows beside or below the composer", () => {
+  sendLongReply();
+  const shot = scroll(600);
+  const box = conversation(shot);
+  const field = composer(shot).bounds;
+  const tail = shot.find({ role: "card", label: "Transcript tail" })?.bounds;
+  assert(tail !== undefined, "nothing covers the transcript's tail");
+  assert(paragraphs(shot).some((n) => n.bounds.y + n.bounds.height > field.y + field.height),
+    "no text passes below the composer, so nothing is tested");
+  assert(tail.y < field.y, `the cover starts below the composer's top: ${JSON.stringify({ tail, field })}`);
+  assert(tail.y + tail.height >= box.y + box.height - 0.5, "the cover stops short of the panel's bottom");
+  assert(tail.x <= box.x + 0.5 && tail.x + tail.width >= box.x + box.width - 0.5,
+    `the cover leaves the gutters beside the composer open: ${JSON.stringify({ tail, box })}`);
+});
+
 test("the first message scrolls fully clear of the header", () => {
   sendLongReply();
   const top = scroll(100000);

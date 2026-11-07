@@ -2089,7 +2089,7 @@ impl AgentChat {
                         |el| {
                             el.child(pin_watch)
                                 .child(transcript_list)
-                                .children(fade_band(footer))
+                                .when(!self.read_only, |el| el.child(tail_cover(footer)))
                                 .children(adrift.then(|| jump_to_bottom(&this, footer, &theme)))
                         },
                     )
@@ -2181,52 +2181,16 @@ impl AgentChat {
             .text_color(theme.text)
     }
 
-    /// The panel's header, floating over the transcript's head: a progressive
-    /// blur that dissolves what scrolls up under it, and the icons crisp on
-    /// top.
-    ///
-    /// The renderer's backdrop blur is one radius over a rectangle; it has no
-    /// mask. So the blur is stepped: each of [`theme::HEADER_BLUR_STEPS`]
-    /// covers the band from the top edge down to a line that climbs with each
-    /// step, and since every step blurs what the steps before it left, the
-    /// blur compounds toward the edge. A fade to the panel's own ground over
-    /// the steps finishes the dissolve and hides their seams. Where there is
-    /// no backdrop blur, the fade alone does it.
-    ///
-    /// Nothing here moves on its own: it paints when the panel does, so an
-    /// idle panel costs nothing and a scroll pays a few small blurs a frame.
+    /// The panel's header, floating over the transcript's head: the
+    /// transcript [`dissolve`]s under it, and the icons sit crisp on top.
     fn header(&self, chat: &Entity<AgentChat>) -> impl IntoElement {
-        let steps = theme::HEADER_BLUR_STEPS.len();
-        let blur = luma_ui::dialog::BACKDROP_BLUR_SUPPORTED.then(|| {
-            theme::HEADER_BLUR_STEPS
-                .iter()
-                .enumerate()
-                .map(move |(step, radius)| {
-                    let reach = theme::HEADER_FADE * (steps - step) as f32 / steps as f32;
-                    luma_ui::dialog::frosted(
-                        0.0,
-                        *radius,
-                        div().absolute().top_0().left_0().right_0().h(px(reach)),
-                    )
-                })
-        });
-        div()
-            .absolute()
+        dissolve(theme::HEADER_FADE, true)
             .top_0()
-            .left_0()
-            .right_0()
-            .h(px(theme::HEADER_FADE))
             // A press here is the header's, not the transcript's unpin; the
             // wheel still scrolls the list under it.
             .block_mouse_except_scroll()
-            .children(blur.into_iter().flatten())
-            // Two fades, the second over the icons' row only, so the ground
-            // closes in faster toward the edge than one linear band would.
-            .child(luma_ui::pane::edge_fade(
-                theme::HEADER_FADE,
-                theme::panel_opaque(),
-                true,
-            ))
+            // A second fade over the icons' row only, so the ground closes in
+            // faster toward the edge than one linear band would.
             .child(luma_ui::pane::edge_fade(
                 theme::HEADER_HEIGHT,
                 theme::panel_opaque(),
@@ -2297,31 +2261,77 @@ fn header_button(
         .agent_disabled(disabled)
 }
 
-/// The band at the bottom of the transcript, dissolved into the panel's own
-/// ground. The top edge is the header's ([`AgentChat::header`]).
+/// One end of the transcript dissolving into the panel's own ground: a
+/// progressive blur under a fade, strongest at the edge (the top edge when
+/// `toward_top`). `height` tall, full width; the caller places it.
 ///
-/// Painted overlays rather than gpui's `EdgeFade`, which this pin does not
-/// have: a gradient to the panel's own ground *is* the fade. Without it a
-/// reply butts against the composer's plate below, and the pair reads as one
-/// control.
+/// The renderer's backdrop blur is one radius over a rectangle; it has no
+/// mask. So the blur is stepped: each of [`theme::DISSOLVE_STEPS`] covers the
+/// band from the edge to a line that moves toward the edge with each step,
+/// and since every step blurs what the steps before it left, the blur
+/// compounds toward the edge. The fade over the steps finishes the dissolve
+/// and hides their seams. Where there is no backdrop blur, the fade alone
+/// does it.
 ///
-/// The stop is [`theme::panel_opaque`] — the ground's colour at **full**
-/// coverage, not [`theme::panel`].
+/// The fade's stop is [`theme::panel_opaque`] — the ground's colour at
+/// **full** coverage, not [`theme::panel`]. `panel()` carries the coverage
+/// the *plane* spends on the blur behind the window, and a band painted on
+/// top of that plane at `panel()` would be darker than the ground and only
+/// half-cover the text: a grey haze.
 ///
-/// `panel()` carries the coverage the *plane* spends on the blur behind the
-/// window, but a band is painted on top of that plane, not instead of it. A
-/// fade to `panel()` would lay a second half-coverage of the ground's tone over
-/// a surface that already has one. The band would be darker than the ground and
-/// would only half-cover the text, so it would read as a grey haze.
-///
-/// The band is the fallback only. Where the backdrop blurs, the composer's
-/// frosted pill blurs what passes under it, and the text around the pill stays
-/// sharp.
-fn fade_band(footer: f32) -> Option<gpui::Div> {
-    (!luma_ui::dialog::BACKDROP_BLUR_SUPPORTED).then(|| {
-        luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, theme::panel_opaque(), false)
-            .bottom(px(footer))
-    })
+/// Nothing here moves on its own: it paints when the panel does, so an idle
+/// panel costs nothing and a scroll pays a few small blurs a frame.
+fn dissolve(height: f32, toward_top: bool) -> gpui::Div {
+    let steps = theme::DISSOLVE_STEPS.len();
+    let blur = luma_ui::dialog::BACKDROP_BLUR_SUPPORTED.then(|| {
+        theme::DISSOLVE_STEPS
+            .iter()
+            .enumerate()
+            .map(move |(step, radius)| {
+                let reach = height * (steps - step) as f32 / steps as f32;
+                let band = div().absolute().left_0().right_0().h(px(reach));
+                let band = if toward_top {
+                    band.top_0()
+                } else {
+                    band.bottom_0()
+                };
+                luma_ui::dialog::frosted(0.0, *radius, band)
+            })
+    });
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(height))
+        .children(blur.into_iter().flatten())
+        .child(luma_ui::pane::edge_fade(
+            height,
+            theme::panel_opaque(),
+            toward_top,
+        ))
+}
+
+/// The transcript's tail under the composer: it [`dissolve`]s just above the
+/// footer, and the footer's own room — the pill and the gutters around it —
+/// is the panel's ground, so no text shows beside or below the pill.
+fn tail_cover(footer: f32) -> impl IntoElement {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .h(px(footer + theme::TRANSCRIPT_FADE_BAND))
+        .child(dissolve(theme::TRANSCRIPT_FADE_BAND, false).top_0())
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(footer))
+                .bg(theme::panel_opaque()),
+        )
+        .agent_node(NodeRole::Card, "Transcript tail")
 }
 
 /// The way back down, offered only once the bottom is far enough away to be
