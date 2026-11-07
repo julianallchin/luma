@@ -1,11 +1,15 @@
 //! The Perform tab: one venue's live show.
 //!
-//! It has two views. Perform is the show: the decks being followed (or,
-//! with no deck to follow, the tapped tempo), then the venue's pages of
-//! cells, to play and nothing else. Setup is the same grid to arrange: the
-//! DJ source, cells placed from an empty place's "+", moved and resized by
-//! dragging, rows that play one at a time, and an inspector for the selected
-//! cell: its pattern's name and group, and what it is mapped to.
+//! It has two views. Perform is the show: the venue's pages of cells, to
+//! play and nothing else. Setup is the same grid to arrange: cells placed
+//! from an empty place's "+", moved and resized by dragging, rows that play
+//! one at a time, and an inspector for the selected cell: its pattern's name
+//! and group, and what it is mapped to.
+//!
+//! Beside the stage, in either view, the deck panel holds the decks being
+//! followed (or, with no deck to follow, the tapped tempo) and, under them,
+//! the DJ source: "Add source" to connect one, then change or disconnect it,
+//! with its latency and what the inputs are doing.
 //!
 //! A cell is a pattern of the venue's Perform set: its pad (the button node
 //! its graph's alpha depends on) turns it on and off, its level fader and the
@@ -109,6 +113,8 @@ pub(crate) struct Perform {
     /// The source just clicked, shown until a read reports it (or the request
     /// fails), so a poll already in flight cannot flip the chooser back.
     choosing: Option<Option<PerformSource>>,
+    /// The deck panel's source picker is open.
+    source_menu: bool,
     error: Option<String>,
     polls: u64,
 }
@@ -404,6 +410,7 @@ impl Luma {
             polled_at: Instant::now(),
             player: None,
             choosing: None,
+            source_menu: false,
             error: None,
             polls: 0,
         };
@@ -728,6 +735,7 @@ impl Luma {
         };
         state.error = None;
         state.choosing = Some(source.clone());
+        state.source_menu = false;
         cx.notify();
         let target = target.clone();
         let request: std::pin::Pin<Box<dyn std::future::Future<Output = _>>> = match source {
@@ -1176,6 +1184,14 @@ impl Luma {
     }
 
     /// Open or close the inspector's group menu.
+    /// Open or close the deck panel's source picker.
+    fn toggle_follow_menu(&mut self, target: &Target, cx: &mut Context<Self>) {
+        if let Some(state) = self.perform_mut(target) {
+            state.source_menu = !state.source_menu;
+            cx.notify();
+        }
+    }
+
     fn toggle_group_menu(&mut self, target: &Target, cx: &mut Context<Self>) {
         if let Some(state) = self.perform_mut(target) {
             state.group_menu = !state.group_menu;
@@ -1347,7 +1363,6 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .px(px(18.))
         .pb(px(16.))
         .children(state.error.clone().map(float::error_row))
-        .children(setup.then(|| source_bar(state, &target, app)))
         .child(grid::surface(state, &target, app));
     div()
         .id("perform")
@@ -1444,12 +1459,8 @@ fn following(state: &Perform) -> String {
     let Some(follow) = state.follow.as_ref() else {
         return String::new();
     };
-    let source = match follow.source.as_ref() {
-        None => return "Not following a DJ".into(),
-        Some(PerformSource::RkbxLink { .. }) => "Rekordbox",
-        Some(PerformSource::ProDjLink { .. }) => "Pro DJ Link",
-        Some(PerformSource::StageLinq) => "StageLinQ",
-        Some(PerformSource::Virtual) => "Virtual deck",
+    let Some(source) = follow.source.as_ref().map(source_name) else {
+        return "Not following a DJ".into();
     };
     match (follow.connected, follow.decks.len()) {
         (false, _) => format!("{source} · connecting…"),
@@ -1459,76 +1470,175 @@ fn following(state: &Perform) -> String {
     }
 }
 
-/// Setup's source chooser, its status, and the latency.
-fn source_bar(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
+/// A source's name as the title bar and the deck panel say it.
+fn source_name(source: &PerformSource) -> &'static str {
+    match source {
+        PerformSource::RkbxLink { .. } => "Rekordbox",
+        PerformSource::ProDjLink { .. } => "Pro DJ Link",
+        PerformSource::StageLinq => "StageLinQ",
+        PerformSource::Virtual => "Virtual deck",
+    }
+}
+
+/// The source the deck panel shows: the one just picked says it is
+/// connecting until a read reports it followed.
+fn source_line(state: &Perform, source: &PerformSource) -> String {
+    let followed = state
+        .follow
+        .as_ref()
+        .and_then(|follow| follow.source.as_ref());
+    if same_source(Some(source), followed) {
+        following(state)
+    } else {
+        format!("{} · connecting…", source_name(source))
+    }
+}
+
+/// The sources Live can follow, as the picker lists them. "Off" is not one:
+/// disconnecting is its own button once a source is connected.
+fn source_choices() -> [(&'static str, PerformSource); 4] {
+    [
+        ("Rekordbox", PerformSource::RkbxLink { address: None }),
+        ("Pro DJ Link", PerformSource::ProDjLink { device_num: 5 }),
+        ("StageLinQ", PerformSource::StageLinq),
+        ("Virtual", PerformSource::Virtual),
+    ]
+}
+
+/// Where a DJ source is connected, under the deck cards: "Add source" while
+/// the set runs on the tapped tempo, and the source with its way to change or
+/// disconnect once one is followed. The picker opens inline, with the
+/// latency; what the source and the inputs are doing sits under it.
+fn source_section(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
     let follow = state.follow.as_ref();
-    let source = state.source();
+    // Until the first read lands nothing is known: an unknown source is not
+    // "none", and offering "Add source" would flicker for a followed one.
     let known = follow.is_some() || state.choosing.is_some();
-    let latency = follow.map_or(0., |follow| follow.latency_ms);
-    let choices: [(&str, Option<PerformSource>); 5] = [
-        ("Off", None),
-        ("Rekordbox", Some(PerformSource::RkbxLink { address: None })),
-        (
-            "Pro DJ Link",
-            Some(PerformSource::ProDjLink { device_num: 5 }),
-        ),
-        ("StageLinQ", Some(PerformSource::StageLinq)),
-        ("Virtual", Some(PerformSource::Virtual)),
-    ];
-    let chooser = choices
-        .into_iter()
-        .fold(float::segmented(), |track, (label, choice)| {
-            // Until the first read lands nothing is chosen: an unknown source
-            // is not Off, and showing Off made a followed source flicker.
-            let chosen = known && same_source(choice.as_ref(), source);
-            let app = app.clone();
-            let target = target.clone();
-            let key = format!("perform-source-{label}");
-            track.child(
-                float::segment(label, chosen, key.clone())
+    let source = state.source().filter(|_| known);
+    let head = match source {
+        None => {
+            let (app, target) = (app.clone(), target.clone());
+            float::nav_row(
+                float::RowState::of(state.source_menu, false),
+                "perform-add-source",
+            )
+            .id("perform-add-source")
+            .w_full()
+            .on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| this.toggle_follow_menu(&target, cx));
+            })
+            .child(
+                gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
+                    .size(px(11.))
+                    .text_color(glass::ink(glass::TEXT_TERTIARY)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(12.))
+                    .text_color(glass::ink(glass::TEXT_SECONDARY))
+                    .child("Add source"),
+            )
+            .agent_node(Role::Button, "Add source")
+            .into_any_element()
+        }
+        Some(chosen) => {
+            let (change_app, change_target) = (app.clone(), target.clone());
+            let (off_app, off_target) = (app.clone(), target.clone());
+            let line = source_line(state, chosen);
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(glass::ink(glass::TEXT_SECONDARY))
+                        .child(line.clone())
+                        .agent_node(Role::Text, format!("Source: {line}")),
+                )
+                .child(
+                    luma_ui::button("Change", luma_ui::Enabled::Yes)
+                        .id("perform-change-source")
+                        .on_click(move |_, _, cx| {
+                            change_app
+                                .update(cx, |this, cx| this.toggle_follow_menu(&change_target, cx));
+                        })
+                        .agent_node(Role::Button, "Change source")
+                        .agent_focused(state.source_menu),
+                )
+                .child(
+                    luma_ui::button("Disconnect", luma_ui::Enabled::Yes)
+                        .id("perform-disconnect-source")
+                        .on_click(move |_, _, cx| {
+                            off_app
+                                .update(cx, |this, cx| this.follow_source(&off_target, None, cx));
+                        })
+                        .agent_node(Role::Button, "Disconnect source"),
+                )
+                .into_any_element()
+        }
+    };
+    let picker = state.source_menu.then(|| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .children(source_choices().into_iter().map(|(label, choice)| {
+                let chosen = same_source(Some(&choice), source);
+                let (app, target) = (app.clone(), target.clone());
+                let key = format!("perform-source-{label}");
+                float::nav_row(float::RowState::of(chosen, false), key.clone())
                     .id(SharedString::from(key))
+                    .w_full()
                     .on_click(move |_, _, cx| {
                         let choice = choice.clone();
-                        app.update(cx, |this, cx| this.follow_source(&target, choice, cx));
+                        app.update(cx, |this, cx| this.follow_source(&target, Some(choice), cx));
                     })
+                    .child(label)
                     .agent_node(Role::Toggle, label)
-                    .agent_focused(chosen),
+                    .agent_focused(chosen)
+            }))
+            .agent_node(Role::Card, "Source picker")
+    });
+    // The latency is the source's: shown while choosing one and while one is
+    // followed.
+    let latency = (state.source_menu || source.is_some()).then(|| {
+        let latency = follow.map_or(0., |follow| follow.latency_ms);
+        let app = app.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(luma_ui::caption("Latency (ms)"))
+            .child(div().flex_1())
+            .child(
+                luma_ui::luma_slider(
+                    "perform-latency",
+                    latency,
+                    -200.,
+                    200.,
+                    140.,
+                    move |value, _, cx| {
+                        app.update(cx, |this, cx| this.set_perform_latency(value, cx));
+                    },
+                )
+                .agent_node(Role::Slider, "Latency"),
             )
-        });
-    let latency_app = app.clone();
+    });
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
         .gap(px(8.))
-        .px(px(14.))
-        .py(px(10.))
-        .rounded(px(luma_ui::radius::CARD))
-        .bg(glass::card_bg())
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .child(luma_ui::caption("Source"))
-                .child(chooser)
-                .child(div().flex_1())
-                .child(luma_ui::caption("Latency (ms)"))
-                .child(
-                    luma_ui::luma_slider(
-                        "perform-latency",
-                        latency,
-                        -200.,
-                        200.,
-                        140.,
-                        move |value, _, cx| {
-                            latency_app.update(cx, |this, cx| this.set_perform_latency(value, cx));
-                        },
-                    )
-                    .agent_node(Role::Slider, "Latency"),
-                ),
-        )
+        .child(head)
+        .children(picker)
+        .children(latency)
         .child(status_line(follow, state.inputs.as_ref()))
+        .agent_node(Role::Card, "Source")
 }
 
 /// What the source and the inputs are doing, in one line of small type.
@@ -1577,7 +1687,8 @@ fn status_line(follow: Option<&PerformState>, inputs: Option<&InputState>) -> im
 }
 
 /// Live's deck panel, beside the stage: each deck followed, or the tapped
-/// tempo when there is none. What is followed is the title bar's line.
+/// tempo when there is none, and under them where a DJ source is connected,
+/// changed or disconnected. What is followed is also the title bar's line.
 pub(crate) fn deck_panel(state: &Perform, app: &Entity<Luma>) -> AnyElement {
     let target = Target::Perform {
         venue: state.venue_id.clone(),
@@ -1599,6 +1710,7 @@ pub(crate) fn deck_panel(state: &Perform, app: &Entity<Luma>) -> AnyElement {
                 .agent_node(Role::Text, "Decks"),
         )
         .child(decks(state, &target, app))
+        .child(source_section(state, &target, app))
         .agent_node(Role::Card, "Deck panel")
         .into_any_element()
 }

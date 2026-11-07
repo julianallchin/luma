@@ -125,9 +125,12 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
   export and the readouts. Space (`PlayPause`) plays and pauses too, and the
   ruler scrubs. A double-click on a clip opens its graph where the timeline
   was.
-- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button. The
-  decks followed (or the tapped tempo) sit in the deck panel beside the
-  stage; what is followed is the title bar's line, said once.
+- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button, and
+  Edit layout arranges the grid only. The decks followed (or the tapped
+  tempo) sit in the deck panel beside the stage, and under them the DJ
+  source: "Add source" opens the sources and the latency inline; a followed
+  source can be changed or disconnected, back to the tapped tempo. The MIDI
+  and OSC status sits under it. What is followed is the title bar's line.
 - **Settings** is zeron's settings page inside the dialog: a nav, then a 640
   column with a title and description over sections of 52-high rows, each
   control at its row's end in a 240 slot.

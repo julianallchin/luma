@@ -126,6 +126,39 @@ test("with nothing followed, the set runs on the tapped tempo", () => {
   );
 });
 
+test("a source picked in the deck panel is followed, and disconnecting returns to the tapped tempo", () => {
+  open();
+  const source = (s) => s.find((n) => n.role === "text" && n.label.startsWith("Source: "));
+  // Nothing followed: the panel offers a source, and the set runs on the tap.
+  until("the offer", (s) => s.find({ role: "button", label: "Add source" }));
+  const tapped = (s) => s.find((n) => n.role === "card" && n.label.startsWith("Tapped tempo: "));
+  until("the tapped tempo", tapped);
+
+  // The picker opens in the panel, with the latency, in the played view.
+  nav.step("the offer", "button", "Add source");
+  until("the picker", (s) =>
+    s.find({ role: "card", label: "Source picker" }) && s.find({ role: "slider", label: "Latency" }));
+  nav.step("the virtual deck", "toggle", "Virtual");
+  const followed = until("the virtual deck followed", (s) => (source(s) ? s : undefined));
+  expect(source(followed).label).toMatch(/^Source: Virtual deck/);
+  assert(followed.find({ role: "card", label: "Source picker" }) === undefined, "the picker stayed open after a pick");
+  assert(followed.find({ role: "button", label: "Add source" }) === undefined, "a followed source still offers Add source");
+  until("the title bar says so", (s) => s.find((n) => n.role === "text" && n.label.startsWith("Virtual deck")));
+
+  // Disconnecting puts the set back on the tapped tempo.
+  nav.step("disconnect", "button", "Disconnect source");
+  until("the offer again", (s) => s.find({ role: "button", label: "Add source" }) && !source(s));
+  until("the tapped tempo again", tapped);
+  until("not following", (s) => s.find((n) => n.role === "text" && n.label.startsWith("Not following a DJ")));
+
+  // Edit layout arranges the grid and nothing else: no source chooser in it.
+  nav.step("Edit layout", "button", "Edit layout");
+  const arranging = until("the grid to arrange", (s) => (s.find({ role: "button", label: "Select Master" }) ? s : undefined));
+  for (const label of ["Rekordbox", "Pro DJ Link", "StageLinQ", "Virtual", "Off"]) {
+    assert(arranging.find({ role: "toggle", label }) === undefined, `Edit layout still offers ${label}`);
+  }
+});
+
 test("Setup's + makes a pattern in that place, lighting the group chosen", () => {
   setup();
   nav.step("an empty place", "button", "New cell, row 3, column 1");
