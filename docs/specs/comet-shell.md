@@ -16,7 +16,7 @@ side. The page holds everything else — the agent panel beside the mode's
 stage and body:
 
 ```text
- ●●● ◧  ▭ Venue ▾           Aurora #1 ▾            [Rig|Arrange|Live]
+ ●●● ◧  Venue ▾             Aurora #1 ▾            [Rig|Arrange|Live]
  ╭────────────┬─────────────────────────────────────────────────────╮
  │         ↶+ │  stage (the venue lit by the mode's body)           │
  │  agent     ├─────────────────────────────────────────────────────┤
@@ -113,7 +113,7 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 
 ## 6. Chrome
 
-- **Venue menu** (title bar, leading): a muted stage glyph, the venue's name and a chevron. The menu holds the venues with their status dots and a
+- **Venue menu** (title bar, leading): the venue's name and a chevron. The menu holds the venues with their status dots and a
   "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
   Sign out / Sign in. The venue dialog is still what a window with no venue
   shows (browse, create, join).

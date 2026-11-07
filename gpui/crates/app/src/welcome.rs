@@ -1148,7 +1148,7 @@ impl Luma {
 }
 
 /// The venue's name in the title bar: the menu's trigger, and the menu hung
-/// off it. A muted stage glyph before the name marks it as the venue.
+/// off it.
 pub(crate) fn venue_trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> AnyElement {
     let name = app.songs.as_ref().map_or_else(
         || "Venues".to_string(),
@@ -1164,12 +1164,6 @@ pub(crate) fn venue_trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> AnyE
         .text_size(px(13.))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| toggled.update(cx, |this, cx| this.toggle_venue_menu(cx)))
-        // A quiet stage glyph says the name is the venue's, not a song's.
-        .child(
-            gpui_component::Icon::new(IconName::Stage)
-                .size(px(14.))
-                .text_color(glass::ink(glass::TEXT_TERTIARY)),
-        )
         .child(
             div()
                 .font_weight(FontWeight::MEDIUM)
