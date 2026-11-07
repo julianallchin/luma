@@ -72,7 +72,6 @@ pub async fn upsert_track_waveform_for_connection(
 }
 
 /// Fetch cached waveform row for a track
-/// Note: duration_seconds will be set to 0.0 and must be updated by the caller
 pub async fn fetch_track_waveform(
     pool: &SqlitePool,
     track_id: &str,
