@@ -102,6 +102,11 @@ log = "0.4"
 midir = "0.9"
 sentry = { version = "0.34", default-features = false, features = ["backtrace", "panic", "reqwest", "rustls"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The MIDI thread runs its run loop: CoreMIDI reports ports plugged in there
+# (`src/inputs/midi.rs`). Already in the tree through midir's coremidi.
+core-foundation-sys = "0.8"
+
 # Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
 # Line tables, not full DWARF: backtraces keep `file:line`, and the test
 # binaries and headless hosts this workspace builds link far faster. The app is

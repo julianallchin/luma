@@ -1,57 +1,55 @@
-//! The persistent shell: three regions, one overlay slot, and the workspace's
-//! tabs.
+//! The persistent shell: the agent panel, the title bar, the content, the
+//! status bar, and one overlay slot over all of them.
 //!
-//! # Nothing is destroyed to show something else
+//! # The window is a venue
 //!
-//! Nothing is thrown away, so there is nothing to restore and no Back:
-//! the sidebar's browser persists beside the editor it opened, a tab keeps its
-//! state while another is showing, and an overlay covers the regions without
-//! displacing them. `docs/specs/comet-shell.md` is the contract.
+//! Everything on screen belongs to the open venue: its modes (Rig, Arrange,
+//! Live — see [`crate::workspace`]), the stage over them, the song list over
+//! Arrange. `docs/specs/comet-shell.md` is the contract.
 //!
 //! # Switching is not closing
 //!
-//! [`Tabs::close`] hands a [`Body`] back and [`Luma::teardown`] is the only
-//! consumer — pausing a closed editor's transport, clearing its loop region.
-//! Switching tabs goes nowhere near it, which is what makes "the transport
-//! keeps playing across a tab switch" structural rather than remembered.
+//! [`crate::workspace::Modes::open`] and `close` hand a [`Body`] back and
+//! [`Luma::teardown`] is the only consumer — pausing a closed editor's
+//! transport, clearing its loop region. Switching modes goes nowhere near it,
+//! which is what makes "the transport keeps playing across a mode switch"
+//! structural rather than remembered.
 //!
 //! # One overlay at a time
 //!
-//! [`Overlay`] is a single slot, not a stack: venues, patterns and settings
-//! are all "a plane over the shell, dismissed by Escape", and three overlays
-//! that each invented their own dismissal would be three ways to do one thing.
-//! The venue picker re-opens itself whenever nothing is selected and nothing
-//! else is up — the shell with no venue *is* the picker, so "dismissed the
-//! picker into an empty shell" is a state that cannot be reached.
+//! [`Overlay`] is a single slot, not a stack: venues, settings and the rest
+//! are all "a plane over the shell, dismissed by Escape", and overlays that
+//! each invented their own dismissal would be several ways to do one thing.
+//! The venue picker re-opens itself whenever no venue is open and nothing
+//! else is up — the window with no venue *is* the picker.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, App, Context, Div, DragMoveEvent, SharedString, Window};
+use gpui::{div, px, AnyElement, App, Context, Div, DragMoveEvent, Window};
 
-use luma_lib::settings::ViewMode;
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::node::{Instrument, Role};
 use luma_ui::pane;
 use luma_ui::{glass, ladder};
 
-use crate::tabs::Target;
+use crate::workspace::{Mode, Target};
 use crate::{
     add_tracks, chat_history, chrome, confirm, export_dialog, fixture_picker, keymap, patch,
     settings, stage, subagents, track_editor, tracks, visualizer, welcome, Luma,
 };
 
-/// How wide the sidebar opens. Comet's default.
-pub(crate) const SIDEBAR_WIDTH: f32 = 256.0;
-/// The two regions' floors — the narrowest each is still worth showing at.
-///
-/// They bound the seam's drag (there is no absolute cap on the panel: it may
-/// take everything except a still-usable thread column, so the bound is stated
-/// as what must *remain*), and together they decide whether the window can
-/// carry a split at all — see the takeover rule in [`regions`].
-const WORKSPACE_MIN: f32 = 320.0;
-const CENTER_MIN: f32 = 360.0;
-/// How wide a seam between two regions is. One device pixel's worth of rule at
-/// 1×, and the only structural line the shell draws.
-const SEAM_WIDTH: f32 = 1.0;
+/// The agent panel's floor, and the content's: the narrowest each is still
+/// worth showing at. They bound the seam's drag, and together they decide
+/// whether the window can carry the panel at all — a window too narrow for
+/// both gives the content the room and the panel comes back when it widens.
+const AGENT_MIN: f32 = 300.0;
+const CONTENT_MIN: f32 = 480.0;
+/// How wide a resizable seam between two panels is: a narrow gutter of the
+/// window's trim, so the trim runs on into the page along every split a
+/// person can drag. Inside the pane grip's reach, so the hit area is the
+/// grip's, not the gutter's.
+const SEAM_WIDTH: f32 = 4.0;
+/// The status bar along the window's foot.
+pub(crate) const STATUS_BAR_HEIGHT: f32 = 24.0;
 
 /// One plane over the whole shell. The regions persist beneath it — closing
 /// an overlay reveals them exactly as they were.
@@ -110,25 +108,14 @@ impl Overlay {
     }
 }
 
-/// A workspace tab's state: the editor behind one [`Target`].
+/// A mode's state: the editor behind one [`Target`].
 ///
-/// The variants mirror `Target`'s — a target is *what* the tab shows, and a
+/// The variants mirror `Target`'s — a target is *what* the body shows, and a
 /// body is the state showing it.
 pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
     Patch(Box<patch::Patch>),
     Perform(Box<crate::perform::Perform>),
-}
-
-impl Body {
-    /// What the tab's chip and the window title call this tab.
-    pub(crate) fn title(&self) -> SharedString {
-        match self {
-            Self::TrackEditor(state) => state.title().into(),
-            Self::Patch(_) => "Venue".into(),
-            Self::Perform(_) => "Perform".into(),
-        }
-    }
 }
 
 /// What should hold the keyboard this frame. Compared across frames so a
@@ -138,14 +125,16 @@ impl Body {
 pub(crate) enum FocusSlot {
     Overlay(&'static str),
     VisualizerFullscreen,
-    Tab(Target),
+    Songs,
+    Body(Target),
     Shell,
 }
 
 impl Luma {
     /// Where the keyboard belongs this frame: the overlay when one is up,
-    /// else the active tab, else the shell root (whose dispatch path still
-    /// reaches every ROOT-scoped binding).
+    /// else the song list when it is the content, else the body on screen,
+    /// else the shell root (whose dispatch path still reaches every
+    /// ROOT-scoped binding).
     pub(crate) fn focus_slot(&self) -> FocusSlot {
         if self.fullscreen_presented() {
             return FocusSlot::VisualizerFullscreen;
@@ -156,11 +145,11 @@ impl Luma {
         if let Some(overlay) = self.overlay.as_open() {
             return FocusSlot::Overlay(overlay.key_context());
         }
-        // The panel is always on screen while it has a tab: a window too
-        // narrow to seat it beside the thread gives it the room instead of
-        // dropping it (see [`regions`]).
+        if self.song_list_shown() {
+            return FocusSlot::Songs;
+        }
         if let Some(target) = self.workspace.active() {
-            return FocusSlot::Tab(target.clone());
+            return FocusSlot::Body(target.clone());
         }
         FocusSlot::Shell
     }
@@ -221,9 +210,9 @@ impl Luma {
     /// A modal is the strict case and gets the strict test — the keyboard
     /// belongs *inside the card*, since that is the whole claim of a focus
     /// trap. Fullscreen likewise keeps focus inside the visualizer. Elsewhere
-    /// the shell is deliberately permissive: a click into
-    /// the sidebar while a tab is up is focus the user moved on purpose, and
-    /// asking whether the tab still contains it would snatch it back.
+    /// the shell is deliberately permissive: a click into the agent panel
+    /// while a body is up is focus the user moved on purpose, and asking
+    /// whether the body still contains it would snatch it back.
     fn keyboard_is_seated(&self, window: &Window, cx: &App) -> bool {
         if matches!(self.focused_slot, FocusSlot::Overlay(_)) {
             return self.dialog_focus.contains_focused(window, cx);
@@ -234,31 +223,88 @@ impl Luma {
         window.focused(cx).is_some()
     }
 
-    /// Reveal `target`, building its body only if it is not already open.
-    /// The one entry point every open gesture routes through — see
-    /// [`Tabs::open`].
-    pub(crate) fn open_tab(
+    /// Reveal `target`, building its body only if it is not already open,
+    /// and put its mode on screen. The one entry point every open gesture
+    /// routes through — see [`crate::workspace::Modes::open`]. A score
+    /// replaced by another runs its teardown here.
+    pub(crate) fn open_body(
         &mut self,
         target: Target,
         build: impl FnOnce() -> Body,
         cx: &mut Context<Self>,
     ) {
-        self.workspace.open(target, build);
+        if let Some(replaced) = self.workspace.open(target, build) {
+            self.teardown(replaced.body, cx);
+        }
         cx.notify();
     }
 
-    /// Close the visible tab and run its state's own close semantics. Bound to
-    /// ⌘W inside the workspace; also the handler behind every tab-closing
-    /// gesture, so the teardown cannot be skipped by one of them.
-    pub(crate) fn close_active_tab(&mut self, cx: &mut Context<Self>) {
-        let Some(target) = self.workspace.active().cloned() else {
+    /// Put `mode` on screen. Rig and Live always have something to show, so
+    /// the first visit opens their body; Arrange with no score open shows the
+    /// song list.
+    pub(crate) fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        if self.songs.is_none() {
             return;
-        };
-        self.close_tab(&target, None, cx);
+        }
+        self.workspace.set_mode(mode);
+        if self.workspace.active().is_none() {
+            match mode {
+                Mode::Rig => self.open_rig(None, cx),
+                Mode::Live => self.open_live(None, cx),
+                Mode::Arrange => {}
+            }
+        }
+        cx.notify();
     }
 
-    /// A closed tab's exit rites. The only caller of anything here is a
-    /// *close* — switching tabs never comes through this path.
+    /// Whether the song list is the content this frame: asked for over
+    /// Arrange, or Arrange with no score to show instead — unless the score
+    /// saved for this venue is still on its way back.
+    pub(crate) fn song_list_shown(&self) -> bool {
+        let Some(songs) = &self.songs else {
+            return false;
+        };
+        self.workspace.mode() == Mode::Arrange
+            && (self.song_list
+                || (self.workspace.active().is_none()
+                    && !self.saved_venues.restoring(songs.venue_id())))
+    }
+
+    /// Open or close the song list: the title bar's song title and ⌘P. Opening
+    /// it from another mode goes to Arrange.
+    pub(crate) fn toggle_song_list(&mut self, cx: &mut Context<Self>) {
+        if self.songs.is_none() {
+            return;
+        }
+        if self.workspace.mode() != Mode::Arrange {
+            self.workspace.set_mode(Mode::Arrange);
+            self.song_list = true;
+        } else {
+            self.song_list = !self.song_list_shown();
+        }
+        // The list takes the window's width: the agent panel stands aside
+        // until it closes (`agent_wanted`).
+        if self.song_list {
+            self.agent_over_songs = false;
+        }
+        self.song_list_close = None;
+        cx.notify();
+    }
+
+    /// Close the song list when there is something under it to go back to.
+    /// Reports whether it closed — Escape's rung for it.
+    pub(crate) fn close_song_list(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.song_list_shown() || self.workspace.active().is_none() {
+            return false;
+        }
+        self.song_list = false;
+        self.song_list_close = None;
+        cx.notify();
+        true
+    }
+
+    /// A closed body's exit rites. The only caller of anything here is a
+    /// *close* — switching modes never comes through this path.
     pub(crate) fn teardown(&mut self, body: Body, cx: &mut Context<Self>) {
         match body {
             Body::TrackEditor(state) => {
@@ -303,13 +349,13 @@ impl Luma {
             cx.notify();
             return;
         }
-        if self.account_menu.is_open() {
-            self.close_account_menu(cx);
+        if self.venue_menu.is_open() {
+            self.close_venue_menu(cx);
             return;
         }
-        // The sidebar's score menu is on the same rung as the other two: a
-        // float over the shell, closed before anything under it is.
-        if self.close_score_menu(cx) {
+        // The song list's menus are on the same rung: floats over the shell,
+        // closed before anything under them is.
+        if self.close_score_menu(cx) || self.close_song_menu(cx) {
             return;
         }
         // Innermost first: a dialog showing a child's transcript steps back to
@@ -374,22 +420,21 @@ impl Luma {
             return;
         }
         match self.overlay.as_open() {
-            Some(Overlay::Venues(_)) if self.sidebar.is_none() => {}
+            Some(Overlay::Venues(_)) if self.songs.is_none() => {}
             Some(Overlay::ShowExport(dialog)) if dialog.is_running() => {}
             Some(_) => self.close_overlay(cx),
-            // Nothing floating: keep stepping back out, innermost first — a
-            // menu inside the args sheet, then the selection the sheet *is*,
-            // then the sidebar's second level. All routed through the one
-            // dismissal ladder rather than given `escape` bindings of their
-            // own, which would have to out-scope the shell's and would then be
-            // the only Escapes in the app that do not mean "close what is over
-            // me". The sheet's rungs sit here, below the overlay arm, so a
-            // dialog open over the timeline still answers Escape first. In
-            // Direct the graph page is a rung of its own: Escape goes back to
-            // the timeline with the clip still selected, and the next one lets
-            // go of it. So is a Perform tab's pattern editor: Escape goes back
-            // to the surface.
+            // Nothing floating: keep stepping back out, innermost first — the
+            // song list over Arrange, then a menu inside the args sheet, then
+            // the clip graph back to the timeline with the clip still
+            // selected, then the selection itself. Live's pattern editor goes
+            // back to its surface the same way. All routed through this one
+            // ladder rather than given `escape` bindings of their own, which
+            // would have to out-scope the shell's and would then be the only
+            // Escapes in the app that do not mean "close what is over me".
             None => {
+                if self.close_song_list(cx) {
+                    return;
+                }
                 if self.dismiss_sheet_menu() {
                     cx.notify();
                     return;
@@ -402,10 +447,7 @@ impl Luma {
                         return;
                     }
                 }
-                if self.clear_clip_selection(cx) {
-                    return;
-                }
-                self.leave_scores(cx);
+                self.clear_clip_selection(cx);
             }
         }
     }
@@ -425,7 +467,7 @@ type RegionBody = fn(&mut Luma, &mut Window, &mut Context<Luma>) -> AnyElement;
 /// frame it draws. The stage asks for a frame on every render (see
 /// [`visualizer::visualizer`]), so while every pane was part of the root, each
 /// stage frame rebuilt and laid out every pane in the window — the fixture
-/// table, the sidebar, the editors — with nothing in them changed. A *cached*
+/// table, the song list, the editors — with nothing in them changed. A *cached*
 /// region is not rebuilt: gpui reuses its last layout, prepaint and paint
 /// until the region's entity is notified (or its bounds change, or the window
 /// is refreshed).
@@ -506,12 +548,11 @@ impl gpui::Render for Region {
     }
 }
 
-/// The shell's regions, made on first use and kept for the app's life.
 #[derive(Default)]
 pub(crate) struct Regions {
-    sidebar: Option<gpui::Entity<Region>>,
-    tab: Option<gpui::Entity<Region>>,
-    inspector: Option<gpui::Entity<Region>>,
+    body: Option<gpui::Entity<Region>>,
+    songs: Option<gpui::Entity<Region>>,
+    status_bar: Option<gpui::Entity<Region>>,
     environment: Option<gpui::Entity<Region>>,
     stage: Option<gpui::Entity<Region>>,
     fullscreen_stage: Option<gpui::Entity<Region>>,
@@ -564,242 +605,77 @@ fn cached(region: gpui::Entity<Region>, style: gpui::StyleRefinement) -> AnyElem
     luma_ui::node::cached_view(region, style).into_any_element()
 }
 
-fn sidebar_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
-    let entity = cx.entity();
-    let app = &*app;
-    let statuses = app.tab_statuses(cx);
-    match &app.sidebar {
-        Some(browser) => {
-            tracks::sidebar(app, browser, &statuses, &entity, window).into_any_element()
-        }
-        None => div().into_any_element(),
-    }
-}
-
-/// The whole window: full-height region columns, the seams between them, the
-/// overlay over all of it, and the traffic lights over that.
+/// The whole window: the dark trim, carrying the title bar across its top and
+/// the status bar along its foot, and between them the page — one rounded
+/// card inset from the window's edge that holds the agent panel and the
+/// content beside it. The overlay sits over all of it, and the traffic lights
+/// over that.
 ///
-/// **The window splits vertically first.** The sidebar and the tab area each
-/// run `y = 0` to the bottom and carry their own head band (see
-/// [`crate::chrome`]). The tab area's band holds the strip, over both halves
-/// of the front tab: its chat and its editor, divided below the band by a
-/// hint seam. Regions are flush and square: no insets, no gutters, no rounded
-/// cards. Depth is a value step across a seam — the one structural line this
-/// shell draws, and the only border it has in either axis.
+/// **Inside the page, panels are flush.** They touch, a hairline between
+/// each, with no gaps and no rounded corners of their own; only the page
+/// rounds (`docs/specs/comet-shell.md` §6).
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
-    let sidebar_view = Regions::get(&mut app.regions.sidebar, "Sidebar", sidebar_body, true, cx);
-    // Geometry follows state. Each edge region's resting width is restated
-    // here every frame as a pure function of what the shell is showing, so a
-    // toggle only flips a flag and `retarget` — a no-op while the destination
-    // is unchanged — turns that into a slide.
-    if app.shell_presented {
-        app.sidebar_width.retarget(app.sidebar_slot(), cx);
-    } else {
-        app.sidebar_width.set(app.sidebar_slot());
-    }
-    // The sidebar's level change is stepped in the same place and for the same
-    // reason as its width: a hand-driven tween has nothing else asking for the
-    // next frame, and both have to be settled before the column is rendered
-    // out of an immutable borrow of the shell.
-    app.tick_sidebar_push(window);
-    let sidebar_w = app.sidebar_width.eval(window);
     let viewport = f32::from(window.viewport_size().width);
     let lights = chrome::corner_lit(window);
-    // What the chat and the editor share, and how they divide it. Stored as a
-    // proportion (see [`luma_ui::split`]), so the sidebar taking 256px from the
-    // pair takes it from *both* in the ratio they were already at — the split
-    // is unchanged by a ⌘B, which is the whole point of storing it this way. A
-    // stored panel width would instead have spent the entire delta on the
-    // thread, because the thread is the flexible one.
-    let room = shared_room(viewport, f32::from(sidebar_w));
-    let squeezed = room < CENTER_MIN + WORKSPACE_MIN;
-    // Takeover: the editor covers everything right of the sidebar. Program
-    // asks for it; Direct shares the room with the front tab's chat, which is
-    // comet's split.
-    //
-    // The chat belongs to the front tab, so with no tab there is no chat and
-    // the panel takes the room to offer the first one. And a window with no
-    // legal split reaches the same layout without anyone asking for it. There
-    // are two floors — [`CENTER_MIN`] and [`WORKSPACE_MIN`] — and a window
-    // that cannot honour both has to drop one region rather than shave both.
-    // The chat goes, and comes back when the window is wide enough again.
-    let has_chat = app.front_chat().is_some();
-    let takeover = app.view_mode == ViewMode::Program || squeezed || !has_chat;
-    let workspace_w = if takeover {
-        room
+    // Geometry follows state: the panel's resting width is restated every
+    // frame as a pure function of the window and the seam. Only showing or
+    // hiding the panel slides it. A width that moved because the seam was
+    // dragged or the window resized is *set*: it is derived from something
+    // already continuous, and a tween retargeted every frame trails the
+    // pointer it is meant to be under (see `PaneWidth::settled`).
+    let open_width = app.agent_open_width(viewport);
+    let resting = if app.agent_shown(viewport) {
+        open_width
     } else {
-        app.workspace_split.resolve(room).1
+        0.0
     };
-    app.shell_presented = true;
-    let show_sidebar = app.sidebar.is_some() && sidebar_w > px(0.0);
-    let show_thread = !takeover;
-    // The tab owns both its chat and its editor, so its strip spans the two
-    // (`docs/specs/venue-tabs.md`, Layout): one band over everything right of
-    // the sidebar — history first, then the strip.
-    let main_x = f32::from(sidebar_w) + if show_sidebar { SEAM_WIDTH } else { 0.0 };
-    let main_span = chrome::BandSpan {
-        x: main_x,
-        width: viewport - main_x,
-        viewport,
-        lights,
-    };
-    let strip_width = chrome::band_room(main_span, chrome::HISTORY_SLOT, 0.0, 0);
-    // The account menu hangs off the sidebar's foot, so a sidebar that is
-    // away has nothing for it to hang from. Dropped rather
-    // than closed — an exit needs a surface to play over.
-    if app.sidebar.is_none() || app.sidebar_hidden {
-        app.account_menu = luma_ui::dialog::Popup::default();
+    let toggled = (resting > 0.0) != (app.agent_width.target() > 0.0);
+    if app.shell_presented && (toggled || !app.agent_width.settled()) {
+        app.agent_width.retarget(resting, cx);
+    } else {
+        app.agent_width.set(resting);
     }
+    app.shell_presented = true;
+    let agent_w = f32::from(app.agent_width.eval(window));
+    let show_agent = agent_w > 0.0;
 
-    // The one surface the desktop shows through. Everything above paints on
-    // top of this single translucent fill — see `luma_ui::glass::tone_column`
-    // for why the sidebar must not paint a plane of its own.
     let mut row = div()
-        .size_full()
+        .flex_1()
+        .min_h_0()
+        .w_full()
         .flex()
         .flex_row()
         .relative()
-        .bg(glass::glass())
-        .on_drag_move(cx.listener(Luma::drag_workspace_seam))
+        .on_drag_move(cx.listener(Luma::drag_agent_seam))
         .on_drag_move(cx.listener(Luma::drag_visualizer_seam));
 
-    if app.sidebar.is_some() && show_sidebar {
-        // The sidebar's content is laid out at its full width for the whole
-        // slide (see `pane::pane`), so its band is spanned that way too —
-        // reserving against the clipped width would re-pad it every frame.
-        let span = chrome::BandSpan {
-            x: 0.0,
-            width: SIDEBAR_WIDTH,
-            viewport,
-            lights,
-        };
-        let body = column(chrome::band(span))
-            // The one region that raises itself off the ground, because it
-            // is the frame and not the subject. On the blurred window that
-            // lift is a WASH over the root fill, not a plane: an opaque
-            // rung would be a slab sitting on the blur, and a translucent
-            // one would land on the root's own tone and vanish.
-            //
-            // No edge of its own: the rule on its trailing side is the
-            // `seam` below, which every region boundary here is drawn by.
-            .bg(glass::tone_column())
-            .key_context(keymap::context::SIDEBAR)
-            .child(cached(
-                sidebar_view,
-                gpui::StyleRefinement::default().size_full(),
-            ))
-            .into_any_element();
-        // Laid out at its full width for the whole slide, so a sidebar
-        // easing open reveals its rows rather than re-wrapping them.
-        row = row.child(
-            pane::pane(sidebar_w, px(SIDEBAR_WIDTH), body)
-                // The region itself, named. Its content is addressable but
-                // its *edge* was not, and the edge is what the regions
-                // beside it are measured from.
-                .agent_node(Role::Card, "Sidebar"),
-        );
-        // The sidebar and whatever is beside it are different planes, so
-        // the line between them is the bright one.
-        row = row.child(seam(ladder::seam_plane()));
-    }
-
-    let origin = chrome::tab_strip_origin(main_span) + chrome::HISTORY_SLOT;
-    let head = chrome::band(main_span)
-        .child(chrome::history_pair())
-        .child(chrome::tab_strip(
-            app,
-            &entity,
-            strip_width,
-            origin,
-            window,
-            cx,
-        ));
-    // Below the band: the front tab's chat, then its editor.
-    let mut body = div().flex_1().min_h_0().flex().flex_row().relative();
-    if show_thread {
-        body = body.child(
-            div()
-                .h_full()
-                .min_w_0()
-                .flex_1()
-                .key_context(keymap::context::THREAD)
-                .children(app.front_chat().cloned().map(|chat| {
-                    luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
-                })),
-        );
-    }
-    if show_thread {
-        // Both sides are lit surfaces whose own value step already divides
-        // them, so this rule is a hint. The grip that pulls it is mounted
-        // after the panel, not here — see [`workspace_grip`].
-        body = body.child(seam(ladder::seam_hint()));
-    }
-    // Opaque, like the chat's ground: a tab holds an *instrument* surface,
-    // and a waveform read through a blurred desktop is a waveform you
-    // cannot read.
-    let panel = div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .bg(ladder::background())
-        .key_context(keymap::context::WORKSPACE)
-        .child(workspace_body(
-            app,
-            if takeover {
-                viewport - main_x
-            } else {
-                workspace_w
-            },
-            window,
-            cx,
-        ));
-    body = body.child(if takeover {
-        div().h_full().flex_1().min_w_0().child(panel)
-    } else {
-        div().h_full().flex_none().w(px(workspace_w)).child(panel)
-    });
-    if show_thread {
-        // After both panes it divides, and before the layers below, which
-        // must keep the pointer they cover. The rule is a hair to the
-        // panel's left and the panel ends at the window; the grip is
-        // placed in the body's own coordinates, which start at `main_x`.
-        body = body.child(workspace_grip(
-            viewport - workspace_w - SEAM_WIDTH / 2.0 - main_x,
-            cx,
-        ));
+    if show_agent {
+        // Laid out at its open width for the whole slide (see `pane::pane`),
+        // so a panel easing away reveals its transcript rather than
+        // re-wrapping it.
+        row = row
+            .child(
+                pane::pane(px(agent_w), px(open_width), agent_panel(app))
+                    .agent_node(Role::Card, "Agent"),
+            )
+            .child(seam());
     }
     row = row.child(
-        column(head)
+        div()
+            .h_full()
             .flex_1()
-            // The ground, not a card on it: the chat is what the app is
-            // about, and the content plane is the darkest one there is.
-            //
-            // **Opaque**: a structural plane has no coverage (see `glass`'s
-            // module docs). A translucent plane would make the transcript's
-            // fade bands unpaintable — a plane composited over an unknown
-            // backdrop has no colour any overlay can match.
-            .bg(glass::panel_opaque())
-            .child(body),
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .bg(ladder::background())
+            .key_context(keymap::context::WORKSPACE)
+            .child(content(app, window, cx)),
     );
-
-    // Window-space tab exits and their stable close target sit above both pane
-    // rails, but below popovers and modal overlays.
-    row = row.child(chrome::tab_transition_layer(app, &entity, window, cx));
-
-    // The window's two fixed corners. Above every region — a toggle inside one
-    // rides that region's animated pane and gets clipped by it — but *below*
-    // the overlay, unlike the traffic lights: a control reachable through a
-    // scrim would move the regions behind a modal that is meant to own the
-    // window. See [`crate::chrome`] for the anchor rule.
-    row = row
-        .child(chrome::sidebar_toggle(
-            &entity,
-            show_sidebar,
-            app.sidebar.is_some(),
-            lights,
-        ))
-        .child(chrome::mode_switch(&entity, app.view_mode));
+    if show_agent {
+        // After both panels it divides, so it owns the strip it overhangs.
+        row = row.child(agent_grip(agent_w + SEAM_WIDTH / 2.0, cx));
+    }
 
     // Reap a dismissed dialog once its out-animation has played, and keep
     // frames coming until it has. Frame-driven rather than timer-driven —
@@ -810,7 +686,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if app.overlay.tick_close() {
         window.request_animation_frame();
     }
-    if app.account_menu.tick_close() {
+    if app.venue_menu.tick_close() {
         window.request_animation_frame();
     }
     // `open_mut`, not `get_mut`: every tick here takes the keyboard, and a
@@ -847,170 +723,176 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             subagents::tick(state, rows, window, cx);
         }
     }
+    let status_bar = Regions::get(
+        &mut app.regions.status_bar,
+        "Status bar",
+        crate::status_bar::bar,
+        true,
+        cx,
+    );
+    let page = div()
+        .flex_1()
+        .min_h_0()
+        .mx(px(glass::WINDOW_TRIM))
+        .flex()
+        .flex_col()
+        .relative()
+        .bg(ladder::background())
+        .child(row)
+        .child(page_corners())
+        .agent_node(Role::Card, "Page");
+    let mut window_root = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .relative()
+        .bg(glass::window_trim())
+        // The title bar spans the window: it is on the trim, not on the
+        // page, so the agent panel's coming and going never moves it.
+        .child(title_bar(app, lights, &entity, cx))
+        .child(page)
+        .child(cached(
+            status_bar,
+            gpui::StyleRefinement::default()
+                .w_full()
+                .h(px(STATUS_BAR_HEIGHT))
+                .flex_none(),
+        ))
+        // The title bar's two fixed ends. Above the page, but *below* the
+        // overlay, unlike the traffic lights: a control reachable through a
+        // scrim would move the regions behind a modal that is meant to own
+        // the window. See [`crate::chrome`] for the anchor rule.
+        .child(chrome::agent_toggle(&entity, app.agent_wanted(), lights))
+        .child(chrome::mode_switch(app, &entity, cx));
     if let Some(overlay) = app.overlay.get() {
-        row = row.child(overlay_layer(app, overlay, &entity, window, cx));
+        window_root = window_root.child(overlay_layer(app, overlay, &entity, window, cx));
     }
     // Last, so nothing — least of all an overlay — can cover the only controls
     // that move and close the window. See [`crate::chrome`].
-    row.children(chrome::window_controls(window))
+    window_root.children(chrome::window_controls(window))
 }
 
-/// One region: its head band, then whatever it shows, floor to ceiling.
-fn column(head: Div) -> Div {
-    div().h_full().min_w_0().flex().flex_col().child(head)
+/// The page's rounded corners. gpui clips to rectangles, so the panels inside
+/// would paint square corners over a rounded page; instead a ring of trim is
+/// drawn over the page's edge — outer radius flush with the trim, inner radius
+/// the page's — and covers what lies outside the curve. It carries no
+/// handlers, so it takes no hitbox and the pointer passes through it.
+fn page_corners() -> Div {
+    let trim = glass::WINDOW_TRIM;
+    div()
+        .absolute()
+        .top(px(-trim))
+        .bottom(px(-trim))
+        .left(px(-trim))
+        .right(px(-trim))
+        .border(px(trim))
+        .border_color(glass::window_trim())
+        .rounded(px(glass::PAGE_RADIUS + trim))
 }
 
-/// The rule between two regions: full height, one pixel, no radius.
-fn seam(color: gpui::Rgba) -> Div {
-    div().h_full().flex_none().w(px(SEAM_WIDTH)).bg(color)
+/// The agent panel: the chat of the body on screen, unchanged, flush at the
+/// page's left. With nothing open — Arrange before a score is picked — it
+/// says where a conversation comes from.
+fn agent_panel(app: &Luma) -> AnyElement {
+    let chat = app.front_chat().cloned().map(|chat| {
+        luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
+            .into_any_element()
+    });
+    div()
+        .size_full()
+        .relative()
+        .flex()
+        .flex_col()
+        // The ground, not a card on it. **Opaque**: a translucent plane would
+        // make the transcript's fade bands unpaintable — a plane composited
+        // over an unknown backdrop has no colour any overlay can match.
+        .bg(glass::panel_opaque())
+        .key_context(keymap::context::THREAD)
+        .child(chat.unwrap_or_else(|| {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .px(px(24.))
+                        .text_size(px(13.))
+                        .text_color(luma_ui::glass::ink(0.42))
+                        .child(NO_CHAT)
+                        .agent_node(Role::Text, NO_CHAT),
+                )
+                .into_any_element()
+        }))
+        .into_any_element()
 }
 
-/// How the thread and the workspace panel divide the room they share, and the
-/// floors neither may be dragged below.
-///
-/// Chat gets 30% of the shared room by default and the workspace the rest.
-/// Chat keeps its minimum readable width, and dragging or resetting the seam uses this same
-/// proportion at every window size.
-pub(crate) fn workspace_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.30, CENTER_MIN, WORKSPACE_MIN)
+/// What the agent panel says while the mode on screen has nothing open.
+const NO_CHAT: &str = "Open a score to talk about it.";
+
+/// The window's head, on the trim above the page: the venue menu, what the
+/// mode is working on, and — reserved by the band's insets — the agent toggle
+/// and the mode switch anchored over its two ends.
+fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
+    chrome::band(lights)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .child(welcome::venue_trigger(app, entity, cx)),
+        )
+        .children(chrome::subject(app, entity))
+        .child(div().flex_1().min_w_0())
+        .agent_node(Role::Card, "Title bar")
 }
 
-/// The room the thread and the panel share this frame: the window, less the
-/// sidebar where it is *now* and the seams between the three.
-///
-/// The sidebar's own seam exists exactly while any of its panel is visible, so
-/// it belongs in the budget too. Taken against the sidebar's live width rather
-/// than its destination, which is what makes the pair follow a sidebar
-/// mid-slide instead of jumping when it lands.
-fn shared_room(viewport: f32, sidebar: f32) -> f32 {
-    let sidebar_seam = if sidebar > 0.0 { SEAM_WIDTH } else { 0.0 };
-    (viewport - sidebar - sidebar_seam - SEAM_WIDTH).max(0.0)
-}
-
-/// The grip that pulls the workspace panel's seam: a wider invisible strip
-/// over the hint-toned rule at `at`, so the pointer can hit the boundary
-/// without the boundary having to be thick enough to aim at. Double-click
-/// restores the default split — the gesture comet's seams answer to.
-///
-/// A child of the row rather than of the rule, because a grip owns the strip
-/// it overhangs only if it is painted after both panes — see
-/// [`pane::resize_handle`].
-fn workspace_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
-    pane::resize_handle(
-        "workspace-seam",
-        pane::Seam::Vertical,
-        at,
-        || WorkspaceResize,
-        |app: &mut Luma, _| app.workspace_split.reset(),
-        glass::glass_hover(),
-        cx,
-    )
-    // A slider is the closest thing in the closed role vocabulary to a grip
-    // whose position along an axis is the value — which is what the seam is.
-    .agent_node(Role::Slider, "Workspace width")
-}
-
-/// The workspace panel's left seam, under the pointer. gpui routes a drag by
-/// the type it carries, so this marker is what tells the row's listener that
-/// the pointer belongs to this seam rather than to anything else being dragged.
-struct WorkspaceResize;
-
-impl Luma {
-    /// How wide the sidebar's card rests: open, or nothing at all.
-    fn sidebar_slot(&self) -> f32 {
-        if self.sidebar_hidden || self.sidebar.is_none() {
-            return 0.0;
-        }
-        SIDEBAR_WIDTH
+/// The window's content under the title bar: the stage over the mode's body,
+/// or the song list in their place.
+fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    if app.songs.is_none() {
+        // The venue picker is up over this.
+        return div().flex_1().into_any_element();
     }
-
-    /// Track the pointer while the workspace seam is dragged. A drag is
-    /// already continuous, so the split follows it directly — tweening toward
-    /// the pointer would only add lag to a gesture that has none.
-    fn drag_workspace_seam(
-        &mut self,
-        event: &DragMoveEvent<WorkspaceResize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Against the sidebar's live width, not its destination: a drag during
-        // a closing sidebar must not overlap the half of it still on screen.
-        let sidebar = self.sidebar_width.current();
-        let room = shared_room(f32::from(window.viewport_size().width), sidebar);
-        // The pointer holds the seam, and what it is setting is the *thread's*
-        // share — the regions are flush, so the offset into the shared room is
-        // simply the pointer minus where that room starts.
-        let origin = sidebar + if sidebar > 0.0 { SEAM_WIDTH } else { 0.0 };
-        self.workspace_split
-            .drag_to(f32::from(event.event.position.x) - origin, room);
-        cx.notify();
+    if app.song_list_shown() {
+        let region = Regions::get(&mut app.regions.songs, "Songs", songs_body, true, cx);
+        return div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .key_context(keymap::context::SONGS)
+            .child(cached(
+                region,
+                gpui::StyleRefinement::default()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0(),
+            ))
+            .into_any_element();
     }
-}
-
-/// The workspace column below its band: the stage over the visible editor.
-///
-/// **The stage is not a tab.** It is a view of whatever the editor below it is
-/// about, so it sits outside the tab's key context and outside its focus
-/// tracking — switching tabs within one room leaves the same stage running.
-/// [`Luma::sync_visualizer`] has already decided whether one exists; this
-/// decides only whether there is room to show it, and *not mounting it here is
-/// what stops its redraw loop* (see [`visualizer::visualizer`]).
-///
-/// # A dialog does not stand the stage down
-///
-/// An earlier revision unmounted the stage while an overlay was up. That is
-/// wrong twice over: the dialog backdrop is a tint rather than a blur, so the
-/// shell behind it is *meant* to be read — and a rig that vanishes when you
-/// open "add track" reads as the app losing your work. The stage stays mounted
-/// and live underneath.
-///
-/// What that revision was actually protecting was the modal's focus trap: at
-/// the time, Shift-Tab out of a dialog escaped into the stage's toolbar. That
-/// belonged to the dialog and has been fixed there, so nothing is owed here —
-/// the sidebar and the editors have always had tab stops behind a modal too,
-/// and a shell where every background region had to disarm itself would be the
-/// trap's job done N times at the wrong layer. `shell_panels` and
-/// `dialog_focus` are what hold that line.
-///
-/// `width` is the column's laid-out width, which only Program reads: its
-/// seam grip is placed in pixels.
-///
-/// # Direct has no inspector
-///
-/// In Direct a score is the stage over the timeline and nothing else: the
-/// agent is how its clips are edited. A clip's graph is still one
-/// double-click away, and it opens *in the tab* — see
-/// [`track_editor::clip_graph_page`] — so the keyboard stays with the tab and
-/// the stage above keeps showing the score.
-fn workspace_body(
-    app: &mut Luma,
-    width: f32,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) -> AnyElement {
-    // An empty panel is not a panel with nothing in it — it is the place a
-    // first tab is started from. The stage stands down with it: a rig view
-    // over no editor is a room with no subject.
-    if app.workspace.is_empty() {
-        return empty_panel();
-    }
-    if app.program_active() {
-        return program_view(app, width, window, cx);
+    if app.workspace.active().is_none() {
+        // A mode whose body is still on its way: Rig and Live open theirs on
+        // the first visit, and a restored score lands with its catalogue.
+        return div().flex_1().into_any_element();
     }
     if app.visualizer.is_none() {
         return div()
             .flex_1()
             .min_h_0()
             .flex()
-            .child(tab_region(app, cx))
+            .child(body_region(app, cx))
             .into_any_element();
     }
-    let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
+    let available = content_height(window);
     let (stage_height, _) = app.active_visualizer_split().resolve(available);
     let grip = visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx);
     // The venue's room — indoor or outdoor, sun, haze — sits beside the stage
-    // it lights, on the venue tab only.
-    let environment = matches!(app.workspace.active_body(), Some(Body::Patch(_))).then(|| {
+    // it lights, in Rig only.
+    let environment = (app.workspace.mode() == Mode::Rig).then(|| {
         let region = Regions::get(
             &mut app.regions.environment,
             "Environment",
@@ -1026,7 +908,30 @@ fn workspace_body(
                 .flex_none(),
         )
     });
+    // What Live follows — the decks, or the tapped tempo — sits beside the
+    // stage, in Live only, at the width last dragged.
+    let decks = match app.workspace.active_body() {
+        Some(Body::Perform(state)) if app.workspace.mode() == Mode::Live => {
+            let width = app.deck_panel_width(content_width(app, window));
+            Some((width, crate::perform::deck_panel(state, &cx.entity())))
+        }
+        _ => None,
+    };
     let stage = stage_region(app, cx);
+    let mut band = div()
+        .h(px(stage_height))
+        .flex_none()
+        .flex()
+        .relative()
+        .overflow_hidden()
+        .on_drag_move(cx.listener(Luma::drag_deck_seam));
+    if let Some((width, panel)) = decks {
+        band = band
+            .child(div().w(px(width)).h_full().flex_none().child(panel))
+            .child(seam())
+            .child(deck_grip(width + SEAM_WIDTH / 2.0, cx));
+    }
+    let band = band.child(stage_slot(stage)).children(environment);
     div()
         .flex_1()
         .min_h_0()
@@ -1034,25 +939,52 @@ fn workspace_body(
         .flex_col()
         // The grip below is placed against this column's own top edge.
         .relative()
-        .child(
-            div()
-                .h(px(stage_height))
-                .flex_none()
-                .flex()
-                .overflow_hidden()
-                .child(stage_slot(stage))
-                .children(environment),
-        )
-        .child(visualizer_seam())
-        .child(tab_region(app, cx))
+        .child(band)
+        .child(seam_across())
+        .child(body_region(app, cx))
         .child(grip)
         .into_any_element()
 }
 
-/// The active tab, in its cached region. It fills the rest of whichever row
-/// or column it is placed in.
-fn tab_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
-    let region = Regions::get(&mut app.regions.tab, "Tab", active_tab, true, cx);
+/// How tall the stage and the body share: the page — the window less the
+/// title bar and the status bar on the trim — less the gutter between them
+/// and a seam grip's reach.
+fn content_height(window: &Window) -> f32 {
+    f32::from(window.viewport_size().height)
+        - chrome::HEIGHT
+        - STATUS_BAR_HEIGHT
+        - SEAM_WIDTH
+        - pane::HANDLE_WIDTH
+}
+
+/// How wide the page is in a window `viewport` wide: the window less the
+/// trim either side.
+fn page_width(viewport: f32) -> f32 {
+    viewport - 2.0 * glass::WINDOW_TRIM
+}
+
+/// The song list page, in its cached region.
+fn songs_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    let entity = cx.entity();
+    let holds_focus = matches!(app.focus_slot(), FocusSlot::Songs);
+    let focus = app.focus.clone();
+    let app = &*app;
+    let statuses = app.body_statuses(cx);
+    match &app.songs {
+        Some(songs) => div()
+            .size_full()
+            .flex()
+            .when(holds_focus, |page| page.track_focus(&focus))
+            .child(tracks::page(app, songs, &statuses, &entity, window))
+            .into_any_element(),
+        None => div().into_any_element(),
+    }
+}
+
+/// The body on screen, in its cached region. It fills the rest of whichever
+/// column it is placed in.
+fn body_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
+    let region = Regions::get(&mut app.regions.body, "Body", active_body, true, cx);
     cached(
         region,
         gpui::StyleRefinement::default()
@@ -1060,27 +992,6 @@ fn tab_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
             .min_w_0()
             .min_h_0(),
     )
-}
-
-/// The score's inspector, in its cached region: Program's whole box under the
-/// stage.
-fn inspector_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
-    let region = Regions::get(
-        &mut app.regions.inspector,
-        "Inspector",
-        inspector_body,
-        true,
-        cx,
-    );
-    cached(region, gpui::StyleRefinement::default().size_full())
-}
-
-fn inspector_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
-    let entity = cx.entity();
-    match app.workspace.active_body_mut() {
-        Some(Body::TrackEditor(editor)) => track_editor::inspector(editor, &entity, window, cx),
-        _ => div().into_any_element(),
-    }
 }
 
 fn environment_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
@@ -1097,7 +1008,7 @@ fn stage_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
     Regions::get(&mut app.regions.stage, "Stage", stage_body, false, cx).into_any_element()
 }
 
-/// The embedded stage, with the venue page's tools on the venue tab.
+/// The embedded stage, with the venue page's tools in Rig.
 fn stage_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
     let stage_view = app.stage_view();
     let venue_tools = match (app.workspace.active_body(), stage_view.as_ref()) {
@@ -1126,9 +1037,9 @@ fn stage_element(
         .filter(|_| app.fullscreen_presented())
         .map(|state| state.slot.clone());
     let focus = app.visualizer_focus.clone();
-    // Split the borrow the way `active_tab` does: the stage's element mutates
-    // its own state and reads the library synchronously, and the two fields
-    // are disjoint.
+    // Split the borrow the way `active_body` does: the stage's element
+    // mutates its own state and reads the library synchronously, and the two
+    // fields are disjoint.
     let Luma {
         visualizer,
         library,
@@ -1159,140 +1070,172 @@ fn stage_slot(stage: AnyElement) -> Div {
         .child(stage)
 }
 
-/// The score editor in Program: the timeline on the left, and beside it a
-/// column of the stage over the inspector.
-///
-/// The same pieces [`workspace_body`] stacks — the tab and the stage — plus
-/// the inspector, so every key context, focus handle and listener they carry
-/// is the one Direct's layout has. The stage/inspector seam is the stacked
-/// layout's stage seam: it pulls [`Luma::active_visualizer_split`], which is
-/// this layout's row split while it is up. With no stage, the inspector takes
-/// the whole column.
-fn program_view(
-    app: &mut Luma,
-    width: f32,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) -> AnyElement {
-    let inspector = inspector_region(app, cx);
-    let (editor_width, _) = app.program_columns.resolve(width - SEAM_WIDTH);
-    let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
-    let (stage_height, _) = app.program_rows.resolve(available);
-    let stage = app.visualizer.is_some().then(|| {
-        div()
-            .h(px(stage_height))
-            .flex_none()
-            .flex()
-            .overflow_hidden()
-            .child(stage_slot(stage_region(app, cx)))
-    });
-    let has_stage = stage.is_some();
-    let side = div()
-        .flex_1()
-        .min_w_0()
+/// The gutter between two panels side by side, on a seam that drags: full
+/// height, in the trim's colour.
+fn seam() -> Div {
+    div()
         .h_full()
-        .flex()
-        .flex_col()
-        // The row grip is placed against this column's own top edge.
-        .relative()
-        .children(stage)
-        .when(has_stage, |side| side.child(visualizer_seam()))
-        .child(div().flex_1().min_h_0().flex().child(inspector))
-        .when(has_stage, |side| {
-            side.child(visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx))
-        });
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .relative()
-        .on_drag_move(cx.listener(Luma::drag_program_seam))
-        .child(
-            div()
-                .w(px(editor_width))
-                .flex_none()
-                .h_full()
-                .flex()
-                .flex_col()
-                .child(tab_region(app, cx)),
-        )
-        .child(seam(ladder::seam_hint()))
-        .child(side)
-        .child(program_grip(editor_width + SEAM_WIDTH / 2.0, cx))
-        .into_any_element()
+        .flex_none()
+        .w(px(SEAM_WIDTH))
+        .bg(glass::window_trim())
 }
 
-/// Program's column split: the timeline takes a little under half of the
-/// workspace, and neither side may be dragged narrower than stays usable.
-pub(crate) fn program_columns() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.45, 360.0, 280.0)
-}
-
-/// Program's row split: the stage over the inspector, each taking half.
-pub(crate) fn program_rows() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.5, 140.0, 160.0)
-}
-
-/// The grip on Program's column seam, at `at` from the workspace's leading
-/// edge. Mounted after both sides for the reason [`workspace_grip`] is.
-fn program_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
-    pane::resize_handle(
-        "program-seam",
-        pane::Seam::Vertical,
-        at,
-        || ProgramResize,
-        |app: &mut Luma, _| app.program_columns.reset(),
-        glass::glass_hover(),
-        cx,
-    )
-    .agent_node(Role::Slider, "Score editor width")
-}
-
-/// Program's column seam, under the pointer — routed by type like
-/// [`WorkspaceResize`].
-struct ProgramResize;
-
-/// What the panel shows before its first tab: the key that opens one. The `+`
-/// in the strip above is the offer itself (`docs/specs/venue-tabs.md` rule 9);
-/// this only says where it is, so there is one offer and not two.
-fn empty_panel() -> AnyElement {
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(luma_ui::float::key_hint_text(
-            "⌘T",
-            "Open a song or the venue",
-        ))
-        .agent_node(Role::Card, "Empty panel")
-        .into_any_element()
-}
-
-/// The stage's resting share of the workspace column (half), and the floors that keep
-/// either half from being dragged away entirely.
-///
-/// A stage needs enough height to read as a room rather than a letterbox; an
-/// editor needs enough for its transport plus a lane or two. Stated here rather
-/// than in `Luma::new` so the two floors sit beside the column that enforces
-/// them.
-pub(crate) fn visualizer_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.5, 140.0, 200.0)
-}
-
-/// The rule between the stage and the editor below it: the same hint-toned
-/// hairline the workspace's own seam is, turned across the other axis.
-fn visualizer_seam() -> Div {
+/// The gutter between two panels stacked, on a seam that drags: full width,
+/// in the trim's colour.
+fn seam_across() -> Div {
     div()
         .w_full()
         .flex_none()
         .h(px(SEAM_WIDTH))
-        .bg(ladder::seam_hint())
+        .bg(glass::window_trim())
 }
 
-/// The grip that pulls it, centred on the rule at `at`. Mounted after the
-/// stage *and* the editor for the reason [`workspace_grip`] is.
+/// How the window divides between the agent panel and the content, and the
+/// floors neither may be dragged below. The panel opens at a quarter of the
+/// window.
+pub(crate) fn agent_split() -> luma_ui::split::SplitFraction {
+    luma_ui::split::SplitFraction::new(0.25, AGENT_MIN, CONTENT_MIN)
+}
+
+/// The grip that pulls the agent panel's seam: a wider invisible strip over
+/// the hairline at `at`, so the pointer can hit the boundary without the
+/// boundary having to be thick enough to aim at. Double-click restores the
+/// default split.
+fn agent_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
+    pane::resize_handle(
+        "agent-seam",
+        pane::Seam::Vertical,
+        at,
+        || AgentResize,
+        |app: &mut Luma, _| app.agent_split.reset(),
+        glass::glass_hover(),
+        cx,
+    )
+    // A slider is the closest thing in the closed role vocabulary to a grip
+    // whose position along an axis is the value — which is what the seam is.
+    .agent_node(Role::Slider, "Agent width")
+}
+
+/// The agent panel's seam, under the pointer. gpui routes a drag by the type
+/// it carries, so this marker is what tells the row's listener that the
+/// pointer belongs to this seam rather than to anything else being dragged.
+struct AgentResize;
+
+impl Luma {
+    /// The agent panel's width when it is shown, in a window `viewport` wide.
+    fn agent_open_width(&self, viewport: f32) -> f32 {
+        self.agent_split
+            .resolve(page_width(viewport) - SEAM_WIDTH)
+            .0
+    }
+
+    /// Whether the agent panel is on screen: not put away by hand, and a
+    /// page wide enough to seat it beside a usable content column.
+    fn agent_shown(&self, viewport: f32) -> bool {
+        self.agent_wanted() && page_width(viewport) - SEAM_WIDTH >= AGENT_MIN + CONTENT_MIN
+    }
+
+    /// Track the pointer while the agent seam is dragged. A drag is already
+    /// continuous, so the split follows it directly.
+    fn drag_agent_seam(
+        &mut self,
+        event: &DragMoveEvent<AgentResize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Measured against the row the seam divides — the page, inset from
+        // the window's edge by the trim.
+        // The pointer holds the gutter by its middle.
+        let room = f32::from(event.bounds.size.width) - SEAM_WIDTH;
+        let at = f32::from(event.event.position.x - event.bounds.left()) - SEAM_WIDTH / 2.0;
+        self.agent_split.drag_to(at, room);
+        cx.notify();
+    }
+}
+
+/// The session item Live's deck panel width is kept under.
+pub(crate) const DECK_WIDTH_KEY: &str = "deck-panel-width";
+/// Live's deck panel width as stored: `None` until first dragged.
+pub(crate) type DeckWidth = crate::session_store::Stored<Option<f32>>;
+/// The deck panel's width before it is ever dragged, and its floor and
+/// ceiling. The stage keeps at least [`DECK_STAGE_MIN`] beside it.
+const DECK_DEFAULT: f32 = 320.0;
+const DECK_MIN: f32 = 240.0;
+const DECK_MAX: f32 = 560.0;
+const DECK_STAGE_MIN: f32 = 320.0;
+
+/// How wide the content column is: the page less the agent panel and its
+/// seam when the panel is up.
+fn content_width(app: &Luma, window: &Window) -> f32 {
+    let viewport = f32::from(window.viewport_size().width);
+    if app.agent_shown(viewport) {
+        page_width(viewport) - app.agent_open_width(viewport) - SEAM_WIDTH
+    } else {
+        page_width(viewport)
+    }
+}
+
+/// The grip on the deck panel's seam, centred on the rule at `at` inside the
+/// stage band. Double-click restores the default width.
+fn deck_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
+    pane::resize_handle(
+        "deck-seam",
+        pane::Seam::Vertical,
+        at,
+        || DeckResize,
+        |app: &mut Luma, cx| app.store_session(|this| &mut this.deck_width, None, cx),
+        glass::glass_hover(),
+        cx,
+    )
+    .agent_node(Role::Slider, "Deck panel width")
+}
+
+/// The deck panel's seam, under the pointer — routed by type like
+/// [`AgentResize`].
+struct DeckResize;
+
+impl Luma {
+    /// The deck panel's width in a content column `room` wide: as stored,
+    /// within its bounds, and never so wide the stage loses its floor.
+    fn deck_panel_width(&self, room: f32) -> f32 {
+        let wanted = self.deck_width.value().unwrap_or(DECK_DEFAULT);
+        let ceiling = (room - SEAM_WIDTH - DECK_STAGE_MIN)
+            .min(DECK_MAX)
+            .max(DECK_MIN);
+        wanted.clamp(DECK_MIN, ceiling)
+    }
+
+    /// Follow the pointer while the deck seam is dragged, and keep the width
+    /// for this device. The listener sits on the stage band, so its left
+    /// edge is the panel's.
+    fn drag_deck_seam(
+        &mut self,
+        event: &DragMoveEvent<DeckResize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let width = f32::from(event.event.position.x - event.bounds.left()) - SEAM_WIDTH / 2.0;
+        let room = f32::from(event.bounds.size.width);
+        let ceiling = (room - SEAM_WIDTH - DECK_STAGE_MIN)
+            .min(DECK_MAX)
+            .max(DECK_MIN);
+        let width = width.clamp(DECK_MIN, ceiling).round();
+        self.store_session(|this| &mut this.deck_width, Some(width), cx);
+        cx.notify();
+    }
+}
+
+/// The stage's resting share of the content column (half), and the floors
+/// that keep either half from being dragged away entirely.
+///
+/// A stage needs enough height to read as a room rather than a letterbox; a
+/// body needs enough for its own head plus a row or two.
+pub(crate) fn visualizer_split() -> luma_ui::split::SplitFraction {
+    luma_ui::split::SplitFraction::new(0.5, 140.0, 200.0)
+}
+
+/// The grip on the stage's lower seam, centred on the rule at `at`. Mounted
+/// after the stage *and* the body for the reason [`agent_grip`] is.
 fn visualizer_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
     pane::resize_handle(
         "visualizer-seam",
@@ -1306,66 +1249,41 @@ fn visualizer_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
     .agent_node(Role::Slider, "Stage height")
 }
 
-/// The stage/editor seam, under the pointer. gpui routes a drag by the type it
-/// carries, so this marker is what tells the row's listener that the pointer
-/// belongs to this seam rather than to the workspace's vertical one.
+/// The stage/body seam, under the pointer — routed by type like
+/// [`AgentResize`].
 struct VisualizerResize;
 
 impl Luma {
     fn active_visualizer_split(&mut self) -> &mut luma_ui::split::SplitFraction {
-        if self.program_active() {
-            &mut self.program_rows
-        } else if matches!(self.workspace.active_body(), Some(Body::TrackEditor(_))) {
+        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(_))) {
             &mut self.score_editor_split
         } else {
             &mut self.visualizer_split
         }
     }
 
-    /// Whether the visible tab is laid out as [`program_view`]: the window is
-    /// in Program and the tab is a score editor.
-    fn program_active(&self) -> bool {
-        self.view_mode == ViewMode::Program
-            && matches!(self.workspace.active_body(), Some(Body::TrackEditor(_)))
-    }
-
-    /// Track the pointer while Program's column seam is dragged. The listener
-    /// sits on the split itself, so its bounds are the room the two sides
-    /// share.
-    fn drag_program_seam(
-        &mut self,
-        event: &DragMoveEvent<ProgramResize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let offset = f32::from(event.event.position.x - event.bounds.origin.x);
-        let available = f32::from(event.bounds.size.width) - SEAM_WIDTH;
-        self.program_columns.drag_to(offset, available);
-        cx.notify();
-    }
-
-    /// Track the pointer while the stage seam is dragged. Like the workspace
-    /// seam, the height follows the pointer directly — a drag is already
-    /// continuous, and tweening toward it would only add lag.
+    /// Track the pointer while the stage seam is dragged. Like the agent
+    /// seam, the height follows the pointer directly.
     fn drag_visualizer_seam(
         &mut self,
         event: &DragMoveEvent<VisualizerResize>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let available =
-            f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
-        // The column starts below the band, and the pointer holds the seam.
-        let offset = f32::from(event.event.position.y) - chrome::HEIGHT;
+        let available = content_height(window);
+        // The column starts at the top of the row that listens — the page's
+        // top edge, under the title bar — and the pointer holds the gutter by
+        // its middle.
+        let offset = f32::from(event.event.position.y - event.bounds.top()) - SEAM_WIDTH / 2.0;
         self.active_visualizer_split().drag_to(offset, available);
         cx.notify();
     }
 }
 
-/// The visible tab's body, with the tab's own key context nested inside the
+/// The body on screen, with its own key context nested inside the
 /// workspace's — which is what lets the track editor's whole binding block
-/// survive the shell swap character-for-character.
-fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+/// survive the shell's moves character-for-character.
+fn active_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
     let entity = cx.entity();
     let Some(target) = app.workspace.active().cloned() else {
         return div().into_any_element();
@@ -1374,26 +1292,22 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     // [`Luma::focus_slot`] is the only thing that decides which — asking it
     // rather than restating its conditions is what keeps the handle from
     // being tracked twice, or nowhere.
-    let holds_focus = matches!(app.focus_slot(), FocusSlot::Tab(_));
+    let holds_focus = matches!(app.focus_slot(), FocusSlot::Body(_));
     let focus = app.focus.clone();
-    let direct = app.view_mode == ViewMode::Direct;
-    // Read before the workspace is borrowed mutably: the builder lives beside
-    // the picture, not in the tab, and its state is a projection either way.
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
     let layout = matches!(&*body, Body::Patch(_));
     let graph_page = match &mut *body {
-        Body::TrackEditor(state) => direct && state.clip_graph_shown(),
+        Body::TrackEditor(state) => state.clip_graph_shown(),
         Body::Perform(state) => state.pattern_sheet.is_some(),
         Body::Patch(_) => false,
     };
     let mut keys = gpui::KeyContext::default();
-    // Direct's graph page is the clip graph's key scope, not the timeline's:
-    // the timeline's letters and Delete act on the selected *clips*, and over
-    // the page the selection is the clip being edited. A Perform tab's
-    // pattern editor is the same page. Program's inspector sits outside the
-    // tab for the same reason.
+    // The graph page is the clip graph's key scope, not the timeline's: the
+    // timeline's letters and Delete act on the selected *clips*, and over the
+    // page the selection is the clip being edited. Live's pattern editor is
+    // the same page.
     keys.add(if layout {
         keymap::context::STAGE
     } else if graph_page {
@@ -1422,7 +1336,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         .flex_1()
         .min_h_0()
         .overflow_hidden()
-        .when(holds_focus, |tab| tab.track_focus(&focus))
+        .when(holds_focus, |body| body.track_focus(&focus))
         .key_context(keys)
         .child(inner)
         .into_any_element()
@@ -1522,16 +1436,15 @@ fn overlay_layer(
         ),
     };
     // A running export is closed by its own Cancel, never by a stray click.
-    let scrim_dismiss = if (matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none())
-        || app.exporting_show()
-    {
-        luma_ui::dialog::ScrimDismiss::Disabled
-    } else {
-        let dismissed = entity.clone();
-        luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
-            dismissed.update(cx, |this, cx| this.dismiss_overlay(cx));
-        }))
-    };
+    let scrim_dismiss =
+        if (matches!(overlay, Overlay::Venues(_)) && app.songs.is_none()) || app.exporting_show() {
+            luma_ui::dialog::ScrimDismiss::Disabled
+        } else {
+            let dismissed = entity.clone();
+            luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
+                dismissed.update(cx, |this, cx| this.dismiss_overlay(cx));
+            }))
+        };
     div()
         .absolute()
         .inset_0()
@@ -1555,149 +1468,26 @@ fn overlay_layer(
 mod tests {
     use super::*;
 
-    /// The sidebar takes its width from the *pair*, and the pair keeps its
-    /// proportion — which is what ⌘B has to preserve.
+    /// The agent panel and the content each keep their floor, at any window
+    /// that can seat both.
     #[test]
-    fn opening_the_sidebar_narrows_both_neighbours_in_the_ratio_they_were_at() {
-        let split = workspace_split();
-        let closed = shared_room(2400.0, 0.0);
-        let open = shared_room(2400.0, SIDEBAR_WIDTH);
-        assert_eq!(closed, 2399.0);
-        assert_eq!(open, 2142.0);
-
-        let (thread_closed, panel_closed) = split.resolve(closed);
-        let (thread_open, panel_open) = split.resolve(open);
-        // Both got narrower, and by the same share of what the sidebar took.
-        assert!(thread_open < thread_closed && panel_open < panel_closed);
-        assert!(
-            ((thread_closed / panel_closed) - (thread_open / panel_open)).abs() < 0.001,
-            "the ratio moved: {thread_closed}:{panel_closed} then {thread_open}:{panel_open}"
-        );
-    }
-
-    /// …until a floor is reached, where the ratio has to give. A window that
-    /// cannot seat both minimums is [`regions`]' takeover case, so what this
-    /// pins is the band between: the split yields to the floors rather than
-    /// letting either region be squeezed under one.
-    #[test]
-    fn a_floor_wins_over_the_proportion_before_the_window_runs_out() {
-        let split = workspace_split();
-        let (thread, panel) = split.resolve(CENTER_MIN + WORKSPACE_MIN + 40.0);
-        assert!(thread >= CENTER_MIN && panel >= WORKSPACE_MIN);
-        // At this size the requested chat share is below its minimum. The
-        // minimum wins and the remaining space belongs to the workspace.
-        assert!((thread - 360.0).abs() < 0.001);
-        assert!((panel - 360.0).abs() < 0.001);
-    }
-
-    /// A panel band ending at the window's edge, `width` wide.
-    fn panel(width: f32) -> chrome::BandSpan {
-        chrome::BandSpan {
-            x: 1280.0 - width,
-            width,
-            viewport: 1280.0,
-            lights: true,
-        }
-    }
-
-    /// The anchors' room is stated once, and both the band and the strip
-    /// arithmetic read it — a strip offered more than its band leaves would
-    /// lay chips out under the toggle.
-    #[test]
-    fn a_strip_is_never_offered_the_room_its_band_reserved() {
-        for span in [
-            chrome::BandSpan {
-                x: 0.0,
-                width: 1280.0,
-                viewport: 1280.0,
-                lights: true,
-            },
-            chrome::BandSpan {
-                x: 0.0,
-                width: 1280.0,
-                viewport: 1280.0,
-                lights: false,
-            },
-            chrome::BandSpan {
-                x: 0.0,
-                width: 256.0,
-                viewport: 1280.0,
-                lights: true,
-            },
-            chrome::BandSpan {
-                x: 257.0,
-                width: 1023.0,
-                viewport: 1280.0,
-                lights: true,
-            },
-            chrome::BandSpan {
-                x: 257.0,
-                width: 503.0,
-                viewport: 1280.0,
-                lights: true,
-            },
-            panel(520.0),
-        ] {
-            let (left, right) = chrome::band_insets(span);
-            assert_eq!(
-                chrome::band_room(span, 0.0, 0.0, 0),
-                (span.width - left - right).max(0.0),
-            );
-            assert_eq!(
-                chrome::tab_strip_origin(span),
-                span.x + left,
-                "a strip starts where its band's leading inset ends",
-            );
-        }
-    }
-
-    /// The rule the whole rework is: the toggles hold still and the clusters
-    /// move. A band's leading content stays put while the sidebar's edge is
-    /// still left of the anchor, then rides that edge — monotonically, with no
-    /// step at the moment the sidebar stops being the leftmost region.
-    #[test]
-    fn a_sliding_sidebar_pushes_its_neighbour_without_ever_pulling_it_back() {
-        let cluster_x = |sidebar: f32| {
-            let seam = if sidebar > 0.0 { SEAM_WIDTH } else { 0.0 };
-            let span = chrome::BandSpan {
-                x: sidebar + seam,
-                width: 1280.0 - sidebar - seam,
-                viewport: 1280.0,
-                lights: true,
-            };
-            chrome::tab_strip_origin(span)
-        };
-        let mut previous = cluster_x(0.0);
-        // Closed, the thread's cluster clears the lights and the toggle.
-        assert_eq!(previous, chrome::left_anchor_end(true));
-        for step in 1..=64 {
-            let x = cluster_x(SIDEBAR_WIDTH * step as f32 / 64.0);
+    fn the_split_keeps_both_floors() {
+        let split = agent_split();
+        for room in [AGENT_MIN + CONTENT_MIN + 1.0, 1280.0, 1920.0, 3200.0] {
+            let (agent, content) = split.resolve(room);
+            assert!(agent >= AGENT_MIN - 0.001, "agent {agent} at {room}");
             assert!(
-                x >= previous,
-                "the cluster moved left at sidebar {}: {x} < {previous}",
-                SIDEBAR_WIDTH * step as f32 / 64.0,
+                content >= CONTENT_MIN - 0.001,
+                "content {content} at {room}"
             );
-            previous = x;
         }
-        // Open, it sits just past the sidebar's seam.
-        assert_eq!(previous, SIDEBAR_WIDTH + SEAM_WIDTH + 12.0);
     }
 
-    /// A corner with no lights in it (a macOS fullscreen space) is given back:
-    /// the cluster at the window's edge moves into the room, and a cluster
-    /// already pushed past the anchors by an open sidebar does not move.
+    /// A corner with no lights in it (a macOS fullscreen space) is given back.
     #[test]
     fn a_corner_without_lights_gives_its_room_back() {
-        let origin = |x: f32, lights: bool| {
-            chrome::tab_strip_origin(chrome::BandSpan {
-                x,
-                width: 1280.0 - x,
-                viewport: 1280.0,
-                lights,
-            })
-        };
-        assert!(origin(0.0, false) < origin(0.0, true));
-        let open = SIDEBAR_WIDTH + SEAM_WIDTH;
-        assert_eq!(origin(open, false), origin(open, true));
+        let lead = |lights| chrome::band_insets(lights).0;
+        assert!(lead(false) < lead(true));
+        assert_eq!(chrome::band_insets(false).1, chrome::band_insets(true).1);
     }
 }

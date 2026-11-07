@@ -12,11 +12,11 @@ function renders(snapshot, region) {
 }
 const counts = (s) => ({
   stage: renders(s, "Stage"),
-  tab: renders(s, "Tab"),
-  sidebar: renders(s, "Sidebar"),
+  body: renders(s, "Body"),
+  statusBar: renders(s, "Status bar"),
   environment: renders(s, "Environment"),
 });
-const panes = ["tab", "sidebar", "environment"];
+const panes = ["body", "statusBar", "environment"];
 
 function openVenue() {
   nav.patch("Test Venue");
@@ -55,7 +55,7 @@ test("a stage frame rebuilds the stage and not the panes around it", () => {
   app.click(app.snapshot().find({ role: "row", label: "Mover 1" }));
   until("the row to be picked", (s) =>
     s.findAll({ role: "row" }).some((n) => n.label === "Mover 1" && n.focused));
-  expect(renders(app.snapshot(), "Tab")).toBeGreaterThan(last.tab);
+  expect(renders(app.snapshot(), "Body")).toBeGreaterThan(last.body);
 });
 
 test("the readout shows both rates and opens the frame stats", () => {

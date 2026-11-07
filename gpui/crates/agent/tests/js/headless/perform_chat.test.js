@@ -107,7 +107,7 @@ const asked = (s) => s.findAll({ role: "card" }).some((n) => n.label.startsWith(
 
 function openPerform() {
   nav.venue("Test Venue");
-  nav.step("the Perform row", "row", "Perform");
+  nav.live();
   until("the pad", (s) => pad(s, "Front wash"));
   nav.step("new conversation", "button", "New chat");
   until("the chat centre", (s) => {
@@ -123,7 +123,7 @@ function ask() {
   until("the turn end", (s) => !busy(s) && texts(s).some((l) => l.includes("beside the front wash")));
 }
 
-// The front tab's chats, as its history lists them once they have loaded.
+// The front body's chats, as its history lists them once they have loaded.
 function history() {
   nav.step("history", "button", "Chat history");
   const listed = until("the history", (s) =>
@@ -144,7 +144,7 @@ test("the agent's new pattern appears in its cell on the grid", () => {
   expect(Math.abs(warm.y - front.y)).toBeLessThan(2);
 });
 
-test("Perform chats are listed in the Perform tab and not the venue's", () => {
+test("Live chats are listed in Live and not in Rig", () => {
   openPerform();
   ask();
   expect(asked(history())).toBe(true);

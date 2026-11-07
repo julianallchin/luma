@@ -22,7 +22,7 @@ use luma_ui::{glass, ladder, radius};
 
 use super::surface::{self, Edit, Rect, View};
 use super::{group_label, Named, Part, PartKind, Perform};
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::Luma;
 
 /// The air between two cells.
@@ -66,9 +66,12 @@ pub(super) fn surface(state: &Perform, target: &Target, app: &Entity<Luma>) -> A
             // A button's envelope is played here, so draw every frame until
             // each settles.
             surface.child(
-                canvas(|_, _, _| (), |_, (), window, _| window.request_animation_frame())
-                    .absolute()
-                    .size_0(),
+                canvas(
+                    |_, _, _| (),
+                    |_, (), window, _| window.request_animation_frame(),
+                )
+                .absolute()
+                .size_0(),
             )
         })
         .into_any_element()
@@ -397,7 +400,7 @@ fn slot(
                 .id(SharedString::from(format!("perform-slot-{column}-{row}")))
                 .relative()
                 .size_full()
-                .rounded(px(radius::PANEL))
+                .rounded(px(radius::CHIP))
                 .border_1()
                 .border_dashed()
                 .border_color(if open { accent } else { glass::hairline(0.12) })
@@ -441,7 +444,7 @@ fn setup_cell(
     let outline = div()
         .absolute()
         .inset_0()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .map(|line| match (fits, selected) {
             (false, _) => line.border_2().border_color(Hsla::from(ladder::danger())),
             (true, true) => line.border_2().border_color(accent),
@@ -508,7 +511,7 @@ fn setup_cell(
     let body = div()
         .absolute()
         .inset_0()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .overflow_hidden()
         .child(face(state, cell, rect, None))
         .child(outline)
@@ -590,7 +593,7 @@ fn plate() -> gpui::Div {
         .size_full()
         .flex()
         .flex_col()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .overflow_hidden()
         .bg(glass::card_bg())
 }
@@ -626,19 +629,17 @@ fn pattern_face(
     // GPUI clips to rectangles, not to rounded corners, so the fill rounds
     // itself: its top always meets the card's, its bottom only when the pad
     // is the whole cell.
-    let corner = px(radius::PANEL);
+    let corner = px(radius::CHIP);
     let fill = div()
         .absolute()
         .inset_0()
         .rounded_t(corner)
-        .when(arrangement == Arrangement::Pad, |fill| fill.rounded_b(corner))
+        .when(arrangement == Arrangement::Pad, |fill| {
+            fill.rounded_b(corner)
+        })
         .bg(tint.opacity(level.clamp(0., 1.)));
-    let pad_view = div()
-        .relative()
-        .w_full()
-        .min_h_0()
-        .child(fill)
-        .child(
+    let pad_view =
+        div().relative().w_full().min_h_0().child(fill).child(
             div()
                 .relative()
                 .size_full()
@@ -1015,7 +1016,7 @@ fn tap_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
         .flex()
         .flex_col()
         .justify_between()
-        .rounded(px(radius::PANEL))
+        .rounded(px(radius::CHIP))
         .bg(glass::ink(if held { 0.22 } else { 0.08 }))
         .child(
             div()

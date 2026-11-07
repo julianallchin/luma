@@ -1,205 +1,143 @@
-# The Comet shell
+# The shell
 
 **Status:** built. This is the contract for the `gpui/crates/app` shell.
-Section numbers are cited from code. Keep them stable.
-**Reference implementation:** comet (`crates/ui/src/shell.rs`, `shell/tabs.rs`,
-`rail.rs`, `motion.rs`, `theme.rs`).
+Section numbers are cited from code; keep them stable.
+**References:** comet (motion, the agent panel) and zeron (`apps/zgx/ui/ds`:
+the flush-panel tokens and the settings page).
 
 ---
 
 ## 0. Overview
 
-**Superseded in part by [`venue-tabs.md`](venue-tabs.md).** Tabs belong to a
-venue, a tab is a score or the venue, and each tab owns its chat. The tab
-strip spans the chat and the editor:
+The window is one venue, shown in one of three modes. A dark trim frames
+one rounded page: the title bar runs across the trim above the page, the
+status bar along the trim below it, and a thin margin of trim shows either
+side. The page holds everything else — the agent panel beside the mode's
+stage and body:
 
 ```text
-┌──────────┬───────────────────────────────────────────────────────┐
-│ venue ▾  │ [Strobe · #1 ●][Strobe · #2][⌂ Venue]  [Direct|Program]│
-│          ├───────────────────┬───────────────────────────────────┤
-│ ⌂ Venue  │  chat (this tab)  │  editor (this tab)                │
-│ songs    │                   │  track editor, or the patch page  │
-│  scores  │  composer         │                                   │
-└──────────┴───────────────────┴───────────────────────────────────┘
-   sidebar (256), ⌘B          Direct shown; Program drops the chat
+ ●●● ◧  ▭ Venue ▾           Aurora #1 ▾            [Rig|Arrange|Live]
+ ╭────────────┬─────────────────────────────────────────────────────╮
+ │         ↶+ │  stage (the venue lit by the mode's body)           │
+ │  agent     ├─────────────────────────────────────────────────────┤
+ │  panel     │  the mode's body: the venue page, the score,        │
+ │  (the      │  or the Perform set — or the song list over Arrange │
+ │  body's    │                                                     │
+ │  chat)     │                                                     │
+ ╰────────────┴─────────────────────────────────────────────────────╯
+ sync · DMX output · import · update                     context line
 ```
 
-The sidebar, the chat and the editor are persistent regions. Nothing is
-destroyed to show something else, so there is no Back and no provenance chain.
+Nothing is destroyed to show something else: each mode keeps its body while
+another mode is up, and each venue keeps its modes while another venue is up.
 
----
+## 1. Regions
 
-## 1. What comet does
-
-| Thing | comet | source |
+| Region | What it is | Code |
 |---|---|---|
-| Regions | sidebar ∥ main ∥ right pane, one flex row | `shell.rs` `impl Render for Shell` |
-| Sidebar | 208–400px, default 256, collapsible, drag-resizable | `settings.rs:24-42` |
-| Right pane | 360–760px, default 520; expand mode takes everything right of the sidebar | `shell.rs::right_target` |
-| Region width motion | a width tween with 200ms ease-out; a fixed-width inner inside an `overflow_hidden` container, so content never reflows mid-slide | `shell.rs`, `pane_container` |
-| Right-pane tabs | per-session ordered list, drag-reorderable, fixed chip slots | `render_right_tab_strip` |
-| Dead-tab healing | the stored pick renders only if it still exists, else the first tab, else the picker | `resolved_right_active` |
-| Transcript | 736px column, 48px gutters, 14px/22 markdown, rail hidden below 768px | `transcript.rs`, `rail.rs` |
+| Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it; stands aside while the song list is up | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
+| Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, venue menu, the mode's subject, the mode switch | `shell::title_bar`, `chrome` |
+| Page | the inset card on the trim, rounded `PAGE_RADIUS` (12), `WINDOW_TRIM` (8) from the window's sides; holds the agent panel and the content | `shell::regions`, `glass::window_trim` |
+| Stage | the venue, lit by the mode's body; collapsible, height-resizable. In Live a deck panel sits at its left, drag-resizable, its width kept per device (`deck-panel-width`) | `shell::stage_body`, `perform::deck_panel` |
+| Body | the mode's body, or the song list in Arrange | `shell::content` |
+| Status bar | 24 high, cached, on the trim under the page in muted text; sync, DMX output, import, update, account failure, and the mode's context line | `status_bar` |
 
----
+The title bar and everything in it hold still whatever the page shows. Hiding
+the agent panel takes the panel off the page and nothing else: the chat's own
+header (history, new chat) is the panel's, at the top of the page, and goes
+with it.
 
-## 2. Region model
+## 2. Per-venue state
 
-[`venue-tabs.md`](venue-tabs.md) is the contract for tab sets, tab keys, the
-per-tab chat and status dots. This section keeps what that spec does not
-restate.
+`workspace::Modes` holds one optional body per mode — Rig (`Target::Venue`,
+the venue page), Arrange (`Target::Score`, one open score) and Live
+(`Target::Perform`, the Perform set) — and which mode is up.
+`workspace::Venues` parks every other venue's `Modes`, so switching venue and
+back finds the same mode and the same open score.
 
-### 2.1 Sidebar — the launcher
+- Opening a score puts it in Arrange, replacing the score that was there; the
+  replaced body's teardown releases its audio.
+- Rig and Live open their body on first visit; Arrange with no score shows the
+  song list.
+- A new venue lands in Rig.
+- `saved_venues` stores each venue's mode, open score and threads under one
+  session item, debounced (`session_store`). A launch reopens the last venue;
+  a restored score that no longer exists leaves Arrange on the song list.
 
-The sidebar shows the selected venue: its "Venue setup" row, then its songs,
-and a song's scores one level in. A row opens its tab or brings it to the
-front. A button at its head reopens the venue picker, which is the only way to
-choose a venue. It opens by itself when there is no venue, no overlay and no
-tab.
+Keys: 1 / 2 / 3 switch mode (not while a text field has focus), ⌘P toggles the
+song list, ⌘B the agent panel, ⌘, settings.
 
-`⌘B` toggles the sidebar.
+## 3. Chats
 
-### 2.2 The tab's chat
+Each body owns its chat (`agent::BodyChat`): the venue page has the venue's,
+a score the score's, the Perform set the set's. The agent panel shows the
+front body's chat; Arrange with no score open says so instead. A mode whose
+chat is working, or finished unseen, carries a status dot on its toggle.
 
-Each tab owns one `luma_chat::AgentChat`, beside its editor. Every chat shares
-the app's one `RunningTurns`, so a turn keeps running when its tab is not in
-front. The ChatHistory overlay lists the front tab's conversations. The
-Subagents overlay shows delegated work.
+## 4. The song list
 
-With no thread, the chat shows the new-thread canvas. The composer stays
-mounted, and the first send creates the thread.
+Today's track browser as a page over Arrange: search, Mine/All, folders, add
+and import. A row expands in place to its scores in this venue and "New
+score"; choosing a score opens it and closes the page a double-click interval
+later (so a double-click on a score's name renames it instead). The title
+bar's song title opens and closes the page; Escape closes it. The list takes
+the window's width: the agent panel stands aside while it is up and comes
+back when it closes, unless it had been hidden by hand; ⌘B over the list
+shows it for that visit only.
 
-### 2.3 The tab strip and the editor
+## 5. Surfaces
 
-A tab strip over the chat and the editor, and one visible tab. The pill at
-the band's trailing edge sets the window's view mode (the `view_mode`
-setting, which replaced the `split_view` checkbox):
+Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 
-- **Direct** — the chat beside the editor. A score is the stage over the
-  timeline, with no inspector; a double-click on a clip puts its graph where
-  the timeline was, under a "Timeline" back button. Escape goes back too.
-- **Program** — no chat: the editor takes everything right of the sidebar.
-  A score is the timeline beside the stage over the inspector.
+- **The trim** (`window_trim` = `ladder::frame`, `#0e0e0e`) is the grey
+  ladder's one rung under the page's ground (`#181818`), by zeron's own step
+  from window to page (`#0e0e10` under `#18181b`), kept achromatic like every
+  other rung. The title bar and the status bar are drawn on it with no card of
+  their own; the page is the one rounded thing on it.
+- **Inside the page, panels are flush.** A seam that drags — agent | content,
+  stage / body, Live's decks | stage — is a 4px gutter of the trim, so the
+  trim runs on into the page along it; the grip over it keeps its own 5px
+  reach. Panels that do not resize against each other take a 1px hairline
+  (`panel_seam`, `#ffffff12`); a hairline inside a panel is `inner_rule`
+  (`#ffffff0a`). No panel corners.
+- **Corners** belong only to controls (6–8), clips and pads (4) and floating
+  things — menus, popovers, settings cards (12). See `luma_ui::radius`.
+- **Washes:** hover `WASH_SUBTLE` (`0x0d`), pressed `WASH_PRESSED` (`0x17`),
+  selected `WASH_REST` (`0x1a`). A button's plate is the pressed wash and
+  lifts to selected on hover. Every one-of-N switch is `float::segmented`:
+  a `#ffffff08` track with no edge, the chosen cell at the selected wash —
+  both laid over the page's ground once and painted opaque, so the mode
+  switch on the trim and a toggle on a panel are the same colours.
+- **Muted text** is the primary at 60% (`TEXT_SECONDARY`,
+  `ladder::muted_foreground`) and 42% (`TEXT_TERTIARY`).
 
-A tab **is** its target (`gpui/crates/app/src/tabs.rs`):
+## 6. Chrome
 
-```rust
-enum Target {
-    Score { venue: String, track: String, score: String },
-    Venue { venue: String },
-}
-```
+- **Venue menu** (title bar, leading): a muted stage glyph, the venue's name and a chevron. The menu holds the venues with their status dots and a
+  "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
+  Sign out / Sign in. The venue dialog is still what a window with no venue
+  shows (browse, create, join).
+- **Subject** (title bar, centre): in Arrange the song title, which opens the
+  song list; in Live the follow line.
+- **Mode switch** (title bar, trailing): Rig / Arrange / Live. The keys 1 / 2 / 3 are named in each cell's tooltip, not drawn.
+- **Arrange** keeps today's timeline and the strip above it. The strip leads
+  with the transport — play / pause, `0:00 / 3:32`, the tempo — then add,
+  export and the readouts. Space (`PlayPause`) plays and pauses too, and the
+  ruler scrubs. A double-click on a clip opens its graph where the timeline
+  was.
+- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button, and
+  Edit layout arranges the grid only. The decks followed (or the tapped
+  tempo) sit in the deck panel beside the stage, and under them the DJ
+  source: "Add source" opens the sources and the latency inline; a followed
+  source can be changed or disconnected, back to the tapped tempo. The MIDI
+  and OSC status sits under it. What is followed is the title bar's line.
+- **Settings** is zeron's settings page inside the dialog: a nav, then a 640
+  column with a title and description over sections of 52-high rows, each
+  control at its row's end in a 240 slot.
 
-- Opening a target that has a tab reveals that tab. There is no `TabId`.
-- `Venue` is a singleton per venue.
-- Each venue has its own set (`gpui/crates/app/src/workspace.rs`). Switching
-  venue parks the set; it closes nothing.
+## 7. Escape
 
-**State retention.** A tab owns its state for its whole life. Switching tabs
-tears down nothing: playback continues and a loop region stays armed.
-`Tabs::close` hands the body back, and only closing runs the close semantics.
-
-**Dead-tab healing.** The stored active target renders only if it is still in
-the list. Else the first tab renders. Else the picker renders.
-
-**Stage.** The visualizer is not a tab. It is a stage view in the workspace
-column. `⌘⇧V` hides or shows it. Hiding drops the stage and its GPU resources.
-Shift-F opens it fullscreen.
-
----
-
-## 4. Focus and keymap
-
-Key contexts nest: `Luma > Workspace > TrackEditor`. The track-editor bindings
-are scoped to `TrackEditor && !TextInput`, so they need no change when the
-tab moves. Direct's graph page declares `ClipGraph` in place of
-`TrackEditor`: the timeline's keys act on the selected clips, and over the
-page the selection is the clip being edited.
-
-Focus follows the last click. A region does not take focus when the selection
-changes.
-
-| Key | Action | Context |
-|---|---|---|
-| `⌘B` | `ToggleSidebar` | shell |
-| `⌘T` | `NewTab` | shell |
-| `⌘W` | `CloseTab` | `Workspace` (the window's `⌘W` still works elsewhere) |
-| `⌘1`…`⌘9` | select tab | shell |
-| `⌘⇧V` | `ToggleVisualizer` | shell |
-| `⌘,` | `OpenSettings` | shell |
-| `Escape` | dismiss the top overlay | overlays and dialogs |
-
-`⌘W` under `Workspace` is a scoped binding, not a runtime branch. gpui resolves
-it by context specificity.
-
----
-
-## 5. Chat fidelity and the tier boundary
-
-The centre matches comet: a 736px reading column with 48px gutters, a turn
-rail, the empty-state canvas, and edge fades under the chrome.
-
-The comet language is not bound to the chat crates. It is a named tier in
-`luma_ui` that any crate can use. §9 states the rule.
-
----
-
-## 6. Shared primitives
-
-- **`luma_ui::motion`** — the one motion catalogue.
-- **`luma_ui::glass`** — the translucent tier's paint.
-- **`luma_ui::pane`** — `PaneWidth`, a region width that animates while its
-  content is laid out at the target width.
-
----
-
-## 8. Overlays
-
-`Overlay` in `gpui/crates/app/src/shell.rs` is one slot, not a stack. Escape
-dismisses it. The variants are Venues, Patterns (the library browser),
-Settings, AddTracks, ChatHistory, Subagents, FixturePicker, InsertPattern,
-AddFixtures, Confirm and GroupRepair.
-
-The modal plane swallows presses, so covered shell controls cannot change
-behind it. The window controls paint last, above any overlay, so the window
-can always move and close.
-
----
-
-## 9. Style boundary (normative)
-
-The current style is the rounded, simple, glass look. Two tiers. The tier of a
-component depends on *what it is*, not on its crate.
-
-- **`luma_ui::ladder` — planes and instrument surfaces.** The sidebar, the
-  thread column and the workspace, plus tab contents: the timeline, the graph
-  canvas, tables and the stage. Planes are opaque. Panes tile the window, so
-  their shared edges are square, and depth between panes is a seam.
-- **`luma_ui::glass` — what floats.** Menus, popovers, dialogs, overlay grounds
-  and chips. They are translucent and round their corners (`luma_ui::radius`).
-  Movement uses the `luma_ui::motion` curves.
-
-Glass mints no tones. Every glass surface is a ladder rung at a coverage.
-
-Controls are rounded, with normal-case labels and subtle hover fills. Do not
-use square, bordered or uppercase controls.
-
-A component that paints from both tiers is in the wrong place.
-
----
-
-## 10. Window chrome, as built
-
-1. **No full-width titlebar.** Each region is a full-height column with its
-   own head band (`chrome::band`). The bands align because they share one
-   height.
-2. **Regions are flush.** Depth between regions is a value step across one
-   full-height seam. The shell draws no horizontal borders.
-3. **Window controls are the top layer** (`chrome::window_controls`). The
-   leftmost region's band reserves their width. The sidebar toggle rides the
-   leftmost visible band, and the settings gear rides the rightmost, so hiding
-   a region never hides the control that brings it back.
-4. **Titlebar back and forward stay dimmed.** The shell has no navigation
-   history.
-5. **The composer has no attachment or effort control.** A control without a
-   feature behind it is not added.
+One ladder (`shell` `dismiss_overlay`), first match wins: the venue menu,
+score and song menus, subagents, visualizer settings, patch rungs, the stage's
+own state, an open dialog, then the song list, a sheet menu, the clip graph,
+the pattern sheet, and finally the selection.

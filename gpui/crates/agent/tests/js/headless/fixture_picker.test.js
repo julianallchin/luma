@@ -21,11 +21,12 @@ test("ticking groups writes the union and escape writes nothing", () => {
 
   nav.trackEditor("Test Venue", "Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
 
   // A clip is labelled by its name; the fixture's clip is a Wash.
   app.click(app.snapshot().find({ role: "card", label: "Wash" }));
+  nav.graphPage();
   until("the strip", (s) => s.findAll({ role: "input" }).some((n) => n.label.startsWith("expression = ")));
   // The default the pattern ships: the whole venue.
   expect(expression()).toBe("all");

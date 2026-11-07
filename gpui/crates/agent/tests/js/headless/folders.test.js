@@ -1,4 +1,4 @@
-// The sidebar's folders (docs/specs/venue-tabs.md, phase 2), end to end.
+// The song list's folders, end to end.
 //
 // - "New folder" makes a folder and puts the caret in its name;
 // - a right-click on a song lists the folders with checkboxes, and ticking
@@ -38,15 +38,15 @@ test("a folder is made, named, filled from a song's menu, opened and deleted", (
 
   // A press outside closes the menu; then the folder opens onto its song,
   // which is listed twice now and opens the same scores from either place.
-  app.click(app.snapshot().find({ role: "row", label: "Venue setup" }));
+  app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
   until("the menu gone", (s) => s.find({ role: "card", label: "Song folders" }) === undefined);
   app.click(folderRow(app.snapshot(), "Warm up"));
   const open = until("the folder open", (s) => songRows(s).length === 2 ? s : undefined);
   app.click(songRows(open)[0]);
-  const level = until("the song's scores", (s) => s.find({ role: "card", label: "Scores level" }));
+  const level = until("the song's scores", (s) => s.find({ role: "card", label: "Scores of Aurora" }) ? s : undefined);
   expect(level.findAll({ role: "row" }).filter((n) => n.label.startsWith("#")).length).toBe(1);
-  app.click(level.find({ role: "button", label: "Back to tracks" }));
-  until("the list again", (s) => folderRow(s, "Warm up") !== undefined && songRows(s).length === 2);
+  app.click(songRows(level)[0]);
+  until("the scores folded again", (s) => folderRow(s, "Warm up") !== undefined && songRows(s).length === 2 && s.find({ role: "card", label: "Scores of Aurora" }) === undefined);
 
   // Deleting asks, because the folder holds a song, and takes only the
   // folder: the song stays under All songs.

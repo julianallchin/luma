@@ -32,7 +32,7 @@ use luma_ui::text_input::TextInput;
 use crate::confirm::{Action, Confirm};
 use crate::library::Patch as PatchData;
 use crate::shell::Body;
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::{LibraryError, Luma};
 
 mod footprint;
@@ -120,7 +120,7 @@ pub(crate) struct StripDrag {
 
 pub(crate) struct Patch {
     /// The venue tab's chat: the venue's own conversations.
-    pub(crate) chat: crate::agent::TabChat,
+    pub(crate) chat: crate::agent::BodyChat,
     pub(crate) venue_id: String,
     pub(crate) venue_name: String,
     pub(crate) stage: crate::stage::StagePage,
@@ -169,7 +169,7 @@ impl Patch {
     pub(crate) fn loading(
         venue_id: String,
         venue_name: String,
-        chat: crate::agent::TabChat,
+        chat: crate::agent::BodyChat,
         cx: &mut Context<Luma>,
     ) -> Self {
         Self {
@@ -262,6 +262,18 @@ impl Patch {
             .unwrap_or_default()
     }
 
+    /// The rig's size, in a few words: the status bar's line in Rig.
+    pub(crate) fn rig_line(&self) -> Option<String> {
+        let data = self.data.as_ref()?;
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        Some(format!(
+            "{} · {}",
+            plural(data.fixtures.len(), "fixture", "fixtures"),
+            plural(data.universes.len(), "universe", "universes"),
+        ))
+    }
+
     pub(crate) fn any_pinned(&self) -> bool {
         self.rows().iter().any(|row| row.address_pinned)
     }
@@ -286,10 +298,10 @@ impl Patch {
 // ---------------------------------------------------------------------------
 
 impl Luma {
-    /// Open the selected venue's tab, or bring it to the front. `thread` is
-    /// the chat a restored tab had open.
-    pub(crate) fn open_venue_tab(&mut self, thread: Option<&str>, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
+    /// Open the venue page in Rig, or bring Rig on screen. `thread` is
+    /// the chat a restored body had open.
+    pub(crate) fn open_rig(&mut self, thread: Option<&str>, cx: &mut Context<Self>) {
+        let Some(browser) = &self.songs else {
             return;
         };
         let venue_id = browser.venue_id().to_string();
@@ -298,13 +310,13 @@ impl Luma {
             venue: venue_id.clone(),
         };
         if self.workspace.body(&target).is_some() {
-            self.workspace.select(&target);
+            self.workspace.set_mode(target.mode());
             cx.notify();
             return;
         }
-        let chat = self.tab_chat(&target, thread, cx);
+        let chat = self.body_chat(&target, thread, cx);
         let state = Patch::loading(venue_id.clone(), venue_name, chat, cx);
-        self.open_tab(target, move || Body::Patch(Box::new(state)), cx);
+        self.open_body(target, move || Body::Patch(Box::new(state)), cx);
         self.reload_patch(venue_id, cx);
     }
 

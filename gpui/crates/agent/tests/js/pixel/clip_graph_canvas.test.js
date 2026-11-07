@@ -16,7 +16,7 @@ fixture({ seconds: 20, clips: [{ ...clipOf("Pulse"), graph }], rig: 4, window: [
 
 function open(preset = "Pulse") {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", preset));
   nav.graphPage();

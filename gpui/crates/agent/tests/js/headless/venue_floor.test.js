@@ -4,7 +4,7 @@
 // environment record, each kind of venue offers its own floors, and the
 // choice is still there when the venue page is opened again.
 
-fixture({ seconds: 20, rig: 4, window: [1500, 1100] });
+fixture({ seconds: 20, rig: 4, window: [1500, 1100], sql: ["INSERT INTO venues (id, uid, name) VALUES ('venue-spare', '$PRINCIPAL', 'Spare Venue')"] });
 
 // Every floor either kind of venue might offer.
 const FLOORS = ["Grass", "Dirt", "Fine sand", "Beach", "Gravelly sand", "Asphalt",
@@ -24,7 +24,7 @@ test("floors follow the kind of venue and survive reopening it", () => {
   const reopen = () => {
     // Let the write land, then leave the venue and come back.
     app.frames(20);
-    nav.closeTab();
+    nav.leaveVenue("Test Venue");
     nav.venuePage("Test Venue");
     until("the reopened environment", (s) => s.find({ role: "card", label: "Venue environment" }));
     return floor(until("the saved floor", (s) => floor(s) !== null));

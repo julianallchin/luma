@@ -111,28 +111,57 @@ fn assert_card_geometry(label: &str, card: &Value) {
 
 #[test]
 fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
+    // A remembered venue opens straight onto its shell; the dialog's create
+    // and join routes open over it from the title bar's venue menu.
     let restored_dir = fixture_dir("routes", true);
-    let mut routes = harness(
-        &restored_dir,
-        luma_app::NavigationFixture {
-            // Every catalogue read is held, so the picker's loading route is
-            // on screen when the venue switcher opens it.
-            catalogue_responses: vec![
-                (Duration::from_millis(1_500), None),
-                (Duration::from_millis(1_500), None),
-            ],
-            ..Default::default()
-        },
-    );
+    let mut routes = harness(&restored_dir, luma_app::NavigationFixture::default());
     let shots = routes.run(
         &support::script(
             r#"
-        // A remembered venue opens straight onto its shell (behind the boot
-        // splash); the picker, and its loading route, open from the switcher.
-        const baseState = until("the restored venue shell", (s) =>
+        until("the restored venue shell", (s) =>
             s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
         const base = app.screenshot().path;
-        app.click(baseState.find({ role: "button", label: "Pixel Venue" }));
+        const route = (row, ready) => {
+            nav.venueMenu();
+            nav.step(row, "row", row);
+            const shot = until(`the ${row} route`, ready);
+            return { shot, card: shot.find({ role: "card", label: "Venue dialog" }) };
+        };
+        const create = route("New venue…", (s) =>
+            s.find({ role: "input", label: "Venue name" })?.focused === true ? s : undefined);
+        const createShot = app.screenshot().path;
+        const createCardShot = app.screenshot({ node: create.card }).path;
+        app.key("escape");
+        until("the dialog gone", (s) => s.find({ role: "card", label: "Venue dialog" }) === undefined);
+        const join = route("Join with code…", (s) =>
+            s.find({ role: "text", label: "Join a venue" }) !== undefined ? s : undefined);
+        ({ base,
+           create: createShot,
+           createCardShot,
+           createBounds: create.card.bounds,
+           join: app.screenshot().path,
+           joinCardShot: app.screenshot({ node: join.card }).path,
+           joinBounds: join.card.bounds })
+        "#,
+        ),
+        GPU_LIVENESS_TIMEOUT,
+    );
+    drop(routes);
+
+    // With no venue remembered the picker is the window: its loading route,
+    // then the list.
+    let launch_dir = fixture_dir("launch", false);
+    let mut launch = harness(
+        &launch_dir,
+        luma_app::NavigationFixture {
+            // The catalogue read is held, so the loading route is on screen.
+            catalogue_responses: vec![(Duration::from_millis(1_500), None)],
+            ..Default::default()
+        },
+    );
+    let launch_shots = launch.run(
+        &support::script(
+            r#"
         let shot = until("the loading route", (s) =>
             s.find({ role: "text", label: "Loading venues…" }) !== undefined);
         const loadingCard = shot.find({ role: "card", label: "Venue dialog" });
@@ -142,29 +171,19 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
             s.find({ role: "input", label: "Search venues…" })?.focused === true
                 && s.find({ role: "card", label: "Pixel Venue" }) !== undefined);
         const browseCard = shot.find({ role: "card", label: "Venue dialog" });
-        const browse = app.screenshot().path;
-        const browseCardShot = app.screenshot({ node: browseCard }).path;
-
-        app.click(shot.find({ role: "button", label: "Create venue" }));
-        shot = until("the create route", (s) =>
-            s.find({ role: "input", label: "Venue name" })?.focused === true);
-        const createCard = shot.find({ role: "card", label: "Venue dialog" });
         ({ loading,
            loadingCardShot,
            loadingBounds: loadingCard.bounds,
-           base,
-           browse,
-           browseCardShot,
-           browseBounds: browseCard.bounds,
-           create: app.screenshot().path,
-           createCardShot: app.screenshot({ node: createCard }).path,
-           createBounds: createCard.bounds })
+           browse: app.screenshot().path,
+           browseCardShot: app.screenshot({ node: browseCard }).path,
+           browseBounds: browseCard.bounds })
         "#,
         ),
         GPU_LIVENESS_TIMEOUT,
     );
+    drop(launch);
 
-    let error_dir = fixture_dir("error", true);
+    let error_dir = fixture_dir("error", false);
     let long_error = format!(
         "Pixel catalogue failure while reading venue metadata.\n{}\n{}",
         "UNBROKEN_ERROR_TOKEN_".repeat(180),
@@ -176,19 +195,12 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     let mut error = harness(
         &error_dir,
         luma_app::NavigationFixture {
-            // Boot reads the catalogue once to restore the venue; the
-            // switcher's read is the one that fails.
-            catalogue_responses: vec![
-                (Duration::from_millis(1_500), None),
-                (Duration::from_millis(1_500), Some(long_error)),
-            ],
+            // The launch picker's read is the one that fails.
+            catalogue_responses: vec![(Duration::from_millis(1_500), Some(long_error))],
             ..Default::default()
         },
     );
     let error_shots = error.run(&support::script(r#"
-        const shell = until("the restored venue shell", (s) =>
-            s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
-        app.click(shell.find({ role: "button", label: "Pixel Venue" }));
         until("the loading route", (s) =>
             s.find({ role: "text", label: "Loading venues…" }) !== undefined);
         const errorLoading = app.screenshot().path;
@@ -207,8 +219,9 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         "#), GPU_LIVENESS_TIMEOUT);
 
     for (label, bounds) in [
-        ("loading", &shots["loadingBounds"]),
-        ("browse", &shots["browseBounds"]),
+        ("loading", &launch_shots["loadingBounds"]),
+        ("browse", &launch_shots["browseBounds"]),
+        ("join", &shots["joinBounds"]),
         ("create", &shots["createBounds"]),
         ("error", &error_shots["errorBounds"]),
     ] {
@@ -253,10 +266,17 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         "venue error geometry: card=({card_x:.0},{card_y:.0}) {card_width:.0}x{card_height:.0}; viewport=({viewport_x:.0},{viewport_y:.0}) {viewport_width:.0}x{viewport_height:.0}; text=({text_x:.0},{text_y:.0}) {text_width:.0}x{text_height:.0}"
     );
 
-    let loading = preserve(shots["loading"].as_str().unwrap(), "venues/venue-loading");
+    let loading = preserve(
+        launch_shots["loading"].as_str().unwrap(),
+        "venues/venue-loading",
+    );
     let base = preserve(shots["base"].as_str().unwrap(), "venues/venue-shell-base");
-    let browse = preserve(shots["browse"].as_str().unwrap(), "venues/venue-browse");
+    let browse = preserve(
+        launch_shots["browse"].as_str().unwrap(),
+        "venues/venue-browse",
+    );
     let create = preserve(shots["create"].as_str().unwrap(), "venues/venue-create");
+    let join = preserve(shots["join"].as_str().unwrap(), "venues/venue-join");
     let error_loading = preserve(
         error_shots["errorLoading"].as_str().unwrap(),
         "venues/venue-error-loading",
@@ -264,16 +284,20 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     let error = preserve(error_shots["error"].as_str().unwrap(), "venues/venue-error");
     let card_paths = [
         preserve(
-            shots["loadingCardShot"].as_str().unwrap(),
+            launch_shots["loadingCardShot"].as_str().unwrap(),
             "venues/venue-loading-card",
         ),
         preserve(
-            shots["browseCardShot"].as_str().unwrap(),
+            launch_shots["browseCardShot"].as_str().unwrap(),
             "venues/venue-browse-card",
         ),
         preserve(
             shots["createCardShot"].as_str().unwrap(),
             "venues/venue-create-card",
+        ),
+        preserve(
+            shots["joinCardShot"].as_str().unwrap(),
+            "venues/venue-join-card",
         ),
         preserve(
             error_shots["errorCardShot"].as_str().unwrap(),
@@ -284,38 +308,44 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     let loading_pixels = support::image::decode(&loading);
     let base_pixels = support::image::decode(&base);
     let browse_pixels = support::image::decode(&browse);
+    let join_pixels = support::image::decode(&join);
     let create_pixels = support::image::decode(&create);
     let error_loading_pixels = support::image::decode(&error_loading);
     let error_pixels = support::image::decode(&error);
     let shell_edge_before = edge_energy(&base_pixels, 300..850, 2..34);
-    let shell_edge_after = edge_energy(&browse_pixels, 300..850, 2..34);
-    let sidebar_edge_before = edge_energy(&base_pixels, 8..250, 2..34);
-    let sidebar_edge_after = edge_energy(&browse_pixels, 8..250, 2..34);
-    let shell_change = differing_fraction(&base_pixels, &browse_pixels, CHANNEL_NOISE);
-    let browse_create_change = differing_fraction(&browse_pixels, &create_pixels, CHANNEL_NOISE);
+    let shell_edge_after = edge_energy(&create_pixels, 300..850, 2..34);
+    let agent_edge_before = edge_energy(&base_pixels, 8..250, 2..34);
+    let agent_edge_after = edge_energy(&create_pixels, 8..250, 2..34);
+    let shell_change = differing_fraction(&base_pixels, &create_pixels, CHANNEL_NOISE);
+    let join_create_change = differing_fraction(&join_pixels, &create_pixels, CHANNEL_NOISE);
     let error_change = differing_fraction(&error_loading_pixels, &error_pixels, CHANNEL_NOISE);
+    let browse_change = differing_fraction(&loading_pixels, &browse_pixels, CHANNEL_NOISE);
     println!(
-        "venue pixels: shell changed={shell_change:.3}, browse/create={browse_create_change:.3}, error transition={error_change:.3}; titlebar edge shell {shell_edge_before:.3}->{shell_edge_after:.3}, sidebar {sidebar_edge_before:.3}->{sidebar_edge_after:.3}"
+        "venue pixels: shell changed={shell_change:.3}, join/create={join_create_change:.3}, error transition={error_change:.3}, loading/browse={browse_change:.3}; titlebar edge shell {shell_edge_before:.3}->{shell_edge_after:.3}, agent panel {agent_edge_before:.3}->{agent_edge_after:.3}"
     );
     assert!(
         shell_change > 0.20,
         "venue modal did not visibly scrim/blur the production shell: {shell_change:.3}"
     );
     assert!(
-        browse_create_change > 0.02,
-        "browse and create rendered as the same route: {browse_create_change:.3}"
+        join_create_change > 0.02,
+        "join and create rendered as the same route: {join_create_change:.3}"
     );
     assert!(
         error_change > 0.005,
         "loading and error rendered as the same route: {error_change:.3}"
     );
     assert!(
+        browse_change > 0.005,
+        "loading and browse rendered as the same route: {browse_change:.3}"
+    );
+    assert!(
         shell_edge_after < shell_edge_before,
         "shell backdrop did not reduce titlebar edge energy: {shell_edge_before:.3}->{shell_edge_after:.3}"
     );
     assert!(
-        sidebar_edge_after < sidebar_edge_before,
-        "sidebar backdrop did not reduce titlebar edge energy: {sidebar_edge_before:.3}->{sidebar_edge_after:.3}"
+        agent_edge_after < agent_edge_before,
+        "agent panel backdrop did not reduce titlebar edge energy: {agent_edge_before:.3}->{agent_edge_after:.3}"
     );
     assert!(
         differing_fraction(&loading_pixels, &error_loading_pixels, CHANNEL_NOISE) < 0.02,
@@ -386,14 +416,14 @@ fn venue_dialog_frame_cost() {
 
         // Re-snapshot: the handle from `until` is 24 frames stale by now.
         app.click(app.snapshot().find({ role: "button", label: "Pixel Venue" }));
-        until("the browse route", (s) =>
-            s.find({ role: "input", label: "Search venues…" }) !== undefined);
+        until("the venue menu", (s) =>
+            s.find({ role: "row", label: "New venue…" }) !== undefined);
         app.frames(12, { waitMs: 16 });
         const settledFrom = app.frames(1).frame;
         app.frames(24, { waitMs: 16 });
         const settledTo = app.frames(1).frame;
 
-        app.click(app.snapshot().find({ role: "button", label: "Create venue" }));
+        app.click(app.snapshot().find({ role: "row", label: "New venue…" }));
         app.frames(24, { waitMs: 16 });
         const morphTo = app.frames(1).frame;
         ({ shellFrom, shellTo, settledFrom, settledTo, morphTo,
@@ -415,13 +445,13 @@ fn venue_dialog_frame_cost() {
         frames,
         number("settledFrom"),
         number("settledTo"),
-        "settled dialog",
+        "settled venue menu",
     );
     let morphing = support::cost::summarize(
         frames,
         number("settledTo"),
         number("morphTo"),
-        "morphing dialog",
+        "menu to create dialog",
     );
     println!(
         "dialog costs {:.2} ms/frame over the shell",
@@ -527,8 +557,8 @@ fn venue_dialog_frame_cost_with_a_long_list() {
         const shellTo = app.frames(1).frame;
 
         app.click(app.snapshot().find({ role: "button", label: "Pixel Venue 0000" }));
-        until("the browse route", (s) =>
-            s.find({ role: "input", label: "Search venues…" }) !== undefined);
+        until("the venue menu", (s) =>
+            s.find({ role: "row", label: "New venue…" }) !== undefined);
         app.frames(12, { waitMs: 16 });
         const settledFrom = app.frames(1).frame;
         app.frames(24, { waitMs: 16 });
@@ -536,7 +566,7 @@ fn venue_dialog_frame_cost_with_a_long_list() {
 
         // Only the flight itself: a wider window averages in the create route,
         // which is a handful of controls and reads as the morph getting cheaper.
-        app.click(app.snapshot().find({ role: "button", label: "Create venue" }));
+        app.click(app.snapshot().find({ role: "row", label: "New venue…" }));
         app.frames(12, { waitMs: 16 });
         const flightTo = app.frames(1).frame;
         app.frames(24, { waitMs: 16 });
@@ -560,13 +590,13 @@ fn venue_dialog_frame_cost_with_a_long_list() {
         frames,
         number("settledFrom"),
         number("settledTo"),
-        "browse route (list)",
+        "venue menu (list)",
     );
     let flight = support::cost::summarize(
         frames,
         number("settledTo"),
         number("flightTo"),
-        "browse->create flight",
+        "menu->create flight",
     );
     let create = support::cost::summarize(
         frames,

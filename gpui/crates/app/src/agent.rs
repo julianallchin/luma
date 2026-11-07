@@ -1,10 +1,10 @@
-//! Each tab owns its chat. A score tab's chats are that score's; the venue
-//! tab's chats are the venue's, and the Perform tab's are its Perform set's
-//! (`docs/specs/venue-tabs.md` rules 3 and 4).
+//! Each mode body owns its chat, and the agent panel shows the one on screen.
+//! The open score's chats are that score's; Rig's are the venue's, and Live's
+//! are its Perform set's (`docs/specs/comet-shell.md` §3).
 //!
 //! Every panel shares the app's one [`RunningTurns`], so a turn belongs to its
-//! thread and not to whichever tab is in front: switching tabs or venues lets
-//! go of the view and leaves the turn running.
+//! thread and not to whichever mode is on screen: switching modes or venues
+//! lets go of the view and leaves the turn running.
 
 use std::collections::HashMap;
 
@@ -16,14 +16,14 @@ use luma_ui::ladder;
 use luma_ui::node::{Instrument, Role};
 
 use crate::shell::Body;
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::Luma;
 
-/// One tab's chat panel, and what the tab's status dot needs beyond it.
-pub(crate) struct TabChat {
+/// One body's chat panel, and what its status dot needs beyond it.
+pub(crate) struct BodyChat {
     pub(crate) panel: Entity<AgentChat>,
-    /// The panel's turn ended while the tab was not in front. Cleared when the
-    /// tab is viewed.
+    /// The panel's turn ended while its body was not on screen. Cleared when
+    /// the body is viewed.
     unseen: bool,
     _requests: Subscription,
 }
@@ -31,12 +31,12 @@ pub(crate) struct TabChat {
 /// What a tab's dot says. There is no "needs input": no turn event asks the
 /// reader anything yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TabStatus {
+pub(crate) enum ChatStatus {
     Working,
     Finished,
 }
 
-impl TabStatus {
+impl ChatStatus {
     /// The stronger of two: a working tab outranks one that finished.
     pub(crate) fn max(self, other: Self) -> Self {
         if self == Self::Working || other == Self::Working {
@@ -47,12 +47,12 @@ impl TabStatus {
     }
 }
 
-/// The dot itself, in the size and recipe of the sidebar's coverage dot.
+/// The dot itself, in the size and recipe of the song list's coverage dot.
 /// `subject` names it in the automation tree.
-pub(crate) fn status_dot(status: TabStatus, subject: &str) -> impl IntoElement {
+pub(crate) fn status_dot(status: ChatStatus, subject: &str) -> impl IntoElement {
     let (color, word) = match status {
-        TabStatus::Working => (ladder::status_warn(), "working"),
-        TabStatus::Finished => (ladder::status_ok(), "finished"),
+        ChatStatus::Working => (ladder::status_warn(), "working"),
+        ChatStatus::Finished => (ladder::status_ok(), "finished"),
     };
     div()
         .flex_none()
@@ -79,7 +79,7 @@ pub(crate) fn scope(target: &Target) -> ThreadScope {
 /// how its timeline stands when it is a score, or its page and what plays
 /// when it is Perform.
 fn turn_context(app: &Luma, target: &Target) -> TurnContext {
-    let body = app.parked.body(&app.workspace, target);
+    let body = app.venues.body(&app.workspace, target);
     TurnContext {
         scope: Some(scope(target)),
         editor: match body {
@@ -94,7 +94,7 @@ fn turn_context(app: &Luma, target: &Target) -> TurnContext {
 }
 
 impl Body {
-    pub(crate) fn chat(&self) -> &TabChat {
+    pub(crate) fn chat(&self) -> &BodyChat {
         match self {
             Self::TrackEditor(state) => &state.chat,
             Self::Patch(state) => &state.chat,
@@ -102,7 +102,7 @@ impl Body {
         }
     }
 
-    fn chat_mut(&mut self) -> &mut TabChat {
+    fn chat_mut(&mut self) -> &mut BodyChat {
         match self {
             Self::TrackEditor(state) => &mut state.chat,
             Self::Patch(state) => &mut state.chat,
@@ -114,12 +114,12 @@ impl Body {
 impl Luma {
     /// A chat panel for `target`. It shows `thread` when one is named — the
     /// chat a restored tab had open — and else the subject's newest chat.
-    pub(crate) fn tab_chat(
+    pub(crate) fn body_chat(
         &mut self,
         target: &Target,
         thread: Option<&str>,
         cx: &mut Context<Self>,
-    ) -> TabChat {
+    ) -> BodyChat {
         let agent = self.library.agent();
         let running = self.running.clone();
         // Weak, so the panel the app owns does not own the app back. The panel
@@ -147,44 +147,45 @@ impl Luma {
                 this.show_subagents(child.clone(), cx);
             }
         });
-        TabChat {
+        BodyChat {
             panel,
             unseen: false,
             _requests: requests,
         }
     }
 
-    /// The front tab's chat panel, which is the one on screen.
+    /// The chat of the body on screen, which is the agent panel's.
     pub(crate) fn front_chat(&self) -> Option<&Entity<AgentChat>> {
         self.workspace.active_body().map(|body| &body.chat().panel)
     }
 
-    /// `target`'s dot, wherever its tab is. `None` for no dot, and for a
-    /// target with no open tab.
-    pub(crate) fn tab_status(&self, target: &Target, cx: &App) -> Option<TabStatus> {
-        status(self.parked.body(&self.workspace, target)?.chat(), cx)
+    /// `target`'s dot, wherever its body is. `None` for no dot, and for a
+    /// target with nothing open.
+    pub(crate) fn body_status(&self, target: &Target, cx: &App) -> Option<ChatStatus> {
+        status(self.venues.body(&self.workspace, target)?.chat(), cx)
     }
 
-    /// The dots of the venue on screen, by tab: what the sidebar's rows show.
-    pub(crate) fn tab_statuses(&self, cx: &App) -> HashMap<Target, TabStatus> {
+    /// The dots of the venue on screen, by body: what the mode switch and the
+    /// song list show.
+    pub(crate) fn body_statuses(&self, cx: &App) -> HashMap<Target, ChatStatus> {
         self.workspace
             .iter()
-            .filter_map(|tab| Some((tab.target.clone(), status(tab.body.chat(), cx)?)))
+            .filter_map(|slot| Some((slot.target.clone(), status(slot.body.chat(), cx)?)))
             .collect()
     }
 
-    /// The strongest dot among each venue's tabs, for the venues not on
-    /// screen: what the venue picker shows beside them.
-    pub(crate) fn venue_statuses(&self, cx: &App) -> HashMap<String, TabStatus> {
+    /// The strongest dot among each venue's bodies, for the venues not on
+    /// screen: what the venue menu shows beside them.
+    pub(crate) fn venue_statuses(&self, cx: &App) -> HashMap<String, ChatStatus> {
         let mut statuses = HashMap::new();
-        for (venue, tabs) in self.parked.sets(&self.workspace) {
-            if Some(venue) == self.parked.current() {
+        for (venue, tabs) in self.venues.sets(&self.workspace) {
+            if Some(venue) == self.venues.current() {
                 continue;
             }
             if let Some(found) = tabs
                 .iter()
                 .filter_map(|tab| status(tab.body.chat(), cx))
-                .reduce(TabStatus::max)
+                .reduce(ChatStatus::max)
             {
                 statuses.insert(venue.to_string(), found);
             }
@@ -192,10 +193,10 @@ impl Luma {
         statuses
     }
 
-    /// Viewing a tab clears its "finished" dot. Done at draw, for the reason
-    /// [`Luma::sync_venue_tabs`] is: every gesture that brings a tab to the
-    /// front only has to select it.
-    pub(crate) fn see_front_tab(&mut self) {
+    /// Viewing a body clears its "finished" dot. Done at draw, for the reason
+    /// [`Luma::sync_venue_modes`] is: every gesture that brings a body on
+    /// screen only has to select its mode.
+    pub(crate) fn see_front_body(&mut self) {
         if let Some(body) = self.workspace.active_body_mut() {
             body.chat_mut().unseen = false;
         }
@@ -219,8 +220,8 @@ impl Luma {
             RunningEvent::Ended { thread } => {
                 let front = self.workspace.active().cloned();
                 let ended: Vec<Target> = self
-                    .parked
-                    .tabs(&self.workspace)
+                    .venues
+                    .slots(&self.workspace)
                     .filter(|tab| Some(&tab.target) != front.as_ref())
                     .filter(|tab| {
                         tab.body.chat().panel.read(cx).thread_id() == Some(thread.as_str())
@@ -228,7 +229,7 @@ impl Luma {
                     .map(|tab| tab.target.clone())
                     .collect();
                 for target in ended {
-                    if let Some(body) = self.parked.body_mut(&mut self.workspace, &target) {
+                    if let Some(body) = self.venues.body_mut(&mut self.workspace, &target) {
                         body.chat_mut().unseen = true;
                     }
                 }
@@ -241,15 +242,15 @@ impl Luma {
     fn agent_documents_changed(&mut self, cx: &mut Context<Self>) {
         // A commit can touch several documents, including delegated work. The
         // event deliberately carries no single editor subject.
-        self.agent_stale_tabs = self.all_targets();
-        self.refresh_agent_tabs(cx);
+        self.agent_stale = self.all_targets();
+        self.refresh_agent_bodies(cx);
         self.reload_stage(cx);
         self.refresh_score_listing(cx);
     }
 
     fn all_targets(&self) -> Vec<Target> {
-        self.parked
-            .tabs(&self.workspace)
+        self.venues
+            .slots(&self.workspace)
             .map(|tab| tab.target.clone())
             .collect()
     }
@@ -268,8 +269,8 @@ impl Luma {
         {
             return;
         }
-        self.agent_stale_tabs = self.all_targets();
-        self.refresh_agent_tabs(cx);
+        self.agent_stale = self.all_targets();
+        self.refresh_agent_bodies(cx);
         self.reload_stage(cx);
         self.refresh_score_listing(cx);
         // The venue list, when it is the thing on screen: a venue shared with
@@ -291,8 +292,8 @@ impl Luma {
 
     /// Reload the live tabs an agent commit or a sync left stale. Parked tabs
     /// stay marked until their venue comes back on screen.
-    pub(crate) fn refresh_agent_tabs(&mut self, cx: &mut Context<Self>) {
-        if self.agent_stale_tabs.is_empty() {
+    pub(crate) fn refresh_agent_bodies(&mut self, cx: &mut Context<Self>) {
+        if self.agent_stale.is_empty() {
             return;
         }
         let targets: Vec<_> = self
@@ -301,10 +302,10 @@ impl Luma {
             .map(|tab| tab.target.clone())
             .collect();
         for target in targets {
-            if !self.agent_stale_tabs.contains(&target) {
+            if !self.agent_stale.contains(&target) {
                 continue;
             }
-            self.agent_stale_tabs.retain(|stale| stale != &target);
+            self.agent_stale.retain(|stale| stale != &target);
             match &target {
                 Target::Score { .. } => self.reload_score_contents(target.clone(), cx),
                 Target::Venue { venue } => self.reload_patch(venue.clone(), cx),
@@ -314,10 +315,10 @@ impl Luma {
     }
 }
 
-fn status(chat: &TabChat, cx: &App) -> Option<TabStatus> {
+fn status(chat: &BodyChat, cx: &App) -> Option<ChatStatus> {
     if chat.panel.read(cx).is_streaming() {
-        Some(TabStatus::Working)
+        Some(ChatStatus::Working)
     } else {
-        chat.unseen.then_some(TabStatus::Finished)
+        chat.unseen.then_some(ChatStatus::Finished)
     }
 }

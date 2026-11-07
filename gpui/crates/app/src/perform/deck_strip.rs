@@ -1,5 +1,5 @@
-//! A deck as a strip, the way a DJ's booth screen shows one: what is loaded
-//! and where it is on the left, and a scrolling waveform on the right with
+//! A deck as a card in Live's deck panel, the way a DJ's booth screen shows one:
+//! what is loaded and where it is, over a scrolling waveform with
 //! the playhead fixed in the middle, the beats and bars ticked across it.
 //!
 //! Positions come from a poll every 100 ms. Between polls a playing deck runs
@@ -19,7 +19,6 @@ use luma_ui::{glass, ladder};
 /// Seconds of track either side of the playhead.
 const SPAN: f32 = 6.;
 const STRIP_HEIGHT: f32 = 64.;
-const INFO_WIDTH: f32 = 220.;
 
 /// What a strip draws for one library track, read once.
 pub(crate) struct TrackView {
@@ -107,8 +106,8 @@ pub(crate) fn strip(
     }
     let name = format!("Deck {}", deck.id);
     let info = div()
-        .w(px(INFO_WIDTH))
-        .flex_none()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap(px(2.))
@@ -170,8 +169,8 @@ pub(crate) fn strip(
         .w_full()
         .p(px(10.))
         .flex()
-        .items_center()
-        .gap(px(14.))
+        .flex_col()
+        .gap(px(10.))
         .rounded(px(luma_ui::radius::ROW))
         .bg(glass::card_bg())
         .border_1()
@@ -183,7 +182,7 @@ pub(crate) fn strip(
         .child(info)
         .child(
             div()
-                .flex_1()
+                .w_full()
                 .h(px(STRIP_HEIGHT))
                 .rounded(px(4.))
                 .overflow_hidden()
@@ -310,16 +309,14 @@ pub(crate) fn tempo_strip(
         .w_full()
         .p(px(10.))
         .flex()
-        .items_center()
-        .gap(px(14.))
+        .flex_col()
+        .gap(px(10.))
         .rounded(px(luma_ui::radius::ROW))
         .bg(glass::card_bg())
         .border_1()
         .border_color(glass::hairline(0.08))
         .child(
             div()
-                .w(px(INFO_WIDTH))
-                .flex_none()
                 .flex()
                 .flex_col()
                 .gap(px(2.))
@@ -339,7 +336,6 @@ pub(crate) fn tempo_strip(
                 ),
         )
         .child(beats)
-        .child(div().flex_1())
-        .child(controls)
+        .child(div().flex().flex_wrap().gap(px(4.)).child(controls))
         .agent_node(Role::Card, format!("Tapped tempo: {readout}"))
 }

@@ -374,7 +374,7 @@ impl Luma {
     /// The sheet of tab `target`, shown or parked: where the answer to a
     /// request it made lands.
     fn sheet_at(&mut self, target: &Target) -> Option<&mut State> {
-        sheet_mut(self.parked.body_mut(&mut self.workspace, target)?)
+        sheet_mut(self.venues.body_mut(&mut self.workspace, target)?)
     }
 
     /// The subject's graph, as the canvas shows it.
@@ -983,7 +983,7 @@ impl Luma {
     /// Write what the live edits of tab `target`'s sheet owe its host: the
     /// score, or the Perform pattern.
     pub(crate) fn flush_sheet(&mut self, target: &Target, cx: &mut Context<Self>) {
-        match self.parked.body_mut(&mut self.workspace, target) {
+        match self.venues.body_mut(&mut self.workspace, target) {
             Some(Body::TrackEditor(editor)) => {
                 if editor.graph_score.is_some() {
                     self.commit_graph_score_for(target.clone(), cx);

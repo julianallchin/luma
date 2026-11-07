@@ -41,10 +41,10 @@ const summarise = (values) => {
 // release build. A debug pixel build on a loaded Linux host (load 35) reads
 // the median ratio at 1.85-2.2x, so run it by changing `test.skip` to `test`
 // on a quiet machine before judging the canvas.
-test.skip("a sidebar slide costs the timeline no cliff over holding still", () => {
+test.skip("an agent panel slide costs the timeline no cliff over holding still", () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   until("a decoded heatmap", (s) => s.findAll({ role: "card" }).some((n) => n.label.endsWith(" preview")));
 
@@ -79,7 +79,7 @@ test.skip("a sidebar slide costs the timeline no cliff over holding still", () =
   const widths = new Set();
   const slide = [];
   for (let round = 0; round < 6; round += 1) {
-    app.action("luma::ToggleSidebar");
+    app.action("luma::ToggleAgent");
     let previous = null;
     for (let i = 0; i < 40; i += 1) {
       const sample = step();
@@ -88,7 +88,7 @@ test.skip("a sidebar slide costs the timeline no cliff over holding still", () =
       previous = sample.width;
     }
   }
-  assert(widths.size >= 4, `the canvas never slid, so the sidebar toggle was snapped: widths ${[...widths]}`);
+  assert(widths.size >= 4, `the canvas never slid, so the agent toggle was snapped: widths ${[...widths]}`);
   const calm = summarise(still);
   const moving = summarise(slide);
   expect(moving.n).toBeGreaterThan(7);

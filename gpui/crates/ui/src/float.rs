@@ -10,11 +10,11 @@
 //! and prose reads the same whatever plane it lands on. Nothing in this module
 //! writes a colour or a corner down.
 
-use crate::motion::FadeHover;
 use crate::icons::IconName;
+use crate::motion::FadeHover;
 use crate::rpx;
 use gpui::prelude::*;
-use gpui::{div, AnimationExt, AnyElement, App, Div, FontWeight, SharedString, Window};
+use gpui::{div, AnimationExt, AnyElement, App, Div, FontWeight, Hsla, SharedString, Window};
 use gpui_component::Icon;
 
 use crate::node::Instrument as _;
@@ -651,15 +651,16 @@ pub(crate) fn chip_plate(enabled: Enabled) -> Div {
         .flex_shrink_0()
         .gap(rpx(6.0))
         .h(rpx(crate::CONTROL_HEIGHT))
-        .rounded(rpx(radius::ROW))
+        .rounded(rpx(radius::CONTROL))
         .text_size(rpx(12.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(ladder::foreground_alpha(0.9))
-        .bg(glass::ink(0.06))
+        // A button's plate is the pressed wash; hover lifts it to selected.
+        .bg(glass::wash(glass::WASH_PRESSED))
         .when(enabled == Enabled::Yes, |el| {
             el.cursor_pointer().hover(|style| {
                 style
-                    .bg(glass::glass_hover())
+                    .bg(glass::wash(glass::WASH_REST))
                     .text_color(ladder::foreground())
             })
         })
@@ -712,8 +713,15 @@ pub fn field() -> Div {
 // Segmented
 // ---------------------------------------------------------------------------
 
-/// One-of-N controls use a recessed track and a rounded selected cell.
-/// Build cells with [`segment`] so each can carry its own id and handler.
+/// One-of-N controls: a faint track with no edge, and the chosen cell
+/// lifted to the selected wash. Build cells with [`segment`] so each can
+/// carry its own id and handler. Every one-of-N switch in the app is one of
+/// these; a caller may size it, never colour it.
+///
+/// **Opaque.** The track and its cells are zeron's washes laid over the
+/// page's ground once, here, rather than translucent over whatever is
+/// behind them: a translucent track reads lighter on a panel than on the
+/// window's trim, and the same control would show two colours in one window.
 pub fn segmented() -> Div {
     div()
         .flex()
@@ -724,9 +732,17 @@ pub fn segmented() -> Div {
         .h(rpx(crate::CONTROL_HEIGHT))
         .p(rpx(SEGMENT_GAP))
         .rounded(rpx(radius::ROW))
-        .border_1()
-        .border_color(glass::hairline(0.08))
-        .bg(glass::ink(0.03))
+        .bg(segment_track())
+}
+
+/// The track: zeron's `#ffffff08` over the page's ground.
+fn segment_track() -> Hsla {
+    Hsla::from(ladder::background()).blend(glass::ink(SEGMENT_TRACK_ALPHA))
+}
+
+/// A cell's plate: a wash of `alpha` over the track.
+fn segment_plate(alpha: f32) -> Hsla {
+    segment_track().blend(glass::wash(alpha))
 }
 
 /// One cell of a [`segmented`] track. The caller adds `.id()` and the click.
@@ -736,7 +752,7 @@ pub fn segmented() -> Div {
 pub fn segment(
     label_text: impl Into<SharedString>,
     chosen: bool,
-    fade_key: impl Into<SharedString>,
+    _fade_key: impl Into<SharedString>,
 ) -> Div {
     let cell = div()
         .flex()
@@ -750,14 +766,23 @@ pub fn segment(
         .text_size(rpx(12.0))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .text_color(ladder::foreground_alpha(if chosen { 1.0 } else { 0.55 }))
+        .text_color(ladder::foreground_alpha(if chosen {
+            1.0
+        } else {
+            glass::TEXT_SECONDARY
+        }))
         .child(select::sentence_case(&label_text.into()));
-    let state = if chosen {
-        RowState::Selected
+    // A flat lift, not a list row's ringed selection: the track already
+    // says these cells belong together.
+    if chosen {
+        cell.bg(segment_plate(glass::WASH_REST))
     } else {
-        RowState::Rest
-    };
-    row_state_paint(cell, state, fade_key)
+        cell.hover(|style| {
+            style
+                .bg(segment_plate(glass::WASH_SUBTLE))
+                .text_color(ladder::foreground())
+        })
+    }
 }
 
 /// A [`segmented`] track as a capsule, for a one-of-N switch that stands
@@ -820,6 +845,10 @@ const SWITCH_TRAVEL: f32 = SWITCH_WIDTH - SWITCH_KNOB - 2.0 * SWITCH_INSET;
 /// because a cell's plate must clear the track's edge by exactly what it
 /// clears its neighbour by or the row reads as ragged.
 const SEGMENT_GAP: f32 = 2.0;
+
+/// The segmented track's own wash — zeron's `#ffffff08`, quieter than a
+/// hover so a cell's lift still reads over it.
+const SEGMENT_TRACK_ALPHA: f32 = 0x08 as f32 / 255.0;
 
 /// A cell's own horizontal inset. Wider than [`SEGMENT_GAP`] so a two-letter
 /// label still reads as a cell rather than as a word in a box.
@@ -1676,6 +1705,23 @@ pub fn error_row(message: impl Into<SharedString>) -> Div {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A segmented control is one colour wherever it sits: opaque, so the
+    /// ground behind it cannot show through, and still stepped — the chosen
+    /// cell over its hover over the track over the page.
+    #[test]
+    fn a_segmented_control_does_not_borrow_its_colour_from_its_ground() {
+        let (track, hover, chosen) = (
+            segment_track(),
+            segment_plate(glass::WASH_SUBTLE),
+            segment_plate(glass::WASH_REST),
+        );
+        for plate in [track, hover, chosen] {
+            assert_eq!(plate.a, 1.0);
+        }
+        let ground = Hsla::from(ladder::background()).l;
+        assert!(ground < track.l && track.l < hover.l && hover.l < chosen.l);
+    }
 
     /// The bug this module exists to not have: selection and the keyboard
     /// cursor resolving to the same paint.

@@ -34,7 +34,7 @@ pub const SPACE_MD: f32 = 12.0;
 pub const SPACE_LG: f32 = 16.0;
 
 /// The panel's own header.
-pub const HEADER_HEIGHT: f32 = 44.0;
+pub const HEADER_HEIGHT: f32 = luma_ui::dialog::TITLEBAR_CLEARANCE;
 /// Reserved for the working indicator, always — reserving it is what keeps the
 /// composer from shifting the moment a turn starts.
 pub const STATUS_STRIP_HEIGHT: f32 = 24.0;

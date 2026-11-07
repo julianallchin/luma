@@ -1,26 +1,22 @@
-//! The sidebar's second level: one track's scores.
+//! A song's scores, expanded in place under its row on the song list.
 //!
 //! A score is a `(track, venue)` document owned by one principal, and a pair
-//! holds as many of them as there are principals who annotated it. Each score
-//! opens as its own tab, so two scores of one track can be open side by side.
+//! holds as many of them as there are principals who annotated it. One score
+//! is open at a time: choosing one opens it in Arrange and closes the list.
 //!
-//! # Why a level and not a strip
+//! # Why in place
 //!
 //! Scores are *navigation*: choosing one is choosing what the timeline is a
 //! view of, which is the same kind of act as choosing the track. So they live
-//! where the track list lives, one push deeper — the column's subject narrows
-//! from "this venue's library" to "this track's documents", and the way back
-//! is the way back. A strip above the canvas would have made the same choice
-//! read as a property of the editor, which it is not.
+//! where the track is, one press deeper, and the way back is the same press.
 //!
 //! # This venue's scores are the list; the others are context
 //!
 //! The listing is cross-venue ([`Library::scores_across_venues`]) because "the
 //! same track, scored in the warehouse too" is the fact the operator cannot
 //! otherwise find. Only the open venue's rows answer the pointer: another
-//! venue's score belongs to that venue's tab set.
+//! venue's score belongs to that venue.
 
-use luma_ui::motion::FadeHover;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -28,19 +24,16 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use luma_ui::float::{self, RowState};
 use luma_ui::glass;
-use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::node::{Instrument, Role};
 use luma_ui::text_input::{self, TextInput, DRAFT_CONTEXT};
 
 use luma_lib::models::scores::ScoreSummary;
 use luma_lib::models::tracks::TrackBrowserRow;
 
-use super::{track_face, Level, PAD_X};
-use crate::agent::TabStatus;
-use crate::tabs::Target;
+use crate::agent::ChatStatus;
+use crate::workspace::Target;
 use crate::Luma;
 
-/// One score, as the level reads it. Everything here is resolved once, when
-/// the listing lands: a draw compares strings and paints, and never asks the
 /// seam or the clock anything.
 pub(crate) struct ScoreRow {
     pub(crate) id: SharedString,
@@ -138,30 +131,29 @@ fn short_uid(uid: &str) -> String {
 }
 
 /// The level's whole state: the track it is about, and the listing for it.
+
+/// One song's expansion: the track it is about, where in the list it was
+/// expanded, and the listing for it.
 ///
-/// The track is a *snapshot*, not an index into the browser's rows: the head
-/// has to keep drawing the same track while the push plays, and the filters
-/// behind it can admit a different set by the time it lands.
+/// The track is a *snapshot*, not an index into the page's rows: the filters
+/// behind it can admit a different set while it is open.
 pub(crate) struct Scores {
     pub(crate) track: TrackBrowserRow,
-    /// The way back, and the level's keyboard seat. Focused on arrival so `←`
-    /// and Escape have a dispatch path in the sidebar's key context the
-    /// instant the level is up — a level nothing focuses is a level the
-    /// keyboard cannot leave.
-    back_focus: FocusHandle,
+    /// The folder the song was expanded under, or none under All songs. A song
+    /// is listed once per place, and expands at the one that was pressed.
+    pub(crate) folder: Option<String>,
     pub(crate) rows: Rc<[ScoreRow]>,
     /// Whether the listing has come back. Written in the same assignment as
     /// [`Self::rows`] and [`Self::error`], so "still loading" and "no scores"
     /// can never be confused for one another.
     pub(crate) loaded: bool,
     pub(crate) error: Option<String>,
-    /// The context menu a right-click raised, or none. Held by the level and
-    /// not by the row: a row is rebuilt every frame from the listing, and the
-    /// menu has to outlive that — and there is exactly one, because two menus
-    /// open at once is the bug the single slot rules out.
+    /// The context menu a right-click raised, or none. Held here and not by
+    /// the row: a row is rebuilt every frame from the listing, and the menu
+    /// has to outlive that.
     pub(crate) menu: Option<ScoreMenu>,
-    /// The score whose name is being typed, or none. One slot for the same
-    /// reason as [`Self::menu`]: one caret is what a person has.
+    /// The score whose name is being typed, or none. One caret is what a
+    /// person has.
     rename: Option<Rename>,
 }
 
@@ -200,109 +192,93 @@ impl ScoreRow {
         self.name.clone().unwrap_or_else(|| self.author.clone())
     }
 
-    /// The line under the title: clips, age and what the agent spent.
+    /// The line beside the title: clips, age and what the agent spent.
     pub(crate) fn detail(&self) -> SharedString {
         format!("{} patterns · {}{}", self.clips, self.age, self.spend).into()
     }
 }
 
-impl Scores {
-    /// This venue's rows, which are the ones that answer the pointer.
-    fn here<'a>(&'a self, venue: &'a str) -> impl Iterator<Item = &'a ScoreRow> {
-        self.rows.iter().filter(move |row| row.venue_id == venue)
+impl super::Tracks {
+    /// Tell the list an expansion changed height: its entry is measured again
+    /// on the next draw, and the rows around it keep theirs.
+    fn remeasure(&mut self, track_id: &str) {
+        let Some(row) = self.rows.iter().position(|row| row.id == track_id) else {
+            return;
+        };
+        let at: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry, super::Entry::Scores { row: r, .. } if *r == row))
+            .map(|(index, _)| index)
+            .collect();
+        for index in at {
+            self.list.splice(index..index + 1, 1);
+        }
     }
 }
 
 // -- navigation and writes ----------------------------------------------------
 
 impl Luma {
-    /// Push the sidebar to `track_id`'s scores, with the row that named it
-    /// flying from `row_top` (region-local, see [`super::Push`]) to the head.
+    /// Expand `track_id` to its scores under the row pressed at `folder`, or
+    /// fold them away. A song open in one place and pressed in another moves
+    /// there.
     ///
-    /// The listing is read fresh on every push rather than cached with the
-    /// browser row: a score minted in another window is exactly the thing this
-    /// level exists to show, and a cache would be showing yesterday's answer
-    /// to the question the push just asked.
-    pub(crate) fn show_scores(
+    /// The listing is read fresh on every expansion rather than cached with
+    /// the row: a score minted in another window is exactly the thing this
+    /// exists to show.
+    pub(crate) fn toggle_track_scores(
         &mut self,
         track_id: &str,
-        row_top: f32,
-        window: &mut Window,
+        folder: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(browser) = &self.sidebar else {
+        let Some(songs) = &mut self.songs else {
             return;
         };
-        let Some(track) = browser.find(track_id) else {
+        songs.menu = None;
+        if let Some(open) = songs.scores.get_mut(track_id) {
+            if open.folder == folder {
+                songs.scores.remove(track_id);
+            } else {
+                open.folder = folder;
+            }
+            songs.refilter();
+            cx.notify();
+            return;
+        }
+        let Some(track) = songs.find(track_id) else {
             return;
         };
+        songs.scores.insert(
+            track_id.to_string(),
+            Scores {
+                track,
+                folder,
+                rows: Vec::new().into(),
+                loaded: false,
+                error: None,
+                menu: None,
+                rename: None,
+            },
+        );
+        songs.refilter();
+        cx.notify();
+        self.load_track_scores(track_id, cx);
+    }
+
+    /// Read `track_id`'s listing into its expansion.
+    fn load_track_scores(&mut self, track_id: &str, cx: &mut Context<Self>) {
         let pending = self.library.scores_across_venues(track_id);
         let user = self.library.user_id();
-        let track_id = track.id.clone();
-        let back_focus = cx.focus_handle().tab_stop(true);
-        window.focus(&back_focus, cx);
-        if let Some(browser) = &mut self.sidebar {
-            browser.enter(
-                Scores {
-                    track,
-                    back_focus,
-                    rows: Vec::new().into(),
-                    loaded: false,
-                    error: None,
-                    menu: None,
-                    rename: None,
-                },
-                row_top,
-                cx,
-            );
-        }
-        cx.notify();
+        let track_id = track_id.to_string();
         cx.spawn(async move |this, cx| {
             let listing = pending.await;
             this.update(cx, |this, cx| {
                 this.with_scores(&track_id, cx, |level| {
                     level.loaded = true;
                     match listing {
-                        Ok(summaries) => level.rows = rows(&summaries, user.as_deref()),
-                        Err(error) => level.error = Some(error.to_string()),
-                    }
-                });
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    pub(crate) fn refresh_score_listing(&mut self, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
-            return;
-        };
-        let venue = browser.venue_id().to_owned();
-        let generation = browser.load_generation();
-        let tracks = self.library.tracks(&venue);
-        cx.spawn(async move |this, cx| {
-            let result = tracks.await;
-            this.update(cx, |this, cx| {
-                this.with_tracks_for_venue(&venue, generation, cx, |browser| match result {
-                    Ok(rows) => browser.replace_rows(rows),
-                    Err(error) => browser.error = Some(error.to_string()),
-                });
-            })
-            .ok();
-        })
-        .detach();
-        let Level::Scores(level) = &browser.level else {
-            return;
-        };
-        let track = level.track.id.clone();
-        let pending = self.library.scores_across_venues(&track);
-        let user = self.library.user_id();
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                this.with_scores(&track, cx, |level| {
-                    level.loaded = true;
-                    match result {
                         Ok(summaries) => {
                             level.rows = rows(&summaries, user.as_deref());
                             level.error = None;
@@ -316,83 +292,94 @@ impl Luma {
         .detach();
     }
 
-    /// Run `edit` against the scores level, only while it is still showing
-    /// `track_id` — the same admission rule the venue's own reads take.
+    /// Re-read the venue's songs, and every expanded song's scores.
+    pub(crate) fn refresh_score_listing(&mut self, cx: &mut Context<Self>) {
+        let Some(songs) = &self.songs else {
+            return;
+        };
+        let venue = songs.venue_id().to_owned();
+        let generation = songs.load_generation();
+        let expanded: Vec<String> = songs.scores.keys().cloned().collect();
+        let tracks = self.library.tracks(&venue);
+        cx.spawn(async move |this, cx| {
+            let result = tracks.await;
+            this.update(cx, |this, cx| {
+                this.with_tracks_for_venue(&venue, generation, cx, |songs| match result {
+                    Ok(rows) => songs.replace_rows(rows),
+                    Err(error) => songs.error = Some(error.to_string()),
+                });
+            })
+            .ok();
+        })
+        .detach();
+        for track in expanded {
+            self.load_track_scores(&track, cx);
+        }
+    }
+
+    /// Run `edit` against `track_id`'s expansion, while it is still open —
+    /// the same admission rule the venue's own reads take.
     fn with_scores(
         &mut self,
         track_id: &str,
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Scores),
     ) {
-        let Some(browser) = &mut self.sidebar else {
+        let Some(songs) = &mut self.songs else {
             return;
         };
-        let Level::Scores(level) = &mut browser.level else {
+        let Some(level) = songs.scores.get_mut(track_id) else {
             return;
         };
-        if level.track.id != track_id {
-            return;
-        }
         edit(level);
+        songs.remeasure(track_id);
         cx.notify();
     }
 
-    /// Open `score`'s tab and hide the sidebar so the timeline has the room.
+    /// Open `score` and close the song list so the timeline has the room.
     ///
-    /// The hide waits [`DOUBLE_CLICK`]: the click that lands here may be the
+    /// The close waits [`DOUBLE_CLICK`]: the click that lands here may be the
     /// first of a rename double-click, and the second click has to find its
-    /// row. A rename in that time cancels the hide. A score that already has a
-    /// tab is only brought to the front, and the sidebar stays.
-    pub(crate) fn open_sidebar_score(
+    /// row. A rename in that time cancels the close.
+    pub(crate) fn open_listed_score(
         &mut self,
         track_id: SharedString,
         score: crate::track_editor::Score,
         cx: &mut Context<Self>,
     ) {
-        let Some(browser) = &self.sidebar else {
+        if self.songs.is_none() {
             return;
-        };
-        let target = Target::Score {
-            venue: browser.venue_id().to_string(),
-            track: track_id.to_string(),
-            score: score.id.clone(),
-        };
-        if self.workspace.body(&target).is_none() {
-            let wait = self.library.debounce(DOUBLE_CLICK);
-            self.sidebar_hide = Some(cx.spawn(async move |this, cx| {
-                wait.await;
-                this.update(cx, |this, cx| {
-                    this.sidebar_hide = None;
-                    this.sidebar_hidden = true;
-                    cx.notify();
-                })
-                .ok();
-            }));
         }
         self.open_score(&track_id, score, None, cx);
+        let wait = self.library.debounce(DOUBLE_CLICK);
+        self.song_list_close = Some(cx.spawn(async move |this, cx| {
+            wait.await;
+            this.update(cx, |this, cx| {
+                this.song_list_close = None;
+                this.song_list = false;
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
-    /// Mint this track another score in the open venue and show it.
+    /// Mint `track_id` another score in the open venue and open it.
     ///
     /// `create_score`, not `ensure_track_in_venue`: the row says *new*, and
     /// the idempotent form would silently hand back the score already there.
-    /// Adding a track to a venue is the other gesture and keeps the other
-    /// seam.
-    pub(crate) fn create_sidebar_score(&mut self, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
+    pub(crate) fn create_listed_score(&mut self, track_id: &str, cx: &mut Context<Self>) {
+        let Some(songs) = &self.songs else {
             return;
         };
-        let Level::Scores(level) = &browser.level else {
-            return;
-        };
-        let (track_id, venue_id) = (level.track.id.clone(), browser.venue_id().to_string());
+        let venue_id = songs.venue_id().to_string();
+        let track_id = track_id.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let pending = self
             .library
             .create_score(&request_id, &track_id, &venue_id, None);
         cx.spawn(async move |this, cx| {
             // Sequential on purpose: the listing has to be taken *after* the
-            // score exists, or the row about to be selected is not in it yet.
+            // score exists, or the row about to be opened is not in it yet.
             let created = pending.await;
             let Ok(listing) =
                 this.read_with(cx, |this, _| this.library.scores_across_venues(&track_id))
@@ -416,46 +403,45 @@ impl Luma {
                     (_, Err(error)) => level.error = Some(error.to_string()),
                 });
                 if let Some(score) = open {
-                    this.open_sidebar_score(track_id.clone().into(), score, cx);
+                    this.open_listed_score(track_id.clone().into(), score, cx);
                 }
             })
             .ok();
         })
         .detach();
     }
-}
 
-impl Luma {
-    /// Raise the score menu over the row that was right-clicked.
-    ///
-    /// Only rows in the open venue get here — see [`score_row`] — because the
-    /// acts on the menu are acts on *this* room's document, and another
-    /// venue's score is a different tab's subject.
-    pub(crate) fn open_score_menu(&mut self, menu: ScoreMenu, cx: &mut Context<Self>) {
-        let Some(browser) = &mut self.sidebar else {
+    /// Raise the score menu over the row that was right-clicked. Only rows in
+    /// the open venue get here — another venue's score is not this list's to
+    /// act on.
+    fn open_score_menu(&mut self, track_id: &str, menu: ScoreMenu, cx: &mut Context<Self>) {
+        let Some(songs) = &mut self.songs else {
             return;
         };
-        let Level::Scores(level) = &mut browser.level else {
-            return;
-        };
-        level.menu = Some(menu);
+        for (track, level) in songs.scores.iter_mut() {
+            level.menu = None;
+            if track == track_id {
+                level.menu = Some(menu);
+                break;
+            }
+        }
         cx.notify();
     }
 
     /// Close it, reporting whether there was one — which is what puts this on
     /// Escape's ladder without giving the menu a binding of its own.
     pub(crate) fn close_score_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(browser) = &mut self.sidebar else {
+        let Some(songs) = &mut self.songs else {
             return false;
         };
-        let Level::Scores(level) = &mut browser.level else {
-            return false;
-        };
-        if level.menu.take().is_none() {
-            return false;
+        let mut closed = false;
+        for level in songs.scores.values_mut() {
+            closed |= level.menu.take().is_some();
         }
-        cx.notify();
-        true
+        if closed {
+            cx.notify();
+        }
+        closed
     }
 
     /// The delete gesture: straight through when the score holds nothing, and
@@ -463,16 +449,14 @@ impl Luma {
     ///
     /// The count decides, not a preference: a confirmation on an empty score
     /// is a dialog that can only ever be answered one way, and one that is
-    /// always answered the same way stops being read — which is exactly when
-    /// the one over a score with forty clips gets waved through too.
-    pub(crate) fn request_delete_score(&mut self, track_id: SharedString, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
-            return;
-        };
-        let Level::Scores(level) = &browser.level else {
-            return;
-        };
-        let Some(menu) = level.menu.as_ref() else {
+    /// always answered the same way stops being read.
+    fn request_delete_score(&mut self, track_id: SharedString, cx: &mut Context<Self>) {
+        let Some(menu) = self
+            .songs
+            .as_ref()
+            .and_then(|songs| songs.scores.get(track_id.as_ref()))
+            .and_then(|level| level.menu.as_ref())
+        else {
             return;
         };
         let (score_id, venue_id, ordinal, clips) = (
@@ -505,14 +489,12 @@ impl Luma {
         );
     }
 
-    /// Archive the score, close its tab, and re-read the listing.
+    /// Archive the score, close it if it is the open one, and re-read the
+    /// listing.
     ///
-    /// The tab closes *first*, before the seam has answered: a timeline that
-    /// kept drawing a document that no longer exists for as long as the round
-    /// trip takes, and then vanished, would be worse. The listing is re-read
-    /// after the seam answers, for the same reason
-    /// [`Luma::create_sidebar_score`] reads after the create: a listing taken
-    /// before the write still has the row in it.
+    /// The score closes *first*, before the seam has answered: a timeline
+    /// that kept drawing a document that no longer exists for as long as the
+    /// round trip takes, and then vanished, would be worse.
     pub(crate) fn delete_score(
         &mut self,
         track_id: &str,
@@ -527,7 +509,7 @@ impl Luma {
             track: track_id.to_string(),
             score: score_id.to_string(),
         };
-        self.close_tabs_where(|target| target != &doomed, cx);
+        self.close_bodies_where(|target| target != &doomed, cx);
         let track_id = track_id.to_string();
         cx.spawn(async move |this, cx| {
             let deleted = pending.await;
@@ -555,24 +537,24 @@ impl Luma {
     /// this list's subject.
     fn start_score_rename(
         &mut self,
+        track_id: SharedString,
         score_id: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(browser) = &self.sidebar else {
-            return;
-        };
-        let Level::Scores(level) = &browser.level else {
-            return;
-        };
-        let Some(row) = level.rows.iter().find(|row| row.id == score_id) else {
+        let Some(row) = self
+            .songs
+            .as_ref()
+            .and_then(|songs| songs.scores.get(track_id.as_ref()))
+            .and_then(|level| level.rows.iter().find(|row| row.id == score_id))
+        else {
             return;
         };
         if row.read_only {
             return;
         }
-        // The second click of the pair: the sidebar stays for the caret.
-        self.sidebar_hide = None;
+        // The second click of the pair: the list stays for the caret.
+        self.song_list_close = None;
         let opened_on = row.name.as_deref().unwrap_or_default().to_string();
         let field = cx.new(|cx| {
             let mut input = TextInput::search("Score name", cx);
@@ -598,15 +580,20 @@ impl Luma {
                 .ok();
         });
         let focus = field.read(cx).focus_handle(cx);
-        if let Some(Level::Scores(level)) = self.sidebar.as_mut().map(|browser| &mut browser.level)
-        {
-            level.menu = None;
-            level.rename = Some(Rename {
-                score_id,
-                field,
-                opened_on,
-                _subscriptions: vec![keys, blur],
-            });
+        if let Some(songs) = self.songs.as_mut() {
+            for level in songs.scores.values_mut() {
+                level.rename = None;
+            }
+            if let Some(level) = songs.scores.get_mut(track_id.as_ref()) {
+                level.menu = None;
+                level.rename = Some(Rename {
+                    score_id,
+                    field,
+                    opened_on,
+                    _subscriptions: vec![keys, blur],
+                });
+            }
+            songs.remeasure(&track_id);
         }
         window.focus(&focus, cx);
         cx.notify();
@@ -614,7 +601,7 @@ impl Luma {
 
     /// End the rename. `save` writes the typed name when it is a different,
     /// non-empty name; otherwise nothing is written. `window` is present when
-    /// a key ended it, and the caret then goes back to the level's seat; on a
+    /// a key ended it, and the keyboard then goes back to the list; on a
     /// blur, focus has already gone where the person sent it.
     fn finish_score_rename(
         &mut self,
@@ -622,28 +609,30 @@ impl Luma {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let Some(browser) = &mut self.sidebar else {
+        let focus = self.focus.clone();
+        let Some(songs) = &mut self.songs else {
             return;
         };
-        let Level::Scores(level) = &mut browser.level else {
+        let Some((track_id, rename)) = songs
+            .scores
+            .iter_mut()
+            .find_map(|(track, level)| Some((track.clone(), level.rename.take()?)))
+        else {
             return;
         };
-        let Some(rename) = level.rename.take() else {
-            return;
-        };
+        songs.remeasure(&track_id);
         if let Some(window) = window {
-            window.focus(&level.back_focus, cx);
+            window.focus(&focus, cx);
         }
         cx.notify();
         let name = rename.field.read(cx).text().trim().to_string();
         if !save || name.is_empty() || name == rename.opened_on {
             return;
         }
-        let track_id = level.track.id.clone();
         let pending = self.library.rename_score(&rename.score_id, &name);
         cx.spawn(async move |this, cx| {
-            // The listing is read after the write, for the reason
-            // `create_sidebar_score` gives: before it, the old name is still in it.
+            // The listing is read after the write: before it, the old name is
+            // still in it.
             let renamed = pending.await;
             let Ok(listing) =
                 this.read_with(cx, |this, _| this.library.scores_across_venues(&track_id))
@@ -665,7 +654,7 @@ impl Luma {
     }
 }
 
-/// The row, as the editor holds the score it is showing. This level is the one
+/// The row, as the editor holds the score it is showing. This list is the one
 /// place a row becomes the open score, so the two cannot disagree about which
 /// `#n` or which ownership the timeline is under.
 pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
@@ -678,47 +667,110 @@ pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
 
 // -- rendering ----------------------------------------------------------------
 
-/// How long a click on a score waits before it puts the sidebar away, so the
+/// How long a click on a score waits before it closes the song list, so the
 /// second click of a double-click still finds the row. About the platform's
-/// double-click interval: gpui does not publish it (its Linux backends keep a
-/// private 400 ms; macOS reads the system setting per event).
+/// double-click interval: gpui does not publish it.
 const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// The head's Back affordance, and therefore where the flying track row lands:
-/// the head's row sits directly under it, at the same inset the list rows have,
-/// so the shared element travels in `y` alone.
-pub(super) const BACK_ROW_HEIGHT: f32 = 26.;
+/// How far an expansion's rows sit in from the page's edge: under the song's
+/// title, past its disclosure and art.
+const INDENT: f32 = 16. + 16. + 10. + 12. + 36. + 12.;
 
-/// The whole level: the head, this venue's scores, the way to mint another,
-/// and — quietly, at the foot — the other rooms this track is scored in.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn level(
+/// The expansion under `track_id`'s row: this venue's scores, the way to mint
+/// another, and — quietly — the other rooms the song is scored in.
+///
+/// Returned as a closure over its inputs because the list draws it on demand,
+/// once per frame it is in view.
+pub(super) fn expansion(
     shell: &Luma,
     state: &super::Tracks,
-    scores: &Scores,
-    statuses: &HashMap<Target, TabStatus>,
+    track_id: &str,
+    statuses: &HashMap<Target, ChatStatus>,
     app: &Entity<Luma>,
-    window: &Window,
-    flying: bool,
-) -> AnyElement {
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .child(head(scores, app, window, flying))
-        .child(body(state, scores, shell.workspace.active(), statuses, app))
-        // A sibling of the body, not a child of a row: the body clips, and a
-        // menu inside it would be cut off at the column's edge. Same argument
-        // the tab strip's `+` menu makes about its own rail.
-        .children(menu(scores, app))
-        .agent_node(Role::Card, "Scores level")
-        .into_any_element()
+) -> Rc<dyn Fn() -> AnyElement> {
+    let Some(scores) = state.scores.get(track_id) else {
+        return Rc::new(|| div().into_any_element());
+    };
+    let venue = state.venue_id().to_string();
+    let venue_name = state.venue_name().to_string();
+    let open = shell
+        .workspace
+        .of_mode(crate::workspace::Mode::Arrange)
+        .map(|slot| slot.target.clone());
+    let statuses = statuses.clone();
+    let rows = Rc::clone(&scores.rows);
+    let (loaded, error) = (scores.loaded, scores.error.clone());
+    let track = scores.track.clone();
+    let renaming = scores
+        .rename
+        .as_ref()
+        .map(|rename| (rename.score_id.clone(), rename.field.clone()));
+    let app = app.clone();
+    Rc::new(move || {
+        let here: Vec<&ScoreRow> = rows.iter().filter(|row| row.venue_id == venue).collect();
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .py(px(6.))
+            .pl(px(INDENT))
+            .pr(px(16.))
+            .bg(glass::wash(0x04 as f32 / 255.0))
+            .border_b_1()
+            .border_color(glass::inner_rule())
+            .children(error.clone().map(float::error_row))
+            .when(error.is_none() && !loaded, |el| {
+                el.child(float::empty_row("Loading scores…"))
+            })
+            .when(loaded && here.is_empty(), |el| {
+                el.child(float::empty_row(format!("No scores in {venue_name}")))
+            })
+            .children(here.into_iter().map(|row| {
+                let target = Target::Score {
+                    venue: venue.clone(),
+                    track: track.id.clone(),
+                    score: row.id.to_string(),
+                };
+                let rename = renaming
+                    .as_ref()
+                    .filter(|(id, _)| *id == row.id)
+                    .map(|(_, field)| field);
+                score_row(
+                    row,
+                    open.as_ref() == Some(&target),
+                    statuses.get(&target).copied(),
+                    Some((&app, &track)),
+                    rename,
+                )
+            }))
+            .when(loaded, |el| el.child(new_score(&app, &track.id)))
+            .children(elsewhere(&rows, &venue).map(|(venue, rows)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .pt(px(6.))
+                    .child(float::section_heading(venue))
+                    .children(
+                        rows.into_iter()
+                            .map(|row| score_row(row, false, None, None, None)),
+                    )
+            }))
+            .agent_node(
+                Role::Card,
+                format!("Scores of {}", super::track_name(&track)),
+            )
+            .into_any_element()
+    })
 }
 
-/// The context menu over the right-clicked score, if one is up.
-fn menu(scores: &Scores, app: &Entity<Luma>) -> Option<AnyElement> {
-    let open = scores.menu.as_ref()?;
-    let track_id = SharedString::from(scores.track.id.clone());
+/// The context menu over a right-clicked score, if one is up anywhere.
+pub(super) fn menus(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
+    let (track_id, open) = state
+        .scores
+        .iter()
+        .find_map(|(track, level)| Some((track.clone(), level.menu.as_ref()?)))?;
+    let track_id = SharedString::from(track_id);
     let deleted = app.clone();
     let dismissed = app.clone();
     Some(
@@ -735,122 +787,15 @@ fn menu(scores: &Scores, app: &Entity<Luma>) -> Option<AnyElement> {
     )
 }
 
-/// The track this level is about, under the way back to the list it came from.
-fn head(scores: &Scores, app: &Entity<Luma>, window: &Window, flying: bool) -> Div {
-    let back = app.clone();
-    div()
-        .flex()
-        .flex_shrink_0()
-        .flex_col()
-        .child(
-            div()
-                .id("scores-back")
-                .track_focus(&scores.back_focus)
-                .tab_stop(true)
-                .h(px(BACK_ROW_HEIGHT))
-                .px(px(PAD_X))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .text_size(px(11.))
-                .text_color(glass::ink(0.55))
-                .hover(|style| style.text_color(glass::ink(0.9)))
-                .fade_hover()
-                .on_click(move |_, _, cx| {
-                    back.update(cx, |this, cx| this.leave_scores(cx));
-                })
-                .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(11.)),
-                )
-                .child("Tracks")
-                .agent_node(Role::Button, "Back to tracks")
-                .agent_focused(scores.back_focus.is_focused(window)),
-        )
-        // While the shared element is in flight it *is* this row; drawing both
-        // would be two of the same track on one column.
-        .child(
-            div()
-                .px(px(PAD_X))
-                .child(track_face(&scores.track, true).when(flying, |row| row.opacity(0.))),
-        )
-}
-
-/// This venue's scores, the way to mint another, and the other venues' as
-/// context under a divider. `front` is the front tab, whose row wears the
-/// ring.
-fn body(
-    state: &super::Tracks,
-    scores: &Scores,
-    front: Option<&Target>,
-    statuses: &HashMap<Target, TabStatus>,
-    app: &Entity<Luma>,
-) -> Div {
-    let venue = state.venue_id();
-    let here: Vec<&ScoreRow> = scores.here(venue).collect();
-    div()
-        .flex_1()
-        .min_h(px(0.))
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .px(px(PAD_X))
-        .pt(px(6.))
-        .gap(px(2.))
-        .children(scores.error.clone().map(float::error_row))
-        .when(scores.error.is_none() && !scores.loaded, |el| {
-            el.child(float::empty_row("Loading scores…"))
-        })
-        .when(scores.loaded && here.is_empty(), |el| {
-            el.child(float::empty_row(format!(
-                "No scores in {}",
-                state.venue_name()
-            )))
-        })
-        .children(here.into_iter().map(|row| {
-            let rename = scores
-                .rename
-                .as_ref()
-                .filter(|rename| rename.score_id == row.id)
-                .map(|rename| &rename.field);
-            let target = Target::Score {
-                venue: venue.to_string(),
-                track: scores.track.id.clone(),
-                score: row.id.to_string(),
-            };
-            score_row(
-                row,
-                front == Some(&target),
-                statuses.get(&target).copied(),
-                Some((app, &scores.track)),
-                rename,
-            )
-        }))
-        .when(scores.loaded, |el| el.child(new_score(app)))
-        .children(elsewhere(scores, venue).map(|(venue, rows)| {
-            div()
-                .flex()
-                .flex_col()
-                .pt(px(8.))
-                .child(float::divider())
-                .child(float::section_heading(venue).pt(px(8.)))
-                .children(
-                    rows.into_iter()
-                        .map(|row| score_row(row, false, None, None, None)),
-                )
-        }))
-        .child(div().flex_1())
-}
-
 /// Every other venue's rows, grouped, in the order the venues first appear —
 /// which is newest-created first, so the room with the newest score leads.
 fn elsewhere<'a>(
-    scores: &'a Scores,
+    rows: &'a [ScoreRow],
     venue: &str,
 ) -> impl Iterator<Item = (SharedString, Vec<&'a ScoreRow>)> {
     let mut order: Vec<SharedString> = Vec::new();
-    let mut groups: std::collections::HashMap<SharedString, Vec<&ScoreRow>> =
-        std::collections::HashMap::new();
-    for row in scores.rows.iter().filter(|row| row.venue_id != venue) {
+    let mut groups: HashMap<SharedString, Vec<&ScoreRow>> = HashMap::new();
+    for row in rows.iter().filter(|row| row.venue_id != venue) {
         if !groups.contains_key(&row.venue_id) {
             order.push(row.venue_id.clone());
         }
@@ -864,23 +809,26 @@ fn elsewhere<'a>(
 
 /// One score.
 ///
-/// `app` present means the row is openable; `None` is another venue's score,
-/// which is readable here and openable only as its own tab. Comet's selection
-/// recipe decides the open one, through [`float::menu_row`]: hover and
-/// selection share the fill, and only the open score carries the inset ring.
+/// `press` present means the row is openable; `None` is another venue's
+/// score, which is readable here and openable only from that venue. The open
+/// score wears the selected wash.
 ///
 /// `rename` is the live field when this row's name is being typed, and
-/// `status` the dot of the score's tab.
+/// `status` the dot of the score's chat.
 fn score_row(
     row: &ScoreRow,
     open: bool,
-    status: Option<TabStatus>,
+    status: Option<ChatStatus>,
     press: Option<(&Entity<Luma>, &TrackBrowserRow)>,
     rename: Option<&Entity<TextInput>>,
 ) -> AnyElement {
-    let renamer = press
-        .filter(|_| !row.read_only)
-        .map(|(app, _)| (app.clone(), row.id.clone()));
+    let renamer = press.filter(|_| !row.read_only).map(|(app, track)| {
+        (
+            app.clone(),
+            SharedString::from(track.id.clone()),
+            row.id.clone(),
+        )
+    });
     let id = SharedString::from(format!("score-{}", row.id));
     let label = format!(
         "#{} · {} · {} patterns · {}{}{}",
@@ -904,13 +852,11 @@ fn score_row(
     .when_some(press, |el, (app, track)| {
         let app = app.clone();
         let track_id = SharedString::from(track.id.clone());
+        let menu_track = track.id.clone();
         let score = open_row(row);
         let raised = app.clone();
         let (score_id, venue_id, ordinal, clips) =
             (row.id.clone(), row.venue_id.clone(), row.ordinal, row.clips);
-        // Right-click is the only gesture in the sidebar that opens a menu, so
-        // it is filtered on the button here rather than routed through a shared
-        // press handler. `stop_propagation` keeps it off the column behind it.
         el.on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
             cx.stop_propagation();
             let menu = ScoreMenu {
@@ -920,7 +866,7 @@ fn score_row(
                 venue_id: venue_id.clone(),
                 clips,
             };
-            raised.update(cx, |this, cx| this.open_score_menu(menu, cx));
+            raised.update(cx, |this, cx| this.open_score_menu(&menu_track, menu, cx));
         })
         .on_click(move |_, _, cx| {
             let (track_id, score) = (
@@ -931,7 +877,7 @@ fn score_row(
                     read_only: score.read_only,
                 },
             );
-            app.update(cx, |this, cx| this.open_sidebar_score(track_id, score, cx));
+            app.update(cx, |this, cx| this.open_listed_score(track_id, score, cx));
         })
     })
     // The handle leads: a score's own name is usually absent and its uuid
@@ -939,9 +885,10 @@ fn score_row(
     .child(
         div()
             .flex_shrink_0()
+            .w(px(28.))
             .text_size(px(11.))
             .font_weight(FontWeight::BOLD)
-            .text_color(glass::ink(if open { 0.95 } else { 0.6 }))
+            .text_color(glass::ink(if open { 0.95 } else { glass::TEXT_SECONDARY }))
             .child(format!("#{}", row.ordinal)),
     )
     .child(
@@ -949,20 +896,17 @@ fn score_row(
             .flex_1()
             .min_w(px(0.))
             .overflow_hidden()
-            .flex()
-            .flex_col()
-            .gap(px(1.))
             .child(match rename {
                 Some(field) => name_field(row, field),
                 None => name_label(row, open, renamer),
-            })
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(10.))
-                    .text_color(glass::ink(0.45))
-                    .child(row.detail()),
-            ),
+            }),
+    )
+    .child(
+        div()
+            .flex_shrink_0()
+            .text_size(px(11.))
+            .text_color(glass::ink(glass::TEXT_TERTIARY))
+            .child(row.detail()),
     )
     .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
     .children(status.map(|status| crate::agent::status_dot(status, &format!("#{}", row.ordinal))))
@@ -974,28 +918,30 @@ fn score_row(
 /// starts a rename when `renamer` is present — this venue's own score.
 ///
 /// The first click of the pair goes to the row, which opens the score and
-/// puts the sidebar away after [`DOUBLE_CLICK`]. The second click stops here,
-/// so the row does not see it, and the rename cancels the hide.
+/// closes the list after [`DOUBLE_CLICK`]. The second click stops here, so
+/// the row does not see it, and the rename cancels the close.
 fn name_label(
     row: &ScoreRow,
     open: bool,
-    renamer: Option<(Entity<Luma>, SharedString)>,
+    renamer: Option<(Entity<Luma>, SharedString, SharedString)>,
 ) -> AnyElement {
     let name = row.title();
     div()
         .id(SharedString::from(format!("score-name-{}", row.id)))
         .truncate()
         .text_size(px(12.))
-        .text_color(glass::ink(if open { 0.9 } else { 0.7 }))
+        .text_color(glass::ink(if open { 0.95 } else { 0.8 }))
         .child(name.clone())
-        .when_some(renamer, |el, (app, score_id)| {
+        .when_some(renamer, |el, (app, track_id, score_id)| {
             el.on_click(move |event, window, cx| {
                 if event.click_count() != 2 {
                     return;
                 }
                 cx.stop_propagation();
-                let score_id = score_id.clone();
-                app.update(cx, |this, cx| this.start_score_rename(score_id, window, cx));
+                let (track_id, score_id) = (track_id.clone(), score_id.clone());
+                app.update(cx, |this, cx| {
+                    this.start_score_rename(track_id, score_id, window, cx)
+                });
             })
         })
         .agent_node(
@@ -1006,7 +952,7 @@ fn name_label(
 }
 
 /// The name as a live field. The draft context gives the field Enter and
-/// Escape ahead of the sidebar's own keys. Presses inside it stop here, so
+/// Escape ahead of the list's own keys. Presses inside it stop here, so
 /// placing the caret does not open the score and take focus from the field.
 fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
     float::field()
@@ -1020,21 +966,25 @@ fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
 }
 
 /// Mint another score on this `(track, venue)`.
-fn new_score(app: &Entity<Luma>) -> AnyElement {
+fn new_score(app: &Entity<Luma>, track_id: &str) -> AnyElement {
     let app = app.clone();
-    float::menu_row(RowState::Rest, "new-score")
-        .id("new-score")
-        .on_click(move |_, _, cx| app.update(cx, |this, cx| this.create_sidebar_score(cx)))
+    let track_id = track_id.to_string();
+    float::menu_row(RowState::Rest, format!("new-score:{track_id}"))
+        .id(SharedString::from(format!("new-score:{track_id}")))
+        .on_click(move |_, _, cx| {
+            let track_id = track_id.clone();
+            app.update(cx, |this, cx| this.create_listed_score(&track_id, cx))
+        })
         .child(
             gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
                 .size(px(11.))
-                .text_color(glass::ink(0.55)),
+                .text_color(glass::ink(glass::TEXT_TERTIARY)),
         )
         .child(
             div()
                 .flex_1()
                 .text_size(px(12.))
-                .text_color(glass::ink(0.7))
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
                 .child("New score"),
         )
         .agent_node(Role::Button, "New score")

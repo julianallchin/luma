@@ -16,14 +16,14 @@ impl Luma {
     /// The same dialog, to choose a song for Perform's virtual deck.
     pub(crate) fn show_track_to_play(
         &mut self,
-        target: crate::tabs::Target,
+        target: crate::workspace::Target,
         cx: &mut Context<Self>,
     ) {
         self.open_add_tracks(Route::TrackBrowser, Purpose::PlayVirtual(target), cx);
     }
 
-    /// The sidebar's import row: the dialog, opened on the import's progress.
-    pub(super) fn show_track_import(&mut self, cx: &mut Context<Self>) {
+    /// The status bar's import item: the dialog, opened on the import's progress.
+    pub(crate) fn show_track_import(&mut self, cx: &mut Context<Self>) {
         if let Some(activity) = &mut self.track_import {
             activity.seen = true;
         }
@@ -32,7 +32,7 @@ impl Luma {
 
     fn open_add_tracks(&mut self, route: Route, purpose: Purpose, cx: &mut Context<Self>) {
         let Some(venue_id) = self
-            .sidebar
+            .songs
             .as_ref()
             .map(|tracks| tracks.venue_id().to_string())
         else {

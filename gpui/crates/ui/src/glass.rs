@@ -131,7 +131,8 @@ pub fn hairline(alpha: f32) -> Hsla {
 }
 
 /// Interactive-state wash: a softened [`ink`] that stops short of pure white,
-/// so a hover plate reads as tinted glass rather than paint.
+/// so a hover plate reads as tinted glass rather than paint. Its strengths are
+/// zeron's: [`WASH_SUBTLE`], [`WASH_PRESSED`], [`WASH_REST`].
 #[must_use]
 pub fn wash(alpha: f32) -> Hsla {
     hsla(0.0, 0.0, 0.92, alpha)
@@ -277,13 +278,64 @@ fn tinted(tone: gpui::Rgba, alpha: f32) -> Hsla {
     Hsla::from(tone).opacity(alpha)
 }
 
-/// The chrome band's three wash strengths, named so the tab chips, the corner
-/// toggles and the close hotspot cannot drift apart one literal at a time.
-/// Hover on a control at rest — the quietest lift there is.
-pub const WASH_SUBTLE: f32 = 0.06;
-/// What an *active* chrome control rests at: the selected tab chip, a toggle
-/// whose panel is up, the armed close hotspot.
-pub const WASH_REST: f32 = 0.10;
+// ---------------------------------------------------------------------------
+// Flush panels (zeron's tokens, `apps/zgx/ui/ds/themes/zeron-dark.json`)
+// ---------------------------------------------------------------------------
+//
+// The shell's panels touch: a hairline between each, no gaps, no panel
+// corners. Surfaces are white washes over whatever is under them, and muted
+// text is the primary text at less opacity rather than a grey. Corners belong
+// only to controls, clips and pads, and floating things — see
+// `luma_ui::radius`.
+
+/// Alpha of the hairline *between* two panels — zeron's `border`, `#ffffff12`.
+pub const PANEL_RULE_ALPHA: f32 = 0x12 as f32 / 255.0;
+/// Alpha of a hairline *inside* one panel — `border.subtle`, `#ffffff0a`.
+pub const INNER_RULE_ALPHA: f32 = 0x0a as f32 / 255.0;
+/// Muted text: the primary at 60% (secondary) and 42% (tertiary).
+pub const TEXT_SECONDARY: f32 = 0.60;
+pub const TEXT_TERTIARY: f32 = 0.42;
+
+/// The window's trim either side of the page: the margin the dark ground
+/// shows between the window's edge and the page.
+pub const WINDOW_TRIM: f32 = 8.0;
+/// The page's corner radius on the trim. Only the page rounds; everything
+/// inside it is flush and square.
+pub const PAGE_RADIUS: f32 = 12.0;
+
+/// The trim's colour: [`ladder::frame`], the rung under the page's ground, so
+/// the page reads as one card sitting on it. The title bar and the status
+/// bar are drawn on it, and the page's draggable seams are gutters of it.
+#[must_use]
+pub fn window_trim() -> Hsla {
+    ladder::frame().into()
+}
+
+/// The hairline between two panels that do not resize against each other —
+/// a page's head over its body. A seam that drags is a gutter of
+/// [`window_trim`] instead.
+#[must_use]
+pub fn panel_seam() -> Hsla {
+    hairline(PANEL_RULE_ALPHA)
+}
+
+/// A hairline inside one panel: between rows, under a panel's own head.
+#[must_use]
+pub fn inner_rule() -> Hsla {
+    hairline(INNER_RULE_ALPHA)
+}
+
+/// The three wash strengths every control takes, named so the chips, the
+/// toggles and the rows cannot drift apart one literal at a time.
+///
+/// Hover on a control at rest — zeron's `hover`, `#ffffff0d`.
+pub const WASH_SUBTLE: f32 = 0x0d as f32 / 255.0;
+/// A control under the press, and a button's own plate — `pressed`,
+/// `#ffffff17`.
+pub const WASH_PRESSED: f32 = 0x17 as f32 / 255.0;
+/// What a *selected* or active control rests at: the chosen segment, a toggle
+/// whose panel is up, an open menu's trigger — `selection.item`, `#ffffff1a`.
+pub const WASH_REST: f32 = 0x1a as f32 / 255.0;
 /// Hover over an already-active control — one step above its rest, so the
 /// pointer still reads on the brightest chip in the band.
 pub const WASH_EMPHASIS: f32 = 0.14;
@@ -295,7 +347,7 @@ pub const WASH_EMPHASIS: f32 = 0.14;
 /// the pointer rests on the selected row they have to resolve into one anyway.
 /// What distinguishes selection is the ring ([`card_selected_shadows`]), which
 /// is an *edge* — a different channel, so the two compose instead of fighting.
-pub const SELECTION_ALPHA: f32 = 0.11;
+pub const SELECTION_ALPHA: f32 = WASH_REST;
 
 /// Hover wash for a row sitting directly on [`glass`]. Softer than an opaque
 /// element hover: over a translucent ground a full-strength wash paints out the

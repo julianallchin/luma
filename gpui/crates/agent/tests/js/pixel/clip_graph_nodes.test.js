@@ -41,7 +41,7 @@ const file = (card) => `card_${card.toLowerCase().replace(" ", "_")}`;
 
 test("the Slash canvas and each node card, captured", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(until("the clip", (s) => s.find({ role: "card", label: "Pulse" }))
     .find({ role: "card", label: "Pulse" }));

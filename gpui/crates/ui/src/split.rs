@@ -81,7 +81,7 @@ impl SplitFraction {
     #[must_use]
     pub fn resolve(&self, available: f32) -> (f32, f32) {
         let available = available.max(0.0);
-        if available <= self.min_leading + self.min_trailing {
+        if available < self.min_leading + self.min_trailing {
             let leading = available * self.fraction;
             return (leading, available - leading);
         }
@@ -118,6 +118,16 @@ mod tests {
 
     fn split() -> SplitFraction {
         SplitFraction::new(0.4, 120.0, 200.0)
+    }
+
+    /// Exactly the two floors' room seats both at their floors. Treating it
+    /// as too narrow split it by the fraction instead, and the leading region
+    /// dropped far below its floor at the one size where both still fit.
+    #[test]
+    fn room_for_exactly_both_floors_seats_both_at_their_floors() {
+        let (leading, trailing) = split().resolve(320.0);
+        assert!((leading - 120.0).abs() < 0.001, "leading {leading}");
+        assert!((trailing - 200.0).abs() < 0.001, "trailing {trailing}");
     }
 
     #[test]

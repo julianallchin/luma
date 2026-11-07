@@ -81,7 +81,7 @@ fn playing_does_not_get_slower_the_longer_it_plays() {
             {NAV}
             nav.trackEditor({VENUE_NAME:?}, {TRACK_NAME:?});
             until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
-            nav.program();
+            nav.agentOff();
             app.frames(10, {{ waitMs: 60 }});
             nav.step("the Play button", "button", "Play");
             app.frames(20, {{ waitMs: 55 }});

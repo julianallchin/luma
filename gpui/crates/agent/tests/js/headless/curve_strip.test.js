@@ -11,15 +11,13 @@ const settle = () => app.frames(16, { waitMs: 60 });
 const graphClip = () => library.score().clips["graph-clip"];
 const nodes = () => graphClip().graph.nodes;
 
-// `page: false` stays in Program, where the timeline is beside the graph.
-function open({ page = true } = {}) {
+// The Wash's graph, on the graph page.
+function open() {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
-  app.click(node("card", "Wash"));
-  until("the graph", (s) => s.find({ role: "row", label: "Brightness" }));
-  if (page) nav.graphPage();
+  nav.clipGraph("Wash");
 }
 
 // The control of `role` and `label` in the row `row` of the graph card
@@ -160,7 +158,7 @@ test("a Bézier handle leaves the box, and a point does not", () => {
 });
 
 test("a time strip draws the clip's beats and follows the playhead", () => {
-  open({ page: false });
+  open();
   promote();
   const beats = () => app.snapshot().find((n) => n.label.startsWith("Curve 1 beat grid = "));
   until("the beat grid", () => beats());
@@ -170,22 +168,34 @@ test("a time strip draws the clip's beats and follows the playhead", () => {
   const playhead = () => app.snapshot().find({ role: "text", label: "Curve 1 playhead" });
   // The track starts before the clip: no playhead on the strip.
   expect(playhead()).toBe(undefined);
+
+  // The graph page stands where the timeline was, so each reading moves the
+  // playhead on the timeline and comes back to the strip.
+  app.key("escape");
   const clip = node("card", "Wash").bounds;
-  const box = strip().bounds;
-  const shareOf = () => {
-    const p = playhead().bounds;
-    return (p.x + p.width / 2 - box.x) / box.width;
+  const at = (x) => {
+    if (app.snapshot().find({ role: "button", label: "Back to timeline" })) app.key("escape");
+    until("the timeline", (s) => s.find({ role: "card", label: "Ruler" }));
+    scrubTo(x);
+    nav.graphPage();
+    if (!app.snapshot().find({ role: "card", label: "Curve 1 strip" })) expand();
+    const box = strip().bounds;
+    return () => {
+      const p = playhead().bounds;
+      return (p.x + p.width / 2 - box.x) / box.width;
+    };
   };
-  scrubTo(clip.x + clip.width * 0.25);
+  const earlyShare = at(clip.x + clip.width * 0.25);
   until("the playhead", () => playhead());
-  const early = shareOf();
-  scrubTo(clip.x + clip.width * 0.75);
-  const late = shareOf();
+  const early = earlyShare();
+  const lateShare = at(clip.x + clip.width * 0.75);
+  until("the playhead", () => playhead());
+  const late = lateShare();
   // The playhead moved with the track time, and sits where the clip is.
   assert(late > early, `the playhead did not move right: ${early} → ${late}`);
   assert(Math.abs(early - 0.25) < 0.05 && Math.abs(late - 0.75) < 0.05, `playhead at ${early} and ${late}`);
   // Past the clip it goes.
-  scrubTo(clip.x + clip.width + 40);
+  at(clip.x + clip.width + 40);
   until("no playhead", () => !playhead());
 });
 
@@ -230,7 +240,7 @@ const GRADIENT = { pattern: "graph-clip", name: "Gradient", start: 1, end: 3, pr
 test("a strip across space marks where each head falls", { fixture: { clips: [GRADIENT] } }, () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Gradient"));
   nav.graphPage();

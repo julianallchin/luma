@@ -1,5 +1,5 @@
 //! The import's progress, drawn: the Progress route's per-song rows and the
-//! sidebar row that stays up while an import runs or after one fails.
+//! status bar item that stays up while an import runs or after one fails.
 
 use std::rc::Rc;
 
@@ -182,57 +182,17 @@ fn import_status_mark(status: &ItemStatus, label: &str) -> Div {
         }))
 }
 
-/// The sidebar's row for an import: there while one runs, and after one
-/// that failed until its page has been opened. A click opens that page.
-pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
+/// The status bar's item for an import: there while one runs, and after one
+/// that failed until its page has been opened. A press opens that page.
+pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
     let activity = shell.track_import.as_ref()?;
     let failed = !activity.active && (activity.failed() > 0 || activity.error.is_some());
     if !activity.active && (!failed || activity.seen) {
         return None;
     }
-    let label = activity.summary();
-    let open = app.clone();
-    let keyed = app.clone();
-    Some(
-        div()
-            .flex_shrink_0()
-            .px(px(12.))
-            .pb(px(4.))
-            .child(
-                float::nav_row(RowState::Rest, "track-import-status")
-                    .id("track-import-status")
-                    .tab_stop(true)
-                    .on_key_down(move |event, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            keyed.update(cx, |this, cx| this.show_track_import(cx));
-                        }
-                    })
-                    .on_click(move |_, _, cx| {
-                        open.update(cx, |this, cx| this.show_track_import(cx));
-                    })
-                    .child(
-                        Icon::new(IconName::ArrowDown)
-                            .size(px(12.))
-                            .text_color(if failed {
-                                Hsla::from(ladder::danger())
-                            } else {
-                                glass::ink(0.72)
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(if failed {
-                                Hsla::from(ladder::danger())
-                            } else {
-                                glass::ink(0.85)
-                            })
-                            .child(label.clone()),
-                    )
-                    .agent_node(Role::Button, label),
-            )
-            .into_any_element(),
-    )
+    let mut item = crate::status_bar::Item::new("track-import-status", activity.summary());
+    item.icon = Some(IconName::ArrowDown);
+    item.danger = failed;
+    item.press = Some(|this, cx| this.show_track_import(cx));
+    Some(item)
 }

@@ -1,5 +1,5 @@
-//! The sidebar's folders: a venue's named sets of its songs
-//! (`docs/specs/venue-tabs.md`, phase 2).
+//! The song list's folders: a venue's named sets of its songs
+//! (`docs/specs/comet-shell.md` §4).
 //!
 //! A folder holds links, not songs. A song in a folder is the same song as
 //! under All songs: pressing it opens the same scores level, so a song in two
@@ -23,9 +23,9 @@ use luma_ui::text_input::{self, TextInput, DRAFT_CONTEXT};
 use luma_lib::models::folders::Folder;
 
 use super::{slot, Tracks};
-use crate::agent::TabStatus;
+use crate::agent::ChatStatus;
 use crate::library::LibraryError;
-use crate::tabs::Target;
+use crate::workspace::Target;
 use crate::Luma;
 
 /// What a right-click raised, and over what.
@@ -71,9 +71,9 @@ impl Tracks {
 
 impl Luma {
     /// Re-read the venue's folders. Admitted only while the same venue load
-    /// still owns the sidebar, the rule its rows follow.
+    /// still owns the song list, the rule its rows follow.
     pub(crate) fn reload_folders(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = &self.sidebar else {
+        let Some(state) = &self.songs else {
             return;
         };
         let (venue, generation) = (state.venue_id.clone(), state.load_generation);
@@ -82,7 +82,7 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let Some(state) = this
-                    .sidebar
+                    .songs
                     .as_mut()
                     .filter(|state| state.venue_id == venue && state.load_generation == generation)
                 else {
@@ -109,17 +109,14 @@ impl Luma {
         pending: impl Future<Output = Result<(), LibraryError>> + 'static,
         cx: &mut Context<Self>,
     ) {
-        let Some(state) = &self.sidebar else {
+        let Some(state) = &self.songs else {
             return;
         };
         let venue = state.venue_id.clone();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                let Some(state) = this
-                    .sidebar
-                    .as_mut()
-                    .filter(|state| state.venue_id == venue)
+                let Some(state) = this.songs.as_mut().filter(|state| state.venue_id == venue)
                 else {
                     return;
                 };
@@ -132,7 +129,7 @@ impl Luma {
     }
 
     fn toggle_folder(&mut self, folder_id: &str, cx: &mut Context<Self>) {
-        let Some(state) = &mut self.sidebar else {
+        let Some(state) = &mut self.songs else {
             return;
         };
         if !state.expanded.remove(folder_id) {
@@ -144,7 +141,7 @@ impl Luma {
 
     /// Make a folder and put the caret in its name.
     fn create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = &self.sidebar else {
+        let Some(state) = &self.songs else {
             return;
         };
         let venue = state.venue_id.clone();
@@ -152,10 +149,7 @@ impl Luma {
         cx.spawn_in(window, async move |this, cx| {
             let created = pending.await;
             this.update_in(cx, |this, window, cx| {
-                let Some(state) = this
-                    .sidebar
-                    .as_mut()
-                    .filter(|state| state.venue_id == venue)
+                let Some(state) = this.songs.as_mut().filter(|state| state.venue_id == venue)
                 else {
                     return;
                 };
@@ -187,7 +181,7 @@ impl Luma {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(name) = self.sidebar.as_ref().and_then(|state| {
+        let Some(name) = self.songs.as_ref().and_then(|state| {
             state
                 .folders
                 .iter()
@@ -219,7 +213,7 @@ impl Luma {
                 .ok();
         });
         let focus = field.read(cx).focus_handle(cx);
-        if let Some(state) = &mut self.sidebar {
+        if let Some(state) = &mut self.songs {
             state.menu = None;
             state.rename = Some(Rename {
                 folder_id,
@@ -235,7 +229,7 @@ impl Luma {
     /// End the rename. `save` writes the typed name when it is a different,
     /// non-empty name; otherwise nothing is written.
     fn finish_folder_rename(&mut self, save: bool, cx: &mut Context<Self>) {
-        let Some(rename) = self.sidebar.as_mut().and_then(|state| state.rename.take()) else {
+        let Some(rename) = self.songs.as_mut().and_then(|state| state.rename.take()) else {
             return;
         };
         cx.notify();
@@ -247,16 +241,16 @@ impl Luma {
         self.change_folders(pending, cx);
     }
 
-    pub(crate) fn open_sidebar_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
-        if let Some(state) = &mut self.sidebar {
+    pub(crate) fn open_song_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+        if let Some(state) = &mut self.songs {
             state.menu = Some(menu);
             cx.notify();
         }
     }
 
     /// Close it, reporting whether there was one.
-    fn close_sidebar_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(state) = &mut self.sidebar else {
+    pub(crate) fn close_song_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &mut self.songs else {
             return false;
         };
         if state.menu.take().is_none() {
@@ -270,8 +264,8 @@ impl Luma {
     /// and through [`crate::confirm`] when it holds some — the same rule a
     /// score's delete follows.
     fn request_delete_folder(&mut self, folder_id: String, cx: &mut Context<Self>) {
-        self.close_sidebar_menu(cx);
-        let Some((name, songs)) = self.sidebar.as_ref().and_then(|state| {
+        self.close_song_menu(cx);
+        let Some((name, songs)) = self.songs.as_ref().and_then(|state| {
             let folder = state.folders.iter().find(|folder| folder.id == folder_id)?;
             Some((folder.name.clone(), state.songs_in(folder)))
         }) else {
@@ -299,7 +293,7 @@ impl Luma {
     }
 
     pub(crate) fn delete_folder(&mut self, folder_id: String, cx: &mut Context<Self>) {
-        if let Some(state) = &mut self.sidebar {
+        if let Some(state) = &mut self.songs {
             state.expanded.remove(&folder_id);
         }
         let pending = self.library.delete_folder(&folder_id);
@@ -325,8 +319,8 @@ impl Luma {
 /// it that are on screen.
 pub(super) fn statuses(
     state: &Tracks,
-    statuses: &HashMap<Target, TabStatus>,
-) -> Rc<[Option<TabStatus>]> {
+    statuses: &HashMap<Target, ChatStatus>,
+) -> Rc<[Option<ChatStatus>]> {
     state
         .folders
         .iter()
@@ -344,7 +338,7 @@ pub(super) fn statuses(
                     }
                     _ => None,
                 })
-                .reduce(TabStatus::max)
+                .reduce(ChatStatus::max)
         })
         .collect()
 }
@@ -355,7 +349,7 @@ pub(super) fn folder_row(
     folder: &Folder,
     songs: usize,
     open: bool,
-    status: Option<TabStatus>,
+    status: Option<ChatStatus>,
     field: Option<&Entity<TextInput>>,
     app: &Entity<Luma>,
 ) -> AnyElement {
@@ -377,7 +371,7 @@ pub(super) fn folder_row(
                     at: event.position,
                     folder_id: menu_id.clone(),
                 };
-                raised.update(cx, |this, cx| this.open_sidebar_menu(menu, cx));
+                raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
             })
             .child(
                 gpui_component::Icon::new(if open {
@@ -413,7 +407,7 @@ pub(super) fn folder_row(
 }
 
 /// The name as a live field. The draft context gives the field Enter and
-/// Escape ahead of the sidebar's own keys; presses inside it stop here, so
+/// Escape ahead of the song list's own keys; presses inside it stop here, so
 /// placing the caret does not close the folder.
 fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
     float::field()
@@ -471,7 +465,7 @@ pub(super) fn menu(state: &Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
                     })
                     .render(move |_, cx| {
                         dismissed.update(cx, |this, cx| {
-                            this.close_sidebar_menu(cx);
+                            this.close_song_menu(cx);
                         });
                     }),
             )
@@ -517,7 +511,7 @@ fn song_menu(state: &Tracks, at: Point<Pixels>, track_id: &str, app: &Entity<Lum
         at,
         Dismiss::on_press_out(move |_, cx| {
             dismissed.update(cx, |this, cx| {
-                this.close_sidebar_menu(cx);
+                this.close_song_menu(cx);
             });
         }),
         card.agent_node(Role::Card, "Song folders")

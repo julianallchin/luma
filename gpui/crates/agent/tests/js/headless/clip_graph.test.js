@@ -31,10 +31,9 @@ const nodeTitles = () => new Set(Object.keys(nodes()).map(titleOf));
 function open(clip) {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", clip));
-  until("the graph", (s) => s.find({ role: "card", label: "Graph canvas" }) && s.find({ role: "input", label: "Name" }));
   nav.graphPage();
 }
 
@@ -607,7 +606,7 @@ test("renaming stores the name and the timeline shows it", () => {
 test("the fade handle writes an alpha curve over the clip", { fixture: { clips: [clipOf("Wash")], window: [1400, 900] } }, () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   until("the waveform", (s) => s.find({ role: "card", label: "Waveform" }));
   settle();

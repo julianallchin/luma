@@ -1,16 +1,19 @@
-// The sidebar's second level, driven end to end with motion snapped.
+// A song's scores on the song list, driven end to end with motion snapped.
 //
-// - a track row is a door to the track's documents: pressing it goes a level
-//   deeper, not straight onto a timeline the sidebar guessed at;
-// - the level lists every score on the `(track, venue)`, and choosing one
-//   opens its own tab and puts the sidebar away;
+// - a song row is a door to the song's scores: pressing it unfolds them under
+//   the row, not straight onto a timeline the list guessed at;
+// - the scores list every score on the `(track, venue)`, and choosing one
+//   opens it and closes the list;
 // - `New score` mints another and opens it;
-// - Back returns to the track list.
+// - pressing the row again folds the scores away.
 
-// Two further scores on the seeded pair, so the level lists three.
+// Two further scores on the seeded pair, so the song lists three.
 fixture({ seconds: 8, clips: [{ pattern: "pat-glow", name: "Glow", start: 1, end: 4 }], extra_scores: 2 });
 
-test("the row opens a track's scores, and the level switches, mints and pops", () => {
+const songList = (s) => s.find({ role: "card", label: "Song list" }) !== undefined;
+const unfolded = (s) => s.find({ role: "card", label: "Scores of Aurora" }) !== undefined;
+
+test("the row unfolds a song's scores, and they switch, mint and fold", () => {
   const ordinal = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"))?.label;
   const rows = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
   const ordinals = (labels) => labels.map((l) => l.split(" ")[0]).sort();
@@ -24,33 +27,26 @@ test("the row opens a track's scores, and the level switches, mints and pops", (
   const listed = rows().map((n) => n.label);
   expect(ordinals(listed)).toEqual(["#1", "#2", "#3"]);
   expect(listed.filter((l) => l.includes("· 1 patterns ·")).length).toBe(1);
-  // The track list is gone, not merely covered: a level parked off the edge
-  // would still be a tab stop.
-  expect(app.snapshot().find({ role: "input", label: "Search tracks" })).toBe(undefined);
+  // The list covers the timeline rather than sitting beside it.
+  expect(app.snapshot().find({ role: "card", label: "Waveform" })).toBe(undefined);
 
-  // Choosing opens the score's own tab and gives the timeline the room; the
-  // level is where it was when the sidebar comes back.
+  // Choosing opens the score and closes the list over it.
   const other = rows().find((n) => !n.label.startsWith(`${opened.slice("Score ".length)} `));
   app.click(other);
-  until("the timeline on the other score", () => ordinal() !== opened);
-  // The sidebar goes one double-click interval after the click.
-  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
-  app.action("luma::ToggleSidebar");
-  until("the level back", (s) => s.find({ role: "card", label: "Scores level" }) !== undefined);
+  until("the timeline on the other score", (s) => ordinal() !== opened && !songList(s));
 
   // Mint another, which opens it: a new score, not a hand-back of one on the
   // pair.
+  nav.scores("Aurora");
   app.click(app.snapshot().find({ role: "button", label: "New score" }));
-  until("a fourth score, open", () => ordinal() === "Score #4");
-  until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
-  app.action("luma::ToggleSidebar");
+  until("a fourth score, open", (s) => ordinal() === "Score #4" && !songList(s));
+  nav.scores("Aurora");
   until("four scores listed", () => rows().length === 4);
   expect(ordinals(rows().map((n) => n.label))).toEqual(["#1", "#2", "#3", "#4"]);
 
-  // …and back out.
-  app.click(app.snapshot().find({ role: "button", label: "Back to tracks" }));
-  until("the track list again", (s) =>
-    s.find({ role: "input", label: "Search tracks" }) !== undefined && s.find({ role: "card", label: "Scores level" }) === undefined);
+  // …and folded away again by the row.
+  app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
+  until("the scores folded", (s) => songList(s) && !unfolded(s) && rows().length === 0);
   expect(app.snapshot().find({ role: "row", label: "Aurora" }) !== undefined).toBe(true);
 });
 
@@ -72,8 +68,8 @@ test("double-clicking a score's name renames it in place", () => {
   app.key("escape");
   until("the field is gone", () => field("#1") === undefined);
   expect(nameOf("#1").label).toBe(before);
-  // Escape ended the rename only; the level is still up.
-  expect(app.snapshot().find({ role: "card", label: "Scores level" }) !== undefined).toBe(true);
+  // Escape ended the rename only; the scores are still up.
+  expect(unfolded(app.snapshot())).toBe(true);
 
   // An empty name is not a name.
   app.click(nameOf("#1"), { count: 2 });

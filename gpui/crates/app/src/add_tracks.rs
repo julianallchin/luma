@@ -42,7 +42,7 @@ mod import;
 mod navigation;
 mod palette;
 mod preview;
-mod progress;
+pub(crate) mod progress;
 mod rows;
 mod source;
 
@@ -52,7 +52,6 @@ pub(crate) use import::TrackImportActivity;
 use palette::palette;
 pub(crate) use preview::{reap_preview, SourcePreview};
 use progress::import_progress;
-pub(crate) use progress::sidebar;
 use source::source_library;
 
 /// The one size every route takes — see the module docs. 680 wide is comet's
@@ -142,7 +141,7 @@ pub(crate) enum Purpose {
     /// Add it to the venue: the dialog's ordinary job.
     AddToVenue,
     /// Play it on the Perform tab's virtual deck, then close.
-    PlayVirtual(crate::tabs::Target),
+    PlayVirtual(crate::workspace::Target),
 }
 
 pub(crate) struct AddTracks {

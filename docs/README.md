@@ -21,7 +21,6 @@ works and the decisions behind it.
 
 - [design/venue-graph.md](design/venue-graph.md) — a venue as a tree of relations; poses derived by the snap resolver
 - [design/venue-workspace.md](design/venue-workspace.md) — the venue tab: live scene, fixture table, groups
-- [specs/venue-tabs.md](specs/venue-tabs.md) — score, venue and Perform tabs
 - [design/venue-authoring-api.md](design/venue-authoring-api.md) — the agent's Python API for building rigs
 - [specs/venue-builder-gauntlet.md](specs/venue-builder-gauntlet.md) — the acceptance contract for the venue graph's rig building
 - [design/editor-core.md](design/editor-core.md) — the stage builder's editor kernel: selection, input, tools
@@ -37,7 +36,7 @@ works and the decisions behind it.
 
 ## App shell
 
-- [specs/comet-shell.md](specs/comet-shell.md) — the shell's contract: tabs, sidebar, chrome
+- [specs/comet-shell.md](specs/comet-shell.md) — the shell's contract: modes, per-venue state, the song list, chrome, surfaces
 - [specs/agent-chat-gpui.md](specs/agent-chat-gpui.md) — the agent chat panel
 
 ## Agent

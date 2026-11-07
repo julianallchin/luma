@@ -58,7 +58,6 @@ pub mod key {
     pub const HDR_OUTPUT: &str = "hdr_output";
     pub const STAGE_LOOK: &str = "stage_look";
     pub const STAGE_LOW_QUALITY: &str = "stage_low_quality";
-    pub const VIEW_MODE: &str = "view_mode";
     pub const AGENT_ENGINE: &str = "agent_engine";
     pub const AGENT_PROVIDER: &str = "agent_provider";
     pub const AGENT_MODEL: &str = "agent_model";
@@ -83,9 +82,6 @@ pub async fn write(pool: &SqlitePool, name: &str, value: &str) -> Result<(), Str
     }
     Ok(())
 }
-
-/// The retired checkbox [`ViewMode`] falls back to. Read, never written.
-const SPLIT_VIEW: &str = "split_view";
 
 /// The values `max_dimmer` may hold, as a percentage of full output.
 pub const MAX_DIMMER_RANGE: std::ops::RangeInclusive<u8> = 0..=100;
@@ -125,10 +121,6 @@ pub struct AppSettings {
     /// cost knob of this machine, like `render_scale`.
     #[serde(default)]
     pub stage_low_quality: bool,
-    /// How the editing window is laid out — see [`ViewMode`]. A view
-    /// preference of this machine.
-    #[serde(default)]
-    pub view_mode: ViewMode,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -147,38 +139,6 @@ pub struct AppSettings {
 
 fn enabled() -> bool {
     true
-}
-
-/// The editing window's two layouts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ViewMode {
-    /// The agent's chat beside the stage over the timeline.
-    #[default]
-    Direct,
-    /// No chat: the timeline beside the stage over the inspector.
-    Program,
-}
-
-impl ViewMode {
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Direct => "direct",
-            Self::Program => "program",
-        }
-    }
-
-    /// The stored mode. Before there were modes there was a `split_view`
-    /// checkbox, and its layout is what Program is, so a library that only
-    /// has that row opens in the layout it was left in.
-    fn configured(map: &std::collections::HashMap<String, String>) -> Self {
-        match map.get(key::VIEW_MODE).map(String::as_str) {
-            Some("direct") => Self::Direct,
-            Some("program") => Self::Program,
-            _ if map.get(SPLIT_VIEW).is_some_and(|v| v == "true") => Self::Program,
-            _ => Self::Direct,
-        }
-    }
 }
 
 /// What the settings screen may know about one service's API key.
@@ -241,7 +201,6 @@ impl Default for AppSettings {
             hdr_output: true,
             stage_look: String::new(),
             stage_low_quality: false,
-            view_mode: ViewMode::default(),
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -294,7 +253,6 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .cloned()
             .unwrap_or(defaults.stage_look),
         stage_low_quality: flag(key::STAGE_LOW_QUALITY, defaults.stage_low_quality),
-        view_mode: ViewMode::configured(&map),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
@@ -352,33 +310,16 @@ mod tests {
         assert!(api_key_statuses(&cleared).iter().all(|s| s.hint.is_none()));
     }
 
-    /// A stored mode wins; without one, the retired split-view checkbox
-    /// decides, and its layout is Program.
+    /// Same contract one axis over: the picker must not offer a service the
+    /// loop cannot build a client for.
     #[test]
-    fn view_mode_falls_back_to_the_split_view_row() {
-        let map = |rows: &[(&str, &str)]| {
-            rows.iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect::<std::collections::HashMap<_, _>>()
-        };
-        assert_eq!(ViewMode::configured(&map(&[])), ViewMode::Direct);
-        assert_eq!(
-            ViewMode::configured(&map(&[("split_view", "true")])),
-            ViewMode::Program
-        );
-        assert_eq!(
-            ViewMode::configured(&map(&[("split_view", "false")])),
-            ViewMode::Direct
-        );
-        assert_eq!(
-            ViewMode::configured(&map(&[("split_view", "true"), ("view_mode", "direct")])),
-            ViewMode::Direct
-        );
-        for mode in [ViewMode::Direct, ViewMode::Program] {
-            assert_eq!(
-                ViewMode::configured(&map(&[("view_mode", mode.key())])),
-                mode
+    fn every_offered_provider_resolves_in_the_model_seam() {
+        for (stored, _) in AGENT_PROVIDERS {
+            assert!(
+                crate::agent::model::Provider::parse(stored).is_some(),
+                "settings offers provider '{stored}', which agent::model does not know"
             );
         }
+        assert!(crate::agent::model::Provider::parse(DEFAULT_AGENT_PROVIDER).is_some());
     }
 }

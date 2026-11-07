@@ -25,8 +25,9 @@ fixture({
     { pattern: "pattern-wash", name: "Wash", start: 14, end: 18, lane: 1, preset: "Random heads" },
   ],
   // The pixel premises below were authored against a timeline about 1000
-  // wide; in takeover the shell and the inspector spend the rest.
-  window: [2500, 818],
+  // wide: the agent panel takes a quarter of the page (the window less its
+  // trim either side) less its seam, and the content the rest.
+  window: [1353, 818],
 });
 const HAZE_SECONDS = 4;
 
@@ -52,7 +53,6 @@ let ZOOM = null;
 function open() {
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
   // The editor's own geometry: give it the whole column.
   nav.stageOff();
   until("the clips", (s) => s.find({ role: "card", label: WASH }) !== undefined);
@@ -61,7 +61,7 @@ function open() {
 
 function reopen() {
   settled();
-  nav.closeTab();
+  nav.reopen("Aurora");
   app.frames(6);
   open();
 }
@@ -392,11 +392,11 @@ test("the insertion menu lists presets and answers pointer and keyboard", () => 
   const copies = (preset) => Object.values(library.score().clips).filter((clip) => isPreset(clip, preset)).length;
   const chosen = copies(presets[1]);
   fitLanes();
-  // Pressed at the lane's start, clear of the dialog, so the resting pointer
+  // Pressed at the lane's end, clear of the centred dialog, so the resting pointer
   // hovers no row: a hovered row is the active one, and the keys would
   // start from wherever the pointer happened to be.
   const lane = node("row", "Lane 0").bounds;
-  app.drag({ x: lane.x + 40, y: lane.y + lane.height / 2 }, { dx: 0, dy: 0 }, { steps: 1, button: "right" });
+  app.drag({ x: lane.x + lane.width - 40, y: lane.y + lane.height / 2 }, { dx: 0, dy: 0 }, { steps: 1, button: "right" });
   until("the insertion menu", (s) => s.find({ role: "card", label: "Insert pattern dialog" }));
   app.key("down");
   app.frames(2);

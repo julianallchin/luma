@@ -3,7 +3,7 @@
 // haze and view settings.
 
 // Twenty seconds of track and the four-mover rig on a wide window.
-fixture({ seconds: 20, rig: 4, window: [1500, 950] });
+fixture({ seconds: 20, rig: 4, window: [1500, 950], sql: ["INSERT INTO venues (id, uid, name) VALUES ('venue-spare', '$PRINCIPAL', 'Spare Venue')"] });
 
 // What a gesture cannot make: a hand-set collision in universe 1 (`rig`
 // patches movers at 1.1, 1.9, 1.17 and 1.25, eight channels each; this one
@@ -44,7 +44,7 @@ function openPatch() {
   nav.patch("Test Venue");
   nav.step("patch details", "button", "Patch details");
   // Takeover, and the stage off: the table is nine columns beside a rail.
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
   app.frames(4);
@@ -290,7 +290,7 @@ test("fixture table edits and scene controls share selection", () => {
   nav.step("include the fixture", "checkbox", "Include wash 1");
   nav.step("save the membership", "button", "Save group");
   nav.step("patch details", "button", "Patch details");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   until("the same address in the patch", (s) => s.find({ role: "text", label: "wash 1 address = 65" }));
   nav.step("close the patch", "button", "Close patch details");
@@ -330,8 +330,7 @@ test("render settings follow the venue across a score and a reopen", () => {
   until("the score's sun", () => sun() !== undefined);
   expect(sun()).toBe(changed);
   app.key("escape");
-  nav.closeTab();
-  nav.closeTab();
+  nav.leaveVenue("Test Venue");
   nav.venuePage("Test Venue");
   until("the loaded room", (s) => s.find({ role: "toggle", label: "Frame stats" }));
   nav.step("the reopened settings", "toggle", "Render settings");
@@ -374,10 +373,12 @@ test("procedural haze controls are editable and survive environment switches", (
   const names = ["Haze density", "Cloudiness", "Cloud size (m)", "Turbulence", "Wind speed (m/s)", "Wind direction (°)"];
   const read = () => names.map((n) => field(n).label);
   const before = read();
-  // The panel is shorter than its rows: wheel it until the slider is on
-  // screen (a clipped node has no height).
+  // The panel is shorter than its rows: wheel it until the slider is wholly
+  // on screen (a clipped node is as tall as what shows of it), so the scrub's
+  // press lands on it.
+  const whole = field(names[0]).bounds.height;
   const reveal = (name) => {
-    for (let i = 0; i < 12 && field(name).bounds.height === 0; i++) {
+    for (let i = 0; i < 12 && field(name).bounds.height < whole; i++) {
       app.scroll(app.snapshot().find({ role: "card", label: "Venue environment" }), { dy: -60, steps: 2 });
       app.frames(2);
     }

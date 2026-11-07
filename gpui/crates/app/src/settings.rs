@@ -10,13 +10,14 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::arg::select::luma_arg_select;
-use luma_ui::ladder;
+use luma_ui::float::RowState;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::Enabled;
+use luma_ui::{glass, ladder, radius};
 
 use luma_lib::settings::{
-    agent_models, key, ApiKeyStatus, AppSettings, ViewMode, AGENT_PROVIDERS, MAX_DIMMER_RANGE,
+    agent_models, key, ApiKeyStatus, AppSettings, AGENT_PROVIDERS, MAX_DIMMER_RANGE,
 };
 
 use crate::Luma;
@@ -41,6 +42,17 @@ impl Tab {
             Tab::Ai => "AI",
             Tab::Output => "DMX Output",
             Tab::About => "About",
+        }
+    }
+
+    /// The line under the page's title.
+    fn description(self) -> &'static str {
+        match self {
+            Tab::General => "How Luma plays and draws on this machine.",
+            Tab::Account => "Who this library belongs to.",
+            Tab::Ai => "The agent that works beside you, and the keys it uses.",
+            Tab::Output => "How light leaves this machine.",
+            Tab::About => "This copy of Luma, and how it stays current.",
         }
     }
 }
@@ -198,7 +210,7 @@ impl Luma {
     /// only honest proof it landed.
     ///
     /// Hangs off the app rather than the settings screen because both doors to
-    /// it — the sidebar's account menu and the settings row — press the same
+    /// it — the venue menu's account row and the settings row — press the same
     /// three commands, and a guard living on one screen could not stop the
     /// other from pressing them again mid-flight.
     pub(crate) fn sign_out(&mut self, cx: &mut Context<Self>) {
@@ -388,59 +400,15 @@ impl Luma {
             self.hdr_output_allowed = values.hdr_output;
             cx.notify();
         }
-        if self.view_mode != values.view_mode {
-            self.view_mode = values.view_mode;
+        if self.dmx_output != values.dmx_output_enabled {
+            self.dmx_output = values.dmx_output_enabled;
             cx.notify();
         }
         self.set_auto_update(values.auto_update);
     }
 
-    /// Lay the window out as `mode` now, and remember it for the next launch.
-    ///
-    /// Applied before the write lands, like the stage's view toggles: the
-    /// switch is the head band's, not the settings screen's, so there is no
-    /// screen to re-read into, and a layout that waited on the database would
-    /// lag the click. A failed write is only reported to the log — the window
-    /// is already in the mode the click asked for, and the next launch opens
-    /// in the last one that was stored.
-    pub(crate) fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
-        if self.view_mode == mode {
-            return;
-        }
-        self.view_mode = mode;
-        cx.notify();
-        let pending = self.library.set_setting(key::VIEW_MODE, mode.key());
-        cx.spawn(async move |_, _| {
-            if let Err(error) = pending.await {
-                eprintln!("[luma] the view mode was not saved: {error}");
-            }
-        })
-        .detach();
-    }
-
-    /// Open or dismiss the account menu that hangs off the sidebar's foot.
-    ///
-    /// A [`luma_ui::dialog::Popup`] like every other menu in the app, so it
-    /// leaves with the same motion — see [`crate::tracks::account_menu`].
-    pub(crate) fn toggle_account_menu(&mut self, cx: &mut Context<Self>) {
-        if self.account_menu.is_open() {
-            self.account_menu.begin_close(cx);
-        } else {
-            self.account_menu.open(());
-        }
-        cx.notify();
-    }
-
-    /// Begin the account menu's exit. Both of its rows do this first: the
-    /// gesture is over the moment one is pressed, and the menu plays out from
-    /// under whatever it opened.
-    pub(crate) fn close_account_menu(&mut self, cx: &mut Context<Self>) {
-        self.account_menu.begin_close(cx);
-        cx.notify();
-    }
-
     /// The one gesture that changes who this library belongs to, in whichever
-    /// direction it currently points. The account menu's second row, and the
+    /// direction it currently points. The venue menu's account row, and the
     /// settings screen's account button — one path, so the in-flight guard
     /// cannot be walked around by pressing the other door.
     pub(crate) fn switch_identity(&mut self, cx: &mut Context<Self>) {
@@ -463,10 +431,29 @@ impl Luma {
 }
 
 // -- rendering ----------------------------------------------------------------
+//
+// Zeron's settings page: a nav down the left, and a page column beside it — a
+// title over a description, then sections, each a small title over a card of
+// rows. A row is the setting's name and help on the left and its control at
+// the end.
 
-const PAD: f32 = 16.;
-/// Gap between one labelled control and the next.
-const SECTION_GAP: f32 = 20.;
+/// What the account row says when nobody is signed in — the guest namespace,
+/// which is a working library and not a failure.
+pub(crate) const GUEST_ACCOUNT: &str = "Working locally";
+
+/// The nav's width, divided from the page by an inner hairline.
+const NAV_WIDTH: f32 = 196.;
+/// The page column: zeron's settings measure.
+const PAGE_WIDTH: f32 = 640.;
+/// A row's floor; a row with help text grows past it.
+const ROW_HEIGHT: f32 = 52.;
+/// The control slot at a row's end. A wider control (a key field and its
+/// buttons) grows it; nothing narrows it.
+const CONTROL_WIDTH: f32 = 240.;
+/// Air between the page's sections.
+const SECTION_GAP: f32 = 24.;
+/// A card's fill: zeron's `#ffffff08`.
+const CARD_ALPHA: f32 = 0x08 as f32 / 255.0;
 
 /// Render the screen. `app` is the root entity every control writes through;
 /// `shell` is the app state the account section reads its identity from.
@@ -474,58 +461,83 @@ pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>) -> Div {
     div()
         .size_full()
         .flex()
-        .flex_col()
+        .flex_row()
         // The shared dialog host paints the card surface; route content stays
         // transparent so a future renderer effect can be upgraded centrally.
         .text_color(ladder::foreground())
-        .child(toolbar(state, app))
-        .child(match (&state.values, &state.error) {
-            (None, None) => luma_ui::plate("Loading…", ladder::muted_foreground()),
-            (None, Some(error)) => luma_ui::plate(
-                format!("Failed to load settings: {error}"),
-                ladder::danger(),
-            ),
-            (Some(values), error) => {
-                body(shell, state, values, error.as_deref(), app).into_any_element()
-            }
-        })
+        .child(nav(state, app))
+        .child(
+            div()
+                .id("settings-page")
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(match (&state.values, &state.error) {
+                    (None, None) => luma_ui::plate("Loading…", ladder::muted_foreground()),
+                    (None, Some(error)) => luma_ui::plate(
+                        format!("Failed to load settings: {error}"),
+                        ladder::danger(),
+                    ),
+                    (Some(values), error) => {
+                        page(shell, state, values, error.as_deref(), app).into_any_element()
+                    }
+                }),
+        )
 }
 
-/// The way back, the screen's name, and the section picker.
-fn toolbar(state: &Settings, app: &Entity<Luma>) -> Div {
+/// The way back and the sections, one row each.
+fn nav(state: &Settings, app: &Entity<Luma>) -> Div {
     let back = app.clone();
     div()
+        .w(px(NAV_WIDTH))
+        .flex_none()
+        .h_full()
         .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(12.))
-        .px(px(PAD))
-        .py(px(8.))
-        .border_b_1()
-        .border_color(ladder::trim())
+        .flex_col()
+        .gap(px(2.))
+        .p(px(8.))
+        .border_r_1()
+        .border_color(glass::inner_rule())
         .child(
-            luma_ui::button("Back", Enabled::Yes)
+            luma_ui::float::nav_row(RowState::Rest, "settings-back")
                 .id("settings-back")
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_settings(cx)))
+                .child(
+                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(12.)),
+                )
+                .child("Back")
                 .agent_node(Role::Button, "Back"),
         )
-        .child(luma_ui::caption("Settings"))
-        .child(div().flex_1())
-        .child(tabs(state, app))
+        .child(
+            div()
+                .px(px(8.))
+                .pt(px(12.))
+                .pb(px(4.))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(glass::ink(glass::TEXT_TERTIARY))
+                .child("Settings")
+                .agent_node(Role::Text, "Settings"),
+        )
+        .children(Tab::ALL.into_iter().map(|tab| {
+            let app = app.clone();
+            luma_ui::float::nav_row(RowState::of(tab == state.tab, false), tab.label())
+                .id(tab.label())
+                .tab_index(0)
+                .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_tab(tab, cx)))
+                .child(tab.label())
+                .agent_node(Role::Toggle, tab.label())
+        }))
 }
 
-fn tabs(state: &Settings, app: &Entity<Luma>) -> Div {
-    luma_ui::float::segmented().children(Tab::ALL.into_iter().map(|tab| {
-        let app = app.clone();
-        luma_ui::float::segment(tab.label(), tab == state.tab, tab.label())
-            .id(tab.label())
-            .tab_index(0)
-            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_tab(tab, cx)))
-            .agent_node(Role::Toggle, tab.label())
-    }))
-}
-
-fn body(
+/// The page column: the section's title and description, a refused write,
+/// and the section's own groups.
+fn page(
     shell: &Luma,
     state: &Settings,
     values: &AppSettings,
@@ -533,11 +545,33 @@ fn body(
     app: &Entity<Luma>,
 ) -> Div {
     div()
-        .flex_1()
+        .w_full()
+        .max_w(px(PAGE_WIDTH))
         .flex()
         .flex_col()
         .gap(px(SECTION_GAP))
-        .p(px(PAD))
+        .px(px(24.))
+        .pt(px(32.))
+        .pb(px(40.))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .text_size(px(20.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(state.tab.label())
+                        .agent_node(Role::Text, state.tab.label()),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(glass::ink(glass::TEXT_SECONDARY))
+                        .child(state.tab.description()),
+                ),
+        )
         .when_some(error, |el, message| {
             el.child(
                 div()
@@ -558,28 +592,36 @@ fn body(
 
 fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     vec![
-        field(
-            None,
-            checkbox(
+        section(
+            "Audio",
+            vec![checkbox(
                 app,
                 key::AUDIO_OUTPUT_ENABLED,
                 "Enable Audio Output",
                 values.audio_output_enabled,
-            ),
-            Some("When disabled, playback stays in sync but stays silent."),
-        ),
-        field(
+                Some("When disabled, playback stays in sync but stays silent."),
+            )],
             None,
-            checkbox(app, key::HDR_OUTPUT, "HDR output", values.hdr_output),
-            Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
+        ),
+        section(
+            "Display",
+            vec![checkbox(
+                app,
+                key::HDR_OUTPUT,
+                "HDR output",
+                values.hdr_output,
+                Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
+            )],
+            None,
         ),
     ]
 }
 
 fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     use luma_lib::agent::engine::Engine;
-    let mut fields = vec![field(
-        Some("Default agent engine"),
+    let engine = row(
+        "Default agent engine",
+        Some("Used for new conversations. Choose a service and model for an existing conversation beside its message box."),
         select(
             state,
             app,
@@ -587,47 +629,62 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             Engine::CHOICES,
             values.agent_engine.key(),
         ),
-        Some("Used for new conversations. Choose a service and model for an existing conversation beside its message box."),
-    )];
+    );
     if values.agent_engine != Engine::Api {
-        fields.push(note("Uses the locally installed agent and its signed-in account. Sign in with the agent's CLI on each machine."));
-        return fields;
+        return vec![section(
+            "Defaults",
+            vec![engine],
+            Some("Uses the locally installed agent and its signed-in account. Sign in with the agent's CLI on each machine."),
+        )];
     }
-    fields.extend([
-        field(
-            Some("Default API service"),
-            select(
-                state,
-                app,
-                key::AGENT_PROVIDER,
-                AGENT_PROVIDERS,
-                &values.agent_provider,
+    let defaults = section(
+        "Defaults",
+        vec![
+            engine,
+            row(
+                "Default API service",
+                Some("Used for new API conversations. Each service keeps its own API key."),
+                select(
+                    state,
+                    app,
+                    key::AGENT_PROVIDER,
+                    AGENT_PROVIDERS,
+                    &values.agent_provider,
+                ),
             ),
-            Some("Used for new API conversations. Each service keeps its own API key."),
-        ),
-        field(
-            Some("Default API model"),
-            select(
-                state,
-                app,
-                key::AGENT_MODEL,
-                &agent_models(),
-                &values.agent_model,
+            row(
+                "Default API model",
+                Some("Used for new API conversations."),
+                select(
+                    state,
+                    app,
+                    key::AGENT_MODEL,
+                    &agent_models(),
+                    &values.agent_model,
+                ),
             ),
-            Some("Used for new API conversations."),
+        ],
+        None,
+    );
+    let keys = state
+        .keys
+        .iter()
+        .filter_map(|key| {
+            let status = values
+                .agent_api_keys
+                .iter()
+                .find(|status| status.provider == key.provider)?;
+            Some(api_key(key, status, app))
+        })
+        .collect();
+    vec![
+        defaults,
+        section(
+            "API keys",
+            keys,
+            Some("Keys are kept on this device only. They are not synced to your account."),
         ),
-    ]);
-    fields.extend(state.keys.iter().filter_map(|key| {
-        let status = values
-            .agent_api_keys
-            .iter()
-            .find(|status| status.provider == key.provider)?;
-        Some(api_key(key, status, app))
-    }));
-    fields.push(note(
-        "Keys are kept on this device only. They are not synced to your account.",
-    ));
-    fields
+    ]
 }
 
 /// One service's key: the masked draft field, Save, and Clear while a key is
@@ -645,7 +702,7 @@ fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Div {
         .gap(px(8.))
         .child(
             luma_ui::float::field()
-                .w(px(320.))
+                .w(px(CONTROL_WIDTH))
                 .when(key.has_draft, |field| {
                     field.key_context(text_input::DRAFT_CONTEXT)
                 })
@@ -678,7 +735,7 @@ fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Div {
         .overridden_by
         .as_ref()
         .map(|env| format!("{env} is set in the environment and is used instead of this key."));
-    field(Some(&label), controls.into_any_element(), help.as_deref())
+    row(&label, help.as_deref(), controls.into_any_element())
 }
 
 /// What an empty key field says: the stored key's hint, or the invitation.
@@ -695,66 +752,74 @@ fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         f32::from(*MAX_DIMMER_RANGE.end()),
     );
     vec![
-        field(
-            Some("Max Brightness"),
-            // Whole percent: the setting is stored as a `u8` and read back as
-            // one, so a slider handing over 61.4 would show 61 on the next
-            // reload and disagree with itself in between.
-            luma_ui::luma_slider(
-                key::MAX_DIMMER,
-                values.max_dimmer as f32,
-                dimmer_low,
-                dimmer_high,
-                240.,
-                {
-                let app = app.clone();
-                let current = values.max_dimmer;
-                move |value, _, cx| {
-                    let level = value.round().clamp(dimmer_low, dimmer_high) as u8;
-                    if level != current {
-                        app.update(cx, |this, cx| {
-                            this.write_setting(key::MAX_DIMMER, level.to_string(), cx);
-                        });
-                    }
-                }
-            })
-            .agent_node(
-                Role::Slider,
-                format!("Max Brightness {}", values.max_dimmer),
-            )
-            .into_any_element(),
-            Some("Limits overall brightness of DMX output (100 = no limit)."),
-        ),
-        field(
+        section(
+            "Output",
+            vec![
+                row(
+                    "Max Brightness",
+                    Some("Limits overall brightness of DMX output (100 = no limit)."),
+                    // Whole percent: the setting is stored as a `u8` and read
+                    // back as one, so a slider handing over 61.4 would show 61
+                    // on the next reload and disagree with itself in between.
+                    luma_ui::luma_slider(
+                        key::MAX_DIMMER,
+                        values.max_dimmer as f32,
+                        dimmer_low,
+                        dimmer_high,
+                        CONTROL_WIDTH,
+                        {
+                            let app = app.clone();
+                            let current = values.max_dimmer;
+                            move |value, _, cx| {
+                                let level = value.round().clamp(dimmer_low, dimmer_high) as u8;
+                                if level != current {
+                                    app.update(cx, |this, cx| {
+                                        this.write_setting(
+                                            key::MAX_DIMMER,
+                                            level.to_string(),
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                        },
+                    )
+                    .agent_node(
+                        Role::Slider,
+                        format!("Max Brightness {}", values.max_dimmer),
+                    )
+                    .into_any_element(),
+                ),
+                checkbox(
+                    app,
+                    key::DMX_OUTPUT_ENABLED,
+                    "Enable DMX Output",
+                    values.dmx_output_enabled,
+                    Some("Sends to Art-Net nodes and USB DMX dongles. Choose where each universe goes under Outputs on a venue's patch page."),
+                ),
+            ],
             None,
-            checkbox(
-                app,
-                key::DMX_OUTPUT_ENABLED,
-                "Enable DMX Output",
-                values.dmx_output_enabled,
-            ),
-            Some("Sends to Art-Net nodes and USB DMX dongles. Choose where each universe goes under Outputs on a venue's patch page."),
         ),
-        field(
-            Some("Art-Net Interface IP (Bind Address)"),
-            readonly_value(&values.artnet_interface, "0.0.0.0"),
-            Some("0.0.0.0 binds to all interfaces."),
+        section(
+            "Art-Net",
+            vec![row(
+                "Art-Net Interface IP (Bind Address)",
+                Some("0.0.0.0 binds to all interfaces."),
+                readonly_value(&values.artnet_interface, "0.0.0.0"),
+            )],
+            Some("The Art-Net interface is not editable from the native host yet."),
         ),
-        note("The Art-Net interface is not editable from the native host yet."),
     ]
 }
 
 /// Who this library belongs to, and the one gesture that changes it.
-///
-/// There is no titlebar account dropdown (see `crate::chrome`), so this screen
-/// *is* the account menu.
 fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
     let account = shell.library.account();
     let signed_in = account.is_some();
     // The address where the session carries one, the principal where it does
-    // not — one spelling of "who this is", shared with the sidebar's foot.
+    // not — one spelling of "who this is", shared with the venue menu.
     let identity = account.as_ref().map_or_else(
-        || crate::tracks::GUEST_ACCOUNT.to_string(),
+        || GUEST_ACCOUNT.to_string(),
         |account| account.label().to_string(),
     );
     let label = if shell.account_action.signing_out {
@@ -767,9 +832,14 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
     let pressable = !shell.account_action.signing_out;
     let act = app.clone();
     let mut rows = vec![
-        field(Some("Signed in as"), readonly_value(&identity, ""), None),
-        field(
-            None,
+        row("Signed in as", None, readonly_value(&identity, "")),
+        row(
+            if signed_in { "Sign out" } else { "Sign in" },
+            Some(if signed_in {
+                "Signing out flushes this library to the cloud, then removes the signed-in copy. Guest work stays."
+            } else {
+                "Signing in claims the rows you write from here; work already done as a guest stays a guest's."
+            }),
             luma_ui::button(label, Enabled::from(pressable))
                 .id("settings-account-action")
                 .when(pressable, |button| {
@@ -780,27 +850,21 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
                 .agent_node(Role::Button, label)
                 .agent_disabled(!pressable)
                 .into_any_element(),
-            Some(if signed_in {
-                "Signing out flushes this library to the cloud, then removes the signed-in copy. Guest work stays."
-            } else {
-                "Signing in claims the rows you write from here; work already done as a guest stays a guest's."
-            }),
         ),
     ];
     if let Some(error) = &shell.account_action.error {
-        rows.push(field(
-            None,
-            div()
-                .max_w(px(560.))
-                .text_size(px(12.))
-                .text_color(ladder::danger())
-                .child(error.clone())
-                .agent_node(Role::Text, error.clone())
-                .into_any_element(),
-            None,
-        ));
+        rows.push(
+            card_row().child(
+                div()
+                    .flex_1()
+                    .text_size(px(12.))
+                    .text_color(ladder::danger())
+                    .child(error.clone())
+                    .agent_node(Role::Text, error.clone()),
+            ),
+        );
     }
-    rows
+    vec![section("Account", rows, None)]
 }
 
 fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
@@ -809,33 +873,109 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         channel => format!(" ({})", channel.label()),
     };
     let (button, status) = crate::update::about(shell, app);
-    let version = luma_ui::caption(format!("Luma v{}{channel}", luma_lib::VERSION));
-    let mut rows = vec![field(None, version.into_any_element(), status.as_deref())];
-    if let Some(button) = button {
-        rows.push(field(None, button, None));
-    }
-    rows.push(field(
-        None,
-        checkbox(app, key::AUTO_UPDATE, "Update automatically", values.auto_update),
-        Some("Checks for a new release every hour and downloads it in the background. When it is ready, Luma asks whether to relaunch now; otherwise it runs the next time you open Luma."),
-    ));
-    rows
+    let version = format!("Luma v{}{channel}", luma_lib::VERSION);
+    let version_row = card_row()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(luma_ui::caption(version))
+                .when_some(status, |el, status| el.child(help_text(&status))),
+        )
+        .children(button.map(control_slot));
+    vec![
+        section("Version", vec![version_row], None),
+        section(
+            "Updates",
+            vec![checkbox(
+                app,
+                key::AUTO_UPDATE,
+                "Update automatically",
+                values.auto_update,
+                Some("Checks for a new release every hour and downloads it in the background. When it is ready, Luma asks whether to relaunch now; otherwise it runs the next time you open Luma."),
+            )],
+            None,
+        ),
+    ]
 }
 
 // -- the pieces every section is built from -----------------------------------
 
-/// One labelled control with its helper line, repeated for every setting.
-fn field(label: Option<&str>, control: AnyElement, help: Option<&str>) -> Div {
+/// A section: its small title over a card of rows, hairlines between them,
+/// and a footnote under the card when the section has one.
+fn section(title: &str, rows: Vec<Div>, note: Option<&str>) -> Div {
+    let count = rows.len();
     div()
         .flex()
         .flex_col()
-        .items_start()
         .gap(px(8.))
-        .when_some(label, |el, label| {
-            el.child(luma_ui::float::label(label.to_string()))
+        .child(
+            div()
+                .px(px(4.))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
+                .child(title.to_string()),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .rounded(px(radius::CARD))
+                .bg(glass::ink(CARD_ALPHA))
+                .border_1()
+                .border_color(glass::inner_rule())
+                .overflow_hidden()
+                .children(rows.into_iter().enumerate().map(|(index, row)| {
+                    row.when(index + 1 < count, |row| {
+                        row.border_b_1().border_color(glass::inner_rule())
+                    })
+                })),
+        )
+        .when_some(note, |el, note| {
+            el.child(div().px(px(4.)).child(help_text(note)))
         })
+}
+
+/// A row's frame: 52 high at least, square, its content on one line.
+fn card_row() -> Div {
+    div()
+        .min_h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .gap(px(16.))
+        .px(px(16.))
+        .py(px(12.))
+}
+
+/// One setting: its name and help, and its control at the end.
+fn row(label: &str, help: Option<&str>, control: AnyElement) -> Div {
+    card_row()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().text_size(px(13.)).child(label.to_string()))
+                .when_some(help, |el, help| el.child(help_text(help))),
+        )
+        .child(control_slot(control))
+}
+
+/// The end of a row, where its control sits: [`CONTROL_WIDTH`] wide, the
+/// control against its trailing edge.
+fn control_slot(control: AnyElement) -> Div {
+    div()
+        .flex_none()
+        .min_w(px(CONTROL_WIDTH))
+        .flex()
+        .justify_end()
         .child(control)
-        .when_some(help, |el, help| el.child(help_text(help)))
 }
 
 fn help_text(text: &str) -> Div {
@@ -845,28 +985,30 @@ fn help_text(text: &str) -> Div {
         .child(text.to_string())
 }
 
-/// A standalone note — the same voice as a field's helper line, with no
-/// control above it.
-fn note(text: &str) -> Div {
-    help_text(text)
-}
-
-/// A checkbox and its label, pressable as one row (`<Checkbox>` + `<Label>`).
-fn checkbox(app: &Entity<Luma>, key: &'static str, label: &str, checked: bool) -> AnyElement {
+/// A boolean setting: the whole row presses, and the box sits at its end.
+fn checkbox(
+    app: &Entity<Luma>,
+    key: &'static str,
+    label: &str,
+    checked: bool,
+    help: Option<&str>,
+) -> Div {
     let app = app.clone();
-    div()
-        .id(key)
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .child(luma_ui::float::checkbox(checked))
-        .child(div().text_size(px(12.)).child(label.to_string()))
-        .on_click(move |_, _, cx| {
-            let value = (!checked).to_string();
-            app.update(cx, |this, cx| this.write_setting(key, value, cx));
-        })
-        .agent_node(Role::Checkbox, label)
-        .into_any_element()
+    let row = row(
+        label,
+        help,
+        luma_ui::float::checkbox(checked).into_any_element(),
+    );
+    div().child(
+        row.id(key)
+            .cursor_pointer()
+            .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
+            .on_click(move |_, _, cx| {
+                let value = (!checked).to_string();
+                app.update(cx, |this, cx| this.write_setting(key, value, cx));
+            })
+            .agent_node(Role::Checkbox, label),
+    )
 }
 
 /// The app's one select ([`luma_arg_select`]), over this screen's `(id, label)`
@@ -912,7 +1054,7 @@ fn readonly_value(value: &str, placeholder: &str) -> AnyElement {
     let empty = value.is_empty();
     let text = if empty { placeholder } else { value };
     luma_ui::float::field()
-        .w(px(240.))
+        .w(px(CONTROL_WIDTH))
         .when(empty, |field| field.text_color(ladder::muted_foreground()))
         .child(text.to_string())
         .agent_node(Role::Input, text)

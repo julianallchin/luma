@@ -13,15 +13,14 @@ test(
   () => {
     // A clip is labelled by its name.
     const CLIP = "Wash";
-    const LAYOUT = ["Sidebar", "Waveform", "Pattern graph", "Stage"];
+    const LAYOUT = ["Agent", "Waveform", "Stage"];
     nav.trackEditor("Test Venue", "Aurora");
-    // Program: the layout with an inspector to restore.
-    nav.program();
     until("the clip", () => peek("card", CLIP));
     // In the track editor the stage carries no visualizer toolbar.
     expect(peek("card", "Visualizer toolbar")).toBe(undefined);
     app.click(peek("card", CLIP));
-    until("the inspector", () => peek("card", "Pattern graph"));
+    const selected = () => app.snapshot().find({ role: "text", label: "1 selected" });
+    until("the selection", selected);
     const before = cards(LAYOUT);
     app.click(peek("button", "Play"));
     until("playing", () => peek("button", "Pause"));
@@ -31,7 +30,7 @@ test(
     // The whole window, one stage, the editors hidden, the transport kept.
     expect(peek("card", "Fullscreen visualizer").bounds).toEqual({ x: 0, y: 0, width: 1400, height: 900 });
     expect(app.snapshot().findAll({ role: "card", label: "Stage" }).length).toBe(1);
-    for (const label of ["Sidebar", "Waveform", "Pattern graph"]) expect(peek("card", label)).toBe(undefined);
+    for (const label of ["Agent", "Waveform"]) expect(peek("card", label)).toBe(undefined);
     assert(peek("button", "Pause") && peek("card", "Visualizer toolbar"), "fullscreen lost the transport");
     const time = () => app.snapshot().findAll({ role: "text" }).find((n) => /^\d+:\d\d \/ \d+:\d\d$/.test(n.label))?.label;
     const firstTime = time();
@@ -42,7 +41,7 @@ test(
     until("playing again", () => peek("button", "Pause"));
 
     // These belong to hidden editors and must not delete the selected clip,
-    // close its tab, or change the remembered panel layout.
+    // close its score, or change the remembered panel layout.
     app.key("delete ctrl-w cmd-w ctrl-b cmd-b ctrl-shift-v cmd-shift-v");
     expect(peek("button", "Exit fullscreen") !== undefined).toBe(true);
     // The first escape closes the settings popover, not fullscreen.
@@ -56,6 +55,7 @@ test(
     expect(cards(LAYOUT)).toEqual(before);
     expect(peek("button", "Pause") !== undefined).toBe(true);
     expect(peek("card", CLIP) !== undefined).toBe(true);
+    assert(selected(), "leaving fullscreen dropped the selection");
 
     // The keyboard door, and the button out.
     app.key("shift-f");

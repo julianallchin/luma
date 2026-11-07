@@ -1,19 +1,18 @@
 // `nav.*`: the suite's one description of how to reach a view.
 //
-// Every test that drives Luma used to spell its own walk, and the shell swap
-// is why that mattered: the venue grid became a picker overlay, the track list
-// became the sidebar, screens became workspace tabs, and Back stopped
-// existing. This file changed once; the tests said where they wanted to be and
-// kept saying it.
+// Every test that drives Luma used to spell its own walk, and the shell's
+// moves are why that mattered: tests say where they want to be, and this file
+// changes when the way there does.
 //
 // The shell's vocabulary, as the walks see it:
-// - the venue picker overlay auto-opens while no venue is selected, and its
-//   cards are the old welcome grid's;
-// - a sidebar row click pushes the column to that track's scores; opening a
-//   timeline is choosing one of them (`nav.track` walks both halves);
-// - a double-click on a clip opens its score graph tab;
-// - `luma::CloseTab` closes the visible tab, dropping its state — the
-//   close-then-reopen idiom that used to be "Back then re-enter";
+// - the venue picker overlay auto-opens while no venue is open, and its cards
+//   are the venues; the title bar's venue menu switches venue after that;
+// - the window is a venue in one of three modes — Rig (the venue page), Arrange
+//   (the open score) and Live (the Perform set) — switched by 1/2/3 or the
+//   title bar's segmented control;
+// - Arrange with no score open is the song list page; a song row expands to
+//   its scores in place, and choosing one opens it and closes the page;
+// - a double-click on a clip opens its graph where the timeline was;
 // - `luma::DismissOverlay` is what Escape means.
 //
 // Requires `until` (until.js). `luma-test` loads both into every test; a
@@ -57,151 +56,181 @@ globalThis.nav = {
 	},
 
 	// The venue picker's card for `name`. The picker is up whenever no venue
-	// is selected — the app opens there — so this is the first line of almost
-	// every walk. Selecting the venue closes the picker and fills the sidebar.
+	// is open — the app opens there — so this is the first line of almost
+	// every walk. Opening the venue closes the picker.
 	//
 	// Closing is not instant: a dismissed dialog stays mounted, and occluding,
 	// while its out-animation plays. Waiting for it to actually go is part of
-	// "go to this venue" — otherwise the next click in the walk lands on a
-	// dying dialog's scrim instead of the shell behind it, which is exactly
-	// the flake this file exists to remove.
+	// "go to this venue" — otherwise the next click lands on a dying dialog's
+	// scrim instead of the shell behind it.
 	venue(name) {
 		nav.step(`the venue ${name}`, "card", name, { restale: "match" });
 		until("the venue picker to finish leaving", (s) =>
 			s.find({ role: "card", label: "Venue dialog" }) === undefined ? s : undefined);
 	},
 
-	// The sidebar's second level: one track's scores.
-	//
-	// The row itself — a track has as many scores as there are people who
-	// annotated it, so the row is the door to the *list* and nothing in the
-	// sidebar guesses which one you meant. Waits for the push to finish,
-	// because a level still in flight occludes every gesture aimed at it.
-	scores(track) {
-		nav.step(`the track ${track}`, "row", track);
-		// The level having *arrived* is the track list being gone: while the
-		// push plays both levels are mounted, and a row on the one still
-		// flying is clipped out of the column — a click on it throws.
-		until("the scores level", (s) =>
-			s.find({ role: "card", label: "Scores level" }) !== undefined
-				&& s.find({ role: "button", label: "New score" }) !== undefined
-				&& s.find({ role: "input", label: "Search tracks" }) === undefined);
+	// Put a mode on screen ("Rig", "Arrange" or "Live") by its action, and
+	// wait for its body.
+	mode(name) {
+		app.action(`luma::Show${name}`);
+		until(`the ${name} mode`, (s) => nav.shownMode(s) === name);
+		app.frames(2);
 	},
 
-	// A track's timeline, which is now two gestures: into the track's scores,
-	// then onto one of them. The level leads with the most recently written
-	// score, which is the one the row used to open by itself.
-	//
-	// Pops back to the track list afterwards, so this still means what it
-	// meant to every caller: the editor is up and the sidebar is at rest on
-	// the list. A test that wants to *stay* on the scores level says
-	// `nav.scores`.
+	// Which mode `snapshot` shows, read off the body a person would see: the
+	// venue page for Rig, the Perform header's layout button for Live, the
+	// song list or a score for Arrange.
+	shownMode(snapshot) {
+		if (snapshot.find({ role: "button", label: "Edit layout" })
+			|| snapshot.find({ role: "button", label: "Done" })?.bounds.y < 120) return "Live";
+		if (snapshot.find({ role: "card", label: "Song list" })
+			|| snapshot.findAll({ role: "text" }).some((n) => n.label.startsWith("Score #"))) return "Arrange";
+		if (snapshot.findAll({ role: "card" }).some((n) => n.label.endsWith(" Venue"))) return "Rig";
+		return undefined;
+	},
+
+	// The song list page, over Arrange. Up by itself while no score is open;
+	// otherwise the title bar's song title opens it.
+	songs() {
+		const shot = app.snapshot();
+		if (shot.find({ role: "card", label: "Song list" }) === undefined) {
+			app.action("luma::ToggleSongList");
+		}
+		until("the song list", (s) =>
+			s.find({ role: "card", label: "Song list" }) !== undefined
+				&& s.find({ role: "input", label: "Search tracks" }) !== undefined);
+	},
+
+	// One song's scores, expanded under its row on the song list. Other
+	// songs may be expanded too, so what is in this one's card is
+	// `nav.inScores`.
+	scores(track) {
+		nav.songs();
+		if (app.snapshot().find({ role: "card", label: `Scores of ${track}` }) === undefined) {
+			nav.step(`the track ${track}`, "row", track);
+		}
+		until("the scores", (s) => nav.inScores(s, track, "button", "New score")[0] !== undefined);
+	},
+
+	// The `role` nodes (labelled `label`, when given) inside `track`'s
+	// expanded scores, top to bottom.
+	inScores(snapshot, track, role, label) {
+		const card = snapshot.find({ role: "card", label: `Scores of ${track}` })?.bounds;
+		if (card === undefined) return [];
+		return snapshot.findAll(label === undefined ? { role } : { role, label })
+			.filter((n) => n.bounds.y >= card.y - 0.5 && n.bounds.y + n.bounds.height <= card.y + card.height + 0.5)
+			.sort((a, b) => a.bounds.y - b.bounds.y);
+	},
+
+	// `track`'s score rows, top to bottom.
+	scoreRows(snapshot, track) {
+		return nav.inScores(snapshot, track, "row").filter((n) => n.label.startsWith("#"));
+	},
+
+	// A song's timeline: its scores, then the newest one (the listing leads
+	// with it) or a new one when it has none. Waits for the timeline and for
+	// the song list to have closed over it.
+	// A score of `name` already open stays: there is nothing to walk to.
 	track(name) {
+		const already = app.snapshot();
+		if (already.find({ role: "card", label: "Song list" }) === undefined
+			&& already.findAll({ role: "button" }).some((n) => n.label.startsWith(`${name} · #`))) {
+			until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }));
+			return;
+		}
 		nav.scores(name);
 		const level = app.snapshot();
-		const tabs = (s) => s.findAll({ role: "button" })
-			.filter((n) => n.label.startsWith("Close ") && n.label !== "Close next tab").length;
-		const before = tabs(level);
-		const score = level.findAll({ role: "row" }).find((n) => n.label.startsWith("#"));
-		// No score in this venue yet — minting one is the same door, and it
-		// opens what it mints.
-		app.click(score ?? level.find({ role: "button", label: "New score" }));
-		// The timeline being up is what "opened the track" means, and waiting
-		// for it here rather than in every caller keeps the walk's failure on
-		// the gesture that missed instead of on the assertion three lines on.
+		app.click(nav.scoreRows(level, name)[0] ?? nav.inScores(level, name, "button", "New score")[0]);
 		until("the timeline", (s) =>
-			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined);
-		// Opening a score's new tab puts the sidebar away so the timeline has
-		// the room — one double-click interval after the click. Wait for it,
-		// then bring the sidebar back to walk out of the level.
-		if (tabs(app.snapshot()) > before) {
-			until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
-			app.action("luma::ToggleSidebar");
-			// At rest, not sliding: two frames in a row at one width.
-			let last = -1;
-			until("the sidebar back at rest", (s) => {
-				const width = s.find({ role: "card", label: "Sidebar" })?.bounds.width ?? -1;
-				const still = width > 0 && width === last;
-				last = width;
-				return still;
-			});
-		}
-		nav.step("the way back to the track list", "button", "Back to tracks");
-		until("the track list again", (s) =>
-			s.find({ role: "card", label: "Scores level" }) === undefined
-				&& s.find({ role: "input", label: "Search tracks" }) !== undefined
-				&& s.find({ role: "row", label: name }) !== undefined);
+			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined
+				&& s.find({ role: "card", label: "Song list" }) === undefined);
+		app.frames(2);
 	},
 
-	// Both halves of the commonest walk in the suite. Named so a test that
-	// only wants a timeline says so in one line.
+	// Leave the open score of `track` and open it again, so what comes back
+	// is what was stored. Arrange holds one score, so opening another one —
+	// a sibling, or a new one when there is none — drops the open body.
+	reopen(track) {
+		const title = (s) => s.findAll({ role: "button" }).find((n) => n.label.startsWith(`${track} · #`))?.label;
+		const open = title(app.snapshot());
+		if (open === undefined) throw new Error(`no score of ${track} is open`);
+		const ordinal = open.slice(`${track} · `.length);
+		const row = (s, mine) => nav.scoreRows(s, track).find((n) => n.label.startsWith(`${ordinal} `) === mine);
+		nav.scores(track);
+		const level = app.snapshot();
+		app.click(row(level, false) ?? nav.inScores(level, track, "button", "New score")[0]);
+		until("another score", (s) => title(s) !== undefined && title(s) !== open
+			&& s.find({ role: "card", label: "Song list" }) === undefined);
+		nav.scores(track);
+		app.click(row(until(`the score ${ordinal}`, (s) => row(s, true) ? s : undefined), true));
+		until(`the score ${ordinal} again`, (s) => title(s) === open
+			&& s.find({ role: "card", label: "Song list" }) === undefined
+			&& s.find({ role: "card", label: "Waveform" }) !== undefined);
+		app.frames(2);
+	},
+
+	// Both halves of the commonest walk in the suite.
 	trackEditor(venue, track) {
 		nav.venue(venue);
 		nav.track(track);
 	},
 
-	// The settings screen, through the sidebar's account foot.
-	//
-	// Two steps rather than one button in a corner: settings is an account
-	// gesture now, so the foot opens a menu and "Settings" is a row in it.
-	// ⌘, is the other door and does not need the sidebar — this walk is the
-	// one that proves the door a person can see.
+	// The settings screen, through the title bar's venue menu. ⌘, is the
+	// other door; this walk is the one that proves the door a person can see.
 	settings() {
-		nav.step("the account foot", "button", "Account");
-		nav.step("the settings row", "row", "Settings");
+		nav.venueMenu();
+		nav.step("the settings row", "row", "Settings…");
 	},
 
-	// The venue tab, through the sidebar's "Venue setup" row. The one tab
-	// that names a room without naming a score, which is what a test wants
-	// when it needs the stage pane up over an *unlit* rig — a score tab would
-	// composite one.
+	// The title bar's venue menu, open. Its trigger is the title bar's first
+	// button, labelled with the venue's name.
+	venueMenu() {
+		const shot = until("the title bar", (s) => s.find({ role: "card", label: "Title bar" }) ? s : undefined);
+		const bar = shot.find({ role: "card", label: "Title bar" }).bounds;
+		const trigger = shot.findAll({ role: "button" })
+			.filter((n) => n.bounds.width > 0
+				&& n.bounds.x >= bar.x && n.bounds.x < bar.x + bar.width
+				&& n.bounds.y >= bar.y && n.bounds.y < bar.y + bar.height
+				&& !n.label.endsWith(" agent"))
+			.sort((a, b) => a.bounds.x - b.bounds.x)[0];
+		app.click(trigger);
+		until("the venue menu", (s) => s.find({ role: "row", label: "New venue…" }));
+	},
+
+	// Rig: the venue page. The one body that names a room without naming a
+	// score, which is what a test wants when it needs the stage over an
+	// *unlit* rig.
 	patch(venue) {
 		nav.venue(venue);
 		nav.venuePage(venue);
 	},
 
-	// The "Venue setup" row, from a sidebar that is already on `venue`.
+	// Rig, from a window that is already on `venue`.
 	venuePage(venue) {
-		nav.step("the Venue setup row", "row", "Venue setup");
+		app.action("luma::ShowRig");
 		until("the venue page", (s) =>
 			s.find({ role: "card", label: `${venue} Venue` }) !== undefined,
 		);
 	},
 
-	// The venue's builder tab, reached the same way. The one tab that can
-	// write a position, so every placement test starts here.
+	// The venue's builder, reached the same way. The one body that can write
+	// a position, so every placement test starts here.
 	stage(venue) {
-        nav.patch(venue);
-        until("the stage controls", s => s.find({role:"button",label:"Add element"}) !== undefined);
-    },
-
-	// Close the visible tab, dropping its state. What "leave and come back"
-	// means now: a reopened tab reloads, which is what the persistence tests
-	// lean on.
-	closeTab() {
-		app.action("luma::CloseTab");
-		app.frames(4);
+		nav.patch(venue);
+		until("the stage controls", s => s.find({role:"button",label:"Add element"}) !== undefined);
 	},
 
-	// Lay the window out as Program: no chat, so the tab body gets
-	// everything right of the sidebar, and a score is the timeline beside the
-	// stage over the inspector. The mode is the window's, so a test says this
-	// once and every later tab inherits it. Idempotent.
-	program() {
-		app.action("luma::ProgramMode");
-		app.frames(2);
+	// Live: the venue's Perform set.
+	live() {
+		app.action("luma::ShowLive");
+		until("the live surface", (s) => s.find({ role: "button", label: "Edit layout" })
+			?? s.find({ role: "button", label: "Done" }));
 	},
 
-	// Direct, the app's default: the chat beside the stage over the timeline.
-	direct() {
-		app.action("luma::DirectMode");
-		app.frames(2);
-	},
-
-	// Give the editor the whole workspace column. The stage rides above every
-	// tab that names a room, so a test about an *editor's* own geometry says
-	// this once rather than budgeting around a viewport it does not care
-	// about. Idempotent across one session.
+	// Give the editor the whole content column. The stage rides above every
+	// mode, so a test about an *editor's* own geometry says this once rather
+	// than budgeting around a viewport it does not care about. Idempotent
+	// across one session.
 	stageOff() {
 		if (!globalThis.__stageOff) {
 			app.action("luma::ToggleVisualizer");
@@ -210,17 +239,47 @@ globalThis.nav = {
 		}
 	},
 
-	// Give the selected clip's graph the most room the window has: Direct's
-	// graph page, which puts it where the timeline was. Once the inspector
-	// shows the clip.
+	// Give the body everything right of the window's edge: the agent panel
+	// hidden. Idempotent across one session.
+	agentOff() {
+		if (app.snapshot().find({ role: "button", label: "Hide agent" })) {
+			app.action("luma::ToggleAgent");
+			until("the agent panel gone", (s) => s.find({ role: "button", label: "Show agent" }));
+			app.frames(2);
+		}
+	},
+
+	// Switch the window to the venue `name`, through the title bar's venue
+	// menu, and wait for its song list or body to arrive.
+	switchVenue(name) {
+		nav.venueMenu();
+		nav.step(`the venue ${name} in the menu`, "row", name);
+		until(`the venue ${name}`, (s) => s.find({ role: "button", label: name })?.bounds.y < 44
+			&& s.find({ role: "row", label: "New venue…" }) === undefined);
+	},
+
+	// Leave `venue` for `elsewhere` and come back, so the venue is opened
+	// again from the library. A test that needs this seeds the second venue
+	// in its fixture SQL.
+	leaveVenue(venue, elsewhere = "Spare Venue") {
+		nav.switchVenue(elsewhere);
+		nav.switchVenue(venue);
+	},
+
+	// The clip card labelled `clip` on the timeline, selected, and its graph
+	// opened where the timeline was.
+	clipGraph(clip) {
+		nav.step(`the clip ${clip}`, "card", clip);
+		nav.graphPage();
+	},
+
+	// The selected clip's graph, where the timeline was: what a double-click
+	// on the clip opens.
 	graphPage() {
-		const shot = until("the graph canvas", (s) => s.find({ role: "card", label: "Pattern graph" }));
-		const before = shot.find({ role: "card", label: "Pattern graph" }).bounds.width;
-		nav.direct();
 		app.action("luma::OpenClipGraph");
 		until("the graph page", (s) =>
 			s.find({ role: "button", label: "Back to timeline" })
-				&& s.find({ role: "card", label: "Pattern graph" })?.bounds.width > before);
+				&& s.find({ role: "card", label: "Pattern graph" }));
 		app.frames(4);
 	},
 

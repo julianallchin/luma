@@ -294,7 +294,7 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let Some(Body::TrackEditor(editor)) =
-                    this.parked.body_mut(&mut this.workspace, &target)
+                    this.venues.body_mut(&mut this.workspace, &target)
                 else {
                     return;
                 };

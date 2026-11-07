@@ -133,7 +133,7 @@ fn open_the_stage(harness: &mut Harness) {
             }}
             nav.track({track:?});
             until("the timeline", (s) => s.find({{ role: "card", label: "Waveform" }}) !== undefined);
-            nav.program();
+            nav.agentOff();
             // The timing labels are only published while the frame-stats
             // panel is unfolded.
             nav.step("the frame-stats panel", "toggle", "Frame stats");

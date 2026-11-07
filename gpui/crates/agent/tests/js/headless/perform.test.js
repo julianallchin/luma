@@ -65,7 +65,7 @@ const key = PATTERN.replaceAll("-", "");
 
 function open() {
   nav.venue("Test Venue");
-  nav.step("the Perform row", "row", "Perform");
+  nav.live();
   // The layout and the first read of the follow session land apart, and the
   // tempo strip the read brings moves the grid down: wait for both before
   // pointing at a cell.
@@ -76,7 +76,7 @@ function open() {
 
 function setup() {
   open();
-  nav.step("Setup", "toggle", "Setup");
+  nav.step("Edit layout", "button", "Edit layout");
   return until("the grid to arrange", (s) => s.find({ role: "button", label: "Select Master" }));
 }
 
@@ -131,6 +131,39 @@ test("with nothing followed, the set runs on the tapped tempo", () => {
   );
 });
 
+test("a source picked in the deck panel is followed, and disconnecting returns to the tapped tempo", () => {
+  open();
+  const source = (s) => s.find((n) => n.role === "text" && n.label.startsWith("Source: "));
+  // Nothing followed: the panel offers a source, and the set runs on the tap.
+  until("the offer", (s) => s.find({ role: "button", label: "Add source" }));
+  const tapped = (s) => s.find((n) => n.role === "card" && n.label.startsWith("Tapped tempo: "));
+  until("the tapped tempo", tapped);
+
+  // The picker opens in the panel, with the latency, in the played view.
+  nav.step("the offer", "button", "Add source");
+  until("the picker", (s) =>
+    s.find({ role: "card", label: "Source picker" }) && s.find({ role: "slider", label: "Latency" }));
+  nav.step("the virtual deck", "toggle", "Virtual");
+  const followed = until("the virtual deck followed", (s) => (source(s) ? s : undefined));
+  expect(source(followed).label).toMatch(/^Source: Virtual deck/);
+  assert(followed.find({ role: "card", label: "Source picker" }) === undefined, "the picker stayed open after a pick");
+  assert(followed.find({ role: "button", label: "Add source" }) === undefined, "a followed source still offers Add source");
+  until("the title bar says so", (s) => s.find((n) => n.role === "text" && n.label.startsWith("Virtual deck")));
+
+  // Disconnecting puts the set back on the tapped tempo.
+  nav.step("disconnect", "button", "Disconnect source");
+  until("the offer again", (s) => s.find({ role: "button", label: "Add source" }) && !source(s));
+  until("the tapped tempo again", tapped);
+  until("not following", (s) => s.find((n) => n.role === "text" && n.label.startsWith("Not following a DJ")));
+
+  // Edit layout arranges the grid and nothing else: no source chooser in it.
+  nav.step("Edit layout", "button", "Edit layout");
+  const arranging = until("the grid to arrange", (s) => (s.find({ role: "button", label: "Select Master" }) ? s : undefined));
+  for (const label of ["Rekordbox", "Pro DJ Link", "StageLinQ", "Virtual", "Off"]) {
+    assert(arranging.find({ role: "toggle", label }) === undefined, `Edit layout still offers ${label}`);
+  }
+});
+
 test("Setup's + makes a pattern in that place, lighting the group chosen", () => {
   setup();
   nav.step("an empty place", "button", "New cell, row 3, column 1");
@@ -146,7 +179,7 @@ test("Setup's + makes a pattern in that place, lighting the group chosen", () =>
   );
   until("its group", (s) => s.find({ role: "button", label: "Group: Left movers" }));
 
-  nav.step("Perform", "toggle", "Perform");
+  nav.step("Done", "button", "Done");
   until("its pad", (s) => pad(s, "Wash"));
   // Below Front wash's two places, in the same column.
   const wash = pad(app.snapshot(), "Wash");
@@ -161,7 +194,7 @@ test("a row set to play one at a time is marked in Perform", () => {
   until("on", (s) =>
     s.find({ role: "toggle", label: "One at a time, row 1" })?.focused ? s : undefined,
   );
-  nav.step("Perform", "toggle", "Perform");
+  nav.step("Done", "button", "Done");
   until("the bracket", (s) => s.find({ role: "text", label: "Row 1 plays one at a time" }));
   expect(app.snapshot().find({ role: "text", label: "Row 2 plays one at a time" })).toBe(undefined);
 });

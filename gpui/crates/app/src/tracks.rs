@@ -1,9 +1,10 @@
-//! The track browser: one venue's library, as the shell's sidebar.
+//! The song list: one venue's library, as a full page over Arrange.
 //!
-//! A row list at sidebar width, in comet's session-row anatomy: a status lead,
-//! the title, and `artist · bpm` muted under it. An ownership filter and a
-//! search work over the venue's rows. There are no added-by or preprocessing
-//! columns; a wider tracks surface can add them if one is ever wanted.
+//! The title bar's song title opens it (and ⌘P). A row is a song: its art,
+//! title, artist, BPM, length and how many scores this venue holds for it. A
+//! press expands it in place to its scores — see [`scores`] — and choosing a
+//! score opens it and closes the page. An ownership filter and a search work
+//! over the venue's rows; the venue's folders lead the list.
 //!
 //! # Filtering is the view's job, not the query's
 //!
@@ -16,81 +17,37 @@
 //!
 //! # Folders
 //!
-//! Under the venue's own row the list shows the venue's folders, each opening
+//! At the head of the list the page shows the venue's folders, each opening
 //! onto the songs it holds, and then every song under "All songs". A song in a
 //! folder is the same song as under All songs: it opens the same scores. See
 //! [`folders`].
 //!
-//! Album art comes from `album_art_path` — a path on disk, never inlined bytes
-//! (see CLAUDE.md on why bulk responses carry paths). The native host reads
-//! the file with `img(path)` and
-//! GPUI's image cache handles the decode and the lazy load.
+//! Album art comes from `album_art_path` — a path on disk, never inlined bytes.
+//! The native host reads the file with `img(path)` and GPUI's image cache
+//! handles the decode and the lazy load.
 
 use luma_ui::motion::FadeHover;
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use luma_ui::float::{self, RowState};
+use luma_ui::float;
+use luma_ui::glass;
+use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
-use luma_ui::{ladder, motion};
 
 use luma_lib::models::folders::Folder;
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 
-use crate::agent::TabStatus;
-use crate::tabs::Target;
+use crate::agent::ChatStatus;
+use crate::workspace::Target;
 use crate::Luma;
 
 pub(crate) mod folders;
 pub(crate) mod scores;
-
-/// Which of the sidebar's two levels the column is showing.
-///
-/// A *level*, not a screen: both are the same column showing the same
-/// person's library at two depths, and the way between them is one gesture
-/// with one reverse. Keeping them in one enum is what makes "the sidebar is
-/// somewhere" a single fact — the filters, the search and the scroll offset
-/// all belong to [`Level::Tracks`] and travel with it.
-pub(crate) enum Level {
-    Tracks,
-    /// Boxed for the reason [`crate::Luma::sign_in`] is: the deep level
-    /// carries a whole track row and a listing, and the shallow one is the
-    /// state the sidebar is in for most of a session.
-    Scores(Box<scores::Scores>),
-}
-
-/// Which way a level change is travelling.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    /// Into the scores: the tracks leave left, the scores arrive from the right.
-    In,
-    /// Back out again — the exact reverse.
-    Out,
-}
-
-/// A level change in flight.
-///
-/// Driven by hand off the wall clock rather than by `with_animation`, for the
-/// reason [`luma_ui::pane::PaneWidth`] states: gpui keys an animation
-/// element's start time by its element-id path, so any remount above it
-/// replays the tween from zero — and a virtualized row list remounts
-/// constantly.
-pub(crate) struct Push {
-    direction: Direction,
-    /// Where the flying track row starts (or ends, popping): the top of its
-    /// list row, in pixels from the top of the pushing region.
-    ///
-    /// Snapshotted at the gesture rather than derived per frame, because the
-    /// list it was measured in is sliding away underneath the flight.
-    row_top: f32,
-    started: Instant,
-}
 
 /// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
 /// the default.
@@ -123,8 +80,7 @@ impl Ownership {
     }
 }
 
-/// One line of the list. A song is two lines of text, [`ROW_HEIGHT`] tall;
-/// every other kind is one. The list measures each row as it draws it, so a
+/// One line of the list. The list measures each row as it draws it, so a
 /// row's height is written only on the row.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Entry {
@@ -144,10 +100,13 @@ enum Entry {
     /// A song; `row` indexes [`Tracks::rows`]. `folder` is the folder it is
     /// listed under, or none under All songs.
     Song { row: usize, folder: Option<usize> },
+    /// The song at `row`'s scores, expanded under it.
+    Scores { row: usize, folder: Option<usize> },
 }
 
-/// The screen's whole state: the venue it is showing, everything the seam
-/// returned for it, and the three filters over that.
+/// The page's whole state: the venue it is showing, everything the seam
+/// returned for it, the filters over that, and the songs expanded to their
+/// scores.
 ///
 /// [`Self::entries`] is indices into [`Self::rows`] and [`Self::folders`]
 /// rather than a second copy of them, recomputed on every state change instead
@@ -167,12 +126,10 @@ pub struct Tracks {
     folders: Rc<[Folder]>,
     /// The open folders, by id.
     expanded: HashSet<String>,
+    /// The songs expanded to their scores, by track id — see [`scores`].
+    pub(crate) scores: HashMap<String, scores::Scores>,
     /// What the list draws, top to bottom.
     entries: Rc<[Entry]>,
-    /// The entry the scores level was entered from. A song can be listed twice
-    /// — in a folder and under All songs — so its track alone does not say
-    /// which row the shared element left.
-    origin: Option<usize>,
     /// The menu a right-click raised, or none. One slot: two menus open at
     /// once is the bug it rules out.
     menu: Option<folders::Menu>,
@@ -194,31 +151,19 @@ pub struct Tracks {
     /// The signed-in principal, snapshotted when the venue was selected. The
     /// ownership filter reads it.
     user: Option<String>,
-    /// Exact return target for the venue dialog. Pointer activation focuses
-    /// this handle before opening the overlay, so Escape restores the control
-    /// itself rather than the sidebar region generically.
-    venue_focus: FocusHandle,
     search_focus: FocusHandle,
-    /// Which level the column is on, and the change taking it there.
-    pub(crate) level: Level,
-    push: Option<Push>,
     /// The row list's measured heights and scroll position, one item per
-    /// entry. The shared element's start position is read back out of it.
+    /// entry.
     list: ListState,
-    /// The pushing region's box, as it painted last. A row's box is in window
-    /// space, and the flight is drawn in the region's, so the region is probed
-    /// — see [`luma_ui::arg::bounds_probe`].
-    region: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 impl Tracks {
-    /// The venue this screen was opened for. The window title is the only
-    /// reader outside this module.
+    /// The venue this page was opened for.
     pub(crate) fn venue_name(&self) -> &str {
         &self.venue_name
     }
 
-    /// The venue a row click opens the editor in.
+    /// The venue a score opens in.
     pub(crate) fn venue_id(&self) -> &str {
         &self.venue_id
     }
@@ -234,8 +179,7 @@ impl Tracks {
         self.rows.iter().find(|row| row.id == track_id).cloned()
     }
 
-    /// Every track in the venue, whatever the sidebar's filters say — the
-    /// rows the `+`'s combo box lists.
+    /// Every track in the venue, whatever the filters say.
     pub(crate) fn venue_rows(&self) -> impl Iterator<Item = &TrackBrowserRow> {
         self.rows.iter().filter(|row| row.is_in_venue)
     }
@@ -263,9 +207,26 @@ impl Tracks {
             .collect()
     }
 
+    /// The song at `row`, and the expansion under it when it was expanded
+    /// from this place in the list — a song listed in a folder and under All
+    /// songs is expanded where it was pressed, not twice.
+    fn song(&self, row: usize, folder: Option<usize>) -> [Option<Entry>; 2] {
+        let song = Entry::Song { row, folder };
+        let place = folder.map(|folder| self.folders[folder].id.as_str());
+        let expanded = self
+            .scores
+            .get(&self.rows[row].id)
+            .is_some_and(|scores| scores.folder.as_deref() == place);
+        [
+            Some(song),
+            expanded.then_some(Entry::Scores { row, folder }),
+        ]
+    }
+
     /// Rebuild [`Self::entries`]: each folder, followed by its songs when it
     /// is open; the way to make another; then every song. A folder lists the
-    /// songs the filters admit, in the same order as All songs.
+    /// songs the filters admit, in the same order as All songs. An expanded
+    /// song carries its scores under it.
     fn refilter(&mut self) {
         let shown = self.filter();
         let mut entries = Vec::with_capacity(self.folders.len() + shown.len() + 3);
@@ -283,10 +244,9 @@ impl Tracks {
                 open,
             });
             if open {
-                entries.extend(songs.into_iter().map(|row| Entry::Song {
-                    row,
-                    folder: Some(index),
-                }));
+                for row in songs {
+                    entries.extend(self.song(row, Some(index)).into_iter().flatten());
+                }
             }
         }
         entries.push(Entry::NewFolder);
@@ -294,11 +254,9 @@ impl Tracks {
         if shown.is_empty() {
             entries.push(Entry::NoSongs);
         }
-        entries.extend(
-            shown
-                .into_iter()
-                .map(|row| Entry::Song { row, folder: None }),
-        );
+        for row in shown {
+            entries.extend(self.song(row, None).into_iter().flatten());
+        }
         self.set_entries(entries);
     }
 
@@ -319,118 +277,6 @@ impl Tracks {
             .splice(head..old.len() - tail, entries.len() - head - tail);
         self.entries = entries.into();
     }
-
-    /// The track of the song at `index`, if that entry is a song.
-    fn song_at(&self, index: usize) -> Option<&TrackBrowserRow> {
-        match self.entries.get(index)? {
-            Entry::Song { row, .. } => Some(&self.rows[*row]),
-            _ => None,
-        }
-    }
-
-    /// The first entry that lists `track_id`.
-    fn first_song(&self, track_id: &str) -> Option<usize> {
-        (0..self.entries.len()).find(|index| {
-            self.song_at(*index)
-                .is_some_and(|track| track.id == track_id)
-        })
-    }
-
-    /// Push to `level`, with the shared element starting at `row_top`.
-    ///
-    /// Under reduced motion the column simply *is* on the new level: no
-    /// flight, no ghost, nothing to wait for — the same rule
-    /// [`luma_ui::pane::PaneWidth::retarget`] applies to a sliding region.
-    fn enter(&mut self, level: scores::Scores, row_top: f32, cx: &App) {
-        self.level = Level::Scores(Box::new(level));
-        self.push = (!motion::reduced_motion(cx)).then(|| Push {
-            direction: Direction::In,
-            row_top,
-            started: Instant::now(),
-        });
-    }
-
-    /// Pop back to the track list. The flight is the entrance's exact reverse,
-    /// so it reads the row's original position back out of the push it is
-    /// undoing rather than measuring a list that is not on screen.
-    fn leave(&mut self, cx: &App) {
-        if !matches!(self.level, Level::Scores(_)) {
-            return;
-        }
-        if motion::reduced_motion(cx) {
-            self.level = Level::Tracks;
-            self.push = None;
-            return;
-        }
-        let row_top = self.push.as_ref().map_or_else(
-            || self.flying_index().map_or(0., |index| self.row_top(index)),
-            |push| push.row_top,
-        );
-        self.push = Some(Push {
-            direction: Direction::Out,
-            row_top,
-            started: Instant::now(),
-        });
-    }
-
-    /// How far the column is towards the scores level: 0 is the track list, 1
-    /// is the scores, and anything between is a push in flight.
-    fn progress(&self) -> f32 {
-        let Some(push) = &self.push else {
-            return match self.level {
-                Level::Tracks => 0.,
-                Level::Scores(_) => 1.,
-            };
-        };
-        let eased = motion::exit_progress(&motion::PUSH, push.started);
-        match push.direction {
-            Direction::In => eased,
-            Direction::Out => 1. - eased,
-        }
-    }
-
-    /// Whether the level change has arrived, so the frame after it can drop
-    /// the bookkeeping and stop asking for frames.
-    fn push_settled(&self) -> bool {
-        self.push
-            .as_ref()
-            .is_some_and(|push| motion::exit_progress(&motion::PUSH, push.started) >= 1.)
-    }
-
-    /// The track the shared element is carrying, while one is in flight.
-    fn flying(&self) -> Option<&TrackBrowserRow> {
-        let Level::Scores(level) = &self.level else {
-            return None;
-        };
-        self.push.as_ref().map(|_| &level.track)
-    }
-
-    /// Where the flying row's list position is, in pixels from the top of the
-    /// pushing region. `index` is a position in [`Self::entries`], which is
-    /// what the list draws. A row the list has not laid out — scrolled above
-    /// the viewport, or new since — flies from the region's top.
-    fn row_top(&self, index: usize) -> f32 {
-        let (Some(region), Some(row)) = (self.region.get(), self.list.bounds_for_item(index))
-        else {
-            return 0.;
-        };
-        f32::from(row.origin.y - region.origin.y)
-    }
-
-    /// The scores level's track, as an index into the entries currently
-    /// shown: the row it was entered from while that row still lists it, else
-    /// the first that does. The position a pop flies back to.
-    fn flying_index(&self) -> Option<usize> {
-        let Level::Scores(level) = &self.level else {
-            return None;
-        };
-        self.origin
-            .filter(|index| {
-                self.song_at(*index)
-                    .is_some_and(|track| track.id == level.track.id)
-            })
-            .or_else(|| self.first_song(&level.track.id))
-    }
 }
 
 /// `title`, `artist` or `album` contains `query`, which is already lowercased
@@ -448,14 +294,13 @@ pub(crate) fn matches(track: &TrackBrowserRow, query: &str) -> bool {
 // -- navigation and filter edits ----------------------------------------------
 //
 // These hang off `Luma` because opening a venue is a `Library` call plus a
-// screen transition, and `Luma` owns both. They live here so the router stays
-// a router.
+// screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Select a venue: the sidebar fills with its tracks, the picker overlay
-    /// closes, and the venue's own tab set comes on screen — the one it had
-    /// when it was left, or the one saved at the last quit. The venue being
-    /// left keeps its set, parked: a venue is a project.
+    /// Open a venue: the window swaps to it. Its songs load, the picker
+    /// closes, and its modes come back as they were — as it was left, or as
+    /// it was saved at the last quit. The venue being left keeps its state,
+    /// parked.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
@@ -479,15 +324,15 @@ impl Luma {
                 cx.notify();
             }
         });
-        self.sidebar = Some(Tracks {
+        self.songs = Some(Tracks {
             venue_id: venue.id,
             venue_name: venue.name,
             load_generation: generation,
             rows: Rc::from(Vec::new()),
             folders: Rc::from(Vec::new()),
             expanded: HashSet::new(),
+            scores: HashMap::new(),
             entries: Rc::from(Vec::new()),
-            origin: None,
             menu: None,
             rename: None,
             folder_error: None,
@@ -498,16 +343,15 @@ impl Luma {
             search,
             _search_subscription: search_subscription,
             user: self.library.user_id(),
-            venue_focus: cx.focus_handle().tab_stop(true),
             search_focus,
-            level: Level::Tracks,
-            push: None,
             list: ListState::new(0, ListAlignment::Top, px(0.)),
-            region: Rc::new(Cell::new(None)),
         });
-        // The arriving venue's set goes on screen now, so a tab opened before
-        // the next draw opens into it.
-        self.sync_venue_tabs(cx);
+        self.song_list = false;
+        self.song_list_close = None;
+        // The arriving venue's state goes on screen now, so a body opened
+        // before the next draw opens into it.
+        self.sync_venue_modes(cx);
+        self.restore_venue_modes(&venue_id, cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
@@ -522,9 +366,9 @@ impl Luma {
                         Err(error) => state.error = Some(error.to_string()),
                     }
                 });
-                // A saved score tab needs its track's row, so the venue's
-                // saved tabs reopen once the catalogue is here.
-                this.restore_tabs(&venue_id, cx);
+                // A saved score needs its track's row, so it reopens once the
+                // catalogue is here.
+                this.restore_venue_score(&venue_id, cx);
             })
             .ok();
         })
@@ -535,84 +379,6 @@ impl Luma {
         .detach();
     }
 
-    /// Enter the scores level for the song at `index` of what the list is
-    /// showing. The index, not the id, because the flight starts at the row's
-    /// *place* — and a song in a folder is on screen twice.
-    fn push_scores(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(browser) = &mut self.sidebar else {
-            return;
-        };
-        let Some(track) = browser.song_at(index).map(|track| track.id.clone()) else {
-            return;
-        };
-        let row_top = browser.row_top(index);
-        browser.origin = Some(index);
-        browser.menu = None;
-        self.show_scores(&track, row_top, window, cx);
-    }
-
-    /// `→` in the sidebar: into the front tab's track's scores.
-    ///
-    /// The front tab's track rather than a focused row, because the list is
-    /// virtualized and its rows carry no focus handles — the front tab is the
-    /// one notion of "the row this column is currently about" that survives a
-    /// scroll.
-    pub(crate) fn enter_selected_scores(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(browser) = &self.sidebar else {
-            return;
-        };
-        if matches!(browser.level, Level::Scores(_)) {
-            return;
-        }
-        let Some(picked) = self.front_track() else {
-            return;
-        };
-        let Some(index) = browser.first_song(picked) else {
-            return;
-        };
-        self.push_scores(index, window, cx);
-    }
-
-    /// Pop back to the track list. Escape reaches this through
-    /// [`Luma::dismiss_overlay`] — one dismissal ladder, innermost first.
-    pub(crate) fn leave_scores(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(browser) = &mut self.sidebar else {
-            return false;
-        };
-        if !matches!(browser.level, Level::Scores(_)) {
-            return false;
-        }
-        browser.leave(cx);
-        cx.notify();
-        true
-    }
-
-    /// Retire a finished level change and keep an unfinished one drawing.
-    ///
-    /// Called once per frame from the shell, before the sidebar is rendered
-    /// immutably — the same place and for the same reason the sidebar's own
-    /// width tween is stepped there.
-    pub(crate) fn tick_sidebar_push(&mut self, window: &mut Window) {
-        let Some(browser) = &mut self.sidebar else {
-            return;
-        };
-        if browser.push.is_none() {
-            return;
-        }
-        if browser.push_settled() {
-            if browser
-                .push
-                .as_ref()
-                .is_some_and(|push| push.direction == Direction::Out)
-            {
-                browser.level = Level::Tracks;
-            }
-            browser.push = None;
-        } else {
-            window.request_animation_frame();
-        }
-    }
-
     fn show_ownership(&mut self, ownership: Ownership, cx: &mut Context<Self>) {
         self.with_tracks(cx, |state| {
             state.ownership = ownership;
@@ -620,7 +386,7 @@ impl Luma {
         });
     }
 
-    /// Mirror an edit of the sidebar filter. Filtering is immediate, with no
+    /// Mirror an edit of the search field. Filtering is immediate, with no
     /// debounce: the work is one pass over a `Vec` and a virtualized list that
     /// redraws a screenful either way.
     fn track_search_changed(&mut self, query: String, cx: &mut Context<Self>) {
@@ -630,13 +396,13 @@ impl Luma {
         });
     }
 
-    /// Escape inside the sidebar filter clears it rather than reaching the
+    /// Escape inside the search field clears it rather than reaching the
     /// shell. The field's own keymap leaves escape unbound (it is navigation,
     /// not text), so it arrives here — and a query is the nearest thing to
     /// dismiss when one is up.
     fn track_search_escape(&mut self, cx: &mut Context<Self>) {
         let field = self
-            .sidebar
+            .songs
             .as_ref()
             .filter(|state| !state.query.is_empty())
             .map(|state| state.search.clone());
@@ -645,16 +411,16 @@ impl Luma {
         }
     }
 
-    /// Run a synchronous edit against the selected venue's browser.
+    /// Run a synchronous edit against the open venue's songs.
     fn with_tracks(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Tracks)) {
-        if let Some(state) = &mut self.sidebar {
+        if let Some(state) = &mut self.songs {
             edit(state);
             cx.notify();
         }
     }
 
-    /// Admit an asynchronous venue read only while that venue still owns the
-    /// sidebar. Both initial loads and post-membership refreshes use this rule.
+    /// Admit an asynchronous venue read only while that venue is still open.
+    /// Both initial loads and post-membership refreshes use this rule.
     pub(crate) fn with_tracks_for_venue(
         &mut self,
         venue_id: &str,
@@ -662,7 +428,7 @@ impl Luma {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Tracks),
     ) {
-        let Some(state) = &mut self.sidebar else {
+        let Some(state) = &mut self.songs else {
             return;
         };
         if state.venue_id() != venue_id || state.load_generation != generation {
@@ -671,9 +437,9 @@ impl Luma {
         edit(state);
         // A loaded catalogue is the only statement this shell ever gets about
         // which tracks exist: there is no delete gesture, so a track that has
-        // stopped appearing here has gone, and the tabs remembered under it can
-        // never be reached again. Read before `notify` so the strip and the
-        // sidebar agree within one frame.
+        // stopped appearing here has gone, and a score remembered under it can
+        // never be reached again. Read before `notify` so the list and the
+        // open score agree within one frame.
         let surviving: Option<Vec<String>> = state
             .loaded
             .then(|| state.rows.iter().map(|row| row.id.clone()).collect());
@@ -686,173 +452,61 @@ impl Luma {
             self.prune_tracks(venue_id, &surviving, cx);
         }
     }
-}
 
-impl Luma {
-    /// The front tab's track, when the front tab is a score.
+    /// The open score's track.
     pub(crate) fn front_track(&self) -> Option<&str> {
-        match self.workspace.active()? {
-            Target::Score { track, .. } => Some(track),
-            Target::Venue { .. } | Target::Perform { .. } => None,
+        match self.workspace.of_mode(crate::workspace::Mode::Arrange)? {
+            crate::workspace::Slot {
+                target: Target::Score { track, .. },
+                ..
+            } => Some(track),
+            _ => None,
         }
     }
 }
 
 // -- rendering ----------------------------------------------------------------
 
-/// Comet's session-row anatomy at sidebar width: two text lines plus the lead.
-const ROW_HEIGHT: f32 = 44.;
-const GAP: f32 = 8.;
-const PAD_X: f32 = 12.;
+/// A song row: art, two columns of text, the numbers.
+const ROW_HEIGHT: f32 = 52.;
+/// The page's inset from its edges, and the gap between a row's columns.
+const PAD_X: f32 = 16.;
+const GAP: f32 = 12.;
+/// The page head's height: the title, the search, the filter and Add songs.
+const HEAD_HEIGHT: f32 = 52.;
+/// The column heads' row.
+const COLUMNS_HEIGHT: f32 = 28.;
 /// The coverage dot's box.
 const DOT: f32 = 6.;
-/// The trailing slot a track row reserves for its chevron.
-const CHEVRON_SLOT: f32 = 20.;
-/// The album-art thumbnail's box, and the row's second lead. Square, so the
-/// placeholder and a loaded cover occupy the same rect and a row cannot change
-/// shape when its art arrives.
-const ART: f32 = 32.;
+/// The disclosure column at a row's start, and the art beside it.
+const DISCLOSURE: f32 = 16.;
+const ART: f32 = 36.;
+/// The numeric columns' widths: BPM, length, scores.
+const NUMBER: f32 = 60.;
+const SCORES: f32 = 96.;
+/// The artist column.
+const ARTIST: f32 = 220.;
+/// The search field's width in the head.
+const SEARCH_WIDTH: f32 = 260.;
 
-/// The sidebar: the two levels, the push between them, and the account at the
-/// foot.
+/// The song list page: the head, the column heads, and the list.
 ///
-/// The sidebar is a launcher (`docs/specs/venue-tabs.md` rule 7): its rows
-/// open tabs or bring them to the front, and the row of the front tab wears
-/// the selection ring. `statuses` are the live tabs' status dots, drawn on
-/// the rows that open those tabs.
-///
-/// Takes the whole shell rather than the browser alone, because the column's
-/// two ends are about different things: the levels are the venue's, the foot
-/// is the person's — and the foot is *outside* the pushing region for exactly
-/// that reason.
-///
-/// # The push
-///
-/// Both levels are laid out at the column's full width and offset along one
-/// axis, so neither reflows while it travels. The track row the gesture named
-/// is drawn *once*, over both, flying from its place in the list to the head
-/// of the arriving level — which is why the two share a horizontal inset and
-/// a row height: the shared element then travels in `y` alone, and there is no
-/// box interpolation to get wrong.
-pub(crate) fn sidebar(
+/// `statuses` are the open bodies' status dots, drawn on the score rows that
+/// open them and on closed folders.
+pub(crate) fn page(
     shell: &Luma,
     state: &Tracks,
-    statuses: &HashMap<Target, TabStatus>,
+    statuses: &HashMap<Target, ChatStatus>,
     app: &Entity<Luma>,
     window: &Window,
-) -> Div {
-    let t = state.progress();
-    let travel = crate::shell::SIDEBAR_WIDTH;
+) -> impl IntoElement {
     div()
         .size_full()
         .flex()
         .flex_col()
-        // Glass tier: the sidebar sits transparent on the shell's frost —
-        // depth comes from the content cards beside it, not from a fill.
-        .text_color(luma_ui::glass::ink(0.85))
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .relative()
-                .overflow_hidden()
-                .child(luma_ui::arg::bounds_into(&state.region))
-                // Each level is mounted only while it is on screen. A level
-                // parked off the edge at zero opacity is not merely wasted
-                // layout: it is still in the accessibility tree and still a
-                // tab stop, so the column would answer for two subjects at
-                // once.
-                .children((t < 1.).then(|| {
-                    sliding(-travel * t, 1. - t)
-                        .child(tracks_level(shell, state, statuses, app, window))
-                }))
-                .children(match &state.level {
-                    Level::Scores(level) => {
-                        Some(sliding(travel * (1. - t), t).child(scores::level(
-                            shell,
-                            state,
-                            level,
-                            statuses,
-                            app,
-                            window,
-                            state.push.is_some(),
-                        )))
-                    }
-                    Level::Tracks => None,
-                })
-                .children(flight(state, t))
-                // A column mid-flight answers no pointer — the same rule a
-                // leaving dialog follows, and for the same reason: the thing
-                // under the cursor is not where it appears to be.
-                .when(state.push.is_some(), |el| {
-                    el.child(div().absolute().inset_0().occlude())
-                }),
-        )
-        .children(crate::add_tracks::sidebar(shell, app))
-        .children(crate::update::sidebar(shell, app))
-        .child(crate::sync_status::sidebar(shell, app))
-        .child(account_foot(shell, app, window))
-}
-
-/// One level, at its offset along the push. Laid out at the column's full
-/// width whatever the offset, so a travelling level never re-wraps.
-fn sliding(x: f32, opacity: f32) -> Div {
-    div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(x))
-        .w(px(crate::shell::SIDEBAR_WIDTH))
-        .flex()
-        .flex_col()
-        .when(opacity < 1., |el| el.opacity(opacity.max(0.)))
-}
-
-/// The shared element: the track row itself, over both levels, on its way
-/// between its place in the list and the head of the scores.
-fn flight(state: &Tracks, t: f32) -> Option<Div> {
-    let track = state.flying()?;
-    let push = state.push.as_ref()?;
-    Some(
-        div()
-            .absolute()
-            .left(px(PAD_X))
-            .right(px(PAD_X))
-            .top(px(motion::lerp(push.row_top, scores::BACK_ROW_HEIGHT, t)))
-            .child(track_face(track, true)),
-    )
-}
-
-/// The track list itself: the venue's name (the way back to the picker), the
-/// search, the filters, the venue's own row, and the songs.
-fn tracks_level(
-    shell: &Luma,
-    state: &Tracks,
-    statuses: &HashMap<Target, TabStatus>,
-    app: &Entity<Luma>,
-    window: &Window,
-) -> Div {
-    let venue = Target::Venue {
-        venue: state.venue_id.clone(),
-    };
-    let perform = Target::Perform {
-        venue: state.venue_id.clone(),
-    };
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
+        .text_color(glass::ink(0.95))
         .child(header(state, app, window))
-        .child(venue_row(
-            shell.workspace.active() == Some(&venue),
-            statuses.get(&venue).copied(),
-            app,
-        ))
-        .child(perform_row(
-            shell.workspace.active() == Some(&perform),
-            statuses.get(&perform).copied(),
-            app,
-        ))
+        .child(columns())
         .children(
             state
                 .folder_error
@@ -867,350 +521,93 @@ fn tracks_level(
             None if !state.loaded => {
                 luma_ui::plate("Loading tracks…".to_string(), ladder::muted_foreground())
             }
-            None => body(state, statuses, shell.front_track(), app).into_any_element(),
+            None => body(shell, state, statuses, app).into_any_element(),
         })
-        // A sibling of the list, not a child of a row: the list clips, and a
-        // menu inside it would be cut off at the column's edge.
+        // Siblings of the list, not children of a row: the list clips, and a
+        // menu inside it would be cut off at its edge.
         .children(folders::menu(state, app))
+        .children(scores::menus(state, app))
+        .agent_node(Role::Card, "Song list")
 }
 
-/// What the foot says when nobody is signed in — the guest namespace, which is
-/// a working library and not a failure. One spelling, shared with the settings
-/// screen's account row.
-pub(crate) const GUEST_ACCOUNT: &str = "Working locally";
-
-/// The account, at the foot of the sidebar: who this library belongs to, and
-/// the door to the two things that can be done about it.
-///
-/// It is here rather than in a corner of the window because it is the one
-/// control that is *about the person* rather than about the venue — and
-/// because a corner control shares its band with the tab strip, which means a
-/// narrow window has to choose between them. The sidebar's own column always
-/// has a bottom edge.
-fn account_foot(shell: &Luma, app: &Entity<Luma>, window: &Window) -> Div {
-    let label = shell
-        .library
-        .account()
-        .map_or_else(|| GUEST_ACCOUNT.to_string(), |a| a.label().to_string());
-    let toggle = app.clone();
-    let keyed = app.clone();
-    let focus = shell.account_focus.clone();
-    div()
-        .flex()
-        .flex_shrink_0()
-        .flex_col()
-        // No fill of its own. The sidebar's tone is painted once, by the
-        // region (`glass::tone_column`); a second wash down here would read as
-        // a plane bolted to the bottom of the column rather than the end of
-        // it. The hairline is the whole separation.
-        .border_t_1()
-        .border_color(luma_ui::glass::hairline(0.07))
-        .px(px(PAD_X))
-        .py(px(6.))
-        .child(
-            float::nav_row(RowState::Rest, "account-foot")
-                .id("account")
-                .track_focus(&shell.account_focus)
-                .tab_stop(true)
-                .on_key_down(move |event, _, cx| {
-                    if event.keystroke.key == "enter" {
-                        keyed.update(cx, |this, cx| this.toggle_account_menu(cx));
-                    }
-                })
-                .on_click(move |_, window, cx| {
-                    window.focus(&focus, cx);
-                    toggle.update(cx, |this, cx| this.toggle_account_menu(cx));
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(luma_ui::glass::ink(0.72))
-                        .child(label.clone())
-                        .agent_node(Role::Text, label),
-                )
-                .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronUp)
-                        .size(px(11.))
-                        .text_color(luma_ui::glass::ink(0.45)),
-                )
-                .children(account_menu(shell, app))
-                // Named for what it is, not for whose it is: the address
-                // beside it is a value that changes with the session, and a
-                // control addressed by its value cannot be found before the
-                // session is known.
-                .agent_node(Role::Button, "Account")
-                .agent_focused(shell.account_focus.is_focused(window)),
-        )
-        .children(account_failure(shell))
-}
-
-/// What a sign-out that could not land says, under the row it was pressed on.
-///
-/// The settings screen shows the same string, but a person who never opened
-/// settings pressed this gesture from the foot — and a gesture whose only
-/// report lives on a screen they are not on is a gesture that silently does
-/// nothing. Both doors, one message; the error is on [`crate::Luma`] rather
-/// than on either screen for exactly this reason.
-fn account_failure(shell: &Luma) -> Option<AnyElement> {
-    let error = shell.account_action.error.clone()?;
-    Some(
-        div()
-            .px(px(float::ROW_INSET))
-            .pt(px(4.))
-            .text_size(px(11.))
-            .text_color(ladder::danger())
-            .child(error.clone())
-            .agent_node(Role::Text, error)
-            .into_any_element(),
-    )
-}
-
-/// The menu the foot opens, above it — the two things there are to do about an
-/// account. An actions menu, not a value picker: each row goes somewhere.
-///
-/// A child of the trigger, so [`float::anchored_above`] has an edge to hang
-/// from, and a [`luma_ui::dialog::Popup`] so it leaves with the same motion
-/// every other menu in the app does.
-fn account_menu(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
-    shell.account_menu.get()?;
-    let closing = shell.account_menu.closing_since();
-    let identity = if shell.account_action.signing_out {
-        "Signing out…"
-    } else if shell.library.user_id().is_some() {
-        "Sign out"
-    } else {
-        "Sign in"
-    };
-    let pressable = closing.is_none() && !shell.account_action.signing_out;
-    let dismiss = app.clone();
-    let settings = app.clone();
-    let switch = app.clone();
-    let card = float::popover_card()
-        .w(px(ACCOUNT_MENU_WIDTH))
-        .child(
-            float::menu_row(RowState::Rest, "account-settings")
-                .id("account-settings")
-                .when(closing.is_none(), |row| {
-                    row.on_click(move |_, _, cx| {
-                        settings.update(cx, |this, cx| {
-                            this.close_account_menu(cx);
-                            this.open_settings(cx);
-                        });
-                    })
-                })
-                .child(div().flex_1().min_w_0().child("Settings"))
-                // The chord is the other door to this row, and saying so here
-                // is the only place a person meets it.
-                .child(float::key_cap().child("⌘,"))
-                .agent_node(Role::Row, "Settings"),
-        )
-        .child(
-            float::menu_row(RowState::Rest, "account-identity")
-                .id("account-identity")
-                .when(pressable, |row| {
-                    row.on_click(move |_, _, cx| {
-                        switch.update(cx, |this, cx| {
-                            this.close_account_menu(cx);
-                            this.switch_identity(cx);
-                        });
-                    })
-                })
-                .child(div().flex_1().min_w_0().child(identity))
-                .agent_node(Role::Row, identity)
-                .agent_disabled(!pressable),
-        );
-    Some(match closing {
-        Some(since) => float::anchored_above_closing(
-            "account-menu",
-            float::NAV_ROW_HEIGHT,
-            card.into_any_element(),
-            luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since),
-        ),
-        None => float::anchored_above(
-            "account-menu",
-            float::NAV_ROW_HEIGHT,
-            float::Dismiss::on_press_out(move |_, cx| {
-                dismiss.update(cx, |this, cx| this.close_account_menu(cx));
-            }),
-            card.into_any_element(),
-        ),
-    })
-}
-
-/// Wide enough for the longer of the two rows plus its key cap, and no wider:
-/// a menu of two words that spanned the sidebar would read as a panel.
-const ACCOUNT_MENU_WIDTH: f32 = 200.0;
-
-/// The sidebar's header: the venue select, the search and the add-track
-/// button, and the ownership filter.
-///
-/// Every control here shares one height, one text size and the field's
-/// material, so the rows read as one block.
+/// The page's head: its title and count, the search, the ownership filter,
+/// and the way to add songs.
 fn header(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
     let add = app.clone();
+    let count = state.venue_rows().count();
     div()
-        .flex()
+        .h(px(HEAD_HEIGHT))
         .flex_shrink_0()
-        .flex_col()
-        .gap(px(HEADER_GAP))
+        .flex()
+        .items_center()
+        .gap(px(GAP))
         .px(px(PAD_X))
-        .pt(px(HEADER_GAP))
+        .border_b_1()
+        .border_color(glass::panel_seam())
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap(px(HEADER_GAP))
-                .child(venue_select(state, app, window)),
+                .text_size(px(15.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Songs"),
         )
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap(px(HEADER_GAP))
-                .child(search(state, app, window))
-                .child(
-                    square(luma_ui::icons::IconName::Plus, "add-track")
-                        .id("add-track")
-                        .on_click(move |_, _, cx| {
-                            add.update(cx, |this, cx| this.show_add_tracks(cx))
-                        })
-                        .agent_node(Role::Button, "Add track"),
-                ),
+                .text_size(px(12.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY))
+                .child(format!("{count} in {}", state.venue_name)),
         )
+        .child(div().flex_1())
+        .child(search(state, app, window))
         .child(ownership_filter(state, app))
+        .child(
+            luma_ui::button("Add songs", luma_ui::Enabled::Yes)
+                .id("add-track")
+                .on_click(move |_, _, cx| add.update(cx, |this, cx| this.show_add_tracks(cx)))
+                .agent_node(Role::Button, "Add track"),
+        )
 }
 
-/// The height every header control shares: a sidebar nav row's.
-const HEADER_CONTROL: f32 = float::NAV_ROW_HEIGHT;
+/// The heads over the list's columns.
+fn columns() -> Div {
+    let head = |text: &'static str| {
+        div()
+            .text_size(px(11.))
+            .text_color(glass::ink(glass::TEXT_TERTIARY))
+            .child(text)
+    };
+    div()
+        .h(px(COLUMNS_HEIGHT))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(GAP))
+        .px(px(PAD_X))
+        .border_b_1()
+        .border_color(glass::inner_rule())
+        .child(div().w(px(DISCLOSURE + DOT + 4.)).flex_none())
+        .child(div().w(px(ART)).flex_none())
+        .child(head("Title").flex_1().min_w_0())
+        .child(head("Artist").w(px(ARTIST)).flex_none())
+        .child(head("BPM").w(px(NUMBER)).flex_none())
+        .child(head("Length").w(px(NUMBER)).flex_none())
+        .child(head("Scores").w(px(SCORES)).flex_none())
+}
 
-/// The header's one text size, the same as the sidebar's rows and menus.
+/// The header's one text size, the same as the rows'.
 const HEADER_TEXT: f32 = 13.;
 
-/// The gap between header rows, and between a field and its button.
-const HEADER_GAP: f32 = 6.;
-
-/// The icon size of a header control.
-const HEADER_ICON: f32 = 14.;
-
-/// The quiet field material every header control wears.
-fn header_field() -> Div {
-    float::field()
-        .h(px(HEADER_CONTROL))
-        .text_size(px(HEADER_TEXT))
-}
-
-/// A square header button in the field's material.
-fn square(icon: luma_ui::icons::IconName, _fade_key: &str) -> Div {
-    header_field()
-        .w(px(HEADER_CONTROL))
-        .px(px(0.))
-        .justify_center()
-        .cursor_pointer()
-        .text_color(luma_ui::glass::ink(0.7))
-        .child(gpui_component::Icon::new(icon).size(px(HEADER_ICON)))
-        .bg(luma_ui::glass::ink(0.03))
-        .hover(|style| style.bg(luma_ui::glass::glass_hover()))
-        .fade_hover()
-}
-
-/// The venue select. It reopens the venue picker — the picker overlay is the
-/// one venue-choosing mechanism, so the field is a door to it rather than a
-/// second selector that could disagree with it.
-fn venue_select(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
-    let picker = app.clone();
-    let venue_focus = state.venue_focus.clone();
-    header_field()
-        .id("venue")
-        .flex_1()
-        .min_w(px(0.))
-        .gap(px(GAP))
-        .cursor_pointer()
-        .track_focus(&state.venue_focus)
-        .tab_stop(true)
-        .on_click(move |_, window, cx| {
-            window.focus(&venue_focus, cx);
-            picker.update(cx, |this, cx| this.show_venues(cx));
-        })
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .truncate()
-                .child(state.venue_name.clone()),
-        )
-        .child(
-            gpui_component::Icon::new(luma_ui::icons::IconName::ChevronDown)
-                .size(px(HEADER_ICON))
-                .text_color(luma_ui::glass::ink(0.45)),
-        )
-        .agent_node(Role::Button, state.venue_name.clone())
-        .agent_focused(state.venue_focus.is_focused(window))
-}
-
-/// The venue's own row: opens the venue tab, or brings it to the front. It
-/// wears the ring while that tab is in front, and the tab's status dot.
-fn venue_row(front: bool, status: Option<TabStatus>, app: &Entity<Luma>) -> Div {
-    let open = app.clone();
-    div()
-        .flex_shrink_0()
-        .px(px(PAD_X))
-        .pt(px(HEADER_GAP))
-        .child(
-            float::nav_row(RowState::of(front, false), "venue-row")
-                .id("venue-row")
-                .on_click(move |_, _, cx| open.update(cx, |this, cx| this.open_venue_tab(None, cx)))
-                .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::Stage)
-                        .size(px(HEADER_ICON))
-                        .text_color(luma_ui::glass::ink(if front { 0.95 } else { 0.7 })),
-                )
-                .child(div().flex_1().min_w(px(0.)).truncate().child(VENUE_ROW))
-                .children(status.map(|status| crate::agent::status_dot(status, VENUE_ROW)))
-                .agent_node(Role::Row, VENUE_ROW),
-        )
-}
-
-/// The venue's Perform row, under its setup row: opens the Perform tab.
-fn perform_row(front: bool, status: Option<TabStatus>, app: &Entity<Luma>) -> Div {
-    let open = app.clone();
-    div().flex_shrink_0().px(px(PAD_X)).child(
-        float::nav_row(RowState::of(front, false), "perform-row")
-            .id("perform-row")
-            .on_click(move |_, _, cx| open.update(cx, |this, cx| this.open_perform_tab(None, cx)))
-            .child(
-                gpui_component::Icon::new(luma_ui::icons::IconName::Sliders)
-                    .size(px(HEADER_ICON))
-                    .text_color(luma_ui::glass::ink(if front { 0.95 } else { 0.7 })),
-            )
-            .child(div().flex_1().min_w(px(0.)).truncate().child(PERFORM_ROW))
-            .children(status.map(|status| crate::agent::status_dot(status, PERFORM_ROW)))
-            .agent_node(Role::Row, PERFORM_ROW),
-    )
-}
-
-const PERFORM_ROW: &str = "Perform";
-
-/// What the venue's row says. One spelling: the row and its status dot are
-/// both named by it.
-const VENUE_ROW: &str = "Venue setup";
-
 /// The search field: a [`float::field`] that takes keystrokes.
-///
-/// It edits a `String` on the sidebar's state rather than hosting a real text
-/// editor — no caret, no selection, no IME — because the browser needs a
-/// filter, and every one of those is a control `luma-ui` would have to own for
-/// the whole app rather than one this list invents.
 fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
     let empty = state.query.is_empty();
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
     let typed = app.clone();
-    header_field()
+    float::field()
         .id("search")
-        .flex_1()
-        .min_w(px(0.))
+        .w(px(SEARCH_WIDTH))
+        .flex_none()
+        .h(px(28.))
+        .text_size(px(HEADER_TEXT))
         .gap(px(6.))
         // Keys the field leaves unbound bubble through here — see
         // `Luma::track_search_escape`.
@@ -1221,8 +618,8 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
         })
         .child(
             gpui_component::Icon::new(luma_ui::icons::IconName::Search)
-                .size(px(HEADER_ICON))
-                .text_color(luma_ui::glass::ink(0.45)),
+                .size(px(14.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY)),
         )
         .child(div().flex_1().min_w(px(0.)).child(state.search.clone()))
         // The semantic label is the field's VALUE once there is one: a driver
@@ -1232,42 +629,31 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
         .agent_focused(focus.is_focused(window))
 }
 
-/// What the sidebar filter says while it is empty. One spelling: the field is
-/// constructed where the venue opens and rendered far below it.
+/// What the search says while it is empty.
 const PLACEHOLDER: &str = "Search tracks";
 
-/// The `mine` / `all` axis: always exactly one pressed. Full width, so the two
-/// cells split the row evenly.
+/// The `mine` / `all` axis: always exactly one pressed.
 fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
-    float::segmented()
-        .w_full()
-        .h(px(HEADER_CONTROL))
-        .children(Ownership::ALL.into_iter().map(|ownership| {
-            let app = app.clone();
-            float::segment(
-                ownership.label(),
-                ownership == state.ownership,
-                ownership.label(),
-            )
-            // A soft fill, without the selection ring a list row carries.
-            .shadow(Vec::new())
-            .text_size(px(HEADER_TEXT))
-            .id(ownership.label())
-            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
-            .agent_node(Role::Toggle, ownership.label())
-        }))
+    float::segmented().children(Ownership::ALL.into_iter().map(|ownership| {
+        let app = app.clone();
+        float::segment(
+            ownership.label(),
+            ownership == state.ownership,
+            ownership.label(),
+        )
+        .id(ownership.label())
+        .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
+        .agent_node(Role::Toggle, ownership.label())
+    }))
 }
 
 /// The scrolling rows. `list` virtualizes them, so a library of thousands
 /// costs one screenful of elements, and measures each as it draws it, so a
-/// song and a folder can be different heights. Everything the closure needs is
-/// refcounted, so a redraw copies pointers rather than the library.
-///
-/// Set off from the venue row by the gap the header's rows keep.
+/// song, a folder and an expanded song's scores can be different heights.
 fn body(
+    shell: &Luma,
     state: &Tracks,
-    statuses: &HashMap<Target, TabStatus>,
-    selected: Option<&str>,
+    statuses: &HashMap<Target, ChatStatus>,
     app: &Entity<Luma>,
 ) -> Div {
     let rows = Rc::clone(&state.rows);
@@ -1278,16 +664,27 @@ fn body(
         .rename
         .as_ref()
         .map(|rename| (rename.folder_id.clone(), rename.field.clone()));
+    // Each expanded song's scores, drawn ahead of the list so its closure
+    // copies elements' inputs rather than borrowing the shell.
+    let expansions: HashMap<String, Rc<dyn Fn() -> AnyElement>> = state
+        .scores
+        .keys()
+        .map(|track| {
+            (
+                track.clone(),
+                scores::expansion(shell, state, track, statuses, app),
+            )
+        })
+        .collect();
     let app = app.clone();
-    let selected = selected.map(str::to_string);
-    // The entry the shared element is carrying, while one is in flight.
-    let flying = state.flying().and_then(|_| state.flying_index());
+    let open = shell.front_track().map(str::to_string);
     let no_songs = if state.rows.is_empty() {
         "No tracks imported"
     } else {
         "No matching tracks"
     };
-    div().flex_1().min_h(px(0.)).pt(px(HEADER_GAP)).child(
+    let expanded: HashSet<String> = state.scores.keys().cloned().collect();
+    div().flex_1().min_h(px(0.)).child(
         list(state.list.clone(), move |index, _, _| {
             match entries[index] {
                 Entry::Folder {
@@ -1320,210 +717,177 @@ fn body(
                     let track = &rows[row];
                     track_row(
                         track,
-                        index,
                         folder.map(|folder| folders[folder].id.as_str()),
-                        selected.as_deref() == Some(track.id.as_str()),
-                        flying == Some(index),
+                        open.as_deref() == Some(track.id.as_str()),
+                        expanded.contains(&track.id),
                         &app,
                     )
                 }
+                Entry::Scores { row, .. } => expansions
+                    .get(&rows[row].id)
+                    .map_or_else(|| div().into_any_element(), |draw| draw()),
             }
         })
         .size_full(),
     )
 }
 
-/// One track as the column draws it wherever it appears: in the list, at the
-/// head of its scores, and in flight between the two.
-///
-/// Shared so the push has something to *be*. Two spellings of this row would
-/// make the shared element a lookalike rather than the same object, and the
-/// flight would read as a cross-fade between two similar things.
-fn track_face(track: &TrackBrowserRow, lit: bool) -> Div {
-    let artist = track
-        .artist
-        .clone()
-        .unwrap_or_else(|| "Unknown artist".into());
-    let sub = match track.bpm {
-        Some(bpm) => format!("{artist} · {bpm:.1}"),
-        None => artist,
-    };
-    div()
-        .w_full()
-        .h(px(ROW_HEIGHT))
-        .flex()
-        .items_center()
-        .gap(px(GAP))
-        .px(px(float::ROW_INSET))
-        .overflow_hidden()
-        // The lead column: how much of the track this venue has annotated,
-        // and — when there is more than nothing — how many scores say so. The
-        // count is the second level's subject stated at sidebar width, so a
-        // track two people have scored is legible before it is opened.
-        .child(
-            div()
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(px(3.))
-                .children(coverage_dot(track))
-                .children(score_count(track)),
-        )
-        .child(album_art(track.album_art_path.as_deref(), ART))
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                // Both lines truncate rather than wrap. The row's height is
-                // declared — every song is exactly [`ROW_HEIGHT`] — so a title
-                // allowed to take a second line does not make its row taller,
-                // it pushes the artist line out of the bottom of it.
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(px(12.))
-                        // The front tab's row carries full ink; the rest sit
-                        // back as a quiet list. This is the only weight
-                        // difference — the ring already says which row is in
-                        // front, and a second louder signal would be shouting.
-                        .text_color(luma_ui::glass::ink(if lit { 0.95 } else { 0.72 }))
-                        .child(track_name(track)),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(px(10.))
-                        .text_color(luma_ui::glass::ink(0.45))
-                        .child(sub.clone())
-                        .agent_node(Role::Text, sub),
-                ),
-        )
-        // The trailing slot the list row's chevron sits in, reserved on every
-        // face so the head and the list row are the *same box* — the shared
-        // element then travels in `y` alone. Empty at the head, which is the
-        // price of that and cheaper than interpolating a width.
-        .child(div().flex_shrink_0().w(px(CHEVRON_SLOT)))
-}
-
-/// One list row: the track, the gesture on it, and the selection ring.
-///
-/// The row is a door to the track's *documents*, not to a timeline: pressing
-/// it pushes to the scores level, where choosing which score the editor opens
-/// is a deliberate act rather than a guess at which one you meant. The chevron
-/// is the hint that the row goes somewhere, and is drawn — not pressed. One
-/// row, one target.
+/// One song: the disclosure and the coverage dot, the art, title, artist,
+/// BPM, length and its scores in this venue. A press expands it to its
+/// scores, or folds them away; a right-click is the folder menu.
 fn track_row(
     track: &TrackBrowserRow,
-    index: usize,
     folder: Option<&str>,
-    picked: bool,
-    flying: bool,
+    open: bool,
+    expanded: bool,
     app: &Entity<Luma>,
 ) -> AnyElement {
     let name = track_name(track);
-    let deeper = app.clone();
+    let pressed = app.clone();
     let raised = app.clone();
     let track_id = track.id.clone();
+    let menu_track = track.id.clone();
+    let place = folder.map(str::to_string);
     // A song listed in a folder is the same track twice on screen, so its
     // element is keyed by the folder too.
     let key = match folder {
         Some(folder) => format!("{folder}/{}", track.id),
         None => track.id.clone(),
     };
-    let row = div()
-        .id(SharedString::from(key.clone()))
+    let text = |value: String, alpha: f32| {
+        div()
+            .truncate()
+            .text_size(px(12.))
+            .text_color(glass::ink(alpha))
+            .child(value)
+    };
+    let number = |value: String| {
+        div()
+            .w(px(NUMBER))
+            .flex_none()
+            .text_size(px(11.))
+            .font_family(luma_ui::fonts::MONO)
+            .text_color(glass::ink(glass::TEXT_SECONDARY))
+            .child(value)
+    };
+    let artist = track
+        .artist
+        .clone()
+        .unwrap_or_else(|| "Unknown artist".into());
+    let bpm = track
+        .bpm
+        .map_or_else(String::new, |bpm| format!("{bpm:.1}"));
+    let length = track
+        .duration_seconds
+        .map_or_else(String::new, |seconds| length(seconds));
+    div()
+        .id(SharedString::from(key))
         .w_full()
         .h(px(ROW_HEIGHT))
-        .relative()
         .flex()
         .items_center()
-        .on_click(move |_, window, cx| {
-            deeper.update(cx, |this, cx| this.push_scores(index, window, cx));
+        .gap(px(GAP))
+        .px(px(PAD_X))
+        .when(folder.is_some(), |row| row.pl(px(PAD_X + FOLDER_INDENT)))
+        .border_b_1()
+        .border_color(glass::inner_rule())
+        .when(open, |row| row.bg(glass::wash(glass::WASH_PRESSED)))
+        .when(!open, |row| {
+            row.bg(glass::wash(0.))
+                .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
+                .fade_hover()
+        })
+        .on_click(move |_, _, cx| {
+            let (track_id, place) = (track_id.clone(), place.clone());
+            pressed.update(cx, |this, cx| {
+                this.toggle_track_scores(&track_id, place, cx)
+            });
         })
         .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
             cx.stop_propagation();
             let menu = folders::Menu::Song {
                 at: event.position,
-                track_id: track_id.clone(),
+                track_id: menu_track.clone(),
             };
-            raised.update(cx, |this, cx| this.open_sidebar_menu(menu, cx));
+            raised.update(cx, |this, cx| this.open_song_menu(menu, cx));
         })
-        // Comet's selection recipe, from the one place it is written down:
-        // hover and selection share the *fill*, and only the picked row also
-        // carries the inset ring. Two fills would make a hovered row and the
-        // picked row compete for one reading, and the moment the pointer rests
-        // on the picked row they would have to resolve into one anyway.
-        .rounded(px(luma_ui::radius::ROW))
-        .when(picked, |row| {
-            row.bg(luma_ui::glass::card_selected_bg())
-                .shadow(luma_ui::glass::card_selected_shadows())
-        })
-        .when(!picked, |row| {
-            row.bg(luma_ui::glass::wash(0.))
-                .hover(|style| style.bg(luma_ui::glass::glass_hover()))
-                .fade_hover()
-        })
-        // The row the shared element is carrying is drawn by the flight, not
-        // here — one track, one row on screen.
-        .child(track_face(track, picked).when(flying, |face| face.opacity(0.)))
-        // Silkscreen, not a control: the whole row is the door, so a second
-        // hit target here would be two ways to say one thing — and a chevron
-        // that could be pressed *separately* is a promise that it does
-        // something else.
         .child(
             div()
-                .absolute()
-                .right(px(float::ROW_INSET - 2.))
-                .size(px(CHEVRON_SLOT))
+                .w(px(DISCLOSURE + DOT + 4.))
+                .flex_none()
                 .flex()
                 .items_center()
-                .justify_center()
-                .text_color(luma_ui::glass::ink(if picked { 0.6 } else { 0.35 }))
+                .gap(px(4.))
                 .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronRight).size(px(11.)),
-                ),
+                    div()
+                        .w(px(DISCLOSURE))
+                        .flex()
+                        .justify_center()
+                        .text_color(glass::ink(glass::TEXT_TERTIARY))
+                        .child(
+                            gpui_component::Icon::new(if expanded {
+                                luma_ui::icons::IconName::ChevronDown
+                            } else {
+                                luma_ui::icons::IconName::ChevronRight
+                            })
+                            .size(px(11.)),
+                        ),
+                )
+                .children(coverage_dot(track)),
         )
-        .agent_node(Role::Row, name);
-    // Inset by the sidebar's gutter, so the fill lines up with the search
-    // field above it; a folder's songs sit one step further in.
-    slot(row)
-        .when(folder.is_some(), |slot| slot.pl(px(PAD_X + FOLDER_INDENT)))
+        .child(album_art(track.album_art_path.as_deref(), ART))
+        .child(text(name.clone(), 0.95).flex_1().min_w_0())
+        .child(
+            text(artist.clone(), glass::TEXT_SECONDARY)
+                .w(px(ARTIST))
+                .flex_none()
+                .agent_node(Role::Text, sub_line(&artist, track.bpm)),
+        )
+        .child(number(bpm))
+        .child(number(length))
+        .child(div().w(px(SCORES)).flex_none().child(score_count(track)))
+        .agent_node(Role::Row, name)
         .into_any_element()
+}
+
+/// What a row said under its title before the list had columns — `artist ·
+/// bpm` — kept as the artist cell's name so a script reads one line.
+fn sub_line(artist: &str, bpm: Option<f64>) -> String {
+    match bpm {
+        Some(bpm) => format!("{artist} · {bpm:.1}"),
+        None => artist.to_string(),
+    }
+}
+
+/// A length as the list prints it: `4:12`.
+fn length(seconds: f64) -> String {
+    let total = seconds.max(0.).round() as u64;
+    format!("{}:{:02}", total / 60, total % 60)
 }
 
 /// How far a folder's songs sit in from the folder.
 const FOLDER_INDENT: f32 = 14.;
 
-/// One line of the list, inset by the sidebar's gutter. As tall as what it
+/// One line of the list, inset by the page's gutter. As tall as what it
 /// holds.
 fn slot(content: impl IntoElement) -> Div {
     div().w_full().flex().px(px(PAD_X)).child(content)
 }
 
-/// The heading over every song, with how many the filters admit, over a
-/// hairline that opens them.
+/// The heading over every song, with how many the filters admit.
 fn all_songs(songs: usize) -> AnyElement {
     slot(
         div()
             .w_full()
             .flex()
-            .flex_col()
-            .gap(px(6.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .px(px(float::ROW_INSET))
-                    .child(div().flex_1().child(float::label(ALL_SONGS)))
-                    .child(luma_ui::caption(format!("{songs} songs"))),
-            )
-            .child(float::divider()),
+            .items_center()
+            .px(px(float::ROW_INSET))
+            .child(div().flex_1().child(float::label(ALL_SONGS)))
+            .child(luma_ui::caption(format!("{songs} songs"))),
     )
-    .py(px(HEADER_GAP))
+    .py(px(8.))
+    .border_b_1()
+    .border_color(glass::inner_rule())
     .into_any_element()
 }
 
@@ -1536,18 +900,14 @@ const ALL_SONGS: &str = "All songs";
 /// The plate is always there and the image sits *inside* it, which is what
 /// makes the two states one rect: a track with no art, a path that no longer
 /// resolves, and a decode still in flight all show the same square, and none
-/// of them can reflow the row. `img` reads the file through gpui's global
-/// image cache, so a row scrolled back into view costs a cache hit rather than
-/// a decode, so art needs no preloading.
+/// of them can reflow the row.
 pub(crate) fn album_art(path: Option<&str>, size: f32) -> Div {
     div()
         .flex_shrink_0()
         .size(px(size))
-        // A hair tighter than the row that holds it — a thumbnail nested in a
-        // rounded row wants the smaller corner, or the two radii fight.
         .rounded(px(luma_ui::radius::CHIP))
         .overflow_hidden()
-        .bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE))
+        .bg(glass::wash(glass::WASH_SUBTLE))
         .children(
             path.filter(|path| !path.is_empty())
                 .map(|path| img(PathBuf::from(path)).size(px(size))),
@@ -1565,37 +925,32 @@ pub(crate) fn track_name(track: &TrackBrowserRow) -> String {
         .unwrap_or_else(|| track.file_path.clone())
 }
 
-/// How much of this track the venue's annotations cover, as the one dot drawn
-/// before the title: red for none, amber for partial, green
-/// from 70% up. A track with no duration has nothing to be a fraction of, so
-/// it gets no dot at all.
-/// How many scores this venue holds for the track, when it holds any.
-///
-/// Zero draws nothing rather than a `0`: the row's lead is a status column,
-/// and a column of zeros reads as data when it is really the absence of any.
-/// This is the only place the count is spelled — the automation label is this
-/// element's, so a script and a pair of eyes cannot be told different numbers.
-fn score_count(track: &TrackBrowserRow) -> Option<impl IntoElement> {
+/// How many scores this venue holds for the track. Zero says so quietly
+/// rather than printing a `0`. This is the only place the count is spelled —
+/// the automation label is this element's, so a script and a pair of eyes
+/// cannot be told different numbers.
+fn score_count(track: &TrackBrowserRow) -> impl IntoElement {
     let count = track.venue_score_count;
-    if count <= 0 {
-        return None;
-    }
-    Some(
-        div()
-            .flex_shrink_0()
-            .text_size(px(11.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(luma_ui::glass::ink(0.45))
-            .child(format!("{count}"))
-            // Track-scoped, because a script finds nodes across the whole
-            // tree and a bare count would match every row at once.
-            .agent_node(
-                Role::Text,
-                format!("{} venue scores: {count}", track_name(track)),
-            ),
-    )
+    let (text, alpha) = match count {
+        n if n <= 0 => ("No scores".to_string(), glass::TEXT_TERTIARY),
+        1 => ("1 score".to_string(), glass::TEXT_SECONDARY),
+        n => (format!("{n} scores"), glass::TEXT_SECONDARY),
+    };
+    div()
+        .text_size(px(12.))
+        .text_color(glass::ink(alpha))
+        .child(text)
+        // Track-scoped, because a script finds nodes across the whole tree
+        // and a bare count would match every row at once.
+        .agent_node(
+            Role::Text,
+            format!("{} venue scores: {}", track_name(track), count.max(0)),
+        )
 }
 
+/// How much of this track the venue's annotations cover, as one dot: red for
+/// none, amber for partial, green from 70% up. A track with no duration has
+/// nothing to be a fraction of, so it gets no dot at all.
 fn coverage_dot(track: &TrackBrowserRow) -> Option<Div> {
     let duration = track.duration_seconds.filter(|seconds| *seconds > 0.)?;
     let covered = (track.venue_annotation_coverage_seconds / duration).clamp(0., 1.);

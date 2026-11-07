@@ -8,11 +8,14 @@
 //!
 //! ```text
 //! main         window + chrome, one root entity      (main.rs)
-//!  └ Luma      the persistent shell                  (this file + shell.rs)
-//!     ├ sidebar    the selected venue's tracks       (tracks.rs)
-//!     ├ chat       the agent thread, the centre      (luma-chat)
-//!     ├ workspace  tabs: track editor, 3D            (tabs.rs + shell.rs)
-//!     ├ overlay    venues / patterns / settings      (shell.rs)
+//!  └ Luma      the persistent shell, one open venue  (this file + shell.rs)
+//!     ├ agent      the chat, full height on the left (luma-chat, agent.rs)
+//!     ├ title bar  venue menu · subject · modes      (chrome.rs, welcome.rs)
+//!     ├ content    the stage over the mode's body:   (shell.rs, workspace.rs)
+//!     │             Rig, Arrange or Live
+//!     ├ song list  the venue's songs, over Arrange   (tracks.rs)
+//!     ├ status bar sync, output, the mode's line     (status_bar.rs)
+//!     ├ overlay    dialogs: settings, add tracks, …  (shell.rs)
 //!     └ library    the only door to Luma's data
 //! ```
 //!
@@ -46,20 +49,19 @@ mod fullscreen;
 mod history;
 mod keymap;
 mod library;
-mod new_tab;
 mod patch;
 mod perform;
 mod picker_preview;
 mod saved_cameras;
-mod saved_tabs;
+mod saved_venues;
+mod session_store;
 mod settings;
 mod shell;
 mod signin;
 mod stage;
+mod status_bar;
 mod subagents;
 mod sync_status;
-mod tab_chrome;
-mod tabs;
 mod track_editor;
 mod tracks;
 mod update;
@@ -100,11 +102,10 @@ pub fn init(cx: &mut App) {
     motion::init(cx);
 }
 use luma_chat::RunningTurns;
-use luma_lib::settings::ViewMode;
 use luma_ui::{fonts, ladder, motion, text_input};
 
 use shell::{Body, FocusSlot, Overlay};
-use tabs::Tabs;
+use workspace::Modes;
 
 pub struct Luma {
     pub(crate) library: Library,
@@ -118,54 +119,53 @@ pub struct Luma {
     /// Decoded covers for source-browser rows, kept across openings of the
     /// dialog and bounded — see [`add_tracks::ArtCache`].
     pub(crate) source_art: add_tracks::ArtCache,
-    /// The selected venue's track browser — the sidebar's body. `None` while
-    /// no venue is selected, which is also when the venue picker overlay
-    /// keeps itself open: the two states are one fact read twice.
-    pub(crate) sidebar: Option<tracks::Tracks>,
-    pub(crate) sidebar_hidden: bool,
-    /// A score click's pending hide of the sidebar — see
-    /// [`Luma::open_sidebar_score`]. Dropping it cancels the hide.
-    pub(crate) sidebar_hide: Option<gpui::Task<()>>,
+    /// The open venue's songs — the song list page's state. `None` while no
+    /// venue is open, which is also when the venue picker keeps itself open:
+    /// the two states are one fact read twice.
+    pub(crate) songs: Option<tracks::Tracks>,
+    /// Whether the song list page is up over Arrange. Arrange with no score
+    /// open shows it whatever this says — see [`Luma::song_list_shown`].
+    pub(crate) song_list: bool,
+    /// A score click's pending close of the song list — see
+    /// [`Luma::open_listed_score`]. Dropping it cancels the close.
+    pub(crate) song_list_close: Option<gpui::Task<()>>,
+    /// Whether the agent panel is put away by hand.
+    pub(crate) agent_hidden: bool,
+    /// Whether the agent panel was asked for over the song list, which
+    /// otherwise puts it away for the list's width — see
+    /// [`Luma::agent_wanted`]. Reset each time the list opens.
+    pub(crate) agent_over_songs: bool,
     /// The window's parts drawn as views of their own, so the stage's frames
     /// rebuild only the stage — see [`shell::Region`].
     pub(crate) regions: shell::Regions,
-    /// The sidebar's live width — the slide [`sidebar_hidden`](Self::sidebar_hidden)
-    /// asks for. Intent and geometry are kept apart because only one of them
-    /// is true mid-slide: the flag says where the region is going, this says
-    /// where it is.
-    pub(crate) sidebar_width: luma_ui::pane::PaneWidth,
-    /// The selected venue's open tabs — **the set on screen**. What each one
-    /// shows *is* its identity, see [`tabs`].
-    pub(crate) workspace: Tabs<Body>,
-    /// Every other venue's tabs. [`Luma::sync_venue_tabs`] swaps this set for
-    /// the sidebar's venue's — see [`workspace`].
-    pub(crate) parked: workspace::ParkedTabs<Body>,
-    /// The tabs this device reopens at launch — see [`saved_tabs`].
-    pub(crate) saved_tabs: saved_tabs::SavedTabs,
+    /// The agent panel's live width — the slide
+    /// [`agent_hidden`](Self::agent_hidden) asks for. Intent and geometry are
+    /// kept apart because only one of them is true mid-slide: the flag says
+    /// where the panel is going, this says where it is.
+    pub(crate) agent_width: luma_ui::pane::PaneWidth,
+    /// The open venue's modes and their bodies — **the state on screen**.
+    /// What each body shows *is* its identity, see [`workspace`].
+    pub(crate) workspace: Modes<Body>,
+    /// Every other venue's. [`Luma::sync_venue_modes`] swaps them.
+    pub(crate) venues: workspace::Venues<Body>,
+    /// Each venue's mode and open score as this device last left them — see
+    /// [`saved_venues`].
+    pub(crate) saved_venues: saved_venues::SavedVenues,
     pub(crate) saved_cameras: saved_cameras::SavedCameras,
-    /// Visual-only state for keyed chip reflow. Logical tab identity and
-    /// teardown remain owned by `workspace`.
-    pub(crate) tab_chrome: tab_chrome::TabChrome,
-    /// The `+`'s combo box, while it is open or leaving — see [`new_tab`].
-    pub(crate) new_tab: Option<new_tab::NewTab>,
+    /// Live's deck panel width as last dragged on this device; `None` is the
+    /// default — see [`shell::DeckWidth`].
+    pub(crate) deck_width: shell::DeckWidth,
+    /// The title bar's venue menu while it is open or leaving — see
+    /// [`welcome::VenueMenu`].
+    pub(crate) venue_menu: luma_ui::dialog::Popup<welcome::VenueMenu>,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
     pub(crate) session_refresh_error: Option<String>,
-    /// How the room left of the panel divides between the thread and the panel.
-    /// The panel's width is *derived* from it every frame rather than stored,
-    /// so the two can never disagree.
-    ///
-    /// A proportion, not a width, so the sidebar opening or the window resizing
-    /// takes its space from both in the ratio they were already at.
-    /// Session-lived: a split chosen for one window is not a preference about
-    /// every future window.
-    pub(crate) workspace_split: luma_ui::split::SplitFraction,
-    /// The `view_mode` setting, as last chosen: Direct shares the room right
-    /// of the sidebar between the front tab's chat and its editor, and lays a
-    /// score out as the stage over the timeline; Program gives the editor all
-    /// of it and lays a score out as [`shell::program_view`]. Written by the
-    /// head band's switch — see [`chrome::mode_switch`].
-    pub(crate) view_mode: ViewMode,
+    /// How the window divides between the agent panel and the content. The
+    /// panel's width is *derived* from it every frame rather than stored, so
+    /// the two can never disagree. Session-lived: a split chosen for one
+    /// window is not a preference about every future window.
+    pub(crate) agent_split: luma_ui::split::SplitFraction,
     /// Device pixels per logical pixel, as of the last render. Offscreen
     /// previews are drawn at the size they are shown.
     pub(crate) scale_factor: f32,
@@ -179,20 +179,15 @@ pub struct Luma {
     pub(crate) fullscreen: Option<fullscreen::State>,
     pub(crate) visualizer_focus: FocusHandle,
     /// Whether the stage pane is suppressed by hand. Kept apart from
-    /// [`visualizer`](Self::visualizer) the way `sidebar_hidden` is from
-    /// `sidebar`: one says what there is to show, the other whether the room
-    /// for it was given away.
+    /// [`visualizer`](Self::visualizer) the way `agent_hidden` is from the
+    /// chat: one says what there is to show, the other whether the room for
+    /// it was given away.
     pub(crate) visualizer_hidden: bool,
-    /// How the workspace column divides between the stage and the editor.
-    /// Session-lived, like `workspace_split`: a split chosen for one window is
-    /// not a preference about every future window.
+    /// How the content column divides between the stage and the mode below
+    /// it: Arrange's timeline, and the other modes. Session-lived, like
+    /// `agent_split`.
     pub(crate) score_editor_split: luma_ui::split::SplitFraction,
     pub(crate) visualizer_split: luma_ui::split::SplitFraction,
-    /// How Program divides the workspace between the timeline and the
-    /// column beside it, and that column between the stage and the
-    /// inspector. Session-lived, like the splits above.
-    pub(crate) program_columns: luma_ui::split::SplitFraction,
-    pub(crate) program_rows: luma_ui::split::SplitFraction,
     /// The sign-in screen, or none. **Not an overlay**: while it is up it is
     /// the app's whole content and the shell is not rendered at all — see
     /// [`signin`]. Boxed because it carries a morph, two text fields and their
@@ -202,7 +197,7 @@ pub struct Luma {
     /// A lapsed session is being asked online whether it still proves anyone;
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
-    pub(crate) sync_status: sync_status::SidebarSync,
+    pub(crate) sync_status: sync_status::SyncState,
     /// The self-updater and what it last said — see [`update`].
     pub(crate) update: update::AutoUpdate,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
@@ -211,12 +206,6 @@ pub struct Luma {
     /// element the frame its state drops, so an exit animation needs the state
     /// held alive while it plays.
     pub(crate) overlay: luma_ui::dialog::Popup<Overlay>,
-    /// The account menu hanging off the sidebar's foot, or none. A `Popup` for
-    /// the same reason the overlay is one — see [`crate::tracks::account_menu`].
-    pub(crate) account_menu: luma_ui::dialog::Popup<()>,
-    /// The foot itself: a tab stop, so the account is reachable without the
-    /// pointer, and a return target the menu hands the keyboard back to.
-    pub(crate) account_focus: FocusHandle,
     /// What the one sign-out gesture is doing — see [`settings::AccountAction`].
     /// Who is signed in is not here: `Library` is the cache of that.
     pub(crate) account_action: settings::AccountAction,
@@ -251,7 +240,7 @@ pub struct Luma {
     pub(crate) venue_picker_generation: u64,
     /// Agent commits invalidate parked tabs too; they reload when their venue
     /// comes back on screen.
-    pub(crate) agent_stale_tabs: Vec<crate::tabs::Target>,
+    pub(crate) agent_stale: Vec<crate::workspace::Target>,
     /// Correlates a history read with the dialog that asked for it — a slow
     /// list arriving after the reader reopened the picker is a stale answer.
     pub(crate) chat_history_generation: u64,
@@ -265,6 +254,9 @@ pub struct Luma {
     /// render (see [`Luma::render`]); it has an effect only on a display that
     /// accepts HDR.
     pub(crate) hdr_output_allowed: bool,
+    /// The `dmx_output_enabled` setting, as last read: what the status bar
+    /// says about output.
+    pub(crate) dmx_output: bool,
 }
 
 impl Luma {
@@ -282,24 +274,25 @@ impl Luma {
             source_preview: None,
             source_art: add_tracks::ArtCache::default(),
             next_track_import: 0,
-            sidebar: None,
-            sidebar_hidden: false,
-            sidebar_hide: None,
+            songs: None,
+            song_list: false,
+            song_list_close: None,
+            agent_hidden: false,
+            agent_over_songs: false,
             regions: shell::Regions::default(),
-            // The first shell frame resolves both widths without animation;
-            // subsequent visibility changes use the shared spring.
-            sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
-            workspace: Tabs::default(),
-            parked: workspace::ParkedTabs::default(),
-            saved_tabs: saved_tabs::SavedTabs::default(),
-            saved_cameras: saved_cameras::SavedCameras::default(),
-            tab_chrome: tab_chrome::TabChrome::default(),
-            new_tab: None,
+            // The first shell frame resolves the width without animation;
+            // later visibility changes use the shared spring.
+            agent_width: luma_ui::pane::PaneWidth::new(0.0),
+            workspace: Modes::default(),
+            venues: workspace::Venues::default(),
+            saved_venues: saved_venues::SavedVenues::default(),
+            saved_cameras: saved_cameras::empty(),
+            deck_width: session_store::Stored::new(shell::DECK_WIDTH_KEY),
+            venue_menu: luma_ui::dialog::Popup::default(),
             shell_presented: false,
             restoring_venue: false,
             session_refresh_error: None,
-            workspace_split: shell::workspace_split(),
-            view_mode: ViewMode::default(),
+            agent_split: shell::agent_split(),
             scale_factor: 1.0,
             visualizer: None,
             fullscreen: None,
@@ -307,15 +300,11 @@ impl Luma {
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
-            program_columns: shell::program_columns(),
-            program_rows: shell::program_rows(),
             sign_in: None,
             refreshing_session: false,
-            sync_status: sync_status::SidebarSync::default(),
+            sync_status: sync_status::SyncState::default(),
             update: update::AutoUpdate::new(),
             overlay: luma_ui::dialog::Popup::default(),
-            account_menu: luma_ui::dialog::Popup::default(),
-            account_focus: cx.focus_handle().tab_stop(true),
             account_action: settings::AccountAction::default(),
             running,
             _running: [running_changed, running_events],
@@ -330,10 +319,11 @@ impl Luma {
             overlay_return_focus: None,
             focused_slot: FocusSlot::Shell,
             venue_picker_generation: 0,
-            agent_stale_tabs: Vec::new(),
+            agent_stale: Vec::new(),
             sign_in_generation: 0,
             venue_selection_generation: 0,
             hdr_output_allowed: true,
+            dmx_output: false,
         };
         // Which door the app opens on. Nothing opens without a principal: a
         // stored session that still proves one goes straight in; one that
@@ -402,18 +392,24 @@ impl Luma {
         .detach();
     }
 
-    /// Reveal the `index`th tab in strip order. ⌘1…⌘9; out of range is
-    /// nothing, not a wrap.
-    fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.workspace.select_index(index);
-        cx.notify();
+    /// Whether the agent panel should be up: not put away by hand, and not
+    /// stood aside for the song list unless asked for over it.
+    pub(crate) fn agent_wanted(&self) -> bool {
+        !self.agent_hidden && (!self.song_list_shown() || self.agent_over_songs)
     }
 
-    /// Show or hide the sidebar, by the button or ⌘B. The person's own toggle
-    /// out-ranks a score click's pending hide, which it cancels.
-    pub(crate) fn toggle_sidebar(&mut self) {
-        self.sidebar_hide = None;
-        self.sidebar_hidden = !self.sidebar_hidden;
+    /// Show or hide the agent panel, by its toggle or ⌘B. Over the song list
+    /// the gesture is about the list's moment only: hiding there does not
+    /// put the panel away for when the list closes.
+    pub(crate) fn toggle_agent(&mut self) {
+        if !self.song_list_shown() {
+            self.agent_hidden = !self.agent_hidden;
+        } else if self.agent_wanted() {
+            self.agent_over_songs = false;
+        } else {
+            self.agent_hidden = false;
+            self.agent_over_songs = true;
+        }
     }
 }
 
@@ -438,17 +434,14 @@ impl Render for Luma {
         if self.sign_in.is_some() {
             return signin::screen(self, window, cx);
         }
-        // The shell with nothing to show *is* the venue picker: keep the
-        // overlay up while no venue is selected, nothing else is up, and no
-        // tab is open. A workspace with tabs is a shell with something to
-        // show — a pattern's graph needs no venue, and a picker that camped
-        // over it would be the welcome screen refusing to leave.
-        if self.sidebar.is_none() && self.overlay.get().is_none() && self.workspace.is_empty() {
+        // A window with no venue *is* the venue picker: keep the overlay up
+        // while no venue is open and nothing else is up.
+        if self.songs.is_none() && self.overlay.get().is_none() {
             self.show_venues(cx);
         }
-        self.sync_venue_tabs(cx);
-        self.see_front_tab();
-        self.save_tabs(cx);
+        self.sync_venue_modes(cx);
+        self.see_front_body();
+        self.save_venues(cx);
         self.sync_visualizer(cx);
         self.save_camera(cx);
         self.sync_fullscreen(window, cx);
@@ -461,7 +454,7 @@ impl Render for Luma {
             .flex_col()
             // The floor. Every region either leaves it showing (the thread
             // column, the workspace panel) or raises itself off it (the
-            // sidebar) — see `shell::regions`. Opaque, and from the ladder
+            // agent panel) — see `shell::regions`. Opaque, and from the ladder
             // rather than the glass tier, because a plane whose brightness is
             // decided by the desktop behind the window has no rung.
             .bg(ladder::background())
@@ -485,12 +478,6 @@ impl Render for Luma {
             .on_action(
                 cx.listener(|this, _: &keymap::DismissOverlay, _, cx| this.dismiss_overlay(cx)),
             )
-            .on_action(cx.listener(|this, _: &keymap::EnterScores, window, cx| {
-                this.enter_selected_scores(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &keymap::LeaveScores, _, cx| {
-                this.leave_scores(cx);
-            }))
             .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleVisualizer, _, cx| this.toggle_visualizer(cx)),
@@ -555,33 +542,25 @@ impl Render for Luma {
                 }
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _, cx| {
-                this.toggle_sidebar();
+            .on_action(cx.listener(|this, _: &keymap::ToggleAgent, _, cx| {
+                this.toggle_agent();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &keymap::DirectMode, _, cx| {
-                this.set_view_mode(ViewMode::Direct, cx)
+            .on_action(cx.listener(|this, _: &keymap::ShowRig, _, cx| {
+                this.set_mode(workspace::Mode::Rig, cx)
             }))
-            .on_action(cx.listener(|this, _: &keymap::ProgramMode, _, cx| {
-                this.set_view_mode(ViewMode::Program, cx)
+            .on_action(cx.listener(|this, _: &keymap::ShowArrange, _, cx| {
+                this.set_mode(workspace::Mode::Arrange, cx)
             }))
+            .on_action(cx.listener(|this, _: &keymap::ShowLive, _, cx| {
+                this.set_mode(workspace::Mode::Live, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &keymap::ToggleSongList, _, cx| this.toggle_song_list(cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &keymap::OpenClipGraph, _, cx| this.open_clip_graph(cx)),
             )
-            .on_action(cx.listener(|this, _: &keymap::CloseTab, _, cx| this.close_active_tab(cx)))
-            .on_action(cx.listener(|this, _: &keymap::NewTab, window, cx| {
-                // ⌘T presses the `+`: it opens the combo box.
-                this.toggle_new_tab(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab1, _, cx| this.select_tab(0, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab2, _, cx| this.select_tab(1, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab3, _, cx| this.select_tab(2, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab4, _, cx| this.select_tab(3, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab5, _, cx| this.select_tab(4, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab6, _, cx| this.select_tab(5, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab7, _, cx| this.select_tab(6, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab8, _, cx| this.select_tab(7, cx)))
-            .on_action(cx.listener(|this, _: &keymap::SelectTab9, _, cx| this.select_tab(8, cx)))
             .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| this.toggle_playback(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::FollowPlayhead, _, cx| this.toggle_follow(cx)),

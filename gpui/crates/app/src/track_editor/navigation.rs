@@ -75,8 +75,11 @@ impl Editor {
     fn fit_lanes(&mut self) {
         let height = f32::from(self.canvas.get().size.height);
         let rows = lane_count(&self.clips) as f32;
-        self.view.zoom_y = ((height - TRACK_AREA_Y) / (rows * LANE_HEIGHT))
-            .clamp(View::MIN_ZOOM_Y, View::MAX_ZOOM_Y);
+        // A lane is drawn at a whole-pixel height (`Layout::lane`), so fit the
+        // whole pixels: a height that rounds up would push the top lane under
+        // the waveform by the stack's accumulated remainder.
+        let lane = ((height - TRACK_AREA_Y) / rows).floor();
+        self.view.zoom_y = (lane / LANE_HEIGHT).clamp(View::MIN_ZOOM_Y, View::MAX_ZOOM_Y);
         self.view.lift = 0.;
     }
 

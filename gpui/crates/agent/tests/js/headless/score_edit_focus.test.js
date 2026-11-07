@@ -1,4 +1,4 @@
-// The edit-focus layout and the searchable dialogs, driven through input.
+// The searchable dialogs of score editing, driven through input.
 
 const CLIP = { pattern: "pat-glow", name: "Glow", start: 2, end: 5 };
 fixture({ seconds: 20, clips: [CLIP], rig: 4, window: [1400, 900] });
@@ -6,70 +6,13 @@ fixture({ seconds: 20, clips: [CLIP], rig: 4, window: [1400, 900] });
 // A clip is labelled by its name; the fixture's clip is a Wash.
 const CARD = "Wash";
 
-test(
-  "the inspector stays open and swaps between presets and clip inputs",
-  { fixture: { motion: true, motion_scale: 4 } },
-  () => {
-    const read = () => {
-      const shot = app.snapshot();
-      const inspector = shot.find({ role: "card", label: "Pattern graph" }) ?? shot.find({ role: "card", label: "Presets" });
-      return {
-        showing: inspector?.label ?? null,
-        width: inspector?.bounds.width ?? 0,
-        stage: shot.find({ role: "card", label: "Stage" }).bounds,
-        waveform: shot.find({ role: "card", label: "Waveform" }).bounds,
-      };
-    };
-    const sample = () => {
-      const frames = [];
-      for (let i = 0; i < 5; i++) {
-        app.frames(1, { waitMs: 20 });
-        frames.push(read());
-      }
-      return frames;
-    };
-    nav.trackEditor("Test Venue", "Aurora");
-    nav.program();
-    until("the clip", () => peek("card", CARD));
-    until("the presets", () => peek("card", "Presets"));
-    const empty = read();
-    expect(empty.showing).toBe("Presets");
-    app.click(peek("card", CARD));
-    const selecting = sample();
-    until("the clip's controls", () => peek("button", "Pick fixtures"));
-    const opened = read();
-    expect(opened.showing).toBe("Pattern graph");
-    app.click(peek("card", "Waveform"));
-    const clearing = sample();
-    until("the presets again", () => peek("card", "Presets"));
-    const cleared = read();
-    expect(cleared.showing).toBe("Presets");
-
-    // The inspector never slides, and the stage and timeline keep their space.
-    for (const frame of [opened, cleared, ...selecting, ...clearing]) {
-      assert(Math.abs(frame.width - empty.width) < 1, `the inspector changed width: ${empty.width} → ${frame.width}`);
-      expect(frame.stage).toEqual(empty.stage);
-      expect(frame.waveform).toEqual(empty.waveform);
-    }
-  },
-);
-
-test("the inspector stays beside the timeline and pickers accept keyboard input", () => {
+test("the clip's pickers and the insertion dialog accept keyboard input", () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   until("the clip", () => peek("card", CARD));
-  app.click(peek("card", CARD));
+  nav.clipGraph(CARD);
   until("the clip's controls", () => peek("button", "Pick fixtures"));
-  const before = peek("card", "Pattern graph").bounds;
-  app.drag(peek("slider", "Stage height"), { dx: 0, dy: -140 });
-  app.frames(4);
-  const inspector = peek("card", "Pattern graph").bounds;
-  const wave = peek("card", "Waveform").bounds;
-  // A shorter stage gives the inspector room, and it stays beside the
-  // timeline with its controls on screen.
-  expect(inspector.height >= before.height).toBe(true);
-  assert(inspector.x >= wave.x + wave.width - 1, `the inspector overlaps the timeline: ${JSON.stringify({ inspector, wave })}`);
   expect(peek("button", "Pick fixtures").bounds.height).toBeGreaterThan(0);
 
   app.click(peek("button", "Pick fixtures"));
@@ -87,6 +30,9 @@ test("the inspector stays beside the timeline and pickers accept keyboard input"
   app.click(peek("button", "Apply"));
   until("the selection applied", (s) => s.findAll({ role: "input" }).some((n) => n.label === "expression = right_movers"));
 
+  // Back on the timeline, a right-click on a lane offers the patterns.
+  app.click(peek("button", "Back to timeline"));
+  until("the timeline", () => peek("row", "Lane 0"));
   app.click(peek("row", "Lane 0"), { button: "right" });
   until("the pattern dialog", () => peek("card", "Insert pattern dialog"));
   expect(peek("card", "Insert pattern dialog").bounds.height).toBeGreaterThan(0);

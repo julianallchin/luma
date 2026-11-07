@@ -127,7 +127,7 @@ fn main() {
             }}
             nav.track({track:?});
             until("the timeline", (s) => s.find({{ role: "card", label: "Waveform" }}) !== undefined);
-            nav.program();
+            nav.agentOff();
             if (!{stage}) nav.stageOff();
             else nav.step("the frame-stats panel", "toggle", "Frame stats");
             // Let the previews land before measuring.
@@ -146,9 +146,7 @@ fn main() {
 
             // Playback redraws every clip on every frame: the case the canvas
             // has to be cheap for. Measured at the zoom the track opens at and
-            // again zoomed out, with a still of each before it plays, in
-            // Direct — the app's default, and free of Program's preset
-            // browser, whose replayed rows would be most of the frame.
+            // again zoomed out, with a still of each before it plays.
             function play(at) {{
                 const shot = app.screenshot().path;
                 app.action("luma::PlayPause");
@@ -158,13 +156,11 @@ fn main() {
                 app.frames(4);
                 return {{ at, shot, frames }};
             }}
-            nav.direct();
             app.frames(30, {{ waitMs: 16 }});
             const playing = [play("default zoom")];
             app.scroll(waveform(), {{ dy: -800, steps: 20, modifiers: ["platform"] }});
             app.frames(30, {{ waitMs: 16 }});
             playing.push(play("zoomed out"));
-            nav.program();
             app.frames(30, {{ waitMs: 16 }});
             const clips = cards().filter((c) => !c.label.endsWith(" preview")).length - 2;
             const previews = cards().filter((c) => c.label.endsWith(" preview")).length;

@@ -81,16 +81,28 @@ test("a code joins a venue, and a bad one says why inline", () => {
     s.find({ role: "card", label: "Venue dialog" }) === undefined
       && s.find({ role: "button", label: "Warehouse" }) !== undefined, { timeoutMs: 10000 });
 
-  // On the list now, marked as someone else's, with no way to share it.
-  nav.step("the venue switcher", "button", "Warehouse");
-  const listed = until("the list", (s) => s.find({ role: "card", label: "Warehouse" }) ? s : undefined);
-  assert(listed.find({ role: "text", label: "Warehouse is shared with you" }), "the joined venue is not marked as shared");
-  expect(listed.find({ role: "button", label: "Share Warehouse" })).toBe(undefined);
+  // On the venue menu now, with no way to share it.
+  nav.venueMenu();
+  const listed = until("the list", (s) => s.find({ role: "row", label: "Warehouse" }) ? s : undefined);
+  expect(listed.findAll({ role: "row" }).find((n) => n.label.startsWith("Share "))).toBe(undefined);
 
   // The same code again is a venue already open.
-  nav.step("Join", "button", "Join a venue");
+  nav.step("Join", "row", "Join with code…");
   until("the join route", (s) => s.find({ role: "text", label: "Join a venue" }) !== undefined);
   app.type(field(), "K7M4-Q9TX");
   app.key("enter");
   until("already in", (s) => s.find({ role: "text", label: "You already have access to Warehouse." }) !== undefined);
+});
+
+// The venue menu marks a joined venue "shared with you", as the picker does.
+test("the venue menu marks a joined venue as shared with you", () => {
+  until("the picker", (s) => s.find({ role: "card", label: "Test Venue" }) !== undefined);
+  nav.step("Join", "button", "Join a venue");
+  const focusedInput = (s) => s.find((n) => n.role === "input" && n.focused === true);
+  app.type(focusedInput(until("the code field", (s) => focusedInput(s) !== undefined)), "k7m4 q9tx");
+  app.key("enter");
+  until("the joined venue to open", (s) => s.find({ role: "button", label: "Warehouse" }) !== undefined, { timeoutMs: 10000 });
+  nav.venueMenu();
+  const listed = until("the list", (s) => s.find({ role: "row", label: "Warehouse" }) ? s : undefined);
+  assert(listed.find({ role: "text", label: "Warehouse is shared with you" }), "the joined venue is not marked as shared");
 });

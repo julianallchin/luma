@@ -1,16 +1,15 @@
 //! The last camera pose in each venue, kept on this device so a venue opens
 //! where it was left.
 //!
-//! A session item in this device's local store, beside the open tabs and the
-//! last venue. Nothing here is synced: where one operator was looking is not a
-//! fact about the venue.
+//! A session item in this device's local store (see [`crate::session_store`]),
+//! beside each venue's mode and the last venue. Nothing here is synced: where
+//! one operator was looking is not a fact about the venue.
 //!
 //! The pose is the camera's spherical form — target, radius and the two
 //! angles — because that is what the orbit controller works in. Storing an eye
 //! and a target and deriving the angles back is how a camera drifts.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use gpui::Context;
 use luma_scene::Camera;
@@ -21,13 +20,9 @@ use crate::Luma;
 /// The session item the poses are stored under.
 const KEY: &str = "camera-poses";
 
-/// How long a change waits for the next one before it is written. An orbit
-/// drag changes the pose every frame; only where it comes to rest is written.
-const SAVE_WAIT: Duration = Duration::from_millis(500);
-
 /// Every venue's last pose, as stored.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
-struct Snapshot {
+pub(crate) struct Snapshot {
     venues: BTreeMap<String, Pose>,
 }
 
@@ -62,35 +57,28 @@ impl Pose {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct SavedCameras {
-    /// What the store holds, as last read or written. A frame whose pose
-    /// matches it writes nothing.
-    stored: Snapshot,
-    /// Correlates a debounced write with the change that scheduled it.
-    writes: u64,
+/// Every venue's last pose, in the shared session store.
+pub(crate) type SavedCameras = crate::session_store::Stored<Snapshot>;
+
+/// Nothing saved yet: what the shell holds until the launch read lands.
+pub(crate) fn empty() -> SavedCameras {
+    SavedCameras::new(KEY)
 }
 
-impl SavedCameras {
-    /// Take in what the store held at launch. A value that does not parse is
-    /// treated as nothing saved: it is a convenience, not a document.
-    pub(crate) fn read(stored: Option<&str>) -> Self {
-        Self {
-            stored: stored
-                .and_then(|json| serde_json::from_str(json).ok())
-                .unwrap_or_default(),
-            writes: 0,
-        }
-    }
+/// Take in what the store held at launch.
+pub(crate) fn read(stored: Option<&str>) -> SavedCameras {
+    SavedCameras::read(KEY, stored)
+}
 
+impl Snapshot {
     /// `venue_id`'s last pose, if it has one.
     pub(crate) fn pose(&self, venue_id: &str) -> Option<Pose> {
-        self.stored.venues.get(venue_id).copied()
+        self.venues.get(venue_id).copied()
     }
 }
 
 impl Luma {
-    /// The store's value, for [`SavedCameras::read`].
+    /// The store's value, for [`read`].
     pub(crate) fn read_saved_cameras(
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, crate::LibraryError>> + use<>
@@ -108,27 +96,12 @@ impl Luma {
         else {
             return;
         };
-        if self.saved_cameras.stored.venues.get(&venue) == Some(&pose) {
+        if self.saved_cameras.value().pose(&venue) == Some(pose) {
             return;
         }
-        self.saved_cameras.stored.venues.insert(venue, pose);
-        let Ok(json) = serde_json::to_string(&self.saved_cameras.stored) else {
-            return;
-        };
-        self.saved_cameras.writes += 1;
-        let generation = self.saved_cameras.writes;
-        let wait = self.library.debounce(SAVE_WAIT);
-        cx.spawn(async move |this, cx| {
-            wait.await;
-            let Ok(Some(write)) = this.update(cx, |this, _| {
-                (this.saved_cameras.writes == generation)
-                    .then(|| this.library.set_session_item(KEY, &json))
-            }) else {
-                return;
-            };
-            let _ = write.await;
-        })
-        .detach();
+        let mut snapshot = self.saved_cameras.value().clone();
+        snapshot.venues.insert(venue, pose);
+        self.store_session(|this| &mut this.saved_cameras, snapshot, cx);
     }
 }
 
@@ -148,10 +121,14 @@ mod tests {
         let mut venues = BTreeMap::new();
         venues.insert("club".to_string(), Pose::of(&camera));
         let json = serde_json::to_string(&Snapshot { venues }).unwrap();
-        let read = SavedCameras::read(Some(&json));
-        let restored = read.pose("club").unwrap().applied(Camera::default());
+        let stored = read(Some(&json));
+        let restored = stored
+            .value()
+            .pose("club")
+            .unwrap()
+            .applied(Camera::default());
         assert_eq!(restored, camera);
-        assert_eq!(read.pose("elsewhere"), None);
+        assert_eq!(stored.value().pose("elsewhere"), None);
     }
 
     #[test]
@@ -164,11 +141,5 @@ mod tests {
         let moved = Pose::of(&Camera::default()).applied(lens);
         assert_eq!(moved.fov_y_deg, 35.0);
         assert_eq!(moved.znear, 0.25);
-    }
-
-    #[test]
-    fn an_unreadable_value_is_nothing_saved() {
-        let read = SavedCameras::read(Some("not json"));
-        assert_eq!(read.stored, Snapshot::default());
     }
 }

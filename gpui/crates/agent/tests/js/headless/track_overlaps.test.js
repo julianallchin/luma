@@ -9,7 +9,7 @@ fixture({ seconds: 20, clips: [chase("a", 0), chase("b", 1), chase("c", 2)], win
 
 test("overlapping clips have separate clickable rows and independent edits", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   const clips = () => app.snapshot().findAll({ role: "card", label: "Chase" }).sort((a, b) => a.bounds.y - b.bounds.y);
   until("three overlapping clips", (s) => s.findAll({ role: "card", label: "Chase" }).length === 3);
@@ -18,16 +18,19 @@ test("overlapping clips have separate clickable rows and independent edits", () 
   for (let i = 1; i < initial.length; i++) {
     assert(initial[i].y >= initial[i - 1].y + initial[i - 1].height, "overlapping clip hit targets");
   }
+  const selected = (s) => s.findAll({ role: "text" }).some((n) => n.label === "1 selected");
   for (let i = 0; i < 3; i++) {
+    app.click(app.snapshot().find({ role: "card", label: "Waveform" }));
+    until("the selection cleared", (s) => !selected(s));
     app.click(clips()[i]);
-    until("the clip's inspector", (s) => s.find({ role: "card", label: "Pattern graph" }));
+    until("the clip alone selected", (s) => s.findAll({ role: "text" }).some((n) => n.label === "1 selected"));
   }
   // Removing the middle clip leaves both others intact.
   app.click(clips()[1]);
   app.key("backspace");
   until("only the selected clip removed", (s) => s.findAll({ role: "card", label: "Chase" }).length === 2);
   until("the removal stored", () => Object.keys(library.score().clips).length === 2);
-  nav.closeTab();
+  nav.reopen("Aurora");
   nav.track("Aurora");
   until("the edit persisted", (s) => s.findAll({ role: "card", label: "Chase" }).length === 2);
 });

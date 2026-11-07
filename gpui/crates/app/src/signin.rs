@@ -187,7 +187,7 @@ impl Luma {
         // The gate is the whole window: nothing the shell was floating gets
         // to play its exit over a shell that is no longer rendered.
         self.overlay = luma_ui::dialog::Popup::default();
-        self.account_menu = luma_ui::dialog::Popup::default();
+        self.venue_menu = luma_ui::dialog::Popup::default();
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
         self.sign_in = Some(Box::new(SignIn::new(generation, expired, cx)));
@@ -506,7 +506,6 @@ pub(crate) fn splash(window: &Window, line: &'static str) -> AnyElement {
 /// [`crate::chrome`] — and the window controls go last, so nothing can cover
 /// the only things that move and close the window.
 fn ground(window: &Window, body: impl IntoElement) -> Div {
-    let viewport = f32::from(window.viewport_size().width);
     div()
         .size_full()
         .flex()
@@ -514,12 +513,7 @@ fn ground(window: &Window, body: impl IntoElement) -> Div {
         .bg(ladder::background())
         .font_family(luma_ui::fonts::FAMILY)
         .text_color(ladder::foreground())
-        .child(chrome::band(chrome::BandSpan {
-            x: 0.0,
-            width: viewport,
-            viewport,
-            lights: chrome::corner_lit(window),
-        }))
+        .child(chrome::band(chrome::corner_lit(window)))
         .child(body)
         .children(chrome::window_controls(window))
 }

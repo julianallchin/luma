@@ -1,5 +1,5 @@
-// A score tab's chat survives navigation inside the track and a visit to the
-// venue tab; only an explicit New chat or a history pick changes it.
+// An open score's chat survives navigation inside the track and a visit to
+// Rig; only an explicit New chat or a history pick changes it.
 
 fixture({
   seconds: 4,
@@ -30,18 +30,15 @@ test("a track keeps its chat until an explicit new or history choice", () => {
   header();
   until("history dismissed", (s) => !s.find({ role: "input", label: "Search chats…" }));
 
-  // The venue tab shows the venue's own chat; coming back to the score tab
+  // Rig shows the venue's own chat; coming back to Arrange
   // shows the same conversation, not a fresh resolve.
-  const scoreTab = app.snapshot().findAll({ role: "button" }).find((n) => n.label.startsWith("Aurora · #")).label;
   nav.venuePage("Test Venue");
   until("the venue's chat", (s) => !s.find({ role: "text", label: saved.label }));
-  nav.step("the score tab again", "button", scoreTab);
+  nav.mode("Arrange");
   header();
   app.frames(8, { waitMs: 20 });
   assert(app.snapshot().find({ role: "text", label: saved.label }),
-    "the venue tab replaced the score's conversation");
+    "Rig replaced the score's conversation");
 
-  nav.step("close the score tab", "button", `Close ${scoreTab}`);
-  until("the score tab closed", (s) => !s.find({ role: "button", label: scoreTab }));
   header();
 });

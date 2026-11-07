@@ -5,8 +5,8 @@
 
 fixture({ track: false, seconds: 1 });
 
-// Through ⌘, rather than the account foot: these tests are about the seam.
-// The foot's own door is the last test in this file.
+// Through ⌘, rather than the venue menu: these tests are about the seam.
+// The menu's own door is the last test in this file.
 function openAiSettings(model) {
   app.action("luma::OpenSettings");
   nav.step("the AI settings section", "toggle", "AI");
@@ -97,8 +97,8 @@ test("HDR output is a General setting", () => {
   assert(!failed, "the HDR write reported a save error");
 });
 
-// The door a person can see: the account foot's menu, then its Settings row.
-test("the account foot opens settings", () => {
+// The door a person can see: the title bar's venue menu, then its Settings row.
+test("the venue menu opens settings", () => {
   nav.venue("Test Venue");
   nav.settings();
   until("the settings screen", (s) => s.find({ role: "toggle", label: "AI" }));

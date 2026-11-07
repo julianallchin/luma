@@ -4,13 +4,14 @@
 //!
 //! # The ground is the floor
 //!
-//! This ladder climbs. [`background`] is the darkest plane there is — the
-//! window, the thread column, the workspace panel, every tab body — and every
-//! other surface is placed by *how far it rises off it*: a card lifts a little
+//! This ladder climbs. [`background`] is the darkest plane *on the page* — the
+//! thread column, the workspace panel, every tab body — and every other
+//! surface is placed by *how far it rises off it*: a card lifts a little
 //! ([`card`]), a header band more ([`band`]), the sidebar further still because
 //! it is chrome rather than content ([`chrome_plane`]), a floating menu most
-//! ([`apex`]). There is nothing below the floor, so depth is never a darker
-//! slice; a divider is a *lighter* hairline ([`trim`], [`border`]).
+//! ([`apex`]). Depth is never a darker slice; a divider is a *lighter*
+//! hairline ([`trim`], [`border`]). The one rung under the floor is
+//! [`frame`]: not a surface on the page but the window's own trim around it.
 //!
 //! Hue appears only for *meaning* ([`primary`], [`status_ok`], [`signal`]).
 
@@ -25,6 +26,10 @@ use gpui::{hsla, rgb, rgba, Hsla, Rgba};
 /// planes it divides — which needs a number, not a colour. [`grey`] is the only
 /// way one of these becomes paint, so a rung and the number it is cannot drift.
 const GROUND: u8 = 0x18;
+/// The window's trim, under the ground. Zeron's window sits `0x0a` under its
+/// page (`#0e0e10` under `#18181b`); this is the same step down from
+/// [`GROUND`], kept achromatic like every rung here.
+const FRAME: u8 = GROUND - 0x0a;
 /// See [`GROUND`]. Ascending; each name is the role, not the value.
 const CARD: u8 = 0x1c;
 const STRIPE: u8 = 0x1f;
@@ -41,9 +46,16 @@ fn grey(value: u8) -> Rgba {
     rgb(u32::from_be_bytes([0, value, value, value]))
 }
 
-/// The ground: the window, the thread column, the workspace panel, every tab
-/// body and every overlay screen's own fill. The darkest plane there is and the
-/// one nothing sits under — see the module docs.
+/// The window's trim: the frame the page sits in, darker than the ground by
+/// zeron's window step. The only rung under [`background`] — see the module
+/// docs.
+pub fn frame() -> Rgba {
+    grey(FRAME)
+}
+
+/// The ground: the thread column, the workspace panel, every tab body and
+/// every overlay screen's own fill. The darkest plane on the page, and the one
+/// nothing on it sits under — see the module docs.
 pub fn background() -> Rgba {
     grey(GROUND)
 }
@@ -280,11 +292,14 @@ pub fn foreground() -> Rgba {
     rgb(0xe4e4e4)
 }
 
-/// Placeholders and de-emphasised text. The reference measures its muted ink
-/// at this value, and a ladder whose ground is [`background`] has the room to
-/// spend it.
+/// Placeholders and de-emphasised text: [`foreground`] at
+/// [`glass::TEXT_SECONDARY`] rather than a grey, so it sits on any plane the
+/// way the primary does.
+///
+/// [`glass::TEXT_SECONDARY`]: crate::glass::TEXT_SECONDARY
 pub fn muted_foreground() -> Rgba {
-    rgb(0xa3a3a3)
+    // 0x99 is TEXT_SECONDARY (60%) of 0xff.
+    rgba(0xe4e4e499)
 }
 
 /// [`foreground`] at 90% — the resting label color on controls.
@@ -369,6 +384,15 @@ pub fn signal(kind: Signal) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window's trim is a rung of this ladder: as grey as every other, and
+    /// under the page's ground.
+    #[test]
+    fn the_frame_is_a_grey_under_the_ground() {
+        let frame = frame();
+        assert!(frame.r == frame.g && frame.g == frame.b);
+        assert!(frame.r < background().r);
+    }
 
     /// The two seams the reference actually measures, named here as the
     /// *measured* greys and not as whatever [`rule`] happens to return — a test

@@ -32,7 +32,7 @@ impl Luma {
         thread: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        let Some(browser) = &self.sidebar else {
+        let Some(browser) = &self.songs else {
             return;
         };
         let Some(track) = browser.find(track_id) else {
@@ -45,7 +45,7 @@ impl Luma {
             score: score.id.clone(),
         };
         if self.workspace.body(&target).is_some() {
-            self.workspace.select(&target);
+            self.workspace.set_mode(target.mode());
             cx.notify();
             return;
         }
@@ -73,7 +73,7 @@ impl Luma {
                 });
             }
         });
-        let chat = self.tab_chat(&target, thread, cx);
+        let chat = self.body_chat(&target, thread, cx);
         let state = Box::new(Editor {
             track_id: track.id.clone(),
             track_name: track_title(&track),
@@ -118,6 +118,7 @@ impl Luma {
             },
             transport: Transport::default(),
             playback_surface: None,
+            transport_readout: None,
             gesture: None,
             alpha_hover: None,
             canvas: Rc::new(Cell::new(Bounds::default())),
@@ -134,7 +135,7 @@ impl Luma {
             compositing: false,
             sheet: sheet::State::default(),
         });
-        self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
+        self.open_body(target.clone(), move || Body::TrackEditor(state), cx);
 
         cx.spawn(async move |this, cx| {
             let waveform = waveform.await;
@@ -215,7 +216,7 @@ impl Luma {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Editor),
     ) {
-        if let Some(Body::TrackEditor(editor)) = self.parked.body_mut(&mut self.workspace, target) {
+        if let Some(Body::TrackEditor(editor)) = self.venues.body_mut(&mut self.workspace, target) {
             edit(editor);
             cx.notify();
         }

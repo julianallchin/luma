@@ -33,7 +33,7 @@ function points(value) {
 function open() {
   nav.venue("Test Venue");
   nav.track("Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   until("the waveform", (s) => s.find({ role: "card", label: "Waveform" }));
   settle();
@@ -54,7 +54,7 @@ test("fade, bend and level handles write the clip fade", () => {
   expect(Math.abs(handle.bounds.x + handle.bounds.width / 2 - card.x)).toBeLessThan(2);
   app.drag(handle, { dx: card.width / 4, dy: 0 }, { steps: 6 });
   settle();
-  until("the clip graph", (s) => s.find({ role: "card", label: "Pattern graph" }));
+  until("the fade written", () => Array.isArray(fade()));
   const faded = points(fade());
   expect(faded.length).toBe(3);
   assert(close(faded[0][0], 0) && close(faded[0][1], 0), `fade start: ${JSON.stringify(faded)}`);

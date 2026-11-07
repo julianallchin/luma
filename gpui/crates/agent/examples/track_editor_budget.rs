@@ -116,7 +116,7 @@ const SCRIPT: &str = r#"
         // runtime gpui does not own — waited for by its result rather than by
         // a frame count.
         until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-        nav.program();
+        nav.agentOff();
         // A test about the editor's own geometry, so give it the whole column:
         // the stage above it would otherwise take 40% of the height.
         nav.stageOff();

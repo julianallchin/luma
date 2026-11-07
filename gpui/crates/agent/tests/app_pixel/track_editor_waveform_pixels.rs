@@ -40,7 +40,7 @@ const SCRIPT: &str = r#"
     function waveform() { return app.snapshot().find({ role: "card", label: "Waveform" }); }
     function settle() { app.frames(30, { waitMs: 60 }); }
     nav.trackEditor("Test Venue", "Aurora");
-    nav.program();
+    nav.agentOff();
     nav.stageOff();
     settle();
     for (let i = 0; i < 14; i++) {

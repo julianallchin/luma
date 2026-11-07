@@ -1,5 +1,5 @@
-//! The strip above the timeline: transport, add and export, readouts, and the
-//! beat-grid vote.
+//! The strip above the timeline: the transport, add and export, readouts,
+//! and the beat-grid vote.
 
 use super::*;
 
@@ -7,12 +7,10 @@ use super::*;
 /// cursor range.
 const EDIT_READOUTS_WIDTH: f32 = 190.;
 
-/// The way back, what is open, the transport, and whether a write is in the air.
-pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
-    let transport = app.clone();
+/// What is open, what can be added to it, and whether a write is in the air.
+pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readout>) -> Div {
     let insert = app.clone();
     let export = app.clone();
-    let playing = state.transport.playing;
     div()
         .flex()
         .flex_wrap()
@@ -23,24 +21,13 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
+        .child(readout)
         .child(
             div()
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .child(state.track_name.clone())
                 .agent_node(Role::Text, state.track_name.clone()),
-        )
-        .child(
-            luma_ui::button(
-                if playing { "Pause" } else { "Play" },
-                (state.transport.ready && state.transport.session.is_some()).into(),
-            )
-            .id("transport")
-            // One button, two labels — the label *is* the state, so a
-            // script reads what the transport is doing from the same place
-            // a person does.
-            .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
-            .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
         )
         .child(
             luma_ui::button(
@@ -61,18 +48,10 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .on_click(move |_, _, cx| export.update(cx, |app, cx| app.open_show_export(cx)))
                 .agent_node(Role::Button, "Export show"),
         )
-        .child(luma_ui::caption(format!(
-            "{} / {}",
-            clock(state.transport.position),
-            clock(state.transport.duration)
-        )))
         .child(luma_ui::caption(match state.clips.len() {
             1 => "1 pattern".to_string(),
             count => format!("{count} patterns"),
         }))
-        .when_some(state.beats.as_deref(), |el, grid| {
-            el.child(luma_ui::caption(format!("{:.1} BPM", grid.bpm)))
-        })
         .when(
             state
                 .beats
@@ -224,7 +203,7 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .when(state.follow, |el| el.child(luma_ui::caption("Follow"))),
         )
         .child(div().flex_1())
-        // Which score is on the timeline, by the handle the sidebar names it
+        // Which score is on the timeline, by the handle the song list names it
         // by.
         .child(luma_ui::caption(format!("Score #{}", state.score.ordinal)))
         // A refused write, over the timeline it was refused for.
@@ -248,6 +227,80 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .when(state.score.read_only, |el| {
             el.child(luma_ui::caption("Read only"))
         })
+}
+
+/// The transport at the strip's head: play or pause, where the song is
+/// against how long it runs, and its tempo.
+///
+/// A view of its own, because the clock has to run with the playhead and
+/// playback never notifies the application root: it repaints whenever the
+/// timeline's surface does, which is every frame the song plays and every
+/// scrub.
+pub(super) struct Readout {
+    app: WeakEntity<Luma>,
+    _surface: Subscription,
+}
+
+impl Readout {
+    pub(super) fn new(
+        app: WeakEntity<Luma>,
+        surface: &Entity<playback_surface::Surface>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            app,
+            _surface: cx.observe(surface, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for Readout {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app) = self.app.upgrade() else {
+            return div().into_any_element();
+        };
+        let Some(Body::TrackEditor(state)) = app.read(cx).workspace.active_body() else {
+            return div().into_any_element();
+        };
+        let playing = state.transport.playing;
+        let ready = state.transport.ready && state.transport.session.is_some();
+        let label = if playing { "Pause" } else { "Play" };
+        let position = format!(
+            "{} / {}",
+            clock(state.transport.position),
+            clock(state.transport.duration)
+        );
+        let transport = app.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                luma_ui::icon_button(
+                    if playing {
+                        luma_ui::icons::IconName::Pause
+                    } else {
+                        luma_ui::icons::IconName::Play
+                    },
+                    ready.into(),
+                )
+                .id("transport")
+                // One button, two labels — the label *is* the state, so a
+                // script reads what the transport is doing from the same place
+                // a person does.
+                .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
+                .agent_node(Role::Button, label),
+            )
+            .child(luma_ui::caption(position))
+            .children(
+                state
+                    .beats
+                    .as_deref()
+                    .map(|grid| luma_ui::caption(format!("{:.1} BPM", grid.bpm))),
+            )
+            .agent_node(Role::Card, "Transport")
+            .into_any_element()
+    }
 }
 
 /// `M:SS`, the same clock the browser's TIME column reads in.

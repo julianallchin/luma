@@ -13,7 +13,7 @@ const CLIP = "Wash";
 
 test("edit focus keeps the controls usable and renders both picker previews", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   until("the clip", () => peek("card", CLIP));
   app.click(peek("card", CLIP));
   until("the clip controls", () => peek("button", "Pick fixtures"));

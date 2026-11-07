@@ -9,15 +9,14 @@
 //!
 //! Scope comes from *key context*, not from a mode check inside the handler.
 //! The shell declares [`context::ROOT`] at the window root, one context per
-//! region under it, and the active tab's own context inside the workspace, so
-//! `space` can mean playback in a track-editor tab and mean nothing at all in
-//! the thread beside it.
+//! region under it, and the mode body's own context inside the workspace, so
+//! `space` can mean playback in Arrange's timeline and mean nothing at all in
+//! the agent panel beside it.
 //!
 //! Contexts **nest**: `Luma > Workspace > TrackEditor`. gpui evaluates a
 //! binding's predicate over the whole focus path and resolves by specificity,
-//! which is what makes `secondary-w` a *scoped* binding rather than a runtime
-//! branch — the tab's ⌘W wins while a tab is focused, and the window's works
-//! everywhere else.
+//! so a binding scoped to a body wins over a shell-wide one while that body
+//! has the keyboard.
 //!
 //! # Why a text field can keep the space bar
 //!
@@ -27,7 +26,7 @@
 //! belongs on the binding: every binding whose key is a character a person
 //! could be typing carries `&& !`[`context::TEXT_INPUT`], a predicate gpui
 //! evaluates over the *whole* focus path. One rule, stated once, and it is
-//! what keeps the sidebar's spacebar a space and its escape a cleared query.
+//! what keeps the song list's spacebar a space and its escape a cleared query.
 
 use gpui::{actions, Action, App, KeyBinding};
 
@@ -43,12 +42,12 @@ pub(crate) mod context {
     /// scoped here is app-wide without being global.
     pub const ROOT: &str = "Luma";
 
-    // The three regions of the shell.
-    pub const SIDEBAR: &str = "Sidebar";
+    // The shell's regions: the agent panel, the content and the song list.
     pub const THREAD: &str = "Thread";
     pub const WORKSPACE: &str = "Workspace";
+    pub const SONGS: &str = "Songs";
 
-    // Tab contexts, declared by the tab's own root *inside* `WORKSPACE`.
+    // Body contexts, declared by the body's own root *inside* `WORKSPACE`.
     pub const TRACK_EDITOR: &str = "TrackEditor";
     /// The clip graph canvas in the score inspector: it keeps the score's
     /// undo while it has the keyboard.
@@ -122,36 +121,17 @@ actions!(
         /// editor. Nothing with neither up: the shell is persistent, so there
         /// is no screen to leave.
         DismissOverlay,
-        /// Show or hide the sidebar.
-        ToggleSidebar,
-        /// Lay the window out for working through the agent: the chat beside
-        /// the stage over the timeline.
-        DirectMode,
-        /// Lay the window out for working by hand: no chat, the timeline
-        /// beside the stage over the inspector.
-        ProgramMode,
-        /// In Direct, put the selected clip's graph where the timeline is —
+        /// Show or hide the agent panel.
+        ToggleAgent,
+        /// Put a mode on screen: the room, the open score, the live show.
+        ShowRig,
+        ShowArrange,
+        ShowLive,
+        /// Open or close the song list page over Arrange.
+        ToggleSongList,
+        /// In Arrange, put the selected clip's graph where the timeline is —
         /// what a double-click on the clip does.
         OpenClipGraph,
-        /// Close the focused tab.
-        CloseTab,
-        /// Toggle the workspace's new-tab menu.
-        NewTab,
-        /// Reveal the nth tab in strip order.
-        SelectTab1,
-        SelectTab2,
-        SelectTab3,
-        SelectTab4,
-        SelectTab5,
-        SelectTab6,
-        SelectTab7,
-        SelectTab8,
-        SelectTab9,
-        /// Walk the sidebar's two levels: into the front tab's track's scores, and
-        /// back out. Scoped to the sidebar, so they mean nothing while the
-        /// keyboard is in a tab — where the same arrows are the timeline's.
-        EnterScores,
-        LeaveScores,
         /// Open settings over the whole shell.
         OpenSettings,
         /// Give the stage pane's room back to the editor under it, or take it
@@ -277,9 +257,9 @@ pub(crate) fn init(cx: &mut App) {
     // out-ranks all of it — `f` is a letter, `delete` is a correction, and
     // `secondary-c` is the clipboard the field already owns.
     let editing = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
-    // The sidebar's own arrows, and the same exclusion for the same reason:
-    // the search field is a text field, and there the arrows are the caret's.
-    let browsing = format!("{} && !{}", context::SIDEBAR, context::TEXT_INPUT);
+    // The mode keys are bare digits: shell-wide, and a field taking typed
+    // text keeps them.
+    let switching = format!("{shell} && !{}", context::TEXT_INPUT);
     // The stage builder's letters and its delete, excluded from the
     // add-element dialog's search field like every other typed character.
     let staging = format!("{} && !{}", context::STAGE, context::TEXT_INPUT);
@@ -305,17 +285,13 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("backspace", DeleteClips, Some(&editing)),
         KeyBinding::new("alt-up", MoveClipsUp, Some(&editing)),
         KeyBinding::new("alt-down", MoveClipsDown, Some(&editing)),
-        KeyBinding::new("right", EnterScores, Some(&browsing)),
-        KeyBinding::new("left", LeaveScores, Some(&browsing)),
         KeyBinding::new("escape", DismissOverlay, Some(&escape)),
         KeyBinding::new("escape", DismissOverlay, Some(&dialog)),
-        KeyBinding::new("secondary-b", ToggleSidebar, Some(&shell)),
-        // Scoped to the panel, so the window's own ⌘W still closes the window
-        // from anywhere else. gpui resolves by specificity — this is a
-        // binding, not a branch, which is what keeps "which ⌘W did I get"
-        // answerable from the focus path alone.
-        KeyBinding::new("secondary-w", CloseTab, Some(context::WORKSPACE)),
-        KeyBinding::new("secondary-t", NewTab, Some(&shell)),
+        KeyBinding::new("secondary-b", ToggleAgent, Some(&shell)),
+        KeyBinding::new("1", ShowRig, Some(&switching)),
+        KeyBinding::new("2", ShowArrange, Some(&switching)),
+        KeyBinding::new("3", ShowLive, Some(&switching)),
+        KeyBinding::new("secondary-p", ToggleSongList, Some(&shell)),
         KeyBinding::new("secondary-,", OpenSettings, Some(&shell)),
         // Not a bare letter: the track editor's alphabet is already spoken
         // for, and this reshapes the column that editor sits in.
@@ -334,15 +310,6 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("f", FocusStageSelection, Some(&staging)),
         KeyBinding::new("delete", DeleteStageElement, Some(&staging)),
         KeyBinding::new("backspace", DeleteStageElement, Some(&staging)),
-        KeyBinding::new("secondary-1", SelectTab1, Some(&shell)),
-        KeyBinding::new("secondary-2", SelectTab2, Some(&shell)),
-        KeyBinding::new("secondary-3", SelectTab3, Some(&shell)),
-        KeyBinding::new("secondary-4", SelectTab4, Some(&shell)),
-        KeyBinding::new("secondary-5", SelectTab5, Some(&shell)),
-        KeyBinding::new("secondary-6", SelectTab6, Some(&shell)),
-        KeyBinding::new("secondary-7", SelectTab7, Some(&shell)),
-        KeyBinding::new("secondary-8", SelectTab8, Some(&shell)),
-        KeyBinding::new("secondary-9", SelectTab9, Some(&shell)),
     ];
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);

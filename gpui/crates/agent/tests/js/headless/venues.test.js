@@ -1,4 +1,4 @@
-// Venue selection through the production app tree. The launch, restore and
+// Venue switching through the production app tree. The launch, restore and
 // stale-read tests stay in `tests/headless/venues.rs`: they inject read
 // delays and relaunch the app on one library.
 
@@ -12,32 +12,34 @@ const room = (id, name) => [
 ];
 fixture({ track: false, seconds: 1, sql: [...room("alpha", "Alpha Hall"), ...room("beta", "Beta Room")] });
 
-// A venue is a project: leaving it parks its whole tab set, and coming back
-// brings the set back as it was. The new-tab offer in the other room cannot
-// open a track from the room that was left.
-test("switching venues parks the venue's tabs and brings them back", () => {
-  const alphaTab = "Alpha Hall Track · #1";
+const titled = (s, label) => s.find({ role: "button", label }) !== undefined;
+
+// Each venue keeps its own mode and open score: leaving a venue parks them,
+// and coming back brings them back as they were. The song list in the other
+// venue lists that venue's songs only.
+test("each venue keeps its mode and open score across a switch", () => {
+  const alphaScore = "Alpha Hall Track · #1";
   nav.venue("Alpha Hall");
-  until("Alpha's track", (s) => s.find({ role: "row", label: "Alpha Hall Track" }) !== undefined);
   nav.track("Alpha Hall Track");
-  until("the Alpha tab", (s) => s.find({ role: "button", label: alphaTab }) !== undefined);
+  until("Alpha's score in the title bar", (s) => titled(s, alphaScore));
+  nav.mode("Rig");
 
-  nav.step("the venue switcher", "button", "Alpha Hall");
-  nav.venue("Beta Room");
-  until("Beta's track", (s) => s.find({ role: "row", label: "Beta Room Track" }) !== undefined);
-  // Beta has nothing open, and its `+` box lists Beta's songs only.
-  until("the empty panel", (s) => s.find({ role: "card", label: "Empty panel" }) !== undefined);
-  expect(app.snapshot().find({ role: "button", label: alphaTab })).toBe(undefined);
-  app.action("luma::NewTab");
-  const offer = until("the + box", (s) => s.find({ role: "card", label: "New tab" }) ? s : undefined);
-  const box = offer.find({ role: "card", label: "New tab" }).bounds;
-  const listed = offer.findAll((n) => n.role === "row" && n.bounds.y >= box.y && n.bounds.x >= box.x)
-    .map((n) => n.label);
-  expect(listed).toEqual(["Venue", "Perform", "Beta Room Track"]);
-  app.key("escape");
+  nav.switchVenue("Beta Room");
+  // Beta has nothing open: Arrange, on the song list of Beta's songs.
+  const beta = until("Beta's song list", (s) =>
+    s.find({ role: "card", label: "Song list" }) && s.find({ role: "row", label: "Beta Room Track" }) ? s : undefined);
+  expect(nav.shownMode(beta)).toBe("Arrange");
+  expect(beta.find({ role: "row", label: "Alpha Hall Track" })).toBe(undefined);
+  nav.track("Beta Room Track");
+  until("Beta's score", (s) => titled(s, "Beta Room Track · #1"));
 
-  // Parked is not closed: going back brings Alpha's tab with it.
-  nav.step("the venue switcher", "button", "Beta Room");
-  nav.venue("Alpha Hall");
-  until("the restored Alpha tab", (s) => s.find({ role: "button", label: alphaTab }) !== undefined);
+  // Parked is not closed: Alpha comes back in Rig, its score still open.
+  nav.switchVenue("Alpha Hall");
+  until("Alpha in Rig", (s) => nav.shownMode(s) === "Rig" && s.find({ role: "card", label: "Alpha Hall Venue" }));
+  nav.mode("Arrange");
+  until("Alpha's score again", (s) => titled(s, alphaScore) && s.find({ role: "card", label: "Song list" }) === undefined);
+
+  // And Beta kept its own.
+  nav.switchVenue("Beta Room");
+  until("Beta's score again", (s) => titled(s, "Beta Room Track · #1") && nav.shownMode(s) === "Arrange");
 });

@@ -58,9 +58,11 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
             "{}\n{}",
             super::support::UNTIL,
             r#"
-        until("finished", s => s.find({role: "button", label: "Up to date"}));
-        app.click(app.snapshot().find({role: "button", label: "Up to date"}));
-        until("quiet idle", s => !s.find({role: "button", label: "Up to date"}));
+        // The status bar keeps its sync item at rest, saying so, and the
+        // fault's reason goes with the fault.
+        until("finished", s => s.find({role: "button", label: "Up to date"})
+            && !s.find({role: "button", label: "Sync rejected this sign-in"})
+            && !s.find({role: "text", label: "Sync rejected this sign-in. 401 from the endpoint"}));
         true;
     "#
         ),

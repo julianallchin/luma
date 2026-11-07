@@ -31,10 +31,11 @@ test("escape drops an expression draft and keeps the selection", () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   until("the clip", (s) => s.find({ role: "card", label: "Wash" }) !== undefined);
   app.click(app.snapshot().find({ role: "card", label: "Wash" }));
+  nav.graphPage();
   until("the sheet", () => field("expression") !== undefined);
 
   escapeDraft("expression", "nowhere");

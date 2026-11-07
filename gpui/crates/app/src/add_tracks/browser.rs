@@ -91,9 +91,9 @@ impl Luma {
         let instance_id = state.instance_id;
         let venue_id = state.venue_id.clone();
         let Some(venue_generation) = self
-            .sidebar
+            .songs
             .as_ref()
-            .filter(|sidebar| sidebar.venue_id() == venue_id)
+            .filter(|songs| songs.venue_id() == venue_id)
             .map(crate::tracks::Tracks::load_generation)
         else {
             return;
@@ -110,8 +110,8 @@ impl Luma {
                 let rows = rows.await;
                 this.update(cx, |this, cx| {
                     if let Ok(rows) = rows {
-                        this.with_tracks_for_venue(&venue_id, venue_generation, cx, |sidebar| {
-                            sidebar.replace_rows(rows)
+                        this.with_tracks_for_venue(&venue_id, venue_generation, cx, |songs| {
+                            songs.replace_rows(rows)
                         });
                     }
                     // The track joined the venue, so the dialog has done its
@@ -163,7 +163,7 @@ pub(super) fn track_browser(
         );
     }
     if rows.is_empty() {
-        // Distinct from the sidebar's "No tracks imported", which is about one
+        // Distinct from the song list's "No tracks imported", which is about one
         // venue: this list is the whole library, and a driver (or a reader)
         // needs to be able to tell the two sentences apart.
         return empty_body(if state.browser_query.is_empty() {

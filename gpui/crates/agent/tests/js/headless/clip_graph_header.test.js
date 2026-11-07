@@ -8,7 +8,7 @@ fixture({ seconds: 20, clips: [clip], rig: 4, window: [1280, 680] });
 
 function open() {
   nav.trackEditor("Test Venue", "Aurora");
-  nav.program();
+  nav.agentOff();
   nav.stageOff();
   app.click(node("card", "Sparkle rain"));
   nav.graphPage();

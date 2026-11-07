@@ -1,13 +1,11 @@
-// The shell's edge regions: what ⌘B and the view mode do, and what the
-// workspace seam does.
+// The shell's agent panel: what ⌘B does, and what its seam does.
 //
 // A panel closes the first time and never comes back, because hiding it left
-// the keyboard with the tab it stopped rendering. A slide stalls part-way,
-// because a manually driven tween only advances while somebody asks for the
-// next frame. A seam drags the wrong way or by the wrong amount, because the
-// gutter arithmetic between the pointer and the card's edge is off by a gap.
+// the keyboard with the body it stopped rendering. A seam drags the wrong way
+// or by the wrong amount, because the gutter arithmetic between the pointer
+// and the panel's edge is off by a gap.
 
-// Wide enough for a 150 px drag before chat reaches its minimum.
+// Wide enough for a 150 px drag either way inside both floors.
 const WINDOW = [1600, 950];
 fixture({
   seconds: 20,
@@ -17,13 +15,10 @@ fixture({
 
 function read() {
   const shot = app.snapshot();
-  // By label: the composer is an input too.
-  const search = shot.find({ role: "input", label: "Search tracks" });
   return {
-    seam: shot.find({ role: "slider", label: "Workspace width" })?.bounds.x ?? null,
-    tab: shot.find({ role: "card", label: "Waveform" })?.bounds.width ?? null,
-    // The sidebar is on screen exactly when its search field is.
-    sidebar: search?.bounds.width ?? null,
+    seam: shot.find({ role: "slider", label: "Agent width" })?.bounds.x ?? null,
+    body: shot.find({ role: "card", label: "Waveform" })?.bounds.width ?? null,
+    agent: shot.find({ role: "card", label: "Agent" })?.bounds.width ?? null,
   };
 }
 
@@ -39,78 +34,94 @@ const toggle = (action) => {
 };
 const dialog = (s = app.snapshot()) => s.find({ role: "card", label: "Settings dialog" });
 
-test("the edge regions toggle both ways and the seam resizes the panel", () => {
+// The window controls are the title bar's whether or not the agent is shown,
+// and the page sits inset from the window's edge under it.
+function framed(toggleLabel) {
+  const shot = app.snapshot();
+  const at = (role, label) => shot.find({ role, label })?.bounds;
+  const bar = at("card", "Title bar");
+  const page = at("card", "Page");
+  for (const [role, label] of [["button", toggleLabel], ["card", "Modes"], ["button", "Test Venue"]]) {
+    const control = at(role, label);
+    assert(control && control.y >= bar.y - 1 && control.y + control.height <= bar.y + bar.height + 1
+      && control.x >= bar.x - 1 && control.x + control.width <= bar.x + bar.width + 1,
+      `${label} is not in the title bar: ${JSON.stringify({ control, bar })}`);
+  }
+  assert(page.x > 1 && page.x + page.width < WINDOW[0] - 1 && page.y >= bar.y + bar.height - 1
+    && page.y + page.height < WINDOW[1] - 1,
+    `the page is not inset from the window's edge: ${JSON.stringify({ page, bar })}`);
+}
+
+test("the agent panel toggles both ways and the seam resizes it", () => {
   open();
   const opened = read();
-  assert(opened.sidebar > 0 && opened.tab > 0, `the walk did not end with both regions open: ${JSON.stringify(opened)}`);
+  assert(opened.agent > 0 && opened.body > 0 && opened.seam !== null, `the walk did not end with the panel open: ${JSON.stringify(opened)}`);
 
-  // 1. Twice each, because a toggle that breaks the keyboard's home breaks on
-  //    the second press.
-  expect(toggle("luma::ToggleSidebar").sidebar).toBe(null);
-  const workspaceReopened = toggle("luma::ToggleSidebar");
-  expect(workspaceReopened.sidebar).toBeGreaterThan(0);
-  // 2. Program takes the chat away, seam and all, and keeps the editor;
-  //    Direct puts the seam back where it was.
-  const program = toggle("luma::ProgramMode");
-  expect(program.seam).toBe(null);
-  expect(program.tab).toBeGreaterThan(0);
-  const direct = toggle("luma::DirectMode");
-  expect(direct.seam).toBe(workspaceReopened.seam);
+  // 1. Twice, because a toggle that breaks the keyboard's home breaks on the
+  //    second press. Hidden, the panel takes its seam with it and the body
+  //    gets the room.
+  framed("Hide agent");
+  const hidden = toggle("luma::ToggleAgent");
+  expect(hidden.agent).toBe(null);
+  expect(hidden.seam).toBe(null);
+  expect(hidden.body).toBeGreaterThan(opened.body);
+  until("the agent hidden", (s) => s.find({ role: "button", label: "Show agent" }));
+  framed("Show agent");
+  const reopened = toggle("luma::ToggleAgent");
+  expect(reopened.seam).toBe(opened.seam);
+  framed("Hide agent");
 
-  // 3. The seam, dragged left, widens the panel by what the pointer moved.
-  //    Sidebar closed first, and read after it went: closing it hands its
-  //    width to both neighbours.
-  //    Right first, to make room: at rest the thread sits near its minimum.
+  // 2. The seam, dragged, moves the body's edge by what the pointer moved.
   const seamDrag = (dx) => {
     const before = read();
-    app.drag(app.snapshot().find({ role: "slider", label: "Workspace width" }), { dx, dy: 0 }, { steps: 10 });
+    app.drag(app.snapshot().find({ role: "slider", label: "Agent width" }), { dx, dy: 0 }, { steps: 10 });
     app.frames(2);
     const after = read();
-    assert(Math.abs(before.tab - after.tab - dx) <= 2,
-      `a ${dx}px seam drag did not resize the panel by what the pointer moved: ${before.tab} → ${after.tab}`);
+    assert(Math.abs(before.body - after.body - dx) <= 2,
+      `a ${dx}px seam drag did not resize the body by what the pointer moved: ${before.body} → ${after.body}`);
     return after;
   };
-  toggle("luma::ToggleSidebar");
   seamDrag(150);
-  const widened = seamDrag(-150);
+  const narrowed = seamDrag(-150);
 
-  // 3b. Dragged as far left as the window goes, the seam stops where the
-  //     thread column's minimum begins instead of following the pointer.
-  const grip = app.snapshot().find({ role: "slider", label: "Workspace width" });
-  app.drag(grip, { dx: -Math.round(grip.bounds.x) + 4, dy: 0 }, { steps: 10 });
+  // 2b. Dragged as far right as the window goes, the seam stops where the
+  //     body's minimum begins instead of following the pointer.
+  const grip = app.snapshot().find({ role: "slider", label: "Agent width" });
+  app.drag(grip, { dx: WINDOW[0] - Math.round(grip.bounds.x) - 4, dy: 0 }, { steps: 10 });
   app.frames(2);
   const maxed = read();
-  assert(maxed.seam > 100 && maxed.seam < widened.seam,
-    `the seam did not stop at the thread's minimum: ${widened.seam} → ${maxed.seam}`);
-  app.action("luma::ToggleSidebar");
-  until("the sidebar after the clamped drag", (s) => s.find({ role: "input", label: "Search tracks" })?.bounds.width > 0);
+  assert(maxed.seam > narrowed.seam && maxed.seam < WINDOW[0] - 100,
+    `the seam did not stop at the body's minimum: ${narrowed.seam} → ${maxed.seam}`);
 
-  // 4. Double-clicking the seam puts the panel back at its default width,
-  //    compared in the same arrangement.
-  app.click(app.snapshot().find({ role: "slider", label: "Workspace width" }), { count: 2 });
+  // 3. Double-clicking the seam puts the panel back at its default width.
+  app.click(app.snapshot().find({ role: "slider", label: "Agent width" }), { count: 2 });
   app.frames(2);
-  assert(Math.abs(read().tab - workspaceReopened.tab) <= 2, "double-clicking the seam did not restore the default width");
+  assert(Math.abs(read().body - opened.body) <= 2, "double-clicking the seam did not restore the default width");
 
-  // 5. An overlay owns its pointer plane: pressing the covered sidebar
+  // 4. An overlay owns its pointer plane: pressing the covered agent
   //    toggle's coordinates lands on the scrim, which dismisses the dialog
   //    and toggles nothing.
-  app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
   app.action("luma::OpenSettings");
   const shown = dialog(until("the settings dialog", dialog)).bounds;
   assert(shown.x >= 0 && shown.x + shown.width <= WINDOW[0] && shown.y + shown.height <= WINDOW[1],
     `the dialog does not fit its window: ${JSON.stringify(shown)}`);
-  app.click(app.snapshot().find({ role: "button", label: "sidebar-toggle" }));
+  app.click(app.snapshot().find({ role: "button", label: "Hide agent" }));
   app.frames(2);
-  expect(read().sidebar).toBeGreaterThan(0);
+  expect(read().agent).toBeGreaterThan(0);
   expect(dialog()).toBe(undefined);
 
   // The same modal boundary applies to key bindings, and the trap holds
   // both ways; escape restores the search field that opened it.
+  nav.songs();
+  app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
   app.action("luma::OpenSettings");
   until("the reopened settings dialog", dialog);
+  // The song list has stood the panel aside; under the overlay ⌘B must not
+  // bring it back either.
+  const covered = read().agent;
   app.key("secondary-b");
   app.frames(2);
-  assert(read().sidebar > 0, "the overlay let a shell shortcut close the covered sidebar");
+  assert(read().agent === covered, "the overlay let a shell shortcut toggle the covered panel");
   app.key("tab");
   app.frames(2);
   assert(dialog()?.focused === true, "Tab escaped the modal focus plane");
@@ -140,52 +151,4 @@ test("a compact window clamps the settings dialog below the titlebar", { fixture
   const lights = ["close", "minimize", "maximize"].map((label) => shot.find({ role: "button", label }));
   assert(lights.every((node) => node === undefined) || lights.every((node) => node !== undefined && node.bounds.width > 0),
     "some painted lights lost their hit target above the compact modal");
-});
-
-// ⌘B takes its width from the thread and the panel in the ratio they were
-// already at: the split is stored as a proportion. Motion is on for the
-// frames in between: a derived width that tweened toward its own moving
-// target would trail the sidebar and then snap.
-test("toggling the sidebar keeps the thread and panel at the same ratio", { fixture: { window: [1600, 800], motion: true } }, () => {
-  const width = 1600;
-  // Where the pair begins: past the sidebar's live edge, or at the window's
-  // edge while the sidebar is away.
-  const sidebarEdge = (shot) => {
-    const sidebar = shot.find({ role: "card", label: "Sidebar" });
-    return sidebar === undefined || sidebar.bounds.width <= 0 ? 0 : sidebar.bounds.x + sidebar.bounds.width + 1;
-  };
-  const share = (shot = app.snapshot()) => {
-    const seam = shot.find({ role: "slider", label: "Workspace width" });
-    if (seam === undefined) return null;
-    const thread = seam.bounds.x - sidebarEdge(shot);
-    const panel = width - seam.bounds.x - 1;
-    return thread <= 0 || panel <= 0 ? null : panel / (thread + panel);
-  };
-  const slide = () => {
-    app.action("luma::ToggleSidebar");
-    const seen = [];
-    for (let i = 0; i < 14; i++) {
-      app.frames(1, { waitMs: 12 });
-      const now = share();
-      if (now !== null) seen.push(now);
-    }
-    return seen;
-  };
-  open();
-  app.frames(8, { waitMs: 40 });
-  const rest = share();
-  expect(typeof rest).toBe("number");
-  const closing = slide();
-  const closed = share();
-  const opening = slide();
-  const reopened = share();
-  for (const [state, value] of Object.entries({ closed, reopened })) {
-    assert(Math.abs(value - rest) < 0.01, `the split moved when the sidebar did: ${rest} then ${value} (${state})`);
-  }
-  // …and it never wandered on the way.
-  for (const [phase, frames] of Object.entries({ closing, opening })) {
-    assert(frames.length >= 4, `too few ${phase} frames: ${frames}`);
-    frames.forEach((value, i) =>
-      assert(Math.abs(value - rest) < 0.02, `the split wandered on frame ${i} of ${phase}: wanted ${rest}, got ${value}`));
-  }
 });
