@@ -131,6 +131,10 @@ pub struct Luma {
     pub(crate) song_list_close: Option<gpui::Task<()>>,
     /// Whether the agent panel is put away by hand.
     pub(crate) agent_hidden: bool,
+    /// Whether the agent panel was asked for over the song list, which
+    /// otherwise puts it away for the list's width — see
+    /// [`Luma::agent_wanted`]. Reset each time the list opens.
+    pub(crate) agent_over_songs: bool,
     /// The window's parts drawn as views of their own, so the stage's frames
     /// rebuild only the stage — see [`shell::Region`].
     pub(crate) regions: shell::Regions,
@@ -148,6 +152,9 @@ pub struct Luma {
     /// [`saved_venues`].
     pub(crate) saved_venues: saved_venues::SavedVenues,
     pub(crate) saved_cameras: saved_cameras::SavedCameras,
+    /// Live's deck panel width as last dragged on this device; `None` is the
+    /// default — see [`shell::DeckWidth`].
+    pub(crate) deck_width: shell::DeckWidth,
     /// The title bar's venue menu while it is open or leaving — see
     /// [`welcome::VenueMenu`].
     pub(crate) venue_menu: luma_ui::dialog::Popup<welcome::VenueMenu>,
@@ -271,6 +278,7 @@ impl Luma {
             song_list: false,
             song_list_close: None,
             agent_hidden: false,
+            agent_over_songs: false,
             regions: shell::Regions::default(),
             // The first shell frame resolves the width without animation;
             // later visibility changes use the shared spring.
@@ -279,6 +287,7 @@ impl Luma {
             venues: workspace::Venues::default(),
             saved_venues: saved_venues::SavedVenues::default(),
             saved_cameras: saved_cameras::empty(),
+            deck_width: session_store::Stored::new(shell::DECK_WIDTH_KEY),
             venue_menu: luma_ui::dialog::Popup::default(),
             shell_presented: false,
             restoring_venue: false,
@@ -383,9 +392,24 @@ impl Luma {
         .detach();
     }
 
-    /// Show or hide the agent panel, by its toggle or ⌘B.
+    /// Whether the agent panel should be up: not put away by hand, and not
+    /// stood aside for the song list unless asked for over it.
+    pub(crate) fn agent_wanted(&self) -> bool {
+        !self.agent_hidden && (!self.song_list_shown() || self.agent_over_songs)
+    }
+
+    /// Show or hide the agent panel, by its toggle or ⌘B. Over the song list
+    /// the gesture is about the list's moment only: hiding there does not
+    /// put the panel away for when the list closes.
     pub(crate) fn toggle_agent(&mut self) {
-        self.agent_hidden = !self.agent_hidden;
+        if !self.song_list_shown() {
+            self.agent_hidden = !self.agent_hidden;
+        } else if self.agent_wanted() {
+            self.agent_over_songs = false;
+        } else {
+            self.agent_hidden = false;
+            self.agent_over_songs = true;
+        }
     }
 }
 

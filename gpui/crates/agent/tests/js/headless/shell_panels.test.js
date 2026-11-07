@@ -94,9 +94,12 @@ test("the agent panel toggles both ways and the seam resizes it", () => {
   app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
   app.action("luma::OpenSettings");
   until("the reopened settings dialog", dialog);
+  // The song list has stood the panel aside; under the overlay ⌘B must not
+  // bring it back either.
+  const covered = read().agent;
   app.key("secondary-b");
   app.frames(2);
-  assert(read().agent > 0, "the overlay let a shell shortcut close the covered panel");
+  assert(read().agent === covered, "the overlay let a shell shortcut toggle the covered panel");
   app.key("tab");
   app.frames(2);
   assert(dialog()?.focused === true, "Tab escaped the modal focus plane");

@@ -112,3 +112,57 @@ test("hiding the agent panel moves the window's corner controls into the title b
   app.action("luma::ToggleAgent");
   until("the agent panel back", (s) => box(s, "card", "Agent") && box(s, "button", "Hide agent"));
 });
+
+test("the song list takes the agent panel's room and gives it back", () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  const agent = (s) => box(s, "card", "Agent") !== undefined;
+  until("the agent beside the score", (s) => agent(s) && box(s, "button", "Hide agent"));
+
+  // Opening the list puts the panel away; closing it brings it back.
+  app.action("luma::ToggleSongList");
+  const listed = until("the song list, full width", (s) => songList(s) && !agent(s) ? s : undefined);
+  const list = box(listed, "card", "Song list");
+  assert(list.x <= 1, `the song list does not start at the window's edge: ${JSON.stringify(list)}`);
+  app.action("luma::ToggleSongList");
+  until("the agent back", (s) => !songList(s) && agent(s));
+
+  // A panel put away by hand stays away when the list closes.
+  app.action("luma::ToggleAgent");
+  until("the agent hidden", (s) => !agent(s));
+  app.action("luma::ToggleSongList");
+  until("the song list", (s) => songList(s));
+  app.action("luma::ToggleSongList");
+  until("the score again", (s) => !songList(s) && box(s, "card", "Waveform"));
+  app.frames(4);
+  assert(!agent(app.snapshot()), "closing the song list brought back a panel hidden by hand");
+});
+
+test("Live's deck panel sits beside the stage and keeps its dragged width", () => {
+  nav.venue("Test Venue");
+  nav.live();
+  const shot = until("the deck panel", (s) =>
+    box(s, "card", "Deck panel") && box(s, "slider", "Deck panel width") ? s : undefined);
+  const panel = box(shot, "card", "Deck panel");
+  const stage = box(shot, "card", "Stage");
+  // Beside the stage, as tall as it.
+  assert(panel.x + panel.width <= stage.x + 1, `the panel is not left of the stage: ${JSON.stringify({ panel, stage })}`);
+  assert(Math.abs(panel.y - stage.y) <= 1 && Math.abs(panel.height - stage.height) <= 2,
+    `the panel does not run the stage's height: ${JSON.stringify({ panel, stage })}`);
+  // The old strip's contents moved: the tapped tempo is in the panel.
+  const tempoOf = (s) => s.findAll({ role: "card" }).find((n) => n.label.startsWith("Tapped tempo"));
+  const t = tempoOf(until("the tapped tempo", (s) => (tempoOf(s) ? s : undefined))).bounds;
+  assert(t.x >= panel.x && t.x + t.width <= panel.x + panel.width + 1,
+    `the tapped tempo is not in the deck panel: ${JSON.stringify({ t, panel })}`);
+
+  const grip = box(shot, "slider", "Deck panel width");
+  app.drag({ x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 }, { dx: 80, dy: 0 }, { steps: 8 });
+  const wider = until("the wider panel", (s) => box(s, "card", "Deck panel").width > panel.width + 40 ? s : undefined);
+  const width = box(wider, "card", "Deck panel").width;
+  expect(box(wider, "card", "Stage").width).toBeLessThan(stage.width);
+
+  // Leaving Live and coming back keeps the width.
+  nav.mode("Arrange");
+  nav.live();
+  const back = until("the panel again", (s) => box(s, "card", "Deck panel"));
+  expect(Math.abs(box(back, "card", "Deck panel").width - width)).toBeLessThan(1);
+});

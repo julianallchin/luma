@@ -645,3 +645,44 @@ fn each_venue_keeps_its_mode_and_score_across_a_relaunch() {
     assert_eq!(out["rig"], true);
     assert_eq!(out["score"], true);
 }
+
+/// Live's deck panel keeps the width it was dragged to across a relaunch.
+#[test]
+fn the_deck_panel_width_survives_a_relaunch() {
+    let dir = fixture_dir("decks", &[("alpha", "Alpha Hall")], None, true);
+    let mut first = harness(&dir, luma_app::NavigationFixture::default());
+    let dragged = exec(
+        &mut first,
+        r#"
+        nav.venue("Alpha Hall");
+        nav.live();
+        const panel = (s) => s.find({ role: "card", label: "Deck panel" })?.bounds;
+        const shot = until("the deck panel", (s) =>
+            panel(s) && s.find({ role: "slider", label: "Deck panel width" }) ? s : undefined);
+        const before = panel(shot).width;
+        const grip = shot.find({ role: "slider", label: "Deck panel width" }).bounds;
+        app.drag({ x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 }, { dx: 90, dy: 0 }, { steps: 8 });
+        const after = until("the wider panel", (s) => panel(s).width > before + 40 ? s : undefined);
+        // Long enough for the debounced save to land.
+        app.frames(30, { waitMs: 50 });
+        panel(after).width
+        "#,
+    );
+    drop(first);
+
+    let mut second = harness(&dir, luma_app::NavigationFixture::default());
+    let restored = exec(
+        &mut second,
+        r#"
+        until("Alpha, restored", (s) => s.find({ role: "button", label: "Alpha Hall" })?.bounds.y < 44);
+        nav.live();
+        const panel = (s) => s.find({ role: "card", label: "Deck panel" })?.bounds;
+        panel(until("the deck panel", (s) => panel(s) ? s : undefined)).width
+        "#,
+    );
+    let (dragged, restored) = (dragged.as_f64().unwrap(), restored.as_f64().unwrap());
+    assert!(
+        (dragged - restored).abs() < 1.0,
+        "dragged to {dragged}, relaunched at {restored}"
+    );
+}

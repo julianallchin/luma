@@ -280,6 +280,11 @@ impl Luma {
         } else {
             self.song_list = !self.song_list_shown();
         }
+        // The list takes the window's width: the agent panel stands aside
+        // until it closes (`agent_wanted`).
+        if self.song_list {
+            self.agent_over_songs = false;
+        }
         self.song_list_close = None;
         cx.notify();
     }
@@ -691,7 +696,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // scrim would move the regions behind a modal that is meant to own the
     // window. See [`crate::chrome`] for the anchor rule.
     row = row
-        .child(chrome::agent_toggle(&entity, !app.agent_hidden, lights))
+        .child(chrome::agent_toggle(&entity, app.agent_wanted(), lights))
         .child(chrome::mode_switch(app, &entity, cx));
 
     // Reap a dismissed dialog once its out-animation has played, and keep
@@ -902,7 +907,30 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
                 .flex_none(),
         )
     });
+    // What Live follows — the decks, or the tapped tempo — sits beside the
+    // stage, in Live only, at the width last dragged.
+    let decks = match app.workspace.active_body() {
+        Some(Body::Perform(state)) if app.workspace.mode() == Mode::Live => {
+            let width = app.deck_panel_width(content_width(app, window));
+            Some((width, crate::perform::deck_panel(state, &cx.entity())))
+        }
+        _ => None,
+    };
     let stage = stage_region(app, cx);
+    let mut band = div()
+        .h(px(stage_height))
+        .flex_none()
+        .flex()
+        .relative()
+        .overflow_hidden()
+        .on_drag_move(cx.listener(Luma::drag_deck_seam));
+    if let Some((width, panel)) = decks {
+        band = band
+            .child(div().w(px(width)).h_full().flex_none().child(panel))
+            .child(seam())
+            .child(deck_grip(width + SEAM_WIDTH / 2.0, cx));
+    }
+    let band = band.child(stage_slot(stage)).children(environment);
     div()
         .flex_1()
         .min_h_0()
@@ -910,15 +938,7 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
         .flex_col()
         // The grip below is placed against this column's own top edge.
         .relative()
-        .child(
-            div()
-                .h(px(stage_height))
-                .flex_none()
-                .flex()
-                .overflow_hidden()
-                .child(stage_slot(stage))
-                .children(environment),
-        )
+        .child(band)
         .child(hairline())
         .child(body_region(app, cx))
         .child(grip)
@@ -1100,7 +1120,7 @@ impl Luma {
     /// Whether the agent panel is on screen: not put away by hand, and a
     /// window wide enough to seat it beside a usable content column.
     fn agent_shown(&self, viewport: f32) -> bool {
-        !self.agent_hidden && viewport - SEAM_WIDTH >= AGENT_MIN + CONTENT_MIN
+        self.agent_wanted() && viewport - SEAM_WIDTH >= AGENT_MIN + CONTENT_MIN
     }
 
     /// Track the pointer while the agent seam is dragged. A drag is already
@@ -1114,6 +1134,78 @@ impl Luma {
         let room = f32::from(window.viewport_size().width) - SEAM_WIDTH;
         self.agent_split
             .drag_to(f32::from(event.event.position.x), room);
+        cx.notify();
+    }
+}
+
+/// The session item Live's deck panel width is kept under.
+pub(crate) const DECK_WIDTH_KEY: &str = "deck-panel-width";
+/// Live's deck panel width as stored: `None` until first dragged.
+pub(crate) type DeckWidth = crate::session_store::Stored<Option<f32>>;
+/// The deck panel's width before it is ever dragged, and its floor and
+/// ceiling. The stage keeps at least [`DECK_STAGE_MIN`] beside it.
+const DECK_DEFAULT: f32 = 320.0;
+const DECK_MIN: f32 = 240.0;
+const DECK_MAX: f32 = 560.0;
+const DECK_STAGE_MIN: f32 = 320.0;
+
+/// How wide the content column is: the window less the agent panel and its
+/// seam when the panel is up.
+fn content_width(app: &Luma, window: &Window) -> f32 {
+    let viewport = f32::from(window.viewport_size().width);
+    if app.agent_shown(viewport) {
+        viewport - app.agent_open_width(viewport) - SEAM_WIDTH
+    } else {
+        viewport
+    }
+}
+
+/// The grip on the deck panel's seam, centred on the rule at `at` inside the
+/// stage band. Double-click restores the default width.
+fn deck_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
+    pane::resize_handle(
+        "deck-seam",
+        pane::Seam::Vertical,
+        at,
+        || DeckResize,
+        |app: &mut Luma, cx| app.store_session(|this| &mut this.deck_width, None, cx),
+        glass::glass_hover(),
+        cx,
+    )
+    .agent_node(Role::Slider, "Deck panel width")
+}
+
+/// The deck panel's seam, under the pointer — routed by type like
+/// [`AgentResize`].
+struct DeckResize;
+
+impl Luma {
+    /// The deck panel's width in a content column `room` wide: as stored,
+    /// within its bounds, and never so wide the stage loses its floor.
+    fn deck_panel_width(&self, room: f32) -> f32 {
+        let wanted = self.deck_width.value().unwrap_or(DECK_DEFAULT);
+        let ceiling = (room - SEAM_WIDTH - DECK_STAGE_MIN)
+            .min(DECK_MAX)
+            .max(DECK_MIN);
+        wanted.clamp(DECK_MIN, ceiling)
+    }
+
+    /// Follow the pointer while the deck seam is dragged, and keep the width
+    /// for this device. The listener sits on the stage band, so its left
+    /// edge is the panel's.
+    fn drag_deck_seam(
+        &mut self,
+        event: &DragMoveEvent<DeckResize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let width = f32::from(event.event.position.x - event.bounds.left());
+        let room = f32::from(event.bounds.size.width);
+        let ceiling = (room - SEAM_WIDTH - DECK_STAGE_MIN)
+            .min(DECK_MAX)
+            .max(DECK_MIN);
+        let width = width.clamp(DECK_MIN, ceiling).round();
+        self.store_session(|this| &mut this.deck_width, Some(width), cx);
         cx.notify();
     }
 }

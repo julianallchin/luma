@@ -1347,11 +1347,7 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .px(px(18.))
         .pb(px(16.))
         .children(state.error.clone().map(float::error_row))
-        .child(if setup {
-            source_bar(state, &target, app).into_any_element()
-        } else {
-            decks(state, &target, app).into_any_element()
-        })
+        .children(setup.then(|| source_bar(state, &target, app)))
         .child(grid::surface(state, &target, app));
     div()
         .id("perform")
@@ -1370,17 +1366,18 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// What is followed, and the way into the layout's editing and back out.
+/// The way into the layout's editing and back out.
 ///
 /// The grid is played by default; "Edit layout" turns the same grid into the
-/// one to arrange — the Setup view — and "Done" turns it back.
+/// one to arrange — the Setup view — and "Done" turns it back. What is
+/// followed is the title bar's and the deck panel's to say, not this row's.
 fn header(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
     let follow = state.follow.as_ref();
     let setup = state.surface.view == View::Setup;
     let (status, problem) = match follow.and_then(|follow| follow.problem.clone()) {
         Some(problem) => (problem, true),
         None if setup => ("Changes save as you go".to_owned(), false),
-        None => (following(state), false),
+        None => (String::new(), false),
     };
     let (label, next) = if setup {
         ("Done", View::Perform)
@@ -1577,6 +1574,33 @@ fn status_line(follow: Option<&PerformState>, inputs: Option<&InputState>) -> im
         .text_color(ladder::foreground_alpha(0.5))
         .child(line.clone())
         .agent_node(Role::Text, line)
+}
+
+/// Live's deck panel, beside the stage: each deck followed, or the tapped
+/// tempo when there is none. What is followed is the title bar's line.
+pub(crate) fn deck_panel(state: &Perform, app: &Entity<Luma>) -> AnyElement {
+    let target = Target::Perform {
+        venue: state.venue_id.clone(),
+    };
+    div()
+        .id("perform-decks")
+        .size_full()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .p(px(12.))
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(glass::ink(glass::TEXT_SECONDARY))
+                .child("Decks")
+                .agent_node(Role::Text, "Decks"),
+        )
+        .child(decks(state, &target, app))
+        .agent_node(Role::Card, "Deck panel")
+        .into_any_element()
 }
 
 fn decks(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoElement {

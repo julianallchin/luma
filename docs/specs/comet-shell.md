@@ -15,7 +15,7 @@ everything:
 
 ```text
 ┌────────────┬──────────────────────────────────────────────────────┐
-│ ◧        ↶+│ Venue ▾         Aurora #1 ▾        [Rig 1|Arrange 2|Live 3] │
+│ ◧        ↶+│ ▭ Venue ▾        Aurora #1 ▾         [Rig|Arrange|Live] │
 │            ├──────────────────────────────────────────────────────┤
 │  agent     │  stage (the venue lit by the mode's body)            │
 │  panel     ├──────────────────────────────────────────────────────┤
@@ -34,9 +34,9 @@ another mode is up, and each venue keeps its modes while another venue is up.
 
 | Region | What it is | Code |
 |---|---|---|
-| Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it | `shell::agent_panel`, `agent_split` |
+| Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it; stands aside while the song list is up | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
 | Title bar | 44 high: venue menu, the mode's subject, the mode switch | `shell::title_bar`, `chrome` |
-| Stage | the venue, lit by the mode's body; collapsible, height-resizable | `shell::stage_body` |
+| Stage | the venue, lit by the mode's body; collapsible, height-resizable. In Live a deck panel sits at its left, drag-resizable, its width kept per device (`deck-panel-width`) | `shell::stage_body`, `perform::deck_panel` |
 | Body | the mode's body, or the song list in Arrange | `shell::content` |
 | Status bar | 24 high, cached; sync, DMX output, import, update, account failure, and the mode's context line | `status_bar` |
 
@@ -78,7 +78,10 @@ Today's track browser as a page over Arrange: search, Mine/All, folders, add
 and import. A row expands in place to its scores in this venue and "New
 score"; choosing a score opens it and closes the page a double-click interval
 later (so a double-click on a score's name renames it instead). The title
-bar's song title opens and closes the page; Escape closes it.
+bar's song title opens and closes the page; Escape closes it. The list takes
+the window's width: the agent panel stands aside while it is up and comes
+back when it closes, unless it had been hidden by hand; ⌘B over the list
+shows it for that visit only.
 
 ## 5. Surfaces
 
@@ -98,17 +101,20 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 
 ## 6. Chrome
 
-- **Venue menu** (title bar, leading): the venues with their status dots and a
+- **Venue menu** (title bar, leading): a muted stage glyph, the venue's name and a chevron. The menu holds the venues with their status dots and a
   "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
   Sign out / Sign in. The venue dialog is still what a window with no venue
   shows (browse, create, join).
 - **Subject** (title bar, centre): in Arrange the song title, which opens the
   song list; in Live the follow line.
-- **Mode switch** (title bar, trailing): Rig / Arrange / Live with their keys.
-- **Arrange** keeps today's timeline. Play, position and tempo sit in the
-  audio lane's header over the waveform; export stays on the strip above the
-  timeline. A double-click on a clip opens its graph where the timeline was.
-- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button.
+- **Mode switch** (title bar, trailing): Rig / Arrange / Live. The keys 1 / 2 / 3 are named in each cell's tooltip, not drawn.
+- **Arrange** keeps today's timeline and the strip above it (add, export,
+  readouts). There is no transport control on screen: Space (`PlayPause`)
+  plays and pauses, the ruler scrubs, and the playhead is the readout. A
+  double-click on a clip opens its graph where the timeline was.
+- **Live**'s Perform/Setup toggle is an "Edit layout" / "Done" button. The
+  decks followed (or the tapped tempo) sit in the deck panel beside the
+  stage; what is followed is the title bar's line, said once.
 - **Settings** is zeron's settings page inside the dialog: a nav, then a 640
   column with a title and description over sections of 52-high rows, each
   control at its row's end in a 240 slot.
