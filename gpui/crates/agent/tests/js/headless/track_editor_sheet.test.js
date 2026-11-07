@@ -1,19 +1,16 @@
-// The clip sheet, driven end to end.
+// The clip sheet on the graph page, driven end to end.
 //
-// 1. Selecting a clip brings the sheet in; with nothing selected the
-//    inspector shows the preset browser. The sheet reads the clip's blend
-//    mode and graph, and not its span: bounds are edited on the timeline.
+// 1. The selection's sheet reads the clip's blend mode and graph, and not its
+//    span: bounds are edited on the timeline.
 // 2. Every input is reachable: every row of the output card is inside the
 //    sheet's own box.
-// 3. A scalar input edit is a document write: it survives leaving the screen
+// 3. A scalar input edit is a document write: it survives leaving the score
 //    and coming back, which a repaint would not.
-// 4. A multi-selection of one graph shape batch-applies: the edit lands on
+// 4. Each clip's sheet is its own.
+// 5. A multi-selection of one graph shape batch-applies: the edit lands on
 //    the clip that was not under the field.
-// 5. Retarget, not reopen: clicking a second clip while the sheet is up
-//    leaves the sheet's box where it was and swaps its contents, and the
-//    timeline stays live underneath.
-// 6. A mixed selection offers only the name, and clearing the selection
-//    brings the preset browser back. The timeline keeps its space throughout.
+// 6. A mixed selection offers only the name, and Escape leaves the page with
+//    the selection kept.
 
 // Two Wash clips and one Random heads. The Random heads sits early on its own
 // lane: the sheet overlays the right of the canvas, and a clip the test has
@@ -78,16 +75,27 @@ function retype(name, digits) {
   app.frames(8, { waitMs: 80 });
 }
 
-test("the sheet arrives, writes, batches, retargets and leaves", () => {
+// Show the selection's sheet on the graph page.
+function sheetPage() {
+  nav.graphPage();
+}
+
+// Back from the graph page to the timeline, the selection kept.
+function timeline() {
+  app.click(app.snapshot().find({ role: "button", label: "Back to timeline" }));
+  until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+}
+
+test("the sheet arrives, writes, batches and narrows to what a selection shares", () => {
   nav.venue("Test Venue");
   app.frames(8);
   open();
-  const empty = readSheet();
-  expect(empty.sheet).toBe(null);
-  expect(app.snapshot().find({ role: "card", label: "Presets" }) !== undefined).toBe(true);
+  expect(readSheet().sheet).toBe(null);
 
-  // 1. Select the first clip and wait for the schema round trip.
+  // 1. Select the first clip, open its sheet, and wait for the schema round
+  //    trip.
   app.click(clip(FORM, 0));
+  sheetPage();
   untilInput(BRIGHTNESS);
   app.frames(12, { waitMs: 30 });
   const populated = readSheet();
@@ -110,56 +118,49 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
   retype(BRIGHTNESS, next);
   const edited = readSheet();
   expect(edited.inputs[BRIGHTNESS]).toBe(next);
+  timeline();
   nav.reopen("Aurora");
   app.frames(6);
   open();
   app.click(clip(FORM, 0));
+  sheetPage();
   untilInput(BRIGHTNESS);
   app.frames(12, { waitMs: 30 });
-  const reopened = readSheet();
-  expect(reopened.inputs[BRIGHTNESS]).toBe(next);
+  expect(readSheet().inputs[BRIGHTNESS]).toBe(next);
 
-  // 4. Retarget in place: the same box, a different subject.
+  // 4. Each clip has its own sheet: the second Wash still reads its own value.
+  timeline();
   app.click(clip(FORM, 1));
-  app.frames(6, { waitMs: 30 });
-  const retargeted = readSheet();
-  expect(retargeted.sheet).toEqual(reopened.sheet);
-  expect(retargeted.inputs[BRIGHTNESS]).toBe(initial);
-
-  // 5. The timeline is live under an open sheet: a press on the waveform
-  //    band clears the selection.
-  app.click(waveform());
-  untilGone();
-  const throughClick = readSheet();
-
-  // 6. Batch: select both clips of one shape, edit, then read the other one.
-  app.click(clip(FORM, 0));
+  sheetPage();
   untilInput(BRIGHTNESS);
+  expect(readSheet().inputs[BRIGHTNESS]).toBe(initial);
+
+  // 5. Batch: select both clips of one shape, edit, then read the other one.
+  timeline();
+  app.click(clip(FORM, 0));
   app.click(clip(FORM, 1), { modifiers: ["shift"] });
+  until("the batch selected", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 selected"));
+  sheetPage();
   until("the batch count", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 patterns"));
   untilInput(BRIGHTNESS);
   const batch = String(Number(next) - 10);
   retype(BRIGHTNESS, batch);
+  timeline();
   app.click(waveform());
-  untilGone();
   app.click(clip(FORM, 1));
+  sheetPage();
   untilInput(BRIGHTNESS);
   expect(readSheet().inputs[BRIGHTNESS]).toBe(batch);
 
-  // 7. Mixed: two graph shapes offer only the name. Escape clears it.
+  // 6. Mixed: two graph shapes offer only the name.
+  timeline();
   app.click(clip("Random heads", 0), { modifiers: ["shift"] });
-  until("the mixed readout", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 patterns") && !s.find({ role: "row", label: "Blend" }));
-  const mixed = readSheet();
-  expect(app.snapshot().find({ role: "input", label: "Name" }) !== undefined).toBe(true);
-  expect(mixed.inputs[BRIGHTNESS]).toBe(undefined);
+  until("the mixed selection", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 selected"));
+  sheetPage();
+  until("the mixed readout", (s) => s.find({ role: "input", label: "Name" }) && !s.find({ role: "row", label: "Blend" }));
+  expect(readSheet().inputs[BRIGHTNESS]).toBe(undefined);
+  // Escape leaves the page and keeps the selection.
   app.key("escape");
   untilGone();
-  const cleared = readSheet();
-  expect(app.snapshot().find({ role: "card", label: "Presets" }) !== undefined).toBe(true);
-
-  // The inspector stays open whatever is selected (the preset browser when
-  // nothing is), so the timeline keeps its space through every state.
-  for (const state of [populated, edited, retargeted, mixed, throughClick, cleared]) {
-    expect(state.waveform).toEqual(empty.waveform);
-  }
+  until("the selection kept", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 selected"));
 });

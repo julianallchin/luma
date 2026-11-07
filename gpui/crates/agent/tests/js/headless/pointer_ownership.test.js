@@ -3,7 +3,7 @@
 // A seam grip is wider than the rule it pulls, so it overhangs the panes
 // either side. gpui hit-tests in paint order and reports every hitbox under
 // the pointer, so the surface underneath used to take the same press:
-// dragging the workspace seam seeked the transport, because the timeline's
+// dragging the agent panel's seam seeked the transport, because the timeline's
 // ruler was under the overhang. The grip blocks the mouse for what is painted
 // behind it, and is mounted after both panes so "behind it" means both.
 //
@@ -12,15 +12,15 @@
 
 fixture({ seconds: 20, clips: [{ pattern: "pattern-strobe", name: "Strobe", start: 2, end: 6 }] });
 
-// Where the seam is, how wide the tab body is, and where the playhead sits
+// Where the seam is, how wide the body is, and where the playhead sits
 // in the editor. The playhead is the witness for a leaked press: the ruler
 // seeks the transport, and it runs under the strip the grip overhangs.
 function read() {
   const shot = app.snapshot();
   const waveform = shot.find({ role: "card", label: "Waveform" });
   return {
-    seam: shot.find({ role: "slider", label: "Workspace width" }).bounds.x,
-    tab: waveform.bounds.width,
+    seam: shot.find({ role: "slider", label: "Agent width" }).bounds.x,
+    body: waveform.bounds.width,
     playhead: shot.find({ role: "slider", label: "Playhead" }).bounds.x - waveform.bounds.x,
   };
 }
@@ -45,15 +45,15 @@ test("a seam drag moves the seam and nothing under it", () => {
   app.frames(2);
   const before = read();
   // The grip's trailing pixel: the strip that overhangs the panel.
-  const grip = app.snapshot().find({ role: "slider", label: "Workspace width" }).bounds;
-  // Rightward: at the default size the thread already sits at its minimum
-  // width, so the panel has room to give and none to take.
+  const grip = app.snapshot().find({ role: "slider", label: "Agent width" }).bounds;
+  // Rightward: at the default size the panel already sits at its minimum
+  // width, so the body has room to give and none to take.
   app.drag(atRuler(grip.x + grip.width - 1), { dx: 120, dy: 0 }, { steps: 10 });
   app.frames(2);
   const after = read();
   const travelled = after.seam - before.seam;
   assert(travelled >= 100 && travelled <= 125, `the seam did not follow the pointer 120px right: ${before.seam} → ${after.seam}`);
-  expect(after.tab).toBeLessThan(before.tab - 100);
+  expect(after.body).toBeLessThan(before.body - 100);
   // The point of the test: the press did not reach the ruler under the grip.
   assert(after.playhead === before.playhead, "dragging the seam seeked the transport — the grip shares its press");
 });

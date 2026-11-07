@@ -65,13 +65,13 @@ const key = PATTERN.replaceAll("-", "");
 
 function open() {
   nav.venue("Test Venue");
-  nav.step("the Perform row", "row", "Perform");
+  nav.live();
   return until("the pad", (s) => (pad(s) ? s : undefined));
 }
 
 function setup() {
   open();
-  nav.step("Setup", "toggle", "Setup");
+  nav.step("Edit layout", "button", "Edit layout");
   return until("the grid to arrange", (s) => s.find({ role: "button", label: "Select Master" }));
 }
 
@@ -141,7 +141,7 @@ test("Setup's + makes a pattern in that place, lighting the group chosen", () =>
   );
   until("its group", (s) => s.find({ role: "button", label: "Group: Left movers" }));
 
-  nav.step("Perform", "toggle", "Perform");
+  nav.step("Done", "button", "Done");
   until("its pad", (s) => pad(s, "Wash"));
   // Below Front wash's two places, in the same column.
   const wash = pad(app.snapshot(), "Wash");
@@ -156,7 +156,7 @@ test("a row set to play one at a time is marked in Perform", () => {
   until("on", (s) =>
     s.find({ role: "toggle", label: "One at a time, row 1" })?.focused ? s : undefined,
   );
-  nav.step("Perform", "toggle", "Perform");
+  nav.step("Done", "button", "Done");
   until("the bracket", (s) => s.find({ role: "text", label: "Row 1 plays one at a time" }));
   expect(app.snapshot().find({ role: "text", label: "Row 2 plays one at a time" })).toBe(undefined);
 });

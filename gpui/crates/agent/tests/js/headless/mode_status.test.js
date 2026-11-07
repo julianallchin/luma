@@ -1,6 +1,6 @@
-// A tab's status dot (`docs/specs/venue-tabs.md` rule 6): working while its
-// chat's turn runs, finished when the turn ended behind another tab, and
-// cleared by viewing the tab. The turn keeps running while another tab is in
+// A mode's status dot (`docs/specs/comet-shell.md`): working while its
+// chat's turn runs, finished when the turn ended behind another mode, and
+// cleared by viewing the mode. The turn keeps running while another mode is in
 // front.
 
 const chunks = (text) => text.match(/[\s\S]{1,24}/g).map((chunk) => ({ text: chunk }));
@@ -19,7 +19,7 @@ fixture({
   tools: [
     {
       name: "python",
-      // Holds the turn open while the test moves to another tab.
+      // Holds the turn open while the test moves to another mode.
       latency_ms: 1500,
       schema: {
         type: "object",
@@ -38,20 +38,20 @@ fixture({
 
 const has = (s, label) => s.find({ role: "text", label }) !== undefined;
 
-test("a turn's dot works, finishes behind another tab, and clears when seen", () => {
+test("a turn's dot works, finishes behind another mode, and clears when seen", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  const tab = app.snapshot().findAll({ role: "button" }).find((n) => n.label.startsWith("Aurora · #")).label;
+  const tab = "Arrange";
   nav.step("new conversation", "button", "New chat");
   const ready = until("the composer", (s) => s.find({ role: "button", label: "New chat" })?.enabled ? s : undefined);
   app.type(ready.find({ role: "input", label: "Do anything…" }), "where does the ramp peak?");
   app.click(app.snapshot().find({ role: "button", label: "Send" }));
   until("the working dot", (s) => has(s, `${tab} working`));
 
-  // Another tab in front: the turn keeps running and ends behind it.
-  nav.venuePage("Test Venue");
+  // Another mode in front: the turn keeps running and ends behind it.
+  nav.mode("Rig");
   until("the finished dot", (s) => has(s, `${tab} finished`));
 
-  // Viewing the tab clears it.
-  nav.step("the score tab", "button", tab);
+  // Viewing the mode clears it.
+  nav.mode("Arrange");
   until("the dot cleared", (s) => !has(s, `${tab} finished`) && !has(s, `${tab} working`));
 });

@@ -1,4 +1,4 @@
-// The sidebar slide, shot frame by frame. Motion is judged by looking
+// The agent panel's slide, shot frame by frame. Motion is judged by looking
 // at it, so the frames are kept (`luma-shots/shell-motion/`); what is asserted
 // is that each slide is a slide — its frames are not all one picture, which a
 // snapped toggle would give.
@@ -15,12 +15,12 @@ fixture({
 const SAMPLES = 5;
 const GAP_MS = 400;
 
-test("the sidebar slides rather than jumps", { timeoutMs: 180000 }, () => {
+test("the agent panel slides rather than jumps", { timeoutMs: 180000 }, () => {
   nav.trackEditor("Test Venue", "Aurora");
   app.frames(12, { waitMs: 60 });
   for (const [name, action] of [
-    ["sidebar-close", "luma::ToggleSidebar"],
-    ["sidebar-open", "luma::ToggleSidebar"],
+    ["agent-close", "luma::ToggleAgent"],
+    ["agent-open", "luma::ToggleAgent"],
   ]) {
     app.action(action);
     const shots = [];

@@ -23,7 +23,7 @@ test("a press outside a menu closes it and does not reach what is under it", () 
   // A point on the song's row clear of the menu.
   const row = opened.find({ role: "row", label: "Aurora" }).bounds;
   const box = opened.find({ role: "row", label: "New venue…" }).bounds;
-  app.click({ x: Math.max(row.x + row.width - 40, box.x + box.width + 40), y: row.y + row.height / 2 });
+  app.drag({ x: Math.max(row.x + row.width - 40, box.x + box.width + 40), y: row.y + row.height / 2 }, { dx: 0, dy: 0 }, { steps: 1 });
   app.frames(2);
   const after = app.snapshot();
   assert(menu(after) === undefined, "the menu stayed up through a press outside it");

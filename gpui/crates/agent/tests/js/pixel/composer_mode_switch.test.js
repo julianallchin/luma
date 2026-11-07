@@ -1,6 +1,6 @@
-// The composer that comes back when its tab does is the one that left, as it
+// The composer that comes back when its mode does is the one that left, as it
 // left it: not faded out and entering again. Opacity is only visible in
-// pixels, which is why this half of `headless/composer_tab_switch.test.js`
+// pixels, which is why this half of `headless/composer_mode_switch.test.js`
 // lives here.
 //
 // Stretched 10x so an entrance, if there were one, spans several shots.
@@ -16,9 +16,6 @@ fixture({
 const SAMPLES = 5;
 const GAP_MS = 200;
 
-const chips = (s) => s.findAll({ role: "button" })
-  .map((n) => n.label)
-  .filter((label) => label.startsWith("Aurora · #") || label === "Venue");
 const field = (s) => s.findAll({ role: "input" })
   .find((n) => n.label === "Do anything…" || n.label === DRAFT);
 const DRAFT = "Light the stage";
@@ -47,7 +44,7 @@ const burst = () => {
   return shots;
 };
 
-test("a tab's composer does not enter again when its tab comes back", { timeoutMs: 180000 }, () => {
+test("a mode's composer does not enter again when its mode comes back", { timeoutMs: 180000 }, () => {
   nav.trackEditor("Test Venue", "Aurora");
   until("the composer", (s) => field(s)?.bounds.width > 0);
   app.type(field(app.snapshot()), DRAFT);
@@ -59,9 +56,9 @@ test("a tab's composer does not enter again when its tab comes back", { timeoutM
   const noise = Math.max(...rest.map((shot) => image.diff(rest[0], shot, { rect })));
 
   nav.venuePage("Test Venue");
-  until("the venue tab", (s) => chips(s).includes("Venue"));
+  until("the venue page", (s) => s.find({ role: "card", label: "Test Venue Venue" }));
   app.frames(12, { waitMs: 400 });
-  nav.step("Aurora's chip", "button", chips(app.snapshot()).find((label) => label !== "Venue"));
+  app.action("luma::ShowArrange");
   until("Aurora's composer", (s) => field(s)?.label === DRAFT);
   const back = burst();
   const drift = back.map((shot) => image.diff(rest[0], shot, { rect }));

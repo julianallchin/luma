@@ -35,7 +35,6 @@ function open(clip) {
   nav.agentOff();
   nav.stageOff();
   app.click(node("card", clip));
-  until("the graph", (s) => s.find({ role: "card", label: "Graph canvas" }) && s.find({ role: "input", label: "Name" }));
   nav.graphPage();
 }
 

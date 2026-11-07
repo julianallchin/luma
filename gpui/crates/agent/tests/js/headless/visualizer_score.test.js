@@ -1,7 +1,7 @@
 // The stage is lit by the score the timeline is on — the same one.
 //
 // A `(track, venue)` pair carries as many scores as people annotated it. The
-// claim is a correspondence: whichever score the sidebar opens, the stage
+// claim is a correspondence: whichever score the song list opens, the stage
 // names that one, and keeps up when the choice changes. The stage's
 // automation label is read because the fact under test is which document was
 // installed; the readout is written when the install lands.
@@ -27,12 +27,11 @@ test("the stage is lit by the score the timeline opened", () => {
     // The install is a round trip, so the stage's readout lands after the
     // timeline's; waiting for it is the point.
     until(`the rig lit by ${handle}`, () => ordinal(rig()) === handle);
-    // A new tab puts the sidebar away a double-click interval after the
-    // click; bring it back for the next pick.
-    until("the sidebar put away", (s) => s.find({ role: "card", label: "Sidebar" }) === undefined);
-    app.action("luma::ToggleSidebar");
+    const shown = timeline();
+    // The list covers the stage; open it again for the next pick.
+    nav.scores("Aurora");
     until("the scores again", () => rows().length === listed.length);
-    return timeline();
+    return shown;
   };
   const one = open(listed[0]);
   // …and onto a score the rig is not on. A stage that resolved the score

@@ -18,9 +18,12 @@ test("overlapping clips have separate clickable rows and independent edits", () 
   for (let i = 1; i < initial.length; i++) {
     assert(initial[i].y >= initial[i - 1].y + initial[i - 1].height, "overlapping clip hit targets");
   }
+  const selected = (s) => s.findAll({ role: "text" }).some((n) => n.label === "1 selected");
   for (let i = 0; i < 3; i++) {
+    app.click(app.snapshot().find({ role: "card", label: "Waveform" }));
+    until("the selection cleared", (s) => !selected(s));
     app.click(clips()[i]);
-    until("the clip's inspector", (s) => s.find({ role: "card", label: "Pattern graph" }));
+    until("the clip alone selected", (s) => s.findAll({ role: "text" }).some((n) => n.label === "1 selected"));
   }
   // Removing the middle clip leaves both others intact.
   app.click(clips()[1]);

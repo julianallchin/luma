@@ -129,7 +129,7 @@ test("space types a space while a query is being typed", () => {
   until("the query's rows", (s) => s.find({ role: "row", label: "Alpha" }) && !s.find({ role: "row", label: "Beta" }));
   app.key("space");
   until("the query with a space in it", (s) => s.find({ role: "row", label: "Spaced" }));
-  expect(app.snapshot().findAll({ role: "slider" }).length).toBe(0);
+  expect(slider(app.snapshot()).length).toBe(0);
 });
 
 test("closing the dialog stops the preview and gives the song its player back", () => {
@@ -140,6 +140,8 @@ test("closing the dialog stops the preview and gives the song its player back", 
   nav.step("a ready player", "button", "Play");
   until("Aurora playing", (s) => button(s, "Pause"));
 
+  // The add-track affordance is the song list's.
+  nav.songs();
   nav.step("the add-track affordance", "button", "Add track");
   app.click(node("the browser", (s) => button(s, "Import tracks")));
   app.click(node("the source menu", (s) => s.find({ role: "row", label: "Rekordbox" })));
@@ -150,6 +152,8 @@ test("closing the dialog stops the preview and gives the song its player back", 
   until("the dialog gone", (s) => !s.find({ role: "button", label: "Close" }));
   // The song let go of the player for the preview, and has it back: it plays
   // its own 20 s audio, not the 40 s preview's.
+  app.action("luma::ToggleSongList");
+  until("the score again", (s) => !s.find({ role: "card", label: "Song list" }));
   nav.step("the song's player", "button", "Play");
   until("Aurora playing again", (s) => button(s, "Pause"));
   app.frames(4, { waitMs: 60 });

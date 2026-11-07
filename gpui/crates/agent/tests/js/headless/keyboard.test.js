@@ -71,12 +71,18 @@ test("keys and actions route to the focused screen and a text field keeps its ow
   app.key("space");
   transport("Play");
 
-  // 4. Escape is Back, and Back from the editor is the browser it came from.
+  // 4. With nothing to back out of, Escape leaves the editor be; ⌘P is the
+  //    way to the song list.
   app.key("escape");
   app.frames(6);
+  const stayed = read();
+  assert(!stayed.onVenuePicker && stayed.search === null && stayed.buttons.includes("Play"),
+    `escape left the editor: ${JSON.stringify(stayed.search)}`);
+  app.key("secondary-p");
+  app.frames(6);
   const back = read();
-  assert(!back.onVenuePicker, "escape went further back than the browser");
-  assert(back.search !== null, "escape did not land on the track browser");
+  assert(!back.onVenuePicker, "⌘P went further back than the song list");
+  assert(back.search !== null, "⌘P did not land on the song list");
 
   // 5. The search field takes the keyboard and keeps it: space is a space,
   //    escape clears the query rather than leaving the venue.
