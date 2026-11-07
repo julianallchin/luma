@@ -21,7 +21,7 @@ use super::tracks::importer;
 ///
 /// The close runs on the failure path too, so a failed read never leaves the
 /// pool holding a lock on the user's library until drop.
-async fn with_library<T, F, Fut>(library_path: &str, read: F) -> Result<T, CommandError>
+pub(crate) async fn with_library<T, F, Fut>(library_path: &str, read: F) -> Result<T, CommandError>
 where
     F: FnOnce(SqlitePool) -> Fut,
     Fut: Future<Output = Result<T, String>>,

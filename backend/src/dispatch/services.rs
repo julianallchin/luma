@@ -67,15 +67,13 @@ impl TrackSources for SystemTrackSources {
         >,
     > {
         Box::pin(async move {
-            let pool = crate::engine_dj::db::open_engine_db(library_path).await?;
-            let result = async {
+            super::handlers::engine_dj::with_library(library_path, |pool| async move {
                 let info = crate::engine_dj::db::get_library_info(&pool, library_path).await?;
                 let tracks = crate::engine_dj::db::list_tracks(&pool).await?;
                 Ok((info.database_uuid, tracks))
-            }
-            .await;
-            pool.close().await;
-            result
+            })
+            .await
+            .map_err(|error| error.to_string())
         })
     }
 
@@ -89,9 +87,9 @@ impl TrackSources for SystemTrackSources {
         >,
     > {
         Box::pin(async {
-            tokio::task::spawn_blocking(crate::rekordbox::subprocess::list_tracks)
+            super::handlers::rekordbox::blocking(crate::rekordbox::subprocess::list_tracks)
                 .await
-                .map_err(|error| format!("Task join error: {error}"))?
+                .map_err(|error| error.to_string())
         })
     }
 }

@@ -19,7 +19,7 @@ use super::tracks::importer;
 ///
 /// A panic in `rbox` surfaces as a join error rather than taking the host down,
 /// which is why every command below goes through here.
-async fn blocking<T, F>(read: F) -> Result<T, CommandError>
+pub(crate) async fn blocking<T, F>(read: F) -> Result<T, CommandError>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
