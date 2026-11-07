@@ -21,7 +21,7 @@ Each head's own clock: 0–1 over the clip, or 0–1 over each event. With `ever
 | `phase` | number | degrees | any | a value or a wire | No phase: the clock does not wrap. |
 
 - A number in `every`, `duration` and `delay` is on the beat grid: a multiple of 1/32 or 1/24 of a beat. The editor snaps a typed number to it. A wire is free.
-- `every` and `duration` set a clock's period. A wire that follows events gives them the newest event's value, so the clock keeps its own events.
+- `every` and `duration` set a clock's period. A wire that follows events gives them the newest event's value, so the clock keeps its own events. A fader wired in changes the clock's speed as it plays, with no jump: a speed that fits the bar starts where the clock's beats and bars stay on the grid, any other at the next event.
 
 ## Space
 
@@ -65,7 +65,7 @@ A random value, 0–1 at each head, drawn again each turn of `every` beats. Rand
 | `scale` | number | share | above 0 | a value or a wire | Uniform: one value for all heads. |
 | `contrast` | number | share | 0–1 | a value or a wire | 0. |
 
-- `every` sets a clock's period. A wire that follows events gives it the newest event's value, so the clock keeps its own events.
+- `every` sets a clock's period. A wire that follows events gives it the newest event's value, so the clock keeps its own events. A fader wired in changes the clock's speed as it plays, with no jump: a speed that fits the bar starts where the clock's beats and bars stay on the grid, any other at the next event.
 
 ## Audio
 
@@ -82,19 +82,20 @@ The energy of a frequency band of the track's full mix, 0–1 over the whole tra
 
 `control` · Python: `control(name="fader")` · Gives a coordinate.
 
-A fader: a live value 0–1, the same at every head, that a performer moves. A curve maps it to the range an input needs, so one fader can drive many inputs, each with its own range. In a Perform pattern it is a fader of that pattern, shown in the pattern's cell. In a score it reads the venue's live control called `name`; a control nothing has set reads 0. A fader cannot reach a clock input (`every`, `duration`) or a fixed input: those are prepared before the clip plays. Moving a fader never prepares the graph again.
+A fader: a live value 0–1, the same at every head, that a performer moves. A curve maps it to the range an input needs, so one fader can drive many inputs, each with its own range. In a Perform pattern it is a fader of that pattern, shown in the pattern's cell. In a score it reads the venue's live control called `name`; a control nothing has set reads 0. A fader wired into a clock's `every` or `duration` is a speed: in a Perform set the clock changes speed with no jump, on the bar. A fader cannot reach a fixed input: the clip's heads are prepared before it plays. Moving a fader never prepares the graph again.
 
 No inputs.
 
 | Setting | Options | Default | Notes |
 |---|---|---|---|
 | `name` | text | `fader` | A control name in snake_case, at most 64 characters, such as `drop` or `front_level`. |
+| `kind` | `number`, `color` | `number` | `number`; `color` makes it a [live color](/docs/node-reference/values#live-color). |
 
 ## Button
 
-`button` · Python: `button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats", shape="smooth")` · Gives a coordinate.
+`button` · Python: `button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats", shape="smooth", start="now")` · Gives a coordinate.
 
-A button a performer presses: 0–1 along its envelope, the same at every head. In `flash` mode it is on while held; in `toggle` mode, from one press to the next. The value rises over the attack, falls to the sustain over the decay, holds while on, and falls to 0 over the release. In a Perform pattern, the button that the output's `alpha` depends on is the pattern's pad. In a score a button reads the venue's control `name` as a plain gate, and its envelope does not apply. Like a fader, it cannot reach a clock input or a fixed input.
+A button a performer presses: 0–1 along its envelope, the same at every head. In `flash` mode it is on while held; in `toggle` mode, from one press to the next. The value rises over the attack, falls to the sustain over the decay, holds while on, and falls to 0 over the release. In a Perform pattern, the button that the output's `alpha` depends on is the pattern's pad. In a score a button reads the venue's control `name` as a plain gate, and its envelope does not apply. Like a fader, it cannot reach a fixed input.
 
 No inputs.
 
@@ -102,6 +103,7 @@ No inputs.
 |---|---|---|---|
 | `name` | text | `button` | A control name, as for a fader. |
 | `mode` | `flash`, `toggle` | `flash` |  |
+| `start` | `now`, `beat`, `bar` | `now` | When a press, on or off, takes effect: at once, or on the Perform set's next beat or bar. A new pad starts on the beat. |
 | `attack` | a number | `0` | A length of 0 or more, in `unit`. |
 | `decay` | a number | `0` | A length of 0 or more, in `unit`. |
 | `sustain` | a number | `1` | A level, 0–1. |

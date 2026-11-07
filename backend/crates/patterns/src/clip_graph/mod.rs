@@ -147,8 +147,9 @@ impl Kind {
         matches!(self, Kind::Color | Kind::Aim | Kind::Strobe | Kind::Laser)
     }
 
-    /// Whether a performer plays this kind: a `control` (a fader) or a
-    /// `button`. Its value comes from the host's [`crate::ControlSource`].
+    /// Whether a performer plays this kind: a `control` (a fader or a live
+    /// color) or a `button`. Its value comes from the host's
+    /// [`crate::ControlSource`].
     pub fn is_live(self) -> bool {
         matches!(self, Kind::Control | Kind::Button)
     }
@@ -321,10 +322,36 @@ impl Node {
             .map(|setting| setting.default)
     }
 
+    /// What a card titles the node: its kind's label, or "Live color" for a
+    /// `control` that holds a color.
+    pub fn label(&self) -> &'static str {
+        if self.is_live_color() {
+            "Live color"
+        } else {
+            self.kind.label()
+        }
+    }
+
+    /// Whether this is a `control` node that holds a color, a live color,
+    /// rather than a number.
+    pub fn is_live_color(&self) -> bool {
+        self.kind == Kind::Control && self.setting("kind") == Some("color")
+    }
+
+    /// What the node's output wire carries: its kind's, except that a live
+    /// color gives a value, a color, where a fader gives a coordinate.
+    pub fn produces(&self) -> Produces {
+        if self.is_live_color() {
+            Produces::Value
+        } else {
+            definition(self.kind).output
+        }
+    }
+
     /// How a `button` node plays, from its settings; `None` for any other
     /// node. A setting the checker would refuse reads as its default.
     pub fn press(&self) -> Option<crate::press::Press> {
-        use crate::press::{Adsr, Press, PressMode, Shape, TimeUnit};
+        use crate::press::{Adsr, Press, PressMode, Shape, Start, TimeUnit};
         if self.kind != Kind::Button {
             return None;
         }
@@ -339,6 +366,11 @@ impl Node {
             mode: match self.setting("mode") {
                 Some("toggle") => PressMode::Toggle,
                 _ => PressMode::Flash,
+            },
+            start: match self.setting("start") {
+                Some("beat") => Start::Beat,
+                Some("bar") => Start::Bar,
+                _ => Start::Now,
             },
             envelope: Adsr {
                 attack: length("attack", plain.attack),
@@ -523,14 +555,16 @@ impl ClipGraph {
             .map(|(id, node)| (id.as_str(), node))
     }
 
-    /// What a performer can play on this graph, in node order: each fader
-    /// and button node, by node id. A Perform pattern's cell shows one of
-    /// each, and a live input's place here is the index its kernel reads.
+    /// What a performer can play on this graph, in node order: each fader,
+    /// live color and button node, by node id. A Perform pattern's cell
+    /// shows one of each, and a live input's place here says where its
+    /// values sit among those its kernels read ([`LiveInputKind::width`]).
     pub fn live_inputs(&self) -> Vec<LiveInput> {
         self.nodes
             .iter()
             .filter_map(|(id, node)| {
                 let kind = match node.kind {
+                    Kind::Control if node.is_live_color() => LiveInputKind::Color,
                     Kind::Control => LiveInputKind::Fader,
                     Kind::Button => LiveInputKind::Button(node.press()?),
                     _ => return None,
@@ -571,9 +605,10 @@ impl ClipGraph {
     }
 
     /// The graph with a pad ([`ClipGraph::pad`]), for a new Perform pattern:
-    /// a toggle button node named `pad`, through a ramp curve into the
-    /// output's `alpha`, times whatever `alpha` held before. A graph that has
-    /// a pad already, or no output, is unchanged.
+    /// a toggle button node named `pad` that starts on the next beat,
+    /// through a ramp curve into the output's `alpha`, times whatever `alpha`
+    /// held before. A graph that has a pad already, or no output, is
+    /// unchanged.
     #[must_use]
     pub fn with_pad(mut self) -> Self {
         let Some(output) = self.output().map(|(id, _)| id.to_owned()) else {
@@ -587,7 +622,8 @@ impl ClipGraph {
             button.clone(),
             Node::new(Kind::Button)
                 .with_setting("name", "pad")
-                .with_setting("mode", "toggle"),
+                .with_setting("mode", "toggle")
+                .with_setting("start", "beat"),
         );
         let curve = self.next_id(Kind::Curve);
         self.nodes.insert(
@@ -616,8 +652,8 @@ impl ClipGraph {
         self
     }
 
-    /// The names the graph's fader and button nodes go by, sorted and each
-    /// once: in a score, the venue controls the graph reads.
+    /// The names the graph's fader, live color and button nodes go by,
+    /// sorted and each once: in a score, the venue controls the graph reads.
     pub fn controls(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self
             .nodes
@@ -710,15 +746,16 @@ impl ClipGraph {
             .collect())
     }
 
-    /// What a curve, math or value node gives: `"number"`, `"vector"` or
-    /// `"color"`. A math node gives the widest kind of its values (color
-    /// over vector over number). A value node gives what the inputs it
-    /// feeds ask of it ([`ClipGraph::asked`]), else what it holds. `None`
-    /// for any other node.
+    /// What a curve, math or value node, or a live color, gives:
+    /// `"number"`, `"vector"` or `"color"`. A math node gives the widest
+    /// kind of its values (color over vector over number). A value node
+    /// gives what the inputs it feeds ask of it ([`ClipGraph::asked`]), else
+    /// what it holds. `None` for any other node.
     pub fn value_kind(&self, id: &str) -> Option<&'static str> {
         fn kind(graph: &ClipGraph, id: &str, depth: usize) -> Option<&'static str> {
             let node = graph.nodes.get(id)?;
             match node.kind {
+                Kind::Control if node.is_live_color() => Some("color"),
                 Kind::Curve => Some(match node.setting("kind") {
                     Some("vector") => "vector",
                     Some("color") => "color",
@@ -832,7 +869,7 @@ impl ClipGraph {
     }
 }
 
-/// A fader or button node of a graph, as a performer sees it.
+/// A fader, live color or button node of a graph, as a performer sees it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveInput {
     /// The node's id, which names its value for its pattern and so keeps a
@@ -846,6 +883,18 @@ pub struct LiveInput {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LiveInputKind {
     Fader,
+    /// A live color: linear Rec. 2020 rgb, each channel 0–1.
+    Color,
     /// A button, played as its node says.
     Button(crate::press::Press),
+}
+
+impl LiveInputKind {
+    /// How many numbers its value is: a color's three, else one.
+    pub fn width(self) -> usize {
+        match self {
+            LiveInputKind::Color => 3,
+            LiveInputKind::Fader | LiveInputKind::Button(_) => 1,
+        }
+    }
 }

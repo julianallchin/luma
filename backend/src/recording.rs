@@ -625,6 +625,7 @@ impl Session {
             pool,
             storage,
             fixtures_root,
+            &services.controls,
             &spec.score_id,
             spec.score,
         )

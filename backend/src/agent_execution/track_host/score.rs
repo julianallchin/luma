@@ -50,6 +50,7 @@ impl TrackHost {
             &self.pool,
             &self.storage,
             &self.resource_root,
+            &self.controls,
             &self.scope.score_id,
             Some(score),
         )
@@ -72,6 +73,7 @@ impl TrackHost {
             &mut access,
             &self.resource_root,
             &self.storage,
+            &self.controls,
             &self.scope.track_id,
             candidate,
         )

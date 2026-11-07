@@ -2351,7 +2351,7 @@ fn a_period_over_beats_eases_the_random_each_beat_without_a_jump() {
 }
 
 /// A fader the test moves by hand: the node `fader`; every other node reads
-/// 0.25.
+/// 0.25, and every live color orange.
 #[derive(Debug, Default)]
 struct Fader(std::sync::Mutex<f64>);
 impl luma_patterns::ControlSource for Fader {
@@ -2362,6 +2362,51 @@ impl luma_patterns::ControlSource for Fader {
             0.25
         }
     }
+    fn color(&self, _: &luma_patterns::clip_graph::LiveInput) -> [f64; 3] {
+        [1., 0.5, 0.]
+    }
+}
+
+#[test]
+fn a_live_color_wires_straight_into_a_color() {
+    // A fader before it and a button after: each reads its own numbers.
+    let graph = graph(json!({
+        "fader": {"kind": "control", "settings": {"name": "drop"}},
+        "hue": {"kind": "control", "settings": {"name": "main", "kind": "color"}},
+        "pad": {"kind": "button", "settings": {"name": "pad"}},
+        "c1": {"kind": "curve", "inputs": {"x": {"node": "fader"}}},
+        "c2": {"kind": "curve", "inputs": {"x": {"node": "pad"}}},
+        "color1": {"kind": "color", "inputs": {
+            "color": {"node": "hue"}, "brightness": {"node": "c1"}, "alpha": {"node": "c2"}}}}));
+    let kinds: Vec<_> = graph
+        .live_inputs()
+        .into_iter()
+        .map(|input| input.kind)
+        .collect();
+    assert_eq!(kinds[1], luma_patterns::clip_graph::LiveInputKind::Color);
+    let frame = Frame {
+        features: None,
+        cells: &line(),
+        beat: 0.,
+        clip_start: 0.,
+        clip_duration: 16.,
+        seed: 7,
+    };
+    let rgb = |prepared: &PreparedGraph| {
+        let out = prepared.evaluate_batch(&[3.]).unwrap();
+        let values = out[OUTPUT].lighting().unwrap().values().to_owned();
+        [values[[0, 0, 0]], values[[0, 0, 1]], values[[0, 0, 2]]]
+    };
+    let prepared = PreparedGraph::new(&standard_library(), &graph, frame).unwrap();
+    assert_eq!(rgb(&prepared), [0.; 3], "nothing bound reads black");
+    let fader = Arc::new(Fader::default());
+    *fader.0.lock().unwrap() = 1.;
+    let prepared = prepared.with_controls(fader);
+    assert_eq!(
+        rgb(&prepared),
+        [1., 0.5, 0.],
+        "the color as the source has it"
+    );
 }
 
 #[test]
@@ -2412,7 +2457,7 @@ fn each_live_node_reads_its_own_value_by_node() {
     let graph = graph(json!({
         "fader": {"kind": "control", "settings": {"name": "drop"}},
         "other": {"kind": "control", "settings": {"name": "drop"}},
-        "hit": {"kind": "button", "settings": {"name": "hit", "mode": "toggle",
+        "hit": {"kind": "button", "settings": {"name": "hit", "mode": "toggle", "start": "bar",
             "attack": "0.5", "decay": "0", "sustain": "1", "release": "2",
             "unit": "seconds", "shape": "linear"}},
         "math1": {"kind": "math", "inputs": {"values": [{"node": "c1"}, {"node": "c2"}, {"node": "c3"}]}},
@@ -2427,6 +2472,7 @@ fn each_live_node_reads_its_own_value_by_node() {
         panic!("hit is a button: {:?}", inputs[1].kind);
     };
     assert_eq!(press.mode, luma_patterns::press::PressMode::Toggle);
+    assert_eq!(press.start, luma_patterns::press::Start::Bar);
     assert_eq!(press.envelope.release, 2.);
     assert_eq!(press.envelope.unit, luma_patterns::press::TimeUnit::Seconds);
     assert_eq!(
@@ -2475,30 +2521,267 @@ fn a_button_refuses_a_length_it_cannot_play() {
     }
     let refused = button("mode", "hold").expect_err("not a mode");
     assert!(refused.0.contains("b.mode"), "{}", refused.0);
+    let refused = button("start", "soon").expect_err("not a start");
+    assert!(refused.0.contains("b.start"), "{}", refused.0);
+}
+
+// ---- a live speed ----
+
+/// A chase whose `every` a fader sets: 1 beat at 0 to 2 at 1, times 1 at
+/// the first head to 2 at the last when `per_head`. Its events live
+/// `life` beats, else one period; its light is the oldest's progress.
+fn speed_chase(per_head: bool, life: Option<f64>) -> ClipGraph {
+    let mut nodes = json!({
+        "fader": {"kind": "control", "settings": {"name": "speed"}},
+        "speed": {"kind": "curve", "inputs": {"x": {"node": "fader"}, "low": 1, "high": 2}},
+        "time1": {"kind": "time", "inputs": {"every": {"node": "speed"}}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}});
+    if per_head {
+        nodes["space1"] = json!({"kind": "space"});
+        nodes["spread"] =
+            json!({"kind": "curve", "inputs": {"x": {"node": "space1"}, "low": 1, "high": 2}});
+        nodes["math1"] =
+            json!({"kind": "math", "inputs": {"values": [{"node": "speed"}, {"node": "spread"}]}});
+        nodes["time1"]["inputs"]["every"] = json!({"node": "math1"});
+    }
+    if let Some(life) = life {
+        nodes["time1"]["inputs"]["duration"] = json!(life);
+    }
+    graph(nodes)
+}
+
+/// `graph` over `cells` from beat -16, reading `fader`; played live on bars
+/// of 4 beats when `live`, as a Perform set plays it.
+fn speed_player(
+    graph: &ClipGraph,
+    cells: &[Cell],
+    fader: &Arc<Fader>,
+    live: bool,
+) -> PreparedGraph {
+    let prepared = PreparedGraph::new(
+        &standard_library(),
+        graph,
+        Frame {
+            features: None,
+            cells,
+            beat: -16.,
+            clip_start: -16.,
+            clip_duration: 4096.,
+            seed: 7,
+        },
+    )
+    .unwrap_or_else(|e| panic!("prepare: {e}"))
+    .with_controls(fader.clone());
+    if live {
+        prepared.played_live(4.)
+    } else {
+        prepared
+    }
+}
+
+/// Each head's dimmer at `beat`.
+fn dimmers(prepared: &PreparedGraph, beat: f64) -> Vec<f64> {
+    let out = prepared.evaluate_batch(&[beat]).unwrap();
+    let light = out[OUTPUT].lighting().unwrap().values().clone();
+    (0..light.dim().0).map(|n| light[[n, 0, DIMMER]]).collect()
+}
+
+/// Frames a sixteenth of a beat apart.
+const FRAME: f64 = 1. / 16.;
+
+/// Play a one-head speed chase from beat `from` to `to`, a frame at a time,
+/// setting the fader to each `(beat, value)` as play reaches it. Answers
+/// the beats its events start on, and checks its turns never jump: each
+/// frame counts at most two frames of a one-beat period, one bridging back
+/// to the bar being at most twice as fast.
+fn speed_events(
+    prepared: &PreparedGraph,
+    fader: &Fader,
+    moves: &[(f64, f64)],
+    from: f64,
+    to: f64,
+) -> Vec<f64> {
+    let mut starts = Vec::new();
+    let mut last: Option<f64> = None;
+    let mut beat = from;
+    while beat <= to + 1e-9 {
+        for (at, value) in moves {
+            if (beat - at).abs() < FRAME / 2. {
+                *fader.0.lock().unwrap() = *value;
+            }
+        }
+        let now = dimmers(prepared, beat)[0];
+        if let Some(last) = last {
+            let counted = (now - last).rem_euclid(1.);
+            assert!(
+                counted <= 2. * FRAME + 1e-6,
+                "turns jump by {counted} at beat {beat}"
+            );
+        }
+        if now < 1e-6 {
+            starts.push(beat);
+        }
+        last = Some(now);
+        beat += FRAME;
+    }
+    starts
 }
 
 #[test]
-fn a_button_cannot_set_a_clock() {
-    let refused = graph(json!({
+fn a_live_period_is_wired_into_a_clock() {
+    for graph in [speed_chase(false, None), speed_chase(true, Some(4.))] {
+        graph.check().expect("a fader sets every");
+    }
+    let held = graph(json!({
         "b": {"kind": "button"},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "b"}, "low": 1, "high": 4}},
-        "time1": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
-        "curve2": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
-        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
-    .check()
-    .expect_err("a live every is refused");
-    assert!(refused.0.contains("time1.every"), "{}", refused.0);
+        "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}));
+    held.check().expect("a button sets a random's every");
 }
 
 #[test]
-fn a_control_cannot_set_a_clock() {
-    let refused = graph(json!({
-        "fader": {"kind": "control"},
-        "curve1": {"kind": "curve", "inputs": {"x": {"node": "fader"}, "low": 1, "high": 4}},
-        "time1": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
-        "curve2": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
-        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
-    .check()
-    .expect_err("a live every is refused");
-    assert!(refused.0.contains("time1.every"), "{}", refused.0);
+fn a_stepped_speed_lands_on_the_bar_without_a_jump() {
+    let fader = Arc::new(Fader::default());
+    let prepared = speed_player(&speed_chase(false, None), &line(), &fader, true);
+    // Every beat, then two beats asked for mid-bar: the beat events run on
+    // to the next that two-beat events share, and those stay on the grid.
+    let starts = speed_events(&prepared, &fader, &[(5.25, 1.)], 0., 16.);
+    assert_eq!(starts, [0., 1., 2., 3., 4., 5., 6., 8., 10., 12., 14., 16.]);
+    // Back to every beat, asked for just after a bar.
+    *fader.0.lock().unwrap() = 1.;
+    let starts = speed_events(&prepared, &fader, &[(16.5, 0.)], 16.0625, 20.);
+    assert_eq!(starts, [18., 19., 20.]);
+}
+
+#[test]
+fn a_smooth_speed_leaves_the_grid_and_a_whole_step_brings_it_back() {
+    let fader = Arc::new(Fader::default());
+    let prepared = speed_player(&speed_chase(false, None), &line(), &fader, true);
+    // 1.375 beats is no whole share of a bar: it starts at the next event.
+    let starts = speed_events(&prepared, &fader, &[(4.5, 0.375)], 0., 8.);
+    assert_eq!(starts, [0., 1., 2., 3., 4., 5., 6.375, 7.75]);
+    // A whole step again: no event of the line is on the beat soon, so one
+    // event bridges from its next to the beat.
+    let starts = speed_events(&prepared, &fader, &[(8.25, 0.)], 8.0625, 14.);
+    assert_eq!(starts, [9.125, 10., 11., 12., 13., 14.]);
+}
+
+#[test]
+fn a_jump_in_time_keeps_the_speed_and_lines_up_with_the_bar() {
+    let fader = Arc::new(Fader::default());
+    let prepared = speed_player(&speed_chase(false, None), &line(), &fader, true);
+    speed_events(&prepared, &fader, &[(4.5, 0.5)], 0., 9.);
+    // Back four bars, as a deck's loop: at 1.5 beats, as a clock of 1.5
+    // beats from the clip start would be.
+    let fixed = PreparedGraph::new(
+        &standard_library(),
+        &graph(json!({
+            "time1": {"kind": "time", "inputs": {"every": 1.5}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
+        Frame {
+            features: None,
+            cells: &line(),
+            beat: -16.,
+            clip_start: -16.,
+            clip_duration: 4096.,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    for beat in [-7., -6.9375, -6.875, -4.] {
+        let (live, fixed) = (dimmers(&prepared, beat)[0], dimmers(&fixed, beat)[0]);
+        assert!((live - fixed).abs() < 1e-9, "{live} {fixed} at {beat}");
+    }
+}
+
+#[test]
+fn each_head_follows_its_own_live_period() {
+    let fader = Arc::new(Fader::default());
+    let prepared = speed_player(&speed_chase(true, None), &line(), &fader, true);
+    let mut last = dimmers(&prepared, 0.);
+    let mut beat = 0.;
+    while beat < 16. {
+        beat += FRAME;
+        if (beat - 5.25).abs() < 1e-9 {
+            *fader.0.lock().unwrap() = 1.;
+        }
+        let now = dimmers(&prepared, beat);
+        for (n, (now, last)) in now.iter().zip(&last).enumerate() {
+            let counted = (now - last).rem_euclid(1.);
+            assert!(
+                counted <= FRAME + 1e-6,
+                "head {n} jumps by {counted} at {beat}"
+            );
+        }
+        last = now;
+    }
+    // The first head runs at the fader's period, 2 beats, the last at
+    // twice it, on the bar.
+    let starts = |n: usize| {
+        let mut starts = Vec::new();
+        let mut beat = 16.;
+        while beat <= 32. {
+            if dimmers(&prepared, beat)[n] < 1e-6 {
+                starts.push(beat);
+            }
+            beat += FRAME;
+        }
+        starts
+    };
+    assert_eq!(starts(0), [16., 18., 20., 22., 24., 26., 28., 30., 32.]);
+    assert_eq!(starts(11), [16., 20., 24., 28., 32.]);
+}
+
+#[test]
+fn events_alive_across_a_speed_change_keep_their_age() {
+    let fader = Arc::new(Fader::default());
+    // Each event lives 4 beats; the oldest alive lights the head.
+    let prepared = speed_player(&speed_chase(false, Some(4.)), &line(), &fader, true);
+    let mut beat = 0.;
+    while beat < 5.25 {
+        dimmers(&prepared, beat);
+        beat += FRAME;
+    }
+    *fader.0.lock().unwrap() = 1.;
+    while beat <= 9. {
+        // Events start on each beat to 6, then every two beats.
+        let oldest = [1., 2., 3., 4., 5., 6., 8.]
+            .into_iter()
+            .find(|born| beat - born < 4. - 1e-9)
+            .unwrap();
+        let lit = dimmers(&prepared, beat)[0];
+        let expected = (beat - oldest) / 4.;
+        assert!(
+            (lit - expected).abs() < 1e-6,
+            "{lit} for {expected} at {beat}"
+        );
+        beat += FRAME;
+    }
+}
+
+#[test]
+fn a_live_period_outside_a_live_set_reads_its_value_now() {
+    // A score or a preview keeps nothing: the clock is the fixed clock of
+    // the period the fader gives now.
+    let fader = Arc::new(Fader::default());
+    *fader.0.lock().unwrap() = 1.;
+    let prepared = speed_player(&speed_chase(false, None), &line(), &fader, false);
+    let lit = |beat| dimmers(&prepared, beat)[0];
+    for beat in [0., 0.5, 1., 7.25_f64] {
+        let expected = ((beat + 16.) / 2.).rem_euclid(1.);
+        assert!(
+            (lit(beat) - expected).abs() < 1e-9,
+            "{} at {beat}",
+            lit(beat)
+        );
+    }
+    let batch = prepared.evaluate_batch(&[0.5, 1., 7.25]).unwrap();
+    let light = batch[OUTPUT].lighting().unwrap().values().clone();
+    for (t, beat) in [0.5, 1., 7.25].into_iter().enumerate() {
+        assert!((light[[0, t, DIMMER]] - lit(beat)).abs() < 1e-9);
+    }
 }

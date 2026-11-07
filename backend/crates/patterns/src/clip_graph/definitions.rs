@@ -17,7 +17,8 @@ pub enum InputType {
     Number,
     /// A vector `[u, v, z]`, or a wire from a vector curve.
     Vector,
-    /// A color `[r, g, b]`, or a wire from a color curve.
+    /// A color `[r, g, b]`, or a wire from a color curve or a color
+    /// control.
     Color,
     /// A curve shape. Value only.
     Points,
@@ -27,8 +28,8 @@ pub enum InputType {
     Heads,
     /// A wire from a `time` node: its events.
     Time,
-    /// A wire from `time`, `space`, `along`, `random`, `audio`, `control` or
-    /// `button`.
+    /// A wire from `time`, `space`, `along`, `random`, `audio`, a number
+    /// `control` or `button`.
     Coordinate,
     /// A math node's items: two or more numbers and value wires.
     Values,
@@ -130,7 +131,8 @@ pub enum Produces {
     Heads,
     Coordinate,
     /// A number, vector or color: by a curve's `kind` setting, the widest
-    /// of a math node's values, or what a value node's inputs ask of it.
+    /// of a math node's values, or what a value node's inputs ask of it. A
+    /// color `control` gives a color too ([`super::Node::produces`]).
     Value,
     /// A laser figure, for `laser.figures`.
     Figure,
@@ -503,22 +505,34 @@ fn build(kind: Kind) -> Definition {
             ],
             vec![],
         ),
-        // A fader: a live value 0–1 a performer moves. A curve maps it to
-        // the range an input needs.
+        // A live value a performer sets. A number is a fader, 0–1, that a
+        // curve maps to the range an input needs; a color is a live color,
+        // wired straight into a color input.
         Kind::Control => (
             Produces::Coordinate,
             vec![],
-            vec![(
-                "name",
-                SettingDef {
-                    options: &[],
-                    default: "fader",
-                },
-            )],
+            vec![
+                (
+                    "name",
+                    SettingDef {
+                        options: &[],
+                        default: "fader",
+                    },
+                ),
+                (
+                    "kind",
+                    SettingDef {
+                        options: &["number", "color"],
+                        default: "number",
+                    },
+                ),
+            ],
         ),
         // A button a performer presses: 0–1 along its envelope, which rises
         // over the attack, falls to the sustain over the decay, and falls to
-        // 0 over the release. The four lengths are numbers in `unit`.
+        // 0 over the release. The four lengths are numbers in `unit`. A
+        // press, on or off, takes effect at `start`: now, or on the set's
+        // next beat or bar.
         Kind::Button => (
             Produces::Coordinate,
             vec![],
@@ -535,6 +549,13 @@ fn build(kind: Kind) -> Definition {
                     SettingDef {
                         options: &["flash", "toggle"],
                         default: "flash",
+                    },
+                ),
+                (
+                    "start",
+                    SettingDef {
+                        options: &["now", "beat", "bar"],
+                        default: "now",
                     },
                 ),
                 ("attack", any("0")),

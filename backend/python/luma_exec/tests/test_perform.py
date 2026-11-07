@@ -50,6 +50,9 @@ def described(patterns: list[dict], cells: list[dict]) -> dict:
         if padded:
             nodes.insert(0, {"node": "button1", "label": "pad", "kind": "button",
                              "control": f"perform_p{p['id']}_n_button1"})
+        if "hue" in p["graph"]["nodes"]:
+            nodes.append({"node": "hue", "label": "main", "kind": "color",
+                          "control": f"perform_p{p['id']}_n_hue"})
         return {"pad": "button1" if padded else None, "level": f"perform_p{p['id']}_level",
                 "nodes": nodes}
     return {
@@ -58,8 +61,10 @@ def described(patterns: list[dict], cells: list[dict]) -> dict:
                               "oneAtATime": [1], "cells": cells}]},
         "controls": {
             "patterns": {p["id"]: controls(p) for p in patterns},
-            "cells": {c["id"]: f"perform_c{c['id']}" for c in cells
-                      if c["content"]["kind"] == "fader"},
+            "cells": {**{c["id"]: f"perform_c{c['id']}" for c in cells
+                         if c["content"]["kind"] in ("fader", "target")},
+                      **{c["id"]: [f"perform_c{c['id']}_s{i}" for i in range(len(c["content"]["swatches"]))]
+                         for c in cells if c["content"]["kind"] == "color"}},
             "master": "perform_master",
             "tap": "perform_tap",
         },
@@ -74,6 +79,24 @@ def pattern(id: str, name: str, z: int = 0, pad: bool = True) -> dict:
 
 def cell(id: str, at: tuple, content: dict) -> dict:
     return {"id": id, "column": at[0], "row": at[1], "width": 1, "height": 1, "content": content}
+
+
+def lit(id: str, name: str) -> dict:
+    """A pattern whose color is a live color, `hue`, named main."""
+    value = pattern(id, name)
+    nodes = value["graph"]["nodes"]
+    nodes["hue"] = {"kind": "control", "settings": {"name": "main", "kind": "color"}}
+    nodes["color1"]["inputs"]["color"] = {"node": "hue"}
+    return value
+
+
+COLORS = {"kind": "color", "label": "Colors", "swatches": [[1, 0, 0], [0, 0, 1]], "fade": 2.0,
+          "unit": "beats", "targets": [{"kind": "node", "patternId": WASH, "node": "hue"}],
+          "step": {"bars": 4, "loops": True}}
+LIT = described([lit(WASH, "Warm wash")],
+                [cell("cell-wash", (0, 0), {"kind": "pattern", "patternId": WASH}),
+                 cell("cell-colors", (1, 0), COLORS)])
+
 
 
 START = described([pattern(WASH, "Warm wash")],
@@ -155,6 +178,29 @@ class ReadingTests(unittest.TestCase):
         host.answers["perform.live"] = {"open": False}
         self.assertIn("not open", repr(namespace(host).perform.live()))
 
+    def test_live_names_the_presses_waiting_for_their_beat(self) -> None:
+        host = Host()
+        set = described([pattern(WASH, "Warm wash"), pattern("p-cold", "Cold wash")], [])
+        pad = f"perform_p{WASH}_n_button1"
+        host.answers["perform.live"] = {"open": True, "state": {
+            "controls": {},
+            "buttons": {
+                pad: {"press": {"start": "bar"}, "gate": {"onFor": -0.5, "offFor": None}},
+                "perform_pp-cold_n_button1": {"press": {"start": "beat"},
+                                              "gate": {"onFor": 3.0, "offFor": -0.2}},
+                f"{pad}@front": {"press": {"start": "bar"}, "gate": {"onFor": 1.0, "offFor": None}},
+            },
+            "instances": {f"{pad}@front": {"patternId": WASH, "on": ["front"]}},
+            "decks": []}}
+        live = namespace(host, set=set).perform.live()
+        self.assertEqual([(p.name, on, going) for p, on, going in live.waiting],
+                         [("Warm wash", (), "on"), ("Cold wash", (), "off")])
+        self.assertEqual([p.name for p, _ in live.playing], ["Cold wash"],
+                         "on until its beat; the other not yet")
+        self.assertEqual([(p.name, on) for p, on in live.instances], [("Warm wash", ("front",))])
+        self.assertIn("'Warm wash' to go on", repr(live))
+        self.assertIn("'Cold wash' to go off", repr(live))
+
 
 class ChangeTests(unittest.TestCase):
     def test_add_sends_the_graph_and_reads_back_what_the_host_made(self) -> None:
@@ -175,6 +221,18 @@ class ChangeTests(unittest.TestCase):
         self.assertNotIn("z", payload, "the host puts it on top")
         self.assertEqual((added.name, added.cell.at), ("Pulse", (2, 1)))
         self.assertEqual([p.name for p in perform.patterns], ["Pulse", "Warm wash"])
+
+    def test_busk_asks_the_host_for_a_page_and_reads_it_back(self) -> None:
+        host = Host()
+        perform = namespace(host).perform
+        made = copy.deepcopy(START)
+        made["layout"]["pages"].append({"id": "page-busk", "name": "Busk", "columns": 7, "rows": 5,
+                                        "oneAtATime": [], "cells": []})
+        host.answers["perform.busk"] = {"id": "page-busk", "set": made}
+        page = perform.busk()
+        self.assertEqual(host.calls[-1], ("perform.busk", {}))
+        self.assertEqual((page.id, page.name), ("page-busk", "Busk"))
+        self.assertEqual([p.name for p in perform.pages], ["Main", "Busk"])
 
     def test_a_preset_names_the_pattern_and_gives_its_blend(self) -> None:
         presets = {"clips": [{"name": "Fan", "blend_mode": "offset", "graph": graph_json()}]}
@@ -209,6 +267,118 @@ class ChangeTests(unittest.TestCase):
             perform.place("fader", targets=[wash.control("pad")])
         with self.assertRaises(PerformRefused):
             perform.place("pattern")
+
+
+FRONT = {"kind": "target", "label": "", "group": "front"}
+AIMED = described([pattern(WASH, "Warm wash")],
+                  [cell("cell-wash", (0, 0), {"kind": "pattern", "patternId": WASH}),
+                   cell("cell-front", (1, 0), FRONT)])
+
+
+class TargetTests(unittest.TestCase):
+    def test_a_target_reads_back_its_group_and_is_held_by_its_control(self) -> None:
+        perform = namespace(Host(), set=AIMED).perform
+        front = perform.cell("cell-front")
+        self.assertEqual((front.kind, front.group), ("target", "front"))
+        [held] = [c for c in perform.controls() if c.kind == "target"]
+        self.assertEqual((held.name, held.mode), ("perform_ccell-front", "momentary"))
+        self.assertIn("(1, 0): target on group front (cell-front)", perform.describe())
+
+    def test_place_and_update_a_target(self) -> None:
+        host = Host()
+        host.answers["perform.place"] = {"id": "cell-front", "set": AIMED}
+        host.answers["perform.cell"] = {"id": "cell-front", "set": AIMED}
+        perform = namespace(host).perform
+        perform.place("target", group="front", at=(1, 0))
+        self.assertEqual(host.calls[-1][1]["content"], FRONT)
+        perform.update_target("cell-front", group="back")
+        self.assertEqual(host.calls[-1][1], {"id": "cell-front", "group": "back"})
+        with self.assertRaises(PerformRefused):
+            perform.place("target")
+
+    def test_play_on_groups_and_live_names_the_instances(self) -> None:
+        host = Host()
+        pad = f"perform_p{WASH}_n_button1"
+        instance = f"{pad}@back+front"
+        host.answers["perform.control"] = {"open": True, "state": {
+            "controls": {}, "decks": [],
+            "buttons": {instance: {"press": {}, "gate": {"onFor": 1.0, "offFor": None}}},
+            "instances": {instance: {"patternId": WASH, "on": ["back", "front"]}}}}
+        perform = namespace(host).perform
+        live = perform.play(WASH, on=["front", "back"])
+        self.assertEqual(host.calls[-1], ("perform.control",
+                                          {"name": pad, "value": 1.0, "on": ["front", "back"]}))
+        [(wash, on)] = live.instances
+        self.assertEqual((wash.name, on), ("Warm wash", ("back", "front")))
+        self.assertEqual(live.playing, (), "its own selection is not on")
+        self.assertIn("'Warm wash' on back + front", repr(live))
+        perform.stop(WASH, on="front")
+        self.assertEqual(host.calls[-1][1], {"name": pad, "value": 0.0, "on": ["front"]})
+        with self.assertRaises(PerformRefused):
+            perform.play(WASH, on=[])
+
+
+class ColorTests(unittest.TestCase):
+    def test_a_color_cell_reads_back_its_swatches_and_their_controls(self) -> None:
+        perform = namespace(Host(), set=LIT).perform
+        colors = perform.cell("cell-colors")
+        self.assertEqual((colors.kind, colors.swatches, colors.step), ("color", ((1, 0, 0), (0, 0, 1)), (4, True)))
+        self.assertEqual((colors.swatch(1).name, colors.swatch(1).mode), ("perform_ccell-colors_s1", "momentary"))
+        self.assertEqual(perform.pattern(WASH).control("main").kind, "color")
+        self.assertIn(colors.swatch(0), perform.controls())
+        self.assertIn("color 'Colors' of 2 swatches setting 1 targets, fading over 2.0 beats, the next every 4 "
+                      "bars, looping", perform.describe())
+        with self.assertRaises(KeyError):
+            colors.swatch(2)
+
+    def test_place_sets_live_colors_only_and_a_fader_moves_no_color(self) -> None:
+        host = Host()
+        host.answers["perform.place"] = {"id": "cell-colors", "set": LIT}
+        perform = namespace(host, set=LIT).perform
+        wash = perform.pattern(WASH)
+        perform.place("color", swatches=[(1, 0, 0), "#0000ff"], targets=[wash.control("main")],
+                      fade=2, step=(4, True))
+        content = host.calls[-1][1]["content"]
+        self.assertEqual(content["swatches"][0], [1, 0, 0])
+        self.assertEqual(len(content["swatches"][1]), 3, "hex reads as a color")
+        self.assertEqual((content["label"], content["fade"], content["unit"], content["step"]),
+                         ("Colors", 2.0, "beats", {"bars": 4, "loops": True}))
+        self.assertEqual(content["targets"], COLORS["targets"])
+        for wrong in (wash.control("speed"), wash, "drop"):
+            with self.subTest(wrong), self.assertRaises(PerformRefused):
+                perform.place("color", swatches=[(1, 0, 0)], targets=[wrong])
+        with self.assertRaises(PerformRefused):
+            perform.place("fader", targets=[wash.control("main")])
+        with self.assertRaises(PerformRefused):
+            perform.place("color", swatches=[(1, 0)])
+        with self.assertRaises(PerformRefused):
+            perform.place("color", swatches=[(1, 0, 0)], step=(0, True))
+
+    def test_update_color_sends_what_is_given_and_none_stops_stepping(self) -> None:
+        host = Host()
+        host.answers["perform.cell"] = {"id": "cell-colors", "set": LIT}
+        perform = namespace(host, set=LIT).perform
+        perform.update_color("cell-colors", swatches=[(0, 1, 0)], unit="seconds")
+        self.assertEqual(host.calls[-1][1], {"id": "cell-colors", "swatches": [[0, 1, 0]], "unit": "seconds"})
+        perform.update_color("cell-colors", step=None)
+        self.assertEqual(host.calls[-1][1], {"id": "cell-colors", "step": None})
+
+    def test_choose_presses_the_swatch_and_live_reads_the_colors(self) -> None:
+        host = Host()
+        live = {"open": True, "state": {
+            "controls": {}, "buttons": {}, "clock": None, "decks": [],
+            "colors": {f"perform_p{WASH}_n_hue": {
+                "fade": {"from": [1, 1, 1], "to": [0, 0, 1], "length": 2.0, "unit": "beats"}, "since": 0.5}},
+            "swatches": {"cell-colors": 1}}}
+        host.answers["perform.press"] = live
+        perform = namespace(host, set=LIT).perform
+        chosen = perform.choose(perform.cell("cell-colors"), 1)
+        self.assertEqual([call for call in host.calls], [
+            ("perform.press", {"name": "perform_ccell-colors_s1", "down": True}),
+            ("perform.press", {"name": "perform_ccell-colors_s1", "down": False})])
+        self.assertEqual(chosen.colors[f"perform_p{WASH}_n_hue"], (0, 0, 1))
+        self.assertEqual(chosen.swatches, {"cell-colors": 1})
+        self.assertIn("cell cell-colors swatch 1", repr(chosen))
 
 
 class BindingTests(unittest.TestCase):

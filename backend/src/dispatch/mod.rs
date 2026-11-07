@@ -376,6 +376,7 @@ commands! {
     perform::delete_perform_pattern(venue_id: String, pattern_id: String) -> ();
     perform::get_perform_layout(venue_id: String) -> Option<PerformLayout>;
     perform::save_perform_layout(venue_id: String, layout: PerformLayout) -> ();
+    perform::perform_add_busk_page(venue_id: String) -> String;
     perform::perform_open_set(venue_id: String) -> ();
     perform::perform_control(name: String, value: f64) -> ();
     perform::perform_press(name: String, down: bool) -> ();

@@ -45,6 +45,7 @@ async fn main() {
         &pool,
         &StorageRoot::from_path(db.parent().unwrap_or(Path::new(".")).to_path_buf()),
         &resource_root,
+        &luma_lib::controls::ControlBanks::default(),
         &score_id,
         None,
     )

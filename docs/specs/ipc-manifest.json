@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 133,
+    "commandCount": 134,
     "domainCount": 26
   },
   "domains": [
@@ -89,7 +89,7 @@
     },
     {
       "domain": "perform",
-      "commandCount": 13,
+      "commandCount": 14,
       "handlers": "backend/src/dispatch/handlers/perform.rs"
     },
     {
@@ -1833,6 +1833,20 @@
       "prose": {
         "returns": "Vec<crate::models::groups::MissingGroup>"
       }
+    },
+    {
+      "name": "perform_add_busk_page",
+      "domain": "perform",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/perform.rs"
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "String"
     },
     {
       "name": "perform_control",

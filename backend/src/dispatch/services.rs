@@ -123,6 +123,9 @@ pub struct AppServices {
     /// none installs a stand-in — see [`AppServices::with_share_codes`].
     pub(crate) share_codes: Arc<dyn crate::services::venue_sharing::ShareCodeServer>,
     pub(crate) render_engine: RenderEngine,
+    /// Every venue's live controls, which the engine, the inputs and the
+    /// Perform session all play. `Arc` because they share it.
+    pub(crate) controls: Arc<crate::controls::ControlBanks>,
     /// MIDI and OSC inputs bound to live controls. `Arc` because it owns
     /// the open ports — a clone would fork them.
     pub(crate) inputs: Arc<crate::inputs::InputHub>,
@@ -179,6 +182,7 @@ impl AppServices {
         LiveHandles {
             perform: Arc::clone(&self.perform),
             inputs: Arc::clone(&self.inputs),
+            controls: Arc::clone(&self.controls),
         }
     }
 
@@ -209,9 +213,15 @@ impl AppServices {
         host_audio.set_audio_output_enabled(false);
         let track_audio =
             crate::sync::audio::TrackAudio::new(db.0.clone(), state_db.0.clone(), storage.clone());
-        let inputs = Arc::new(crate::inputs::InputHub::new(db.0.clone(), false));
+        let controls = Arc::new(crate::controls::ControlBanks::default());
+        let inputs = Arc::new(crate::inputs::InputHub::new(
+            db.0.clone(),
+            controls.clone(),
+            false,
+        ));
         let perform = Arc::new(crate::perform::PerformSession::new(
             render_engine.clone(),
+            controls.clone(),
             db.0.clone(),
             storage.clone(),
             fixtures_root.clone(),
@@ -231,6 +241,7 @@ impl AppServices {
             track_sources: system_track_sources(),
             share_codes,
             render_engine: render_engine.clone(),
+            controls,
             inputs,
             perform,
             output: None,
@@ -291,7 +302,11 @@ impl AppServices {
     /// bind sockets or open devices.
     pub(crate) async fn with_output(mut self) -> Result<Self, String> {
         let output = Arc::new(OutputHub::new(&self.db.0, self.fixtures_root.clone()).await?);
-        self.inputs = Arc::new(crate::inputs::InputHub::new(self.db.0.clone(), true));
+        self.inputs = Arc::new(crate::inputs::InputHub::new(
+            self.db.0.clone(),
+            self.controls.clone(),
+            true,
+        ));
         self.output = Some(output);
         Ok(self)
     }
@@ -420,7 +435,7 @@ impl AppServices {
         self.host_audio.unload();
         self.perform.stop().await;
         self.inputs.close().await;
-        crate::controls::clear();
+        self.controls.clear();
         crate::database::local::venue_graph::rig_changed();
         self.render_engine.reset_for_identity_switch();
         workspaces

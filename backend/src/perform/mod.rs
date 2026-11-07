@@ -15,12 +15,13 @@ mod virtual_deck;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::task::JoinHandle;
 
+use crate::controls::ControlBanks;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::host_audio::HostAudioState;
 use crate::models::perform::{DeckMatch, PerformClock, PerformDeck, PerformSource, PerformState};
@@ -126,6 +127,7 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     render: RenderEngine,
+    controls: Arc<ControlBanks>,
     pool: SqlitePool,
     storage: StorageRoot,
     fixtures_root: PathBuf,
@@ -155,6 +157,7 @@ pub struct PerformSession {
 impl PerformSession {
     pub(crate) fn new(
         render: RenderEngine,
+        controls: Arc<ControlBanks>,
         pool: SqlitePool,
         storage: StorageRoot,
         fixtures_root: PathBuf,
@@ -178,6 +181,7 @@ impl PerformSession {
                     set_clock: None,
                 }),
                 render,
+                controls,
                 pool,
                 storage,
                 fixtures_root,
@@ -329,17 +333,29 @@ impl PerformSession {
         Ok(())
     }
 
-    /// Set control `name` of the open set's venue to `value`, 0–1: a pad or
-    /// fader of the Perform tab. No database read: the venue was admitted when
-    /// its set opened, and this runs on every fader move.
-    pub fn set_control(&self, name: &str, value: f64) -> Result<(), String> {
+    /// The bank of the open set's venue. No database read: the venue was
+    /// admitted when its set opened, and this runs on every fader move.
+    fn bank(&self) -> Result<Arc<crate::controls::VenueControls>, String> {
         let venue_id = self
             .shared
             .lock()
             .set_venue
             .clone()
             .ok_or("No Perform set is open")?;
-        crate::controls::venue(&venue_id).set(name, value);
+        Ok(self.shared.controls.venue(&venue_id))
+    }
+
+    /// Set control `name` of the open set's venue to `value`, 0–1: a pad or
+    /// fader of the Perform tab.
+    pub fn set_control(&self, name: &str, value: f64) -> Result<(), String> {
+        self.bank()?.set(name, value);
+        Ok(())
+    }
+
+    /// Set pad `name` of the open set's venue on or off on groups `on`,
+    /// whatever targets are held: on none, the pattern on its own selection.
+    pub fn set_on(&self, name: &str, value: f64, on: &[String]) -> Result<(), String> {
+        self.bank()?.set_on(name, value, on);
         Ok(())
     }
 
@@ -347,13 +363,7 @@ impl PerformSession {
     /// button node of a pattern, its pad or another. It plays as the button says: a toggle
     /// flips on the press, a flash is on while held.
     pub fn press(&self, name: &str, down: bool) -> Result<(), String> {
-        let venue_id = self
-            .shared
-            .lock()
-            .set_venue
-            .clone()
-            .ok_or("No Perform set is open")?;
-        crate::controls::venue(&venue_id).press(name, down, Instant::now());
+        self.bank()?.press(name, down, Instant::now());
         Ok(())
     }
 
@@ -375,9 +385,8 @@ impl PerformSession {
         let Some(source) = state.source.clone() else {
             return PerformState::off(
                 state.latency_ms,
-                set_clock(&state),
-                set_controls(&state),
-                set_buttons(&state),
+                self.shared.set_clock(&state),
+                self.shared.set_bank(&state),
             );
         };
         let now = Instant::now();
@@ -428,9 +437,8 @@ impl PerformSession {
                     }
                 })
                 .collect(),
-            clock: set_clock(&state),
-            controls: set_controls(&state),
-            buttons: set_buttons(&state),
+            clock: self.shared.set_clock(&state),
+            bank: self.shared.set_bank(&state),
         }
     }
 }
@@ -481,12 +489,18 @@ impl Shared {
             shared.render.finish_update(update, Built::Live(None));
             return;
         };
-        match Self::compile_set(&shared, &venue_id, track.as_ref()).await {
+        let (wants, wanted) = tokio::sync::mpsc::unbounded_channel();
+        match Self::compile_set(&shared, &venue_id, track.as_ref(), update.id(), wants).await {
             Ok((clock, set)) => {
                 let mut state = shared.lock();
                 state.set_clock = Some(clock);
-                follow_tempo(&state);
+                shared.follow_tempo(&state);
                 drop(state);
+                let set = set.map(|(set, build)| {
+                    let grows = Self::grow_set(Arc::downgrade(&shared), venue_id, build, wanted);
+                    tokio::spawn(grows);
+                    set
+                });
                 shared.render.finish_update(update, Built::Live(set));
             }
             Err(message) => {
@@ -497,11 +511,53 @@ impl Shared {
         }
     }
 
+    /// Compile each instance the open set's bank makes into the set that
+    /// `build` built, the first time the instance is played: off the frame
+    /// path, so the set plays on meanwhile. Ends when that set is replaced,
+    /// which drops the other end of `wanted`.
+    async fn grow_set(
+        shared: Weak<Self>,
+        venue_id: String,
+        mut build: live::Build,
+        mut wanted: tokio::sync::mpsc::UnboundedReceiver<()>,
+    ) {
+        while wanted.recv().await.is_some() {
+            while wanted.try_recv().is_ok() {}
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            let started = Instant::now();
+            let grown = async {
+                let mut access =
+                    VenueAccess::<Read>::read(&shared.pool, VenueResource::Venue(&venue_id))
+                        .await
+                        .map_err(|error| error.to_string())?;
+                build
+                    .grow(&mut access, &shared.fixtures_root, &shared.storage)
+                    .await
+            }
+            .await;
+            match grown {
+                Ok(Some(grown)) => {
+                    log::debug!(
+                        "Perform instances compiled in {:.1} ms",
+                        started.elapsed().as_secs_f64() * 1000.
+                    );
+                    shared.render.grow_live(build.id(), grown);
+                }
+                Ok(None) => {}
+                Err(message) => log::warn!("a Perform instance did not compile: {message}"),
+            }
+        }
+    }
+
     async fn compile_set(
         shared: &Shared,
         venue_id: &str,
         track: Option<&(u8, String)>,
-    ) -> Result<(LiveClock, Option<live::LiveSet>), String> {
+        id: u64,
+        wants: tokio::sync::mpsc::UnboundedSender<()>,
+    ) -> Result<(LiveClock, Option<(live::LiveSet, live::Build)>), String> {
         let mut access = VenueAccess::<Read>::read(&shared.pool, VenueResource::Venue(venue_id))
             .await
             .map_err(|error| error.to_string())?;
@@ -510,12 +566,15 @@ impl Shared {
             .await?
             .unwrap_or_default();
         live::compile(
+            id,
             &mut access,
             &shared.fixtures_root,
             &shared.storage,
+            shared.controls.venue(venue_id),
             &patterns,
             &layout,
             track.map(|(deck, track_id)| (*deck, track_id.as_str())),
+            wants,
         )
         .await
     }
@@ -628,7 +687,7 @@ impl Shared {
         if stopped {
             shared.push(&state);
         }
-        follow_tempo(&state);
+        shared.follow_tempo(&state);
         // The set follows the master deck's song.
         let master = master(&state);
         if state.set_venue.is_some() && master != state.set_track {
@@ -796,44 +855,39 @@ fn master(state: &State) -> Option<(u8, String)> {
     })
 }
 
-/// What the open set is timed by, `None` until it has compiled.
-fn set_clock(state: &State) -> Option<PerformClock> {
-    let venue_id = state.set_venue.as_deref()?;
-    Some(match state.set_clock? {
-        LiveClock::Deck(deck) => PerformClock::Deck { deck },
-        LiveClock::Tap => PerformClock::Tap(crate::controls::venue(venue_id).tempo(Instant::now())),
-    })
-}
+impl Shared {
+    /// What the open set is timed by, `None` until it has compiled.
+    fn set_clock(&self, state: &State) -> Option<PerformClock> {
+        let venue_id = state.set_venue.as_deref()?;
+        Some(match state.set_clock? {
+            LiveClock::Deck(deck) => PerformClock::Deck { deck },
+            LiveClock::Tap => {
+                PerformClock::Tap(self.controls.venue(venue_id).tempo(Instant::now()))
+            }
+        })
+    }
 
-/// Count the open set's buttons' beats at the tempo its clock runs at: its
-/// deck's, or the tapped one.
-fn follow_tempo(state: &State) {
-    let Some(venue_id) = state.set_venue.as_deref() else {
-        return;
-    };
-    let bpm = match state.set_clock {
-        Some(LiveClock::Deck(deck)) => state.decks.get(&deck).map(|deck| deck.bpm),
-        _ => None,
-    };
-    crate::controls::venue(venue_id).follow(bpm);
-}
+    /// Count the open set's buttons' beats at the tempo its clock runs at:
+    /// its deck's, or the tapped one.
+    fn follow_tempo(&self, state: &State) {
+        let Some(venue_id) = state.set_venue.as_deref() else {
+            return;
+        };
+        let bpm = match state.set_clock {
+            Some(LiveClock::Deck(deck)) => state.decks.get(&deck).map(|deck| deck.bpm),
+            _ => None,
+        };
+        self.controls.venue(venue_id).follow(bpm);
+    }
 
-/// The open set's buttons as they stand now.
-fn set_buttons(state: &State) -> BTreeMap<String, luma_patterns::press::Button> {
-    state
-        .set_venue
-        .as_deref()
-        .map(|venue_id| crate::controls::venue(venue_id).buttons())
-        .unwrap_or_default()
-}
-
-/// The open set's venue's controls, as set now.
-fn set_controls(state: &State) -> BTreeMap<String, f64> {
-    state
-        .set_venue
-        .as_deref()
-        .map(|venue_id| crate::controls::venue(venue_id).values())
-        .unwrap_or_default()
+    /// What the open set's venue's bank plays now.
+    fn set_bank(&self, state: &State) -> crate::controls::Playing {
+        state
+            .set_venue
+            .as_deref()
+            .map(|venue_id| self.controls.venue(venue_id).playing())
+            .unwrap_or_default()
+    }
 }
 
 struct Job {
@@ -926,6 +980,7 @@ async fn deck_scene(
             &shared.pool,
             &shared.storage,
             &shared.fixtures_root,
+            &shared.controls,
             &score.id,
             None,
         )

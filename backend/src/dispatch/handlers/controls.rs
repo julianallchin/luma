@@ -12,7 +12,7 @@ pub async fn control_list(
 ) -> Result<Vec<Control>, CommandError> {
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(crate::controls::list(&mut access).await?)
+    Ok(crate::controls::list(&mut access, &services.controls).await?)
 }
 
 #[cfg(test)]
@@ -92,7 +92,7 @@ mod tests {
             .unwrap();
         assert_eq!(listed, json!([{ "name": "drop", "value": 0.0 }]));
 
-        crate::controls::venue(&venue).set("drop", 1.5);
+        services.controls.venue(&venue).set("drop", 1.5);
         let listed = dispatch(&services, "control_list", &json!({ "venueId": venue }))
             .await
             .unwrap();

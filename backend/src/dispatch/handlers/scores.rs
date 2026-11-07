@@ -92,6 +92,7 @@ pub async fn prepare_score_clip_preview(
         &mut access,
         &services.fixtures_root,
         &services.storage,
+        &services.controls,
         &metadata.track_id,
         &score,
         &clip_id,

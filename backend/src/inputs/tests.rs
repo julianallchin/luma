@@ -57,21 +57,25 @@ async fn learn(services: &AppServices, venue: &str, control: &str, mode: &str, e
     learning.await.unwrap();
 }
 
-fn value(venue: &str, control: &str) -> f64 {
-    crate::controls::venue(venue).value(control)
+fn value(services: &AppServices, venue: &str, control: &str) -> f64 {
+    services.controls.venue(venue).value(control)
 }
 
 #[tokio::test]
 async fn a_learned_fader_follows_its_input_and_is_kept() {
     let (_dir, services, venue) = library().await;
     learn(&services, &venue, "drop", "fader", cc(7, 0.9)).await;
-    assert_eq!(value(&venue, "drop"), 0.0, "the learning move sets nothing");
+    assert_eq!(
+        value(&services, &venue, "drop"),
+        0.0,
+        "the learning move sets nothing"
+    );
 
     services.inputs.receive(cc(7, 0.4));
-    assert!((value(&venue, "drop") - 0.4).abs() < 1e-9);
+    assert!((value(&services, &venue, "drop") - 0.4).abs() < 1e-9);
     services.inputs.receive(cc(8, 1.0));
     assert!(
-        (value(&venue, "drop") - 0.4).abs() < 1e-9,
+        (value(&services, &venue, "drop") - 0.4).abs() < 1e-9,
         "another CC is not bound"
     );
 
@@ -108,15 +112,15 @@ async fn pads_press_latching_keys_set_and_any_input_can_invert() {
     learn(&services, &venue, "strobe", "toggle", cc(21, 1.0)).await;
 
     services.inputs.receive(cc(20, 0.8));
-    assert_eq!(value(&venue, "flash"), 1.0);
+    assert_eq!(value(&services, &venue, "flash"), 1.0);
     services.inputs.receive(cc(20, 0.0));
-    assert_eq!(value(&venue, "flash"), 0.0);
+    assert_eq!(value(&services, &venue, "flash"), 0.0);
 
     // A latching key sends its state: on, then off at the next press.
     services.inputs.receive(cc(21, 1.0));
-    assert_eq!(value(&venue, "strobe"), 1.0);
+    assert_eq!(value(&services, &venue, "strobe"), 1.0);
     services.inputs.receive(cc(21, 0.0));
-    assert_eq!(value(&venue, "strobe"), 0.0);
+    assert_eq!(value(&services, &venue, "strobe"), 0.0);
 
     let flash = services.inputs.state().bindings[0].id.clone();
     dispatch(
@@ -127,7 +131,11 @@ async fn pads_press_latching_keys_set_and_any_input_can_invert() {
     .await
     .unwrap();
     services.inputs.receive(cc(20, 0.0));
-    assert_eq!(value(&venue, "flash"), 1.0, "inverted, released is on");
+    assert_eq!(
+        value(&services, &venue, "flash"),
+        1.0,
+        "inverted, released is on"
+    );
 
     dispatch(
         &services,
@@ -138,7 +146,7 @@ async fn pads_press_latching_keys_set_and_any_input_can_invert() {
     .unwrap();
     services.inputs.receive(cc(20, 1.0));
     assert_eq!(
-        value(&venue, "flash"),
+        value(&services, &venue, "flash"),
         1.0,
         "an unbound input moves nothing"
     );
@@ -162,35 +170,55 @@ async fn a_pad_plays_a_button_as_the_button_says() {
         z_index: 0,
         blend_mode: luma_patterns::BlendMode::Replace,
         seed: 1,
-        graph: luma_patterns::presets()
-            .clip("Wash")
-            .expect("the shipped Wash")
-            .graph
-            .clone()
-            .with_pad(),
+        graph: crate::controls::tests::with_pad_at_once(
+            luma_patterns::presets()
+                .clip("Wash")
+                .expect("the shipped Wash")
+                .graph
+                .clone(),
+        ),
     };
     let pad = perform::pad(&pattern).expect("a pad");
-    crate::controls::venue(&venue).install(&[pattern], &PerformLayout::default());
+    services
+        .controls
+        .venue(&venue)
+        .install(&[pattern], &PerformLayout::default());
     learn(&services, &venue, &pad, "momentary", cc(30, 1.0)).await;
     learn(&services, &venue, &pad, "toggle", cc(31, 1.0)).await;
 
     for expected in [1.0, 0.0] {
         services.inputs.receive(cc(30, 1.0));
         services.inputs.receive(cc(30, 0.0));
-        assert_eq!(value(&venue, &pad), expected, "each press flips it");
+        assert_eq!(
+            value(&services, &venue, &pad),
+            expected,
+            "each press flips it"
+        );
     }
     // A soft hit is a press: a pad's note carries how hard, not whether.
     let soft = 20.0 / 127.0;
     services.inputs.receive(cc(30, soft));
     services.inputs.receive(cc(30, 0.0));
-    assert_eq!(value(&venue, &pad), 1.0, "a soft hit flips it too");
+    assert_eq!(
+        value(&services, &venue, &pad),
+        1.0,
+        "a soft hit flips it too"
+    );
     services.inputs.receive(cc(30, soft));
     services.inputs.receive(cc(30, 0.0));
-    assert_eq!(value(&venue, &pad), 0.0);
+    assert_eq!(value(&services, &venue, &pad), 0.0);
     services.inputs.receive(cc(31, 1.0));
-    assert_eq!(value(&venue, &pad), 1.0, "a latching key sets its state");
+    assert_eq!(
+        value(&services, &venue, &pad),
+        1.0,
+        "a latching key sets its state"
+    );
     services.inputs.receive(cc(31, 1.0));
-    assert_eq!(value(&venue, &pad), 1.0, "and sets it again, not flips it");
+    assert_eq!(
+        value(&services, &venue, &pad),
+        1.0,
+        "and sets it again, not flips it"
+    );
 }
 
 #[tokio::test]
@@ -205,7 +233,7 @@ async fn osc_from_any_device_binds_like_midi() {
     };
     learn(&services, &venue, "tilt", "fader", glove(0.2)).await;
     services.inputs.receive(glove(0.75));
-    assert!((value(&venue, "tilt") - 0.75).abs() < 1e-9);
+    assert!((value(&services, &venue, "tilt") - 0.75).abs() < 1e-9);
 }
 
 /// A learn whose caller stopped waiting is over, so the next input moves

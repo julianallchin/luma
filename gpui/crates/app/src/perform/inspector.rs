@@ -3,13 +3,19 @@
 //!
 //! For a pattern it holds the name, the group it lights, the way into its
 //! editor, where its pad (a button node of its graph) is said to live.
-//! A fader cell says what it moves. Every cell lists what of it can be
-//! mapped, each with a Learn button and the controller inputs bound to it.
+//! A fader cell says what it moves. A color cell holds its swatches, each
+//! edited in the color picker, its fade, whether it steps on by itself, and
+//! the live colors it sets. A target holds its name and group. Every cell
+//! lists what of it can be mapped, each with a Learn button and the
+//! controller inputs bound to it.
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, Hsla, SharedString};
-use luma_lib::models::perform::{Cell, CellContent, ControlTarget, LayoutPage, PerformPattern};
+use luma_lib::models::perform::{
+    Cell, CellContent, ControlTarget, LayoutPage, PerformPattern, Step, MOST_SWATCHES,
+};
 use luma_patterns::clip_graph::LiveInputKind;
+use luma_patterns::press::TimeUnit;
 use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{glass, ladder, radius, Enabled};
@@ -18,6 +24,7 @@ use super::surface::Edit;
 use super::{binding_chip, draft_field, group_label, Named, Perform};
 use crate::workspace::Target;
 use crate::Luma;
+use luma_lib::dispatch::handlers::inputs::Mode;
 
 const WIDTH: f32 = 316.;
 
@@ -223,6 +230,8 @@ fn kind(cell: &Cell) -> &'static str {
         CellContent::Master => "Master",
         CellContent::Tap => "Tap",
         CellContent::Fader { .. } => "Fader",
+        CellContent::Color { .. } => "Colors",
+        CellContent::Target { .. } => "Target",
     }
 }
 
@@ -259,7 +268,7 @@ fn cell_sections(
                     ))
                     .child(float::inline_field_row(
                         "Group",
-                        group_picker(state, pattern, target, app),
+                        group_picker(state, cell, &pattern.selection.expression, target, app),
                     ))
                     .child(edit_pattern(pattern, target, app))
                     .child(note(match pattern.graph.pad() {
@@ -294,21 +303,72 @@ fn cell_sections(
                 .child(note("This cell's pattern was deleted."))
                 .into_any_element(),
         ),
-        (CellContent::Fader { label, targets }, _) => {
+        (CellContent::Fader { targets, .. }, _) => {
             sections.push(
                 column()
                     .child(head)
                     .child(name(
                         state,
-                        Named::Fader(cell.id.clone()),
+                        Named::Label(cell.id.clone()),
                         state.title(cell),
                         target,
                         app,
                     ))
                     .into_any_element(),
             );
-            sections.push(moves(state, cell, label, targets, target, app).into_any_element());
+            sections.push(moves(state, cell, targets, target, app).into_any_element());
         }
+        (
+            CellContent::Color {
+                swatches,
+                fade,
+                unit,
+                targets,
+                step,
+                ..
+            },
+            _,
+        ) => {
+            sections.push(
+                column()
+                    .child(head)
+                    .child(name(
+                        state,
+                        Named::Label(cell.id.clone()),
+                        state.title(cell),
+                        target,
+                        app,
+                    ))
+                    .child(note(
+                        "Choosing a swatch fades every live color it sets to that color.",
+                    ))
+                    .into_any_element(),
+            );
+            sections.push(swatch_list(state, cell, swatches, target, app).into_any_element());
+            sections.push(fading(cell, *fade, *unit, target, app).into_any_element());
+            sections.push(stepping(cell, *step, target, app).into_any_element());
+            sections.push(moves(state, cell, targets, target, app).into_any_element());
+        }
+        (CellContent::Target { group, .. }, _) => sections.push(
+            column()
+                .child(head)
+                .child(name(
+                    state,
+                    Named::Label(cell.id.clone()),
+                    state.title(cell),
+                    target,
+                    app,
+                ))
+                .child(float::inline_field_row(
+                    "Group",
+                    group_picker(state, cell, group, target, app),
+                ))
+                .child(note(
+                    "Hold it and press a pad: the pad's pattern plays on this group \
+                     instead of its own. Hold several to play on all of them.",
+                ))
+                .into_any_element(),
+        ),
         (CellContent::Master, _) => sections.push(
             column()
                 .child(head)
@@ -329,14 +389,16 @@ fn cell_sections(
     sections
 }
 
-/// The group a pattern lights, and the menu to pick another.
+/// The group a pattern lights or a target holds, `current`, and the menu to
+/// pick another.
 fn group_picker(
     state: &Perform,
-    pattern: &PerformPattern,
+    cell: &Cell,
+    current: &str,
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
-    let current = pattern.selection.expression.clone();
+    let current = current.to_owned();
     let mut options: Vec<String> = std::iter::once("all".to_owned())
         .chain(state.groups.iter().cloned())
         .collect();
@@ -361,18 +423,14 @@ fn group_picker(
             }
         };
         let rows = options.iter().zip(&labels).map(|(option, label)| {
-            let (app, target, id, option) = (
-                app.clone(),
-                target.clone(),
-                pattern.id.clone(),
-                option.clone(),
-            );
+            let (app, target, id, option) =
+                (app.clone(), target.clone(), cell.id.clone(), option.clone());
             luma_ui::luma_select_item(label, RowState::of(*option == current, false))
                 .id(SharedString::from(format!("perform-group-{option}")))
                 .on_click(move |_, _, cx| {
                     let option = option.clone();
                     app.update(cx, |this, cx| {
-                        this.set_pattern_group(&target, &id, option, cx);
+                        this.set_group(&target, &id, option, cx);
                         this.toggle_group_menu(&target, cx);
                     });
                 })
@@ -406,19 +464,27 @@ fn edit_pattern(pattern: &PerformPattern, target: &Target, app: &Entity<Luma>) -
         .agent_node(Role::Button, "Edit pattern")
 }
 
-/// Everything a fader cell can move: each pattern's level and faders, and
-/// the venue's own controls.
-fn target_options(state: &Perform) -> Vec<(ControlTarget, String)> {
+/// Everything a fader cell can move (each pattern's level and faders, and
+/// the venue's own controls), or with `colors`, everything a color cell can
+/// set: each pattern's live colors.
+fn target_options(state: &Perform, colors: bool) -> Vec<(ControlTarget, String)> {
     let mut options = Vec::new();
     for pattern in state.patterns.iter().flatten() {
-        options.push((
-            ControlTarget::Level {
-                pattern_id: pattern.id.clone(),
-            },
-            format!("{} · Level", pattern.name),
-        ));
+        if !colors {
+            options.push((
+                ControlTarget::Level {
+                    pattern_id: pattern.id.clone(),
+                },
+                format!("{} · Level", pattern.name),
+            ));
+        }
+        let wanted = if colors {
+            LiveInputKind::Color
+        } else {
+            LiveInputKind::Fader
+        };
         for input in pattern.graph.live_inputs() {
-            if input.kind == LiveInputKind::Fader {
+            if input.kind == wanted {
                 options.push((
                     ControlTarget::Node {
                         pattern_id: pattern.id.clone(),
@@ -428,6 +494,9 @@ fn target_options(state: &Perform) -> Vec<(ControlTarget, String)> {
                 ));
             }
         }
+    }
+    if colors {
+        return options;
     }
     for control in &state.controls {
         if !luma_lib::controls::perform::owns(&control.name) {
@@ -442,35 +511,31 @@ fn target_options(state: &Perform) -> Vec<(ControlTarget, String)> {
     options
 }
 
-/// A fader cell's targets: a checklist of what it can move.
+/// A fader or color cell's targets: a checklist of what it can move.
 fn moves(
     state: &Perform,
     cell: &Cell,
-    label: &str,
     targets: &[ControlTarget],
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
-    let options = target_options(state);
+    let colors = matches!(cell.content, CellContent::Color { .. });
+    let options = target_options(state, colors);
     let empty = options.is_empty();
     let rows = options
         .into_iter()
         .enumerate()
         .map(|(index, (option, text))| {
             let checked = targets.contains(&option);
-            let mut next: Vec<ControlTarget> = targets.to_vec();
-            if checked {
-                next.retain(|one| *one != option);
-            } else {
-                next.push(option);
+            let mut content = cell.content.clone();
+            if let Some(next) = content.targets_mut() {
+                if checked {
+                    next.retain(|one| *one != option);
+                } else {
+                    next.push(option);
+                }
             }
-            let edit = Edit::SetContent(
-                cell.id.clone(),
-                CellContent::Fader {
-                    label: label.to_owned(),
-                    targets: next,
-                },
-            );
+            let edit = Edit::SetContent(cell.id.clone(), content);
             div()
                 .id(SharedString::from(format!("perform-moves-{index}")))
                 .flex()
@@ -493,31 +558,324 @@ fn moves(
                 .agent_node(Role::Checkbox, text)
                 .agent_focused(checked)
         });
+    let (label, nothing) = if colors {
+        (
+            "Sets",
+            "Nothing to set yet: give a pattern a live color in its editor.",
+        )
+    } else {
+        ("Moves", "Nothing to move yet: add a pattern first.")
+    };
     column()
-        .child(float::label("Moves"))
-        .children(empty.then(|| note("Nothing to move yet: add a pattern first.")))
+        .child(float::label(label))
+        .children(empty.then(|| note(nothing)))
         .child(div().flex().flex_col().gap(px(2.)).children(rows))
+}
+
+/// What of a color cell an edit here changes.
+struct Palette<'a> {
+    swatches: &'a mut Vec<[f64; 3]>,
+    fade: &'a mut f64,
+    unit: &'a mut TimeUnit,
+    step: &'a mut Option<Step>,
+}
+
+/// Color cell `cell` as `change` leaves it.
+fn recolored(cell: &Cell, change: impl FnOnce(Palette<'_>)) -> Edit {
+    let mut content = cell.content.clone();
+    if let CellContent::Color {
+        swatches,
+        fade,
+        unit,
+        step,
+        ..
+    } = &mut content
+    {
+        change(Palette {
+            swatches,
+            fade,
+            unit,
+            step,
+        });
+    }
+    Edit::SetContent(cell.id.clone(), content)
+}
+
+/// A color cell's swatches: each a chip that opens it in the picker, a way
+/// to add one, and for the one open its picker, its place and removing it.
+fn swatch_list(
+    state: &Perform,
+    cell: &Cell,
+    swatches: &[[f64; 3]],
+    target: &Target,
+    app: &Entity<Luma>,
+) -> impl IntoElement {
+    let open = state
+        .swatch
+        .as_ref()
+        .filter(|editor| editor.cell == cell.id && editor.index < swatches.len());
+    let pick = |index: Option<usize>| {
+        let (app, target, id) = (app.clone(), target.clone(), cell.id.clone());
+        move |_: &gpui::ClickEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
+            app.update(cx, |this, cx| this.open_swatch(&target, &id, index, cx));
+        }
+    };
+    let chips = swatches.iter().enumerate().map(|(index, rgb)| {
+        let chosen = open.is_some_and(|editor| editor.index == index);
+        div()
+            .id(SharedString::from(format!("perform-swatch-edit-{index}")))
+            .size(px(28.))
+            .rounded(px(radius::CONTROL))
+            .bg(super::paint(*rgb))
+            .border_2()
+            .border_color(if chosen {
+                ladder::foreground().into()
+            } else {
+                glass::hairline(0.12)
+            })
+            .cursor_pointer()
+            .on_click(pick((!chosen).then_some(index)))
+            .agent_node(Role::Toggle, format!("Edit swatch {}", index + 1))
+            .agent_focused(chosen)
+    });
+    let full = swatches.len() >= MOST_SWATCHES;
+    let add = {
+        let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
+        let at = swatches.len();
+        let copy = swatches.last().copied().unwrap_or([1.; 3]);
+        luma_ui::button("Add", if full { Enabled::No } else { Enabled::Yes })
+            .id("perform-swatch-add")
+            .when(!full, |button| {
+                button.on_click(move |_, _, cx| {
+                    let edit = recolored(&cell, |palette| palette.swatches.push(copy));
+                    app.update(cx, |this, cx| {
+                        this.edit_surface(&target, edit, cx);
+                        this.open_swatch(&target, &cell.id, Some(at), cx);
+                    });
+                })
+            })
+            .agent_node(Role::Button, "Add swatch")
+    };
+    let editing = open.map(|editor| {
+        let index = editor.index;
+        let last = swatches.len() - 1;
+        let shift = |label: &'static str, to: Option<usize>| {
+            let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
+            let key = format!("perform-swatch-{}", label.to_lowercase().replace(' ', "-"));
+            luma_ui::button(
+                label,
+                if to.is_some() {
+                    Enabled::Yes
+                } else {
+                    Enabled::No
+                },
+            )
+            .id(SharedString::from(key))
+            .when_some(to, |button, to| {
+                button.on_click(move |_, _, cx| {
+                    let edit = recolored(&cell, |palette| palette.swatches.swap(index, to));
+                    app.update(cx, |this, cx| {
+                        this.edit_surface(&target, edit, cx);
+                        this.open_swatch(&target, &cell.id, Some(to), cx);
+                    });
+                })
+            })
+            .agent_node(Role::Button, format!("{label} swatch {}", index + 1))
+        };
+        let remove = {
+            let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
+            let can = last > 0;
+            luma_ui::button("Remove", if can { Enabled::Yes } else { Enabled::No })
+                .id("perform-swatch-remove")
+                .text_color(Hsla::from(ladder::danger()))
+                .when(can, |button| {
+                    button.on_click(move |_, _, cx| {
+                        let edit = recolored(&cell, |palette| {
+                            palette.swatches.remove(index);
+                        });
+                        app.update(cx, |this, cx| {
+                            this.open_swatch(&target, &cell.id, None, cx);
+                            this.edit_surface(&target, edit, cx);
+                        });
+                    })
+                })
+                .agent_node(Role::Button, format!("Remove swatch {}", index + 1))
+        };
+        column().child(editor.picker.clone()).child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(shift("Earlier", index.checked_sub(1)))
+                .child(shift("Later", (index < last).then_some(index + 1)))
+                .child(remove),
+        )
+    });
+    column()
+        .child(float::label("Swatches"))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.))
+                .children(chips)
+                .child(add),
+        )
+        .children(editing)
+}
+
+/// A color cell's fade: its length, and whether it counts beats or seconds.
+fn fading(
+    cell: &Cell,
+    fade: f64,
+    unit: TimeUnit,
+    target: &Target,
+    app: &Entity<Luma>,
+) -> impl IntoElement {
+    let length = {
+        let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
+        float::scrub("Fade", fade, 0., 16., 0.25, 120., move |value, _, cx| {
+            let edit = recolored(&cell, |palette| *palette.fade = value);
+            app.update(cx, |this, cx| this.edit_surface(&target, edit, cx));
+        })
+        .agent_node(Role::Slider, "Fade")
+    };
+    let units = [(TimeUnit::Beats, "Beats"), (TimeUnit::Seconds, "Seconds")]
+        .into_iter()
+        .fold(float::segmented(), |track, (choice, label)| {
+            let chosen = unit == choice;
+            let key = format!("perform-fade-{label}");
+            track.child(
+                float::segment(label, chosen, key.clone())
+                    .id(SharedString::from(key))
+                    .on_click(on_edit(
+                        target,
+                        app,
+                        recolored(cell, |palette| *palette.unit = choice),
+                    ))
+                    .agent_node(Role::Toggle, label)
+                    .agent_focused(chosen),
+            )
+        });
+    column()
+        .child(float::label("Fade"))
+        .child(float::inline_field_row("Length", length))
+        .child(float::inline_field_row("In", units))
+}
+
+/// Whether a color cell steps on by itself, every how many bars, and
+/// whether it loops back to its first swatch.
+fn stepping(
+    cell: &Cell,
+    step: Option<Step>,
+    target: &Target,
+    app: &Entity<Luma>,
+) -> impl IntoElement {
+    let set =
+        |next: Option<Step>| on_edit(target, app, recolored(cell, |palette| *palette.step = next));
+    let choices = [
+        ("Off", None),
+        (
+            "Every few bars",
+            Some(step.unwrap_or(Step {
+                bars: 4,
+                loops: true,
+            })),
+        ),
+    ];
+    let switch = choices
+        .into_iter()
+        .fold(float::segmented(), |track, (label, choice)| {
+            let chosen = step.is_some() == choice.is_some();
+            let key = format!("perform-step-{label}");
+            track.child(
+                float::segment(label, chosen, key.clone())
+                    .id(SharedString::from(key))
+                    .on_click(set(choice))
+                    .agent_node(Role::Toggle, format!("Step: {label}"))
+                    .agent_focused(chosen),
+            )
+        });
+    let details = step.map(|step| {
+        let bars = {
+            let (app, target, cell) = (app.clone(), target.clone(), cell.clone());
+            float::scrub(
+                "Bars",
+                f64::from(step.bars),
+                1.,
+                32.,
+                1.,
+                120.,
+                move |value, _, cx| {
+                    let next = Step {
+                        bars: value as u16,
+                        ..step
+                    };
+                    let edit = recolored(&cell, |palette| *palette.step = Some(next));
+                    app.update(cx, |this, cx| this.edit_surface(&target, edit, cx));
+                },
+            )
+            .agent_node(Role::Slider, "Bars")
+        };
+        let looping = div()
+            .id("perform-step-loop")
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(6.))
+            .py(px(4.))
+            .rounded(px(radius::ROW))
+            .cursor_pointer()
+            .hover(|style| style.bg(glass::glass_hover()))
+            .child(float::checkbox(step.loops))
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .child("Back to the first after the last"),
+            )
+            .on_click(set(Some(Step {
+                loops: !step.loops,
+                ..step
+            })))
+            .agent_node(Role::Checkbox, "Loop")
+            .agent_focused(step.loops);
+        column()
+            .child(float::inline_field_row("Every", bars))
+            .child(looping)
+    });
+    column()
+        .child(float::label("Steps"))
+        .child(switch)
+        .children(details)
+        .child(note(
+            "It moves on to its next swatch on the set's bars: the deck's, or \
+             4 beats of the tapped tempo.",
+        ))
 }
 
 /// What of the cell can be mapped, each with Learn and its bindings.
 fn mapping(state: &Perform, cell: &Cell, target: &Target, app: &Entity<Luma>) -> impl IntoElement {
-    let parts = state.parts(cell);
+    // A live color is set by a color cell, not by a controller.
+    let parts: Vec<(super::Part, Mode)> = state
+        .parts(cell)
+        .into_iter()
+        .filter_map(|part| {
+            let mode = part.kind.mode()?;
+            Some((part, mode))
+        })
+        .collect();
     let listening = parts
         .iter()
-        .any(|part| state.learning.as_deref() == Some(part.control.as_str()));
+        .any(|(part, _)| state.learning.as_deref() == Some(part.control.as_str()));
     let mapped = parts
         .iter()
-        .any(|part| state.bindings(&part.control).next().is_some());
+        .any(|(part, _)| state.bindings(&part.control).next().is_some());
     let accent = Hsla::from(ladder::accent());
-    let rows = parts.iter().map(|part| {
+    let rows = parts.iter().map(|(part, mode)| {
         let waiting = state.learning.as_deref() == Some(part.control.as_str());
         let key = format!("perform-learn-{}", part.control);
-        let (learn_app, learn_target, control, mode) = (
-            app.clone(),
-            target.clone(),
-            part.control.clone(),
-            part.kind.mode(),
-        );
+        let (learn_app, learn_target, control, mode) =
+            (app.clone(), target.clone(), part.control.clone(), *mode);
         let learn = if waiting {
             float::btn_primary("Cancel").id(SharedString::from(key))
         } else {

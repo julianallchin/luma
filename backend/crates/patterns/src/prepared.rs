@@ -1,5 +1,7 @@
 //! Validated, flattened graphs. Mapping/other fixed outputs are computed once;
 //! the frame loop never walks definitions or repeats geometry solves.
+use crate::clip_graph::clock_table::{self, Line};
+use crate::clip_graph::Kernel;
 use crate::{
     runtime::{self, Batch, EvaluatedValue},
     Binding, Body, Cell, Definition, Error, Frame, Graph, Library, Primitive, Result, Value,
@@ -35,10 +37,19 @@ pub struct PreparedGraph {
     features: Option<std::sync::Arc<dyn crate::FeatureSource>>,
     requests: Vec<crate::FeatureRequest>,
     baked: Vec<Option<EvaluatedValue>>,
-    /// The graph's fader and button nodes, in the order its control
-    /// kernels index them.
+    /// The graph's fader, live color and button nodes, in the order its
+    /// control kernels index them.
     live_inputs: Vec<crate::clip_graph::LiveInput>,
     controls: Option<std::sync::Arc<dyn crate::ControlSource>>,
+    /// The lines of its live clocks while one player plays it live.
+    played: Option<std::sync::Arc<Played>>,
+}
+/// What a live set's player keeps of a graph between frames: each live
+/// clock's line per head, by step, and the bar they land on.
+#[derive(Debug)]
+struct Played {
+    beats_per_bar: f64,
+    lines: std::sync::Mutex<BTreeMap<usize, Vec<Line>>>,
 }
 impl PreparedGraph {
     /// A clip graph, checked and lowered onto kernels of `library` over the
@@ -85,6 +96,7 @@ impl PreparedGraph {
             baked: Vec::new(),
             live_inputs,
             controls: None,
+            played: None,
         };
         prepared.outputs = prepared.lower_definition(library, "clip", root, BTreeMap::new())?;
         // A nested definition may offer several independent outputs. Only the
@@ -135,10 +147,24 @@ impl PreparedGraph {
         self.evaluate(self.clip_start)?;
         Ok(self)
     }
-    /// Read the fader and button nodes from `controls` at every
+    /// Read the fader, live color and button nodes from `controls` at every
     /// evaluation. Nothing is rebuilt: live values are never baked.
     pub fn with_controls(mut self, controls: std::sync::Arc<dyn crate::ControlSource>) -> Self {
         self.controls = Some(controls);
+        self
+    }
+
+    /// Keep each live clock's line from one evaluation to the next, for the
+    /// one player of a live set, which evaluates its frames in order on a
+    /// clock whose bars are `beats_per_bar` long from beat 0. A clock a live
+    /// control moves then changes speed without a jump in its turns, and on
+    /// the bar. Without it, such a clock reads as a fixed clock of its
+    /// period now. Clones share the lines.
+    pub fn played_live(mut self, beats_per_bar: f64) -> Self {
+        self.played = Some(std::sync::Arc::new(Played {
+            beats_per_bar,
+            lines: Default::default(),
+        }));
         self
     }
 
@@ -147,21 +173,27 @@ impl PreparedGraph {
         &self.live_inputs
     }
 
+    /// Every live input's numbers, in order: one for a fader or a button,
+    /// three for a color, each 0–1.
     fn control_values(&self) -> Vec<f64> {
-        self.live_inputs
-            .iter()
-            .map(|input| {
-                let value = self
-                    .controls
-                    .as_ref()
-                    .map_or(0.0, |source| source.value(input));
-                if value.is_finite() {
-                    value.clamp(0.0, 1.0)
-                } else {
-                    0.0
+        let mut values = Vec::new();
+        for input in &self.live_inputs {
+            match (input.kind, &self.controls) {
+                (crate::clip_graph::LiveInputKind::Color, Some(source)) => {
+                    values.extend(source.color(input));
                 }
-            })
-            .collect()
+                (kind, None) => values.extend(std::iter::repeat_n(0.0, kind.width())),
+                (_, Some(source)) => values.push(source.value(input)),
+            }
+        }
+        for value in &mut values {
+            *value = if value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+        values
     }
 
     fn live_steps<'a>(
@@ -224,7 +256,13 @@ impl PreparedGraph {
         let controls = self.control_values();
         for index in self.live_steps(self.steps.len(), baked, self.outputs.values()) {
             let step = &self.steps[index];
-            let outputs = self.run_step(step, beats, features, &controls, &slots)?;
+            // Every fixed clock is baked: one evaluated here a live control
+            // moves.
+            let outputs = if step.primitive == Primitive::Kernel(Kernel::ClockTable) {
+                self.live_clock(index, step, beats, &slots)?
+            } else {
+                self.run_step(step, beats, features, &controls, &slots)?
+            };
             for (name, value) in outputs {
                 slots[step.outputs[&name]] = Some(value);
             }
@@ -240,6 +278,35 @@ impl PreparedGraph {
                 ))
             })
             .collect()
+    }
+    /// Live clock step `index`'s table at `beats`, its lines played on when
+    /// the graph is played live.
+    fn live_clock(
+        &self,
+        index: usize,
+        step: &Step,
+        beats: &[f64],
+        slots: &[Option<EvaluatedValue>],
+    ) -> Result<BTreeMap<String, EvaluatedValue>> {
+        let period = step.inputs["period"].read(slots)?;
+        let table = match &self.played {
+            Some(played) => {
+                let mut lines = played.lines.lock().expect("clock lines poisoned");
+                clock_table::live(
+                    period.numeric(),
+                    beats,
+                    Some(lines.entry(index).or_default()),
+                    self.clip_start,
+                    played.beats_per_bar,
+                )
+            }
+            None => clock_table::live(period.numeric(), beats, None, self.clip_start, 0.),
+        }
+        .map_err(|error| Error(format!("{}: {error}", step.label)))?;
+        Ok(BTreeMap::from([(
+            "value".into(),
+            EvaluatedValue::from_signal(crate::ValueType::Signal(crate::SignalType::ANY), table)?,
+        )]))
     }
     fn run_step(
         &self,

@@ -6,7 +6,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command
 prose in it is the only hand-written part and is carried across by name.
 
-**133 commands** across **26 domains**
+**134 commands** across **26 domains**
 
 ## Domains
 
@@ -28,7 +28,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `inputs` | 6 | `backend/src/dispatch/handlers/inputs.rs` |
 | `lasers` | 1 | `backend/src/dispatch/handlers/lasers.rs` |
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
-| `perform` | 13 | `backend/src/dispatch/handlers/perform.rs` |
+| `perform` | 14 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `scores` | 9 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
@@ -38,7 +38,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **133** | |
+| **total** | **134** | |
 
 ## Commands
 
@@ -210,6 +210,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `delete_perform_pattern` | `venueId: String`<br>`patternId: String` | `()` |
 | `get_perform_layout` | `venueId: String` | `Option<PerformLayout>` |
 | `save_perform_layout` | `venueId: String`<br>`layout: PerformLayout` | `()` |
+| `perform_add_busk_page` | `venueId: String` | `String` |
 | `perform_open_set` | `venueId: String` | `()` |
 | `perform_control` | `name: String`<br>`value: f64` | `()` |
 | `perform_press` | `name: String`<br>`down: bool` | `()` |

@@ -296,9 +296,14 @@ impl Lowering<'_> {
             return Ok((known.clone(), key));
         }
         let every = self.number(id, "every", 1.)?;
-        let duration = self.duration(id)?;
         let every_table = self.clock_table(&every);
-        let duration_table = self.clock_table(&duration);
+        // Events as long as every count on its own table.
+        let duration_table = if self.node(id).inputs.contains_key("duration") {
+            let duration = self.duration(id)?;
+            self.clock_table(&duration)
+        } else {
+            every_table.clone()
+        };
         let events = self.kernel(
             Kernel::Events,
             vec![
@@ -523,19 +528,24 @@ impl Lowering<'_> {
         })
     }
 
-    /// A fader or button node's value, 0–1 and the same at every head: the
-    /// `control` kernel at the node's place among the graph's live inputs.
+    /// A fader, live color or button node's value, each part 0–1 and the
+    /// same at every head: a `control` kernel per number of it, at the
+    /// node's place among the numbers of the graph's live inputs.
     fn live(&mut self, id: &str) -> Lowered {
-        let index = self
-            .graph
-            .nodes
+        let inputs = self.graph.live_inputs();
+        let at = inputs
             .iter()
-            .filter(|(_, node)| node.kind.is_live())
-            .position(|(known, _)| known == id)
+            .position(|input| input.node == id)
             .expect("a live node is among the graph's live inputs");
-        let value = self.library_node("control", vec![("index", number(index as f64))]);
+        let first: usize = inputs[..at].iter().map(|input| input.kind.width()).sum();
+        let parts: Vec<Binding> = (first..first + inputs[at].kind.width())
+            .map(|index| {
+                let value = self.library_node("control", vec![("index", number(index as f64))]);
+                output(&value, "value")
+            })
+            .collect();
         Lowered {
-            parts: std::array::from_fn(|_| output(&value, "value")),
+            parts: std::array::from_fn(|c| parts[c.min(parts.len() - 1)].clone()),
             clock: None,
         }
     }

@@ -12,14 +12,21 @@ pub(crate) async fn prepare_scene(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
+    controls: &crate::controls::ControlBanks,
     track_id: &str,
     score: &Score,
 ) -> Result<crate::eval::Scene, String> {
-    Ok(
-        prepare_scene_data(access, fixtures_root, storage, track_id, score, false)
-            .await?
-            .scene,
+    Ok(prepare_scene_data(
+        access,
+        fixtures_root,
+        storage,
+        controls,
+        track_id,
+        score,
+        false,
     )
+    .await?
+    .scene)
 }
 
 /// A compiled scene and the cells each clip lights.
@@ -36,6 +43,7 @@ async fn prepare_scene_data(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
+    controls: &crate::controls::ControlBanks,
     track_id: &str,
     score: &Score,
     single: bool,
@@ -145,7 +153,7 @@ async fn prepare_scene_data(
                 .await?,
         )
     };
-    let controls = crate::controls::venue(access.venue_id());
+    let controls = controls.venue(access.venue_id());
     for (id, clip, cells, prepared) in prepared_clips {
         let prepared = prepared.with_controls(controls.clone());
         let prepared = match &features {
@@ -203,15 +211,22 @@ pub(crate) async fn prepare_clip_preview(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
+    controls: &crate::controls::ControlBanks,
     track_id: &str,
     score: &Score,
     clip_id: &str,
 ) -> Result<ClipPreview, String> {
-    Ok(
-        prepare_single_clip(access, fixtures_root, storage, track_id, score, clip_id)
-            .await?
-            .0,
+    Ok(prepare_single_clip(
+        access,
+        fixtures_root,
+        storage,
+        controls,
+        track_id,
+        score,
+        clip_id,
     )
+    .await?
+    .0)
 }
 
 /// [`prepare_clip_preview`], and the cells the clip lights.
@@ -219,6 +234,7 @@ async fn prepare_single_clip(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
+    controls: &crate::controls::ControlBanks,
     track_id: &str,
     score: &Score,
     clip_id: &str,
@@ -229,8 +245,16 @@ async fn prepare_single_clip(
         .ok_or_else(|| format!("unknown clip {clip_id}"))?;
     let mut single = score.clone();
     single.clips.retain(|id, _| id == clip_id);
-    let SceneData { scene, mut cells } =
-        prepare_scene_data(access, fixtures_root, storage, track_id, &single, true).await?;
+    let SceneData { scene, mut cells } = prepare_scene_data(
+        access,
+        fixtures_root,
+        storage,
+        controls,
+        track_id,
+        &single,
+        true,
+    )
+    .await?;
     let cells = cells.remove(clip_id).unwrap_or_default();
     let span = if let Some(annotation) = scene.annotations.first() {
         annotation.span

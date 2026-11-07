@@ -176,8 +176,8 @@ pub struct PerformView {
     pub page: Option<PerformPageView>,
     pub selected: Option<PerformCellView>,
     /// The patterns that play: those whose pads are on and, while the set is
-    /// open, those with no pad; the top of the set first, at most
-    /// [`MAX_PLAYING`].
+    /// open, those with no pad, then each instance on; the top of the set
+    /// first, at most [`MAX_PLAYING`].
     pub playing: Vec<PlayingPattern>,
     #[serde(default)]
     pub playing_omitted: usize,
@@ -211,8 +211,8 @@ pub struct PerformCellView {
     pub row: u16,
     pub width: u16,
     pub height: u16,
-    /// `pattern <id> "<name>", selection <expression>`, `master`, `tap` or
-    /// `fader "<label>"` and what it moves.
+    /// `pattern <id> "<name>", selection <expression>`, `master`, `tap`,
+    /// `fader "<label>"` and what it moves, a color cell, or `target`.
     pub holds: String,
 }
 
@@ -222,6 +222,10 @@ pub struct PlayingPattern {
     pub id: String,
     pub name: String,
     pub level: f64,
+    /// The groups an instance plays on; empty for the pattern on its own
+    /// selection.
+    #[serde(default)]
+    pub on: Vec<String>,
 }
 
 /// What the set plays at: a deck's tempo, or the tapped one.
@@ -266,21 +270,33 @@ impl PerformView {
         let pages = layout.map_or(&[][..], |layout| &layout.pages[..]);
         let shown = pages.get(page.min(pages.len().saturating_sub(1)));
         let value = |name: &str, rest: f64| {
-            live.and_then(|live| live.controls.get(name).copied())
+            live.and_then(|live| live.bank.controls.get(name).copied())
                 .unwrap_or(rest)
+        };
+        let on = |button: &str| {
+            live.is_some_and(|live| live.bank.buttons.get(button).is_some_and(|b| b.on()))
         };
         let mut playing: Vec<PlayingPattern> = patterns
             .iter()
-            .filter(|pattern| {
-                live.is_some_and(|live| match names::pad(pattern) {
-                    Some(pad) => live.buttons.get(&pad).is_some_and(|pad| pad.on()),
-                    None => live.clock.is_some(),
-                })
-            })
-            .map(|pattern| PlayingPattern {
-                id: pattern.id.clone(),
-                name: pattern.name.clone(),
-                level: value(&names::level(&pattern.id), 1.0),
+            .flat_map(|pattern| {
+                let own = match names::pad(pattern) {
+                    Some(pad) => on(&pad),
+                    None => live.is_some_and(|live| live.clock.is_some()),
+                };
+                let instances = live
+                    .into_iter()
+                    .flat_map(|live| &live.bank.instances)
+                    .filter(|(button, instance)| instance.pattern_id == pattern.id && on(button))
+                    .map(|(_, instance)| instance.on.clone());
+                own.then(Vec::new)
+                    .into_iter()
+                    .chain(instances)
+                    .map(|on| PlayingPattern {
+                        id: pattern.id.clone(),
+                        name: pattern.name.clone(),
+                        level: value(&names::level(&pattern.id), 1.0),
+                        on,
+                    })
             })
             .collect();
         let playing_omitted = playing.len().saturating_sub(MAX_PLAYING);
@@ -368,6 +384,23 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
                 |pattern| format!("{:?}", pattern.name),
             )
     };
+    let moves = |targets: &[crate::models::perform::ControlTarget]| {
+        let targets: Vec<String> = targets
+            .iter()
+            .map(|target| match target {
+                crate::models::perform::ControlTarget::Level { pattern_id } => {
+                    format!("the level of {}", name(pattern_id))
+                }
+                crate::models::perform::ControlTarget::Node { pattern_id, node } => {
+                    format!("{node} of {}", name(pattern_id))
+                }
+                crate::models::perform::ControlTarget::Named { name } => {
+                    format!("control {name}")
+                }
+            })
+            .collect();
+        targets.join(", ")
+    };
     match &cell.content {
         CellContent::Pattern { pattern_id } => {
             match patterns.iter().find(|p| &p.id == pattern_id) {
@@ -381,26 +414,43 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
         CellContent::Master => "master".into(),
         CellContent::Tap => "tap".into(),
         CellContent::Fader { label, targets } => {
-            let targets: Vec<String> = targets
-                .iter()
-                .map(|target| match target {
-                    crate::models::perform::ControlTarget::Level { pattern_id } => {
-                        format!("the level of {}", name(pattern_id))
-                    }
-                    crate::models::perform::ControlTarget::Node { pattern_id, node } => {
-                        format!("{node} of {}", name(pattern_id))
-                    }
-                    crate::models::perform::ControlTarget::Named { name } => {
-                        format!("control {name}")
-                    }
-                })
-                .collect();
             if targets.is_empty() {
                 format!("fader {label:?}, moving nothing")
             } else {
-                format!("fader {label:?}, moving {}", targets.join(", "))
+                format!("fader {label:?}, moving {}", moves(targets))
             }
         }
+        CellContent::Color {
+            label,
+            swatches,
+            fade,
+            unit,
+            targets,
+            step,
+        } => {
+            let unit = match unit {
+                luma_patterns::press::TimeUnit::Beats => "beats",
+                luma_patterns::press::TimeUnit::Seconds => "seconds",
+            };
+            let setting = if targets.is_empty() {
+                "setting nothing".to_owned()
+            } else {
+                format!("setting {}", moves(targets))
+            };
+            let step = step.map_or(String::new(), |step| {
+                format!(
+                    ", the next every {} bars{}",
+                    step.bars,
+                    if step.loops { ", looping" } else { "" }
+                )
+            });
+            format!(
+                "color {label:?}, {} swatches, {setting}, fading over {fade} {unit}{step}",
+                swatches.len()
+            )
+        }
+        CellContent::Target { label, group } if label.is_empty() => format!("target on {group}"),
+        CellContent::Target { label, group } => format!("target {label:?} on {group}"),
     }
 }
 
@@ -579,9 +629,14 @@ fn render_perform(out: &mut String, perform: &PerformView) {
     } else {
         let _ = writeln!(out, "Playing ({total}):");
         for pattern in &perform.playing {
+            let on = if pattern.on.is_empty() {
+                String::new()
+            } else {
+                format!(" on {}", pattern.on.join(", "))
+            };
             let _ = writeln!(
                 out,
-                "- {} {:?} at level {:.2}",
+                "- {} {:?}{on} at level {:.2}",
                 pattern.id, pattern.name, pattern.level
             );
         }
@@ -956,8 +1011,11 @@ mod tests {
                 bpm: 124.0,
                 beat: 3.0,
             })),
-            [(names::level("p1"), 0.5), (names::MASTER.to_owned(), 0.8)].into(),
-            [(names::pad(&patterns[0]).expect("a pad"), on)].into(),
+            crate::controls::Playing {
+                controls: [(names::level("p1"), 0.5), (names::MASTER.to_owned(), 0.8)].into(),
+                buttons: [(names::pad(&patterns[0]).expect("a pad"), on)].into(),
+                ..Default::default()
+            },
         );
         let view = PerformView::capture(
             true,

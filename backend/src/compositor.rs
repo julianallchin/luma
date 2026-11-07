@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use crate::controls::ControlBanks;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::Scene;
 use crate::render_engine::{Built, RenderEngine, SceneTarget};
@@ -64,22 +65,33 @@ pub(crate) async fn install_score_scene(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &Path,
+    controls: &ControlBanks,
     render_engine: &RenderEngine,
     score_id: &str,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
     let update = render_engine.begin_scene_update(SceneTarget::Active);
-    let scene = build_score_scene(pool, storage, resource_root, score_id, graph_score).await?;
+    let scene = build_score_scene(
+        pool,
+        storage,
+        resource_root,
+        controls,
+        score_id,
+        graph_score,
+    )
+    .await?;
     render_engine.finish_update(update, Built::Scene(scene));
     Ok(())
 }
 
 /// Resolve and compile one score, including a caller's optional working copy.
 /// Rendering, performance decks and agent previews share this format boundary.
+/// Its faders and buttons read the venue's bank of `controls`.
 pub async fn build_score_scene(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &Path,
+    controls: &ControlBanks,
     score_id: &str,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<Scene, String> {
@@ -94,6 +106,7 @@ pub async fn build_score_scene(
         &mut access,
         resource_root,
         storage,
+        controls,
         &track_id,
         &score,
     )

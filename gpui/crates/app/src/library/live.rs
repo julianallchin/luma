@@ -102,6 +102,18 @@ impl Library {
         })
     }
 
+    /// Add a busk page made from a venue's rig, beside its set. Answers the
+    /// page's id.
+    pub(crate) fn perform_add_busk_page(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("perform_add_busk_page", |services| async move {
+            handlers::perform::perform_add_busk_page(&services, venue_id).await
+        })
+    }
+
     /// Compile a venue's Perform set, to play as its controls say.
     pub(crate) fn perform_open_set(
         &self,
@@ -125,17 +137,19 @@ impl Library {
         })
     }
 
-    /// Press (`down`) or let go of a button of the open Perform set: a
-    /// button node of a pattern's graph, its pad among them. It plays as the button
-    /// says: a toggle flips on the press, a flash holds until the release.
+    /// Press (`true`) or let go of buttons of the open Perform set, one
+    /// after another: a button node of a pattern's graph, its pad among
+    /// them, or a target. Each plays as the button says: a toggle flips on
+    /// the press, a flash holds until the release.
     pub(crate) fn perform_press(
         &self,
-        name: &str,
-        down: bool,
+        presses: Vec<(String, bool)>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let name = name.to_owned();
         self.call("perform_press", move |services| async move {
-            handlers::perform::perform_press(&services, name, down).await
+            for (name, down) in presses {
+                handlers::perform::perform_press(&services, name, down).await?;
+            }
+            Ok(())
         })
     }
 

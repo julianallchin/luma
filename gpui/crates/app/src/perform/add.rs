@@ -1,6 +1,6 @@
 //! The menu an empty place's "+" opens in Setup: a new pattern, from a
-//! preset, lighting the group chosen here; or the master, tap, or a fader of
-//! its own.
+//! preset, lighting the group chosen here; or the master, tap, a fader of
+//! its own, a color cell, or a target on the group chosen.
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, SharedString};
@@ -15,6 +15,22 @@ use crate::workspace::Target;
 use crate::Luma;
 
 const WIDTH: f32 = 380.;
+
+/// A new color cell: a warm white, red, amber and blue, fading over a beat,
+/// setting nothing until its targets are chosen.
+fn colors() -> CellContent {
+    CellContent::Color {
+        label: "Colors".into(),
+        swatches: ["#ffd9a8", "#ff2a1a", "#ffa000", "#2050ff"]
+            .into_iter()
+            .filter_map(luma_patterns::color_space::from_hex)
+            .collect(),
+        fade: 1.,
+        unit: luma_patterns::press::TimeUnit::Beats,
+        targets: Vec::new(),
+        step: None,
+    }
+}
 
 /// The menu, hung off the place it fills. A press outside closes it.
 pub(super) fn menu(state: &Perform, target: &Target, app: &Entity<Luma>) -> AnyElement {
@@ -155,6 +171,14 @@ pub(super) fn menu(state: &Perform, target: &Target, app: &Entity<Luma>) -> AnyE
                     CellContent::Fader {
                         label: "Fader".into(),
                         targets: Vec::new(),
+                    },
+                ))
+                .child(other("Colors", colors()))
+                .child(other(
+                    "Target",
+                    CellContent::Target {
+                        label: String::new(),
+                        group: adding.group.clone(),
                     },
                 )),
         );

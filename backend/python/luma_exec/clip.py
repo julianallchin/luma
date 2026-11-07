@@ -258,8 +258,8 @@ class Coordinate(Node):
 
 
 class Value(Node):
-    """A curve's, a math node's or a value node's output: a number, vector or
-    color wire."""
+    """A curve's, a math node's or a value node's output, or a live color: a
+    number, vector or color wire."""
 
 
 class Heads(Node):
@@ -350,8 +350,15 @@ def _gradient(value, where):
     raise ClipError(f"{where}: expected a gradient preset name, (t, color) pairs or stops; got {value!r}")
 
 
+def _class(kind, settings):
+    """The class of a node: its kind's, but a live color is a Value."""
+    if kind == "control" and (settings or {}).get("kind") == "color":
+        return Value
+    return _CLASSES.get(kind, Node)
+
+
 def _make(kind, settings=None, **inputs):
-    return _CLASSES[kind](kind, settings, {key: _input(item, f"{kind}.{key}") for key, item in inputs.items()})
+    return _class(kind, settings)(kind, settings, {key: _input(item, f"{kind}.{key}") for key, item in inputs.items()})
 
 
 # ---------------------------------------------------------------------------
@@ -521,17 +528,24 @@ def audio(low_hz=None, high_hz=None) -> Coordinate:
     return _make("audio", low_hz=low_hz, high_hz=high_hz)
 
 
-def control(name="fader") -> Coordinate:
-    """A live control's value, 0-1: a fader, pad, MIDI or OSC input on the
-    Perform screen bound to `name`. Names are snake_case, like groups.
+def control(name="fader", kind="number"):
+    """A live control: a fader, pad, MIDI or OSC input on the Perform screen
+    bound to `name`. Names are snake_case, like groups.
 
-    A curve maps it to a range: curve(control("drop"), "Ramp up", low=0.2).
-    Every clip that names a control reads the same value. It cannot set a
-    clock's every or duration.
+    kind "number" is a fader, 0-1, a coordinate: a curve maps it to a range,
+    curve(control("drop"), "Ramp up", low=0.2). kind "color" is a live color,
+    a color wire: color(color=control("main", kind="color")); a color cell
+    sets it. Every clip that names a control reads the same value. Wired
+    into a clock's every or duration it is a speed: time(every=curve(
+    control("speed"), "Steps 4", low=0.5, high=2)) steps, "Ramp up" glides.
+    In a Perform set the clock changes speed with no jump, a speed that fits
+    the bar on the bar.
     """
     if not isinstance(name, str):
         raise ClipError(f"control.name: expected a control name such as \"drop\"; got {name!r}")
-    return _make("control", {"name": name})
+    if kind not in ("number", "color"):
+        raise ClipError(f'control.kind: expected "number" or "color"; got {kind!r}. Example: control("main", kind="color")')
+    return _make("control", {"name": name, "kind": kind})
 
 
 # A button's lengths and sustain, stored as settings: text of a number.
@@ -539,7 +553,7 @@ _BUTTON_NUMBERS = ("attack", "decay", "sustain", "release")
 
 
 def button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0, unit="beats",
-           shape="smooth") -> Coordinate:
+           shape="smooth", start="now") -> Coordinate:
     """A button's envelope, 0-1: a pad a performer presses.
 
     mode "flash" is on while held, "toggle" from one press to the next. The
@@ -547,14 +561,17 @@ def button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0,
     holds while on, and falls to 0 over the release; lengths are in unit
     ("beats" or "seconds"), each stage shaped "smooth", "linear", "punchy" or
     "snap". A hit: button("hit", decay=0.5, sustain=0, shape="punchy").
+    A press, on or off, takes effect at start: "now", or on the set's next
+    "beat" or "bar", so busking lands on the music.
     In a score it reads the venue's control `name`, as a plain gate. In a
     Perform pattern the button the output's alpha depends on is its pad, which
     turns it on and off: color(..., alpha=curve(button("pad", "toggle",
-    attack=2, release=4))) fades in over 2 beats and out over 4.
+    start="beat", attack=2, release=4))) starts on the next beat and fades in
+    over 2 beats, and out over 4.
     """
     if not isinstance(name, str):
         raise ClipError(f"button.name: expected a control name such as \"hit\"; got {name!r}")
-    settings = {"name": name, "mode": mode, "unit": unit, "shape": shape}
+    settings = {"name": name, "mode": mode, "start": start, "unit": unit, "shape": shape}
     for key, value in zip(_BUTTON_NUMBERS, (attack, decay, sustain, release)):
         value = float(_number(value, f"button.{key}"))
         settings[key] = str(int(value)) if value.is_integer() else repr(value)
@@ -1006,7 +1023,7 @@ class Graph:
                     value = [built[item["node"]] if wire(item) else item for item in value]
                 inputs[input_name] = value
             kind = record.get("kind")
-            built[node_id] = _CLASSES.get(kind, Node)(kind, record.get("settings"), inputs, id=node_id)
+            built[node_id] = _class(kind, record.get("settings"))(kind, record.get("settings"), inputs, id=node_id)
             for other, deps in waiting.items():
                 if node_id in deps:
                     deps.discard(node_id)
@@ -1103,9 +1120,9 @@ def _gradient_literal(value):
     return _json_literal(value)
 
 
-_DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
+_DEFAULT_SETTINGS = {"space": {"kind": "line"}, "control": {"kind": "number"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
                      "figure": {"kind": "beams"}, "laser": {"zone": ""},
-                     "button": {"name": "button", "mode": "flash", "attack": "0", "decay": "0", "sustain": "1",
+                     "button": {"name": "button", "mode": "flash", "start": "now", "attack": "0", "decay": "0", "sustain": "1",
                                 "release": "0", "unit": "beats", "shape": "smooth"}}
 # Python precedence: an atom (a name, a number, a call) binds tightest.
 _ATOM = 3

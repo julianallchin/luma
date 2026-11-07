@@ -5,9 +5,12 @@
 //! page, so a page of four rows on a tall window gets tall cells. What a
 //! pattern cell shows follows its shape. A single place is its pad alone; a
 //! taller cell stands its level and its graph's other faders and buttons up
-//! under the pad, and a wider one lays them along it. A pattern with no pad
-//! shows the same face, which nothing presses: it plays whenever the set is
-//! open.
+//! under the pad, and a wider one lays them along it; a live color shows as
+//! its color, which a color cell sets. A pattern with no pad shows the same
+//! face, which nothing presses: it plays whenever the set is open. While a
+//! pattern plays on targets, its cell names where it plays. A color cell
+//! fills itself with its swatches, the one on marked. A target is a pad held
+//! while pressed.
 
 use std::cell::Cell as Shared;
 
@@ -154,6 +157,15 @@ fn tabs(
                     .on_click(on_edit(target, app, Edit::AddPage))
                     .agent_node(Role::Button, "Add page"),
             )
+            .child({
+                let (app, target) = (app.clone(), target.clone());
+                float::btn("Busk page", "perform-page-busk")
+                    .id("perform-page-busk")
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| this.add_busk_page(&target, cx));
+                    })
+                    .agent_node(Role::Button, "Add busk page")
+            })
         })
         .child(div().flex_1())
         .child(
@@ -549,6 +561,8 @@ fn face(state: &Perform, cell: &Cell, rect: Rect, live: Live) -> AnyElement {
         CellContent::Pattern { pattern_id } => pattern_face(state, cell, pattern_id, rect, live),
         CellContent::Master | CellContent::Fader { .. } => fader_face(state, cell, rect, live),
         CellContent::Tap => tap_face(state, cell, live),
+        CellContent::Color { swatches, .. } => color_face(state, cell, swatches, rect, live),
+        CellContent::Target { .. } => target_face(state, cell, live),
     }
 }
 
@@ -613,9 +627,39 @@ fn pattern_face(
         Some((pad, controls)) if pad.kind == PartKind::Pad => (Some(pad), controls),
         _ => (None, &parts[..]),
     };
-    let level = pad.map_or(0., |pad| state.value(&pad.control, 0.) as f32);
-    let on = pad.is_some_and(|pad| state.on(&pad.control));
+    // It glows by the brightest of its pad and its instances, and is on
+    // while any is.
+    let plays = state.plays(pattern_id);
+    let level = plays
+        .iter()
+        .map(|(button, _)| state.value(button, 0.) as f32)
+        .fold(0., f32::max);
+    let on = plays.iter().any(|(button, _)| state.on(button));
+    let waiting = plays.iter().any(|(button, _)| state.waiting(button));
+    // Where it plays, when that is more than its own selection.
+    let places: Vec<String> = pattern
+        .map(|pattern| {
+            plays
+                .iter()
+                .filter(|(button, _)| state.on(button))
+                .map(|(_, groups)| match groups.as_slice() {
+                    [] => group_label(&pattern.selection.expression),
+                    groups => groups
+                        .iter()
+                        .map(|group| group_label(group))
+                        .collect::<Vec<_>>()
+                        .join(" + "),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let on_targets = plays
+        .iter()
+        .any(|(button, groups)| !groups.is_empty() && state.on(button));
     let subtitle = pattern.map(|pattern| {
+        if on_targets {
+            return places.join(", ");
+        }
         let group = group_label(&pattern.selection.expression);
         match pattern.graph.pad().map(|pad| pad.kind) {
             Some(LiveInputKind::Button(press)) if press.mode == PressMode::Flash => {
@@ -638,51 +682,44 @@ fn pattern_face(
             fill.rounded_b(corner)
         })
         .bg(tint.opacity(level.clamp(0., 1.)));
-    let pad_view =
-        div().relative().w_full().min_h_0().child(fill).child(
-            div()
-                .relative()
-                .size_full()
-                .p(px(10.))
-                .flex()
-                .flex_col()
-                .justify_between()
-                .gap(px(4.))
-                .child(
-                    div()
-                        .flex()
-                        .items_start()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .line_clamp(2)
-                                .text_size(px(13.5))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(ladder::foreground())
-                                .child(title.clone()),
-                        )
-                        .child(div().flex_none().mt(px(3.)).size(px(9.)).rounded_full().bg(
-                            if on {
-                                ladder::foreground().into()
-                            } else {
-                                tint
-                            },
-                        )),
-                )
-                .children(subtitle.map(|subtitle| {
-                    div()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(ladder::foreground_alpha(if level > 0.4 {
-                            0.85
-                        } else {
-                            0.55
-                        }))
-                        .child(subtitle)
-                })),
-        );
+    let pad_view = div().relative().w_full().min_h_0().child(fill).child(
+        div()
+            .relative()
+            .size_full()
+            .p(px(10.))
+            .flex()
+            .flex_col()
+            .justify_between()
+            .gap(px(4.))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .line_clamp(2)
+                            .text_size(px(13.5))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(ladder::foreground())
+                            .child(title.clone()),
+                    )
+                    .child(dot(on, waiting, tint)),
+            )
+            .children(subtitle.map(|subtitle| {
+                div()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(ladder::foreground_alpha(if level > 0.4 {
+                        0.85
+                    } else {
+                        0.55
+                    }))
+                    .child(subtitle)
+            })),
+    );
     let pad_view = match (live, pad) {
         (Some((target, app)), Some(pad)) => press(
             pad_view.id(SharedString::from(format!("perform-pad-{}", cell.id))),
@@ -693,7 +730,15 @@ fn pattern_face(
         )
         .agent_node(
             Role::Button,
-            format!("Pad: {title}{}", if on { " (on)" } else { "" }),
+            described(
+                format!("Pad: {title}"),
+                match (on, on_targets) {
+                    (true, true) => Some(format!("on: {}", places.join(", "))),
+                    (true, false) => Some("on".into()),
+                    (false, _) => None,
+                },
+                waiting,
+            ),
         )
         .into_any_element(),
         _ => pad_view.into_any_element(),
@@ -745,8 +790,40 @@ fn pattern_face(
     card.into_any_element()
 }
 
+/// A pad's mark: lit while it is on, its tint while off, and a ring while a
+/// press waits for its beat or bar.
+fn dot(on: bool, waiting: bool, tint: Hsla) -> gpui::Div {
+    let color: Hsla = if on {
+        ladder::foreground().into()
+    } else {
+        tint
+    };
+    let dot = div().flex_none().mt(px(3.)).size(px(9.)).rounded_full();
+    if waiting {
+        dot.border_2().border_color(color)
+    } else {
+        dot.bg(color)
+    }
+}
+
+/// What a button says it is to an agent: `name`, and how it stands, as
+/// "Pad: Wash (on, waiting)".
+fn described(name: String, on: Option<String>, waiting: bool) -> String {
+    let state: Vec<String> = on
+        .into_iter()
+        .chain(waiting.then(|| "waiting".to_owned()))
+        .collect();
+    if state.is_empty() {
+        name
+    } else {
+        format!("{name} ({})", state.join(", "))
+    }
+}
+
 /// Press and release handlers for a button of a cell: the pointer's
-/// release, wherever it lands, lets go of the button it pressed.
+/// release, wherever it lands, lets go of the button it pressed. A target
+/// lets go after the release is handled where it landed, so a pad there
+/// still sees it held.
 fn press(
     element: gpui::Stateful<gpui::Div>,
     control: &str,
@@ -754,15 +831,28 @@ fn press(
     target: &Target,
     app: &Entity<Luma>,
 ) -> gpui::Stateful<gpui::Div> {
-    let handler = |down: bool| {
+    let handler = |down: bool, over: bool| {
         let (app, target, control) = (app.clone(), target.clone(), control.to_owned());
         move |cx: &mut gpui::App| {
-            app.update(cx, |this, cx| {
-                this.press_part(&target, &control, kind, down, cx)
-            });
+            let app = app.clone();
+            let (target, control) = (target.clone(), control.clone());
+            let press = move |cx: &mut gpui::App| {
+                app.update(cx, |this, cx| {
+                    this.press_part(&target, &control, kind, down, over, cx)
+                });
+            };
+            if kind == PartKind::Target && !down {
+                cx.defer(press);
+            } else {
+                press(cx);
+            }
         }
     };
-    let (down, up, out) = (handler(true), handler(false), handler(false));
+    let (down, up, out) = (
+        handler(true, true),
+        handler(false, true),
+        handler(false, false),
+    );
     element
         .cursor_pointer()
         .on_mouse_down(MouseButton::Left, move |_, _, cx| down(cx))
@@ -819,6 +909,7 @@ fn button(
     live: Live,
 ) -> AnyElement {
     let on = state.on(&part.control);
+    let waiting = state.waiting(&part.control);
     let plate = div()
         .id(SharedString::from(format!(
             "perform-button-{}-{}",
@@ -834,6 +925,8 @@ fn button(
         } else {
             glass::ink(0.06)
         })
+        // A press waiting for its beat or bar rings it.
+        .when(waiting, |plate| plate.border_2().border_color(tint))
         .text_size(px(11.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(ladder::foreground_alpha(0.9))
@@ -842,11 +935,26 @@ fn button(
         Some((target, app)) => press(plate, &part.control, PartKind::Button, target, app)
             .agent_node(
                 Role::Button,
-                format!("{name}{}", if on { " (on)" } else { "" }),
+                described(name, on.then(|| "on".to_owned()), waiting),
             )
             .into_any_element(),
         None => plate.into_any_element(),
     }
+}
+
+/// A live color of a pattern's graph: its color as it is now. A color cell
+/// sets it, so here it only shows.
+fn live_color(state: &Perform, name: String, part: &Part) -> AnyElement {
+    let rgb = state.color(&part.control);
+    let hex = luma_ui::arg::color::Hex::of_light(rgb.map(|c| c as f32));
+    div()
+        .size_full()
+        .rounded(px(radius::CONTROL))
+        .border_1()
+        .border_color(glass::hairline(0.12))
+        .bg(super::paint(rgb))
+        .agent_node(Role::Text, format!("{name} {hex}"))
+        .into_any_element()
 }
 
 /// A fader's reading as a percentage.
@@ -870,6 +978,7 @@ fn stood(
     let name = format!("{title} {}", part.label);
     let control = match part.kind {
         PartKind::Fader { .. } => track(state, cell, name, part, Axis::Vertical, tint, live),
+        PartKind::Color => live_color(state, name, part),
         _ => button(state, cell, name, part, tint, live),
     };
     div()
@@ -916,6 +1025,7 @@ fn laid(
     let name = format!("{title} {}", part.label);
     let control = match part.kind {
         PartKind::Fader { .. } => track(state, cell, name, part, Axis::Horizontal, tint, live),
+        PartKind::Color => live_color(state, name, part),
         _ => button(state, cell, name, part, tint, live),
     };
     div()
@@ -990,21 +1100,177 @@ fn fader_face(state: &Perform, cell: &Cell, rect: Rect, live: Live) -> AnyElemen
         .into_any_element()
 }
 
+/// How many columns `count` swatches fill a cell `width` × `height` places
+/// in: as many as keep each swatch near square.
+pub(super) fn swatch_columns(width: u16, height: u16, count: usize) -> usize {
+    let count = count.max(1);
+    let wide = f64::from(width) / f64::from(height.max(1));
+    ((count as f64 * wide).sqrt().round() as usize).clamp(1, count)
+}
+
+/// A color cell: its name over its swatches, filling the cell. Pressing a
+/// swatch chooses it; the one on is ringed.
+fn color_face(
+    state: &Perform,
+    cell: &Cell,
+    swatches: &[[f64; 3]],
+    rect: Rect,
+    live: Live,
+) -> AnyElement {
+    let title = state.title(cell);
+    let on = state.swatch_on(&cell.id);
+    let parts = state.parts(cell);
+    let columns = swatch_columns(rect.width, rect.height, swatches.len());
+    // A part per swatch, in order.
+    let swatch = |index: usize, part: &Part| {
+        let chosen = on == Some(index);
+        let hex = luma_ui::arg::color::Hex::of_light(swatches[index].map(|c| c as f32));
+        let plate = div()
+            .id(SharedString::from(format!(
+                "perform-swatch-{}-{index}",
+                cell.id
+            )))
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .rounded(px(radius::CONTROL))
+            .bg(super::paint(swatches[index]))
+            .border_2()
+            .border_color(if chosen {
+                ladder::foreground().into()
+            } else {
+                glass::hairline(0.1)
+            })
+            .when(chosen, |plate| {
+                plate.child(
+                    div()
+                        .m(px(5.))
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(ladder::foreground()),
+                )
+            });
+        let label = format!(
+            "{title} {}, {hex}{}",
+            part.label,
+            if chosen { " (on)" } else { "" }
+        );
+        match live {
+            Some((target, app)) => press(plate, &part.control, part.kind, target, app)
+                .agent_node(Role::Button, label)
+                .agent_focused(chosen)
+                .into_any_element(),
+            None => plate.agent_node(Role::Text, label).into_any_element(),
+        }
+    };
+    let grid = div()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .children(parts.chunks(columns).enumerate().map(|(row, parts)| {
+            let room = columns - parts.len();
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .gap(px(6.))
+                .children(
+                    parts
+                        .iter()
+                        .enumerate()
+                        .map(|(column, part)| swatch(row * columns + column, part)),
+                )
+                // The last row's empty places keep its swatches as wide.
+                .children((0..room).map(|_| div().flex_1()))
+        }));
+    plate()
+        .p(px(10.))
+        .gap(px(8.))
+        .child(
+            div()
+                .w_full()
+                .truncate()
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(ladder::foreground())
+                .child(title),
+        )
+        .child(grid)
+        .into_any_element()
+}
+
+/// A target: held while pressed, it plays the pads pressed meanwhile on its
+/// group. With one pointer, a press on it let go over a pad presses that pad.
+fn target_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
+    let title = state.title(cell);
+    let control = luma_lib::controls::perform::cell(&cell.id);
+    let held = state.held(&control);
+    let body = div()
+        .id(SharedString::from(format!("perform-target-{}", cell.id)))
+        .size_full()
+        .p(px(10.))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .rounded(px(radius::CHIP))
+        .bg(glass::ink(if held { 0.22 } else { 0.08 }))
+        .child(
+            div()
+                .line_clamp(2)
+                .text_size(px(13.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(ladder::foreground())
+                .child(title.clone()),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(ladder::foreground_alpha(if held { 0.85 } else { 0.55 }))
+                .child(if held {
+                    "Held: pads play here"
+                } else {
+                    "Hold, then press a pad"
+                }),
+        );
+    let body = match live {
+        Some((target, app)) => press(body, &control, PartKind::Target, target, app)
+            .agent_node(
+                Role::Button,
+                format!("Target: {title}{}", if held { " (held)" } else { "" }),
+            )
+            .into_any_element(),
+        None => body.into_any_element(),
+    };
+    plate().child(body).into_any_element()
+}
+
 /// Tap: pressed on the beat, it sets the tempo; it shows the tempo and the
 /// beat of the bar.
 fn tap_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
     let tempo = state.tempo();
     let held = state.pressed.as_deref() == Some(luma_lib::controls::perform::TAP);
+    let bar = luma_lib::controls::TAPPED_BEATS_PER_BAR;
     let lit = tempo
         .and_then(|(_, beat)| beat)
-        .map(|beat| beat.rem_euclid(4.).floor() as usize);
-    let beats = div().flex().gap(px(5.)).children((0..4).map(|index| {
-        div().size(px(8.)).rounded_full().bg(if lit == Some(index) {
-            ladder::foreground_alpha(0.95)
-        } else {
-            glass::hairline(0.18)
-        })
-    }));
+        .map(|beat| beat.rem_euclid(bar).floor() as usize);
+    // The bar's first beat, the one a run of taps starts on, is the larger.
+    let beats = div()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .children((0..bar as usize).map(|index| {
+            div()
+                .size(px(if index == 0 { 11. } else { 8. }))
+                .rounded_full()
+                .bg(if lit == Some(index) {
+                    ladder::foreground_alpha(0.95)
+                } else {
+                    glass::hairline(0.18)
+                })
+        }));
     let readout = match tempo {
         Some((bpm, _)) => format!("{bpm:.1} BPM"),
         None => "No tempo yet".into(),
@@ -1052,6 +1318,21 @@ fn tap_face(state: &Perform, cell: &Cell, live: Live) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swatches_fill_a_cell_by_its_shape() {
+        for (width, height) in [(1, 1), (2, 1), (1, 3), (4, 2)] {
+            for count in 1..=16 {
+                let columns = swatch_columns(width, height, count);
+                assert!((1..=count).contains(&columns), "{count} in {columns}");
+            }
+        }
+        assert!(
+            swatch_columns(4, 1, 8) > swatch_columns(1, 4, 8),
+            "a wide cell lays its swatches along"
+        );
+        assert_eq!(swatch_columns(2, 2, 4), 2, "a square holds a square");
+    }
 
     #[test]
     fn a_cell_shows_as_many_controls_as_its_shape_holds() {

@@ -275,9 +275,11 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
 }
 
 /// What a node of `kind` gives. A curve, a math or a value gives the value
-/// kind it has (`value`).
+/// kind it has (`value`), and so does a control that holds a color.
 fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
+        // A live color.
+        Kind::Control if value == Some("color") => Signal::Color,
         Kind::Time
         | Kind::Space
         | Kind::Along
@@ -424,7 +426,7 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> 
     };
     let geometry = canvas.geometry.clone();
     let app = cx.app.clone();
-    let label = format!("{} {} port", edit::label(id), port_name(input));
+    let label = format!("{} {} port", edit::label(cx.graph, id), port_name(input));
     let recorded = key.clone();
     Some(
         ring(signal, wired && !detached, tone, move |at| {
@@ -568,7 +570,7 @@ pub(super) fn port_slot(port: AnyElement) -> Div {
 fn node_card(cx: &Ctx, id: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
     let canvas = &cx.sheet.canvas;
-    let label = edit::label(id);
+    let label = edit::label(cx.graph, id);
     let wide = canvas.wide.contains(id) && super::curve_open(cx, id);
     let mut buttons = super::title_buttons(cx, id);
     let port = (!node.kind.is_output()).then(|| {
@@ -920,6 +922,8 @@ struct Link {
     to: Port,
     color: Hsla,
     gradient: Option<(Hsla, Hsla)>,
+    /// What the agent reads it as: "Time 1 → Curve 1 x".
+    name: String,
 }
 
 /// The wires, under the cards, from the port centres the cards recorded
@@ -938,6 +942,12 @@ fn wires(cx: &Ctx) -> AnyElement {
                 gradient: (signal == Signal::Color)
                     .then(|| gradient_ends(graph, &from))
                     .flatten(),
+                name: format!(
+                    "{} → {} {}",
+                    edit::label(graph, &from),
+                    edit::label(graph, &id),
+                    port_name(&input)
+                ),
                 from: Source::Node(from),
                 to: (id, input),
                 color: ladder::signal(signal),
@@ -993,17 +1003,9 @@ fn wires(cx: &Ctx) -> AnyElement {
                     if let Some(path) = path {
                         window.paint_path(path, paint);
                     }
-                    let Source::Node(from) = &link.from else {
-                        continue;
-                    };
                     agent_paint_node(
                         Role::Text,
-                        format!(
-                            "{} → {} {}",
-                            edit::label(from),
-                            edit::label(&link.to.0),
-                            port_name(&link.to.1)
-                        ),
+                        link.name.clone(),
                         Bounds::centered_at(
                             point((start.x + end.x) / 2., (start.y + end.y) / 2.),
                             size(px(4.), px(4.)),
@@ -1462,12 +1464,12 @@ impl Luma {
             Some(target) if Some(&target) == detach.as_ref() => {}
             Some((id, input)) => {
                 let what = match &from {
-                    Source::Node(from) => edit::label(from),
+                    Source::Node(from) => edit::label(&graph, from),
                     Source::Draft(index) => drafts[*index].kind.label().to_owned(),
                 };
                 let into = format!(
                     "{} {}",
-                    edit::label(&id),
+                    edit::label(&graph, &id),
                     input_label(&input).to_lowercase()
                 );
                 self.with_sheet(cx, |sheet| {

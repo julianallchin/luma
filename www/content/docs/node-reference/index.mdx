@@ -55,7 +55,7 @@ Positions in the selection are shares too. A **selection number** (`space.at`, `
 | Wire | From | Into |
 |---|---|---|
 | coordinate | `time`, `space`, `along`, `random`, `audio`, `control`, `button` | `curve.x` |
-| value | `curve`, `math`, `value` | any number, vector or color input of its type, a curve's `low` and `high`, a math node's `values` |
+| value | `curve`, `math`, `value`, a color `control` | any number, vector or color input of its type, a curve's `low` and `high`, a math node's `values` |
 | heads | `mirror`, `shuffle`, `group`, `split` | `space.heads`, `random.heads`, `mirror.heads`, `shuffle.heads`, `group.heads`, `split.heads`, `figure.heads`, `aim.heads` |
 | time | `time` | `shuffle.time` |
 | figure | `figure` | `laser.figures` |
@@ -73,7 +73,7 @@ graph = color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))
 ## Pages
 
 - [Coordinates](/docs/node-reference/coordinates): Time (`time`), Space (`space`), Along (`along`), Random (`random`), Audio (`audio`), Fader (`control`), Button (`button`).
-- [Values](/docs/node-reference/values): Curve (`curve`), Math (`math`), Value (`value`).
+- [Values](/docs/node-reference/values): Curve (`curve`), Math (`math`), Value (`value`), Live color (`control`).
 - [Heads](/docs/node-reference/heads): Mirror (`mirror`), Shuffle (`shuffle`), Group (`group`), Split (`split`).
 - [Outputs](/docs/node-reference/outputs): Color (`color`), Aim (`aim`), Strobe (`strobe`).
 - [Lasers](/docs/node-reference/lasers): Figure (`figure`), Laser (`laser`).

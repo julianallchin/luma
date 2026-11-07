@@ -110,15 +110,22 @@ impl Fixture {
         );
         let service = PythonWorkspaceService::with_env(storage.agent_workspaces_dir(), env);
 
+        let controls = Arc::new(crate::controls::ControlBanks::default());
         let live = LiveHandles {
             perform: Arc::new(crate::perform::PerformSession::new(
                 crate::render_engine::RenderEngine::default(),
+                controls.clone(),
                 pool.clone(),
                 storage.clone(),
                 repo_fixtures_root(),
                 crate::host_audio::HostAudioState::default(),
             )),
-            inputs: Arc::new(crate::inputs::InputHub::new(pool.clone(), false)),
+            inputs: Arc::new(crate::inputs::InputHub::new(
+                pool.clone(),
+                controls.clone(),
+                false,
+            )),
+            controls,
         };
         let f = Self {
             _dir: dir,

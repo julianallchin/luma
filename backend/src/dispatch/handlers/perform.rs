@@ -6,6 +6,7 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::perform::{PerformLayout, PerformPattern, PerformSource, PerformState};
+use crate::services::busk_page;
 use crate::services::perform_set::PerformSet;
 
 /// Follow `source`'s decks with `venue_id`'s scores, replacing whatever was
@@ -104,6 +105,18 @@ pub async fn save_perform_layout(
         .await
 }
 
+/// Add a busk page made from the venue's rig, and its patterns, beside
+/// what the set has. Answers the page's id.
+pub async fn perform_add_busk_page(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<String, CommandError> {
+    let rig = busk_page::read_rig(&services.db.0, &services.fixtures_root, &venue_id).await?;
+    PerformSet::new(&services.db.0, &services.perform, &venue_id)
+        .change(|set| Ok(busk_page::add(set, &rig)))
+        .await
+}
+
 /// Open the venue's Perform set: compile every pattern of it, to play as
 /// its controls (`controls::perform`: each pattern's level, its graph's
 /// fader and button nodes, its pad among them, `perform_master`) say.
@@ -155,6 +168,6 @@ pub async fn perform_set_bpm(
     bpm: f64,
 ) -> Result<(), CommandError> {
     VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    crate::controls::venue(&venue_id).set_bpm(bpm);
+    services.controls.venue(&venue_id).set_bpm(bpm);
     Ok(())
 }

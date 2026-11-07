@@ -12,7 +12,8 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kernel {
-    /// A clock's period integrated over the clip, prepared once.
+    /// A clock's period as a line of turns: integrated over the clip and
+    /// prepared once, or, when a live control moves it, read at each frame.
     ClockTable,
     /// Turns of a clock table at each beat.
     Clock,
@@ -375,16 +376,12 @@ fn spans(span: &Signal, heads: usize) -> BTreeMap<i64, Vec<usize>> {
 
 /// The first cell of each unit among `members`.
 fn unit_heads(unit: &Signal, members: &[usize]) -> Vec<usize> {
-    let mut seen = Vec::new();
-    let mut firsts = Vec::new();
-    for n in members {
-        let u = unit.at(*n, 0, 0) as i64;
-        if !seen.contains(&u) {
-            seen.push(u);
-            firsts.push(*n);
-        }
-    }
-    firsts
+    let mut seen = std::collections::HashSet::new();
+    members
+        .iter()
+        .copied()
+        .filter(|n| seen.insert(unit.at(*n, 0, 0) as i64))
+        .collect()
 }
 
 /// A premultiplied value over its alpha, clamped to 0–1; 0 where the
@@ -404,12 +401,7 @@ pub(crate) fn run(
 ) -> Result<BTreeMap<String, EvaluatedValue>> {
     let s = |k: &str| inputs[k].numeric();
     let f = |k: &str| inputs[k].fixed_scalar();
-    let clock = |table, head| Clock {
-        table,
-        head,
-        start: batch.frame.clip_start,
-        span: batch.frame.clip_duration,
-    };
+    let clock = |table, head, time| Clock { table, head, time };
     let single = |key: &str, value: EvaluatedValue| Ok(BTreeMap::from([(key.to_string(), value)]));
     let heads = batch.fixtures.len();
     match kernel {
@@ -424,7 +416,7 @@ pub(crate) fn run(
             let table = s("table");
             let values = Array3::from_shape_fn(
                 (table.values().dim().0, batch.times.len(), 1),
-                |(n, t, _)| clock(table, n).turns(batch.times[t]),
+                |(n, t, _)| clock(table, n, t).turns(batch.times[t]),
             );
             single("value", signal(values, Channels::Value, &batch)?)
         }
@@ -447,9 +439,9 @@ pub(crate) fn run(
             let mut rows = Vec::with_capacity(rows_n * times);
             let mut width = 1;
             for n in 0..rows_n {
-                let schedule = clock(every, n);
-                let life = clock(duration, n);
-                for beat in batch.times {
+                for (t, beat) in batch.times.iter().enumerate() {
+                    let schedule = clock(every, n, t);
+                    let life = clock(duration, n, t);
                     let now = life.turns(*beat);
                     let last = (schedule.turns(*beat).floor() as i64 + 1).max(0);
                     let first = (schedule.turns(life.beat_at(now - 1.)).floor() as i64).max(0);
@@ -470,9 +462,9 @@ pub(crate) fn run(
             let mut present = Array3::zeros(dims);
             let mut index = Array3::zeros(dims);
             for n in 0..rows_n {
-                let schedule = clock(every, n);
-                let life = clock(duration, n);
                 for t in 0..times {
+                    let schedule = clock(every, n, t);
+                    let life = clock(duration, n, t);
                     let (now, first, last) = rows[n * times + t];
                     for (e, k) in (first..last).enumerate() {
                         let born = life.turns(schedule.beat_at(k as f64));
@@ -596,54 +588,82 @@ pub(crate) fn run(
             let span = s("span");
             let first = s("first");
             let groups = spans(span, heads);
-            // A random key per unit and event; ties (never in practice)
-            // fall back to cell order. Only the units no mirror moved draw
-            // a key; a folded unit takes the rank of the one nearest the
-            // place it folded onto, so mirrored pairs stay paired.
-            let ranking = |event: i64, t: usize| {
+            // Only the units no mirror moved draw a key; a folded unit takes
+            // the rank of the keeper nearest the place it folded onto (the
+            // first on a tie), so mirrored pairs stay paired. Which keeper
+            // that is hangs on the positions alone, so it is found once per
+            // position time, not per event: per span, the keepers and, per
+            // member, the keeper it takes its rank from.
+            let images = |t: usize| -> Vec<(Vec<usize>, Vec<usize>)> {
+                groups
+                    .values()
+                    .map(|members| {
+                        let firsts = unit_heads(unit, members);
+                        let moved = |n: usize| {
+                            let (p, b) = (vector_at(positions, n, t), vector_at(base, n, t));
+                            (0..3).any(|a| (p[a] - b[a]).abs() > 1e-9)
+                        };
+                        let mut keepers: Vec<usize> =
+                            firsts.iter().copied().filter(|n| !moved(*n)).collect();
+                        if keepers.is_empty() {
+                            keepers = firsts.clone();
+                        }
+                        let spots: Vec<[f64; 3]> = keepers
+                            .iter()
+                            .map(|k| vector_at(positions, *k, t))
+                            .collect();
+                        // A unit on a keeper's spot (every unit no mirror
+                        // moved) is at distance 0 from it: look it up rather
+                        // than search. `+ 0.` folds -0 into 0.
+                        let bits = |p: [f64; 3]| p.map(|v| (v + 0.).to_bits());
+                        let mut on_spot = HashMap::new();
+                        for (k, p) in spots.iter().enumerate().rev() {
+                            on_spot.insert(bits(*p), k);
+                        }
+                        let image: HashMap<i64, usize> = firsts
+                            .iter()
+                            .map(|n| {
+                                let p = vector_at(positions, *n, t);
+                                let distance = |k: &usize| {
+                                    (0..3).map(|a| (p[a] - spots[*k][a]).powi(2)).sum::<f64>()
+                                };
+                                let nearest = on_spot.get(&bits(p)).copied().unwrap_or_else(|| {
+                                    (0..spots.len())
+                                        .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+                                        .expect("a span has a unit")
+                                });
+                                (unit.at(*n, 0, 0) as i64, nearest)
+                            })
+                            .collect();
+                        let image = members
+                            .iter()
+                            .map(|n| image[&(unit.at(*n, 0, 0) as i64)])
+                            .collect();
+                        (keepers, image)
+                    })
+                    .collect()
+            };
+            // A random key per keeper and event; ties (never in practice)
+            // fall back to cell order.
+            let ranking = |event: i64, images: &[(Vec<usize>, Vec<usize>)]| {
                 let mut rank = vec![0.; heads];
                 let seed = crate::spatial::epoch_seed(batch.frame.seed, event);
-                for members in groups.values() {
-                    let firsts = unit_heads(unit, members);
-                    let moved = |n: usize| {
-                        let (p, b) = (vector_at(positions, n, t), vector_at(base, n, t));
-                        (0..3).any(|a| (p[a] - b[a]).abs() > 1e-9)
-                    };
-                    let mut keepers: Vec<usize> =
-                        firsts.iter().copied().filter(|n| !moved(*n)).collect();
-                    if keepers.is_empty() {
-                        keepers = firsts.clone();
-                    }
-                    let mut keys: Vec<(f64, usize)> = keepers
+                for (members, (keepers, image)) in groups.values().zip(images) {
+                    let keys: Vec<f64> = keepers
                         .iter()
                         .map(|n| {
                             let id = &batch.fixtures[first.at(*n, 0, 0) as usize];
-                            (crate::spatial::threshold(id, seed), *n)
+                            crate::spatial::threshold(id, seed)
                         })
                         .collect();
-                    keys.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-                    let kept: HashMap<usize, f64> = keys
-                        .iter()
-                        .enumerate()
-                        .map(|(r, (_, n))| (*n, r as f64))
-                        .collect();
-                    let place: HashMap<i64, f64> = firsts
-                        .iter()
-                        .map(|n| {
-                            let p = vector_at(positions, *n, t);
-                            let distance = |k: &usize| {
-                                let q = vector_at(positions, *k, t);
-                                (0..3).map(|a| (p[a] - q[a]).powi(2)).sum::<f64>()
-                            };
-                            let nearest = keepers
-                                .iter()
-                                .min_by(|a, b| distance(a).total_cmp(&distance(b)))
-                                .expect("a span has a unit");
-                            (unit.at(*n, 0, 0) as i64, kept[nearest])
-                        })
-                        .collect();
-                    for n in members {
-                        rank[*n] = place[&(unit.at(*n, 0, 0) as i64)];
+                    let mut order: Vec<usize> = (0..keepers.len()).collect();
+                    order.sort_by(|a, b| keys[*a].total_cmp(&keys[*b]).then(a.cmp(b)));
+                    let mut kept = vec![0.; keepers.len()];
+                    for (r, k) in order.into_iter().enumerate() {
+                        kept[k] = r as f64;
+                    }
+                    for (n, k) in members.iter().zip(image) {
+                        rank[*n] = kept[*k];
                     }
                 }
                 rank
@@ -651,13 +671,16 @@ pub(crate) fn run(
             let (_, index_times, width) = index.values().dim();
             let place_times = positions.values().dim().1.max(base.values().dim().1);
             let times = index_times.max(place_times);
+            let images: Vec<_> = (0..place_times).map(images).collect();
             let mut cache: HashMap<(i64, usize), Vec<f64>> = HashMap::new();
             let mut values = Array3::zeros((heads, times, width));
             for t in 0..times {
                 let at = if place_times == 1 { 0 } else { t };
                 for e in 0..width {
                     let k = index.at(0, t, e) as i64;
-                    let rank = cache.entry((k, at)).or_insert_with(|| ranking(k, at));
+                    let rank = cache
+                        .entry((k, at))
+                        .or_insert_with(|| ranking(k, &images[at]));
                     for n in 0..heads {
                         values[[n, t, e]] = rank[n];
                     }

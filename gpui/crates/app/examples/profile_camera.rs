@@ -91,9 +91,17 @@ fn main() -> Result<(), String> {
             .await
             .map_err(|e| e.to_string())?;
         let program = match &score_id {
-            Some(id) => {
-                Some(luma_lib::build_score_scene(&pool, &storage, &fixtures, id, None).await?)
-            }
+            Some(id) => Some(
+                luma_lib::build_score_scene(
+                    &pool,
+                    &storage,
+                    &fixtures,
+                    &luma_lib::controls::ControlBanks::default(),
+                    id,
+                    None,
+                )
+                .await?,
+            ),
             None => None,
         };
         let geometry = VenueGeometry::load(&pool, &fixtures, &export.scene.venue_id).await?;

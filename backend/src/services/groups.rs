@@ -867,6 +867,37 @@ impl GroupSources {
         group_derivation::make_names_distinct(&mut nodes);
         nodes
     }
+
+    /// The rig as a busk page reads it: each fixture's role and whether it
+    /// aims, and each named group of [`Self::tree`] by its fixtures.
+    #[must_use]
+    pub(crate) fn rig(&self) -> crate::services::busk_page::Rig {
+        use crate::services::busk_page::{Rig, RigFixture, RigGroup};
+        Rig {
+            fixtures: self
+                .solved
+                .fixtures
+                .iter()
+                .map(|fixture| {
+                    let (role, moves) = role_and_aim(&self.root, fixture);
+                    RigFixture {
+                        id: fixture.id.clone(),
+                        role,
+                        moves,
+                    }
+                })
+                .collect(),
+            groups: self
+                .tree()
+                .into_iter()
+                .filter(|node| !node.name.is_empty())
+                .map(|node| RigGroup {
+                    name: node.name,
+                    fixtures: node.fixtures,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The label path of every node of a merged tree, `/`-joined, keyed by id.

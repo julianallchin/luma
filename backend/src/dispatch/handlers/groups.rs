@@ -424,7 +424,7 @@ mod tests {
         let stage = place(&services, &venue, "stage", DECK, None, None, 0.0, 0.0).await;
         hang(&services, &venue, &stage, 2.0).await;
         assert_eq!(selection(&services, &venue, "all").await, 1);
-        crate::controls::venue(&venue).set("drop", 1.0);
+        services.controls.venue(&venue).set("drop", 1.0);
 
         // The rows change under the cache, as the next identity's would.
         sqlx::query("DELETE FROM fixtures WHERE venue_id = ?")
@@ -435,7 +435,7 @@ mod tests {
         drop(services.reset_identity().await);
 
         assert_eq!(selection(&services, &venue, "all").await, 0);
-        assert_eq!(crate::controls::venue(&venue).value("drop"), 0.0);
+        assert_eq!(services.controls.venue(&venue).value("drop"), 0.0);
     }
     async fn tree(services: &AppServices, venue: &str) -> Value {
         dispatch(services, "list_group_tree", &json!({"venueId":venue}))

@@ -18,6 +18,7 @@
 
 pub(crate) mod agent_execution;
 pub mod artwork;
+pub(crate) mod busk_page;
 pub mod catalog;
 pub mod composable_patterns;
 pub mod distribute;

@@ -19,7 +19,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use luma_patterns::clip_graph::{is_control_name, ClipGraph, LiveInputKind};
+use luma_patterns::clip_graph::{is_control_name, ClipGraph};
+use luma_patterns::press::TimeUnit;
 use luma_patterns::BlendMode;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -32,11 +33,11 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::error::CommandError;
 use crate::inputs::{InputHub, Mode};
 use crate::models::perform::{
-    Cell, CellContent, ControlTarget, LayoutPage, PerformLayout, PerformPattern,
+    Cell, CellContent, ControlTarget, LayoutPage, PerformLayout, PerformPattern, Step,
 };
 use crate::perform::PerformSession;
-use crate::services::groups;
 use crate::services::perform_set::{PerformSet, Set};
+use crate::services::{busk_page, groups};
 
 /// The most columns or rows a page has, as on the Perform tab.
 const MOST: u16 = 16;
@@ -46,7 +47,7 @@ const MOST: u16 = 16;
 pub struct PerformHost {
     runtime: Handle,
     pool: SqlitePool,
-    /// The fixtures root, to read the venue's groups for a selection.
+    /// The fixtures root, to read the venue's groups and rig.
     resource_root: PathBuf,
     venue_id: String,
     /// Who this thread's writes are attributed to: the thread's `actor`.
@@ -126,24 +127,45 @@ impl PerformHost {
             }
             "perform.place" => {
                 let place: Place = decode(payload)?;
+                if let CellContent::Target { group, .. } = &place.content {
+                    self.check_selection(group).await?;
+                }
                 self.change(|set| place.apply(set)).await
             }
             "perform.cell" => {
                 let change: CellChange = decode(payload)?;
+                if let Some(group) = &change.group {
+                    self.check_selection(group).await?;
+                }
                 self.change(|set| change.apply(set)).await
             }
             "perform.remove_cell" => {
                 let Id { id } = decode(payload)?;
                 self.change(|set| remove_cell(&mut set.layout, &id)).await
             }
+            "perform.busk" => {
+                let rig =
+                    busk_page::read_rig(&self.pool, &self.resource_root, &self.venue_id).await?;
+                self.change(|set| Ok(json!({ "id": busk_page::add(set, &rig) })))
+                    .await
+            }
             "perform.live" => Ok(self.live()),
             "perform.control" => {
-                let Control { name, value } = decode(payload)?;
+                let Control { name, value, on } = decode(payload)?;
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                     return Err(refused(format!("a control's value is 0 to 1; got {value}")));
                 }
                 self.require_open(&name)?;
-                self.session.set_control(&name, value).map_err(refused)?;
+                match on {
+                    Some(on) => {
+                        for group in &on {
+                            self.check_selection(group).await?;
+                        }
+                        self.session.set_on(&name, value, &on)
+                    }
+                    None => self.session.set_control(&name, value),
+                }
+                .map_err(refused)?;
                 Ok(self.live())
             }
             "perform.press" => {
@@ -262,7 +284,7 @@ impl HostCallHandler for PerformHost {
 }
 
 /// The methods that change the set.
-const WRITES: [&str; 9] = [
+const WRITES: [&str; 10] = [
     "perform.add",
     "perform.update",
     "perform.remove",
@@ -272,6 +294,7 @@ const WRITES: [&str; 9] = [
     "perform.place",
     "perform.cell",
     "perform.remove_cell",
+    "perform.busk",
 ];
 
 impl From<CommandError> for HostCallError {
@@ -538,7 +561,8 @@ fn remove_page(layout: &mut PerformLayout, id: &str) -> Result<Value, CommandErr
     Ok(json!({}))
 }
 
-/// A new cell of the master, tap or a fader of its own.
+/// A new cell of the master, tap, a fader of its own, a color cell or a
+/// target.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Place {
@@ -558,7 +582,6 @@ impl Place {
                 "a pattern's cell comes with the pattern: add the pattern instead",
             ));
         }
-        check_content(set, &self.content)?;
         let cell = put_cell(
             &mut set.layout,
             self.page.as_deref(),
@@ -570,8 +593,10 @@ impl Place {
     }
 }
 
-/// A cell moved, resized or taken to another page, or a fader cell's label
-/// and targets: what is given changes.
+/// A cell moved, resized or taken to another page, a fader cell's label and
+/// targets, a color cell's label, targets, swatches, fade and step, or a
+/// target's label and group: what is given changes. A step of null stops a
+/// color cell stepping.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CellChange {
@@ -586,6 +611,23 @@ struct CellChange {
     label: Option<String>,
     #[serde(default)]
     targets: Option<Vec<ControlTarget>>,
+    #[serde(default)]
+    swatches: Option<Vec<[f64; 3]>>,
+    #[serde(default)]
+    fade: Option<f64>,
+    #[serde(default)]
+    unit: Option<TimeUnit>,
+    #[serde(default, deserialize_with = "given")]
+    step: Option<Option<Step>>,
+    #[serde(default)]
+    group: Option<String>,
+}
+
+/// A field that was given, null or not: absent is `None`.
+fn given<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
 }
 
 impl CellChange {
@@ -602,20 +644,59 @@ impl CellChange {
             .position(|cell| cell.id == self.id)
             .expect("found on this page");
         let mut cell = set.layout.pages[from].cells.remove(held);
-        if self.label.is_some() || self.targets.is_some() {
-            let CellContent::Fader { label, targets } = &mut cell.content else {
+        let colors = self.swatches.is_some()
+            || self.fade.is_some()
+            || self.unit.is_some()
+            || self.step.is_some();
+        if self.group.is_some() && !matches!(cell.content, CellContent::Target { .. }) {
+            return Err(invalid(format!(
+                "cell {} is not a target, so it has no group",
+                cell.id
+            )));
+        }
+        match &mut cell.content {
+            CellContent::Target { .. } if colors || self.targets.is_some() => {
                 return Err(invalid(format!(
-                    "cell {} is not a fader of its own, so it has no label or targets",
+                    "cell {} is a target: it has a label and a group",
                     cell.id
-                )));
-            };
-            if let Some(new) = self.label {
-                *label = new.trim().to_owned();
+                )))
             }
-            if let Some(new) = self.targets {
-                *targets = new;
+            CellContent::Target { label, group } => {
+                set_given(label, self.label.map(|new| new.trim().to_owned()));
+                set_given(group, self.group);
             }
-            check_content(set, &cell.content)?;
+            CellContent::Fader { .. } if colors => {
+                return Err(invalid(format!(
+                    "cell {} is a fader: it has no swatches, fade or step",
+                    cell.id
+                )))
+            }
+            CellContent::Fader { label, targets } => {
+                set_given(label, self.label.map(|new| new.trim().to_owned()));
+                set_given(targets, self.targets);
+            }
+            CellContent::Color {
+                label,
+                swatches,
+                fade,
+                unit,
+                targets,
+                step,
+            } => {
+                set_given(label, self.label.map(|new| new.trim().to_owned()));
+                set_given(targets, self.targets);
+                set_given(swatches, self.swatches);
+                set_given(fade, self.fade);
+                set_given(unit, self.unit);
+                set_given(step, self.step);
+            }
+            _ if colors || self.label.is_some() || self.targets.is_some() => {
+                return Err(invalid(format!(
+                    "cell {} is not a fader, a color cell or a target, so it has no label or targets",
+                    cell.id
+                )))
+            }
+            _ => {}
         }
         if let Some((width, height)) = self.size {
             cell.width = width;
@@ -651,8 +732,14 @@ impl CellChange {
     }
 }
 
-/// Remove a cell of the master, tap or a fader. A pattern's cell goes with
-/// its pattern.
+fn set_given<T>(field: &mut T, given: Option<T>) {
+    if let Some(given) = given {
+        *field = given;
+    }
+}
+
+/// Remove a cell of the master, tap, a fader or a color cell. A pattern's
+/// cell goes with its pattern.
 fn remove_cell(layout: &mut PerformLayout, id: &str) -> Result<Value, CommandError> {
     let page = layout
         .pages
@@ -670,49 +757,6 @@ fn remove_cell(layout: &mut PerformLayout, id: &str) -> Result<Value, CommandErr
     }
     page.cells.retain(|cell| cell.id != id);
     Ok(json!({}))
-}
-
-/// Refuse a fader cell's target that moves nothing: a pattern the set does
-/// not have, a node that is not one of its faders, or a name that is not a
-/// control's.
-fn check_content(set: &Set, content: &CellContent) -> Result<(), CommandError> {
-    let CellContent::Fader { targets, .. } = content else {
-        return Ok(());
-    };
-    for target in targets {
-        match target {
-            ControlTarget::Level { pattern_id } => {
-                if !set.patterns.iter().any(|pattern| &pattern.id == pattern_id) {
-                    return Err(no_such("pattern", pattern_id));
-                }
-            }
-            ControlTarget::Node { pattern_id, node } => {
-                let pattern = set
-                    .patterns
-                    .iter()
-                    .find(|pattern| &pattern.id == pattern_id)
-                    .ok_or_else(|| no_such("pattern", pattern_id))?;
-                let fader =
-                    pattern.graph.live_inputs().into_iter().any(|input| {
-                        &input.node == node && matches!(input.kind, LiveInputKind::Fader)
-                    });
-                if !fader {
-                    return Err(invalid(format!(
-                        "pattern \"{}\" has no fader node {node}",
-                        pattern.name
-                    )));
-                }
-            }
-            ControlTarget::Named { name } => {
-                if !is_control_name(name) || crate::controls::perform::owns(name) {
-                    return Err(invalid(format!(
-                        "expected one of the venue's own control names, such as drop; got {name:?}"
-                    )));
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Put a new cell holding `content` on `page` (the first when `None`), at
@@ -778,6 +822,10 @@ fn no_room(page: &LayoutPage, width: u16, height: u16) -> CommandError {
 struct Control {
     name: String,
     value: f64,
+    /// For a pad: the venue groups to play its pattern on, whatever targets
+    /// are held; none is its own selection.
+    #[serde(default)]
+    on: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]

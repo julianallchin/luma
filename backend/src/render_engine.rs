@@ -56,6 +56,13 @@ pub(crate) struct SceneUpdate {
     generation: u64,
 }
 
+impl SceneUpdate {
+    /// This update's number, which no other update of the engine has.
+    pub(crate) fn id(&self) -> u64 {
+        self.generation
+    }
+}
+
 /// What a finished [`SceneUpdate`] installs: a compiled scene for the editor
 /// or a deck, or the Perform set. An empty scene or `None` clears the slot.
 pub(crate) enum Built {
@@ -132,9 +139,6 @@ impl RenderEngine {
         let Some(live) = inner.live.as_mut() else {
             return base;
         };
-        if !live.update_levels() {
-            return base;
-        }
         let now = Instant::now();
         let time = match live.clock() {
             LiveClock::Deck(id) => inner
@@ -148,8 +152,23 @@ impl RenderEngine {
             // Its deck is gone; until live follow recompiles the set, it waits.
             return base;
         };
+        // The bank reads the set's clock whether or not anything plays: color
+        // cells step on it and presses land on it.
+        live.tick(time, now);
+        if !live.update_levels() {
+            return base;
+        }
         let base = base.unwrap_or_default();
         Some(live.render_onto(base, time, &mut inner.scratch))
+    }
+
+    /// Play `grown` in the Perform set, the set grown by the instances
+    /// compiled since, if the set is still build `id`.
+    pub(crate) fn grow_live(&self, id: u64, grown: Arc<crate::perform::live::Layers>) {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        if let Some(live) = guard.live.as_mut().filter(|live| live.id() == id) {
+            live.grow(grown);
+        }
     }
 
     /// Updates belong to one engine and one render slot. Starting a newer

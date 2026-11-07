@@ -70,11 +70,13 @@ fn cell_digest(domain: &[u8], parts: &[&str]) -> String {
     format!("sha256:{:x}", hash.finalize())
 }
 
-/// What is live in this process that a cell may play or bind: the Perform
-/// session and the input hub. Plain handles, like the pool beside them.
+/// What is live in this app that a cell may play, bind or read: the Perform
+/// session, the input hub and the control banks. Plain handles, like the
+/// pool beside them.
 pub struct LiveHandles {
     pub(crate) perform: Arc<crate::perform::PerformSession>,
     pub(crate) inputs: Arc<crate::inputs::InputHub>,
+    pub(crate) controls: Arc<crate::controls::ControlBanks>,
 }
 
 /// Interrupt the thread's in-flight cell. `false` when there is none.
@@ -330,6 +332,7 @@ pub async fn run_python_cell_inner(
             pool.clone(),
             storage.clone(),
             resource_root.to_path_buf(),
+            Arc::clone(&live.controls),
             Arc::clone(&workspace),
             track_scope,
             edit_scope,

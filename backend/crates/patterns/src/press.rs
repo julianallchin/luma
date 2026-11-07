@@ -10,9 +10,13 @@
 //! slow attack and release at sustain 1; a hit is a fast attack at sustain 0,
 //! punchy, which fires once however long it is held.
 //!
-//! The value is a pure function of when the button went on and off and of
+//! A press takes effect now, or on the set's next beat or bar ([`Start`]),
+//! turning on and turning off alike, so busking lands on the music.
+//!
+//! The value is a pure function of when the button goes on and off and of
 //! now ([`Adsr::value`]), so a host keeps only those two times per button,
 //! and anything shown a [`Button`] can play its envelope on, frame by frame.
+//! A press waiting for its beat is a time still to come.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +29,18 @@ pub enum PressMode {
     Toggle,
     /// On while held.
     Flash,
+}
+
+/// When a press takes effect, turning on and turning off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Start {
+    #[default]
+    Now,
+    /// On the set's next beat.
+    Beat,
+    /// On the set's next bar.
+    Bar,
 }
 
 /// How a stage of an envelope moves from where it starts to where it ends.
@@ -44,7 +60,7 @@ pub enum Shape {
 
 impl Shape {
     /// Progress `t` 0–1 through a stage, shaped.
-    fn eval(self, t: f64) -> f64 {
+    pub fn eval(self, t: f64) -> f64 {
         let t = t.clamp(0., 1.);
         match self {
             Self::Linear => t,
@@ -63,6 +79,16 @@ pub enum TimeUnit {
     #[default]
     Beats,
     Seconds,
+}
+
+impl TimeUnit {
+    /// `length` of this unit in seconds at `bpm`.
+    pub fn seconds(self, length: f64, bpm: f64) -> f64 {
+        match self {
+            TimeUnit::Seconds => length.max(0.),
+            TimeUnit::Beats => length.max(0.) * 60. / bpm.max(1.),
+        }
+    }
 }
 
 /// An attack, decay, sustain and release, in `unit`, shaped by `shape`.
@@ -92,7 +118,8 @@ impl Default for Adsr {
     }
 }
 
-/// When a button went on and, if it has since, off: seconds before now.
+/// When a button goes on and, if it has been let go, off: seconds before
+/// now, less than 0 while still to come.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Gate {
@@ -101,13 +128,22 @@ pub struct Gate {
     pub off_for: Option<f64>,
 }
 
+impl Gate {
+    /// Whether it has gone on and not yet off.
+    pub fn on(&self) -> bool {
+        self.on_for >= 0. && self.off_for.is_none_or(|off| off < 0.)
+    }
+
+    /// Whether it waits to go on or off.
+    pub fn waiting(&self) -> bool {
+        self.on_for < 0. || self.off_for.is_some_and(|off| off < 0.)
+    }
+}
+
 impl Adsr {
     /// A stage's `length` in seconds at `bpm`.
     fn seconds(&self, length: f64, bpm: f64) -> f64 {
-        match self.unit {
-            TimeUnit::Seconds => length.max(0.),
-            TimeUnit::Beats => length.max(0.) * 60. / bpm.max(1.),
-        }
+        self.unit.seconds(length, bpm)
     }
 
     /// The value `gate` puts out now, 0–1, at `bpm` (for lengths in beats).
@@ -137,30 +173,33 @@ impl Adsr {
             }
         };
         match gate.off_for {
-            None => held(gate.on_for),
-            Some(off) => {
+            _ if gate.on_for < 0. => 0.,
+            Some(off) if off >= 0. => {
                 let from = held((gate.on_for - off).max(0.));
                 from * (1. - stage(off, release))
             }
+            _ => held(gate.on_for),
         }
     }
 
-    /// Whether the value is still changing: on and rising or decaying, or
-    /// off and releasing.
+    /// Whether the value is still changing: on and rising or decaying, off
+    /// and releasing, or waiting to do either.
     pub fn moving(&self, gate: Gate, bpm: f64) -> bool {
         let seconds = |length| self.seconds(length, bpm);
-        match gate.off_for {
-            None => gate.on_for < seconds(self.attack) + seconds(self.decay),
-            Some(off) => off < seconds(self.release),
-        }
+        gate.waiting()
+            || match gate.off_for {
+                None => gate.on_for < seconds(self.attack) + seconds(self.decay),
+                Some(off) => off < seconds(self.release),
+            }
     }
 }
 
-/// A button's press and envelope.
+/// A button's press, when it takes effect, and its envelope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Press {
     pub mode: PressMode,
+    pub start: Start,
     pub envelope: Adsr,
 }
 
@@ -175,9 +214,14 @@ pub struct Button {
 
 impl Button {
     /// Pressed and held, or toggled on. A button releasing is off, though
-    /// its envelope may still sound.
+    /// its envelope may still sound; one waiting for its beat is as it was.
     pub fn on(&self) -> bool {
-        self.gate.is_some_and(|gate| gate.off_for.is_none())
+        self.gate.is_some_and(|gate| gate.on())
+    }
+
+    /// Whether a press waits for its beat or bar to turn it on or off.
+    pub fn waiting(&self) -> bool {
+        self.gate.is_some_and(|gate| gate.waiting())
     }
 
     /// Its value, 0–1, at `bpm`.
@@ -264,6 +308,40 @@ mod tests {
         assert!(hit.moving(on(0.1), BPM));
         assert_eq!(hit.value(on(2.), BPM), 0.);
         assert!(!hit.moving(on(2.), BPM), "settled at sustain");
+    }
+
+    #[test]
+    fn a_press_still_to_come_waits_dark_and_a_release_still_to_come_holds() {
+        let adsr = Adsr {
+            attack: 1.,
+            unit: TimeUnit::Seconds,
+            shape: Shape::Linear,
+            ..Adsr::default()
+        };
+        let waiting = Gate {
+            on_for: -0.5,
+            off_for: None,
+        };
+        assert_eq!(adsr.value(waiting, BPM), 0.);
+        assert!(adsr.moving(waiting, BPM), "it will light");
+        assert!(!waiting.on() && waiting.waiting());
+        let button = Button {
+            press: Press {
+                envelope: adsr,
+                ..Press::default()
+            },
+            gate: Some(waiting),
+        };
+        let lit = button.later(1.);
+        assert!(lit.on() && !lit.waiting(), "on at its beat");
+        assert!((lit.value(BPM) - 0.5).abs() < 1e-9, "halfway up its attack");
+
+        let letting_go = Gate {
+            on_for: 2.,
+            off_for: Some(-0.5),
+        };
+        assert_eq!(adsr.value(letting_go, BPM), 1., "on until its beat");
+        assert!(letting_go.on() && letting_go.waiting());
     }
 
     #[test]

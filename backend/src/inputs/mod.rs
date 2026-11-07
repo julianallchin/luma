@@ -143,6 +143,8 @@ impl State {
 
 struct Shared {
     state: Mutex<State>,
+    /// The banks an input plays.
+    controls: Arc<crate::controls::ControlBanks>,
 }
 
 impl Shared {
@@ -167,7 +169,7 @@ impl Shared {
         let Some(venue_id) = state.venue_id.clone() else {
             return;
         };
-        let controls = crate::controls::venue(&venue_id);
+        let controls = self.controls.venue(&venue_id);
         let at = Instant::now();
         // A key is down at any value above 0: a pad's note carries how hard
         // it was hit, not whether it is held, and only its release is 0.
@@ -224,10 +226,15 @@ struct Listeners {
 }
 
 impl InputHub {
-    pub(crate) fn new(pool: SqlitePool, devices: bool) -> Self {
+    pub(crate) fn new(
+        pool: SqlitePool,
+        controls: Arc<crate::controls::ControlBanks>,
+        devices: bool,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
                 state: Mutex::new(State::idle(devices)),
+                controls,
             }),
             pool,
             devices,

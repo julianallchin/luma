@@ -1,6 +1,7 @@
 //! Wire types for live follow: which DJ source to follow, and what the
 //! session following it currently knows.
 
+use luma_patterns::clip_graph::{is_control_name, LiveInputKind};
 use serde::{Deserialize, Serialize};
 
 /// A DJ source live follow can listen to.
@@ -46,20 +47,18 @@ pub struct PerformState {
     /// The beat the Perform set plays on: the master deck's, or tapped.
     /// `None` while no set is open.
     pub clock: Option<PerformClock>,
-    /// The venue's controls as set now, the Perform set's own among them
-    /// (`controls::perform`).
-    pub controls: std::collections::BTreeMap<String, f64>,
-    /// The open set's buttons as they stand now, for a reader to play their
-    /// envelopes on at the set's tempo.
-    pub buttons: std::collections::BTreeMap<String, luma_patterns::press::Button>,
+    /// What the open set's venue's control bank plays now: its controls as
+    /// set, the Perform set's own among them (`controls::perform`), its
+    /// buttons, its live colors and each color cell's swatch.
+    #[serde(flatten)]
+    pub bank: crate::controls::Playing,
 }
 
 impl PerformState {
     pub(crate) fn off(
         latency_ms: f32,
         clock: Option<PerformClock>,
-        controls: std::collections::BTreeMap<String, f64>,
-        buttons: std::collections::BTreeMap<String, luma_patterns::press::Button>,
+        bank: crate::controls::Playing,
     ) -> Self {
         Self {
             source: None,
@@ -71,8 +70,7 @@ impl PerformState {
             latency_ms,
             decks: Vec::new(),
             clock,
-            controls,
-            buttons,
+            bank,
         }
     }
 }
@@ -199,10 +197,10 @@ impl PerformPattern {
 }
 
 /// How a venue's Perform tab lays out its set: named pages of a grid. A cell
-/// holds one pattern (its level, and a fader or button for each fader and
-/// button node of its graph, its pad first), or the master, tap, or a fader
-/// of its own. Nothing is tied to a controller, which reaches a cell through
-/// bindings.
+/// holds one pattern (its level, and a fader, color or button for each live
+/// node of its graph, its pad first), or the master, tap, a fader of its own,
+/// a color cell's swatches, or a target to play patterns on. Nothing is tied
+/// to a controller, which reaches a cell through bindings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PerformLayout {
@@ -252,16 +250,50 @@ pub enum CellContent {
         label: String,
         targets: Vec<ControlTarget>,
     },
+    /// Swatches to choose from: choosing one fades every one of `targets`,
+    /// live colors of the set's patterns, to it over `fade` (in `unit`).
+    /// Which swatch is on is live, in the control bank.
+    #[serde(rename_all = "camelCase")]
+    Color {
+        label: String,
+        /// Linear Rec. 2020 rgb, each channel 0–1.
+        swatches: Vec<[f64; 3]>,
+        fade: f64,
+        unit: luma_patterns::press::TimeUnit,
+        targets: Vec<ControlTarget>,
+        /// Moving on to the next swatch by itself, on the set's bars.
+        #[serde(default)]
+        step: Option<Step>,
+    },
+    /// A venue group to play patterns on, by name (or `all`): a pattern's
+    /// pad pressed while this is held plays the pattern on `group` instead
+    /// of its own selection. Several held play it on all of them. An empty
+    /// label shows the group's.
+    #[serde(rename_all = "camelCase")]
+    Target { label: String, group: String },
 }
 
-/// Something a fader cell moves.
+/// A color cell moving on by itself: to the next swatch every `bars` bars
+/// of the set's clock, after the last back to the first when it `loops`,
+/// else staying on the last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub bars: u16,
+    pub loops: bool,
+}
+
+/// The most swatches a color cell holds: a controller's 4 × 4 pads.
+pub const MOST_SWATCHES: usize = 16;
+
+/// Something a fader cell moves, or a color cell sets.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ControlTarget {
     /// A pattern's level.
     #[serde(rename_all = "camelCase")]
     Level { pattern_id: String },
-    /// A fader node of a pattern's graph, by node id.
+    /// A fader or live color node of a pattern's graph, by node id.
     #[serde(rename_all = "camelCase")]
     Node { pattern_id: String, node: String },
     /// One of the venue's own controls, which score patterns read by name.
@@ -281,6 +313,119 @@ impl Cell {
         match &self.content {
             CellContent::Pattern { pattern_id } => Some(pattern_id),
             _ => None,
+        }
+    }
+}
+
+impl CellContent {
+    /// What a fader or color cell moves; nothing for any other cell.
+    pub fn targets(&self) -> &[ControlTarget] {
+        match self {
+            CellContent::Fader { targets, .. } | CellContent::Color { targets, .. } => targets,
+            _ => &[],
+        }
+    }
+
+    /// What a fader or color cell moves, to change; `None` for any other
+    /// cell.
+    pub fn targets_mut(&mut self) -> Option<&mut Vec<ControlTarget>> {
+        match self {
+            CellContent::Fader { targets, .. } | CellContent::Color { targets, .. } => {
+                Some(targets)
+            }
+            _ => None,
+        }
+    }
+
+    /// Why this cannot be stored with `patterns`, if it cannot: a fader
+    /// moving what is no number, a color cell setting what is no live
+    /// color, a color cell's swatches, fade or step out of range, or a
+    /// target holding what is no group name.
+    fn misfit(&self, patterns: &[PerformPattern]) -> Option<String> {
+        if let CellContent::Target { group, .. } = self {
+            return (group != "all")
+                .then(|| crate::models::groups::validate_group_name(group).err())
+                .flatten()
+                .map(|why| {
+                    format!(
+                        "a target holds a venue group's name, such as front_wash, or all: {why}"
+                    )
+                });
+        }
+        if let CellContent::Color {
+            swatches,
+            fade,
+            step,
+            ..
+        } = self
+        {
+            if swatches.is_empty() || swatches.len() > MOST_SWATCHES {
+                return Some(format!(
+                    "a color cell holds 1 to {MOST_SWATCHES} swatches; got {}",
+                    swatches.len()
+                ));
+            }
+            if let Some(rgb) = swatches
+                .iter()
+                .find(|rgb| rgb.iter().any(|c| !(0.0..=1.0).contains(c)))
+            {
+                return Some(format!(
+                    "a swatch is a color with each channel 0 to 1; got {rgb:?}"
+                ));
+            }
+            if !fade.is_finite() || *fade < 0.0 {
+                return Some(format!("a color cell's fade is 0 or more; got {fade}"));
+            }
+            if step.is_some_and(|step| step.bars == 0) {
+                return Some("a color cell steps every 1 bar or more".into());
+            }
+        }
+        let colors = matches!(self, CellContent::Color { .. });
+        self.targets()
+            .iter()
+            .find_map(|target| target.misfit(colors, patterns))
+    }
+}
+
+impl ControlTarget {
+    /// Why a fader cell (or with `colors`, a color cell) cannot move this
+    /// among `patterns`, if it cannot.
+    fn misfit(&self, colors: bool, patterns: &[PerformPattern]) -> Option<String> {
+        let pattern = |id: &str| patterns.iter().find(|pattern| pattern.id == id);
+        match self {
+            ControlTarget::Level { pattern_id } if colors => Some(format!(
+                "a color cell sets live colors; pattern {pattern_id}'s level is a number"
+            )),
+            ControlTarget::Level { pattern_id } => pattern(pattern_id)
+                .is_none()
+                .then(|| format!("this Perform set has no pattern {pattern_id}")),
+            ControlTarget::Node { pattern_id, node } => {
+                let Some(pattern) = pattern(pattern_id) else {
+                    return Some(format!("this Perform set has no pattern {pattern_id}"));
+                };
+                let kind = pattern
+                    .graph
+                    .live_inputs()
+                    .into_iter()
+                    .find(|input| &input.node == node)
+                    .map(|input| input.kind);
+                let (fits, what) = if colors {
+                    (kind == Some(LiveInputKind::Color), "live color")
+                } else {
+                    (kind == Some(LiveInputKind::Fader), "fader")
+                };
+                (!fits).then(|| format!("pattern \"{}\" has no {what} node {node}", pattern.name))
+            }
+            ControlTarget::Named { name } if colors => Some(format!(
+                "a color cell sets live colors of the set's patterns; got the venue's control {name}"
+            )),
+            ControlTarget::Named { name } => (!is_control_name(name)
+                || crate::controls::perform::owns(name))
+            .then(|| {
+                format!(
+                    "expected one of the venue's own control names, such as drop; got {name:?}"
+                )
+            }),
         }
     }
 }
@@ -370,26 +515,59 @@ impl PerformLayout {
         }
     }
 
-    /// Why this layout cannot be stored, if it cannot: a cell off its page or
-    /// over another.
-    pub fn check(&self) -> Result<(), String> {
-        match self
-            .pages
-            .iter()
-            .find_map(|page| page.cells.iter().find_map(|cell| page.misfit(cell)))
-        {
+    /// Why this layout cannot be stored with `patterns`, if it cannot: a
+    /// cell off its page or over another, or a fader or color cell that
+    /// moves what it cannot.
+    pub fn check(&self, patterns: &[PerformPattern]) -> Result<(), String> {
+        let misfit = self.pages.iter().find_map(|page| {
+            page.cells.iter().find_map(|cell| {
+                page.misfit(cell).or_else(|| {
+                    cell.content
+                        .misfit(patterns)
+                        .map(|why| format!("cell {}: {why}", cell.id))
+                })
+            })
+        });
+        match misfit {
             Some(misfit) => Err(misfit),
             None => Ok(()),
         }
     }
 
-    /// Take pattern `id` off the layout: its cell, and every fader cell's
-    /// hold on it.
+    /// Drop each target that no longer fits `patterns` (its pattern or node
+    /// gone, or the node now of the other kind) where `before` had it
+    /// already, so a change is never refused for what it did not ask.
+    pub fn tidy(&mut self, before: &PerformLayout, patterns: &[PerformPattern]) {
+        let held: std::collections::HashSet<(&str, &ControlTarget)> = before
+            .pages
+            .iter()
+            .flat_map(|page| page.cells.iter())
+            .flat_map(|cell| {
+                cell.content
+                    .targets()
+                    .iter()
+                    .map(move |target| (cell.id.as_str(), target))
+            })
+            .collect();
+        for cell in self.pages.iter_mut().flat_map(|page| page.cells.iter_mut()) {
+            let colors = matches!(cell.content, CellContent::Color { .. });
+            let id = cell.id.clone();
+            if let Some(targets) = cell.content.targets_mut() {
+                targets.retain(|target| {
+                    target.misfit(colors, patterns).is_none()
+                        || !held.contains(&(id.as_str(), target))
+                });
+            }
+        }
+    }
+
+    /// Take pattern `id` off the layout: its cell, and every fader and color
+    /// cell's hold on it.
     pub fn forget(&mut self, id: &str) {
         for page in &mut self.pages {
             page.cells.retain(|cell| cell.pattern_id() != Some(id));
             for cell in &mut page.cells {
-                if let CellContent::Fader { targets, .. } = &mut cell.content {
+                if let Some(targets) = cell.content.targets_mut() {
                     targets.retain(|target| match target {
                         ControlTarget::Level { pattern_id }
                         | ControlTarget::Node { pattern_id, .. } => pattern_id != id,

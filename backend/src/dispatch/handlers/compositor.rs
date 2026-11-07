@@ -23,6 +23,7 @@ pub async fn composite_track(
         &services.db.0,
         &services.storage,
         &services.fixtures_root,
+        &services.controls,
         &services.render_engine,
         &score_id,
         graph_score,

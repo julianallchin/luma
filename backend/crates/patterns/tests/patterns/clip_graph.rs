@@ -797,6 +797,36 @@ fn a_control_is_named_like_a_group() {
     assert!(refused.0.contains("c.name"), "{}", refused.0);
 }
 
+#[test]
+fn a_live_color_is_a_color_and_a_fader_is_not() {
+    let straight = graph(json!({
+        "hue": {"kind": "control", "settings": {"name": "main", "kind": "color"}},
+        "color1": {"kind": "color", "inputs": {"color": {"node": "hue"}}}}));
+    straight.check().expect("a live color wires into a color");
+    assert_eq!(straight.value_kind("hue"), Some("color"));
+
+    let fader = error(json!({
+        "hue": {"kind": "control", "settings": {"name": "main"}},
+        "color1": {"kind": "color", "inputs": {"color": {"node": "hue"}}}}));
+    assert!(
+        fader.starts_with("color1.color: expected a color"),
+        "{fader}"
+    );
+    assert!(
+        fader.contains(r#"control("main", kind="color")"#),
+        "it says how to make the fader a color: {fader}"
+    );
+
+    let coordinate = error(json!({
+        "hue": {"kind": "control", "settings": {"name": "main", "kind": "color"}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "hue"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    assert!(
+        coordinate.starts_with("curve1.x: expected a coordinate wire"),
+        "a color is no coordinate: {coordinate}"
+    );
+}
+
 // ---- the pad ----
 
 fn pad_of(nodes: Value) -> Option<String> {
@@ -855,6 +885,11 @@ fn with_pad_wires_a_toggle_into_alpha_and_keeps_what_alpha_held() {
         panic!("a pad is a button: {:?}", pad.kind);
     };
     assert_eq!(press.mode, luma_patterns::press::PressMode::Toggle);
+    assert_eq!(
+        press.start,
+        luma_patterns::press::Start::Beat,
+        "a new pad lands on the beat"
+    );
     assert_eq!(padded.clone().with_pad(), padded, "one pad is enough");
 
     let half = graph(json!({"color1": {"kind": "color", "inputs": {"alpha": 0.5}}})).with_pad();

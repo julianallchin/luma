@@ -1,7 +1,6 @@
 //! The session end to end, fed by rkbx_link packets over real UDP.
 
 use std::net::UdpSocket;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use rosc::{OscMessage, OscPacket, OscType};
@@ -10,11 +9,12 @@ use serde_json::json;
 use crate::dispatch::{dispatch, AppServices};
 use crate::models::perform::{DeckMatch, PerformSource, PerformState};
 
-/// A signed-in library with one venue and one track, "Strobe" by deadmau5.
+/// A signed-in library with one venue and one track, "Strobe" by deadmau5,
+/// reading the bundled fixture definitions.
 async fn library() -> (tempfile::TempDir, AppServices, String) {
     let directory = tempfile::tempdir().unwrap();
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let services = crate::test_support::signed_in(directory.path(), repo).await;
+    let fixtures = crate::resources::source_fixtures_root().expect("a bundled fixture library");
+    let services = crate::test_support::signed_in(directory.path(), fixtures).await;
     let venue = dispatch(
         &services,
         "create_venue",
@@ -198,7 +198,7 @@ fn wash(id: &str) -> crate::models::perform::PerformPattern {
         z_index: 0,
         blend_mode: wash.blend_mode,
         seed: u64::MAX,
-        graph: wash.graph.clone().with_pad(),
+        graph: crate::controls::tests::with_pad_at_once(wash.graph.clone()),
     }
 }
 
@@ -358,10 +358,110 @@ async fn an_open_set_plays_its_pads_and_faders() {
     .await
     .unwrap();
     let state = services.perform.state();
-    assert!(state.buttons[&pad].on(), "a toggle pad stays on");
-    assert_eq!(state.buttons[&pad].value(120.0), 1.0);
-    assert_eq!(state.controls[&perform::level("wash")], 1.0);
-    assert_eq!(state.controls[perform::MASTER], 1.0);
+    assert!(state.bank.buttons[&pad].on(), "a toggle pad stays on");
+    assert_eq!(state.bank.buttons[&pad].value(120.0), 1.0);
+    assert_eq!(state.bank.controls[&perform::level("wash")], 1.0);
+    assert_eq!(state.bank.controls[perform::MASTER], 1.0);
+}
+
+#[tokio::test]
+async fn a_color_cell_sets_live_colors_and_a_fader_moves_numbers() {
+    use crate::controls::perform;
+    use crate::models::perform::{Cell, CellContent, ControlTarget, PerformLayout, PerformPattern};
+
+    let (_dir, services, venue) = library().await;
+    let graph = luma_patterns::ClipGraph::from_json(
+        &json!({"version": 3, "nodes": {
+            "hue": {"kind": "control", "settings": {"name": "main", "kind": "color"}},
+            "drop": {"kind": "control", "settings": {"name": "drop"}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "drop"}}},
+            "color1": {"kind": "color", "inputs": {
+                "color": {"node": "hue"}, "brightness": {"node": "curve1"}}}}})
+        .to_string(),
+    )
+    .unwrap();
+    let pattern = PerformPattern {
+        graph: crate::controls::tests::with_pad_at_once(graph),
+        ..wash("lit")
+    };
+    save(&services, &venue, &pattern).await.unwrap();
+    let node = |node: &str| ControlTarget::Node {
+        pattern_id: "lit".into(),
+        node: node.into(),
+    };
+    let with = |content: CellContent| {
+        let mut layout = PerformLayout::generated(std::slice::from_ref(&pattern));
+        let page = &mut layout.pages[0];
+        let (column, row) = page.free_spot(1, 1).unwrap();
+        page.cells.push(Cell {
+            id: "cell".into(),
+            column,
+            row,
+            width: 1,
+            height: 1,
+            content,
+        });
+        layout
+    };
+    let colors = |target: ControlTarget| {
+        with(CellContent::Color {
+            label: "Colors".into(),
+            swatches: vec![[1., 0., 0.], [0., 0., 1.]],
+            fade: 0.,
+            unit: luma_patterns::press::TimeUnit::Beats,
+            targets: vec![target],
+            step: None,
+        })
+    };
+    let store = |layout: PerformLayout| {
+        let services = &services;
+        let args = json!({ "venueId": venue, "layout": layout });
+        async move { dispatch(services, "save_perform_layout", &args).await }
+    };
+    let refused = store(colors(node("drop"))).await.unwrap_err();
+    assert_eq!(refused.kind(), "invalid", "a color cell sets no fader");
+    let fader = with(CellContent::Fader {
+        label: "Speeds".into(),
+        targets: vec![node("hue")],
+    });
+    let refused = store(fader).await.unwrap_err();
+    assert_eq!(refused.kind(), "invalid", "a fader moves no live color");
+    let layout = colors(node("hue"));
+    store(layout.clone()).await.unwrap();
+
+    dispatch(&services, "perform_open_set", &json!({ "venueId": venue }))
+        .await
+        .unwrap();
+    let blue = perform::swatch("cell", 1);
+    for down in [true, false] {
+        dispatch(
+            &services,
+            "perform_press",
+            &json!({ "name": blue, "down": down }),
+        )
+        .await
+        .unwrap();
+    }
+    let state = services.perform.state();
+    assert_eq!(state.bank.swatches["cell"], 1, "the swatch pressed is on");
+    let color = state.bank.colors[&perform::node("lit", "hue")];
+    assert_eq!(color.value(120.), [0., 0., 1.], "its target took its color");
+
+    // The live color leaves the graph: the cell lets go of it, and the
+    // pattern's change is not refused for it.
+    let mut plain = pattern.clone();
+    plain.graph.nodes.remove("hue");
+    plain
+        .graph
+        .nodes
+        .get_mut("color1")
+        .unwrap()
+        .inputs
+        .remove("color");
+    save(&services, &venue, &plain).await.unwrap();
+    let tidied = read_layout(&services, &venue).await.unwrap();
+    let cell = tidied.pages[0].cells.iter().find(|cell| cell.id == "cell");
+    assert_eq!(cell.unwrap().content.targets(), &[] as &[ControlTarget]);
 }
 
 #[tokio::test]
@@ -416,4 +516,215 @@ async fn read_layout(
             .unwrap(),
     )
     .unwrap()
+}
+
+/// Two PARs a metre apart, `left` and `right`, each the one fixture of a
+/// group of its name.
+async fn two_groups(services: &AppServices, venue: &str) {
+    use crate::database::local::groups as groups_db;
+    use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
+
+    let root = crate::venue_graph::root_id(venue);
+    for (i, id) in ["left", "right"].iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
+                manufacturer, model, mode_name, fixture_path, label)
+             VALUES (?, ?, 1, ?, 7, 'Chauvet', 'SlimPAR 64', '7ch',
+                'Chauvet/Chauvet-SlimPAR-64.qxf', ?)",
+        )
+        .bind(id)
+        .bind(venue)
+        .bind(1 + i as i64 * 8)
+        .bind(id)
+        .execute(&services.db.0)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_nodes
+                 (id, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
+             VALUES (?, ?, 'fixture', 'Chauvet/Chauvet-SlimPAR-64.qxf', ?, ?, 'clamp', 'rig', 0.0)",
+        )
+        .bind(id)
+        .bind(venue)
+        .bind(id)
+        .bind(&root)
+        .execute(&services.db.0)
+        .await
+        .unwrap();
+        for (key, value) in [("u", i as f64), ("v", 0.0), ("trim", 2.0)] {
+            sqlx::query(
+                "INSERT INTO venue_node_params (node_id, venue_id, key, value) VALUES (?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(venue)
+            .bind(key)
+            .bind(value)
+            .execute(&services.db.0)
+            .await
+            .unwrap();
+        }
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(venue))
+            .await
+            .unwrap();
+        let group = groups_db::create_group(&mut access, Some(id), None, None, None)
+            .await
+            .unwrap();
+        groups_db::add_member_to_group(&mut access, id, &group.id, groups_db::WHOLE_FIXTURE)
+            .await
+            .unwrap();
+        access.commit().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_pad_pressed_on_a_target_lights_only_that_groups_heads() {
+    use crate::controls::perform;
+    use crate::models::perform::{Cell, CellContent, PerformLayout};
+
+    let (_dir, services, venue) = library().await;
+    two_groups(&services, &venue).await;
+    let pattern = wash("wash");
+    save(&services, &venue, &pattern).await.unwrap();
+    let mut layout = PerformLayout::generated(std::slice::from_ref(&pattern));
+    let page = &mut layout.pages[0];
+    let (column, row) = page.free_spot(1, 1).expect("room for a target");
+    page.cells.push(Cell {
+        id: "on-left".into(),
+        column,
+        row,
+        width: 1,
+        height: 1,
+        content: CellContent::Target {
+            label: String::new(),
+            group: "left".into(),
+        },
+    });
+    dispatch(
+        &services,
+        "save_perform_layout",
+        &json!({ "venueId": venue, "layout": layout }),
+    )
+    .await
+    .unwrap();
+    dispatch(&services, "perform_open_set", &json!({ "venueId": venue }))
+        .await
+        .unwrap();
+    let dimmers = || {
+        let frame = services.render_engine.sample(0.0).unwrap_or_default();
+        let lit = |fixture: &str| {
+            frame
+                .primitives
+                .iter()
+                .filter(|(id, _)| id.starts_with(&format!("{fixture}:")))
+                .map(|(_, head)| head.dimmer)
+                .fold(0.0_f32, f32::max)
+        };
+        (lit("left"), lit("right"))
+    };
+    assert_eq!(dimmers(), (0.0, 0.0), "nothing pressed, nothing lit");
+
+    let target = perform::cell("on-left");
+    let pad = perform::pad(&pattern).expect("a pad");
+    for (name, down) in [
+        (&target, true),
+        (&pad, true),
+        (&pad, false),
+        (&target, false),
+    ] {
+        services.perform.press(name, down).unwrap();
+    }
+    // The first frame asks for the instance; it plays once compiled.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (left, right) = loop {
+        let (left, right) = dimmers();
+        if left > 0.0 || Instant::now() > deadline {
+            break (left, right);
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(left > 0.0, "the instance lights the target's group");
+    assert_eq!(right, 0.0, "and nothing outside it");
+    assert!(
+        !services.perform.state().bank.buttons[&pad].on(),
+        "the pattern on its own selection stays off"
+    );
+
+    // No target held: the pattern on its own selection, everywhere.
+    services.perform.press(&pad, true).unwrap();
+    let (left, right) = dimmers();
+    assert!(left > 0.0 && right > 0.0, "{left} {right}");
+}
+
+#[tokio::test]
+async fn a_speed_fader_changes_a_chases_rate_on_the_bar() {
+    use crate::controls::perform;
+    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+    use crate::models::perform::{PerformLayout, PerformPattern};
+
+    let (_dir, services, venue) = library().await;
+    two_groups(&services, &venue).await;
+    // A chase whose every a fader sets, 1 beat at 0 to 2 at 1; its light is
+    // each event's progress, so 0 where one starts. No pad: it plays.
+    let graph = luma_patterns::ClipGraph::from_json(
+        &json!({"version": 3, "nodes": {
+            "fader": {"kind": "control", "settings": {"name": "speed"}},
+            "speed": {"kind": "curve", "inputs": {"x": {"node": "fader"}, "low": 1, "high": 2}},
+            "time1": {"kind": "time", "inputs": {"every": {"node": "speed"}}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}})
+        .to_string(),
+    )
+    .unwrap();
+    let pattern = PerformPattern {
+        graph,
+        ..wash("chase")
+    };
+    let controls = services.controls.venue(&venue);
+    let mut access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue))
+        .await
+        .unwrap();
+    let (wants, _wanted) = tokio::sync::mpsc::unbounded_channel();
+    let (_, compiled) = super::live::compile(
+        0,
+        &mut access,
+        &services.fixtures_root,
+        &services.storage,
+        controls.clone(),
+        std::slice::from_ref(&pattern),
+        &PerformLayout::generated(std::slice::from_ref(&pattern)),
+        None,
+        wants,
+    )
+    .await
+    .unwrap();
+    let (mut live, _build) = compiled.expect("the chase compiles");
+
+    // Play the set on the tapped tempo's grid, 120 BPM, a sixteenth of a
+    // beat a frame, moving the fader mid-bar.
+    let now = Instant::now();
+    let mut scratch = crate::eval::Arena::default();
+    let mut starts = Vec::new();
+    for frame in 0..=16 * 16 {
+        let beat = f64::from(frame) / 16.;
+        if beat == 5.25 {
+            controls.set(&perform::node("chase", "fader"), 1.0);
+        }
+        let time = (beat * 0.5) as f32;
+        live.tick(time, now);
+        assert!(live.update_levels());
+        let lit = live
+            .render_onto(Default::default(), time, &mut scratch)
+            .primitives
+            .values()
+            .map(|head| head.dimmer)
+            .fold(0.0_f32, f32::max);
+        if lit < 1e-4 {
+            starts.push(beat);
+        }
+    }
+    assert_eq!(
+        starts,
+        [0., 1., 2., 3., 4., 5., 6., 8., 10., 12., 14., 16.],
+        "every beat, then every two from the next they share"
+    );
 }

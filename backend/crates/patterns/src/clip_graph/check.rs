@@ -708,7 +708,7 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
         for source in given.sources() {
             let input = &Input::Wire(source.to_string());
             let source_node = &graph.nodes[source];
-            let produces = definition_of(source_node).output;
+            let produces = source_node.produces();
             let gives = graph.value_kind(source);
             let fits = match def.ty {
                 InputType::Number => gives == Some("number"),
@@ -737,6 +737,11 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                     Produces::Coordinate,
                 ) => {
                     format!("{name}=curve({source}, \"Ramp up\")")
+                }
+                // A fader into a color: the live color it means.
+                (InputType::Color, Produces::Coordinate) if source_node.kind == Kind::Control => {
+                    let control = source_node.setting("name").unwrap_or(source);
+                    format!("{name}=control(\"{control}\", kind=\"color\")")
                 }
                 (InputType::Color, Produces::Coordinate) => {
                     format!("{name}=curve({source}, \"Ramp up\", gradient=\"Rainbow\")")
@@ -1017,9 +1022,7 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
                     "{id}.{name}: expected a value that is the same all along each laser element; got a wire that varies along it from {source}. Example: wire along only into a figure's x, y, size, rotation or color, through curves and math"
                 ));
             }
-            // A clock's period is integrated over the clip ahead of play,
-            // so nothing live may set it.
-            if carried.live && (def.clock || def.fixed) {
+            if carried.live && def.fixed {
                 return fail(format!(
                     "{id}.{name}: expected a value fixed for the clip; got a wire a live control moves, from {source}. Example: {}",
                     example(node.kind, name)
@@ -1084,10 +1087,6 @@ fn curve_kind(node: &Node) -> Option<&str> {
     (node.kind == Kind::Curve).then(|| node.setting("kind").unwrap_or("number"))
 }
 
-fn definition_of(node: &Node) -> &'static super::Definition {
-    definition(node.kind)
-}
-
 /// `a`, `a and b`, `a, b and c`.
 fn list(items: &[impl AsRef<str>]) -> String {
     joined(items, "and")
@@ -1130,7 +1129,7 @@ fn describe(graph: &ClipGraph, input: Option<&Input>) -> String {
         Some(Input::List(items)) => format!("a list of {} items", items.len()),
         Some(Input::Wire(source)) => match graph.nodes.get(source) {
             None => format!("a wire to {source}, which is not in the graph"),
-            Some(node) => match definition(node.kind).output {
+            Some(node) => match node.produces() {
                 Produces::Heads => format!("a heads wire from {source}"),
                 Produces::Coordinate => format!("a coordinate wire from {source}"),
                 Produces::Figure => format!("a figure wire from {source}"),

@@ -148,7 +148,7 @@ fn coordinate(graph: &ClipGraph, curve: &str) -> Option<(String, Kind)> {
 
 /// How a link menu names a node: "Curve 1 · Ramp up", "Math 1 · cut × fade".
 fn describe(graph: &ClipGraph, id: &str) -> String {
-    let label = edit::label(id);
+    let label = edit::label(graph, id);
     let Some(node) = graph.nodes.get(id) else {
         return label;
     };
@@ -202,10 +202,10 @@ fn short(value: f64) -> String {
 }
 
 /// A value or a wire, as a summary names it.
-fn item_text(item: &Input) -> String {
+fn item_text(graph: &ClipGraph, item: &Input) -> String {
     match item {
         Input::Number(v) => short(*v),
-        Input::Wire(to) => edit::label(to),
+        Input::Wire(to) => edit::label(graph, to),
         _ => "…".into(),
     }
 }
@@ -219,8 +219,8 @@ fn math_summary(graph: &ClipGraph, id: &str) -> String {
         .inputs
         .get("values")
         .map(|values| match values {
-            Input::List(items) => items.iter().map(item_text).collect(),
-            one => vec![item_text(one)],
+            Input::List(items) => items.iter().map(|item| item_text(graph, item)).collect(),
+            one => vec![item_text(graph, one)],
         })
         .unwrap_or_default();
     match node.setting("op").unwrap_or("*") {
@@ -237,7 +237,7 @@ fn curve_summary(graph: &ClipGraph, id: &str) -> String {
     };
     let mut parts = Vec::new();
     if let Some((x, _)) = coordinate(graph, id) {
-        parts.push(edit::label(&x));
+        parts.push(edit::label(graph, &x));
     }
     if node.setting("kind") == Some("color") {
         let name = match node.inputs.get("gradient") {
@@ -254,9 +254,11 @@ fn curve_summary(graph: &ClipGraph, id: &str) -> String {
         return parts.join(" · ");
     }
     let bound = |name: &str| match node.inputs.get(name) {
-        Some(item @ (Input::Number(_) | Input::Wire(_))) => Some(item_text(item)),
+        Some(item @ (Input::Number(_) | Input::Wire(_))) => Some(item_text(graph, item)),
         Some(_) => None,
-        None => edit::empty(graph, id, name).as_ref().map(item_text),
+        None => edit::empty(graph, id, name)
+            .as_ref()
+            .map(|item| item_text(graph, item)),
     };
     if let (Some(low), Some(high)) = (bound("low"), bound("high")) {
         parts.push(format!("{low}→{high}"));
@@ -302,7 +304,7 @@ fn item_field(
         return None;
     };
     let entity = number_field(
-        format!("{}: item {}", field_name(id, input), index + 1),
+        format!("{}: item {}", field_name(graph, id, input), index + 1),
         value,
         spec,
         canvas::NODE_FIELD_W - CONTROL_HEIGHT - VECTOR_GAP,
@@ -369,8 +371,12 @@ fn grid_snap(graph: &ClipGraph, id: &str, input: &str) -> Option<Box<dyn Fn(f64)
         .then(|| Box::new(move |beats| grid::snap(kind, &input, beats)) as Box<dyn Fn(f64) -> f64>)
 }
 
-fn field_name(id: &str, input: &str) -> String {
-    format!("{} {}", edit::label(id), input_label(input).to_lowercase())
+fn field_name(graph: &ClipGraph, id: &str, input: &str) -> String {
+    format!(
+        "{} {}",
+        edit::label(graph, id),
+        input_label(input).to_lowercase()
+    )
 }
 
 /// Build the widget for one value input.
@@ -392,7 +398,7 @@ fn field(
     Some(match (spec.ty, value) {
         (Ty::Number, Input::Number(v)) => {
             let entity = number_field(
-                field_name(id, input),
+                field_name(graph, id, input),
                 *v,
                 spec,
                 canvas::NODE_FIELD_W,
@@ -417,7 +423,11 @@ fn field(
                 ..spec
             };
             let entities = [0, 1, 2].map(|axis| {
-                let name = format!("{}: {}", field_name(id, input), ["u", "v", "z"][axis]);
+                let name = format!(
+                    "{}: {}",
+                    field_name(graph, id, input),
+                    ["u", "v", "z"][axis]
+                );
                 let entity = number_field(
                     name,
                     v[axis],
@@ -449,7 +459,7 @@ fn field(
         }
         (Ty::Color, Input::Color(rgb)) => {
             let entity = cx.new(|cx| {
-                ColorArgEditor::new(field_name(id, input), color_arg(*rgb), cx).rgb_only()
+                ColorArgEditor::new(field_name(graph, id, input), color_arg(*rgb), cx).rgb_only()
             });
             subs.push(cx.subscribe(
                 &entity,
@@ -463,9 +473,10 @@ fn field(
         }
         (Ty::Points, Input::Points(points)) => {
             let (range, unit) = strip_scale(graph, id);
-            let mut strip = CurveStrip::new(edit::label(id), StripValue::Number(points.clone()))
-                .with_presets(presets::curves())
-                .with_scale(range, unit);
+            let mut strip =
+                CurveStrip::new(edit::label(graph, id), StripValue::Number(points.clone()))
+                    .with_presets(presets::curves())
+                    .with_scale(range, unit);
             let app = cx.entity().downgrade();
             let curve = id.to_owned();
             match coordinate(graph, id).map(|(_, kind)| kind) {
@@ -486,7 +497,7 @@ fn field(
             Field::Strip(entity)
         }
         (Ty::Gradient, Input::Gradient(gradient)) => {
-            let label = format!("{} colors", edit::label(id));
+            let label = format!("{} colors", edit::label(graph, id));
             let entity = cx.new(|_| {
                 CurveStrip::new(label, StripValue::Gradient(ui_gradient(gradient)))
                     .with_presets(strip::gradient_presets())
@@ -714,7 +725,7 @@ fn random_preview(
     });
     let settings = random_settings(graph, node);
     cx.new(|cx| {
-        let mut preview = random::RandomPreview::new(edit::label(id), sampler, transport);
+        let mut preview = random::RandomPreview::new(edit::label(graph, id), sampler, transport);
         preview.set_value(settings, cx);
         preview
     })
@@ -785,7 +796,7 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                 options.push((Kind::Math.label().into(), Pick::Multiply));
             }
             match (&wired, held) {
-                (Some((to, _)), _) => from_name(to),
+                (Some((to, _)), _) => from_name(graph, to),
                 (None, None) if !showable => edit::empty_note(&graph.nodes[id], input).into(),
                 _ => "Value".into(),
             }
@@ -796,7 +807,7 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                     .into_iter()
                     .map(|kind| (edit::source_label(kind).into(), Pick::Coordinate(kind))),
             );
-            wired.map_or("None".into(), |(to, _)| from_name(&to))
+            wired.map_or("None".into(), |(to, _)| from_name(graph, &to))
         }
         Ty::Heads => {
             options.push(("All".into(), Pick::Empty));
@@ -805,12 +816,12 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                     .iter()
                     .map(|kind| (kind.label().into(), Pick::Insert(*kind))),
             );
-            wired.map_or("All".into(), |(to, _)| from_name(&to))
+            wired.map_or("All".into(), |(to, _)| from_name(graph, &to))
         }
         Ty::Time => {
             options.push(("Once".into(), Pick::Empty));
             options.push((Kind::Time.label().into(), Pick::Insert(Kind::Time)));
-            wired.map_or("Once".into(), |(to, _)| from_name(&to))
+            wired.map_or("Once".into(), |(to, _)| from_name(graph, &to))
         }
         Ty::Points | Ty::Gradient | Ty::Values | Ty::Figures => return None,
     };
@@ -822,8 +833,8 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
 
 /// What a wired input's source chip reads: the name of the node that feeds
 /// it, "← mix".
-fn from_name(to: &str) -> String {
-    format!("← {}", edit::label(to))
+fn from_name(graph: &ClipGraph, to: &str) -> String {
+    format!("← {}", edit::label(graph, to))
 }
 
 /// A curve's low or high: it has no empty to go back to when the curve is a
@@ -1179,7 +1190,7 @@ pub(super) fn body(cx: &Ctx, id: &str) -> Vec<AnyElement> {
 /// on an open curve its widen and close.
 pub(super) fn title_buttons(cx: &Ctx, id: &str) -> Vec<AnyElement> {
     let node = &cx.graph.nodes[id];
-    let label = edit::label(id);
+    let label = edit::label(cx.graph, id);
     match node.kind {
         Kind::Math => vec![op_button(cx, id, node)],
         Kind::Curve if curve_open(cx, id) => {
@@ -1275,7 +1286,7 @@ fn curve_value(graph: &ClipGraph, id: &str) -> StripValue {
 /// among them; a bound left empty waits behind a "+".
 fn curve_rows(cx: &Ctx, id: &str) -> Vec<AnyElement> {
     let node = &cx.graph.nodes[id];
-    let label = edit::label(id);
+    let label = edit::label(cx.graph, id);
     let inputs: Vec<&str> = definition(node.kind)
         .inputs
         .iter()
@@ -1418,7 +1429,7 @@ fn list_rows(cx: &Ctx, id: &str, input: &'static str) -> Vec<AnyElement> {
             let key = item_key(input, index);
             let control = match item.source() {
                 Some(from) => {
-                    let name = from_name(from);
+                    let name = from_name(cx.graph, from);
                     div()
                         .h(rpx(CONTROL_HEIGHT))
                         .flex()
@@ -1452,7 +1463,11 @@ fn list_rows(cx: &Ctx, id: &str, input: &'static str) -> Vec<AnyElement> {
                 })
                 .agent_node(
                     Role::Button,
-                    format!("Remove {} item {}", field_name(id, input), index + 1),
+                    format!(
+                        "Remove {} item {}",
+                        field_name(cx.graph, id, input),
+                        index + 1
+                    ),
                 );
             div()
                 .relative()
@@ -1536,7 +1551,10 @@ fn add_item_button(id: &str, input: &str, cx: &Ctx) -> AnyElement {
                 this.graph_live(cx, move |graph| edit::add_item(graph, &at, &name))
             });
         })
-        .agent_node(Role::Button, format!("Add to {}", field_name(id, input)))
+        .agent_node(
+            Role::Button,
+            format!("Add to {}", field_name(cx.graph, id, input)),
+        )
         .into_any_element()
 }
 

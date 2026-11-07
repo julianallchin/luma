@@ -2,8 +2,8 @@ use super::*;
 
 impl PreparedGraph {
     /// Bakes every value that does not change over the clip, in topological
-    /// order: constants, folded kernels and clock tables. Rebinding features
-    /// rebuilds every value.
+    /// order: constants, folded kernels and the clock tables no live control
+    /// moves. Rebinding features rebuilds every value.
     pub(super) fn prepare_fixed(
         &self,
         features: Option<&dyn crate::FeatureSource>,
@@ -47,6 +47,12 @@ impl PreparedGraph {
         let step = &self.steps[index];
         let source = &step.inputs["period"];
         let dependencies = self.live_steps(index, baked, [source]);
+        if dependencies
+            .iter()
+            .any(|step| self.steps[*step].primitive == Primitive::Control)
+        {
+            return Ok(BTreeMap::new());
+        }
         let beats: Vec<_> = if dependencies.is_empty() {
             vec![self.clip_start]
         } else {

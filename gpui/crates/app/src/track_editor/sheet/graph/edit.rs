@@ -8,15 +8,17 @@ use std::collections::BTreeSet;
 use luma_patterns as p;
 use p::clip_graph::{definition, ClipGraph, Input, InputType, Kind, Node, Unit};
 
-/// "Curve 2" for `curve2`: a kind's name then a number reads as the kind in
-/// sentence case and its number. Any other id is a name someone gave the
-/// node (`cut`, `bloom_far`) and reads as it is.
-pub(crate) fn label(id: &str) -> String {
+/// "Curve 2" for `curve2`: a kind's name then a number reads as what the
+/// node is ([`Node::label`]) and its number, so `control2` holding a color is
+/// "Live color 2". Any other id is a name someone gave the node (`cut`,
+/// `bloom_far`) and reads as it is.
+pub(crate) fn label(graph: &ClipGraph, id: &str) -> String {
     let split = id.find(|c: char| c.is_ascii_digit()).unwrap_or(id.len());
     let (word, number) = id.split_at(split);
     match Kind::from_name(word) {
         Some(kind) if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) => {
-            format!("{} {number}", kind.label())
+            let what = graph.nodes.get(id).map_or(kind.label(), Node::label);
+            format!("{what} {number}")
         }
         _ => id.to_owned(),
     }
@@ -559,7 +561,8 @@ fn promoted(spec: Spec, current: Option<&Input>) -> Node {
 
 /// Promote a value input to `source`, a coordinate kind: a coordinate node
 /// and a curve wired into the input, or into a list as one more item
-/// ([`link`]). Returns the value it held, for an unwire to give back.
+/// ([`link`]). A control into a color input is a live color, wired
+/// straight in. Returns the value it held, for an unwire to give back.
 pub(crate) fn promote(graph: &mut ClipGraph, id: &str, input: &str, source: Kind) -> Option<Input> {
     let spec = spec(graph, id, input)?;
     let held = graph
@@ -569,6 +572,14 @@ pub(crate) fn promote(graph: &mut ClipGraph, id: &str, input: &str, source: Kind
         .get(input)
         .filter(|held| !matches!(held, Input::Wire(_) | Input::List(_)))
         .cloned();
+    if spec.ty == Ty::Color && source == Kind::Control {
+        let live = add(
+            graph,
+            Node::new(Kind::Control).with_setting("kind", "color"),
+        );
+        link(graph, id, input, &live);
+        return held;
+    }
     let current = shown(graph, id, input);
     let curve = match (graph.nodes[id].kind, input) {
         (Kind::Space, "shift") => {
@@ -875,7 +886,7 @@ pub(crate) fn link_candidates(graph: &ClipGraph, id: &str, input: &str) -> Vec<S
                 Ty::Figures => node.kind == Kind::Figure,
                 Ty::Heads => SHAPERS.contains(&node.kind),
                 Ty::Time => node.kind == Kind::Time,
-                Ty::Coordinate => SOURCES.contains(&node.kind),
+                Ty::Coordinate => SOURCES.contains(&node.kind) && !node.is_live_color(),
                 Ty::Points | Ty::Gradient => false,
             }
         })
@@ -1138,13 +1149,42 @@ mod tests {
     }
 
     #[test]
-    fn labels_read_as_kind_and_number() {
-        assert_eq!(label("curve2"), "Curve 2");
-        assert_eq!(label("color1"), "Color 1");
+    fn labels_read_as_what_the_node_is_and_its_number() {
+        let mut graph = ClipGraph::default();
+        let live = add(
+            &mut graph,
+            Node::new(Kind::Control).with_setting("kind", "color"),
+        );
+        let fader = add(&mut graph, Node::new(Kind::Control));
+        assert_eq!(label(&graph, "curve2"), "Curve 2");
+        assert_eq!(label(&graph, "color1"), "Color 1");
+        assert_eq!(label(&graph, &live), format!("Live color {}", &live[7..]));
+        assert_eq!(label(&graph, &fader), format!("Fader {}", &fader[7..]));
         // A name someone gave reads as it is, digits and all.
         for named in ["cut", "bloom_far", "cut2", "curve2b", "curve_2"] {
-            assert_eq!(label(named), named);
+            assert_eq!(label(&graph, named), named);
         }
+    }
+
+    #[test]
+    fn a_new_control_on_a_color_input_is_a_live_color() {
+        let mut graph = wash();
+        attach(&mut graph, "color1", "color", Kind::Control).expect("a control feeds a color");
+        let live = wired(&graph, "color1", "color");
+        assert!(graph.nodes[&live].is_live_color(), "wired straight in");
+        assert_eq!(label(&graph, &live), format!("Live color {}", &live[7..]));
+    }
+
+    #[test]
+    fn a_fader_on_a_clock_is_its_speed() {
+        let mut graph = wash();
+        promote(&mut graph, "color1", "brightness", Kind::Time);
+        let curve = wired(&graph, "color1", "brightness");
+        let time = wired(&graph, &curve, "x");
+        attach(&mut graph, &time, "every", Kind::Control).expect("a fader feeds every");
+        let speed = wired(&graph, &time, "every");
+        assert_eq!(graph.nodes[&wired(&graph, &speed, "x")].kind, Kind::Control);
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
     }
 
     #[test]

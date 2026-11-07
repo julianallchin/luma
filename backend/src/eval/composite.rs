@@ -96,7 +96,7 @@ pub fn offset_frame<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::eval::{
         lighting::{compile_clip, test_clip},
         Arena, CompiledAnnotation, Scene, Scope,
@@ -106,7 +106,7 @@ mod tests {
     use std::sync::Arc;
 
     /// One Wash clip on one head over beats 0–4 (one beat per second).
-    fn wash(
+    pub(crate) fn wash(
         color: [f64; 3],
         brightness: f64,
         alpha: f64,

@@ -11,9 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec import clip as clip_module  # noqa: E402
-from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, curve, group,  # noqa: E402
-                            along, figure, laser, mirror, preset, random, shuffle, space, split, strobe, time,
-                            value)
+from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, control, curve,  # noqa: E402
+                            group, along, figure, laser, mirror, preset, random, shuffle, space, split, strobe,
+                            time, value)
 from luma_exec.clip import max as clip_max, min as clip_min  # noqa: E402
 from luma_exec.score import GraphTrack  # noqa: E402
 
@@ -213,7 +213,9 @@ CATALOG = {
     "Triplet pulse": "t = time(every=1/3); color(brightness=curve(t, 'Drop'))",
     "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('low'), 'Ramp up', low=0.2, high=1))",
     "Drop on a fader": "t = time(every=1); color(brightness=curve(t, 'Drop') * curve(control('drop'), 'Ramp up', low=0.2, high=1))",
+    "Speed on a fader": "t = time(every=curve(control('speed'), 'Ramp up', low=1, high=2)); color(brightness=curve(t, 'Drop'))",
     "Hit on a button": "color(brightness=curve(button('hit', decay=0.5, sustain=0, shape='punchy')))",
+    "Pad on the bar": "color(alpha=curve(button('pad', mode='toggle', start='bar', release=4)))",
     "Named steps": "t = time(every=2); cut = curve(t, 'Step down'); fade = curve(t, 'Fade out'); glow = cut * fade; color(brightness=max(glow, 0.1), alpha=1 - curve(t, 'Ramp up'))",
 }
 
@@ -354,6 +356,32 @@ class ClipBuilderTests(unittest.TestCase):
         # On plain numbers max and min stay Python's own.
         self.assertEqual((clip_max(1, 3, 2), clip_min([4, 2]), clip_max([], default=7)), (3, 2, 7))
         self.assertEqual(clip_max("ab", key=str.upper), "b")
+
+    def test_a_live_color_is_a_color_wire_and_round_trips(self):
+        graph = color(color=control("main", kind="color"),
+                      brightness=curve(control("drop"), "Ramp up"))
+        nodes = graph.json()["nodes"]
+        main = next(node for node in nodes.values() if node["settings"].get("name") == "main")
+        self.assertEqual(main["settings"]["kind"], "color")
+        self.assertIn('control("main", kind="color")'.replace('"', "'"), graph.source())
+        self.assertNotIn("kind='number'", graph.source(), "a fader is the default")
+        self.assertEqual(run(graph.source()).json(), graph.json())
+        read = Graph.from_json(graph.json())
+        self.assertEqual(run(read.source()).json(), graph.json())
+        # A live color is a value: it takes math; a fader stays a coordinate.
+        control("main", kind="color") * 0.5
+        with self.assertRaisesRegex(ClipError, r"curve\(\.\.\.\)"):
+            control("drop") * 0.5
+        with self.assertRaisesRegex(ClipError, "control.kind"):
+            control("main", kind="hue")
+
+    def test_a_fader_sets_a_clocks_speed(self):
+        speed = curve(control("speed"), "Ramp up", low=1, high=2)
+        graph = color(brightness=curve(time(every=speed, duration=speed), "Drop"))
+        nodes = graph.json()["nodes"]
+        self.assertEqual(nodes["time1"]["inputs"], {"every": {"node": "speed"}, "duration": {"node": "speed"}})
+        self.assertEqual(nodes[nodes["speed"]["inputs"]["x"]["node"]]["kind"], "control")
+        self.assertEqual(run(graph.source()).json(), graph.json())
 
     def test_coordinates_and_lists_are_not_values(self):
         for code in ("time() * 2", "2 * time()", "curve(time()) + space()", "max(curve(time()), random())"):
