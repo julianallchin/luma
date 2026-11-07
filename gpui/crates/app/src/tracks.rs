@@ -1004,6 +1004,7 @@ fn songs_column(
                 let chosen = selected.as_deref() == Some(track.id.as_str());
                 song_row(
                     track,
+                    index,
                     if chosen { path } else { Lit::Rest },
                     open.as_deref() == Some(track.id.as_str()),
                     dots.get(&track.id).copied(),
@@ -1022,6 +1023,7 @@ fn songs_column(
 /// right-click is the folder menu.
 fn song_row(
     track: &TrackBrowserRow,
+    index: usize,
     state: Lit,
     open: bool,
     status: Option<ChatStatus>,
@@ -1039,7 +1041,7 @@ fn song_row(
         .unwrap_or_else(|| "Unknown artist".into());
     let subtitle = sub_line(&artist, track.bpm);
     let length = track.duration_seconds.map_or_else(String::new, length);
-    column_row(state, key)
+    column_row(state, index, key)
         .pr(px(ROW_INSET))
         .on_click(move |_, window, cx| {
             let track_id = track_id.clone();
@@ -1119,8 +1121,17 @@ pub(crate) enum Lit {
 /// One row of any column, [`ROW`] tall and the column's full width. Lit by a
 /// plain fill, edge to edge: no rounding, no inset, no ring. A row at rest
 /// takes the hover fill, which is lighter than either path fill.
-pub(crate) fn column_row(lit: Lit, id: impl Into<SharedString>) -> Stateful<Div> {
-    let row = div()
+///
+/// `row` is the row's place in its run — the column's rows from its top or
+/// from the heading above them — and every second one is striped, Finder's
+/// way, with a fill under hover's.
+pub(crate) fn column_row(lit: Lit, row: usize, id: impl Into<SharedString>) -> Stateful<Div> {
+    let rest = if row % 2 == 1 {
+        glass::wash(glass::WASH_STRIPE)
+    } else {
+        glass::wash(0.)
+    };
+    let el = div()
         .id(id.into())
         .w_full()
         .h(px(ROW))
@@ -1131,10 +1142,10 @@ pub(crate) fn column_row(lit: Lit, id: impl Into<SharedString>) -> Stateful<Div>
         .text_size(px(12.5))
         .cursor_pointer();
     match lit {
-        Lit::Focused => row.bg(glass::wash(glass::WASH_EMPHASIS)),
-        Lit::Path => row.bg(glass::wash(glass::WASH_PRESSED)),
-        Lit::Rest => row
-            .bg(glass::wash(0.))
+        Lit::Focused => el.bg(glass::wash(glass::WASH_EMPHASIS)),
+        Lit::Path => el.bg(glass::wash(glass::WASH_PRESSED)),
+        Lit::Rest => el
+            .bg(rest)
             .hover(|style| style.bg(glass::wash(glass::WASH_SUBTLE)))
             .fade_hover(),
     }

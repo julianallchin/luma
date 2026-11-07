@@ -734,7 +734,9 @@ pub(super) fn column(
         let at = items.iter().position(|other| *other == item);
         state.path_state(super::Column::Scores, at.is_some() && at == scores.cursor)
     };
-    let draw = |row: &ScoreRow| {
+    // `run` is the row's place under its venue's heading: the stripes count
+    // from each heading.
+    let draw = |run: usize, row: &ScoreRow| {
         let index = scores
             .rows
             .iter()
@@ -753,6 +755,7 @@ pub(super) fn column(
         score_row(
             row,
             index,
+            run,
             row_state(Item::Score(index)),
             here,
             open.as_ref() == Some(&target),
@@ -782,15 +785,15 @@ pub(super) fn column(
         .when(scores.error.is_none() && !scores.loaded, |el| {
             el.child(float::empty_row("Loading scores…"))
         })
+        .children(here.iter().enumerate().map(|(run, row)| draw(run, row)))
         .when(scores.loaded && here.is_empty(), |el| {
             el.child(float::empty_row(format!(
                 "No scores in {}",
                 state.venue_name()
             )))
         })
-        .children(here.into_iter().map(draw))
         .when(scores.loaded, |el| {
-            el.child(new_score(row_state(Item::New), app, &track.id))
+            el.child(new_score(row_state(Item::New), here.len(), app, &track.id))
         })
         .children(elsewhere(&scores.rows, venue).map(|(name, rows)| {
             div()
@@ -798,7 +801,11 @@ pub(super) fn column(
                 .flex_col()
                 .pt(px(10.))
                 .child(float::section_heading(name).px(px(ROW_INSET)))
-                .children(rows.into_iter().map(draw))
+                .children(
+                    rows.into_iter()
+                        .enumerate()
+                        .map(|(run, row)| draw(run, row)),
+                )
         }))
         .agent_node(
             Role::Card,
@@ -860,6 +867,7 @@ pub(crate) fn elsewhere<'a>(
 fn score_row(
     row: &ScoreRow,
     index: usize,
+    run: usize,
     state: Lit,
     here: bool,
     open: bool,
@@ -892,7 +900,7 @@ fn score_row(
     );
     let pressed = app.clone();
     let track_id = track.id.clone();
-    column_row(state, id)
+    column_row(state, run, id)
         .px(px(ROW_INSET))
         .when(here, |el| {
             let raised = app.clone();
@@ -1007,10 +1015,10 @@ fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
 }
 
 /// Mint another score on this `(track, venue)`.
-fn new_score(state: Lit, app: &Entity<Luma>, track_id: &str) -> AnyElement {
+fn new_score(state: Lit, run: usize, app: &Entity<Luma>, track_id: &str) -> AnyElement {
     let app = app.clone();
     let track_id = track_id.to_string();
-    column_row(state, format!("new-score:{track_id}"))
+    column_row(state, run, format!("new-score:{track_id}"))
         .px(px(ROW_INSET))
         .on_click(move |_, window, cx| {
             let track_id = track_id.clone();

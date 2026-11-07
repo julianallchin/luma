@@ -76,3 +76,61 @@ test("a song fills the scores column and steps back out", { timeoutMs: 180000 },
   expect(image.stats(open, column).meanLuma).toBeGreaterThan(image.stats(folded, column).meanLuma);
   expect(image.diff(folded, refolded)).toBeLessThan(0.02);
 });
+
+test("every other row is striped, under hover and under both selections", { timeoutMs: 180000 }, () => {
+  nav.venue("Test Venue");
+  nav.scores("Aurora");
+  app.frames(6, { waitMs: 16 });
+  const shell = page().bounds;
+  // A sliver at a row's right end, inside its padding: only its fill shows.
+  const sliver = (node) => ({
+    x: node.bounds.x + node.bounds.width - 6 - shell.x,
+    y: node.bounds.y + 4 - shell.y,
+    width: 3,
+    height: node.bounds.height - 8,
+  });
+  const luma = (shot, node) => image.stats(shot, sliver(node)).meanLuma;
+  // The scores column's run under its heading: three scores, then New score.
+  const rows = () => {
+    const s = app.snapshot();
+    return [...nav.scoreRows(s, "Aurora"), nav.inScores(s, "Aurora", "button", "New score")[0]]
+      .sort((a, b) => a.bounds.y - b.bounds.y);
+  };
+  const foot = { x: shell.x + shell.width / 2, y: shell.y + shell.height - 20 };
+  // The pointer off the rows.
+  app.scroll(foot, { dy: 0 });
+  app.frames(6, { waitMs: 16 });
+  const rest = app.screenshot({ node: page() });
+  const run = rows();
+  expect(run.length).toBe(4);
+  const fills = run.map((row) => luma(rest, row));
+  // Neighbours differ, alternate rows match, and the striped ones are lighter.
+  for (let i = 1; i < fills.length; i++) {
+    assert(Math.abs(fills[i] - fills[i - 1]) > 0.2, `rows ${i - 1} and ${i} are not striped apart: ${fills}`);
+  }
+  for (let i = 2; i < fills.length; i++) {
+    assert(Math.abs(fills[i] - fills[i - 2]) < 0.2, `rows ${i - 2} and ${i} do not match: ${fills}`);
+  }
+  assert(fills[1] > fills[0] && fills[3] > fills[2], `the odd rows are not the striped ones: ${fills}`);
+  const stripe = fills[1];
+
+  // Hover over a striped row lifts it past the stripe.
+  const centre = (row) => ({ x: row.bounds.x + row.bounds.width / 2, y: row.bounds.y + row.bounds.height / 2 });
+  app.scroll(centre(run[1]), { dy: 0 });
+  app.frames(20, { waitMs: 16 });
+  const hovered = luma(app.screenshot({ node: page() }), run[1]);
+  assert(hovered > stripe, `hover does not read over the stripe: ${hovered} vs ${stripe}`);
+
+  // Both selection strengths read over it: the keyboard's row in the scores
+  // column, a striped one, and the selected song in the column it left.
+  app.scroll(foot, { dy: 0 });
+  app.key("right");
+  app.key("down");
+  app.frames(6, { waitMs: 16 });
+  const keyed = app.screenshot({ node: page() });
+  const focused = luma(keyed, rows()[1]);
+  const path = luma(keyed, app.snapshot().find({ role: "row", label: "Aurora" }));
+  assert(focused > stripe && path > stripe,
+    `a selection does not read over the stripe: ${JSON.stringify({ focused, path, stripe })}`);
+  assert(focused > path, `the keyboard's column is not the stronger: ${focused} vs ${path}`);
+});

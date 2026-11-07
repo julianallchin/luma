@@ -324,6 +324,7 @@ pub(super) fn column(
         .flex_col()
         .child(all_songs_row(
             state.path_state(Column::Places, *place == Place::All),
+            0,
             state.all_count,
             app,
         ))
@@ -344,12 +345,22 @@ pub(super) fn column(
                 folder,
                 state.counts.get(index).copied().unwrap_or_default(),
                 state.path_state(Column::Places, selected),
+                index,
                 dots[index],
                 field,
                 app,
             )
         }))
-        .child(new_folder_row(app))
+        // Under the folders' heading when there are folders, so the next
+        // in their run; alone under All songs otherwise.
+        .child(new_folder_row(
+            if state.folders.is_empty() {
+                1
+            } else {
+                state.folders.len()
+            },
+            app,
+        ))
         .into_any_element()
 }
 
@@ -380,8 +391,8 @@ fn folder_statuses(
 
 /// A place's row: its glyph, its name, how many songs the filters admit in
 /// it, and the chevron that says selecting it opens a column.
-fn place_row(state: Lit, key: SharedString, icon: IconName) -> Stateful<Div> {
-    column_row(state, key).px(px(ROW_INSET)).child(
+fn place_row(state: Lit, row: usize, key: SharedString, icon: IconName) -> Stateful<Div> {
+    column_row(state, row, key).px(px(ROW_INSET)).child(
         gpui_component::Icon::new(icon)
             .size(px(14.))
             .text_color(glass::ink(glass::TEXT_SECONDARY)),
@@ -406,9 +417,9 @@ fn place_tail(count: usize, label: String) -> [AnyElement; 2] {
 }
 
 /// Every song in the venue, in a folder or not.
-fn all_songs_row(state: Lit, songs: usize, app: &Entity<Luma>) -> AnyElement {
+fn all_songs_row(state: Lit, row: usize, songs: usize, app: &Entity<Luma>) -> AnyElement {
     let app = app.clone();
-    place_row(state, "place-all".into(), IconName::Music)
+    place_row(state, row, "place-all".into(), IconName::Music)
         .on_click(move |_, window, cx| {
             app.update(cx, |this, cx| {
                 this.focus_columns(window, cx);
@@ -437,6 +448,7 @@ fn folder_row(
     folder: &Folder,
     songs: usize,
     state: Lit,
+    row: usize,
     status: Option<ChatStatus>,
     field: Option<&Entity<TextInput>>,
     app: &Entity<Luma>,
@@ -447,6 +459,7 @@ fn folder_row(
     let label = format!("Folder {}", folder.name);
     place_row(
         state,
+        row,
         SharedString::from(format!("folder-{}", folder.id)),
         IconName::Folder,
     )
@@ -500,9 +513,9 @@ fn name_field(folder: &Folder, field: &Entity<TextInput>) -> AnyElement {
 }
 
 /// Make another folder.
-fn new_folder_row(app: &Entity<Luma>) -> AnyElement {
+fn new_folder_row(row: usize, app: &Entity<Luma>) -> AnyElement {
     let app = app.clone();
-    column_row(Lit::Rest, "new-folder")
+    column_row(Lit::Rest, row, "new-folder")
         .px(px(ROW_INSET))
         .on_click(move |_, window, cx| {
             app.update(cx, |this, cx| this.create_folder(window, cx));

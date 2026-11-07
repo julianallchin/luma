@@ -105,7 +105,9 @@ the songs' selection. Every row in every column is one height (36,
 `tracks::ROW`) and full column width; hover and selection are plain fills
 edge to edge, no corners, inset or ring. The path stays lit: the column with
 the keyboard wears the stronger fill (`WASH_EMPHASIS`), the others the
-weaker (`WASH_PRESSED`); hover is `WASH_SUBTLE`. Up and Down move in a
+weaker (`WASH_PRESSED`); hover is `WASH_SUBTLE`. Every other row is
+striped (`WASH_STRIPE`, under hover), counted from each column's top and
+again from each heading under it. Up and Down move in a
 column, Right goes into the next, Left steps back (clearing the column it
 leaves), Enter opens the score under the cursor; Down in the search goes to
 the first match. The selection outlives the page closing, so it reopens on

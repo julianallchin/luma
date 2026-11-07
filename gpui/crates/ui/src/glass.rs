@@ -330,6 +330,9 @@ pub fn inner_rule() -> Hsla {
 ///
 /// Hover on a control at rest — zeron's `hover`, `#ffffff0d`.
 pub const WASH_SUBTLE: f32 = 0x0d as f32 / 255.0;
+/// Every other row of a list striped Finder's way, `#ffffff05`: under hover,
+/// so a hovered or selected row still reads on a striped one.
+pub const WASH_STRIPE: f32 = 0x05 as f32 / 255.0;
 /// A control under the press, and a button's own plate — `pressed`,
 /// `#ffffff17`.
 pub const WASH_PRESSED: f32 = 0x17 as f32 / 255.0;
