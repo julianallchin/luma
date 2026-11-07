@@ -427,16 +427,4 @@ mod tests {
             "the far end is violated by construction"
         );
     }
-
-    /// The canonical file for the golden rig, pinned byte for byte: this is
-    /// what a revision of that venue *is*, so a change to the encoding shows
-    /// up here as a diff a human reads rather than as a silent rehash of
-    /// everyone's history.
-    #[test]
-    fn venue_graph_canonical_golden_is_current() {
-        luma_scene::golden::assert_golden(
-            &repo_root().join("harness/goldens/venue-graph-canonical.json"),
-            &String::from_utf8(golden_rows().to_canonical_json()).expect("canonical JSON is UTF-8"),
-        );
-    }
 }

@@ -4,7 +4,6 @@ pub mod annotation_preview;
 pub mod audio;
 /// Opening a library, in the one order every host follows.
 pub mod boot;
-mod canonical_json;
 mod compositor;
 pub mod controls;
 /// Compile a saved score for read-only render replay and diagnostics.
