@@ -182,12 +182,17 @@ pub struct Fixture {
     /// Statements run on the seeded library after its rows and before the
     /// score: what no option models (a second venue, a clashing patch, an
     /// output binding). Owned rows need `uid` = [`session::PRINCIPAL`] or
-    /// admission refuses them; `$PRINCIPAL` in a statement is replaced by it.
+    /// admission refuses them; `$PRINCIPAL` in a statement is replaced by it,
+    /// and `$LIBRARY` by the library directory, for a row that names a file.
     sql: Vec<String>,
     /// Files written into the library directory after the rows, by path
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
     files: HashMap<String, String>,
+    /// Files copied into the library directory, by path relative to it, from
+    /// a path relative to the repository root: what a string cannot carry,
+    /// such as album art.
+    assets: HashMap<String, String>,
     /// The agent's model, replayed: one array of events per step. See
     /// [`agent`] for the event shapes. Unset, the app's own model runs.
     #[serde(deserialize_with = "agent::steps")]
@@ -228,6 +233,7 @@ impl Default for Fixture {
             outside_clips: Vec::new(),
             sql: Vec::new(),
             files: HashMap::new(),
+            assets: HashMap::new(),
             model: None,
             model_cadence: None,
             tools: None,
@@ -288,10 +294,10 @@ impl Fixture {
         call_timeout: Duration,
     ) -> Result<Harness, crate::HarnessError> {
         let config_dir = self.seed();
-        // `seed_rig` writes the bundle under the config directory, so the app
-        // resolves the definition this fixture wrote rather than the
-        // developer's.
-        let fixtures_root = (self.rig > 0).then(|| config_dir.join("fixtures"));
+        // `seed_rig` (or a fixture's `files` and `assets`) writes the bundle
+        // under the config directory, so the app resolves the definitions
+        // this fixture wrote rather than the developer's.
+        let fixtures_root = Some(config_dir.join("fixtures")).filter(|root| root.is_dir());
         let sync_status = self.sync_status.clone();
         let source_fixture = self
             .source_fixture
@@ -513,9 +519,22 @@ impl Fixture {
             }
             std::fs::write(&path, contents).expect("failed to write a fixture file");
         }
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        for (path, source) in &self.assets {
+            let path = config_dir.join(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .expect("failed to create a fixture asset's directory");
+            }
+            std::fs::copy(repository.join(source), &path)
+                .unwrap_or_else(|error| panic!("failed to copy fixture asset {source}: {error}"));
+        }
+        let library = config_dir.to_string_lossy();
         for statement in &self.sql {
             sqlx::query(sqlx::AssertSqlSafe(
-                statement.replace("$PRINCIPAL", session::PRINCIPAL),
+                statement
+                    .replace("$PRINCIPAL", session::PRINCIPAL)
+                    .replace("$LIBRARY", &library),
             ))
             .execute(pool)
             .await
