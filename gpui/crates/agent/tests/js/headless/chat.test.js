@@ -170,14 +170,18 @@ test("the chat chrome offers history and starts a new conversation", () => {
 test("the history picker reopens the conversation that was picked", () => {
   openChat();
   // Only the dialog's own rows: `card` is a shared role, and the screen
-  // behind the dialog is still in the tree. The dialog paints last, so its
-  // rows follow it in the frame.
+  // behind the dialog is still in the tree. The dialog paints over the
+  // screen, so its rows follow it in the frame; the window's controls paint
+  // over everything, the dialog too, so a row is also inside the dialog.
   const rows = () => {
     const nodes = app.snapshot().nodes;
     const start = nodes.findIndex((n) => n.label === "Chat history dialog");
     if (start < 0) return [];
+    const card = nodes[start].bounds;
+    const inside = (b) => b.x >= card.x && b.y >= card.y
+      && b.x + b.width <= card.x + card.width && b.y + b.height <= card.y + card.height;
     return nodes.slice(start).filter((n) =>
-      n.role === "card" && n.label !== "Chat history dialog" && n.bounds.height > 0);
+      n.role === "card" && n.label !== "Chat history dialog" && n.bounds.height > 0 && inside(n.bounds));
   };
 
   send();
