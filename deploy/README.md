@@ -47,6 +47,9 @@ A new migration adds its line here.
 - `20261107120000_perform_controllers.sql` — then redeploy
   `powersync/sync-config.yaml`, which names `perform_controllers` and
   `control_bindings`; before shipping the client that uploads them
+- `20261107130000_random_time.sql` — before shipping the client that reads
+  `random.time`: it cannot read a random with an `every`, and a client from
+  before it cannot read the rewritten graphs
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

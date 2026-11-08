@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec import clip as clip_module  # noqa: E402
-from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, color, control, curve,  # noqa: E402
+from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, button, color, control, curve,  # noqa: E402
                             group, along, figure, laser, mirror, preset, random, shuffle, space, split, strobe,
                             time, value)
 from luma_exec.clip import max as clip_max, min as clip_min  # noqa: E402
@@ -145,7 +145,7 @@ CATALOG = {
     'Sparkle': "k = time(every=0.125, duration=0.5); order = shuffle(time=k); rank = space(heads=order, kind='order'); color(brightness=curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]) * curve(k, 'Spike'))",
     'Build': "clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, 'Ramp up'), kind='order'); color(brightness=curve(rank, 'Step down'))",
     'Dissolve': "clip = time(); order = shuffle(); rank = space(heads=order, shift=curve(clip, 'Ramp down'), kind='order'); color(brightness=curve(rank, 'Step down'))",
-    'Clouds': "cloud = random(every=8, glide=1, scale=0.5); color(color=curve(cloud, 'Ramp up', gradient='Ocean'), brightness=curve(cloud, 'Ramp up', low=0.2, high=1))",
+    'Clouds': "t = time(every=8); cloud = random(time=t, glide=1, scale=0.5); color(color=curve(cloud, 'Ramp up', gradient='Ocean'), brightness=curve(cloud, 'Ramp up', low=0.2, high=1))",
     'Sparkle rain': "bars = group(); columns = split(); k = time(every=0.25, duration=1); order = shuffle(heads=bars, time=k); drop = space(heads=columns, direction=(0, 0, -1), shift=curve(k, 'Ramp up', low=-0.3, high=1), scale=0.3); rank = space(heads=order, kind='order'); color(brightness=curve(drop, 'Comet') * curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]))",
     'Chase': "t = time(every=2); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))",
     'Wave': "place = space(); t = time(every=2, phase=curve(place, 'Ramp down', low=180, high=360)); color(brightness=curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))",
@@ -181,7 +181,7 @@ CATALOG = {
     'Pinwheel': "turn = space(kind='angle'); t = time(every=4, phase=curve(turn, 'Ramp up', high=360)); low = value(-20); high = value(20); aim(direction=D, yaw=curve(t, 'Cosine', low=high, high=low), pitch=curve(t, 'Sine', low=low, high=high))",
     'Scissor': "halves = mirror(); t = time(every=4); aim(heads=halves, direction=D, yaw=curve(t, 'Sine', low=30, high=-30))",
     'Up/down flip': "t = time(every=2); aim(direction=D, pitch=curve(t, 'Square', low=-30, high=30))",
-    'Ballyhoo': "period = value(4); scale = value(0.02); drift = random(every=period, glide=1, scale=scale); wander = random(every=period, glide=1, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=high, high=low), pitch=curve(wander, 'Ramp up', low=low, high=high))",
+    'Ballyhoo': "period = value(4); scale = value(0.02); t = time(every=period); drift = random(time=t, glide=1, scale=scale); wander = random(time=t, glide=1, scale=scale); low = value(-40); high = value(40); aim(direction=D, yaw=curve(drift, 'Ramp up', low=high, high=low), pitch=curve(wander, 'Ramp up', low=low, high=high))",
     'Strobe': 'strobe(rate=0.9)',
     'Ramp': "t = time(); strobe(rate=curve(t, 'Ramp up'))",
     'Strobe steps up': "t = time(); strobe(rate=curve(t, 'Steps 4', low=0.4, high=0.9))",
@@ -194,7 +194,7 @@ CATALOG = {
     "Liquid sky": "t = time(every=4); figure1 = figure('line', size=1, y=curve(along(), 'Sine', low=curve(t, 'Sine', low=-0.3, high=0.3), high=curve(t, 'Sine', low=0.3, high=-0.3))); laser([figure1])",
     "Settle": "order = space(split(), kind='order'); home = curve(order, 'Ramp up', low=-0.8, high=0.8); t = time(); fade = curve(t, [[0, 1, 'sine-out'], [0.6, 0], [1, 0]]); slowing = curve(t, [[0, 0, 'sine-out'], [1, 1]], low=0, high=2160); swing = time(phase=slowing); wiggle = curve(swing, 'Sine', low=-0.15, high=0.15); figure1 = figure(count=4, x=home + wiggle * fade); laser([figure1])",
     "Soft sheet": "soft = curve(along(), gradient=[(0, (0, 0, 0)), (0.25, (1, 1, 1)), (0.75, (1, 1, 1)), (1, (0, 0, 0))]); figure1 = figure('line', size=1, color=soft); laser([figure1])",
-    "Sheet and beams": "sheet = figure('line', size=0.8); rails = figure(count=2, size=0.8); spot = curve(random(every=4, scale=0.02), 'Ramp up', low=-0.7, high=0.7); dots = figure(count=4, x=spot); laser([sheet, rails, dots])",
+    "Sheet and beams": "t = time(every=4); sheet = figure('line', size=0.8); rails = figure(count=2, size=0.8); spot = curve(random(time=t, scale=0.02), 'Ramp up', low=-0.7, high=0.7); dots = figure(count=4, x=spot); laser([sheet, rails, dots])",
     # Not shipped presets.
     "Beam fan sweep": "t = time(every=4); laser([figure(count=6, x=curve(t, 'Sine', low=-0.6, high=0.6))])",
     "Spinning polygon": "t = time(every=4); laser([figure('polygon', sides=5, rotation=curve(t, 'Ramp up', low=-180, high=180), color=curve(along(), gradient='Rainbow'))])",
@@ -214,7 +214,8 @@ CATALOG = {
     "Kick chase": "t = time(every=1); place = space(shift=curve(t, 'Ramp up', low=-0.2, high=1), scale=0.2); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]) * curve(audio('low'), 'Ramp up', low=0.2, high=1))",
     "Drop on a fader": "t = time(every=1); color(brightness=curve(t, 'Drop') * curve(control('drop'), 'Ramp up', low=0.2, high=1))",
     "Speed on a fader": "t = time(every=curve(control('speed'), 'Ramp up', low=1, high=2)); color(brightness=curve(t, 'Drop'))",
-    "Hit on a button": "color(brightness=curve(button('hit', decay=0.5, sustain=0, shape='punchy')))",
+    "Hit on each press": "k = time(on=button('hit', start='now'), duration=1); color(alpha=curve(k, 'Ramp down'))",
+    "Scatter on each press": "k = time(on=button('hit', start='now'), duration=1); rank = space(shuffle(time=k), kind='order'); color(alpha=curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]) * curve(k, 'Ramp down'))",
     "Pad on the bar": "color(alpha=curve(button('pad', mode='toggle', start='bar', release=4)))",
     "Named steps": "t = time(every=2); cut = curve(t, 'Step down'); fade = curve(t, 'Fade out'); glow = cut * fade; color(brightness=max(glow, 0.1), alpha=1 - curve(t, 'Ramp up'))",
 }
@@ -382,6 +383,19 @@ class ClipBuilderTests(unittest.TestCase):
         self.assertEqual(nodes["time1"]["inputs"], {"every": {"node": "speed"}, "duration": {"node": "speed"}})
         self.assertEqual(nodes[nodes["speed"]["inputs"]["x"]["node"]]["kind"], "control")
         self.assertEqual(run(graph.source()).json(), graph.json())
+
+    def test_a_hit_is_a_clock_of_presses_and_round_trips(self):
+        hit = button("hit")
+        k = time(on=hit, duration=1)
+        graph = color(alpha=curve(k, "Ramp down"), brightness=curve(random(time=time(every=4)), "Ramp up"))
+        nodes = graph.json()["nodes"]
+        clocks = [nodes[key]["inputs"] for key in sorted(nodes) if nodes[key]["kind"] == "time"]
+        self.assertIn({"on": {"node": "hit"}, "duration": 1}, clocks)
+        self.assertIn({"every": 4}, clocks)
+        drawn = next(node for node in nodes.values() if node["kind"] == "random")
+        self.assertEqual(nodes[drawn["inputs"]["time"]["node"]]["inputs"], {"every": 4})
+        self.assertEqual(run(graph.source()).json(), graph.json())
+        self.assertEqual(run(Graph.from_json(graph.json()).source()).json(), graph.json())
 
     def test_coordinates_and_lists_are_not_values(self):
         for code in ("time() * 2", "2 * time()", "curve(time()) + space()", "max(curve(time()), random())"):

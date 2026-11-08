@@ -580,12 +580,33 @@ impl ClipGraph {
 
     /// The graph's pad, which turns a Perform pattern on and off: the button
     /// node the output's `alpha` depends on, wired straight in or through
-    /// curves and math. With several, the first by id, as
-    /// [`ClipGraph::live_inputs`] orders them; the others stay buttons of
-    /// the pattern. `None` when no button feeds `alpha`.
+    /// curves and math, or the presses of a time node (`time.on`) it
+    /// reads. With several, the first by id, as [`ClipGraph::live_inputs`]
+    /// orders them; the others stay buttons of the pattern. `None` when no
+    /// button feeds `alpha`.
     pub fn pad(&self) -> Option<LiveInput> {
-        let (_, output) = self.output()?;
+        let feeding = self.into_alpha(true);
+        self.live_inputs().into_iter().find(|input| {
+            matches!(input.kind, LiveInputKind::Button(_)) && feeding.contains(input.node.as_str())
+        })
+    }
+
+    /// Whether the pad's envelope is in the output's `alpha`, so the
+    /// pattern is dark while its pad is off. A pad that only a press clock
+    /// reads starts events instead, which play out after it is let go.
+    pub fn pad_gates(&self) -> bool {
+        self.pad()
+            .is_some_and(|pad| self.into_alpha(false).contains(pad.node.as_str()))
+    }
+
+    /// Every node the output's `alpha` reads, through any number of wires;
+    /// with `presses` false, not through a time node's `on`, which reads a
+    /// button's presses and not its value.
+    fn into_alpha(&self, presses: bool) -> std::collections::BTreeSet<&str> {
         let mut feeding = std::collections::BTreeSet::new();
+        let Some((_, output)) = self.output() else {
+            return feeding;
+        };
         let mut wires: Vec<&str> = output
             .inputs
             .get("alpha")
@@ -595,13 +616,15 @@ impl ClipGraph {
         while let Some(id) = wires.pop() {
             if feeding.insert(id) {
                 if let Some(node) = self.nodes.get(id) {
-                    wires.extend(node.wires().map(|(_, source)| source));
+                    wires.extend(
+                        node.wires()
+                            .filter(|(input, _)| presses || *input != "on")
+                            .map(|(_, source)| source),
+                    );
                 }
             }
         }
-        self.live_inputs().into_iter().find(|input| {
-            matches!(input.kind, LiveInputKind::Button(_)) && feeding.contains(input.node.as_str())
-        })
+        feeding
     }
 
     /// The graph with a pad ([`ClipGraph::pad`]), for a new Perform pattern:
@@ -828,22 +851,53 @@ impl ClipGraph {
         }
     }
 
-    /// The events a time node with `every` gives, as a key: two time
-    /// nodes whose `every` and `duration` inputs are equal share one set
-    /// of events. `None` for a time node without `every`, or another node.
+    /// The events a time node with `every` or `on` gives, as a key: two
+    /// time nodes whose `every` (or `on`) and `duration` inputs are equal
+    /// share one set of events. `None` for a time node with neither, or
+    /// another node.
     pub fn clock_key(&self, id: &str) -> Option<String> {
-        let node = self.nodes.get(id)?;
-        if node.kind != Kind::Time {
-            return None;
+        let node = self.nodes.get(id).filter(|node| node.kind == Kind::Time)?;
+        let duration = node.inputs.get("duration");
+        if let Some(button) = node.inputs.get("on") {
+            // A press with no duration lasts until the next.
+            let life = duration.map_or_else(|| "next".into(), |d| self.input_key(d));
+            return Some(format!("on{}/{life}", self.input_key(button)));
         }
         let every = node.inputs.get("every")?;
-        let key = |input: &Input| match self.resolve(input) {
+        Some(format!(
+            "{}/{}",
+            self.input_key(every),
+            self.input_key(duration.unwrap_or(every))
+        ))
+    }
+
+    /// Whether time node `id`'s events may overlap: it has a duration of
+    /// its own, other than its every. One whose events each last until the
+    /// next (an every alone, or presses with no duration) has one live event
+    /// at a time, so a wire that follows it carries no event axis and meets
+    /// any other clock freely (spec 5.3).
+    pub fn overlaps(&self, id: &str) -> bool {
+        if self.clock_key(id).is_none() {
+            return false;
+        }
+        let node = &self.nodes[id];
+        match (node.inputs.get("duration"), node.inputs.get("every")) {
+            (None, _) => false,
+            (Some(duration), Some(every)) if !node.inputs.contains_key("on") => {
+                self.input_key(duration) != self.input_key(every)
+            }
+            (Some(_), _) => true,
+        }
+    }
+
+    /// An input as a part of a clock key: a value node's value counts as
+    /// itself, so equal numbers make one key.
+    fn input_key(&self, input: &Input) -> String {
+        match self.resolve(input) {
             Input::Number(value) => format!("{value:?}"),
             Input::Wire(source) => format!("@{source}"),
             other => format!("{other:?}"),
-        };
-        let duration = node.inputs.get("duration").unwrap_or(every);
-        Some(format!("{}/{}", key(every), key(duration)))
+        }
     }
 
     /// The name of a clock key in messages: the first time node, by id

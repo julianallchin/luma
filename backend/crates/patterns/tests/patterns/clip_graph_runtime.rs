@@ -538,7 +538,8 @@ fn random_nodes_draw_their_own_streams_and_a_linked_node_is_shared() {
         (0..12).any(|n| (0..times.len()).any(|t| (turn[[n, t, 3]] - turn[[n, t, 4]]).abs() > 1e-6));
     assert!(differs, "two random nodes with the same settings differ");
     let linked = graph(json!({
-        "random1": {"kind": "random", "inputs": {"every": 4, "glide": 1, "scale": 0.02}},
+        "t": {"kind": "time", "inputs": {"every": 4}},
+        "random1": {"kind": "random", "inputs": {"time": {"node": "t"}, "glide": 1, "scale": 0.02}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}, "low": -40, "high": 40}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}, "low": -40, "high": 40}},
         "aim1": {"kind": "aim", "settings": {"base": "direction"},
@@ -835,7 +836,8 @@ fn a_space_node_gives_each_head_its_place() {
 fn sample_random_matches_the_random_playback_reads() {
     let cells = line();
     let graph = graph(json!({
-        "random1": {"kind": "random", "inputs": {"every": 4, "glide": 0.5, "scale": 0.3, "contrast": 0.2}},
+        "t": {"kind": "time", "inputs": {"every": 4}},
+        "random1": {"kind": "random", "inputs": {"time": {"node": "t"}, "glide": 0.5, "scale": 0.3, "contrast": 0.2}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
     for beat in [0., 1.5, 3.5, 9.] {
@@ -850,7 +852,7 @@ fn sample_random_matches_the_random_playback_reads() {
                 7,
                 place,
                 beat,
-                4.,
+                Some(4.),
                 0.5,
                 Some(0.3),
                 0.2,
@@ -868,7 +870,8 @@ fn sample_random_matches_the_random_playback_reads() {
 /// `beat`.
 fn random_at(glide: f64, beat: f64) -> Vec<f64> {
     graph(json!({
-        "random1": {"kind": "random", "inputs": {"every": 4, "glide": glide, "scale": 0.3}},
+        "t": {"kind": "time", "inputs": {"every": 4}},
+        "random1": {"kind": "random", "inputs": {"time": {"node": "t"}, "glide": glide, "scale": 0.3}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
     .coordinate_at_heads("random1", frame(&line(), beat))
@@ -914,7 +917,8 @@ fn random_glides_over_the_last_share_of_each_turn() {
 fn random_gives_mirrored_heads_one_value() {
     let at = graph(json!({
         "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
-        "random1": {"kind": "random", "inputs": {"heads": {"node": "mirror1"}, "every": 2, "scale": 0.2}},
+        "t": {"kind": "time", "inputs": {"every": 2}},
+        "random1": {"kind": "random", "inputs": {"heads": {"node": "mirror1"}, "time": {"node": "t"}, "scale": 0.2}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
     .coordinate_at_heads("random1", frame(&line(), 3.))
@@ -2288,14 +2292,15 @@ fn a_shuffle_keeps_mirrored_pairs_paired_either_way_round() {
     }
 }
 
-/// A gliding random whose every follows a curve over `time1` (every 1
-/// beat), read by brightness.
+/// A gliding random whose time's every follows a curve over `time1`
+/// (every 1 beat), read by brightness.
 fn random_over_beats(points: Value, low: f64, high: f64) -> ClipGraph {
     graph(json!({
         "time1": {"kind": "time", "inputs": {"every": 1}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": low, "high": high,
                    "shape": {"points": points}}},
-        "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}, "glide": 1, "scale": 0.25}},
+        "turn": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
+        "random1": {"kind": "random", "inputs": {"time": {"node": "turn"}, "glide": 1, "scale": 0.25}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}))
 }
@@ -2311,7 +2316,8 @@ fn a_period_over_beats_is_the_newest_beats_value() {
     );
     let value = play(
         &graph(json!({
-            "random1": {"kind": "random", "inputs": {"every": 4, "glide": 1, "scale": 0.25}},
+            "turn": {"kind": "time", "inputs": {"every": 4}},
+            "random1": {"kind": "random", "inputs": {"time": {"node": "turn"}, "glide": 1, "scale": 0.25}},
             "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}})),
         &line(),
@@ -2364,6 +2370,9 @@ impl luma_patterns::ControlSource for Fader {
     }
     fn color(&self, _: &luma_patterns::clip_graph::LiveInput) -> [f64; 3] {
         [1., 0.5, 0.]
+    }
+    fn presses(&self, _: &luma_patterns::clip_graph::LiveInput) -> luma_patterns::press::Presses {
+        Default::default()
     }
 }
 
@@ -2636,10 +2645,12 @@ fn a_live_period_is_wired_into_a_clock() {
     let held = graph(json!({
         "b": {"kind": "button"},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "b"}, "low": 1, "high": 4}},
-        "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}}},
+        "turn": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
+        "random1": {"kind": "random", "inputs": {"time": {"node": "turn"}}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}}}));
-    held.check().expect("a button sets a random's every");
+    held.check()
+        .expect("a button sets the every of a random's time");
 }
 
 #[test]
@@ -2784,4 +2795,223 @@ fn a_live_period_outside_a_live_set_reads_its_value_now() {
     for (t, beat) in [0.5, 1., 7.25].into_iter().enumerate() {
         assert!((light[[0, t, DIMMER]] - lit(beat)).abs() < 1e-9);
     }
+}
+
+// ---- press clocks ----
+
+/// A pad the test presses: node `pad`'s turns on, at the beats it was
+/// pressed on. Every other live input reads nothing.
+#[derive(Debug, Default)]
+struct Pads(std::sync::Mutex<luma_patterns::press::Presses>);
+impl Pads {
+    /// A turn on at `beat`, which may be still to come, as a press waiting
+    /// for its bar is.
+    fn press(&self, beat: f64) {
+        let mut presses = self.0.lock().unwrap();
+        presses.count += 1;
+        presses.beats.push(beat);
+    }
+}
+impl luma_patterns::ControlSource for Pads {
+    fn value(&self, _: &luma_patterns::clip_graph::LiveInput) -> f64 {
+        0.
+    }
+    fn color(&self, _: &luma_patterns::clip_graph::LiveInput) -> [f64; 3] {
+        [1.; 3]
+    }
+    fn presses(
+        &self,
+        input: &luma_patterns::clip_graph::LiveInput,
+    ) -> luma_patterns::press::Presses {
+        if input.node == "pad" {
+            self.0.lock().unwrap().clone()
+        } else {
+            Default::default()
+        }
+    }
+}
+
+/// `nodes` and a pad, prepared on `line()` for a clip over beats 0–16 and
+/// read through `pads`.
+fn pressed(nodes: Value, pads: &Arc<Pads>) -> PreparedGraph {
+    let mut nodes = nodes;
+    nodes["pad"] = json!({"kind": "button", "settings": {"name": "pad"}});
+    PreparedGraph::new(
+        &standard_library(),
+        &graph(nodes),
+        Frame {
+            features: None,
+            cells: &line(),
+            beat: 0.,
+            clip_start: 0.,
+            clip_duration: 16.,
+            seed: 7,
+        },
+    )
+    .unwrap_or_else(|e| panic!("prepare: {e}"))
+    .with_controls(pads.clone())
+}
+
+fn light_at(prepared: &PreparedGraph, beat: f64) -> Array3<f64> {
+    prepared.evaluate_batch(&[beat]).unwrap()[OUTPUT]
+        .lighting()
+        .unwrap()
+        .values()
+        .clone()
+}
+
+/// A random third of the heads in an order from `k`'s events.
+fn third_of(k: Value) -> Value {
+    json!({
+        "k": k,
+        "order": {"kind": "shuffle", "inputs": {"time": {"node": "k"}}},
+        "rank": {"kind": "space", "settings": {"kind": "order", "wrap": "no"},
+                 "inputs": {"heads": {"node": "order"}}},
+        "third": {"kind": "curve", "inputs": {"x": {"node": "rank"},
+                  "shape": {"points": [[0, 1], [0.34, 1], [0.34, 0], [1, 0]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "third"}}}})
+}
+
+#[test]
+fn a_press_clock_is_dark_before_the_first_press_and_shuffles_anew_each_press() {
+    let pads = Arc::new(Pads::default());
+    let prepared = pressed(
+        third_of(json!({"kind": "time", "inputs": {"on": {"node": "pad"}}})),
+        &pads,
+    );
+    let alpha = |beat| light_at(&prepared, beat)[[0, 0, 11]];
+    assert_eq!(alpha(0.5), 0., "nobody has pressed: the clip is not there");
+    for beat in [1., 3.5, 6.] {
+        pads.press(beat);
+    }
+    let set = |beat| lit(&light_at(&prepared, beat), 0);
+    assert_eq!(
+        alpha(0.5),
+        0.,
+        "before the first press it is still not there"
+    );
+    assert_eq!(set(1.5).len(), 4, "a third of twelve heads");
+    assert_eq!(set(1.5), set(3.4), "one set until the next press");
+    assert_eq!(set(3.5), set(5.9));
+    assert_ne!(set(1.5), set(3.5), "a new set at the second press");
+    assert_ne!(set(3.5), set(6.), "and at the third");
+    assert_eq!(alpha(15.), 1., "a press lasts until the next");
+}
+
+#[test]
+fn hits_pressed_fast_overlap_each_on_its_own_subset() {
+    let pads = Arc::new(Pads::default());
+    let hits = pressed(
+        third_of(json!({"kind": "time", "inputs": {"on": {"node": "pad"}, "duration": 2}})),
+        &pads,
+    );
+    let steps = pressed(
+        third_of(json!({"kind": "time", "inputs": {"on": {"node": "pad"}}})),
+        &pads,
+    );
+    pads.press(1.);
+    pads.press(1.5);
+    let set = |prepared, beat| lit(&light_at(prepared, beat), 0);
+    let first = set(&hits, 1.25);
+    let second = set(&hits, 3.25);
+    assert_eq!((first.len(), second.len()), (4, 4));
+    let both = set(&hits, 2.);
+    assert!(
+        first.iter().chain(&second).all(|n| both.contains(n)) && both.len() > 4,
+        "two hits live at once light both their subsets: {first:?} and {second:?} in {both:?}"
+    );
+    assert_eq!(
+        set(&hits, 3.75),
+        Vec::<usize>::new(),
+        "both have run their course"
+    );
+    assert_eq!(
+        set(&steps, 2.),
+        set(&steps, 3.75),
+        "with no duration a press replaces the last"
+    );
+}
+
+#[test]
+fn a_press_waiting_for_its_bar_is_born_on_the_bar() {
+    // A hit that fades out over a beat, pressed at 5.3 for the bar at 8.
+    let pads = Arc::new(Pads::default());
+    let prepared = pressed(
+        json!({
+            "k": {"kind": "time", "inputs": {"on": {"node": "pad"}, "duration": 1}},
+            "fade": {"kind": "curve", "inputs": {"x": {"node": "k"}, "shape": {"points": [[0, 1], [1, 0]]}}},
+            "color1": {"kind": "color", "inputs": {"alpha": {"node": "fade"}}}}),
+        &pads,
+    );
+    pads.press(8.);
+    let alpha = |beat| light_at(&prepared, beat)[[0, 0, 11]];
+    assert_eq!(alpha(7.9), 0., "waiting for the bar");
+    assert!((alpha(8.) - 1.).abs() < 1e-9, "born on the bar");
+    assert!(
+        (alpha(8.25) - 0.75).abs() < 1e-9,
+        "a quarter through its fade"
+    );
+    assert_eq!(alpha(9.), 0., "over after its duration");
+}
+
+#[test]
+fn a_press_clock_of_one_event_meets_a_beat_clock() {
+    // A random order per press, a chase running through it each beat.
+    let chase = |press: Value, beat: Value| {
+        json!({
+            "k": press,
+            "beat": beat,
+            "order": {"kind": "shuffle", "inputs": {"time": {"node": "k"}}},
+            "shift": {"kind": "curve", "inputs": {"x": {"node": "beat"}}},
+            "rank": {"kind": "space", "settings": {"kind": "order", "wrap": "yes"},
+                     "inputs": {"heads": {"node": "order"}, "shift": {"node": "shift"}}},
+            "quarter": {"kind": "curve", "inputs": {"x": {"node": "rank"},
+                        "shape": {"points": [[0, 1], [0.25, 1], [0.25, 0], [1, 0]]}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "quarter"}}}})
+    };
+    let pads = Arc::new(Pads::default());
+    let prepared = pressed(
+        chase(
+            json!({"kind": "time", "inputs": {"on": {"node": "pad"}}}),
+            json!({"kind": "time", "inputs": {"every": 1}}),
+        ),
+        &pads,
+    );
+    pads.press(2.);
+    pads.press(4.);
+    let set = |beat| lit(&light_at(&prepared, beat), 0);
+    assert_eq!(set(2.1).len(), 3, "a quarter of the heads");
+    assert_ne!(set(2.1), set(2.6), "the chase moves through the order");
+    assert_ne!(
+        set(2.1),
+        set(4.1),
+        "the same place in the beat, a new order"
+    );
+    // Presses that overlap carry events of their own: they cannot meet a
+    // beat clock whose events overlap too.
+    let mut overlapping = chase(
+        json!({"kind": "time", "inputs": {"on": {"node": "pad"}, "duration": 2}}),
+        json!({"kind": "time", "inputs": {"every": 1, "duration": 2}}),
+    );
+    overlapping["pad"] = json!({"kind": "button", "settings": {"name": "pad"}});
+    let error = graph(overlapping).check().unwrap_err().0;
+    assert!(error.contains("expected wires of one clock"), "{error}");
+}
+
+#[test]
+fn a_random_on_a_press_clock_draws_anew_each_press() {
+    let pads = Arc::new(Pads::default());
+    let prepared = pressed(
+        json!({
+            "k": {"kind": "time", "inputs": {"on": {"node": "pad"}}},
+            "random1": {"kind": "random", "inputs": {"time": {"node": "k"}}},
+            "level": {"kind": "curve", "inputs": {"x": {"node": "random1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "level"}}}}),
+        &pads,
+    );
+    pads.press(1.);
+    pads.press(5.);
+    let level = |beat| light_at(&prepared, beat)[[0, 0, DIMMER]];
+    assert_eq!(level(1.5), level(4.9), "one draw while a press lasts");
+    assert_ne!(level(4.9), level(5.), "a new draw at the next press");
 }

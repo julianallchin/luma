@@ -217,7 +217,7 @@ Brightness is time: a projector shares each scan between its elements, so
 
 ## Coordinate nodes
 
-**time** `time(every=None, duration=None, delay=None, phase=None)` → coordinate
+**time** `time(every=None, duration=None, delay=None, phase=None, on=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
@@ -225,6 +225,7 @@ Brightness is time: a projector shares each scan between its elements, so
 | duration | number | beats | above 0 | every (the clip with no every) |
 | delay | number | beats | any | 0 |
 | phase | number | degrees | any | 0 |
+| on | button wire | | | no presses: events by every |
 
 With `every`, events start at the clip start, one each `every` beats. Each
 event lives `duration` beats. A duration above every makes events overlap on
@@ -232,6 +233,14 @@ purpose: tails, many pills, a color per pill, a turning line with two arms.
 The clip end cuts an event. With no every and a duration, there is one event
 of that length from the clip start. Two time nodes whose every and duration
 are equal (the same numbers or the same wires) share one set of events.
+
+With `on` (a wire from a `button`, never with every) the clock counts
+presses: event k is born at the k-th press, on the beat its start lands it
+on, and lives `duration` beats, so presses closer than that overlap; with no
+duration it lives until the next press. Before the first press, and in a
+score, it is dark. A hit is `k = time(on=button("pad", "flash",
+start="now"), duration=1)` with `alpha=curve(k, "Ramp down")`: each press a
+flash that fades on its own, however long the pad is held.
 
 A number in every, duration or delay must be on the beat grid: a multiple
 of 1/32 or of 1/24. The smallest every and duration is 1/32. A wire (a curve
@@ -316,18 +325,20 @@ is a narrow curve with scale 1 (`[[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]`),
 not a smaller scale, which tiles. A curve over time on a wrapped scale
 zooms: `scale` 0.5 → 0.125 turns 2 copies into 8.
 
-**random** `random(heads=None, every=None, glide=None, scale=None, contrast=None)` → coordinate
+**random** `random(heads=None, time=None, glide=None, scale=None, contrast=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
-| every | number | beats | above 0 | 4 |
+| time | time wire | | | one value, never drawn again |
 | glide | number | share | 0–1 | 0 |
 | scale | number | share | above 0 | one value for all heads |
 | contrast | number | share | 0–1 | 0 |
 
-Random gives a value, Shuffle gives an order. Each turn of `every` draws a
-new value 0–1 per head. `glide` 0 jumps on the turn and holds; 1 drifts the
+Random gives a value, Shuffle gives an order. Each event of its `time` (a
+wire from a time node with every or on) draws a new value 0–1 per head:
+`random(time=time(every=4))` every four beats,
+`random(time=time(on=button("hit")))` at each press. `glide` 0 jumps on the turn and holds; 1 drifts the
 whole turn (slow clouds, a wandering aim); 0.25 holds three quarters of the
 turn, then eases to the next value. `scale` is a share of the rig's largest
 extent: how much neighbouring heads agree. 0.5 gives broad patches, 0.02
@@ -442,7 +453,7 @@ symmetry.
 **shuffle** `shuffle(heads=None, time=None)` → heads
 
 A random order of the heads, from the clip seed. `time` is a wire from a
-time node: with `every`, a new order per event; without, one order.
+time node: with `every` or `on`, a new order per event; without, one order.
 Positions do not change. Read it with `space(kind="order")`. A mirror's
 pairs keep one slot, with the mirror before or after the shuffle. Shuffle
 gives an order, random gives a value.
@@ -470,11 +481,16 @@ work inside each span: one bar meter per bar, for example.
 
 ## Two clocks
 
-A clock is one set of events: a time node with `every`, or time nodes with
-equal every and duration. The inputs of one node carry at most one clock,
-except the output node. So `color(color=<clock A>, brightness=<clock B>)` is
-right, but a curve whose `x` follows clock A and whose `low` follows clock B
-is an error, and so is `a * b` with a and b on two clocks.
+A clock is one set of events: a time node with `every` or `on`, or time
+nodes with equal every (or on) and duration. A clock whose events overlap
+(a duration above its every, or a press clock with a duration) carries its
+events side by side. The inputs of one node carry at most one such clock,
+except the output node; a clock of one live event at a time (no duration,
+or a duration equal to its every) meets any other freely.
+`curve(time(every=1), "Drop") * curve(time(every=4), "Ramp up")` is right.
+So is `color(color=<clock A>, brightness=<clock B>)` with A and B
+overlapping, but a curve whose `x` follows A and whose `low` follows B is an
+error, and so is `a * b` with a and b on two overlapping clocks.
 
 ## Presets
 

@@ -267,8 +267,9 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
         Ty::Vector => Signal::Vector,
         Ty::Color => Signal::Color,
         Ty::Heads => Signal::Heads,
-        // A shuffle's time is a time node's wire, the one it gives a curve.
-        Ty::Coordinate | Ty::Time => Signal::Coordinate,
+        // A shuffle's time is a time node's wire, the one it gives a curve;
+        // a press clock's button, a button's.
+        Ty::Coordinate | Ty::Time | Ty::Button => Signal::Coordinate,
         Ty::Figures => Signal::Figure,
         Ty::Points | Ty::Gradient => return None,
     })

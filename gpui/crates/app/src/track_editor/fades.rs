@@ -214,7 +214,9 @@ fn over_clip<'a>(graph: &'a ClipGraph, out: &str) -> Option<(&'a str, &'a Node)>
         Some(Input::Number(v)) => *v == 0.,
         Some(_) => false,
     };
-    let once = !time.inputs.contains_key("every") && !time.inputs.contains_key("duration");
+    let once = !["every", "on", "duration"]
+        .iter()
+        .any(|input| time.inputs.contains_key(*input));
     (time.kind == Kind::Time && once && zero("delay") && zero("phase")).then_some((id, curve))
 }
 

@@ -478,8 +478,7 @@ fn tapped(set: &[PerformPattern], layout: &PerformLayout, start: Instant) -> Ven
 
 /// Whether button `name` is on at `at`, and whether it waits then.
 fn state_at(controls: &VenueControls, name: &str, at: Instant) -> (bool, bool) {
-    let held = controls.read().buttons[name];
-    let button = held.at(at);
+    let button = controls.read().buttons[name].at(at);
     (button.on(), button.waiting())
 }
 
@@ -558,6 +557,49 @@ fn a_change_still_to_come_is_called_off_by_the_opposite() {
         state_at(&controls, &flash, beat(start, 4.01)),
         (false, false)
     );
+}
+
+#[test]
+fn a_buttons_turns_on_are_counted_on_the_beats_they_land_on() {
+    let start = Instant::now();
+    let set = [
+        quantised("hit", "flash", "now"),
+        quantised("bar", "toggle", "bar"),
+    ];
+    let [hit, bar] = [&set[0], &set[1]].map(pad);
+    let controls = tapped(&set, &PerformLayout::default(), start);
+    let near = |presses: luma_patterns::press::Presses, count: u64, beats: &[f64]| {
+        presses.count == count
+            && presses.beats.len() == beats.len()
+            && presses
+                .beats
+                .iter()
+                .zip(beats)
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+    };
+    assert!(near(controls.presses(&hit), 0, &[]), "nobody has pressed");
+    // A flash: every press is a turn on, however fast.
+    for at in [1.0, 1.25, 1.5] {
+        controls.press(&hit, true, beat(start, at));
+        controls.press(&hit, false, beat(start, at + 0.1));
+    }
+    assert!(near(controls.presses(&hit), 3, &[1.0, 1.25, 1.5]));
+    // A toggle on the bar: a press that turns it on counts on the bar it
+    // waits for, one that turns it off does not count, and one called off
+    // before its bar is no press.
+    controls.press(&bar, true, beat(start, 5.3));
+    assert!(
+        near(controls.presses(&bar), 1, &[8.0]),
+        "on the bar to come"
+    );
+    controls.press(&bar, true, beat(start, 9.0));
+    controls.press(&bar, true, beat(start, 13.0));
+    assert!(near(controls.presses(&bar), 2, &[8.0, 16.0]));
+    controls.press(&bar, true, beat(start, 14.0));
+    assert!(near(controls.presses(&bar), 1, &[8.0]), "called off");
+    // A recompile keeps them.
+    install(&controls, &set, &PerformLayout::default());
+    assert!(near(controls.presses(&hit), 3, &[1.0, 1.25, 1.5]));
 }
 
 #[test]

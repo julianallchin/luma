@@ -328,8 +328,8 @@ mod tests {
 
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
-        // A random whose every drops to almost nothing past the clip's
-        // middle: its turns then leave the range the random accepts.
+        // A random whose clock's every drops to almost nothing past the
+        // clip's middle: its turns then leave the range the random accepts.
         let clip = test_clip(
             json!({
                 "time1": {"kind": "time"},
@@ -337,7 +337,8 @@ mod tests {
                            "inputs": {"x": {"node": "time1"},
                                       "shape": {"points": [[0, 0, "hold"], [0.5, 1], [1, 1]]},
                                       "low": 4, "high": 1e-13}},
-                "random1": {"kind": "random", "inputs": {"every": {"node": "curve1"}}},
+                "turn": {"kind": "time", "inputs": {"every": {"node": "curve1"}}},
+                "random1": {"kind": "random", "inputs": {"time": {"node": "turn"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "random1"}, "low": 1, "high": 1}},
                 "color1": {"kind": "color",

@@ -330,14 +330,37 @@ fn an_effect_has_a_pad_a_live_color_and_a_speed_from_its_period() {
 
 #[test]
 fn a_hit_flashes_from_the_press() {
-    let busk = busk(&small());
-    for name in ["Strobe", "White", "Black"] {
+    let busk = busk(&large());
+    for name in ["Strobe", "Blinder", "White", "Black"] {
         let pad = named(&busk, name).graph.pad().expect("a pad");
         let luma_patterns::clip_graph::LiveInputKind::Button(press) = pad.kind else {
             panic!("{name}'s pad is a button");
         };
         assert_eq!(press.mode, luma_patterns::press::PressMode::Flash, "{name}");
         assert_eq!(press.start, luma_patterns::press::Start::Now, "{name}");
+    }
+}
+
+#[test]
+fn strobe_and_black_play_while_held_and_white_and_blinder_are_struck_by_each_press() {
+    let busk = busk(&large());
+    for name in ["Strobe", "Black"] {
+        assert!(
+            named(&busk, name).graph.pad_gates(),
+            "{name} plays while held"
+        );
+    }
+    for name in ["Blinder", "White"] {
+        let graph = &named(&busk, name).graph;
+        assert!(!graph.pad_gates(), "{name} plays out once struck");
+        let clock = graph
+            .nodes
+            .iter()
+            .find(|(_, node)| node.kind == Kind::Time)
+            .map(|(id, _)| id.as_str())
+            .expect("a clock of presses");
+        assert!(graph.overlaps(clock), "{name}'s hits pressed fast overlap");
+        assert!(graph.check().is_ok(), "{name}");
     }
 }
 

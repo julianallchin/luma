@@ -145,13 +145,14 @@ fn doc(shown: Shown) -> Doc {
     };
     match kind {
         Kind::Time => Doc {
-            python: "time(every, duration, delay, phase)",
-            about: s("Each head's own clock: 0–1 over the clip, or 0–1 over each event. With `every`, an event starts every `every` beats from the clip start. Each head's clock is the event's age over its duration, minus `delay / duration`. When `phase` is set, the clock wraps: `fract(clock + phase / 360)`, so 360° is one event. Before a head starts, its clock is below 0 and a curve holds its first value; after it ends, the curve holds its last value. A curve over space on `delay` makes a one-shot (a wipe); on `phase` it makes a loop (a chase, a wave). Two time nodes with equal `every` and `duration` share one set of events."),
+            python: "time(every, duration, delay, phase, on)",
+            about: s("Each head's own clock: 0–1 over the clip, or 0–1 over each event. With `every`, an event starts every `every` beats from the clip start. With `on`, a button wire, the clock counts presses instead: an event starts at each press that turns the button on, on the beat or bar its `start` waits for, and event k is press k, so a shuffle or a random over it is new each press. Each head's clock is the event's age over its duration, minus `delay / duration`. When `phase` is set, the clock wraps: `fract(clock + phase / 360)`, so 360° is one event. Before a head starts, its clock is below 0 and a curve holds its first value; after it ends, the curve holds its last value. A curve over space on `delay` makes a one-shot (a wipe); on `phase` it makes a loop (a chase, a wave). Two time nodes with equal `every` (or `on`) and `duration` share one set of events.\n\nEvents that overlap (a `duration` longer or shorter than `every`, or presses that last a `duration`) each light on their own, and the brightest wins; they meet another clock's only at the output. A clock with one live event at a time (an `every` alone, or presses with no `duration`, each lasting until the next) is a plain value over time and combines with any other clock. A hit is `k = time(on=button(\"hit\"), duration=1)` and a fade over `k`: hits pressed fast stack. Between events, before the first press and outside the clip the clip is transparent; in a score nobody presses."),
             empty: vec![
                 ("every", s("Once over the clip: no events.")),
-                ("duration", s("`every`; with no `every`, the clip's length. A `duration` with no `every` is one event of that length from the clip start.")),
+                ("duration", s("`every`; with `on`, until the next press, with no delay or phase; with neither, the clip's length. A `duration` with no `every` or `on` is one event of that length from the clip start.")),
                 ("delay", s("0.")),
                 ("phase", s("No phase: the clock does not wrap.")),
+                ("on", s("No presses: events by `every`. `on` and `every` are exclusive.")),
             ],
             settings: vec![],
         },
@@ -178,11 +179,11 @@ fn doc(shown: Shown) -> Doc {
             settings: vec![],
         },
         Kind::Random => Doc {
-            python: "random(heads, every, glide, scale, contrast)",
-            about: s("A random value, 0–1 at each head, drawn again each turn of `every` beats. Random gives a value; Shuffle gives an order. `glide` 0 jumps to the new value on the turn and holds it; 1 drifts the whole turn; in between, it holds for the first 1 − glide of the turn and then eases to the next value. `scale` is how far apart heads are before their values differ, as a share of the heads' largest extent: 0.02 gives each head its own value. Heads a mirror folded together read one value. `contrast` spreads the values away from 0.5, up to four times at 1, and clips them to 0–1. Each random node has its own stream, from the clip's seed and the node's id."),
+            python: "random(heads, time, glide, scale, contrast)",
+            about: s("A random value, 0–1 at each head, drawn again for each event of its `time` (a wire from a time node with `every` or `on`): `random(time=time(every=4))` draws every four beats, `random(time=time(on=button(\"hit\")))` at each press. Random gives a value; Shuffle gives an order. `glide` 0 jumps to the new value at the event's start and holds it; 1 drifts over the whole event; in between, it holds for the first 1 − glide of the event and then eases to the next value. `scale` is how far apart heads are before their values differ, as a share of the heads' largest extent: 0.02 gives each head its own value. Heads a mirror folded together read one value. `contrast` spreads the values away from 0.5, up to four times at 1, and clips them to 0–1. Each random node has its own stream, from the clip's seed and the node's id."),
             empty: vec![
                 all_heads(),
-                ("every", s("4 beats.")),
+                ("time", s("One draw for the whole clip.")),
                 ("glide", s("0.")),
                 ("scale", s("Uniform: one value for all heads.")),
                 ("contrast", s("0.")),
@@ -218,7 +219,7 @@ fn doc(shown: Shown) -> Doc {
         },
         Kind::Button => Doc {
             python: "button(name=\"button\", mode=\"flash\", attack=0, decay=0, sustain=1, release=0, unit=\"beats\", shape=\"smooth\", start=\"now\")",
-            about: s("A button a performer presses: 0–1 along its envelope, the same at every head. In `flash` mode it is on while held; in `toggle` mode, from one press to the next. The value rises over the attack, falls to the sustain over the decay, holds while on, and falls to 0 over the release. In a Perform pattern, the button that the output's `alpha` depends on is the pattern's pad. In a score a button reads the venue's control `name` as a plain gate, and its envelope does not apply. Like a fader, it cannot reach a fixed input."),
+            about: s("A button a performer presses: 0–1 along its envelope, the same at every head. In `flash` mode it is on while held; in `toggle` mode, from one press to the next. The value rises over the attack, falls to the sustain over the decay, holds while on, and falls to 0 over the release. In a Perform pattern, the button that the output's `alpha` depends on is the pattern's pad. In a score a button reads the venue's control `name` as a plain gate, and its envelope does not apply. Like a fader, it cannot reach a fixed input. Wired into a time node's `on`, its presses are events of their own instead: each turn on starts one, so a hit's fade is a curve over that time node and hits stack, where an envelope's next press cuts the last one's tail. Use the envelope for levels and holds."),
             empty: vec![],
             settings: vec![
                 ("name", "A control name, as for a fader."),
@@ -267,7 +268,7 @@ fn doc(shown: Shown) -> Doc {
         },
         Kind::Shuffle => Doc {
             python: "shuffle(heads, time)",
-            about: s("A random order of the heads within each span. Read it with `space(kind=\"order\")`. With a `time` wire from a time node with `every`, the order is new for each event. Positions do not change. Heads a mirror folded together share one place in the order, whether the mirror comes before or after the shuffle."),
+            about: s("A random order of the heads within each span. Read it with `space(kind=\"order\")`. With a `time` wire from a time node with `every` or `on`, the order is new for each event: each press, for a press clock. Positions do not change. Heads a mirror folded together share one place in the order, whether the mirror comes before or after the shuffle."),
             empty: vec![
                 all_heads(),
                 ("time", s("One order for the whole clip.")),
@@ -389,6 +390,7 @@ fn type_name(ty: InputType) -> &'static str {
         InputType::Gradient => "gradient",
         InputType::Heads => "heads",
         InputType::Time => "time",
+        InputType::Button => "button",
         InputType::Coordinate => "coordinate",
         InputType::Values => "values",
         InputType::Figures => "figures",
@@ -746,6 +748,12 @@ fn index() -> String {
     )
     .unwrap();
     writeln!(out, "| time | `time` | {} |", inputs_of(&[InputType::Time])).unwrap();
+    writeln!(
+        out,
+        "| button | `button` | {} |",
+        inputs_of(&[InputType::Button])
+    )
+    .unwrap();
     writeln!(
         out,
         "| figure | {} | {} |\n",

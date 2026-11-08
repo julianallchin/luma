@@ -10,10 +10,10 @@
 //! groups, the base color (a list with no targets, so it colors the groups
 //! chosen), the accent color (a list setting the accent effects' own
 //! colors), the effects (the base ones take the color below, the accent
-//! ones their own), movement (one at a time) and hits. Select, Clear, tap,
-//! the master, the effects' levels and their speed stand in a column at the
-//! right. Every pattern is an ordinary Perform pattern, edited like any
-//! other.
+//! ones their own), movement (one at a time) and hits (held, or struck by
+//! each press and fading on their own). Select, Clear, tap, the master, the
+//! effects' levels and their speed stand in a column at the right. Every
+//! pattern is an ordinary Perform pattern, edited like any other.
 
 use std::collections::BTreeSet;
 
@@ -389,11 +389,10 @@ pub async fn read_rig(
     Ok(GroupSources::read(resource_root, &mut access).await?.rig())
 }
 
-/// The hits, each a flash pad that plays from the press: a strobe (on the
-/// strobes, else everything), a blinder (when the rig has a group of them),
-/// full white, and black on top.
+/// The hits, each on a pad that plays from the press: a strobe (on the
+/// strobes, else everything) and black on top while held; a blinder (when
+/// the rig has a group of them) and full white struck by each press.
 fn hits(rig: &Rig) -> Vec<PerformPattern> {
-    let white = presets().clip("Wash").map(|preset| &preset.graph);
     let strobe = presets().clip("Strobe").map(|preset| &preset.graph);
     let black = ClipGraph::new([(
         "color1".to_owned(),
@@ -408,27 +407,59 @@ fn hits(rig: &Rig) -> Vec<PerformPattern> {
         .role_group(FixtureRole::Blinder)
         .map(|group| group.name.as_str());
     [
-        strobe.map(|graph| ("Strobe", strobes, graph.clone())),
-        white
-            .zip(blinders)
-            .map(|(graph, group)| ("Blinder", group, graph.clone())),
-        white.map(|graph| ("White", "all", graph.clone())),
-        Some(("Black", "all", black)),
+        strobe.map(|graph| hold("Strobe", strobes, graph.clone())),
+        blinders.map(|group| strike("Blinder", group)),
+        Some(strike("White", "all")),
+        Some(hold("Black", "all", black)),
     ]
     .into_iter()
     .flatten()
-    .map(|(name, selection, graph)| hit(name, selection, graph))
     .collect()
 }
 
-/// `graph` with a pad that flashes while held, from the press.
-fn hit(name: &str, selection: &str, graph: ClipGraph) -> PerformPattern {
+/// A pad that plays from the press.
+fn flash_pad() -> Node {
+    Node::new(Kind::Button)
+        .with_setting("name", "pad")
+        .with_setting("mode", "flash")
+        .with_setting("start", "now")
+}
+
+/// `graph` with a pad that plays it while held.
+fn hold(name: &str, selection: &str, graph: ClipGraph) -> PerformPattern {
     let mut graph = graph.with_pad();
     if let Some(pad) = graph.pad() {
-        let settings = &mut graph.nodes.get_mut(&pad.node).expect("its pad").settings;
-        settings.insert("mode".into(), "flash".into());
-        settings.insert("start".into(), "now".into());
+        graph.nodes.insert(pad.node, flash_pad());
     }
+    pattern(name, selection, BlendMode::Replace, graph)
+}
+
+/// Full white struck by each press of its pad and fading out over a beat,
+/// however long the pad is held: a clock of presses, so hits pressed fast
+/// overlap, each fading on its own.
+fn strike(name: &str, selection: &str) -> PerformPattern {
+    let fade = presets().curve("Ramp down").expect("the shipped Ramp down");
+    let graph = ClipGraph::new([
+        ("pad".to_owned(), flash_pad()),
+        (
+            "hit".to_owned(),
+            Node::new(Kind::Time)
+                .with_input("on", Input::wire("pad"))
+                .with_input("duration", 1.),
+        ),
+        (
+            "fade".to_owned(),
+            Node::new(Kind::Curve)
+                .with_input("x", Input::wire("hit"))
+                .with_input("shape", Input::Points(fade.clone())),
+        ),
+        (
+            "color1".to_owned(),
+            Node::new(Kind::Color)
+                .with_input("color", Input::Color([1.; 3]))
+                .with_input("alpha", Input::wire("fade")),
+        ),
+    ]);
     pattern(name, selection, BlendMode::Replace, graph)
 }
 

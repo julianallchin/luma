@@ -23,6 +23,21 @@ struct Step {
     outputs: BTreeMap<String, usize>,
     output_types: BTreeMap<String, crate::Output>,
 }
+impl Step {
+    /// Whether the step reads what a performer plays: a fader, color or
+    /// button's value, or a press clock's turns on. A clock it moves is
+    /// read at each frame, never baked.
+    fn plays_live(&self) -> bool {
+        match self.primitive {
+            Primitive::Control => true,
+            Primitive::Kernel(Kernel::Events) => matches!(
+                self.inputs.get("on"),
+                Some(Source::Constant(on)) if on.fixed_scalar().is_ok_and(|on| on >= 0.)
+            ),
+            _ => false,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct PreparedGraph {
     steps: Vec<Step>,
@@ -173,27 +188,41 @@ impl PreparedGraph {
         &self.live_inputs
     }
 
-    /// Every live input's numbers, in order: one for a fader or a button,
-    /// three for a color, each 0–1.
-    fn control_values(&self) -> Vec<f64> {
-        let mut values = Vec::new();
+    /// Every live input as its source has it now: its numbers, in order,
+    /// one for a fader or a button and three for a color, each 0–1; and each
+    /// button's turns on. With no source, every number is 0 and nobody has
+    /// pressed.
+    fn live(&self) -> runtime::Live {
+        let mut live = runtime::Live::default();
         for input in &self.live_inputs {
-            match (input.kind, &self.controls) {
+            let presses = match (input.kind, &self.controls) {
                 (crate::clip_graph::LiveInputKind::Color, Some(source)) => {
-                    values.extend(source.color(input));
+                    live.controls.extend(source.color(input));
+                    Default::default()
                 }
-                (kind, None) => values.extend(std::iter::repeat_n(0.0, kind.width())),
-                (_, Some(source)) => values.push(source.value(input)),
-            }
+                (kind, None) => {
+                    live.controls.extend(std::iter::repeat_n(0.0, kind.width()));
+                    Default::default()
+                }
+                (crate::clip_graph::LiveInputKind::Button(_), Some(source)) => {
+                    live.controls.push(source.value(input));
+                    source.presses(input)
+                }
+                (_, Some(source)) => {
+                    live.controls.push(source.value(input));
+                    Default::default()
+                }
+            };
+            live.presses.push(presses);
         }
-        for value in &mut values {
+        for value in &mut live.controls {
             *value = if value.is_finite() {
                 value.clamp(0.0, 1.0)
             } else {
                 0.0
             };
         }
-        values
+        live
     }
 
     fn live_steps<'a>(
@@ -253,7 +282,7 @@ impl PreparedGraph {
         } else {
             baked.to_vec()
         };
-        let controls = self.control_values();
+        let live = self.live();
         for index in self.live_steps(self.steps.len(), baked, self.outputs.values()) {
             let step = &self.steps[index];
             // Every fixed clock is baked: one evaluated here a live control
@@ -261,7 +290,7 @@ impl PreparedGraph {
             let outputs = if step.primitive == Primitive::Kernel(Kernel::ClockTable) {
                 self.live_clock(index, step, beats, &slots)?
             } else {
-                self.run_step(step, beats, features, &controls, &slots)?
+                self.run_step(step, beats, features, &live, &slots)?
             };
             for (name, value) in outputs {
                 slots[step.outputs[&name]] = Some(value);
@@ -313,7 +342,7 @@ impl PreparedGraph {
         step: &Step,
         beats: &[f64],
         features: Option<&dyn crate::FeatureSource>,
-        controls: &[f64],
+        live: &runtime::Live,
         slots: &[Option<EvaluatedValue>],
     ) -> Result<BTreeMap<String, EvaluatedValue>> {
         let inputs = step
@@ -329,7 +358,7 @@ impl PreparedGraph {
             Batch {
                 times: beats,
                 fixtures: &self.fixtures,
-                controls,
+                live,
                 frame: Frame {
                     features,
                     beat: self.clip_start,
@@ -410,7 +439,7 @@ impl PreparedGraph {
                         Batch {
                             fixtures: &self.fixtures,
                             times: &[self.clip_start],
-                            controls: &[],
+                            live: &runtime::Live::default(),
                             frame: Frame {
                                 features: self.features.as_deref(),
                                 beat: self.clip_start,

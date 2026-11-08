@@ -184,6 +184,16 @@ pub(crate) struct Batch<'a> {
     pub frame: Frame<'a>,
     pub times: &'a [f64],
     pub fixtures: &'a [String],
-    /// The graph's controls' values for this evaluation, by index.
-    pub controls: &'a [f64],
+    /// The graph's live inputs as they stand for this evaluation.
+    pub live: &'a Live,
+}
+
+/// The graph's live inputs for one evaluation: each fader, color and
+/// button's numbers, by the index its control kernel reads, and each
+/// button's turns on, by its place among the live inputs (none for the
+/// others).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Live {
+    pub controls: Vec<f64>,
+    pub presses: Vec<crate::press::Presses>,
 }

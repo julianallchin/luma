@@ -7,8 +7,7 @@
 //! while held ([`PressMode::Flash`]), and an [`Adsr`] shapes the value
 //! through the press: it rises over the attack, falls to the sustain over the
 //! decay, holds while on, and falls to 0 over the release. A soft wash is a
-//! slow attack and release at sustain 1; a hit is a fast attack at sustain 0,
-//! punchy, which fires once however long it is held.
+//! slow attack and release at sustain 1.
 //!
 //! A press takes effect now, or on the set's next beat or bar ([`Start`]),
 //! turning on and turning off alike, so busking lands on the music.
@@ -17,6 +16,12 @@
 //! now ([`Adsr::value`]), so a host keeps only those two times per button,
 //! and anything shown a [`Button`] can play its envelope on, frame by frame.
 //! A press waiting for its beat is a time still to come.
+//!
+//! A press can also start an event rather than gate a value: a press clock
+//! (`time(on=button)`) counts a button's turns on ([`Presses`]), each one a
+//! new event of its own, so hits stack where an envelope's next press would
+//! cut the last one's tail. Envelopes are for levels and holds; a hit is a
+//! press clock and a curve over its events.
 
 use serde::{Deserialize, Serialize};
 
@@ -191,6 +196,26 @@ impl Adsr {
                 None => gate.on_for < seconds(self.attack) + seconds(self.decay),
                 Some(off) => off < seconds(self.release),
             }
+    }
+}
+
+/// How many times a button has turned on (each press of a flash, each
+/// press that turns a toggle on), and on which beats of the set's clock its
+/// last few did, oldest first: what a press clock counts
+/// (`time(on=button)`, spec 2.3). Turn on `count - beats.len() + i` is at
+/// `beats[i]`, from turn on 0. A press waiting for its beat or bar is a
+/// beat still to come.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Presses {
+    pub count: u64,
+    pub beats: Vec<f64>,
+}
+
+impl Presses {
+    /// Each kept turn on, oldest first: its number and its beat.
+    pub fn each(&self) -> impl Iterator<Item = (u64, f64)> + '_ {
+        let first = self.count.saturating_sub(self.beats.len() as u64);
+        (first..).zip(self.beats.iter().copied())
     }
 }
 

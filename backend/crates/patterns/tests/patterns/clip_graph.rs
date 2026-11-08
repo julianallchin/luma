@@ -464,24 +464,47 @@ fn rule_4_math_takes_values_and_broadcasts() {
 
 #[test]
 fn rule_5_axes() {
+    // Events that overlap lie on an axis of their clock's own: two such
+    // clocks meet only at the output.
     assert_eq!(
         error(json!({
-            "time2": {"kind": "time", "inputs": {"every": 2}},
+            "time2": {"kind": "time", "inputs": {"every": 2, "duration": 4}},
             "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 180}},
-            "time1": {"kind": "time", "inputs": {"every": 1, "phase": {"node": "curve4"}}},
+            "time1": {"kind": "time", "inputs": {"every": 1, "duration": 4, "phase": {"node": "curve4"}}},
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
         "time1.phase: expected wires of one clock; got time2 through curve4 while time1 has its own events. Example: use the same every and duration for both"
     );
     // The same every and duration are one clock: a phase may follow it.
     graph(json!({
-        "time2": {"kind": "time", "inputs": {"every": 2, "duration": 2}},
+        "time2": {"kind": "time", "inputs": {"every": 2, "duration": 4}},
         "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 180}},
-        "time1": {"kind": "time", "inputs": {"every": 2, "phase": {"node": "curve4"}}},
+        "time1": {"kind": "time", "inputs": {"every": 2, "duration": 4, "phase": {"node": "curve4"}}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
     .check()
     .unwrap();
+    // A clock of one live event at a time (an every alone, or a duration
+    // equal to it) carries no events to meet: its phase may follow another
+    // clock, and either may follow it.
+    for (first, second) in [
+        (json!({"every": 2}), json!({"every": 1})),
+        (
+            json!({"every": 2, "duration": 2}),
+            json!({"every": 1, "duration": 3}),
+        ),
+    ] {
+        let mut time1 = second;
+        time1["phase"] = json!({"node": "curve4"});
+        graph(json!({
+            "time2": {"kind": "time", "inputs": first},
+            "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 180}},
+            "time1": {"kind": "time", "inputs": time1},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+        .check()
+        .unwrap();
+    }
     // A period that follows events takes the newest event's value: the
     // events stop there, so its time node keeps its own clock.
     graph(json!({
@@ -514,11 +537,53 @@ fn rule_5_axes() {
 }
 
 #[test]
+fn a_press_clock_counts_a_buttons_presses() {
+    let press = |inputs: Value| {
+        json!({
+            "hit": {"kind": "button", "settings": {"name": "hit"}},
+            "k": {"kind": "time", "inputs": inputs},
+            "fade": {"kind": "curve", "inputs": {"x": {"node": "k"}}},
+            "color1": {"kind": "color", "inputs": {"alpha": {"node": "fade"}}}})
+    };
+    let hits = graph(press(json!({"on": {"node": "hit"}, "duration": 1})));
+    hits.check().unwrap();
+    assert!(hits.overlaps("k"), "hits that last a beat may overlap");
+    let steps = graph(press(json!({"on": {"node": "hit"}})));
+    steps.check().unwrap();
+    assert!(!steps.overlaps("k"), "each press lasts until the next");
+    assert_ne!(hits.clock_key("k"), steps.clock_key("k"));
+    assert_eq!(
+        hits.pad().map(|pad| pad.node),
+        Some("hit".into()),
+        "the button a press clock counts on alpha is the pad"
+    );
+    assert_eq!(
+        error(press(json!({"on": {"node": "hit"}, "every": 1}))),
+        r#"k.every: expected no every on a clock that counts presses; got every and on. Example: time(on=button("hit"), duration=1), or time(every=1)"#
+    );
+    assert_eq!(
+        error(press(json!({"on": {"node": "hit"}, "delay": 0.5}))),
+        "k.delay: expected no delay on a press that lasts until the next press, which does not age; got delay. Example: duration=1, so each press lasts a beat"
+    );
+    graph(press(
+        json!({"on": {"node": "hit"}, "duration": 1, "delay": 0.5}),
+    ))
+    .check()
+    .unwrap();
+    let mut wrong = press(json!({"on": {"node": "level"}}));
+    wrong["level"] = json!({"kind": "curve", "inputs": {"x": {"node": "hit"}}});
+    assert_eq!(
+        error(wrong),
+        r#"k.on: expected a button wire; got a number wire from level. Example: on=button("hit")"#
+    );
+}
+
+#[test]
 fn rule_5_a_math_node_follows_one_clock() {
     let nodes = |second: f64| {
         json!({
-            "time1": {"kind": "time", "inputs": {"every": 1}},
-            "time2": {"kind": "time", "inputs": {"every": second}},
+            "time1": {"kind": "time", "inputs": {"every": 1, "duration": 3}},
+            "time2": {"kind": "time", "inputs": {"every": second, "duration": 3}},
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
             "curve2": {"kind": "curve", "inputs": {"x": {"node": "time2"}}},
             "math1": {"kind": "math", "inputs": {"values": [{"node": "curve1"}, {"node": "curve2"}]}},
@@ -529,6 +594,15 @@ fn rule_5_a_math_node_follows_one_clock() {
         "math1.values: expected wires of one clock; got time2 through curve2 while values follows time1. Example: use the same every and duration for both"
     );
     graph(nodes(1.)).check().unwrap();
+    // A beat clock and a bar clock, each one event at a time, multiply.
+    let mut one_each = nodes(4.);
+    for time in ["time1", "time2"] {
+        one_each[time]["inputs"]
+            .as_object_mut()
+            .unwrap()
+            .remove("duration");
+    }
+    graph(one_each).check().unwrap();
 }
 
 // ---- rule 6: clip ----

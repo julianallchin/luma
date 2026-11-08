@@ -470,6 +470,9 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
             Error(message.replacen("; got ", &format!("; got {source} = "), 1))
         })?;
     }
+    if node.kind == Kind::Time {
+        press_clock(id, node)?;
+    }
     if node.kind == Kind::Audio {
         let hz = |name: &str, empty: f64| match node.inputs.get(name) {
             None => Some(empty),
@@ -485,6 +488,32 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Rule 3: a press clock (a time node `on` a button) counts presses, not
+/// beats, so it takes no `every`; with no duration each press lasts until
+/// the next and never ages, so it takes no delay or phase either.
+fn press_clock(id: &str, node: &Node) -> Result<()> {
+    if !node.inputs.contains_key("on") {
+        return Ok(());
+    }
+    if node.inputs.contains_key("every") {
+        return fail(format!(
+            "{id}.every: expected no every on a clock that counts presses; got every and on. Example: time(on=button(\"hit\"), duration=1), or time(every=1)"
+        ));
+    }
+    if node.inputs.contains_key("duration") {
+        return Ok(());
+    }
+    if let Some(name) = ["delay", "phase"]
+        .into_iter()
+        .find(|name| node.inputs.contains_key(*name))
+    {
+        return fail(format!(
+            "{id}.{name}: expected no {name} on a press that lasts until the next press, which does not age; got {name}. Example: duration=1, so each press lasts a beat"
+        ));
     }
     Ok(())
 }
@@ -718,6 +747,7 @@ fn wires(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                 InputType::Values => gives.is_some(),
                 InputType::Heads => produces == Produces::Heads,
                 InputType::Time => source_node.kind == Kind::Time,
+                InputType::Button => source_node.kind == Kind::Button,
                 InputType::Coordinate => produces == Produces::Coordinate,
                 InputType::Figures => produces == Produces::Figure,
                 InputType::Points | InputType::Gradient | InputType::Constant => false,
@@ -969,7 +999,7 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
 
 /// The axes a node's output wire carries: whether it varies over heads,
 /// whether it varies along a laser element, whether a live control moves
-/// it, and the clocks whose events it carries.
+/// it, and the clocks whose overlapping events it carries.
 #[derive(Clone, Default)]
 struct Axes {
     heads: bool,
@@ -998,8 +1028,9 @@ fn axes(graph: &ClipGraph, id: &str, memo: &mut HashMap<String, Axes>) -> Result
     let definition = definition(node.kind);
     let mut out = Axes::default();
     // The first clock seen and where it came from: an input, or the node
-    // itself when it is a time node with events.
-    let own = graph.clock_key(id);
+    // itself when it is a time node with events that may overlap. A clock
+    // of one live event at a time has no event axis to meet another's.
+    let own = graph.clock_key(id).filter(|_| graph.overlaps(id));
     let mut first: Option<(String, Option<&str>)> = None;
     if let Some(key) = &own {
         out.clocks.insert(key.clone());
@@ -1168,6 +1199,7 @@ fn accepts(def: &InputDef) -> String {
         InputType::Gradient => "a gradient".into(),
         InputType::Heads => "a heads wire".into(),
         InputType::Time => "a time wire".into(),
+        InputType::Button => "a button wire".into(),
         InputType::Values => "a list of two or more numbers and value wires".into(),
         InputType::Coordinate => "a coordinate wire".into(),
         InputType::Figures => "a list of one or more figure wires".into(),

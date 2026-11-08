@@ -63,10 +63,10 @@ VERSION = 3  # clip_graph::VERSION
 
 # Input order per kind: the builder signature order, used by source().
 _INPUTS = {
-    "time": ("every", "duration", "delay", "phase"),
+    "time": ("every", "duration", "delay", "phase", "on"),
     "space": ("heads", "direction", "centre", "at", "shift", "scale"),
     "along": (),
-    "random": ("heads", "every", "glide", "scale", "contrast"),
+    "random": ("heads", "time", "glide", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "control": (),
     "button": (),
@@ -429,13 +429,20 @@ def min(*args, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def time(every=None, duration=None, delay=None, phase=None) -> Coordinate:
+def time(every=None, duration=None, delay=None, phase=None, on=None) -> Coordinate:
     """Each head's own clock, 0-1 over the clip or over each event.
 
     `every` (beats): an event starts every `every` beats from the clip
     start; empty = once over the clip, so one clip per hit uses `time()`.
+    `on` (a button, instead of every): an event starts at each press that
+    turns it on, on the beat or bar its start waits for; event k is press k,
+    so shuffle(time=k) or random(time=k) is new each press. A hit is
+    `k = time(on=button("hit"), duration=1)` with its fade a curve over k:
+    hits pressed fast stack. Before the first press the clip is not there;
+    in a score nobody presses.
     `duration` (beats): each event's
-    life; empty = every (the clip with no every). A duration above every
+    life; empty = every (the clip with no every), or with `on` until the
+    next press (no delay or phase then). A duration above every
     makes events overlap on purpose (tails, many pills).
     `delay` (beats, any sign): the head starts this much later. Before its
     start the clock is below 0 and curves hold their first value: a curve
@@ -444,9 +451,13 @@ def time(every=None, duration=None, delay=None, phase=None) -> Coordinate:
     then the clock wraps to 0-1, whenever it is set (0 too): a curve over
     space on phase, such as `high=360`, makes a loop such as a chase or a
     wave.
-    Two time nodes with equal every and duration share one set of events.
+    Two time nodes with equal every (or on) and duration share one set of
+    events. Events that overlap (a duration other than every, or presses
+    that last a duration) meet another clock's only at the output; a clock
+    of one event at a time (every alone, or presses with no duration) is a
+    plain value over time and combines with any other.
     """
-    return _make("time", every=every, duration=duration, delay=delay, phase=phase)
+    return _make("time", every=every, duration=duration, delay=delay, phase=phase, on=on)
 
 
 def _wrap(wrap, kind):
@@ -498,21 +509,23 @@ def along() -> Coordinate:
     return _make("along")
 
 
-def random(heads=None, every=None, glide=None, scale=None, contrast=None) -> Coordinate:
-    """A random value, 0-1 at each head, drawn anew each turn of `every`.
+def random(heads=None, time=None, glide=None, scale=None, contrast=None) -> Coordinate:
+    """A random value, 0-1 at each head, drawn anew for each event of `time`.
 
     Random gives a value, shuffle gives an order.
-    every: beats (above 0) per turn. Default 4.
-    glide: 0-1. 0 jumps to the new value on the turn and holds it; 1 drifts
-    the whole turn; 0.25 holds for the first three quarters, then eases to
-    the next value. Default 0.
+    time: a time node with every or on: random(time=time(every=4)) draws
+    every 4 beats, random(time=time(on=button("hit"))) each press. Empty is
+    one draw for the clip.
+    glide: 0-1. 0 jumps to the new value at the event's start and holds it;
+    1 drifts over the whole event; 0.25 holds for the first three quarters,
+    then eases to the next value. Default 0.
     scale: how much neighbouring heads agree, as a share (above 0) of the
     largest extent of the heads. No scale gives one value for all heads;
     0.02 gives each head its own. Mirrored heads get one value.
     contrast: 0-1. 0 is plain; 1 spreads the values 4 times wider about 0.5
     and clips them to 0-1. Default 0.
     """
-    return _make("random", heads=heads, every=every, glide=glide, scale=scale,
+    return _make("random", heads=heads, time=time, glide=glide, scale=scale,
                  contrast=contrast)
 
 
@@ -560,7 +573,9 @@ def button(name="button", mode="flash", attack=0, decay=0, sustain=1, release=0,
     value rises over the attack, falls to the sustain (0-1) over the decay,
     holds while on, and falls to 0 over the release; lengths are in unit
     ("beats" or "seconds"), each stage shaped "smooth", "linear", "punchy" or
-    "snap". A hit: button("hit", decay=0.5, sustain=0, shape="punchy").
+    "snap". The envelope is for levels and holds; a hit is a press clock,
+    time(on=button("hit"), duration=1), so hits stack where an envelope's
+    next press would cut the last one's tail.
     A press, on or off, takes effect at start: "now", or on the set's next
     "beat" or "bar", so busking lands on the music.
     In a score it reads the venue's control `name`, as a plain gate. In a
@@ -627,7 +642,8 @@ def mirror(heads=None, direction=None, at=None) -> Heads:
 
 def shuffle(heads=None, time=None) -> Heads:
     """A random order of the heads: one order, or a new order per event of
-    `time` (a time node with every). Read it with space(kind="order").
+    `time` (a time node with every, or on a button: a new order each press).
+    Read it with space(kind="order").
     Shuffle gives an order, random gives a value. Mirrored heads share a
     place in the order, before or after the mirror."""
     return _make("shuffle", heads=heads, time=time)
