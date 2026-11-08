@@ -86,6 +86,11 @@ See [`scheduler.rs`](scheduler.rs). Two-tier parallelism:
 `InflightSet` deduplicates concurrent calls for the same `(track,
 preprocessor)` so user-driven re-imports never race the startup reconcile.
 
+The startup reconcile launches its workers below the UI
+(`WorkerEnvironment::in_background`, the Darwin background band on macOS), so
+a library-wide backfill never costs the stage its frame rate. Imports run at
+normal priority: someone is waiting on them.
+
 On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The
 backoff record carries the track to a later retry.

@@ -284,13 +284,15 @@ impl AppServices {
     }
 
     /// Resume stale or interrupted analysis after the desktop's Python setup.
+    /// Nobody is waiting on it, so its workers run below the UI: a version
+    /// bump or a broken environment can queue the whole library here.
     pub async fn reconcile_analysis(&self) -> Result<(), String> {
         let epoch = self.analysis_tasks.current_epoch()?;
         let lease = self.analysis_tasks.lease(epoch)?;
         crate::preprocessing::scheduler::reconcile_on_startup(
             self.db.0.clone(),
             self.storage.clone(),
-            self.workers.clone(),
+            self.workers.clone().in_background(),
             self.events.clone(),
             lease.guard(),
         )

@@ -15,6 +15,7 @@ pub struct WorkerEnvironment {
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
     wait_for_setup: bool,
+    background: bool,
 }
 
 impl WorkerEnvironment {
@@ -24,7 +25,18 @@ impl WorkerEnvironment {
             cache_dir,
             resource_dir,
             wait_for_setup: false,
+            background: false,
         }
+    }
+
+    /// Launch every worker below the UI ([`crate::runtime::command::background`]),
+    /// for analysis nobody is waiting on, like the startup catch-up. Six MERT
+    /// workers at normal priority take a 60 Hz GPU loop down to 31-43 fps; in
+    /// the background it holds 58, and the batch takes about a quarter longer.
+    #[must_use]
+    pub fn in_background(mut self) -> Self {
+        self.background = true;
+        self
     }
 
     /// Wait for the desktop host's concurrent environment bootstrap instead
@@ -104,6 +116,9 @@ impl WorkerEnvironment {
             .to_path_buf();
 
         let mut cmd = crate::runtime::command::command(python);
+        if self.background {
+            crate::runtime::command::background(&mut cmd);
+        }
         cmd.env("PYTHONUNBUFFERED", "1")
             .current_dir(workdir)
             .arg(script);
