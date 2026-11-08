@@ -1510,11 +1510,18 @@ impl Luma {
     /// virtual deck follows whatever the player has.
     pub(crate) fn play_virtual(&mut self, target: &Target, track_id: &str, cx: &mut Context<Self>) {
         let (session, load) = self.library.load_audio(track_id);
-        let play = self.library.play(session, 0.);
         let target = target.clone();
         cx.spawn(async move |this, cx| {
+            // A library call starts when it is made, so the play is asked for
+            // only once the load has landed: made beside it, it raced the load
+            // and found no audio to play.
             let done = match load.await {
-                Ok(()) => play.await,
+                Ok(()) => {
+                    let Ok(play) = this.update(cx, |this, _| this.library.play(session, 0.)) else {
+                        return;
+                    };
+                    play.await
+                }
                 Err(error) => Err(error),
             };
             if let Err(error) = done {

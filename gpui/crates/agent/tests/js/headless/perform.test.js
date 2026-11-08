@@ -352,6 +352,21 @@ test("a source picked in the deck panel is followed, and disconnecting returns t
   }
 });
 
+// Choosing a song loads it onto the player and plays it. The play is asked for
+// once the load has landed; asked for beside it, it found no audio and the
+// page said so.
+test("a song chosen for the virtual deck loads and plays, with no error", () => {
+  open();
+  nav.step("the offer", "button", "Add source");
+  nav.step("the virtual deck", "toggle", "Virtual");
+  nav.step("a song for the deck", "button", "Choose song");
+  nav.step("the song", "row", "Aurora");
+  until("the song on the deck", (s) => s.findAll({ role: "card" }).some((n) => n.label.startsWith("Deck 1: Aurora")));
+  app.frames(10, { waitMs: 30 });
+  const failed = app.painted().flatMap((s) => texts(s)).find((label) => label.includes("No audio segment loaded"));
+  assert(failed === undefined, `the deck reported: ${failed}`);
+});
+
 test("Setup's + makes a pattern in that place, lighting the group chosen", () => {
   setup();
   nav.step("an empty place", "button", "New cell, row 3, column 1");
