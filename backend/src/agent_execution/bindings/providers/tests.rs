@@ -23,6 +23,7 @@ use crate::test_support::TEST_OWNER;
 const TRACK_ID: &str = "trk-1";
 const TRACK_HASH: &str = "hash1";
 const SCORE_ID: &str = "sc-1";
+const STEMS: [&str; 4] = ["vocals", "drums", "bass", "other"];
 
 /// Temp-file pool built the way `init_app_db` builds the real one.
 async fn test_pool(dir: &Path) -> SqlitePool {
@@ -217,15 +218,18 @@ impl Fixture {
             .await
             .unwrap();
 
-        // Separation ran: only the vocals stem is ever bound.
-        sqlx::query(
-            "INSERT INTO track_stems (track_id, stem_name, file_path) VALUES (?, 'vocals', ?)",
-        )
-        .bind(TRACK_ID)
-        .bind("vocals.ogg")
-        .execute(&self.pool)
-        .await
-        .unwrap();
+        // Separation ran: all four demucs stems are recorded.
+        for stem in STEMS {
+            sqlx::query(
+                "INSERT INTO track_stems (track_id, stem_name, file_path) VALUES (?, ?, ?)",
+            )
+            .bind(TRACK_ID)
+            .bind(stem)
+            .bind(format!("{stem}.ogg"))
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        }
 
         // Waveform bands: 4 buckets per band over an 8-second decode.
         let bands: Vec<f32> = vec![
@@ -257,7 +261,8 @@ impl Fixture {
         .await
         .unwrap();
 
-        // PCM caches: the mix and the vocals stem (stereo, 3 frames each).
+        // PCM caches: the mix and each stem (stereo, 3 frames each). Every
+        // stem holds its own value so a test can tell which file was bound.
         crate::audio::cache::write_pcm_file(
             &self.storage.mix_pcm_path(TRACK_HASH),
             &[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -272,6 +277,15 @@ impl Fixture {
             2,
         )
         .unwrap();
+        for (i, stem) in ["drums", "bass", "other"].into_iter().enumerate() {
+            crate::audio::cache::write_pcm_file(
+                &self.storage.stem_pcm_path(TRACK_HASH, stem),
+                &[0.2 + 0.1 * i as f32; 6],
+                48_000,
+                2,
+            )
+            .unwrap();
+        }
 
         // MERT: real .npy files, shape read back off their own headers.
         let fullmix = self.storage.mert_fullmix_path(TRACK_HASH);
@@ -541,11 +555,7 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(shape(&v, "audio.vocals"), vec![3, 2]);
     assert_eq!(shape(&v, "audio.rest"), vec![3, 2]);
     let audio: Vec<&String> = v["audio"].as_object().unwrap().keys().collect();
-    assert_eq!(
-        audio,
-        ["mix", "rest", "vocals"],
-        "individual stems are not exposed"
-    );
+    assert_eq!(audio, ["bass", "drums", "mix", "other", "rest", "vocals"]);
 
     // §10.1 features
     assert_eq!(shape(&v, "features.beats"), vec![4]);
@@ -838,6 +848,43 @@ async fn audio_tensors_describe_their_own_pcm_layout() {
 }
 
 #[tokio::test]
+async fn each_demucs_stem_is_bound_to_its_own_cache_and_says_it_is_an_estimate() {
+    let f = Fixture::new().await;
+    let (manifest, store) = f.assemble(&f.scope()).await;
+    let v = root(&manifest);
+    for (i, stem) in ["drums", "bass", "other"].into_iter().enumerate() {
+        let path = format!("audio.{stem}");
+        assert_eq!(shape(&v, &path), vec![3, 2], "{path}");
+        let want = 0.2 + 0.1 * i as f32;
+        let samples = read_f32(&manifest, &store, &path);
+        assert!(
+            samples.iter().all(|s| (s - want).abs() < 1e-6),
+            "{path}: {samples:?}"
+        );
+        let note = at(&v, &path)["provenance"]["note"].as_str().unwrap();
+        assert!(note.contains("estimate"), "{path}: {note}");
+    }
+    let other = at(&v, "audio.other")["provenance"]["note"]
+        .as_str()
+        .unwrap();
+    assert!(other.contains("synths"), "{other}");
+}
+
+#[tokio::test]
+async fn a_separated_stem_without_a_cache_is_decoded_on_demand() {
+    let f = Fixture::new().await;
+    std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "other")).unwrap();
+    std::fs::create_dir_all(f.storage.stems_dir(TRACK_HASH)).unwrap();
+    std::fs::write(f.storage.stems_dir(TRACK_HASH).join("other.ogg"), b"x").unwrap();
+
+    let (manifest, _store) = f.assemble(&f.scope()).await;
+    let v = root(&manifest);
+    let r = reason(&v, "audio.other");
+    assert!(r.contains("decoding the other stem failed"), "{r}");
+    assert_eq!(shape(&v, "audio.bass"), vec![3, 2]);
+}
+
+#[tokio::test]
 async fn drum_onsets_merge_duplicate_hits_and_bars_count_from_one() {
     let f = Fixture::new().await;
     let (manifest, store) = f.assemble(&f.scope()).await;
@@ -886,14 +933,16 @@ async fn unavailable_reasons_name_the_real_cause() {
 }
 
 #[tokio::test]
-async fn a_failed_separation_leaves_vocals_and_rest_unavailable_with_its_error() {
+async fn a_failed_separation_leaves_every_stem_and_rest_unavailable_with_its_error() {
     let f = Fixture::new().await;
     sqlx::query("DELETE FROM track_stems WHERE track_id = ?")
         .bind(TRACK_ID)
         .execute(&f.pool)
         .await
         .unwrap();
-    std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "vocals")).unwrap();
+    for stem in STEMS {
+        std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, stem)).unwrap();
+    }
     crate::preprocessing::failures::record(
         &f.pool,
         TRACK_ID,
@@ -906,23 +955,17 @@ async fn a_failed_separation_leaves_vocals_and_rest_unavailable_with_its_error()
 
     let (manifest, _store) = f.assemble(&f.scope()).await;
     let v = root(&manifest);
-    for path in ["audio.vocals", "audio.rest"] {
+    for path in [
+        "audio.vocals",
+        "audio.rest",
+        "audio.drums",
+        "audio.bass",
+        "audio.other",
+    ] {
         let r = reason(&v, path);
         assert!(r.contains("demucs ran out of memory"), "{path}: {r}");
     }
     assert_eq!(shape(&v, "audio.mix"), vec![3, 2]);
-}
-
-#[tokio::test]
-async fn a_separated_vocals_stem_without_a_cache_is_decoded_on_demand() {
-    let f = Fixture::new().await;
-    std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "vocals")).unwrap();
-    std::fs::create_dir_all(f.storage.stems_dir(TRACK_HASH)).unwrap();
-    std::fs::write(f.storage.stems_dir(TRACK_HASH).join("vocals.ogg"), b"x").unwrap();
-
-    let (manifest, _store) = f.assemble(&f.scope()).await;
-    let r = reason(&root(&manifest), "audio.vocals");
-    assert!(r.contains("decoding the vocals stem failed"), "{r}");
 }
 
 #[tokio::test]
@@ -963,7 +1006,13 @@ async fn a_scope_with_no_track_marks_every_track_branch_unavailable() {
     let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
 
-    for path in ["track", "audio.mix", "features.beats", "features.mert"] {
+    for path in [
+        "track",
+        "audio.mix",
+        "audio.other",
+        "features.beats",
+        "features.mert",
+    ] {
         assert!(reason(&v, path).contains("no track"), "{path}");
     }
     assert!(v.get("score").is_none());

@@ -1,20 +1,22 @@
-//! `luma.audio` — the two signals the agent analyses, plus the mix for reference.
+//! `luma.audio` — the mix, its four demucs stems, and the mix minus vocals.
 //!
-//! - `vocals`: the vocals stem.
+//! - `mix`: the full mix.
+//! - `vocals`, `drums`, `bass`, `other`: the demucs (`htdemucs`) stems. They
+//!   are estimates, not multitracks: one sound can bleed across them (a kick's
+//!   click in `other`, a sub in `drums`), so a stem says where a sound mostly
+//!   is, not that it is absent elsewhere. `other` holds whatever is not voice,
+//!   drums or bass: synths, keys, pads, guitars, effects.
 //! - `rest`: the mix minus the vocals stem — drums, bass and everything else,
-//!   so rap harmonics can never pass for a growl.
-//! - `mix`: the full mix, for reference.
-//!
-//! The individual drums/bass/other stems are deliberately not exposed: demucs
-//! scatters one sound across them, and an agent that trusts those labels hears
-//! the wrong thing. Band splits of `rest` plus n2n drum onsets replace them.
+//!   so rap harmonics can never pass for a growl. Subtracting one estimate
+//!   leaves the rest of the mix whole, which is why the text tools analyse
+//!   `rest` rather than the other stems.
 //!
 //! Nothing is transcoded for the agent: each signal is a `.pcm` cache imported
 //! as-is and described by a tensor that starts after the 18-byte header, so
-//! `byte_offset` is 18 and the shape is `[frames, channels]`. All three are
-//! *ensured*: mix and vocals go through the one decode cache whenever their
-//! source is on disk, which rewrites a stale cache at [`SAMPLE_RATE`], and rest
-//! is derived from them and persisted.
+//! `byte_offset` is 18 and the shape is `[frames, channels]`. Every signal is
+//! *ensured*: the mix and each stem go through the one decode cache whenever
+//! their source is on disk, which rewrites a stale cache at [`SAMPLE_RATE`],
+//! and rest is derived from mix and vocals and persisted.
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +33,24 @@ use crate::database::local;
 /// The derived "stem" name of the mix minus vocals, cached beside the stems.
 const REST: &str = "rest";
 
+/// The demucs stems bound as `audio.<name>`, each with its provenance note.
+/// Vocals comes first: `rest` is derived from it.
+const STEMS: [(&str, &str); 4] = [
+    ("vocals", "demucs vocals stem"),
+    (
+        "drums",
+        "demucs drums stem, an estimate: other sounds can bleed into it",
+    ),
+    (
+        "bass",
+        "demucs bass stem, an estimate: other sounds can bleed into it",
+    ),
+    (
+        "other",
+        "demucs other stem: synths, keys, pads and anything not vocals, drums or bass; an estimate",
+    ),
+];
+
 const NO_CACHE_WRITTEN: &str = "the audio decoded but no PCM cache file was written";
 
 pub async fn provide(
@@ -39,15 +59,19 @@ pub async fn provide(
     store: &mut ArtifactStore,
 ) -> Result<(), String> {
     let Some(track) = ctx.track.as_ref() else {
-        for path in ["audio.mix", "audio.vocals", "audio.rest"] {
-            unavailable(b, path, NO_TRACK)?;
+        let names = ["mix", REST].into_iter().chain(STEMS.map(|(stem, _)| stem));
+        for name in names {
+            unavailable(b, &format!("audio.{name}"), NO_TRACK)?;
         }
         return Ok(());
     };
 
     let mix = ensure_mix_pcm(ctx, &track.track_hash, &track.file_path);
-    let vocals = ensure_vocals_pcm(ctx, track).await;
-    let rest = match (&mix, &vocals) {
+    let mut stems = Vec::with_capacity(STEMS.len());
+    for (stem, note) in STEMS {
+        stems.push((stem, ensure_stem_pcm(ctx, track, stem).await, note));
+    }
+    let rest = match (&mix, &stems[0].1) {
         (Ok(mix), Ok(vocals)) => ensure_rest_pcm(
             mix,
             vocals,
@@ -58,46 +82,46 @@ pub async fn provide(
         }
     };
 
-    for (path, signal, note) in [
+    let signals = [
+        ("mix", mix, "full stereo mix at 48 kHz"),
         (
-            "audio.mix",
-            mix,
-            "full stereo mix at 48 kHz, for reference; analyse rest and vocals",
-        ),
-        ("audio.vocals", vocals, "vocals stem, decoded PCM cache"),
-        (
-            "audio.rest",
+            REST,
             rest,
             "mix minus the vocals stem: drums, bass and everything else",
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(stems);
+    for (name, signal, note) in signals {
+        let path = format!("audio.{name}");
         match signal {
             Ok(file) => bind_pcm(
                 b,
                 store,
-                path,
+                &path,
                 &file,
                 Provenance::new("audio_cache").with_note(note),
             )?,
-            Err(reason) => unavailable(b, path, reason)?,
+            Err(reason) => unavailable(b, &path, reason)?,
         }
     }
     Ok(())
 }
 
-/// The vocals stem's PCM cache, decoded through the one decode cache when the
+/// A demucs stem's PCM cache, decoded through the one decode cache when the
 /// separated stem is on disk. `Err` says whether separation never ran or its
 /// file is gone.
-async fn ensure_vocals_pcm(
+async fn ensure_stem_pcm(
     ctx: &ProviderCtx<'_>,
     track: &crate::models::tracks::TrackSummary,
+    stem: &str,
 ) -> Result<PathBuf, String> {
-    let cache = ctx.storage.stem_pcm_path(&track.track_hash, "vocals");
-    if let Some(source) = ctx.storage.stem_source_path(&track.track_hash, "vocals") {
+    let cache = ctx.storage.stem_pcm_path(&track.track_hash, stem);
+    if let Some(source) = ctx.storage.stem_source_path(&track.track_hash, stem) {
         // Keyed so the decode cache lands exactly on `stem_pcm_path`.
-        let key = format!("{}_stem_vocals", track.track_hash);
+        let key = format!("{}_stem_{stem}", track.track_hash);
         load_or_decode_audio_shared(&source, &key)
-            .map_err(|e| format!("decoding the vocals stem failed: {e}"))?;
+            .map_err(|e| format!("decoding the {stem} stem failed: {e}"))?;
         return cache
             .exists()
             .then_some(cache)
@@ -109,13 +133,12 @@ async fn ensure_vocals_pcm(
     let stems = local::tracks::get_track_stems(ctx.pool, &track.id)
         .await
         .unwrap_or_default();
-    if !stems.iter().any(|s| s.stem_name == "vocals") {
+    if !stems.iter().any(|s| s.stem_name == stem) {
         return Err(missing_reason(ctx.pool, &track.id, "stems", "stem separation").await);
     }
-    Err(
-        "the vocals stem is recorded in the database but its audio file is missing from disk"
-            .into(),
-    )
+    Err(format!(
+        "the {stem} stem is recorded in the database but its audio file is missing from disk"
+    ))
 }
 
 /// `mix - vocals`, written once and reused while it is newer than both inputs.

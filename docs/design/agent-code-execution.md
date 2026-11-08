@@ -378,8 +378,9 @@ routine tool output does not dump revision bookkeeping at the model.
 
 This distinction is fundamental:
 
-- `luma.audio` contains audio signals: the vocals stem, the rest of the mix
-  without vocals, and the mix for reference.
+- `luma.audio` contains audio signals: the mix, the four demucs stems
+  (vocals, drums, bass, other) and the rest of the mix without vocals. The
+  stems are estimates; a sound can bleed across them.
 - `luma.features` contains information derived from audio: beats, downbeats,
   drum onsets, bar classifications, chords, mel data, waveform bands, and MERT
   features when exposed.
@@ -838,8 +839,11 @@ luma.track
   document                  the complete saved score: clips by ID
 
 luma.audio
-  mix                       lazy AudioTensor, for reference
-  vocals                    lazy AudioTensor, the vocals stem
+  mix                       lazy AudioTensor, the full mix
+  vocals                    lazy AudioTensor, the demucs vocals stem
+  drums                     lazy AudioTensor, the demucs drums stem
+  bass                      lazy AudioTensor, the demucs bass stem
+  other                     lazy AudioTensor, the demucs other stem (synths, keys, pads)
   rest                      lazy AudioTensor, mix minus vocals
 
 luma.features

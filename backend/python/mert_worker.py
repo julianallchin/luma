@@ -12,6 +12,19 @@ The full-mix cache feeds the bar classifier (per-bar slicing for the
 — v6+ checkpoints were trained on drum-isolated stems, so its MERT
 conditioning has to be on the drum stem, not the full mix.
 
+The full-mix and drum caches also back `luma.music.find_like`, the agent's
+"every moment that sounds like this" score. Layer 7 suits it too. On three
+synthetic tracks (two synth grooves, one built on harness/showcase/night-bloom),
+7 distinct sounds were each repeated 3-4 times at random 16ths, giving 77
+queries. Each query's repeats were ranked against every other 16th by
+find_like's mean-pooled window cosine. Mean average precision on the mix:
+layer 3 0.57, 4 0.59, 5 0.64, 6 0.63, 7 0.64, 8 0.61, 9 0.55. Layers 5-7 tie,
+and layers 0-2 and 10-12 are worse. Centring frames on the track mean did not
+help. On the demucs `other` stem the same queries score 0.80-0.82 for layers
+3-6 and 0.80 for 7. A frame-aligned window scores 0.94-0.96 there, but only
+0.41-0.56 on the mix, where mean-pooling wins. Caching MERT for
+`other` would help find_like far more than changing the layer would.
+
 Algorithm: delegated to `n2n.infer.compute_mert_features` so chunking
 parameters (window/overlap/crop) stay locked to the same defaults the
 training pipeline and `python -m n2n.infer` use. Duplicating the math here

@@ -327,6 +327,17 @@ def test_pcm_stereo_shape_and_sample_rate():
 
 
 @test
+def test_demucs_stems_are_audio_signals_beside_the_mix():
+    client = shared()
+    for stem in ("drums", "bass", "other"):
+        assert ok(client.execute(f"luma.audio.{stem}.values.shape"))["repr"] == "(1000, 2)", stem
+        assert ok(client.execute(f"luma.audio.{stem}.sample_rate_hz"))["repr"] == "48000.0", stem
+    catalog = ok(client.execute("luma.catalog('audio')"))["repr"]
+    for stem in ("mix", "vocals", "drums", "bass", "other"):
+        assert stem in catalog, catalog
+
+
+@test
 def test_arrays_are_read_only():
     client = shared()
     assert (

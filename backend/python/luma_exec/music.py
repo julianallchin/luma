@@ -15,6 +15,7 @@ The analysis runs on two signals and one drum source:
 The text tools (`listen`, `deviations`, `modulation`, `similar`, `sections`)
 are short functions over the same arrays exposed here (`onsets`, `mert`,
 `envelopes`, `beats`), so a method can be read and extended in a cell.
+`find_like` returns a score over time instead of text.
 """
 
 from __future__ import annotations
@@ -88,6 +89,42 @@ class Frame:
         return f"<{self._path} {len(self)} rows: {', '.join(shapes)}>"
 
 
+class Score(Frame):
+    """`find_like`'s score over time: `time_s` and `score` at 75 Hz.
+
+    `.sixteenths` is the same score on the felt 16th grid.
+    """
+
+    def __init__(self, music: "Music", time_s: np.ndarray, score: np.ndarray) -> None:
+        super().__init__("luma.music.find_like", {"time_s": time_s, "score": score})
+        self._music = music
+
+    @cached_property
+    def sixteenths(self) -> Frame:
+        """One row per felt 16th of bars 1..bar_count: grid columns plus `score`,
+        the max of the 75 Hz scores whose window starts nearer that 16th than
+        any other (half a 16th either side of it), so a match that starts on
+        `7.1.1` peaks in the `7.1.1` row. NaN where no window starts, as at the
+        very end of the track."""
+        music = self._music
+        spb = music._slots_per_beat
+        steps = (np.arange(music._slots_per_bar + 1) - 0.5) / spb
+        edges = np.stack([music._grid.start(bar) + steps for bar in range(1, music.bar_count + 1)])
+        positions = edges[:, :-1].ravel() + 0.5 / spb
+        bounds = np.searchsorted(self.time_s, music._seconds(edges))
+        first, last = bounds[:, :-1].ravel(), bounds[:, 1:].ravel()
+        score = np.full(len(positions), np.nan, dtype=np.float32)
+        filled = last > first
+        if filled.any():
+            # Pairs (first, last) as reduceat indices: the even results are the
+            # max over [first, last). The pad keeps `last == len` a valid index.
+            padded = np.append(self.score, np.float32(-np.inf))
+            peaks = np.maximum.reduceat(padded, np.stack([first, last], axis=1).ravel())[::2]
+            score[filled] = peaks[filled]
+        return Frame("luma.music.find_like.sixteenths",
+                     dict(_grid_columns(music, positions, music._seconds(positions)), score=score))
+
+
 @dataclass(frozen=True)
 class Feel:
     """How the stored grid relates to the tempo the music is felt at."""
@@ -141,6 +178,8 @@ class Music:
       modulation(bars)  wobble/sweep rate, depth, shape and direction; flags rate changes
       similar(at)       ranked places that sound or groove like a beat, bar or phrase
       sections()        MERT novelty, repeats and drops
+    Score over time (no picking; peaks and thresholds are yours):
+      find_like(at)     MERT cosine of every 75 Hz moment against a span, `.sixteenths` view
     `bars` is a bar number 13, a bar pair (9, 13), or a range "9-13"; a range
     includes its start and excludes its end.
     Arrays: beats, onsets, envelopes, mert.
@@ -604,6 +643,83 @@ class Music:
                          f"{self._differences(start, candidate, length)}")
         return "\n".join(lines)
 
+    def find_like(self, at, *, length=None, end=None, stem: str = "mix"):
+        """How much every moment of the track sounds like the span at `at`: a score over time.
+
+        The query is `at` as a position or range as printed ("13.2.3", "13.2",
+        "13", "13.2.3-13.3.1") or seconds (`at=31.25`). A lone position spans
+        what it names; `length` (felt 16ths) or `end` (a position or seconds,
+        excluded) set the span instead. Seconds need one of them.
+
+        `stem` is the MERT cache searched: "mix" or "drums". MERT is cached for
+        those two only; "bass", "other" and "vocals" return Unavailable (their
+        audio is in `luma.audio`).
+
+        Method: MERT-95M layer 7 frames at 75 Hz (see `mert_worker.py` for
+        the layer comparison). The query's frames are mean-pooled to one
+        vector; at every frame t the window of the same length starting at t
+        is mean-pooled too, and `score[t]` is the cosine of the two. Pooling
+        ignores order inside the window, so a sound matches wherever it falls
+        in the bar and however the drums under it line up; frame-by-frame
+        alignment ranked true repeats worse on full mixes.
+
+        Returns a Frame with one row per 75 Hz frame where a whole window fits:
+        `time_s` (where the window starts, so a peak is where the matching
+        sound starts) and `score`. `.sixteenths` is the same numbers on the felt
+        16th grid, the max over the frames that start nearest each 16th, with
+        the usual grid columns. The score is a raw cosine in -1..1, not a
+        probability and not calibrated across tracks or stems; the query itself
+        scores 1 and its neighbours score high. Nothing is picked: find peaks,
+        set a threshold and snap to the grid yourself.
+        """
+        names = {"mix": "fullmix", "drums": "drum"}
+        if stem not in (*names, "bass", "other", "vocals"):
+            raise ValueError(f"stem is 'mix', 'drums', 'bass', 'other' or 'vocals'; got {stem!r}")
+        cached = self._mert.get(names.get(stem, ""))
+        if cached is None:
+            why = ("MERT is cached for mix and drums only" if stem not in names
+                   else "no MERT cache for this track")
+            return Unavailable(f"find_like(stem={stem!r}): {why}", "luma.music.find_like")
+        frames = np.asarray(getattr(cached, "values", cached), dtype=np.float32)
+        start_s, end_s = self._query_seconds(at, length, end)
+        first = int(round(start_s * self._mert_rate))
+        size = max(1, int(round((end_s - start_s) * self._mert_rate)))
+        if first < 0 or first + size > len(frames):
+            raise ValueError(f"the query {start_s:.3f}-{end_s:.3f} s is outside the "
+                             f"{len(frames) / self._mert_rate:.3f} s of MERT frames")
+        sums = np.cumsum(np.concatenate([np.zeros((1, frames.shape[1])), frames]), axis=0, dtype=np.float64)
+        windows = sums[size:] - sums[:-size]
+        windows /= np.linalg.norm(windows, axis=1, keepdims=True) + 1e-9
+        query = windows[first]
+        return Score(self, np.arange(len(windows)) / self._mert_rate, (windows @ query).astype(np.float32))
+
+    def _query_seconds(self, at, length, end) -> tuple[float, float]:
+        """`find_like`'s query span in seconds."""
+        if length is not None and end is not None:
+            raise ValueError("give length or end, not both")
+        seconds = isinstance(at, (int, float, np.integer, np.floating)) and not isinstance(at, bool)
+        if seconds:
+            start = float(at)
+            stop = None
+        else:
+            start_beat, stop_beat = self._positions(at)
+            start, stop = (float(v) for v in self._seconds([start_beat, stop_beat]))
+        if length is not None:
+            if length <= 0:
+                raise ValueError(f"length counts felt 16ths and must be positive; got {length!r}")
+            beat = self._position(start) if seconds else start_beat
+            stop = float(self._seconds(beat + length / self._slots_per_beat))
+        elif end is not None:
+            if isinstance(end, str):
+                stop = float(self._seconds(self._positions(end)[0]))
+            else:
+                stop = float(end)
+        if stop is None:
+            raise ValueError("a query in seconds needs length (felt 16ths) or end")
+        if stop <= start:
+            raise ValueError(f"the query ends before it starts: {start:.3f}-{stop:.3f} s")
+        return start, stop
+
     def sections(self, *, threshold: float | None = None) -> str:
         """Form from bar-pooled MERT: boundaries, repeats and drops.
 
@@ -731,7 +847,7 @@ class Music:
 
     def __repr__(self) -> str:
         return (f"<luma.music {self.feel.bpm:.0f} bpm felt (grid {self._grid_bpm:.0f}), {self.bar_count} bars: "
-                "listen deviations modulation similar sections; beats onsets envelopes mert>")
+                "listen deviations modulation similar sections find_like; beats onsets envelopes mert>")
 
 
 # ---------------------------------------------------------------------------

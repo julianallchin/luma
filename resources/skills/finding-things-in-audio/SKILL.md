@@ -29,14 +29,19 @@ can print as `13.1.3.5`. Quote positions exactly as the tools print them:
   stabs live.
 - `similar("13")`: places that share what is special about a bar (`"13"`),
   a beat (`"13.2"`) or a range (`"9-17"`). `mode="rhythm"`: same rhythm, other sound; `mode="sound"`: the
-  reverse.
+  reverse. It steps a bar at a time.
+- `find_like("13.2.3", length=4)`: a score at every 75 Hz frame of how much
+  the window starting there sounds like the query (MERT cosine), anywhere in
+  the bar; `.sixteenths` puts it on the felt 16th grid. `stem="drums"` searches
+  the drum stem. It is a raw cosine: you pick the peaks and the threshold.
 - The recipes below: 5 ms envelopes, pitch, kick templates.
 
 Evidence strength: `rest` band levels and `modulation` are strong. n2n hats
 over- and under-trigger: treat any hat pattern as low-confidence and confirm
 it in the high-band envelope before you build on it. Stem labels are weak: one
-sound spreads across demucs stems; only `vocals` is separated, everything else
-is `rest`, split by frequency.
+sound spreads across demucs stems. `luma.audio` has `drums`, `bass` and
+`other` (synths, keys, pads) next to `vocals` and `rest`; use them to hear a
+part on its own, and confirm in `rest` that what a stem shows is really there.
 
 ## The loop
 

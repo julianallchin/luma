@@ -23,7 +23,7 @@ def setUpModule():
                                      / "crates/patterns/src/presets.json").read_text()))
 
 
-def synthetic(bars=16, bpm=120.0, missing_kick_bar=None, rate=16000):
+def synthetic(bars=16, bpm=120.0, missing_kick_bar=None, rate=16000, **mert):
     """A four-on-the-floor loop: kick on every beat, noise bursts on the kicks."""
     beat = 60.0 / bpm
     beats = np.arange(bars * 4 + 1) * beat + 0.5
@@ -36,7 +36,28 @@ def synthetic(bars=16, bpm=120.0, missing_kick_bar=None, rate=16000):
         audio[i:i + 800] += np.sin(np.arange(800) * 2 * np.pi * 60 / rate).astype(np.float32) * 0.8
     return Music(beats=beats, downbeats=beats[::4], beats_per_bar=4, bpm=bpm,
                  onsets={"kick": np.array(kicks), "snare": snares, "hat": np.array([])},
-                 rest=audio, sample_rate=rate)
+                 rest=audio, sample_rate=rate, **mert)
+
+
+def with_repeated_sound(bars=16, bpm=120.0):
+    """`synthetic()` with MERT-like frames: a one-bar loop plus noise, and one
+    distinct sound two 16ths long at three known places, at different places
+    in the bar so a bar-stepping search could not find them."""
+    grid = synthetic(bars=bars, bpm=bpm)
+    rng = np.random.default_rng(1)
+    count = int(round(float(grid._seconds(bars * 4 + 2)) * 75))
+    bar_frames = int(round(4 * 60 / bpm * 75))
+    loop = np.resize(rng.normal(0, 1.0, (bar_frames, 32)), (count, 32))
+    frames = loop + rng.normal(0, 0.5, (count, 32)) + 5.0
+    sound = rng.normal(0, 3.0, (8, 32))
+    places = ["3.2.3", "7.1.1", "12.4.2"]
+    for place in places:
+        start = int(round(float(grid._seconds(grid._positions(place)[0])) * 75))
+        size = int(round(float(grid._seconds(grid._positions(place)[0] + 0.5)) * 75)) - start
+        frames[start:start + size] += np.resize(sound, (size, 32))
+    drum = frames[:, ::-1] + rng.normal(0, 1.0, frames.shape)
+    music = synthetic(bars=bars, bpm=bpm, mert=frames.astype(np.float16), mert_drum=drum.astype(np.float16))
+    return music, places
 
 
 class MusicUnitTests(unittest.TestCase):
@@ -117,6 +138,75 @@ class MusicUnitTests(unittest.TestCase):
     def test_similar_finds_the_bar_with_the_same_missing_kick(self):
         music = synthetic(bars=16, missing_kick_bar=6)
         self.assertIn("kick@", music.similar("6", top=3))
+
+    def test_find_like_scores_the_repeats_of_a_sound_above_everything_else(self):
+        music, places = with_repeated_sound()
+        sixteenths = music.find_like(places[0], length=2).sixteenths
+        at = list(sixteenths.at)
+        repeats = [at.index(place) for place in places[1:]]
+        # Everything at least a 16th away from every occurrence of the sound.
+        near = {i + d for i in [at.index(p) for p in places] for d in (-1, 0, 1)}
+        elsewhere = [i for i in range(len(at)) if i not in near and not np.isnan(sixteenths.score[i])]
+        self.assertGreater(sixteenths.score[repeats].min(), np.nanmax(sixteenths.score[elsewhere]))
+
+    def test_find_like_is_a_score_at_every_mert_frame_and_picks_nothing(self):
+        music, places = with_repeated_sound()
+        frames = len(music._mert["fullmix"])
+        score = music.find_like(places[0], length=2)
+        self.assertEqual(score.keys(), ["time_s", "score"])
+        # One row per frame where a whole window fits; the window is the
+        # query's duration (two 16ths at 120 bpm, 0.25 s) in frames.
+        window = frames - len(score) + 1
+        self.assertLessEqual(abs(window - 0.25 * 75), 1)
+        self.assertTrue(np.allclose(np.diff(score.time_s), 1 / 75))
+        self.assertTrue(np.all(score.score <= 1 + 1e-5) and np.all(score.score >= -1 - 1e-5))
+        query = int(round(float(music._seconds(music._positions(places[0])[0])) * 75))
+        self.assertAlmostEqual(float(score.score[query]), 1.0, places=4)
+        with self.assertRaises(ValueError):
+            score.score[0] = 0.0
+
+    def test_find_like_sixteenths_is_the_max_of_the_frames_in_each_sixteenth(self):
+        music, places = with_repeated_sound()
+        score = music.find_like(places[0], length=2)
+        view = score.sixteenths
+        self.assertEqual(len(view), music.bar_count * 16)
+        self.assertEqual(view.at[0], "1.1.1")
+        for key in ("time_s", "at", "bar", "beat", "sixteenth", "slot", "score"):
+            self.assertIn(key, view.keys())
+        # Each row holds the frames nearer its 16th than its neighbours.
+        for row in (5, 37, 200):
+            start = (view.time_s[row - 1] + view.time_s[row]) / 2
+            stop = (view.time_s[row] + view.time_s[row + 1]) / 2
+            inside = (score.time_s >= start) & (score.time_s < stop)
+            self.assertAlmostEqual(float(view.score[row]), float(score.score[inside].max()), places=6)
+        # So the repeats peak on the 16th they start on, not the one before.
+        for place in places:
+            row = list(view.at).index(place)
+            self.assertGreater(view.score[row], view.score[row - 1])
+
+    def test_find_like_takes_seconds_positions_and_ranges_for_the_same_query(self):
+        music, places = with_repeated_sound()
+        by_length = music.find_like(places[0], length=2).score
+        start = float(music._seconds(music._positions(places[0])[0]))
+        stop = float(music._seconds(music._positions(places[0])[0] + 0.5))
+        self.assertTrue(np.allclose(music.find_like(start, end=stop).score, by_length))
+        self.assertTrue(np.allclose(music.find_like(start, length=2).score, by_length))
+        end = music._grid.format(music._positions(places[0])[0] + 0.5)
+        self.assertTrue(np.allclose(music.find_like(f"{places[0]}-{end}").score, by_length))
+        self.assertTrue(np.allclose(music.find_like(places[0], end=end).score, by_length))
+        for bad in (dict(at=start), dict(at=places[0], length=2, end=end), dict(at=places[0], length=0)):
+            with self.assertRaises(ValueError):
+                music.find_like(**bad)
+
+    def test_find_like_searches_the_drum_cache_and_explains_stems_without_one(self):
+        music, places = with_repeated_sound()
+        drums = music.find_like(places[0], length=2, stem="drums")
+        self.assertFalse(np.allclose(drums.score, music.find_like(places[0], length=2).score))
+        for stem in ("bass", "other", "vocals"):
+            self.assertIsInstance(music.find_like(places[0], length=2, stem=stem), Unavailable)
+        self.assertIsInstance(synthetic().find_like("3", stem="mix"), Unavailable)
+        with self.assertRaises(ValueError):
+            music.find_like(places[0], length=2, stem="guitar")
 
     def test_missing_bindings_explain_themselves(self):
         features = LumaRecord({"beats": Unavailable("beat detection has not run")}, "luma.features")

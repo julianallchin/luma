@@ -125,6 +125,31 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
                     "$kind": "unavailable",
                     "reason": "stems have not been separated for this track",
                 },
+                # The other demucs stems, as the Rust provider binds them. They
+                # reuse the mix's bytes; only the binding shape matters here.
+                **{
+                    stem: {
+                        "$kind": "tensor",
+                        "artifact_id": "mix",
+                        "dtype": "f32",
+                        "shape": [PCM_FRAMES, PCM_CHANNELS],
+                        "byte_offset": 18,
+                        "unit": None,
+                        "axes": [
+                            {
+                                "kind": "linear",
+                                "name": "time",
+                                "start": 0.0,
+                                "step": 1.0 / PCM_SAMPLE_RATE,
+                                "count": PCM_FRAMES,
+                                "unit": "s",
+                            },
+                            {"kind": "labels", "name": "channel", "labels": ["l", "r"]},
+                        ],
+                        "provenance": {"source": "audio_cache", "note": f"demucs {stem} stem"},
+                    }
+                    for stem in ("drums", "bass", "other")
+                },
             },
             "features": {
                 "beats": {
