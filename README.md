@@ -5,6 +5,10 @@
 <h1 align="center">Luma</h1>
 
 <p align="center">
+  <img src="www/public/screenshots/hero.webp" alt="Luma in Arrange mode: moving heads and lasers in haze above a song's score, with the agent chat on the left" />
+</p>
+
+<p align="center">
   <a href="https://github.com/julianallchin/luma/actions/workflows/ci.yml">
     <img src="https://github.com/julianallchin/luma/actions/workflows/ci.yml/badge.svg" alt="CI" />
   </a>
