@@ -20,6 +20,21 @@ pub enum SyncError {
     SessionRevoked,
 }
 
+impl SyncError {
+    /// Storage answered that the object is not there. It says so with a 400
+    /// whose body carries `"statusCode": "404"`, and it says the same for an
+    /// object its read policy hides.
+    #[must_use]
+    pub fn is_missing_object(&self) -> bool {
+        let SyncError::Api { status, message } = self else {
+            return false;
+        };
+        *status == 404
+            || serde_json::from_str::<serde_json::Value>(message)
+                .is_ok_and(|body| body["statusCode"] == "404")
+    }
+}
+
 impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

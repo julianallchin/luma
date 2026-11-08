@@ -25,6 +25,7 @@ pub(crate) struct TrackAudio {
 
 #[derive(sqlx::FromRow, PartialEq)]
 struct AudioSource {
+    uid: Option<String>,
     file_path: String,
     track_hash: String,
     storage_path: Option<String>,
@@ -62,11 +63,12 @@ impl TrackAudio {
             .await
             .map_err(SyncError::Local)?;
         let principal = access.principal().map(str::to_owned);
-        let source: AudioSource =
-            sqlx::query_as("SELECT file_path, track_hash, storage_path FROM tracks WHERE id = ?")
-                .bind(track_id)
-                .fetch_one(access.connection())
-                .await?;
+        let source: AudioSource = sqlx::query_as(
+            "SELECT uid, file_path, track_hash, storage_path FROM tracks WHERE id = ?",
+        )
+        .bind(track_id)
+        .fetch_one(access.connection())
+        .await?;
         access.finish().await.map_err(SyncError::Local)?;
         if !source.file_path.ends_with(".stub") && Path::new(&source.file_path).is_file() {
             return Ok(source.file_path.into());
@@ -104,7 +106,16 @@ impl TrackAudio {
         let bytes = self
             .remote
             .download_file(bucket, path, &auth.access_token)
-            .await?;
+            .await
+            .map_err(|error| {
+                if !error.is_missing_object() {
+                    error
+                } else if source.uid.as_deref() == Some(auth.principal.user_id.as_str()) {
+                    SyncError::Media("This song's audio is missing from cloud storage. Import it again on a device that has the file.".into())
+                } else {
+                    SyncError::Media("This song was added by another member of this venue, and cloud storage isn't sharing its audio with you.".into())
+                }
+            })?;
         if bytes.is_empty() {
             return Err(SyncError::Media("Downloaded audio is empty".into()));
         }
@@ -121,11 +132,12 @@ impl TrackAudio {
         if access.principal() != principal.as_deref() {
             return Err(SyncError::AuthRequired);
         }
-        let current: AudioSource =
-            sqlx::query_as("SELECT file_path, track_hash, storage_path FROM tracks WHERE id = ?")
-                .bind(track_id)
-                .fetch_one(access.connection())
-                .await?;
+        let current: AudioSource = sqlx::query_as(
+            "SELECT uid, file_path, track_hash, storage_path FROM tracks WHERE id = ?",
+        )
+        .bind(track_id)
+        .fetch_one(access.connection())
+        .await?;
         if current != source {
             return Err(SyncError::Media(
                 "Track changed while downloading audio; reopen it to retry".into(),
@@ -171,6 +183,10 @@ mod tests {
     }
 
     async fn server(status: u16) -> Server {
+        replying(status, "audio").await
+    }
+
+    async fn replying(status: u16, body: &'static str) -> Server {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(AtomicUsize::new(0));
@@ -193,7 +209,8 @@ mod tests {
                     .contains("authorization: bearer "));
                 count.fetch_add(1, Ordering::SeqCst);
                 let reply = format!(
-                    "HTTP/1.1 {status} Test\r\nContent-Length: 5\r\nConnection: close\r\n\r\naudio"
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 );
                 socket.write_all(reply.as_bytes()).await.unwrap();
             }
@@ -206,14 +223,31 @@ mod tests {
     }
 
     async fn fixture(directory: &Path, server: &Server) -> TrackAudio {
+        fixture_as(directory, server, "alice").await
+    }
+
+    /// Alice's track in Alice's venue, which `user` is a member of when it is
+    /// not Alice.
+    async fn fixture_as(directory: &Path, server: &Server, user: &str) -> TrackAudio {
         let pool = database::init_app_db_at(directory).await.unwrap().0;
         let state_pool = state::init_state_db_at(directory).await.unwrap().0;
         sqlx::query("INSERT INTO tracks (id, uid, track_hash, title, file_path, storage_path) VALUES ('track', 'alice', 'hash', 'Remote track', 'hash.stub', 'track-audio/alice/hash/audio.ogg')")
             .execute(&pool).await.unwrap();
-        auth::install_test_session(&state_pool, "alice").await;
-        auth::arm_write_admission(&pool, Some("alice"))
+        if user != "alice" {
+            sqlx::query(
+                "INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Room');
+                 INSERT INTO scores (id, uid, track_id, venue_id, name)
+                     VALUES ('score', 'alice', 'track', 'venue', 'Score');
+                 INSERT INTO venue_members (id, uid, venue_id, role)
+                     VALUES ('member', ?1, 'venue', 'member');",
+            )
+            .bind(user)
+            .execute(&pool)
             .await
             .unwrap();
+        }
+        auth::install_test_session(&state_pool, user).await;
+        auth::arm_write_admission(&pool, Some(user)).await.unwrap();
         let mut audio = TrackAudio::new(
             pool,
             state_pool,
@@ -261,16 +295,44 @@ mod tests {
         let failed = server(404).await;
         let directory = tempfile::tempdir().unwrap();
         let mut audio = fixture(directory.path(), &failed).await;
-        assert!(matches!(
-            audio.ensure("track").await,
-            Err(SyncError::Api { status: 404, .. })
-        ));
+        assert!(audio
+            .ensure("track")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("missing from cloud storage"));
         assert_eq!(path(&audio).await, "hash.stub");
         assert!(!audio.storage.tracks_dir().join("hash.ogg").exists());
         let success = server(200).await;
         audio.remote = Storage::new(success.url.clone(), "test-key".into());
         audio.ensure("track").await.unwrap();
         assert_eq!(std::fs::read(path(&audio).await).unwrap(), b"audio");
+    }
+
+    /// Storage's answer for an object that is not there, or that its read
+    /// policy hides: a 400 whose body says 404.
+    const NO_SUCH_KEY: &str = r#"{"statusCode":"404","error":"not_found","message":"Object not found","code":"NoSuchKey"}"#;
+
+    #[tokio::test]
+    async fn a_shared_track_storage_will_not_serve_says_so_in_words() {
+        let server = replying(400, NO_SUCH_KEY).await;
+        let directory = tempfile::tempdir().unwrap();
+        let audio = fixture_as(directory.path(), &server, "bob").await;
+        let message = audio.ensure("track").await.unwrap_err().to_string();
+        assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+        assert!(message.contains("another member"), "{message}");
+        assert!(!message.contains("NoSuchKey"), "{message}");
+        assert_eq!(path(&audio).await, "hash.stub");
+    }
+
+    #[tokio::test]
+    async fn an_own_track_missing_from_storage_says_so_in_words() {
+        let server = replying(400, NO_SUCH_KEY).await;
+        let directory = tempfile::tempdir().unwrap();
+        let audio = fixture(directory.path(), &server).await;
+        let message = audio.ensure("track").await.unwrap_err().to_string();
+        assert!(message.contains("missing from cloud storage"), "{message}");
+        assert!(!message.contains("NoSuchKey"), "{message}");
     }
 
     #[tokio::test]
