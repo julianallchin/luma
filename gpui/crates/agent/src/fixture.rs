@@ -193,6 +193,15 @@ pub struct Fixture {
     /// a path relative to the repository root: what a string cannot carry,
     /// such as album art.
     assets: HashMap<String, String>,
+    /// A copy of a real library to open in place of a seeded one: a directory
+    /// holding `luma.db` (and its `-wal` and `-shm`), or `$NAME` for one named
+    /// by that environment variable. Only the database is copied, into this
+    /// fixture's own directory; its rows go on reading media where they name
+    /// it. The copy is signed in as the account its rows belong to, with a
+    /// session made here (never the library's own), loses every stored API
+    /// key, and has DMX and audio output off. Every other row option is
+    /// ignored except `sql`, which runs on the copy.
+    library: Option<String>,
     /// The agent's model, replayed: one array of events per step. See
     /// [`agent`] for the event shapes. Unset, the app's own model runs.
     #[serde(deserialize_with = "agent::steps")]
@@ -234,6 +243,7 @@ impl Default for Fixture {
             sql: Vec::new(),
             files: HashMap::new(),
             assets: HashMap::new(),
+            library: None,
             model: None,
             model_cadence: None,
             tools: None,
@@ -396,6 +406,10 @@ impl Fixture {
             .enable_all()
             .build()
             .expect("failed to start the fixture runtime");
+        if let Some(library) = &self.library {
+            runtime.block_on(self.copy_library(library, &dir));
+            return dir;
+        }
         // The `-shm` index stays behind: SQLite rebuilds it on open.
         let migrated = migrated(&runtime);
         for entry in std::fs::read_dir(migrated).expect("the migrated library is gone") {
@@ -408,6 +422,52 @@ impl Fixture {
         }
         runtime.block_on(self.write(&dir));
         dir
+    }
+
+    /// See [`Fixture::library`].
+    async fn copy_library(&self, library: &str, config_dir: &Path) {
+        let source = match library.strip_prefix('$') {
+            Some(name) => PathBuf::from(
+                std::env::var_os(name)
+                    .unwrap_or_else(|| panic!("fixture library: ${name} is not set")),
+            ),
+            None => PathBuf::from(library),
+        };
+        for name in ["luma.db", "luma.db-wal", "luma.db-shm"] {
+            let from = source.join(name);
+            if from.is_file() {
+                std::fs::copy(&from, config_dir.join(name))
+                    .unwrap_or_else(|error| panic!("failed to copy {}: {error}", from.display()));
+            }
+        }
+        let db = luma_lib::database::local::database::init_app_db_at(config_dir)
+            .await
+            .expect("failed to open the library copy");
+        let pool = &db.0;
+        let owner: Option<String> =
+            sqlx::query_scalar("SELECT uid FROM venues WHERE uid IS NOT NULL LIMIT 1")
+                .fetch_optional(pool)
+                .await
+                .expect("failed to read the library's owner");
+        let owner = owner.expect("the library copy has no venue");
+        for statement in [
+            "DELETE FROM settings WHERE key LIKE '%api_key%'",
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('dmx_output_enabled', 'false')",
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('audio_output_enabled', 'false')",
+        ] {
+            sqlx::query(statement)
+                .execute(pool)
+                .await
+                .unwrap_or_else(|error| panic!("failed to prepare the library copy: {error}"));
+        }
+        for statement in &self.sql {
+            sqlx::query(sqlx::AssertSqlSafe(statement.replace("$PRINCIPAL", &owner)))
+                .execute(pool)
+                .await
+                .unwrap_or_else(|error| panic!("fixture sql failed: {error}\n{statement}"));
+        }
+        db.0.close().await;
+        session::signed_in_as(config_dir, &owner).await;
     }
 
     async fn write(&self, config_dir: &Path) {

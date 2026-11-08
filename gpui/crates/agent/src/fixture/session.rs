@@ -48,14 +48,14 @@ fn sha256(value: &str) -> String {
 
 /// A JWT the host can parse. The signature is never checked — trust comes from
 /// the proof row beside it — so only the payload has to be real.
-fn access_token(expires_at: i64) -> String {
+fn access_token(principal: &str, expires_at: i64) -> String {
     let encode = |value: &Value| {
         base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(value).expect("claims serialize"))
     };
     let header = encode(&json!({ "alg": "HS256", "typ": "JWT" }));
     let payload = encode(&json!({
-        "sub": PRINCIPAL,
+        "sub": principal,
         "iss": ISSUER,
         "aud": ["authenticated"],
         "exp": expires_at,
@@ -83,8 +83,19 @@ pub async fn signed_in(dir: &Path) {
     seed(dir, Stored::Proven { expires_in: 3600 }).await;
 }
 
+/// [`signed_in`], as `principal`: a copy of a real library is signed in as
+/// the account that owns its rows, with a session made here. Its own session
+/// is never copied, and the harness keeps the library off the network.
+pub async fn signed_in_as(dir: &Path, principal: &str) {
+    seed_as(dir, Stored::Proven { expires_in: 3600 }, principal).await;
+}
+
 /// Write `stored` into the state database at `dir`, opening and closing it.
 pub async fn seed(dir: &Path, stored: Stored) {
+    seed_as(dir, stored, PRINCIPAL).await;
+}
+
+async fn seed_as(dir: &Path, stored: Stored, principal: &str) {
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await
         .expect("failed to open the fixture state database");
@@ -96,11 +107,11 @@ pub async fn seed(dir: &Path, stored: Stored) {
         Stored::Unproven => (now() + 3600, "unproven"),
     };
     let session = serde_json::to_string(&json!({
-        "access_token": access_token(expires_at),
+        "access_token": access_token(principal, expires_at),
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_at": expires_at,
-        "user": { "id": PRINCIPAL },
+        "user": { "id": principal },
     }))
     .expect("session serializes");
 
@@ -119,10 +130,10 @@ pub async fn seed(dir: &Path, stored: Stored) {
                 verified_at, proof_generation
              ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(PRINCIPAL)
+        .bind(principal)
         .bind(sha256(&session))
         .bind(sha256(envelope["access_token"].as_str().expect("a token")))
-        .bind(PRINCIPAL)
+        .bind(principal)
         .bind(ISSUER)
         .bind(r#"["authenticated"]"#)
         .bind(expires_at)
