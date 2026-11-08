@@ -80,6 +80,7 @@ for (const [name, members] of Object.entries(groups)) {
 // -- the library ---------------------------------------------------------------
 
 const HAZE = { enabled: true, density: 0.38, appearance: { cloudiness: 0.55, cloudSize: 5, turbulence: 0.25, windSpeed: 0.2, windDirection: 30 } };
+sql.push("INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_frame_rate', 'false')");
 sql.push(`UPDATE venues SET name = '${VENUE}', haze = '${JSON.stringify(HAZE)}' WHERE id = 'venue-main'`);
 sql.push(`UPDATE tracks SET title = '${SONG}', artist = 'Halden', album = 'Night Bloom',
     file_path = '$LIBRARY/night-bloom.mp3', album_art_path = '$LIBRARY/art/night-bloom.jpg',

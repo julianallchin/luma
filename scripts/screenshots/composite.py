@@ -55,15 +55,16 @@ def cover(img, size, centre_x):
     return scaled.crop((left, top, left + w, top + h))
 
 
-def backdrop(stage, size, centre_x):
+def backdrop(stage, size, centre_x, render):
     w, h = size
     art = cover(stage, size, centre_x).convert("RGB")
     art = np.asarray(art.filter(ImageFilter.GaussianBlur(1.2))).astype(np.float32) / 255
     # Lift the stage a little, and soften its saturated colour toward its own
     # grey: the render is dark and loud, and the backdrop is art.
-    grey = art @ np.array([0.3, 0.59, 0.11], np.float32)
-    art = art * 0.8 + grey[..., None] * 0.2
-    art = np.clip(art * 1.2 + 0.03, 0, 1) ** 0.92
+    if render:
+        grey = art @ np.array([0.3, 0.59, 0.11], np.float32)
+        art = art * 0.8 + grey[..., None] * 0.2
+        art = np.clip(art * 1.2 + 0.03, 0, 1) ** 0.92
 
     # The fog: the stage's own light, spread wide and washed toward white.
     spread = Image.fromarray((art * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(w / 14))
@@ -138,8 +139,8 @@ def shadow(canvas_size, box, mask, blur, alpha, offset):
     return layer.filter(ImageFilter.GaussianBlur(blur))
 
 
-def compose(stage, shot, size, share, centre_x):
-    canvas = backdrop(stage, size, centre_x).convert("RGBA")
+def compose(stage, shot, size, share, centre_x, render):
+    canvas = backdrop(stage, size, centre_x, render).convert("RGBA")
     win = window(shot, round(size[0] * share))
     x = (size[0] - win.width) // 2
     y = round((size[1] - win.height) * 0.62)
@@ -172,7 +173,7 @@ def main():
         w, h = stage.size
         stage = stage.crop((round(w * 0.04), round(h * 0.07), round(w * 0.94), round(h * 0.9)))
     for name, (capture, size, share, centre_x) in IMAGES.items():
-        image = compose(stage, Image.open(shots / f"{capture}.png"), size, share, centre_x)
+        image = compose(stage, Image.open(shots / f"{capture}.png"), size, share, centre_x, backdrop_file is None)
         path = out / f"{name}.webp"
         image.save(path, quality=86, method=6)
         print(f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}: {path.stat().st_size // 1024} KB")

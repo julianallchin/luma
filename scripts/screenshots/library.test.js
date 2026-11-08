@@ -11,6 +11,8 @@
 const VENUE = "Gasworks Park";
 const SONG = "RXGER CLUB!";
 const SONG_AT = 0.3;
+// The conversation the Arrange shot shows, by how it opens: one about the show.
+const CHAT = "for the drop can we prototype";
 const LIVE_VENUE = "laser test";
 const LIVE_SONG = "..FEISTY";
 const LIVE_PADS = ["Beam fan", "Bar chase"];
@@ -19,7 +21,10 @@ fixture({
   mode: "pixel",
   window: [1440, 900],
   library: "$LUMA_SHOWCASE_LIBRARY",
-  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_low_quality', 'false')"],
+  sql: [
+    "INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_low_quality', 'false')",
+    "INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_frame_rate', 'false')",
+  ],
 });
 
 const settle = (n = 30) => app.frames(n, { waitMs: 50 });
@@ -51,6 +56,11 @@ function openSong(venue, song) {
 
 test("arrange", { timeoutMs: 600000 }, () => {
   openSong(VENUE, SONG);
+  nav.step("the chat history", "button", "Chat history");
+  const chat = until("the conversation", (s) =>
+    s.findAll({ role: "card" }).find((n) => n.label.startsWith(CHAT) && n.bounds.height > 0));
+  app.click(chat.findAll({ role: "card" }).find((n) => n.label.startsWith(CHAT) && n.bounds.height > 0));
+  until("the conversation open", (s) => s.find({ role: "card", label: "Chat history dialog" }) === undefined);
   seek(SONG_AT);
   settle(60);
   keep("arrange");

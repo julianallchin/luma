@@ -17,6 +17,7 @@ scripts/screenshots/capture --library DIR SHOTS_DIR # raw captures kept there
 | `showcase.test.js` | Captures from a staged library made of made-up names: the fixture definitions, cover art and audio in `harness/showcase/`. Anyone can run it. |
 | `library.test.js` | Captures from a copy of a real library, named by `--library`. The venues, songs and scores it opens are constants at its top. |
 | `composite.py` | Composes each capture over the backdrop: `backdrop.jpg` here when it exists, else the stage capture. |
+| `backdrop.jpg` | The backdrop photo; see below. |
 | `make_assets.py` | Writes the showcase library's art and audio. Run it only to change them. |
 
 ## A real library
@@ -32,3 +33,12 @@ makes for the account that owns the rows. It never reads the library's own
 reading their audio and art where they name them.
 
 Nothing from a real library is committed: only the composed images.
+
+## The backdrop
+
+`backdrop.jpg` is "laser show" by Artem Bryzgalov,
+https://unsplash.com/photos/r4qdM8iD5WY, under the
+[Unsplash License](https://unsplash.com/license): free for commercial use, no
+attribution required (given here anyway). It is cropped to the beams and
+resized to 2400 pixels wide; the same credit is in the file's JPEG comment.
+A replacement must carry a licence as free, and no identifiable faces.
