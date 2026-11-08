@@ -5,6 +5,9 @@
 // which renumbers the ladder, and a drag that re-read it would walk the rest
 // of the selection a further lane on every mouse move. That is only
 // observable when two clips share a layer, which is why this fixture has one.
+// A layer is one track: clips in it never overlap, and a clip dropped over
+// another in its layer cuts away what it covers. So the clips that share a
+// layer, and the one the drag drops Alpha into, sit beside each other.
 
 // The editor labels a clip by its form, so each clip here plays a different
 // form to be told apart on screen.
@@ -17,12 +20,13 @@ const FORMS = {
 const clip = (name, start, end, lane) =>
   ({ pattern: `pattern-${name}`, name, start, end, lane, preset: FORMS[name].preset });
 
-// Three layers over four lanes, with Charlie and Cap sharing the top one.
-// Alpha is on the floor and Charlie on the roof: dragging the pair up one lane
-// asks both halves of `rowToZ` at once.
+// Three layers, with Charlie and Cap sharing the top one. Alpha is on the
+// floor and Charlie on the roof: dragging the pair up one lane asks both
+// halves of `rowToZ` at once. Bravo, in the middle layer, comes after Alpha,
+// so Alpha lands beside it and cuts nothing.
 fixture({
   seconds: 20,
-  clips: [clip("alpha", 2, 6, 0), clip("bravo", 2, 6, 1), clip("charlie", 2, 6, 2), clip("cap", 10, 14, 2)],
+  clips: [clip("alpha", 2, 6, 0), clip("bravo", 7, 9, 1), clip("charlie", 2, 6, 2), clip("cap", 10, 14, 2)],
   // Wide enough that Program's timeline shows every clip, and that a lane's
   // middle lies past them.
   window: [1620, 800],
@@ -34,7 +38,11 @@ const card = (name) => peek("card", FORMS[name].label);
 // the topmost occupied one. Lanes, not pixels.
 function stack() {
   const tops = {};
-  for (const name of Object.keys(FORMS)) tops[name] = card(name)?.bounds.y;
+  for (const name of Object.keys(FORMS)) {
+    const drawn = card(name);
+    if (!drawn) throw new Error(`${name} is not on the timeline`);
+    tops[name] = drawn.bounds.y;
+  }
   const order = [...new Set(Object.values(tops))].sort((a, b) => a - b);
   const out = {};
   for (const [name, y] of Object.entries(tops)) out[name] = order.indexOf(y);
@@ -76,13 +84,12 @@ test("a group dragged up takes one lane each, however many moves it took", () =>
   // One lane's drag is one lane each: Alpha joins Bravo's layer, and Charlie
   // mints a layer above everything, leaving Cap behind. The failure this
   // pins moved Alpha two lanes, because the new layer renumbered the ladder
-  // under the next mouse move.
+  // under the next mouse move: into Cap's lane.
   for (const [when, reading] of Object.entries({ lifted, stored })) {
-    expect([reading.charlie, reading.cap]).toEqual([0, 1]);
-    assert([reading.alpha, reading.bravo].sort().join() === "2,3",
-      `${when}: same-priority overlaps need separate editable rows: ${JSON.stringify(reading)}`);
+    const lanes = [reading.charlie, reading.cap, reading.alpha, reading.bravo];
+    assert(lanes.join() === "0,1,2,2", `${when}: ${JSON.stringify(reading)}`);
   }
-  // The extra visible row does not change the layer the drag saved.
+  // Every clip is still there, in the layer the drag saved.
   const layers = {};
   for (const row of library.query("SELECT substr(id, instr(id, ':pattern-') + 9) AS name, z_index FROM clips")) {
     layers[row.name] = row.z_index;
