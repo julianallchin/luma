@@ -70,7 +70,7 @@ jobs:
     needs: prepare
     # Apple silicon only: PyTorch publishes no macOS x86_64 wheels past 2.2,
     # so the managed Python environment could not be built on an Intel Mac.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       LUMA_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
