@@ -46,6 +46,8 @@ pub(super) struct RenderControls {
     /// Editor chrome, not the room. Local device settings (`stage_grid` /
     /// `stage_gizmos`), so they follow the operator across venues.
     pub(super) grid_enabled: bool,
+    /// The `stage_frame_rate` setting: whether the corner frame rate shows.
+    pub(super) frame_rate_shown: bool,
     pub(super) gizmos_enabled: bool,
     /// What fraction of the element's pixels the stage renders, as a whole
     /// percent — the `render_scale` device setting. It rides here rather than in
@@ -171,6 +173,7 @@ impl RenderControls {
             // Written by `apply_settings` below, from the settings table's
             // defaults until the stored rows arrive.
             grid_enabled: false,
+            frame_rate_shown: true,
             gizmos_enabled: false,
             render_scale_percent: 0,
             look: scene_desc::Look::STAGE,
@@ -185,6 +188,7 @@ impl RenderControls {
     /// Take this machine's view preferences from the settings table.
     pub(super) fn apply_settings(&mut self, settings: &AppSettings) {
         self.grid_enabled = settings.stage_grid;
+        self.frame_rate_shown = settings.stage_frame_rate;
         self.gizmos_enabled = settings.stage_gizmos;
         self.render_scale_percent = settings.render_scale;
         self.look = scene_desc::Look::stored(&settings.stage_look);

@@ -54,6 +54,16 @@ fn fps_reading(stage: &Stage) -> FpsReading {
     }
 }
 
+impl Visualizer {
+    /// Show or hide the corner frame rate (the `stage_frame_rate` setting).
+    /// Whether that changed anything.
+    pub(crate) fn show_frame_rate(&mut self, shown: bool) -> bool {
+        let changed = self.render_controls.frame_rate_shown != shown;
+        self.render_controls.frame_rate_shown = shown;
+        changed
+    }
+}
+
 /// The renderer worker's retired-frame count, sampled at each submission over
 /// the readout's trailing window.
 ///
@@ -117,7 +127,7 @@ fn stat_value(value: impl Into<gpui::SharedString>) -> Div {
 /// It is part of the stage's own element, so it is rebuilt with every stage
 /// frame while the cached panes around the stage are not.
 pub(super) fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Option<AnyElement> {
-    if !matches!(state.status, Status::Live) {
+    if !matches!(state.status, Status::Live) || !state.render_controls.frame_rate_shown {
         return None;
     }
     let open = state.fps_panel.is_open();

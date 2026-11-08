@@ -500,6 +500,15 @@ impl Luma {
             self.hdr_output_allowed = values.hdr_output;
             cx.notify();
         }
+        // The stage open now takes it at once; one opened later reads it
+        // with the rest of its settings.
+        if self
+            .visualizer
+            .as_mut()
+            .is_some_and(|stage| stage.show_frame_rate(values.stage_frame_rate))
+        {
+            self.notify_stage(cx);
+        }
         if self.dmx_output != values.dmx_output_enabled {
             self.dmx_output = values.dmx_output_enabled;
             cx.notify();
@@ -898,13 +907,22 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
         ),
         section(
             "Display",
-            vec![checkbox(
-                app,
-                key::HDR_OUTPUT,
-                "HDR output",
-                values.hdr_output,
-                Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
-            )],
+            vec![
+                checkbox(
+                    app,
+                    key::HDR_OUTPUT,
+                    "HDR output",
+                    values.hdr_output,
+                    Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
+                ),
+                checkbox(
+                    app,
+                    key::STAGE_FRAME_RATE,
+                    "Show frame rate on the stage",
+                    values.stage_frame_rate,
+                    Some("The frames per second in the stage's corner. Click it for the frame stats."),
+                ),
+            ],
             None,
         ),
     ]

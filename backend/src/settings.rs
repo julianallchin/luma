@@ -56,6 +56,7 @@ pub mod key {
     pub const STAGE_GIZMOS: &str = "stage_gizmos";
     pub const RENDER_SCALE: &str = "render_scale";
     pub const HDR_OUTPUT: &str = "hdr_output";
+    pub const STAGE_FRAME_RATE: &str = "stage_frame_rate";
     pub const STAGE_LOOK: &str = "stage_look";
     pub const STAGE_LOW_QUALITY: &str = "stage_low_quality";
     pub const AGENT_ENGINE: &str = "agent_engine";
@@ -112,6 +113,9 @@ pub struct AppSettings {
     /// Whether the window may present HDR where the display supports it.
     /// Device-global: it is a fact about this machine's display.
     pub hdr_output: bool,
+    /// Whether the stage shows its frame rate in a corner, and the frame stats
+    /// it opens. Device-global: it is about this machine's renderer.
+    pub stage_frame_rate: bool,
     /// The visualizer's camera — exposure, tone curve and glare — as the
     /// renderer's `Look` in JSON. Empty means the renderer's default. Kept
     /// opaque here: the backend has no renderer types, and a value the
@@ -199,6 +203,7 @@ impl Default for AppSettings {
             stage_gizmos: true,
             render_scale: *RENDER_SCALE_RANGE.end(),
             hdr_output: true,
+            stage_frame_rate: true,
             stage_look: String::new(),
             stage_low_quality: false,
             agent_engine: crate::agent::engine::Engine::default(),
@@ -248,6 +253,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
         stage_gizmos: flag(key::STAGE_GIZMOS, defaults.stage_gizmos),
         render_scale: percent(key::RENDER_SCALE, RENDER_SCALE_RANGE, defaults.render_scale),
         hdr_output: flag(key::HDR_OUTPUT, defaults.hdr_output),
+        stage_frame_rate: flag(key::STAGE_FRAME_RATE, defaults.stage_frame_rate),
         stage_look: map
             .get(key::STAGE_LOOK)
             .cloned()
