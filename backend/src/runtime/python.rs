@@ -292,6 +292,12 @@ impl BackgroundSetup {
         Self { cache_dir, state }
     }
 
+    /// Whether setup is still running.
+    #[must_use]
+    pub fn running(&self) -> bool {
+        *self.state.borrow() == PythonSetup::Running
+    }
+
     /// Wait for setup to end: `Ok` once it is ready, the failed step if it
     /// failed. A setup thread that died without reporting counts as failed.
     pub async fn settled(&self) -> Result<(), String> {

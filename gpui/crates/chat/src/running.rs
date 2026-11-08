@@ -18,7 +18,7 @@
 //! task, counts against no limit and cannot be stopped or steered on its own.
 //! It ends with the child's turn, or with its parent's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use gpui::{Context, EventEmitter, Task};
@@ -48,6 +48,41 @@ pub(crate) struct Live {
     /// The thread's transcript at send time with every event since folded in
     /// — what a re-attaching panel seats instead of a database read.
     pub(crate) transcript: Transcript,
+    /// The turn's `python` calls that are waiting for the host's Python setup,
+    /// by call id. Live state, which no transcript carries
+    /// ([`TurnEvent::PythonSetupWait`]); kept here so a panel that attaches
+    /// mid-wait still says why the call is slow.
+    pub(crate) awaiting_setup: HashSet<String>,
+}
+
+impl Live {
+    fn new(since: Instant, transcript: Transcript) -> Self {
+        Self {
+            since,
+            transcript,
+            awaiting_setup: HashSet::new(),
+        }
+    }
+
+    fn fold(&mut self, event: &TurnEvent) {
+        luma_lib::agent::apply(&mut self.transcript, event);
+        match event {
+            TurnEvent::PythonSetupWait {
+                call_id,
+                waiting: true,
+            } => {
+                self.awaiting_setup.insert(call_id.clone());
+            }
+            TurnEvent::PythonSetupWait {
+                call_id,
+                waiting: false,
+            }
+            | TurnEvent::ToolCallEnded { call_id, .. } => {
+                self.awaiting_setup.remove(call_id);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// One running turn. The task, its live state and its steering handle begin
@@ -116,7 +151,7 @@ impl RunningTurns {
             Running {
                 _task: task,
                 steer,
-                live: Live { since, transcript },
+                live: Live::new(since, transcript),
             },
         );
         cx.notify();
@@ -194,7 +229,7 @@ impl RunningTurns {
                 None => return,
             },
         };
-        luma_lib::agent::apply(&mut live.transcript, &event);
+        live.fold(&event);
         cx.emit(RunningEvent::Event {
             thread: thread.to_owned(),
             event,
@@ -219,10 +254,7 @@ impl RunningTurns {
                 child.clone(),
                 Child {
                     parent: parent.to_owned(),
-                    live: Live {
-                        since: Instant::now(),
-                        transcript: Transcript::default(),
-                    },
+                    live: Live::new(Instant::now(), Transcript::default()),
                 },
             );
             cx.notify();
@@ -282,6 +314,47 @@ mod tests {
             .detach();
         });
         seen
+    }
+
+    /// A panel that attaches mid-wait seats this, so the wait has to be the
+    /// turn's, not the panel's.
+    #[gpui::test]
+    fn a_call_waiting_for_python_setup_is_live_state_of_its_turn(cx: &mut TestAppContext) {
+        let running = cx.new(|_| RunningTurns::default());
+        let events = start(&running, "a", cx).unwrap();
+        let waiting = |running: &Entity<RunningTurns>, cx: &mut TestAppContext| {
+            running.read_with(cx, |running, _| {
+                running.live("a").unwrap().awaiting_setup.clone()
+            })
+        };
+        for call in ["c1", "c2"] {
+            events
+                .send(TurnEvent::PythonSetupWait {
+                    call_id: call.into(),
+                    waiting: true,
+                })
+                .unwrap();
+        }
+        cx.run_until_parked();
+        assert_eq!(waiting(&running, cx).len(), 2);
+
+        // One stops waiting; the other ends while it still was.
+        events
+            .send(TurnEvent::PythonSetupWait {
+                call_id: "c1".into(),
+                waiting: false,
+            })
+            .unwrap();
+        events
+            .send(TurnEvent::ToolCallEnded {
+                call_id: "c2".into(),
+                output: luma_lib::agent::ToolResult::Failed {
+                    message: "stopped".into(),
+                },
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(waiting(&running, cx).is_empty());
     }
 
     #[gpui::test]

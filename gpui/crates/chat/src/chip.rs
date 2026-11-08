@@ -100,8 +100,8 @@ impl Label {
 
 /// The chip's label as the automation tree reports it — the painted text, with
 /// the red dot spelled out, because a driver cannot see a colour.
-pub fn label(tool: &ToolPart) -> SharedString {
-    let parts = label_parts(tool);
+pub fn label(tool: &ToolPart, awaits_setup: bool) -> SharedString {
+    let parts = label_parts(tool, awaits_setup);
     if parts.failed {
         format!("{} · Failed", parts.text()).into()
     } else {
@@ -111,7 +111,10 @@ pub fn label(tool: &ToolPart) -> SharedString {
 
 /// The phrasing lives in this one function rather than being assembled at the
 /// element, so the painted chip and the automation tree cannot drift.
-pub fn label_parts(tool: &ToolPart) -> Label {
+///
+/// `awaits_setup` is a `python` call waiting for the host's Python setup
+/// ([`crate::transcript::RowCtx::awaits_setup`]).
+pub fn label_parts(tool: &ToolPart, awaits_setup: bool) -> Label {
     let running = matches!(
         tool.state,
         ToolState::InputStreaming | ToolState::InputAvailable
@@ -143,6 +146,16 @@ pub fn label_parts(tool: &ToolPart) -> Label {
             tense.to_string()
         });
         let detail = detail(tool).unwrap_or_else(|| "analysis".into());
+        // On a first launch setup takes minutes, and the model's verb would
+        // claim work that has not begun.
+        if running && awaits_setup {
+            return Label {
+                verb: "Waiting for Python setup".into(),
+                detail: Some(format!(" · {detail}")),
+                failed,
+                running,
+            };
+        }
         return Label {
             verb,
             detail: Some(format!(" {detail}")),
@@ -351,7 +364,7 @@ fn child_thread(tool: &ToolPart) -> Option<SharedString> {
 fn subagent_pill(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
     let theme = ctx.theme;
     let state = delegation(tool);
-    let text = label(tool);
+    let text = label(tool, ctx.awaits_setup(tool));
     let description: SharedString = detail(tool).unwrap_or_else(|| "Subagent".into()).into();
     let tint = match state {
         Delegation::Failed => theme.danger,
@@ -423,7 +436,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
         return subagent_pill(tool, ctx);
     }
     let theme = ctx.theme;
-    let text = label(tool);
+    let text = label(tool, ctx.awaits_setup(tool));
     // Read once for both the detail card and its animation height.
     let cell = ctx.cells.borrow_mut().read(tool);
     let open = ctx.is_expanded(&tool.call_id);
@@ -439,7 +452,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
     let call_id = SharedString::from(tool.call_id.clone());
     let id = SharedString::from(format!("chat-chip-{call_id}"));
     let row_ix = ctx.ix;
-    let parts = label_parts(tool);
+    let parts = label_parts(tool, ctx.awaits_setup(tool));
     let failed = parts.failed
         || cell.as_ref().is_some_and(|cell| {
             matches!(
@@ -761,9 +774,9 @@ mod tests {
     #[test]
     fn the_verb_carries_the_tense() {
         let running = part("python", ToolState::InputAvailable, None);
-        assert_eq!(label(&running), "Running analysis");
+        assert_eq!(label(&running, false), "Running analysis");
         let done = part("python", ToolState::OutputAvailable, None);
-        assert_eq!(label(&done), "Ran analysis");
+        assert_eq!(label(&done, false), "Ran analysis");
     }
 
     /// A tool the vocabulary does not know narrates as prose, not as its wire
@@ -771,7 +784,7 @@ mod tests {
     #[test]
     fn an_unknown_tool_narrates_by_the_default_verb() {
         let unknown = part("wobble", ToolState::OutputAvailable, None);
-        assert_eq!(label(&unknown), "Ran tool");
+        assert_eq!(label(&unknown, false), "Ran tool");
     }
 
     /// The card shows the argument, not the JSON it travelled in.
@@ -847,6 +860,30 @@ mod tests {
 
     /// The chip is titled by the model's own verb, in the tense of the call's
     /// state, followed by its purpose.
+    /// A cell waiting for the host's Python setup says so instead of claiming
+    /// the model's verb, keeps its purpose, and stops saying so once it
+    /// settles.
+    #[test]
+    fn a_python_chip_waiting_for_setup_says_so() {
+        let mut tool = part(
+            "python",
+            ToolState::InputAvailable,
+            Some(json!({
+                "verb": "Finding",
+                "verbPast": "Found",
+                "purpose": "section boundaries",
+                "code": "luma.features.sections",
+            })),
+        );
+        let waiting = label(&tool, true);
+        assert!(waiting.contains("Python setup"), "{waiting}");
+        assert!(waiting.contains("section boundaries"), "{waiting}");
+        assert!(!waiting.contains("Finding"), "{waiting}");
+        assert!(label_parts(&tool, true).running);
+        tool.state = ToolState::OutputAvailable;
+        assert_eq!(label(&tool, true), label(&tool, false));
+    }
+
     #[test]
     fn a_python_chip_is_titled_by_its_verb_and_purpose() {
         let mut tool = part(
@@ -859,12 +896,12 @@ mod tests {
                 "code": "luma.features.sections",
             })),
         );
-        let parts = label_parts(&tool);
+        let parts = label_parts(&tool, false);
         assert_eq!(parts.verb, "Finding");
         assert!(parts.running);
-        assert_eq!(label(&tool), "Finding section boundaries");
+        assert_eq!(label(&tool, false), "Finding section boundaries");
         tool.state = ToolState::OutputAvailable;
-        assert_eq!(label(&tool), "Found section boundaries");
+        assert_eq!(label(&tool, false), "Found section boundaries");
     }
 
     /// A call made before the schema asked for a verb reads with the default
@@ -879,9 +916,9 @@ mod tests {
                 "code": "kicks = luma.features.drum_onsets",
             })),
         );
-        assert_eq!(label(&tool), "Ran an onset analysis");
+        assert_eq!(label(&tool, false), "Ran an onset analysis");
         tool.state = ToolState::InputAvailable;
-        assert_eq!(label(&tool), "Running an onset analysis");
+        assert_eq!(label(&tool, false), "Running an onset analysis");
     }
 
     /// …and **never** falls back to the code. A call with no purpose is titled
@@ -894,8 +931,8 @@ mod tests {
             ToolState::OutputAvailable,
             Some(json!({ "code": "print(luma.catalog())" })),
         );
-        assert_eq!(label(&tool), "Ran analysis");
-        assert!(!label(&tool).contains("print"));
+        assert_eq!(label(&tool, false), "Ran analysis");
+        assert!(!label(&tool, false).contains("print"));
     }
 
     /// Failure remains visible without expanding the details: the chip paints
@@ -909,11 +946,11 @@ mod tests {
         );
         tool.state = ToolState::OutputAvailable;
         tool.output = Some(json!({ "status": "error", "durationMs": 1500 }));
-        assert!(label_parts(&tool).failed);
-        assert_eq!(label(&tool), "Ran a validation pass · Failed");
+        assert!(label_parts(&tool, false).failed);
+        assert_eq!(label(&tool, false), "Ran a validation pass · Failed");
         tool.state = ToolState::OutputError;
         tool.output = Some(json!({ "status": "ok", "durationMs": 1500 }));
-        assert_eq!(label(&tool), "Ran a validation pass · Failed");
+        assert_eq!(label(&tool, false), "Ran a validation pass · Failed");
     }
 
     /// A skill is titled by the skill it read — its own argument, not python's.
@@ -924,7 +961,7 @@ mod tests {
             ToolState::OutputAvailable,
             Some(json!({ "name": "beatgrid", "code": "ignored" })),
         );
-        assert_eq!(label(&tool), "Read skill · beatgrid");
+        assert_eq!(label(&tool, false), "Read skill · beatgrid");
     }
 
     /// A tool the vocabulary does not know narrates by its verb alone rather
@@ -936,7 +973,7 @@ mod tests {
             ToolState::OutputAvailable,
             Some(json!({ "purpose": "nope", "name": "nope", "code": "nope" })),
         );
-        assert_eq!(label(&tool), "Ran tool");
+        assert_eq!(label(&tool, false), "Ran tool");
     }
 
     /// However long the purpose, the title stays one clipped line — the chip's
@@ -948,7 +985,7 @@ mod tests {
             ToolState::OutputAvailable,
             Some(json!({ "purpose": format!("a\n  {}", "x".repeat(200)) })),
         );
-        let label = label(&tool);
+        let label = label(&tool, false);
         assert!(label.starts_with("Ran a x"), "{label}");
         assert!(label.ends_with('…'));
         assert!(!label.contains('\n'));

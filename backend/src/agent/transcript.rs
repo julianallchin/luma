@@ -674,10 +674,12 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
                 ..Applied::default()
             }
         }
-        // Live-only or host-only: a subagent milestone is not transcript
-        // (§2.5), and the other two are notifications to the editor.
+        // Live-only or host-only: a subagent milestone and a wait for Python
+        // setup are not transcript (§2.5), and the other two are notifications
+        // to the editor.
         TurnEvent::Subagent { .. }
         | TurnEvent::Child { .. }
+        | TurnEvent::PythonSetupWait { .. }
         | TurnEvent::DocumentChanged { .. }
         | TurnEvent::PreviewSelection { .. }
         | TurnEvent::TurnEnded { .. } => Applied::default(),

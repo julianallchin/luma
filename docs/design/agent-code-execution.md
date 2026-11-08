@@ -1310,7 +1310,9 @@ The desktop sets its Python environment up in the background, which takes
 minutes on a first launch or after an update changes the requirements. A cell
 waits for that setup when it asks for its workspace, after scope resolution
 and before binding assembly, so it never starts a kernel on missing or
-half-replaced packages. Stop ends the wait like any other stage, and a cell
+half-replaced packages. While it waits, the call's chip in the chat says so: the
+tool reports the wait as live turn state (`TurnEvent::PythonSetupWait`), which
+no transcript row keeps. Stop ends the wait like any other stage, and a cell
 stopped by then skips binding assembly and returns `interrupted`. If setup
 failed and no earlier setup finished installing the environment, the cell
 fails with the step that failed.

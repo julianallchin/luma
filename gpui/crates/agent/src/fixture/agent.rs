@@ -106,10 +106,14 @@ pub(super) enum ToolEntry {
     Scripted(ScriptedTool),
 }
 
-/// `{ name, result, latency_ms?, error?, description?, schema?, dispatch? }`.
+/// `{ name, result, latency_ms?, setup_wait_ms?, error?, description?, schema?,
+/// dispatch? }`.
 ///
 /// Named like the tool it stands in for, because a tool's name is how the
 /// chat narrates it. `error` answers as a failed call instead of `result`.
+/// `setup_wait_ms` is how long a `python` stand-in first waits for the app's
+/// Python setup, telling the host as the shipped tool does, before its
+/// `latency_ms` of running.
 /// `dispatch` is the app commands the call runs before it answers, in order:
 /// the writes a Python cell's host calls would make, so a test sees the app
 /// take in an agent's change as it would a real one.
@@ -123,6 +127,8 @@ pub(super) struct ScriptedTool {
     schema: Value,
     #[serde(default)]
     latency_ms: u64,
+    #[serde(default)]
+    setup_wait_ms: u64,
     #[serde(default)]
     result: Value,
     #[serde(default)]
@@ -169,6 +175,11 @@ impl Tool for ScriptedTool {
     }
 
     async fn call(&self, ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
+        if self.setup_wait_ms > 0 {
+            ctx.progress.python_setup_wait(ctx.call_id, true);
+            tokio::time::sleep(Duration::from_millis(self.setup_wait_ms)).await;
+            ctx.progress.python_setup_wait(ctx.call_id, false);
+        }
         tokio::time::sleep(Duration::from_millis(self.latency_ms)).await;
         for command in &self.dispatch {
             luma_lib::dispatch::dispatch(ctx.services(), &command.command, &command.args)

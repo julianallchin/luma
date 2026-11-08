@@ -466,6 +466,12 @@ impl PythonWorkspaceService {
         debug_assert!(first, "a host sets its Python environment up once");
     }
 
+    /// The host's Python setup while it is still running, which a cell admitted
+    /// now waits for in [`Self::workspace_for_cell`].
+    pub(crate) fn running_setup(&self) -> Option<&BackgroundSetup> {
+        self.setup.get().filter(|setup| setup.running())
+    }
+
     /// Admit one complete cell operation. A thread has at most one cell because
     /// its Python namespace is sequential, and a terminal deletion gate never
     /// reopens in this process.
