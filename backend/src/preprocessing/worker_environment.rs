@@ -15,6 +15,7 @@ pub struct WorkerEnvironment {
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
     wait_for_setup: bool,
+    background: bool,
 }
 
 impl WorkerEnvironment {
@@ -24,7 +25,18 @@ impl WorkerEnvironment {
             cache_dir,
             resource_dir,
             wait_for_setup: false,
+            background: false,
         }
+    }
+
+    /// Launch every worker below the UI
+    /// ([`crate::runtime::command::background_command`]), for analysis nobody
+    /// is waiting on, like the startup catch-up: the stage keeps its frames,
+    /// and the batch takes longer.
+    #[must_use]
+    pub fn in_background(mut self) -> Self {
+        self.background = true;
+        self
     }
 
     /// Wait for the desktop host's concurrent environment bootstrap instead
@@ -103,7 +115,11 @@ impl WorkerEnvironment {
             .ok_or_else(|| format!("worker script {} has no parent directory", script.display()))?
             .to_path_buf();
 
-        let mut cmd = crate::runtime::command::command(python);
+        let mut cmd = if self.background {
+            crate::runtime::command::background_command(python)
+        } else {
+            crate::runtime::command::command(python)
+        };
         cmd.env("PYTHONUNBUFFERED", "1")
             .current_dir(workdir)
             .arg(script);
