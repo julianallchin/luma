@@ -168,7 +168,11 @@ venue between devices. Only the three hardware-port columns above are local.
   resolution=merge-duplicates` for PUT, `PATCH` by id, `DELETE` by id).
 - `backend/src/sync/media.rs`, `files.rs`, `progress.rs`: media transfer, on
   its own clock, independent of record sync. Bytes go through Supabase
-  Storage; only the resulting `storage_path` is a row.
+  Storage; only the resulting `storage_path` is a row. It names the bucket
+  too (`track-audio/<uid>/<hash>/audio.ogg`), while a Storage object's name
+  does not, so the read policy `can_read_track_media` compares
+  `bucket || '/' || name` against it. Storage reports an object its policy
+  hides as missing (a 400 with `NoSuchKey`).
 - `backend/crates/sync`: SDK glue only (shared SQLite file between SQLx and the
   SDK pool, blocking actor tasks).
 - `supabase/migrations/20260912000000_row_model.sql`: drops the old schema and

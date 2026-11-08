@@ -50,6 +50,8 @@ A new migration adds its line here.
 - `20261107130000_random_time.sql` — before shipping the client that reads
   `random.time`: it cannot read a random with an `every`, and a client from
   before it cannot read the rewritten graphs
+- `20261108120000_track_media_read_bucket_path.sql` — any time; until it
+  runs, venue members cannot download a shared track's audio or stems
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.
