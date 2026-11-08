@@ -1,85 +1,143 @@
 ---
-title: Perform
-description: Live performance with DJ software, live patterns, MIDI and OSC, and Art-Net output.
+title: Live
+description: Live performance with DJ software, the Perform set, MIDI and OSC controllers, and DMX output.
 ---
 
-# Perform
+# Live
 
-Each venue has a **Perform** tab. Open it from the venue's row in the sidebar
-or from the new-tab box. Closing the tab does not stop anything: Luma keeps
-following the decks and keeps every value.
+**Live** is the third mode of a venue's window (key `3`, or **Live** in the
+title bar's mode switch). It holds the deck panel beside the stage and the
+venue's **Perform set** under it. Switching to another mode stops nothing:
+Luma keeps following the decks and keeps every value.
 
-## Deck Sources
+## The Deck Panel
 
-Luma follows one DJ source at a time. Connect it from the deck panel beside
-the stage in **Live**: **Add source** lists the sources and the latency, and a
-connected source can be changed or disconnected from the same place, which
-puts the set back on the tapped tempo.
+The deck panel sits at the left of the stage. Drag its edge to resize it. It
+shows each deck Luma follows: what is loaded, the bar and beat, and a
+scrolling waveform with the playhead in the middle. With no deck to follow,
+the set plays on a tapped tempo.
+
+Under the decks is the DJ source. **Add source** lists the sources and the
+latency. Once a source is connected you can change it or disconnect it, which
+puts the set back on the tapped tempo. The MIDI and OSC status sits under it,
+and the status bar says what is followed.
 
 | Source | Hardware | Notes |
 |--------|----------|-------|
 | **Rekordbox** | rekordbox on this computer | Read through [rkbx_link](https://github.com/grufkork/rkbx_link) over OSC. Turn on `osc.msg.n/time` in rkbx_link's config; it is off by default. Load tracks after Luma starts listening. |
 | **Pro DJ Link** | Pioneer CDJs | To connect, Luma claims a virtual player number. That number must not be the number of a real deck on the network. |
 | **StageLinQ** | Denon DJ / Engine DJ | Luma listens for devices and reads deck telemetry. |
+| **Virtual** | None | Luma's own player is the deck. **Choose song** picks any library track, which loads and plays. Use it to practise and to see patterns. |
 
 Luma matches the track each deck loads against the library and plays that
 track's scores for the venue. Each deck renders its own layer at its own time,
 and the layers blend by deck volume. Between reports from the source, Luma
 runs each deck's clock forward, so the lights keep moving.
 
-Without DJ gear, pick a library song to play on the tab's **virtual deck**: the
-app's own player becomes deck 1.
+## The Perform Set
 
-## The Perform set
+Each venue has a set of live patterns. A pattern is a clip graph with no
+timeline: a selection, a blend mode and a graph. The set is laid out on pages
+of a grid, like a console's executor window. The page tabs run along the top;
+**Edit layout** at the end of their row arranges the grid, and **Done** goes
+back to playing.
 
-Beside the decks, each venue has a set of live patterns. A pattern is a clip
-graph with no timeline: a selection, a blend mode and a graph. The set is laid
-out on pages of a grid, like a console's executor window. A cell holds a
-pattern, the master, tap tempo, or a fader that moves several things together.
+A cell holds one of:
 
-- A pattern's **pad** is a `button` node wired into its output's alpha. It plays
-  as **toggle** (on until the next press) or **flash** (on while held), and
-  fades with its own attack, decay, sustain and release.
-- A `control` node is a fader of that pattern, shown in its cell.
-- Every pattern plays at its level times the Perform master, over the decks.
-- In a page's one-at-a-time rows, turning one pattern on releases the others.
+- **A pattern.** Its pad turns it on and off. The cell also has the
+  pattern's level and a fader or button for each fader and button node in its
+  graph.
+- **A group.** Tap it to choose that group. It stays chosen until you tap it
+  again.
+- **A list** of colors or numbers. A tap sets the next value. A list can step
+  on by itself every few bars.
+- **A fader** that moves several things together, such as three chases'
+  speeds.
+- **Select**, **Clear**, **tap** tempo or the **master**.
 
-The Perform tab has its own chat. Ask it to add, change or lay out patterns.
+### Pads
+
+A pattern's pad is a `button` node wired into its output's alpha. A pad plays
+as **toggle** (on until the next press) or **flash** (on while held). It fades
+with its own attack, decay, sustain and release. A press can land at once, or
+on the next beat or bar of the set's clock; a pad shows that it is waiting.
+
+Every pattern plays at its level times the master, over the decks. In a row
+whose patterns play one at a time, a pattern that comes on releases the
+others.
+
+### Choose Where, Then Act
+
+Tap a group, then a pad: the pattern plays on that group. Hold a group while
+you press a pad to act on that group for one press only. With nothing chosen,
+a pad plays its pattern on its own selection.
+
+A color list with no targets sets the **base color**: the color under every
+effect, on the chosen groups or on every light. A pattern with the **Below**
+blend takes the color already under it. Hold **Select** (or tap it to latch
+it) and press pads to choose patterns instead of playing them; the next color
+you tap becomes their own color. Tap **Clear** to choose nothing. Hold it for
+half a second to let every effect go.
+
+### Edit Layout
+
+In **Edit layout**, click a **+** to put something in that place: a new
+pattern from a preset, a group, a list of colors or numbers, a fader, the
+master, tap, Select or Clear. Drag cells to move and resize them. Turn on the switch
+at a row's left to make its patterns play one at a time. The inspector beside
+the grid edits the selected cell, or the page when no cell is selected: its
+name, its columns and rows, and its controller.
+
+- **Edit pattern…** opens the pattern's graph, the same editor a score's clips
+  use. See [Clips and Presets](/docs/user-guide/patterns).
+- **+** beside the page tabs adds a page.
+- **Busk page** builds a whole page from the rig: group cells, base and accent
+  color lists, effects from the presets with their own pads and speed faders,
+  movement when the rig has movers, hits such as strobe and blinder, and
+  Select, Clear, tap and the master. It never names a fixture, so it works on
+  a small rig and a large one.
+
+Live has its own chat in the agent panel. Ask it to add, change or lay out
+patterns.
 
 ## MIDI and OSC
 
-Any MIDI device and anything that sends OSC (to UDP port 8000) can drive a fader
-or a pad. Press **Learn** on a control, then move the fader or press the key.
-A binding says what the hardware sends: a fader's position, a pad's press and
-release, or a latching key. It can be inverted. Bindings belong to a
-controller, and sync with the venue.
+Any MIDI device and anything that sends OSC (to UDP port 8000) can drive a
+fader or a pad. In Edit layout, select a cell and press **Learn** beside one of
+its controls, then move the fader or press the key. A binding says what the
+hardware sends: a fader's position, a pad's press and release, or a
+**latching** key. It can be inverted. Learning an input again changes its
+binding.
 
-A controller with a profile knows where its pads and faders sit, and its pad
-lights show what each control does. **Map this page** puts the page's cells on
-its grid. Luma ships no profiles: press **Set up with the agent** in Edit
-layout, and the Perform chat writes one with you, lighting pads one at a time
-and asking what you see. Click the controller's name to rename it.
+Bindings belong to a **controller**, and controllers and bindings sync with
+the venue. A controller with a profile knows where its pads and faders sit,
+and its pad lights show what each control does: an effect dim while off and
+bright while on, blinking while it waits for its beat. **Map this page** puts
+the page's cells on its grid. Luma ships no profiles: press **Set up with the
+agent** in the inspector's Controller section, and the chat writes one with
+you, lighting pads one at a time and asking what you see. Click the
+controller's name to rename it.
 
-## Art-Net Output
+## DMX Output
 
-Luma sends DMX over Art-Net on UDP port 6454. Settings are in **Settings → Art-Net / DMX**:
+Luma sends DMX to Art-Net nodes and to USB DMX dongles. Turn it on in
+**Settings → DMX Output**:
 
 | Setting | Meaning |
 |---------|---------|
-| **Enable Art-Net Output** | Turns Art-Net output on or off |
-| **Always Broadcast (255.255.255.255)** | Sends to the broadcast address |
-| **Interface IP (Bind Address)** | The address to bind. `0.0.0.0` binds to all interfaces. |
-| **Unicast Destination IP** | A single destination. Empty means broadcast only. |
-| **Net / Subnet** | The Art-Net net and subnet |
+| **Max Brightness** | Limits the brightness of all DMX output. 100 means no limit. |
+| **Enable DMX Output** | Turns every output on or off. While it is off, Luma holds no socket or device. |
+| **Art-Net Interface IP** | The address Art-Net binds. `0.0.0.0` binds to all interfaces. It cannot be edited in the app yet. |
 
-The page also has a brightness limit for all DMX output. 100 means no limit.
-
-The text fields and node discovery cannot be edited in the native app yet.
-
-You need an Art-Net node on the same network. The node receives the Art-Net packets and sends DMX-512 to the fixtures.
+Choose where each universe goes under **Outputs** on the venue page in Rig. A
+universe can go to several ports. A universe with no output is not sent.
+Luma finds Art-Net nodes on the network by ArtPoll and lists the ports each
+one reports. The supported USB dongles are the SoundSwitch Micro DMX
+Interface and the SoundSwitch Control One. See the
+[DMX pipeline](/docs/architecture/dmx-pipeline) for the details.
 
 ## From Values to DMX
 
 1. Luma evaluates the active clips and [combines them](/docs/user-guide/annotations#how-clips-combine) into one `UniverseState`.
 2. It maps each head's dimmer, color, strobe, position and speed to the DMX channels of the fixture's mode.
-3. It writes one DMX buffer for each universe and sends it over Art-Net.
+3. It writes one DMX buffer for each universe and hands it to each output that the universe is routed to.

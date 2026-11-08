@@ -66,5 +66,5 @@ no write server:
 - Postgres row-level security controls access.
 
 Venues and their fixtures and groups sync like other rows. Venue members can
-read and edit a shared venue. Hardware port settings are local columns and do
-not sync. See [Database](/docs/architecture/database).
+read and edit a shared venue. Where each universe goes is the local `dmx_routes`
+table, because the DMX hardware belongs to one machine; it does not sync. See [Database](/docs/architecture/database).

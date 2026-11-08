@@ -15,11 +15,21 @@ Definitions are `.qxf` XML files. `parse_definition` reads one file with
 `Manufacturer/Model.qxf` file. If a file name starts with the manufacturer
 name, the index removes that prefix from the model name.
 
+The rest of the backend reads a definition through `fixtures::definition`
+(`backend/src/fixtures/mod.rs`). It refuses a `fixture_path` that would leave
+the fixtures root, parses each file at most once per process, and parses it
+again when the file's modification time changes.
+
 The parser reads:
 
 - **Channels**: name, preset, group and capabilities (DMX ranges, presets, colors and labels).
 - **Modes**: channel lists and head definitions.
 - **Physical**: dimensions, layout grid and pan/tilt ranges.
+- **Type**: the fixture's kind, such as `Moving Head`, `Strobe` or
+  `Laser Projector`. Group generation reads it to give a fixture its role. A
+  `Laser Projector` has no cells: its heads are the elements a laser clip
+  draws on it, and the [laser solver](/docs/user-guide/lasers) turns them into
+  its point stream.
 
 ## Channel types
 

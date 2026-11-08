@@ -7,34 +7,38 @@ description: How to set up a venue in Luma by patching fixtures, building the st
 
 A venue is one physical room. It holds the fixtures in the room, their DMX addresses, their positions, the stage pieces and the groups.
 
-## Tabs
+## Rig
 
-Each venue has its own set of tabs, of three kinds:
-
-- **Venue.** The venue's stage, patch and groups. One per venue.
-- **Score.** One score of one track in the venue. It holds the track editor.
-- **Perform.** The venue's live show: the decks Luma follows and the live patterns. One per venue.
+A window shows one venue. Its **Rig** mode (key `1`) is where you build it: the stage at the top, and the venue page under it with the patch and the groups. See [The Window](/docs/user-guide/the-window).
 
 ## Patch Fixtures
 
-The patch table lists each fixture with its **Mode**, **Universe** and **Address**.
+The patch table lists each fixture with its **Model**, **Mode**, **Universe**, **Address**, the **Channels** it uses and its **Group**.
 
-You add lights on the stage page, not here. Every light has a place on the stage. When you place a light, it gets a row in the patch table. When you delete a light, its row goes too.
+You add lights on the stage, not in the table. Every light has a place on the stage. When you place a light, it gets a row in the patch table. When you delete a light, its row goes too.
 
 1. Choose the **Mode**. The mode sets how many DMX channels the fixture uses and what each channel does. Choose the mode that is set on the real fixture.
 2. Set the **Universe** and **Address**, or let Luma pick them. **Auto patch** assigns addresses for you.
 
-The backend assigns every address. The patch page shows an error when the backend refuses an address.
+The backend assigns every address. The patch page shows an error when the backend refuses an address. If the venue holds addresses you set by hand, **Auto patch** asks before it moves them.
+
+The **Footprint** chip shows each universe as 512 cells. Drag a fixture's block to give it a new address.
 
 A universe has 512 channels. A fixture that uses 16 channels and starts at address 33 uses channels 33 to 48.
 
+## Send DMX
+
+The **Outputs** chip lists each universe and where it goes. **Add output** sends a universe to a port of an Art-Net node or a USB DMX dongle that Luma found; **Unbind** takes it off. A universe can go to more than one port. A universe with no output is not sent anywhere. Turn output on in **Settings → DMX Output**. See [Live](/docs/user-guide/performing#dmx-output).
+
 ## Build the Stage
 
-The stage page is the only place where you set positions.
+The stage in Rig is the only place where you set positions.
 
-- Choose a piece from the palette, such as a truss, and place it.
+- Press **A**, or **Add element** on the stage, to open the add-element dialog. It lists the stage pieces and the fixture library in one search.
+- Choose a piece, such as a truss, and place it.
 - Choose a fixture and place it on a piece, such as a truss. Luma ships a library of QLC+ fixture definitions.
-- Delete a piece, and the lights on it are deleted too. Undo brings them back.
+- **W** and **E** switch the gizmo between move and rotate. **⌘D** duplicates the selection. **F** frames it.
+- Delete a piece, and the lights on it are deleted too. **⌘Z** brings them back.
 - A piece snaps to a socket first, then to the surface under the cursor, then to the ground grid.
 
 Positions use a Z-up, right-handed coordinate system in metres.
@@ -70,7 +74,11 @@ The environment and the haze belong to the venue. They sync with the venue to yo
 
 ## Venue Members
 
-A venue has an owner and can have members. Venue content syncs to the owner and to each member. An owner cannot leave their own venue.
+A venue has an owner and can have members. Venue content syncs to the owner and to each member.
+
+- **Share** in the title bar's venue menu opens the venue's invite code. **Create invite code** makes one. **Copy code**, **New code** and **Revoke** are beside it. Anyone with the code can open and edit the venue.
+- The same page lists the people with access. The owner can remove a member.
+- **Join with code…** in the venue menu joins someone else's venue. Its content then downloads like any other synced rows. The venue menu marks it **Shared with you**.
 
 ## Next Steps
 

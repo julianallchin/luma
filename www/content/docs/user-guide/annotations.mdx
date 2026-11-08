@@ -5,13 +5,19 @@ description: How to put patterns on a track's timeline as clips, and how overlap
 
 # Place Clips
 
-The track editor shows one track on a timeline. You place patterns on the timeline as **clips**. The clips of one track in one venue make a **score**.
+In **Arrange** mode (key `2`), the track editor shows the open score's track on a timeline under the stage. You place patterns on the timeline as **clips**. The clips of one track in one venue make a **score**.
 
 ## Scores
 
-A score belongs to one track and one venue. A track can have many scores. The score list shows each score with its venue, its author, its clip count and its age. Use **New score** to start a new score.
+A score belongs to one track and one venue. A track can have many scores. The song list's third column (⌘P, see [The Window](/docs/user-guide/the-window#the-song-list)) shows a song's scores: this venue's first, with **New score**, then each other venue's under that venue's name. Each row shows the score's author, its clip count and its age. A click opens a score. Double-click the name of one of this venue's scores to rename it, or right-click it to delete it.
 
-A score that another user wrote opens in read-only mode. You can view it, but you cannot change it.
+The menu at the top of the stage names the open song and score. It lists the song's other scores too. Opening a score from another venue asks first, then switches the window to that venue.
+
+A score that another user wrote opens read-only. You can view it, but you cannot change it.
+
+## Play
+
+The strip above the timeline starts with the transport: play or pause, the position and the tempo. **Space** plays and pauses, and the ruler scrubs. **F** keeps the view on the playhead, and **H** fits every lane. **⌘L** loops the selected span. The [shortcuts table](/docs/user-guide/settings#shortcuts) lists the editing keys: split, copy, cut, paste, duplicate, delete, undo and moving clips between lanes.
 
 ## Add a Clip
 
@@ -19,7 +25,7 @@ A score that another user wrote opens in read-only mode. You can view it, but yo
 2. The dialog lists the presets and a blank start for each output. It shows a looping preview of the highlighted preset on the current venue.
 3. Choose one. Luma adds it to the timeline as a clip.
 
-You can also drag a preset from the preset browser, which the inspector shows while no clip is selected. See [Clips and Presets](/docs/user-guide/patterns).
+See [Clips and Presets](/docs/user-guide/patterns) for what a clip plays.
 
 ## Clip Properties
 
@@ -34,7 +40,7 @@ You can also drag a preset from the preset browser, which the inspector shows wh
 | **Graph** | The clip's own [graph](/docs/user-guide/patterns#the-graph) of nodes. |
 | **Seed** | The seed for the graph's random choices. |
 
-The inspector shows the clip's name, selection, blend mode and graph.
+Double-click a clip to open its graph page. It shows the clip's name, selection, blend mode and graph.
 
 **Pick fixtures** opens a dialog. It lists the venue's groups next to a picture of the venue. Tick groups to write a union such as `front_wash | back_movers`. The dialog cannot write `&`, `~` or `^`. If the current expression uses them, the dialog shows it as read-only text.
 
@@ -53,4 +59,4 @@ The seven light blend modes and their formulas are in the [blend mode table](/do
 
 ## Next Steps
 
-Play scores live from the decks on the [Perform](/docs/user-guide/performing) tab.
+Play scores live from the decks in [Live](/docs/user-guide/performing) mode.

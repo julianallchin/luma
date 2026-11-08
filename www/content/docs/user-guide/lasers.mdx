@@ -1,0 +1,70 @@
+---
+title: Lasers
+description: Laser projectors, zones, laser clips and how Luma previews them.
+---
+
+# Lasers
+
+Luma draws beam shows for ILDA laser projectors. A laser clip never names
+points or mirror angles. It says what figures to draw, where and in what
+color, and a solver turns that into each projector's point stream, the way an
+aim becomes pan and tilt.
+
+DMX party lasers are not covered here. They are ordinary fixtures and play
+like any other light.
+
+## Projectors
+
+A projector is a fixture whose definition has the type `Laser Projector`.
+Luma ships `Generic/Generic-ILDA-Laser-Projector.qxf`. Place it on the stage
+in Rig like any other fixture. Its scan field is the pan and tilt range of its
+definition, and it draws 30,000 points a second. It scans around the
+direction it is mounted in.
+
+## Zones
+
+A **zone** is a named window of directions in the room, for example 5° to 20°
+up and 60° either side. Every projector shares it. A laser clip draws on a
+canvas from −1 to 1 that maps onto the zone, so the middle of the canvas is
+the same direction from every projector: six projectors draw six parallel
+fans.
+
+A laser clip names its zone. With no zone, or a zone the venue does not have,
+it uses the venue's first zone. A venue with no zones draws ahead into the
+house, inside every projector's scan.
+
+The app has no zone editor yet. Ask the venue's chat to make one: its Python
+has `luma.venue.laser_zones()` and
+`luma.venue.laser_zone(name, turn=[min, max], tilt=[min, max])`, in degrees.
+
+## Laser Clips
+
+A laser clip's output is a **laser** node. It draws one or more **figure**
+nodes, in order, and holds the clip's alpha and its zone. A figure has a kind
+(`beams`, `line`, `ring`, `polygon` or `grid`), a count, and the place, size,
+rotation and color of each of its elements. The elements are the figure's
+heads, so Space, Random, Shuffle and Mirror spread over them as they spread
+over a rig's heads.
+
+An **along** node gives 0 to 1 within one element, from a line's start to its
+end or once round a ring. A figure input that reads it varies along the
+element: a gradient, a bend, or dashes where the color is black.
+
+Laser clips stack in one of two blend modes. **Add** draws both. **Replace**
+morphs the elements under the clip into its own, by its alpha. Colors never
+blend, and a color clip never reaches a projector.
+
+The laser presets include Beam fan, Beam circle, Beam grid, Sheet, Ring,
+Liquid sky, Settle, Soft sheet and Sheet and beams; see the [preset reference](/docs/node-reference/presets). The
+[laser node reference](/docs/node-reference/lasers) lists the figure, along
+and laser nodes.
+
+## Preview
+
+The visualizer draws the frames the solver makes: the same points a projector
+would be sent. It runs them through a model of the scanner's mirrors, so a
+fast shape's corners round and dwell brighter, and it scatters the beams in
+the venue's haze.
+
+Luma does not send laser frames to projector hardware yet. Laser shows play
+in the visualizer and in exported videos only.

@@ -12,13 +12,20 @@ Library                                  Venue
 |-- Tracks                               |-- Fixtures (universe, address, mode, position)
 |   |-- Beat grid                        |-- Groups
 |   |-- Stems (drums, bass, vocals,      |-- Stage pieces
-|   |   other)                           '-- Members
+|   |   other)                           |-- Folders (links to tracks)
+|   |                                    |-- Laser zones
+|   |                                    |-- Perform set, layout, controllers
+|   |                                    '-- Members
 |   |-- Roots (chord analysis)
 |   |-- Drum onsets
 |   '-- Bar classifications, genres
 '-- Scores (one track + one venue)
     '-- Clips (name, graph, start, duration, z index, blend mode, selection, seed)
 ```
+
+## Mode
+
+One of the three ways a window shows its venue: **Rig** (the stage builder, patch and groups), **Arrange** (one score's timeline) and **Live** (the decks and the Perform set). See [The Window](/docs/user-guide/the-window).
 
 ## Venue
 
@@ -67,6 +74,18 @@ The node of a clip graph that says what the clip does: `color` (color, brightnes
 ## Preset
 
 A shipped clip graph with a name and a blend mode, such as Chase or Rainbow. Adding a preset copies its graph into the new clip. See [Clips and Presets](/docs/user-guide/patterns).
+
+## Perform Set
+
+A venue's live patterns: clip graphs with no timeline, laid out on pages of a grid and played from pads, faders and controllers in Live mode. See [Live](/docs/user-guide/performing).
+
+## Controller
+
+A MIDI device a venue knows by its port name, with an optional profile that says where its pads and faders sit and how to light them. A **binding** maps one of its inputs, or an OSC address, to a live control.
+
+## Laser Zone
+
+A named window of directions in a venue, shared by every laser projector. A laser clip draws on a canvas from −1 to 1 that maps onto the zone. See [Lasers](/docs/user-guide/lasers).
 
 ## Kernel Graph
 

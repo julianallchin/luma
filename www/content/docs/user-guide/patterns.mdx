@@ -7,11 +7,11 @@ description: "What a clip plays: its own small graph of nodes, often started fro
 
 Every clip owns one small **graph**. The graph says what the clip does to the lights: which color, which pattern across the lights, where moving heads point, how a strobe runs. A **preset** is a shipped graph with a name and a blend mode, such as Chase or Rainbow. Adding a preset copies its graph into the new clip. After that the clip's graph is its own: editing it never changes the preset or another clip.
 
-Live patterns on the [Perform](/docs/user-guide/performing) tab are graphs too, and edit the same way.
+The patterns of a venue's Perform set, in [Live](/docs/user-guide/performing) mode, are graphs too, and edit the same way.
 
 ## Add a Clip
 
-Click **Add pattern** in the track editor, or right-click the timeline. The **Insert pattern** dialog opens:
+In **Arrange**, click **Add pattern** in the strip above the timeline, or right-click the timeline. The **Insert pattern** dialog opens:
 
 - It lists the shipped presets, then three blank starts: **Color**, **Aim** and **Strobe**. A blank start is a graph with only its output node.
 - Type to search. Use ↑ and ↓ to move and ↵ to insert.
@@ -19,7 +19,7 @@ Click **Add pattern** in the track editor, or right-click the timeline. The **In
 
 The new clip starts at the playhead and lasts one bar, or fills the span you selected on the timeline.
 
-When no clip is selected, the inspector shows the **preset browser** instead. It groups the presets by output: Color, Aim, Strobe and Laser. Each row has a strip of the preset: time across, heads down. Click a row to place the preset at the playhead on the selected lane, or drag it onto the timeline. While the pointer is over a row, the stage plays the preset alone as a two-bar loop. The score does not change. On the Perform tab, a click starts a new pattern from the preset.
+In **Live**, adding a pattern to a cell lists the presets by name. **Browse with previews…** opens the **preset browser** instead. It groups the presets by output: Color, Aim, Strobe and Laser. Each row has a strip of the preset: time across, heads down. Click a row to start a new pattern of the set from it.
 
 The [preset reference](/docs/node-reference/presets) lists every shipped preset.
 
@@ -58,7 +58,7 @@ color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))
 
 ## Edit a Graph
 
-Select a clip to open its graph. In **Program** view the inspector under the stage shows it. In **Direct** view a double-click on a clip shows its graph in place of the timeline. Above the graph are the clip's **Name**, **Selection** and **Blend**.
+Double-click a clip to open its graph. The graph page takes the timeline's place under the stage; **Timeline** at its top, or Escape, goes back. Above the graph are the clip's **Name**, **Selection** and **Blend**. The stage keeps playing the score with your edits while the page is up, and **⌘Z** still undoes.
 
 The graph is a canvas of node cards. Sources are on the left and the output is on the right. The layout is automatic: the same graph always looks the same. Each card shows the node's settings and one row per input. A value input shows its control. A wired input shows a port, and the wire says where its value comes from. Each wire takes the color of what it carries.
 
