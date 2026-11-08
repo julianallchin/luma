@@ -43,7 +43,7 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
             .agent_node(Role::Button, "Add pattern"),
         )
         .child(
-            luma_ui::button("Export show", state.export_source().is_some().into())
+            luma_ui::button("Export show", state.exportable().into())
                 .id("export-show")
                 .on_click(move |_, _, cx| export.update(cx, |app, cx| app.open_show_export(cx)))
                 .agent_node(Role::Button, "Export show"),

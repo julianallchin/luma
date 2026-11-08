@@ -442,15 +442,21 @@ impl Editor {
         format!("#{}", self.score.ordinal)
     }
 
+    /// Whether the open score can be exported yet: not before the track's
+    /// length is known. Cheap enough for every frame, unlike
+    /// [`Self::export_source`], which builds the whole score.
+    pub(crate) fn exportable(&self) -> bool {
+        self.transport.duration > 0.
+    }
+
     /// What an export of the open score takes from the timeline: its name,
     /// its length in seconds, and the score as the stage lights it — the
-    /// working copy, unsaved edits included. `None` before the track's length
-    /// is known.
+    /// working copy, unsaved edits included. `None` until
+    /// [`Self::exportable`].
     pub(crate) fn export_source(&self) -> Option<crate::export_dialog::Source> {
-        let duration = self.transport.duration;
-        (duration > 0.).then(|| crate::export_dialog::Source {
+        self.exportable().then(|| crate::export_dialog::Source {
             track_name: self.track_name.clone(),
-            duration,
+            duration: self.transport.duration,
             score_id: self.score.id.clone(),
             score: self.graph_candidate().ok(),
         })
