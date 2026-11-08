@@ -5,7 +5,7 @@
 <h1 align="center">Luma</h1>
 
 <p align="center">
-  <img src="www/public/screenshots/hero.webp" alt="Luma in Arrange mode: moving heads and lasers in haze above a song's score, with the agent chat on the left" />
+  <img src="www/public/screenshots/hero.webp" alt="Luma in Arrange mode: a song's dense score under the lit stage, with the agent chat on the left." />
 </p>
 
 <p align="center">

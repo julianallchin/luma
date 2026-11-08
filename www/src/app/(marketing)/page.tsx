@@ -7,28 +7,28 @@ const DOWNLOAD = "https://github.com/julianallchin/luma/releases/latest";
 const features = [
 	{
 		image: "/screenshots/arrange.webp",
-		alt: "Arrange mode: a song's score with clips in lanes under the lit stage, and the agent chat on the left explaining how it reworked the drop.",
+		alt: "Arrange mode: the agent panel on the left, the lit stage with the song and score menu at its top, and the score's clips in lanes under the song's waveform.",
 		title: "Arrange a score against the song",
 		body: "Luma analyzes each song's beats, stems and chords. Place clips on its timeline, each one a small graph that turns the music into colour, movement, strobe or laser figures. Ask the agent on the left to build or change a score with you.",
 		link: { href: "/docs/user-guide/patterns", label: "Clips and presets" },
 	},
 	{
 		image: "/screenshots/live.webp",
-		alt: "Live mode: the deck panel playing a song, the lit stage beside it, and a page of pads for groups, colours, chases and strobes under them.",
+		alt: "Live mode: the deck panel playing a song on the virtual deck beside the stage, and a page of pads for washes, chases, laser looks and strobes under them.",
 		title: "Play it live",
 		body: "Live follows the DJ over Pro DJ Link, StageLinQ or Rekordbox and plays each song's score on the beat. Pages of pads, faders and colour cells sit beside it for busking, and a MIDI or OSC controller can play them.",
 		link: { href: "/docs/user-guide/performing", label: "Live" },
 	},
 	{
 		image: "/screenshots/rig.webp",
-		alt: "Rig mode: a venue's moving heads and laser projectors around a stage of decks, with the haze controls beside the 3D view and the patch and groups under it.",
+		alt: "Rig mode: a venue's laser projectors and LED bars on truss towers, the environment and haze controls beside the 3D view, and the patch and groups under it.",
 		title: "Build the room once",
 		body: "Hang fixtures and laser projectors in 3D, patch them, and name groups such as back_beams or lasers. Scores aim at groups, never at fixtures, so a show carries from one venue to the next.",
 		link: { href: "/docs/user-guide/venues", label: "Venues" },
 	},
 	{
 		image: "/screenshots/songs.webp",
-		alt: "The song list in columns: folders on the left, the songs of the Peak time folder with their cover art, and the scores of the selected song.",
+		alt: "The song list: the venue's songs with their cover art, and the selected song's scores in each venue.",
 		title: "Every song, every score",
 		body: "The song list is a column view: places and folders, their songs, and each song's scores for this venue. Press ⌘P to bring it up from anywhere.",
 		link: { href: "/docs/user-guide/the-window", label: "The window" },
@@ -79,7 +79,7 @@ export default function LandingPage() {
 			<div className="px-4 md:px-12 mt-12 md:mt-16">
 				<Image
 					src="/screenshots/hero.webp"
-					alt="Luma's window in Arrange mode over a backdrop of its own stage render: moving heads and lasers in haze above a song's score, with the agent chat on the left."
+					alt="Luma in Arrange mode: a song's dense score under the lit stage, with the agent chat on the left."
 					width={2400}
 					height={1560}
 					priority
