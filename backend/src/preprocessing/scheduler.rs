@@ -427,6 +427,17 @@ async fn run_one(
         };
     };
 
+    // Every stage runs a Python worker, so wait for the host's setup first. A
+    // stage waiting on it is still queued, and the wait is no part of its cost.
+    if let Err(error) = ctx.python_ready().await {
+        // A cancelled wait is a lifecycle outcome; see below.
+        ctx.checkpoint()?;
+        // The environment failed, not this track: report it, but record no
+        // backoff, so the next launch with a working setup retries at once.
+        settle(StageOutcome::Failed(error.clone()));
+        return Err(error);
+    }
+
     if let Some(report) = report {
         report.started(p.name());
     }

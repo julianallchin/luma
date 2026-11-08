@@ -276,6 +276,15 @@ impl AppServices {
         self
     }
 
+    /// Set this host's Python environment up in the background, and make
+    /// analysis wait for it instead of failing while it runs. Only the desktop
+    /// sets Python up; harnesses and the CLI fail fast without one.
+    #[must_use]
+    pub fn start_python_setup(mut self) -> Self {
+        self.workers = self.workers.start_setup();
+        self
+    }
+
     /// Stop record replication, for a host that is quitting.
     pub fn stop_sync(&self) {
         if let Some(sync) = &self.sync {
@@ -283,12 +292,18 @@ impl AppServices {
         }
     }
 
-    /// Resume stale or interrupted analysis after the desktop's Python setup.
-    /// Nobody is waiting on it, so its workers run below the UI: a version
-    /// bump or a broken environment can queue the whole library here.
+    /// Resume stale or interrupted analysis once this host's Python setup has
+    /// settled. Nobody is waiting on it, so its workers run below the UI: a
+    /// version bump or a broken environment can queue the whole library here.
+    /// A setup that left nothing to run on skips it, rather than failing every
+    /// pending track.
     pub async fn reconcile_analysis(&self) -> Result<(), String> {
+        // Settle before leasing, so a sign-in during setup finds no lease to
+        // wait for, and the catch-up then runs for the identity it brought.
+        self.workers.setup_settled().await;
         let epoch = self.analysis_tasks.current_epoch()?;
         let lease = self.analysis_tasks.lease(epoch)?;
+        self.workers.ready(&lease.guard()).await?;
         crate::preprocessing::scheduler::reconcile_on_startup(
             self.db.0.clone(),
             self.storage.clone(),

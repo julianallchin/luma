@@ -13,6 +13,8 @@ pub struct AnalysisEpoch(u64);
 #[derive(Clone, Debug)]
 pub struct AnalysisGuard {
     cancelled: Arc<AtomicBool>,
+    /// Announces each identity transition, after it has set `cancelled`.
+    suspensions: watch::Receiver<u64>,
 }
 
 impl AnalysisGuard {
@@ -26,6 +28,17 @@ impl AnalysisGuard {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once an identity transition has cancelled this analysis, for
+    /// work that waits instead of computing: the transition cannot finish
+    /// until that work lets go of its lease.
+    pub async fn cancelled(&self) {
+        let mut suspensions = self.suspensions.clone();
+        if suspensions.wait_for(|_| self.is_cancelled()).await.is_err() {
+            // The task group is gone, so no transition can come.
+            std::future::pending::<()>().await;
+        }
     }
 }
 
@@ -91,6 +104,7 @@ impl AnalysisTaskGroup {
             inner: Arc::clone(&self.inner),
             guard: AnalysisGuard {
                 cancelled: Arc::clone(&state.cancelled),
+                suspensions: self.inner.suspended_generation.subscribe(),
             },
         })
     }
