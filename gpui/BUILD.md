@@ -1,5 +1,14 @@
 # Building the gpui workspace
 
+A fresh clone needs `scripts/setup` once. It installs the toolchain,
+initialises the submodule, fetches the LFS files, enables the git hooks and
+checks the prerequisites below. Clone over SSH: the one submodule is an SSH
+URL too. Then `python3 gpui/dev.py` builds, launches and rebuilds on save, and
+`cargo run --manifest-path gpui/Cargo.toml -p luma-app` runs the app once.
+
+At first launch the app creates the Python environment for the analysis
+workers (beats, stems, chords) in the background.
+
 ## Prerequisites
 
 - **Rust 1.97.1.** The repository's `rust-toolchain.toml` pins it for both
@@ -149,6 +158,13 @@ and add `rustc-wrapper = "sccache"` under `[build]` in `gpui/.cargo/config.toml`
 This invalidates the whole tree once.
 
 ## Test suites
+
+The README's "Tests" table lists a command for each suite. CI
+(`.github/workflows/ci.yml`) runs the workspace check, the backend tests, the
+Python executor suite, the Rust headless app tests (`gpui-agent --test
+headless`) and the scene, pattern and updater crates. A golden test fails when
+its file is stale and never rewrites it: regenerate with
+`LUMA_UPDATE_GOLDENS=1`, review the diff and commit it.
 
 Keep integration tests in as few binaries as possible, because each
 binary links the whole crate graph. `crates/agent/tests/` has 4 test targets,

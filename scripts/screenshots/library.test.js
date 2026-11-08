@@ -10,7 +10,8 @@
 
 const VENUE = "Gasworks Park";
 const SONG = "RXGER CLUB!";
-const SONG_AT = 0.3;
+// A moment with the moving heads fanned out through the haze.
+const SONG_AT = 0.25;
 // The conversation the Arrange shot shows, by how it opens: one about the show.
 const CHAT = "for the drop can we prototype";
 const LIVE_VENUE = "laser test";
@@ -42,6 +43,20 @@ function seek(fraction) {
   app.drag({ x: ruler.x + ruler.width * fraction, y: ruler.y + ruler.height / 2 }, { dx: 0, dy: 0 }, { steps: 1 });
 }
 
+// The stage seen from the floor, head-on, set with the stage's own camera
+// controls: a left drag upwards lowers the eye to about the audience's, and the
+// wheel walks it in. The venue keeps the pose (saved_cameras.rs), so Arrange's
+// pane opens on it too. Done full-screen, where the gestures were tuned.
+function faceTheStage() {
+  nav.step("fullscreen", "button", "Fullscreen visualizer");
+  settle(30);
+  const centre = { x: 720, y: 450 };
+  app.drag(centre, { dx: 0, dy: -100 }, { steps: 20 });
+  settle(30);
+  for (let i = 0; i < 6; i++) app.scroll(centre, { dy: -30, steps: 3 });
+  settle(30);
+}
+
 // The whole song across the timeline, every lane in view.
 function openSong(venue, song) {
   nav.venue(venue);
@@ -56,13 +71,19 @@ function openSong(venue, song) {
 
 test("arrange", { timeoutMs: 600000 }, () => {
   openSong(VENUE, SONG);
+  // The moment and the camera first, on the same ruler the stage shot seeks.
+  nav.agentOff();
+  seek(SONG_AT);
+  faceTheStage();
+  nav.step("the arrange page", "button", "Exit fullscreen");
+  app.action("luma::ToggleAgent");
+  until("the agent panel", (s) => s.find({ role: "button", label: "Hide agent" }));
   nav.step("the chat history", "button", "Chat history");
   const chat = until("the conversation", (s) =>
     s.findAll({ role: "card" }).find((n) => n.label.startsWith(CHAT) && n.bounds.height > 0));
   app.click(chat.findAll({ role: "card" }).find((n) => n.label.startsWith(CHAT) && n.bounds.height > 0));
   until("the conversation open", (s) => s.find({ role: "card", label: "Chat history dialog" }) === undefined);
-  seek(SONG_AT);
-  settle(60);
+  settle(120);
   keep("arrange");
 });
 
@@ -71,8 +92,8 @@ test("stage", { timeoutMs: 600000 }, () => {
   nav.agentOff();
   seek(SONG_AT);
   settle(10);
-  nav.step("fullscreen", "button", "Fullscreen visualizer");
-  settle(80);
+  faceTheStage();
+  settle(50);
   keep("stage");
 });
 
