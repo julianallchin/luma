@@ -52,7 +52,7 @@ One JSON request per line on stdin. One JSON response per line on stdout.
   them by `id`.
 - A malformed line gets `{"id": null, "err": ...}`. The process stays up.
 - Events go to stderr.
-- There is no Art-Net output, no audio device, no render loop and no sync loop.
+- There is no DMX output, no audio device, no render loop and no sync loop.
 
 To add a command, add it to `dispatch`. The harness needs no change.
 
@@ -136,7 +136,7 @@ cargo run --manifest-path backend/Cargo.toml --bin luma-cli -- render \
 | flag | meaning |
 |---|---|
 | `--db PATH` | Library to read. Default: the app library. |
-| `--state PATH` | State database. |
+| `--state PATH` | A lighting frame (`UniverseState` JSON) to light the venue with. Default: the rig unlit. |
 | `--format png\|catalogue` | An image, or a renderer scene catalogue as JSON. |
 | `--view` | `front`, `audience`, `overhead`, `quarter_left`, `quarter_right` or `dj`. |
 | `--width`, `--height` | 1–2000 pixels. Default 1600 × 1000. |
@@ -154,8 +154,3 @@ See [harness/agent-gauntlet/README.md](../../harness/agent-gauntlet/README.md).
   paid model turn.
 - `gauntlet-mcp-proxy.test.py`: tests the recorder.
 
-## Known broken
-
-- `import_engine_playlists.ts` imports `./shim`, which does not exist.
-- `mcp_smoke.ts` counts rows in `authored_revisions`, which the row-model
-  migration drops. It also expects 10 skill prompts; `resources/skills` has 12.

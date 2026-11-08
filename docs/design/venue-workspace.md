@@ -1,13 +1,14 @@
 # Venue workspace
 
-The venue tab (`Target::Patch`) sits beside chat. It has the live scene above,
-and the fixture table and groups below. The fixture column gets most of the
+The venue page is Rig mode's body (`Target::Venue`, `gpui/crates/app/src/patch.rs`),
+beside the agent panel. It has the live scene above, and the fixture table and
+groups below. The fixture column gets most of the
 width. Both columns scroll independently.
 
 ## Scene
 
 The centred floating bar contains Add, Objects, the View eye icon and the
-available transform modes. The venue tab has no track clock and no separate
+available transform modes. Rig has no track clock and no separate
 toolbar. Selecting an object opens its placement controls over the scene.
 Patch fields stay in the table.
 

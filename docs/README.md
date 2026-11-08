@@ -14,13 +14,13 @@ works and the decisions behind it.
 - [specs/composable-patterns.md](specs/composable-patterns.md) — the evaluation and persistence contract under clip graphs
 - [specs/aim.md](specs/aim.md) — the room frame, the pan/tilt solver, moving in black, motor lag
 - [design/lasers.md](design/lasers.md) — beam shows from ILDA projectors: zones, figures, output
-- [design/live-control.md](design/live-control.md) — controls, MIDI and OSC bindings, the Perform tab and set
+- [design/live-control.md](design/live-control.md) — controls, controllers, MIDI and OSC bindings, Live and its Perform set
 - [design/score-video.md](design/score-video.md) — recording a score as video (`luma-cli record`, Export show)
 
 ## Venues and the editor
 
 - [design/venue-graph.md](design/venue-graph.md) — a venue as a tree of relations; poses derived by the snap resolver
-- [design/venue-workspace.md](design/venue-workspace.md) — the venue tab: live scene, fixture table, groups
+- [design/venue-workspace.md](design/venue-workspace.md) — Rig's venue page: live scene, fixture table, groups
 - [design/venue-authoring-api.md](design/venue-authoring-api.md) — the agent's Python API for building rigs
 - [specs/venue-builder-gauntlet.md](specs/venue-builder-gauntlet.md) — the acceptance contract for the venue graph's rig building
 - [design/editor-core.md](design/editor-core.md) — the stage builder's editor kernel: selection, input, tools

@@ -1,6 +1,9 @@
 # Lasers
 
-Status: agreed with the user on 2026-10-24. Scope: beam shows from ILDA
+Status: built, except physical output: zones, limits, the laser clip and its
+figures, the scan solver (`backend/src/laser/`), and the stage, timeline and
+show-export previews. **Not built:** a DAC driver; nothing sends a laser frame
+to a projector yet. Agreed with the user on 2026-10-24. Scope: beam shows from ILDA
 projectors over Ethernet. DMX party lasers stay ordinary fixtures. Graphics
 (logos, text, surface zones) and audience scanning are out of scope.
 
@@ -67,7 +70,7 @@ that into a point stream, the way aim becomes pan and tilt.
 ```
 UniverseState → laser solver (zone, scan plan, limit) → LaserFrame
                                                          ├→ visualizer
-                                                         └→ DAC driver
+                                                         └→ DAC driver (not built)
 ```
 
 The solver runs before the output hub, so the visualizer reads the same

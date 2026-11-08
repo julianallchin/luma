@@ -59,17 +59,17 @@ A score is rows.
 | table | columns |
 |---|---|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
-| `clips` | id, uid, score_id, graph, start, duration, seed (TEXT, decimal u64), selection_seed (TEXT, nullable), selection_json, z_index, blend_mode, inputs_json, created_at, updated_at |
+| `clips` | id, uid, score_id, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_seed (TEXT, nullable), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read |
 
-A clip key and a definition key are unique inside their score, not across the
-library — two scores may each have a `flash`. Sync addresses every row by one
-global `id`, so both tables carry an ordinary `id` column the writer sets to
+A clip key is unique inside its score, not across the library — two scores
+may each have a `flash`. Sync addresses every row by one global `id`, so
+`clips` carries an ordinary `id` column the writer sets to
 `score_id || ':' || key`, and the key is read back off it
 (`backend/src/database/local/scores/rows.rs`). A score id is a uuid and carries
 no colon, so the split is unambiguous however the key is spelled.
 
-`luma_patterns::Score` stays the in-memory type. Loading a score reads the
-three tables into a `Score`. Saving a score diffs the candidate against the
+`luma_patterns::Score` stays the in-memory type. Loading a score reads its
+`scores` row and its clips into a `Score`. Saving a score diffs the candidate against the
 rows and writes only the rows that changed. Editors and agents keep sending a
 whole `Score`; the row diff happens once in the backend. There is no revision
 token. A stale candidate simply overwrites the rows it touches.
@@ -82,7 +82,7 @@ Supabase) drops the pattern library and MIDI cues: `patterns`,
 `implementations`, `cues`, `pattern_categories`, `venue_implementation_overrides`,
 `scores_pending_cutover`, `legacy_scores_backup` and the `auth_visible_patterns`
 view. It also deletes MIDI bindings whose action fired a cue or a blackout.
-Clips play score-local definitions only.
+Each clip holds its own graph (`graph_json`).
 
 ## History
 
@@ -111,7 +111,7 @@ A subagent works on a draft, never on the live score.
 
 Create copies the live `Score` into `base_json` and `state_json`. The agent's
 `track.score_apply` writes `state_json` when the thread owns a draft. Merge
-diffs `state_json` against `base_json` per clip and per definition and writes
+diffs `state_json` against `base_json` per clip and writes
 those changes onto the live rows, then deletes the draft. Discard deletes the
 draft. Drafts sync to their owner only.
 

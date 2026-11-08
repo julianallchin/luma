@@ -33,9 +33,10 @@ whole brief, because the child cannot see the parent conversation.
 3. If the parent has a score, create a `drafts` row for the child. The child's
    `track.score_apply` writes the draft's `state_json`.
 4. Run the child turn. Its messages are ordinary rows in the child thread.
-5. On success, `drafts::merge` compares `state_json` with `base_json` per clip
-   and per definition. It writes each changed or added row onto the live score,
-   removes each row the child deleted, and then deletes the draft. The parent model receives `<subagent status="merged"/>`
+5. On success, `drafts::merge` compares `state_json` with `base_json` per
+   clip. It writes each changed or added clip onto the live score, removes
+   each clip the child deleted, and then deletes the draft. The parent model
+   receives `<subagent status="merged"/>`
    and the child's final text, clamped to 16,000 characters.
 6. On failure, the draft is deleted. The tool returns an error that names the
    child thread.
@@ -63,6 +64,6 @@ Everything durable is already a row in the child thread.
 ## Known limits
 
 - A merge does not detect conflicts. When the parent and a child change the
-  same clip or definition, the child's version wins.
+  same clip, the child's version wins.
 - A reload during a run shows the chips but no pill until the next snapshot
   arrives.

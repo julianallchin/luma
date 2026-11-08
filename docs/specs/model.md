@@ -3,6 +3,8 @@
 2026-10-02 · Julian. Live doc with the architecture diagram:
 https://claude.ai/code/artifact/5d04a37d-a34d-4902-9937-4bc864ab0d9f
 
+Status: not built. No training or inference code is in the repository yet.
+
 ## Overview
 
 Two models turn a track into a Luma score. A clip graph autoencoder learns a latent space of rendered effects. A placement transformer writes the show as a time-ordered sequence of clips, and each clip carries an effect latent that the graph decoder turns into a v3 graph.

@@ -8,9 +8,9 @@ it could do.
 
 The graph lives in `venue_nodes`, `venue_edges`, `venue_node_params` and
 `venue_constraints`. `luma_scene::venue::resolve` derives the poses. The old
-`stage_pieces` table and the `fixtures.pos_*`/`rot_*` columns remain only as the
-source for `backend/src/venue_graph.rs::migrate`, which converts a venue the first
-time it is read. Nothing else reads them.
+`stage_pieces` table and the `fixtures.pos_*`/`rot_*` columns are gone
+(`backend/migrations/20261024000200_drop_venue_conversion.sql`); no client
+converts a pre-graph venue.
 
 ## Decisions
 
@@ -194,9 +194,9 @@ what exists, and where it is.
   label, N of a fixture added at once. **One allocator, in the backend, per
   universe.** Collisions and addresses past 512 render red and are **refused by
   `patch_fixture`**. Address and mode are editable; Auto Patch is real.
-- **Outputs live on the patch page.** Discovered Art-Net nodes bind to universes as
-  a **table**, not the `(net<<8)|(sub<<4)|(u&0xF)` arithmetic in `artnet.rs:218`
-  that aliases universe 17 onto 1. sACN later.
+- **Outputs live on the patch page.** Each universe has a table of routes
+  (`dmx_routes`) to discovered Art-Net nodes and USB DMX dongles; a universe with
+  no route is sent nowhere. There is no net/subnet arithmetic. sACN later.
 - **Stage page = the builder** — the venue graph above. A fixture may be patched but
   unplaced; those fixtures are a section of the add-element list, and **that is the
   only place an unplaced fixture is allowed to be** — no more fixtures piled at the

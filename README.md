@@ -22,17 +22,19 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 
 ## The Workflow
 
-1. **Define your venue** — Patch fixtures, set 3D positions and rotations
-2. **Tag groups** — Organize fixtures into groups with tags (`left`, `circular`, `wash`)
-3. **Import tracks** — From Engine DJ or audio files; auto-analyzes beats, stems, chords
-4. **Define patterns** — Visual node graphs that generate lighting from audio/beat data
-5. **Annotate tracks** — Place patterns on a timeline with layering and blend modes
-6. **Perform** — Follow a DJ (Rekordbox, Pro DJ Link or StageLinQ), play live patterns from pads and faders, bind MIDI and OSC, and output Art-Net or USB DMX
+A window is one venue, in one of three modes: **Rig**, **Arrange** and **Live**.
+An agent chat sits on the left in each.
+
+1. **Build the rig** (Rig) — Place fixtures and laser projectors in 3D, patch them, and route each universe to an output
+2. **Group fixtures** — Name groups of fixtures (`front_wash`, `back_movers`); scores target groups, never fixtures
+3. **Import songs** — From Engine DJ, Rekordbox, audio files or a folder; Luma analyzes beats, stems and chords
+4. **Arrange a score** (Arrange) — Place clips on a song's timeline; each clip is a small graph that turns audio and beat data into light
+5. **Perform** (Live) — Follow a DJ (Rekordbox, Pro DJ Link or StageLinQ), play patterns from pads and faders, bind MIDI and OSC controllers, and output Art-Net or USB DMX
 
 ## Project Structure
 
 - **`gpui/`** — Native Rust desktop UI and wgpu stage renderer
-- **`backend/`** — Shared Rust backend (SQLite, node engine, audio DSP, ArtNet)
+- **`backend/`** — Shared Rust backend (SQLite, pattern engine, audio analysis, DMX output, sync)
 - **`www/`** — Documentation site ([luma.show](https://luma.show))
 - **`resources/fixtures/`** — QLC+ fixture definition library (thousands of fixtures)
 - **`harness/`** — Renderer goldens, reference captures and image comparison tools (`cd harness && bun install`)
@@ -76,8 +78,9 @@ Run from the repository root:
 
 A golden test fails when its file is stale and never rewrites it; regenerate
 with `LUMA_UPDATE_GOLDENS=1`, review the diff and commit it. CI
-(`.github/workflows/ci.yml`) runs the first two rows, the Python suite, and
-some native crates.
+(`.github/workflows/ci.yml`) runs the first two rows, the Python suite, the
+Rust headless app tests (`gpui-agent --test headless`) and the scene, pattern
+and updater crates.
 
 ## Where to read next
 

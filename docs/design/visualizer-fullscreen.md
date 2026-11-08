@@ -8,7 +8,7 @@ Make the visualizer fill the current display for watching a score or examining t
 
 - Put a compact Nucleo expand icon in the visualizer’s upper-right corner. Tooltip and accessible name: **Fullscreen visualizer**. Use the shared rounded button primitive and subtle hover fill.
 - Add **View → Fullscreen visualizer**. Shortcut: **Shift+F**, scoped to the visualizer and excluded while typing. Keep **F** for its existing frame-selection behavior.
-- Fill the display containing the current window using native fullscreen. Hide the sidebar, conversation, tabs, timeline, pattern inspector, and split handles for the duration.
+- Fill the display containing the current window using native fullscreen. The stage covers the whole window: the title bar, agent panel, status bar, the mode's body (the timeline, the venue page or the Live grid), inspectors and split handles are hidden for the duration.
 - In fullscreen, replace the expand icon with a Nucleo contract icon in the same corner, with tooltip and accessible name **Exit fullscreen**. Keep it visibly available in v1; do not require hover to discover the way out.
 - **Escape** closes an open settings popover first, then exits fullscreen. Exiting must not clear the selected clip or alter a stage selection. Native OS fullscreen exit must restore the editor too.
 - Return to the exact prior window bounds and panel layout. If the app was already in native fullscreen, return to the editor within fullscreen instead of forcing it into a window.
@@ -23,7 +23,7 @@ For a venue or standalone pattern view without track transport, omit the centre 
 
 ## Motion and continuity
 
-- Use the same shared spring as the sidebar for Luma’s expanding/collapsing layout. Coordinate it with the OS fullscreen transition; do not play two successive expansion animations.
+- Use the shared surface motion (`luma_ui::motion::SURFACE`) for the expansion. Coordinate it with the OS fullscreen transition; do not play two successive expansion animations.
 - Keep the live visualizer and playback session intact throughout the transition. No black reload frame, restarted effects, or duplicate render loop.
 - Preserve the camera’s position, target, and zoom. Update the projection for the new aspect ratio; do not automatically frame the rig again.
 - Keep selected clips and fixture selections in memory while their UI is hidden. Restore focus to the fullscreen trigger or its originating visualizer on exit.

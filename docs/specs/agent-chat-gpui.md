@@ -125,9 +125,10 @@ parent's tool call, so it is cancelled with the parent.
 It never keeps a second copy of the content. It also holds the live
 `SubagentSnapshot`s.
 
-`scope_for` (`gpui/crates/app/src/agent.rs`) sets the working context for the
-next turn. It uses the open track editor (the active tab, else the last track
-tab), then the graph editor's score, then the venue in the sidebar.
+Each mode body owns its chat (`agent::BodyChat`, `gpui/crates/app/src/agent.rs`),
+and its scope is the body's: the open score's chats are that score's, Rig's
+the venue's, and Live's the venue's Perform set's. The agent panel, on the
+left, shows the chat of the body on screen (`docs/specs/comet-shell.md` §3).
 
 ### 3.3 Streaming rules
 

@@ -5,7 +5,7 @@ marked **Not built** or **Not met** has no code yet.
 
 Scope:
 
-- the track copilot, the pattern-graph agent and the venue rig agent;
+- the track copilot, the venue rig agent and the Perform set agent (Live);
 - the durable agent threads they share;
 - the binding and artifact data plane that exposes Luma state to Python;
 - the narrow host capabilities behind score and venue authoring;
@@ -22,7 +22,7 @@ number, so keep the numbering.
 Every durable agent thread owns one persistent Python workspace. The model gets
 one notebook-like `python` tool. Before each cell, Luma refreshes one reserved
 root named `luma`; variables created by the agent stay in the kernel namespace
-across calls. All track, audio, musical-feature, venue, pattern and graph-run
+across calls. All track, audio, musical-feature, venue, clip-graph and Perform-set
 data reaches Python through one versioned binding manifest and one artifact
 store. Numerical data keeps its semantic axes, units, identities and
 provenance. In a thread with a score, `luma.track` is the complete saved score
@@ -127,7 +127,7 @@ ambiguous between model tokens and runtime variables.
 | **Python workspace** | Thread-owned cells, artifacts, scratch files, and live-kernel association. |
 | **Python kernel** | The live subprocess and its mutable Python namespace. |
 | **Kernel namespace** | Variables, functions, and imports created by executed cells. |
-| **Analysis scope** | IDs and time window identifying the current track, venue, score, pattern, and graph run. |
+| **Analysis scope** | IDs and time window identifying the current track, venue and score. |
 | **Luma bindings** | Host snapshots exposed under the reserved `luma` object. Bound values are immutable; selected objects may expose explicit host capabilities. |
 | **Binding revision** | One immutable, internally versioned set of Luma bindings used by a cell. |
 | **Edit** | Python-local candidate that holds the complete score, created by `luma.track.edit()`. |
@@ -152,8 +152,8 @@ Messages are `agent_thread_messages` rows. Each holds the complete structured
 parts: text, reasoning, tool calls with their inputs, and tool results.
 `agent_thread_transcript_heads` names each thread's last message.
 
-`AgentKind` is `TrackCopilot`, `VenueRig` or `PerformSet` (the Perform tab's
-chats, about one venue's Perform set). `ThreadScope`
+`AgentKind` is `TrackCopilot`, `VenueRig` or `PerformSet` (Live's chats,
+about one venue's Perform set). `ThreadScope`
 (`backend/src/agent/mod.rs`) is the kind, the subject, the venue and the
 score. The subject is metadata, not identity: several threads may
 share one track.
@@ -208,12 +208,12 @@ History does not sync to devices. Undo in the editors stays in memory. See
   (`agent_execution/track_host/score.rs`).
 - In a subagent thread, `track.score_apply` writes the draft's `state_json`.
   When the child succeeds, `services/drafts.rs` merges the draft onto the live
-  rows per clip and per definition. See `docs/design/subagents.md`.
+  rows per clip. See `docs/design/subagents.md`.
 - In a Perform thread, each `luma.perform` verb (`agent_execution/perform_host.rs`)
-  is one `services/perform_set.rs` change, the one the Perform tab's commands
+  is one `services/perform_set.rs` change, the one Live's own commands
   make: the same checks, one transaction, and the open set recompiled. A
-  turn whose set changed says so (`TurnEvent::DocumentChanged`), and the
-  Perform tab reads it again.
+  turn whose set changed says so (`TurnEvent::DocumentChanged`), and Live
+  reads it again.
 
 ---
 
@@ -275,7 +275,7 @@ The model does not choose:
 
 - workspace or thread IDs;
 - binding revisions;
-- track, venue, score, pattern, or graph-run IDs;
+- track, venue or score IDs;
 - input paths;
 - artifact paths;
 - timeout or sandbox policy.
@@ -326,10 +326,17 @@ luma.window
 luma.track
 luma.audio
 luma.features
+luma.music
 luma.venue
-luma.patterns
-luma.graph
+luma.nodes
+luma.presets
+luma.clip
+luma.perform
 ```
+
+`luma.nodes` holds the clip-graph node definitions, `luma.presets` the shipped
+presets, and `luma.clip` the graph builders. `luma.perform` exists only in a
+Perform set thread.
 
 In a thread with a score, `luma.track` is a domain object backed by the binding
 tree (`GraphTrack` in `luma_exec/score.py`). It exposes track metadata plus:
@@ -338,10 +345,10 @@ tree (`GraphTrack` in `luma_exec/score.py`). It exposes track metadata plus:
 luma.track.document          # read-only score mapping; clips by ID
 luma.track.clips             # every saved Clip, ordered by start beat, z, then ID
 luma.track.editable          # descriptive; the host rechecks authority
-luma.track.nodes(search)     # node IDs and names
-luma.track.definition(id)    # one built-in definition, such as a form
+luma.track.nodes()           # the node kinds a clip graph is built from
+luma.track.definition(kind)  # one node kind's inputs, settings and defaults
 luma.track.edit()            # start a private edit of the complete score
-luma.track.window(beats=...) # an immutable view of the saved score
+luma.track.window(bars=...)  # an immutable view of the saved score; also at= or seconds=
 ```
 
 A clip holds its ID, graph, start and duration in beats, selection, seed, `z`,
@@ -417,12 +424,11 @@ second asks a new question of the audio signal itself.
 ### 7.5 Correlating audio features and lighting output
 
 ```python
-view = luma.graph.run.views["view_signal_1"]
-dimmer_channel = view.channels.index("dimmer")
-dimmer = view.values[:, :, dimmer_channel].mean(axis=0)
+output = luma.track.window(bars=(1, 17)).output
+brightness = output.values.max(axis=2).mean(axis=0)   # [primitive, time, rgb]
 
-light_peaks, _ = scipy.signal.find_peaks(dimmer, prominence=0.2)
-light_times = view.times_s[light_peaks]
+light_peaks, _ = scipy.signal.find_peaks(brightness, prominence=0.2)
+light_times = output.times_s[light_peaks]
 kick_times = luma.features.drum_onsets["kick"].values
 
 errors = np.array([
@@ -686,14 +692,13 @@ builder.unavailable("audio.vocals", "stem preprocessing has not completed")?;
 Expected providers:
 
 ```text
-agent_bindings/
+agent_execution/bindings/providers/
   track
   audio
   features
   venue
-  patterns
-  graph_definition
-  graph_run
+  nodes                     clip-graph node definitions and shipped presets
+  perform
 ```
 
 Providers understand their domain sources but know nothing about Python.
@@ -881,9 +886,9 @@ luma.venue
 ### 10.2 Track agent
 
 ```text
-luma.patterns
-  summaries
-  argument_schemas
+luma.nodes                  every clip-graph node kind's definition
+luma.presets                the shipped presets
+luma.clip                   graph builders
 ```
 
 The score does not live in a parallel namespace branch. It lives on
@@ -891,29 +896,16 @@ The score does not live in a parallel namespace branch. It lives on
 loader materializes the bound track record as the `GraphTrack` facade in
 `luma_exec/score.py`. It does not create a second data source.
 
-The graph branch is unavailable unless a graph run is placed in the thread's
-scope.
-
-### 10.3 Graph agent
+### 10.3 Perform set agent
 
 ```text
-luma.graph
-  definition
-    nodes
-    edges
-    args
-    arg_values
-  run
-    views                    name -> semantic tensor
-    mel_views
-    primitive_ids
-    positions
-    span
-    fingerprint/provenance
+luma.perform
+  venue_id
+  set                       patterns, top of the set first; layout; controls
+  pages cells patterns      read views, plus the verbs that change the set
 ```
 
-The graph agent does not receive the whole authored timeline by default. Its
-subject is one pattern and one preview instance.
+The branch is unavailable outside a Perform set thread (Live's chats).
 
 ### 10.4 Laziness
 
@@ -922,7 +914,7 @@ perspective, access remains ordinary:
 
 ```python
 luma.audio.mix.values
-luma.graph.run.views["view_signal_1"].values
+luma.track.window(bars=(1, 17)).output.values
 ```
 
 The Python loader caches an opened artifact by immutable artifact ID. It uses
@@ -933,31 +925,9 @@ The model does not choose the loading strategy.
 
 ## 11. Graph-run integration
 
-### 11.1 What a run publishes
-
-`crate::eval::graph_run::GraphEvaluation` is the complete result of a graph
-run. The editor draws only part of it.
-
-### 11.2 The run store
-
-`agent_execution/graph_runs.rs` keeps the latest evaluation for each execution.
-The next cell's binding assembly publishes it under `luma.graph.run` through the
-normal binding and artifact system.
-
-### 11.3 Compatibility
-
-A graph-run contribution is usable only when these match the current scope:
-
-- track ID;
-- venue ID;
-- span;
-- graph hash;
-- argument values;
-- preview selection/instance seed when they affect output.
-
-Otherwise `luma.graph.run` reports that the graph has changed since its latest
-run. It must never silently pair a new audio/track scope with an old graph
-tensor.
+Retired with the pattern-graph agent. A clip's lighting reaches Python as a
+score window's `output` (`luma.track.window(...).output`), rendered by the
+track host from the candidate score.
 
 ---
 
@@ -1603,7 +1573,7 @@ backend/src/agent_execution/
   track_host.rs            scoped score check, render and apply
   track_host/score.rs
   venue_host.rs            scoped venue queries and edits
-  graph_runs.rs            latest graph evaluation per execution
+  perform_host.rs          scoped Perform set verbs
   headless_env.rs          worker environment for headless hosts
   bindings/                manifest, assembler, domain providers
   artifacts/               store and codecs
@@ -1615,6 +1585,7 @@ backend/python/luma_exec/
   track.py                 track metadata, clips and output views
   score.py                 score facade: GraphTrack, Edit, graphs
   venue.py                 venue facade
+  perform.py               Perform set facade
   figures.py, display.py   figure capture and notebook display
 
 backend/src/agent/tools/python.rs   the model-facing tool
@@ -1897,7 +1868,7 @@ for the new persistent worker, data plane, or sandbox.
 - `track_waveforms`: low/mid/high band envelopes;
 - track mel spectrogram generation;
 - MERT full-mix and drum arrays;
-- graph run views, mel views, universe state;
+- score output windows, mel views, universe state;
 - evaluator positions and primitive ordering;
 - current graph definition and pattern arguments;
 - timeline annotations, pattern summaries, and argument schemas;

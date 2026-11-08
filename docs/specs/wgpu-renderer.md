@@ -40,6 +40,8 @@ The main parts are:
 - **Haze.** Analytic beam transport in `shaders/beam_transport.wgsl`, a baked
   density field (`haze_field.rs`), a shared far-field grid (`fog_grid.rs`), and the
   lit-interval cache (`interval_cache.rs`).
+- **Lasers.** Beams and sheets in haze from each projector's solved point
+  stream (`laser.rs`, `shaders/laser.wgsl`). See `docs/design/lasers.md`.
 - **Overlay.** Gizmos, selection and socket marks (`overlay.rs`).
 
 `docs/design/stage-rendering-quality.md` has the quality targets and measurements.
@@ -57,7 +59,7 @@ renderer.
 
 ## 5. Editor tooling
 
-Picking is a CPU raycast against a per-mesh BVH (`luma-scene/src/bvh.rs`). There is
+Picking is a CPU raycast against a per-mesh BVH (`gpui/crates/scene/src/bvh.rs`). There is
 no GPU picking buffer, because the snap solver needs face normals and downward
 surface queries with no camera. The gizmo is an explicit state machine
 (`gizmo.rs`). Snapping and sockets are in `snap.rs` and `sockets.rs`. The venue

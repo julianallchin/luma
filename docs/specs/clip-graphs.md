@@ -576,7 +576,7 @@ below holds for both kinds.
 Of kind `number`, output 0–1, the same at every head: a fader a performer moves. A curve maps
 it to an input's range, so one fader drives many inputs, each with its own
 range. What it reads is the host's: in a score, the venue's live control
-`name`, set from the Perform screen, MIDI or OSC (a control exists by being
+`name`, set from Live, MIDI or OSC (a control exists by being
 named; one nothing has set reads 0); in a Perform pattern, a value of that
 pattern keyed by the node's id, so a rename keeps its bindings. Into a
 clock input (`every`, `duration`) it is a speed, a live clock (section 5.5);
