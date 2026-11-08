@@ -5,6 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use tokio::sync::watch;
 
 const PY_MIN_VERSION: (u32, u32) = (3, 12);
 const PY_MAX_VERSION_EXCLUSIVE: (u32, u32) = (3, 13);
@@ -254,21 +255,49 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<
     Ok(())
 }
 
+/// Where a host's background Python setup stands
+/// ([`setup_python_env_background`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PythonSetup {
+    /// Creating the environment, installing its packages or fetching weights.
+    Running,
+    Ready,
+    /// Setup failed with this error. An environment an earlier setup left
+    /// behind may still work, as it does on an offline launch after an update.
+    Failed(String),
+}
+
+impl PythonSetup {
+    /// Wait for `setup` to end: `Ok` once it is ready, its error if it failed.
+    /// A setup thread that died without reporting counts as a failure.
+    pub async fn settled(setup: &mut watch::Receiver<Self>) -> Result<(), String> {
+        match setup.wait_for(|state| *state != Self::Running).await {
+            Ok(state) => match &*state {
+                Self::Failed(error) => Err(error.clone()),
+                Self::Ready | Self::Running => Ok(()),
+            },
+            Err(_) => Err("Python setup ended before reporting readiness".into()),
+        }
+    }
+}
+
 /// Kick off Python environment setup on a background thread at app startup.
 /// After the env is ready, also pre-fetches model weights to the HF cache
 /// so the classifier preprocessor doesn't pay a ~400 MB download on first
 /// track import. The preload is silent (folded under the dependency-setup
 /// umbrella) and non-fatal — the classifier worker can still download on
 /// demand if it failed here.
+///
+/// The receiver reads `Running` from the moment this returns, so nothing
+/// waiting on it takes the previous launch's environment as ready while this
+/// one reinstalls it.
 pub fn setup_python_env_background(
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
-) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+) -> watch::Receiver<PythonSetup> {
     crate::runtime::ffmpeg::init_headless();
-    let (ready, receiver) = tokio::sync::oneshot::channel();
+    let (state, receiver) = watch::channel(PythonSetup::Running);
     std::thread::spawn(move || {
-        let error_path = setup_error_path(&cache_dir);
-        let _ = fs::remove_file(&error_path);
         let result = ensure_python_env(&cache_dir, resource_dir.as_deref()).and_then(|python| {
             ensure_python_resource_dir_at(&cache_dir, resource_dir.as_deref(), "luma_exec")?;
             if let Err(error) = preload_model_weights(&cache_dir, &python) {
@@ -276,12 +305,13 @@ pub fn setup_python_env_background(
             }
             Ok(())
         });
-        if let Err(error) = &result {
-            log::error!("Python setup failed: {error}");
-            let _ = fs::create_dir_all(&cache_dir);
-            let _ = fs::write(error_path, error);
-        }
-        let _ = ready.send(result);
+        state.send_replace(match result {
+            Ok(()) => PythonSetup::Ready,
+            Err(error) => {
+                log::error!("Python setup failed: {error}");
+                PythonSetup::Failed(error)
+            }
+        });
     });
     receiver
 }
@@ -595,23 +625,6 @@ pub fn venv_dir(cache_dir: &Path) -> PathBuf {
 /// Written into the venv once its packages match this build's requirements;
 /// holds their hash.
 const REQUIREMENTS_MARKER: &str = ".requirements.hash";
-
-/// Where a failed setup leaves its error, for a worker waiting on it.
-fn setup_error_path(cache_dir: &Path) -> PathBuf {
-    cache_dir.join(".python-env-error")
-}
-
-/// Whether setup under `cache_dir` has installed this build's packages.
-#[must_use]
-pub fn setup_finished(cache_dir: &Path) -> bool {
-    venv_dir(cache_dir).join(REQUIREMENTS_MARKER).exists()
-}
-
-/// The error the last setup under `cache_dir` failed with, if it failed.
-#[must_use]
-pub fn setup_failure(cache_dir: &Path) -> Option<String> {
-    fs::read_to_string(setup_error_path(cache_dir)).ok()
-}
 
 /// The managed interpreter, if it already exists under `cache_dir`.
 ///

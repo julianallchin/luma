@@ -427,20 +427,28 @@ async fn run_one(
         };
     };
 
-    if let Some(report) = report {
-        report.started(p.name());
-    }
-
-    let started = std::time::Instant::now();
-    let result = p.run(ctx, track_id).await;
-    // The only stage-cost record the pipeline keeps. Emitted for failures too,
-    // because a slow failure and a fast one are different problems.
-    eprintln!(
-        "[preprocessing] {} track={track_id} duration_ms={} {}",
-        p.name(),
-        started.elapsed().as_millis(),
-        if result.is_ok() { "ok" } else { "failed" }
-    );
+    // Every stage runs a Python worker, so wait for the host's setup first. A
+    // stage waiting on it is still queued, and the wait is no part of its cost.
+    let result = match ctx.python_ready().await {
+        Ok(()) => {
+            if let Some(report) = report {
+                report.started(p.name());
+            }
+            let started = std::time::Instant::now();
+            let result = p.run(ctx, track_id).await;
+            // The only stage-cost record the pipeline keeps. Emitted for
+            // failures too, because a slow failure and a fast one are
+            // different problems.
+            eprintln!(
+                "[preprocessing] {} track={track_id} duration_ms={} {}",
+                p.name(),
+                started.elapsed().as_millis(),
+                if result.is_ok() { "ok" } else { "failed" }
+            );
+            result
+        }
+        Err(error) => Err(error),
+    };
 
     // Cancellation is a lifecycle outcome, not a failed analysis. Do not
     // publish status or exponential-backoff rows for a retired identity.

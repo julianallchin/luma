@@ -78,6 +78,12 @@ impl<'a> PreprocessorContext<'a> {
         self.analysis.checkpoint()
     }
 
+    /// Wait until this host's Python setup lets workers start
+    /// ([`WorkerEnvironment::ready`]).
+    pub async fn python_ready(&self) -> Result<(), String> {
+        self.workers.ready(&self.analysis).await
+    }
+
     pub fn stems_dir(&self) -> &std::path::Path {
         &self.stems_dir
     }

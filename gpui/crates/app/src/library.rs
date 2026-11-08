@@ -359,28 +359,36 @@ impl Library {
             Ok::<_, String>((services, account, lapsed))
         })?;
 
+        // The desktop sets its Python environment up in the background, which
+        // takes minutes on a first launch or after an update changes the
+        // requirements. Analysis waits for it instead of failing meanwhile.
+        let python_setup = if desktop {
+            Some(luma_lib::runtime::python::setup_python_env_background(
+                luma_lib::storage::cache_dir()?,
+                luma_lib::resources::resource_dir(),
+            ))
+        } else {
+            None
+        };
+        let services = match &python_setup {
+            Some(setup) => services.with_python_setup(setup.clone()),
+            None => services,
+        };
         let services = services.into_shared();
         // The loop that keeps the library current after the sync that opened
         // it, on this library's reactor, for
         // as long as the library lives. It handles its own sign-in state —
         // a 401 backs it off, and the next sign-in's push wakes it.
-        if desktop {
-            let ready = luma_lib::runtime::python::setup_python_env_background(
-                luma_lib::storage::cache_dir()?,
-                luma_lib::resources::resource_dir(),
-            );
+        if let Some(mut setup) = python_setup {
             let analysis_services = services.clone();
             runtime.spawn(async move {
-                match ready.await {
-                    Ok(Ok(())) => {
+                match luma_lib::runtime::python::PythonSetup::settled(&mut setup).await {
+                    Ok(()) => {
                         if let Err(error) = analysis_services.reconcile_analysis().await {
                             eprintln!("startup analysis reconciliation failed: {error}");
                         }
                     }
-                    Ok(Err(error)) => eprintln!("Python environment is unavailable: {error}"),
-                    Err(error) => {
-                        eprintln!("Python setup ended before reporting readiness: {error}")
-                    }
+                    Err(error) => eprintln!("Python environment is unavailable: {error}"),
                 }
             });
         }

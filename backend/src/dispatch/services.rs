@@ -276,6 +276,18 @@ impl AppServices {
         self
     }
 
+    /// Make analysis wait for the Python setup this host started
+    /// ([`crate::runtime::python::setup_python_env_background`]) instead of
+    /// failing while it runs.
+    #[must_use]
+    pub fn with_python_setup(
+        mut self,
+        setup: tokio::sync::watch::Receiver<crate::runtime::python::PythonSetup>,
+    ) -> Self {
+        self.workers = self.workers.after_setup(setup);
+        self
+    }
+
     /// Stop record replication, for a host that is quitting.
     pub fn stop_sync(&self) {
         if let Some(sync) = &self.sync {
