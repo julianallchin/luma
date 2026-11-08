@@ -259,17 +259,25 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<
 /// ([`setup_python_env_background`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PythonSetup {
-    /// Creating the environment, installing its packages or fetching weights.
+    /// Creating the environment or installing its packages.
     Running,
+    /// Installed; workers can start.
     Ready,
-    /// Setup failed with this error. An environment an earlier setup left
-    /// behind may still work, as it does on an offline launch after an update.
+    /// Setup failed at this step. An environment an earlier setup finished
+    /// installing ([`installed`]) may still work, as it does on an offline
+    /// launch after an update.
     Failed(String),
 }
 
 impl PythonSetup {
-    /// Wait for `setup` to end: `Ok` once it is ready, its error if it failed.
-    /// A setup thread that died without reporting counts as a failure.
+    /// A failure named by its step, the first line of `error`. The rest is
+    /// pip's output, which the setup log already holds.
+    pub(crate) fn failed(error: &str) -> Self {
+        Self::Failed(error.lines().next().unwrap_or_default().to_string())
+    }
+
+    /// Wait for `setup` to end: `Ok` once it is ready, the failed step if it
+    /// failed. A setup thread that died without reporting counts as failed.
     pub async fn settled(setup: &mut watch::Receiver<Self>) -> Result<(), String> {
         match setup.wait_for(|state| *state != Self::Running).await {
             Ok(state) => match &*state {
@@ -290,7 +298,8 @@ impl PythonSetup {
 ///
 /// The receiver reads `Running` from the moment this returns, so nothing
 /// waiting on it takes the previous launch's environment as ready while this
-/// one reinstalls it.
+/// one reinstalls it. It reads `Ready` once the packages are in, before the
+/// preload: workers need not wait for an optimisation.
 pub fn setup_python_env_background(
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
@@ -298,20 +307,25 @@ pub fn setup_python_env_background(
     crate::runtime::ffmpeg::init_headless();
     let (state, receiver) = watch::channel(PythonSetup::Running);
     std::thread::spawn(move || {
-        let result = ensure_python_env(&cache_dir, resource_dir.as_deref()).and_then(|python| {
-            ensure_python_resource_dir_at(&cache_dir, resource_dir.as_deref(), "luma_exec")?;
-            if let Err(error) = preload_model_weights(&cache_dir, &python) {
-                log::warn!("model-weights preload failed: {error}");
-            }
-            Ok(())
-        });
-        state.send_replace(match result {
-            Ok(()) => PythonSetup::Ready,
+        let python = match ensure_python_env(&cache_dir, resource_dir.as_deref()) {
+            Ok(python) => python,
             Err(error) => {
                 log::error!("Python setup failed: {error}");
-                PythonSetup::Failed(error)
+                state.send_replace(PythonSetup::failed(&error));
+                return;
             }
-        });
+        };
+        // The agent's cells import this package; analysis workers do not, so
+        // its failure is not the environment's.
+        if let Err(error) =
+            ensure_python_resource_dir_at(&cache_dir, resource_dir.as_deref(), "luma_exec")
+        {
+            log::error!("Deploying luma_exec failed: {error}");
+        }
+        state.send_replace(PythonSetup::Ready);
+        if let Err(error) = preload_model_weights(&cache_dir, &python) {
+            log::warn!("model-weights preload failed: {error}");
+        }
     });
     receiver
 }
@@ -624,7 +638,15 @@ pub fn venv_dir(cache_dir: &Path) -> PathBuf {
 
 /// Written into the venv once its packages match this build's requirements;
 /// holds their hash.
-const REQUIREMENTS_MARKER: &str = ".requirements.hash";
+pub(crate) const REQUIREMENTS_MARKER: &str = ".requirements.hash";
+
+/// Whether some setup, perhaps an earlier build's, finished installing the
+/// environment under `cache_dir`. A bare venv, which setup creates before
+/// installing anything, does not count.
+#[must_use]
+pub fn installed(cache_dir: &Path) -> bool {
+    venv_dir(cache_dir).join(REQUIREMENTS_MARKER).exists()
+}
 
 /// The managed interpreter, if it already exists under `cache_dir`.
 ///

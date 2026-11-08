@@ -92,12 +92,15 @@ band, on macOS). There a library-wide backfill mostly leaves the stage's frame
 rate alone, and takes longer. Other platforms still run it at normal priority.
 Imports run at normal priority everywhere: someone is waiting on them.
 
-The desktop sets Python up in the background, which takes minutes on a first
-launch or after an update changes the requirements. Until it settles, every
-stage waits in `run_one` (`WorkerEnvironment::ready`, fed by
-`Services::with_python_setup`) and stays queued. An identity transition ends
-the wait. If setup fails, stages still run on an environment an earlier setup
-left, so an offline launch after an update keeps working.
+The desktop sets Python up in the background (`AppServices::start_python_setup`),
+which takes minutes on a first launch or after an update changes the
+requirements. Until the packages are in, every stage waits in `run_one`
+(`WorkerEnvironment::ready`) and stays queued, and so does the startup
+reconcile. An identity transition ends the wait. If setup fails, stages still
+run on an environment an earlier setup finished installing, so an offline
+launch after an update keeps working. With none, they fail without recording
+backoff: the environment failed, not the track, so the next launch with a
+working setup retries them.
 
 On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The

@@ -429,26 +429,29 @@ async fn run_one(
 
     // Every stage runs a Python worker, so wait for the host's setup first. A
     // stage waiting on it is still queued, and the wait is no part of its cost.
-    let result = match ctx.python_ready().await {
-        Ok(()) => {
-            if let Some(report) = report {
-                report.started(p.name());
-            }
-            let started = std::time::Instant::now();
-            let result = p.run(ctx, track_id).await;
-            // The only stage-cost record the pipeline keeps. Emitted for
-            // failures too, because a slow failure and a fast one are
-            // different problems.
-            eprintln!(
-                "[preprocessing] {} track={track_id} duration_ms={} {}",
-                p.name(),
-                started.elapsed().as_millis(),
-                if result.is_ok() { "ok" } else { "failed" }
-            );
-            result
-        }
-        Err(error) => Err(error),
-    };
+    if let Err(error) = ctx.python_ready().await {
+        // A cancelled wait is a lifecycle outcome; see below.
+        ctx.checkpoint()?;
+        // The environment failed, not this track: report it, but record no
+        // backoff, so the next launch with a working setup retries at once.
+        settle(StageOutcome::Failed(error.clone()));
+        return Err(error);
+    }
+
+    if let Some(report) = report {
+        report.started(p.name());
+    }
+
+    let started = std::time::Instant::now();
+    let result = p.run(ctx, track_id).await;
+    // The only stage-cost record the pipeline keeps. Emitted for failures too,
+    // because a slow failure and a fast one are different problems.
+    eprintln!(
+        "[preprocessing] {} track={track_id} duration_ms={} {}",
+        p.name(),
+        started.elapsed().as_millis(),
+        if result.is_ok() { "ok" } else { "failed" }
+    );
 
     // Cancellation is a lifecycle outcome, not a failed analysis. Do not
     // publish status or exponential-backoff rows for a retired identity.

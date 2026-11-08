@@ -43,20 +43,36 @@ impl WorkerEnvironment {
         self
     }
 
-    /// Hold every worker until the host's background Python setup
-    /// ([`python_env::setup_python_env_background`]) has settled; see
-    /// [`Self::ready`].
+    /// Set this environment up in the background
+    /// ([`python_env::setup_python_env_background`]) and hold every worker
+    /// until that settles; see [`Self::ready`].
     #[must_use]
-    pub fn after_setup(mut self, setup: watch::Receiver<PythonSetup>) -> Self {
+    pub fn start_setup(self) -> Self {
+        let setup = python_env::setup_python_env_background(
+            self.cache_dir.clone(),
+            self.resource_dir.clone(),
+        );
+        self.after_setup(setup)
+    }
+
+    fn after_setup(mut self, setup: watch::Receiver<PythonSetup>) -> Self {
         self.setup = Some(setup);
         self
+    }
+
+    /// Wait for this environment's setup, if it has one, to settle either way.
+    pub async fn setup_settled(&self) {
+        if let Some(setup) = &self.setup {
+            let _ = PythonSetup::settled(&mut setup.clone()).await;
+        }
     }
 
     /// Wait until workers can start: at once when there is no setup to wait
     /// for, otherwise once it settles. Setup takes minutes on a first launch,
     /// and an update that changes the requirements reinstalls them, so an
     /// import can arrive first. An identity transition ends the wait. A failed
-    /// setup still lets workers run on an environment an earlier one left.
+    /// setup still lets workers run on an environment an earlier setup finished
+    /// installing.
     pub async fn ready(&self, analysis: &AnalysisGuard) -> Result<(), String> {
         let Some(setup) = &self.setup else {
             return Ok(());
@@ -67,10 +83,7 @@ impl WorkerEnvironment {
             () = analysis.cancelled() => return analysis.checkpoint(),
         };
         match settled {
-            Err(error) if python_env::find_existing_venv_python(&self.cache_dir).is_none() => {
-                // The first line names the step that failed. The rest is pip's
-                // output, which the setup log already holds.
-                let step = error.lines().next().unwrap_or_default();
+            Err(step) if !python_env::installed(&self.cache_dir) => {
                 Err(format!("Python setup failed: {step}"))
             }
             _ => Ok(()),
@@ -146,17 +159,19 @@ mod tests {
     use super::*;
     use crate::preprocessing::AnalysisTaskGroup;
 
-    fn guard(group: &AnalysisTaskGroup) -> AnalysisGuard {
-        let epoch = group.current_epoch().expect("epoch");
-        group.lease(epoch).expect("lease").guard()
+    fn lease(group: &AnalysisTaskGroup) -> crate::preprocessing::task_group::AnalysisLease {
+        group
+            .lease(group.current_epoch().expect("epoch"))
+            .expect("lease")
     }
 
     fn waiting_on(cache: &Path, setup: watch::Receiver<PythonSetup>) -> WorkerEnvironment {
         WorkerEnvironment::new(cache.to_path_buf(), None).after_setup(setup)
     }
 
-    /// A cache holding the interpreter an earlier setup left behind.
-    fn cache_with_interpreter() -> tempfile::TempDir {
+    /// A cache holding a venv's interpreter, as setup leaves it before it has
+    /// installed any package.
+    fn bare_venv() -> tempfile::TempDir {
         let cache = tempfile::tempdir().expect("temp dir");
         let (bin, exe) = if cfg!(windows) {
             ("Scripts", "python.exe")
@@ -169,15 +184,24 @@ mod tests {
         cache
     }
 
+    /// A cache holding an environment an earlier setup finished installing.
+    fn installed_environment() -> tempfile::TempDir {
+        let cache = bare_venv();
+        let marker = python_env::venv_dir(cache.path()).join(python_env::REQUIREMENTS_MARKER);
+        std::fs::write(marker, "an earlier build's hash").expect("marker");
+        cache
+    }
+
     #[tokio::test]
     async fn a_worker_waits_for_running_setup_and_starts_once_it_is_ready() {
-        // The interpreter already exists, as during an update's reinstall.
-        let cache = cache_with_interpreter();
+        // An installed environment, as during an update's reinstall.
+        let cache = installed_environment();
         let (setup, state) = watch::channel(PythonSetup::Running);
         let workers = waiting_on(cache.path(), state);
         let group = AnalysisTaskGroup::new();
-        let analysis = guard(&group);
+        let stage = lease(&group);
 
+        let analysis = stage.guard();
         let ready = workers.ready(&analysis);
         tokio::pin!(ready);
         assert!(
@@ -189,37 +213,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_identity_switch_ends_a_wait_for_setup() {
+    async fn an_identity_switch_completes_while_a_stage_waits_for_setup() {
         let cache = tempfile::tempdir().expect("temp dir");
         let (_setup, state) = watch::channel(PythonSetup::Running);
         let workers = waiting_on(cache.path(), state);
         let group = AnalysisTaskGroup::new();
-        let analysis = guard(&group);
-
+        // The waiting stage holds its lease, which the switch waits for.
+        let stage = lease(&group);
+        let analysis = stage.guard();
         let ready = workers.ready(&analysis);
         tokio::pin!(ready);
         assert!(poll!(&mut ready).is_pending());
-        let _barrier = group
-            .suspend_for_identity_switch()
-            .await
-            .expect("transition");
+
+        let switch = group.suspend_for_identity_switch();
+        tokio::pin!(switch);
+        assert!(
+            poll!(&mut switch).is_pending(),
+            "the switch should wait for the stage's lease"
+        );
         assert!(
             matches!(poll!(&mut ready), Poll::Ready(Err(_))),
-            "the wait outlived the identity it was for"
+            "the stage kept waiting for setup through the switch"
+        );
+        drop(stage);
+        assert!(
+            matches!(poll!(&mut switch), Poll::Ready(Ok(_))),
+            "the switch did not complete once the stage let go"
         );
     }
 
     #[tokio::test]
     async fn a_failed_first_setup_fails_the_worker_with_the_step_not_the_pip_log() {
-        let cache = tempfile::tempdir().expect("temp dir");
+        // Setup creates the venv before it installs anything, so a failed
+        // first setup leaves an interpreter with no packages.
+        let cache = bare_venv();
         let error = "Command to install PyTorch failed.\nstdout: Collecting torch==2.6.0";
-        let (_setup, state) = watch::channel(PythonSetup::Failed(error.into()));
+        let (_setup, state) = watch::channel(PythonSetup::failed(error));
         let group = AnalysisTaskGroup::new();
+        let stage = lease(&group);
 
         let failure = waiting_on(cache.path(), state)
-            .ready(&guard(&group))
+            .ready(&stage.guard())
             .await
-            .expect_err("there is no environment to run on");
+            .expect_err("there is no installed environment to run on");
         assert!(
             failure.contains("Command to install PyTorch failed."),
             "{failure}"
@@ -228,15 +264,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_setup_leaves_workers_the_environment_an_earlier_one_built() {
-        // An offline launch after an update: the reinstall fails, the old
-        // environment is still there.
-        let cache = cache_with_interpreter();
-        let (_setup, state) = watch::channel(PythonSetup::Failed("offline".into()));
+    async fn a_failed_setup_leaves_workers_the_environment_an_earlier_one_installed() {
+        // An offline launch after an update: the reinstall fails, and the old
+        // environment is still installed.
+        let cache = installed_environment();
+        let (_setup, state) = watch::channel(PythonSetup::failed("offline"));
         let group = AnalysisTaskGroup::new();
+        let stage = lease(&group);
 
         assert_eq!(
-            waiting_on(cache.path(), state).ready(&guard(&group)).await,
+            waiting_on(cache.path(), state).ready(&stage.guard()).await,
             Ok(())
         );
     }
