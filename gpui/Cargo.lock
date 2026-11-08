@@ -4615,7 +4615,7 @@ dependencies = [
 
 [[package]]
 name = "luma"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
