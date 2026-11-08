@@ -11,6 +11,8 @@ from __future__ import annotations
 import sys
 
 MODEL_ID = "m-a-p/MERT-v1-95M"
+# The revision mert_worker.py loads (`MERT_REVISION` there): fetch the same one.
+MODEL_REVISION = "12af15fef9d0ac838c3f475bfbbf26d2060dd4f5"
 
 
 def main() -> int:
@@ -23,8 +25,10 @@ def main() -> int:
         return 1
 
     print(f"[mert-preload] ensuring {MODEL_ID} weights cached…", file=sys.stderr, flush=True)
-    AutoModel.from_pretrained(MODEL_ID, trust_remote_code=True)
-    Wav2Vec2FeatureExtractor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    AutoModel.from_pretrained(MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True)
+    Wav2Vec2FeatureExtractor.from_pretrained(
+        MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True
+    )
     print(f"[mert-preload] {MODEL_ID} ready", file=sys.stderr, flush=True)
     return 0
 

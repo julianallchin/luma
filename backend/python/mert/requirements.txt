@@ -9,7 +9,12 @@
 # strips them at write time so the cu128 GPU wheels installed in step 1
 # aren't overwritten by CPU PyPI wheels. transformers + accelerate pull
 # torch transitively; pip respects the already-installed version.
-transformers>=4.41.0
+#
+# transformers stays below 5: MERT's remote code (modeling_MERT.py on the
+# hub) subclasses transformers' HubertEncoder, which in v5 no longer collects
+# hidden states itself, so `output_hidden_states=True` returns None and every
+# track fails with "'NoneType' object is not subscriptable".
+transformers>=4.41.0,<5
 accelerate>=0.30.0
 soundfile>=0.12.0
 numpy>=1.24.0

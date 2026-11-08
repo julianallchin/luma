@@ -58,6 +58,11 @@ import sys
 
 
 MERT_MODEL_ID = "m-a-p/MERT-v1-95M"
+# The hub commit both the weights and the remote modeling code load from.
+# `trust_remote_code` runs that code, so a moving `main` would run whatever
+# the repo publishes next against the transformers pinned in
+# mert/requirements.txt. Keep in step with `MODEL_REVISION` in mert_preload.py.
+MERT_REVISION = "12af15fef9d0ac838c3f475bfbbf26d2060dd4f5"
 MERT_FRAMES_PER_SECOND = 75
 MERT_LAYER = 7
 # `n2n.infer.compute_mert_features` consumes audio at cfg["mel"]["sample_rate"]
@@ -120,8 +125,12 @@ def main() -> int:
             else:
                 device = torch.device("cpu")
 
-            fe = AutoFeatureExtractor.from_pretrained(MERT_MODEL_ID, trust_remote_code=True)
-            model = AutoModel.from_pretrained(MERT_MODEL_ID, trust_remote_code=True).to(device).eval()
+            fe = AutoFeatureExtractor.from_pretrained(
+                MERT_MODEL_ID, revision=MERT_REVISION, trust_remote_code=True
+            )
+            model = AutoModel.from_pretrained(
+                MERT_MODEL_ID, revision=MERT_REVISION, trust_remote_code=True
+            ).to(device).eval()
             for p in model.parameters():
                 p.requires_grad_(False)
 
