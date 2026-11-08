@@ -196,14 +196,20 @@ globalThis.nav = {
 	},
 
 	// The title bar's venue menu, open. Its trigger is the title bar's first
-	// button, labelled with the venue's name.
+	// button of its own, labelled with the venue's name: not the agent toggle,
+	// and not a window light. Off macOS the corner's lights are painted dots,
+	// the leftmost buttons in the bar, and the first of them closes the window.
 	venueMenu() {
 		const shot = until("the title bar", (s) => s.find({ role: "card", label: "Title bar" }) ? s : undefined);
+		const within = (n, box) => box !== undefined
+			&& n.bounds.x >= box.x && n.bounds.x < box.x + box.width
+			&& n.bounds.y >= box.y && n.bounds.y < box.y + box.height;
 		const bar = shot.find({ role: "card", label: "Title bar" }).bounds;
+		const lights = shot.find({ role: "card", label: "Window controls" })?.bounds;
 		const trigger = shot.findAll({ role: "button" })
 			.filter((n) => n.bounds.width > 0
-				&& n.bounds.x >= bar.x && n.bounds.x < bar.x + bar.width
-				&& n.bounds.y >= bar.y && n.bounds.y < bar.y + bar.height
+				&& within(n, bar)
+				&& !within(n, lights)
 				&& !n.label.endsWith(" agent"))
 			.sort((a, b) => a.bounds.x - b.bounds.x)[0];
 		app.click(trigger);
