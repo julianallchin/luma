@@ -483,6 +483,9 @@ fn field(
                 Some(Kind::Time) => {
                     strip = strip.over_time(Rc::new(move |cx| clock_of(&app, &curve, cx)));
                 }
+                Some(Kind::Space) => {
+                    strip = strip.across_space(Rc::new(move |cx| heads_of(&app, &curve, cx)));
+                }
                 _ => {}
             }
             let entity = cx.new(|_| strip);
@@ -621,6 +624,7 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
         length,
         elapsed,
         playing,
+        ..
     } = host.beats()?;
     let (time, _) = coordinate(graph, curve)?;
     let time = graph
@@ -653,6 +657,38 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
         phase: inside.then_some(x),
         playing,
     })
+}
+
+/// Where the subject's heads fall along a curve's space axis at the
+/// playhead, as playback computes it, after the space's shift and scale: one
+/// place per head, outside 0–1 where a head is past an end of the curve.
+fn heads_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<Rc<[f64]>> {
+    let app = app.upgrade()?;
+    let host = app.read(cx).sheet_host()?;
+    let subject = host.subject()?;
+    let (space, _) = coordinate(subject.graph, curve)?;
+    let cells = host.sheet().heads.cells.clone()?;
+    let Beats {
+        start,
+        length,
+        elapsed,
+        ..
+    } = host.beats()?;
+    let places = subject
+        .graph
+        .coordinate_at_heads(
+            &space,
+            p::Frame {
+                cells: &cells,
+                features: None,
+                beat: start + elapsed.clamp(0., length.next_down().max(0.)),
+                clip_start: start,
+                clip_duration: length,
+                seed: subject.seed,
+            },
+        )
+        .ok()?;
+    Some(places.into_iter().flatten().collect())
 }
 
 /// A random node's settings as the preview draws them: a value node's
@@ -736,6 +772,7 @@ fn random_preview(
                 length,
                 elapsed,
                 playing,
+                ..
             } = host.beats()?;
             Some(random::Transport {
                 seed: host.subject()?.seed,

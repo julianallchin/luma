@@ -217,6 +217,8 @@ impl Subject<'_> {
 /// Where the playhead is in the subject, in beats since its start, and how
 /// long the subject lasts.
 pub(super) struct Beats {
+    /// The beat the subject starts on.
+    pub(super) start: f64,
     pub(super) length: f64,
     pub(super) elapsed: f64,
     pub(super) playing: bool,
@@ -317,6 +319,7 @@ impl<'a> Host<'a> {
                     .beat_at(f64::from(editor.transport.position))
                     .ok()?;
                 Some(Beats {
+                    start,
                     length: timeline.beat_at(clip.end).ok()? - start,
                     elapsed: now - start,
                     playing: editor.transport.playing,
