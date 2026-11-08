@@ -275,16 +275,44 @@ impl PythonSetup {
     pub(crate) fn failed(error: &str) -> Self {
         Self::Failed(error.lines().next().unwrap_or_default().to_string())
     }
+}
 
-    /// Wait for `setup` to end: `Ok` once it is ready, the failed step if it
+/// A host's background Python setup ([`setup_python_env_background`]), as
+/// everything that runs Python waits on it: analysis workers and the agent's
+/// cells.
+#[derive(Clone, Debug)]
+pub struct BackgroundSetup {
+    cache_dir: PathBuf,
+    state: watch::Receiver<PythonSetup>,
+}
+
+impl BackgroundSetup {
+    /// The setup of the environment under `cache_dir`, as `state` reports it.
+    pub(crate) fn new(cache_dir: PathBuf, state: watch::Receiver<PythonSetup>) -> Self {
+        Self { cache_dir, state }
+    }
+
+    /// Wait for setup to end: `Ok` once it is ready, the failed step if it
     /// failed. A setup thread that died without reporting counts as failed.
-    pub async fn settled(setup: &mut watch::Receiver<Self>) -> Result<(), String> {
-        match setup.wait_for(|state| *state != Self::Running).await {
+    pub async fn settled(&self) -> Result<(), String> {
+        let mut state = self.state.clone();
+        let settled = match state.wait_for(|state| *state != PythonSetup::Running).await {
             Ok(state) => match &*state {
-                Self::Failed(error) => Err(error.clone()),
-                Self::Ready | Self::Running => Ok(()),
+                PythonSetup::Failed(error) => Err(error.clone()),
+                PythonSetup::Ready | PythonSetup::Running => Ok(()),
             },
             Err(_) => Err("Python setup ended before reporting readiness".into()),
+        };
+        settled
+    }
+
+    /// Wait for setup to end, then whether Python can run: once it is ready,
+    /// and after a failure when an earlier setup finished installing the
+    /// environment ([`installed`]), as on an offline launch after an update.
+    pub async fn ready(&self) -> Result<(), String> {
+        match self.settled().await {
+            Err(step) if !installed(&self.cache_dir) => Err(format!("Python setup failed: {step}")),
+            _ => Ok(()),
         }
     }
 }
@@ -296,16 +324,17 @@ impl PythonSetup {
 /// umbrella) and non-fatal — the classifier worker can still download on
 /// demand if it failed here.
 ///
-/// The receiver reads `Running` from the moment this returns, so nothing
-/// waiting on it takes the previous launch's environment as ready while this
-/// one reinstalls it. It reads `Ready` once the packages are in, before the
+/// The setup reads `Running` from the moment this returns, so nothing waiting
+/// on it takes the previous launch's environment as ready while this one
+/// reinstalls it. It reads `Ready` once the packages are in, before the
 /// preload: workers need not wait for an optimisation.
 pub fn setup_python_env_background(
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
-) -> watch::Receiver<PythonSetup> {
+) -> BackgroundSetup {
     crate::runtime::ffmpeg::init_headless();
     let (state, receiver) = watch::channel(PythonSetup::Running);
+    let setup = BackgroundSetup::new(cache_dir.clone(), receiver);
     std::thread::spawn(move || {
         let python = match ensure_python_env(&cache_dir, resource_dir.as_deref()) {
             Ok(python) => python,
@@ -327,7 +356,7 @@ pub fn setup_python_env_background(
             log::warn!("model-weights preload failed: {error}");
         }
     });
-    receiver
+    setup
 }
 
 const MERT_PRELOAD_SOURCE: &str = include_str!("../../python/mert_preload.py");

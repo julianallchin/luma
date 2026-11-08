@@ -1306,6 +1306,15 @@ checks again after a cold worker has started, preserving that fresh namespace
 for the next cell instead of killing it. A final check before writing the
 `exec` request closes the remaining pre-dispatch gap.
 
+The desktop sets its Python environment up in the background, which takes
+minutes on a first launch or after an update changes the requirements. A cell
+waits for that setup when it asks for its workspace, after scope resolution
+and before binding assembly, so it never starts a kernel on missing or
+half-replaced packages. Stop ends the wait like any other stage, and a cell
+stopped by then skips binding assembly and returns `interrupted`. If setup
+failed and no earlier setup finished installing the environment, the cell
+fails with the step that failed.
+
 Once an `exec` request has been written, cancellation remains pending until the
 worker emits the matching `started` acknowledgement. Only then may Rust send
 the cancellation `SIGINT`. Each execution has an ID, and both the start frame
@@ -1824,8 +1833,8 @@ Platform acceptance tests must prove:
 17. Python has no generic application mutation, database or filesystem
     authority beyond explicitly installed host capabilities.
 18. A new conversation cannot inherit the prior thread's Python namespace.
-19. Cancellation covers binding assembly, cold startup, dispatch, host calls
-    and running user code. Pre-execution cancellation runs no user code and
+19. Cancellation covers the wait for Python setup, binding assembly, cold
+    startup, dispatch, host calls and running user code. Pre-execution cancellation runs no user code and
     preserves the namespace. `SIGINT` is sent only after the matching `started`
     acknowledgement. Forced process death reports state loss.
 20. Execution cannot read home or app secrets, write outside scratch, or reach

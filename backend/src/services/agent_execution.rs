@@ -311,7 +311,16 @@ pub async fn run_python_cell_inner(
         return Err("editable Python cells require a durable turn message".into());
     }
     let scope = resolved.bindings;
-    let workspace = service.workspace_for_cell(&lease)?;
+    // Waits for the host's Python setup, which a stop can cut short.
+    let workspace = service.workspace_for_cell(&lease).await?;
+    if cancel.is_cancelled() {
+        // A stopped cell has no use for bindings, and assembling them can
+        // decode a song's audio while a sign-out waits for this cell. The
+        // workspace reports a cancelled cell interrupted without touching
+        // Python.
+        let outcome = workspace.run_cell(&code, DEFAULT_CELL_TIMEOUT, &cancel);
+        return Ok(project(&workspace, outcome));
+    }
 
     // Assembly is async (it reads the database) and holds the workspace's
     // artifact store, which is why that lock is a tokio one.
@@ -603,6 +612,98 @@ mod tests {
         assert!(!cancel_python_cell_inner(&service, &thread));
         let next = service.claim_cell(&thread).unwrap();
         drop(next);
+    }
+
+    /// A windowless library with no Python and one unbound agent thread,
+    /// whose cells wait for the setup `state` reports, of a cache with nothing
+    /// installed in it.
+    async fn waiting_on_setup(
+        directory: &Path,
+        state: tokio::sync::watch::Receiver<crate::runtime::python::PythonSetup>,
+    ) -> (crate::dispatch::AppServices, String) {
+        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
+        crate::database::local::auth::arm_write_admission(&services.db.0, None)
+            .await
+            .unwrap();
+        let thread = crate::database::local::agent_threads::create_thread(
+            &services.db.0,
+            crate::models::agent_threads::CreateAgentThreadInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                agent_kind: "unbound".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        services
+            .workspaces
+            .attach_setup(crate::runtime::python::BackgroundSetup::new(
+                directory.join("cache"),
+                state,
+            ));
+        (services, thread.id)
+    }
+
+    async fn run(
+        services: &crate::dispatch::AppServices,
+        directory: &Path,
+        thread: &str,
+    ) -> Result<PythonCellResult, String> {
+        run_python_cell_inner(
+            &services.db.0,
+            &services.storage,
+            directory,
+            &services.workspaces,
+            &services.live_handles(),
+            thread.to_string(),
+            "1".to_string(),
+            PythonScopeInput::default(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_cell_on_a_host_whose_first_python_setup_failed_reports_the_step() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_setup, state) =
+            tokio::sync::watch::channel(crate::runtime::python::PythonSetup::failed(
+                "Command to install PyTorch failed.\nstdout: Collecting torch",
+            ));
+        let (services, thread) = waiting_on_setup(directory.path(), state).await;
+
+        let error = run(&services, directory.path(), &thread)
+            .await
+            .expect_err("there is no Python to run the cell on");
+        assert!(
+            error.contains("Command to install PyTorch failed."),
+            "the cell should say which setup step failed: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cell_stopped_while_it_waits_for_python_setup_comes_back_interrupted() {
+        let directory = tempfile::tempdir().unwrap();
+        // A setup that never finishes.
+        let (_setup, state) =
+            tokio::sync::watch::channel(crate::runtime::python::PythonSetup::Running);
+        let (services, thread) = waiting_on_setup(directory.path(), state).await;
+
+        let stop = async {
+            // A cell can be stopped from the moment it is admitted.
+            while !cancel_python_cell_inner(&services.workspaces, &thread) {
+                tokio::task::yield_now().await;
+            }
+        };
+        let (cell, ()) = tokio::join!(run(&services, directory.path(), &thread), stop);
+        let cell = cell.expect("a stopped cell is a result");
+        // This host has no Python, so a cell that went on to start it would
+        // come back failed.
+        assert_eq!(cell.status, "interrupted", "{cell:?}");
     }
 
     #[tokio::test]
