@@ -281,9 +281,10 @@ test("duplicate, delete, undo, split, lift, alt-drag and overlap are writes", ()
   expect([count(STROBE), total()]).toEqual([1, start]);
 
   // Split: Haze a second right of the middle of the lane, the cursor set
-  // with a press on its body below the header, then cut in two. The second
-  // is what makes the later half overlap Wash, so the lift below cannot
-  // share Wash's lane.
+  // with a press on its body below the header, then cut in two. Both halves
+  // end before Strobe and Wash start, so neither lift nor move below cuts
+  // anything: a layer is one track, and a clip placed over another in it
+  // cuts away what it covers (`lanes::settle`).
   const middle = node("row", "Lane 2").bounds.width / 2 / ZOOM + 1;
   const haze = span(HAZE);
   app.drag(node("card", HAZE), { dx: (middle - (haze.start + haze.length / 2)) * ZOOM, dy: 0 });
@@ -305,6 +306,7 @@ test("duplicate, delete, undo, split, lift, alt-drag and overlap are writes", ()
   // above and stays there across a reopen. Other clips keep their timing.
   const lane = laneHeight();
   const strobeBefore = span(STROBE);
+  const washBefore = span(WASH);
   const gap = () => { const h = spans(HAZE); return Math.abs(h[1].y - h[0].y); };
   assert(Math.abs(gap()) < 1, "the two halves did not start in one lane");
   app.drag(node("card", HAZE), { dx: 0, dy: -lane });
@@ -312,9 +314,15 @@ test("duplicate, delete, undo, split, lift, alt-drag and overlap are writes", ()
   settled();
   const lifted = gap();
   assert(lifted >= lane - 1, `an upward drag did not lift one half a lane: gap ${lifted}, lane ${lane}, ${JSON.stringify(spans(HAZE))}`);
-  // It stays separately editable beside Wash.
-  const liftedHalf = Math.min(...spans(HAZE).map((h) => h.y));
-  expect(Math.abs(liftedHalf - span(WASH).y) >= lane - 1).toBe(true);
+  // One lane up is Wash's layer: the half joins it as a clip of its own,
+  // clear of Wash, and Wash keeps all of its span.
+  const liftedHalf = spans(HAZE).reduce((a, b) => (b.y < a.y ? b : a));
+  const wash = spans(WASH);
+  expect(wash.length).toBe(1);
+  assert(Math.abs(liftedHalf.y - wash[0].y) < 1, `the lifted half is not in Wash's lane: ${JSON.stringify({ liftedHalf, wash })}`);
+  assert(liftedHalf.start + liftedHalf.length <= wash[0].start + 0.01, `the lifted half reaches into Wash: ${JSON.stringify({ liftedHalf, wash })}`);
+  assert(near(wash[0].start, washBefore.start) && near(wash[0].length, washBefore.length),
+    `Wash changed when a clip joined its layer clear of it: ${JSON.stringify({ washBefore, wash })}`);
   reopen();
   assert(Math.abs(gap() - lifted) < 1, "the lane change did not survive a reopen");
   const strobeAfter = span(STROBE);
