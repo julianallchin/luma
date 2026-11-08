@@ -5,10 +5,11 @@ Each image is one app window, with rounded corners and a soft shadow, over a
 backdrop made from Luma's own stage render: the lit, hazed stage at the top
 dissolving through a halftone screen into a pale fog of its own light.
 
-    python3 scripts/screenshots/composite.py SHOTS_DIR [OUT_DIR]
+    python3 scripts/screenshots/composite.py SHOTS_DIR [OUT_DIR] [--backdrop IMAGE]
 
 SHOTS_DIR is what `scripts/screenshots/capture` wrote (it holds showcase/*.png);
-OUT_DIR defaults to www/public/screenshots. Needs numpy and Pillow.
+OUT_DIR defaults to www/public/screenshots. The backdrop is IMAGE when given,
+else the stage capture (showcase/stage.png). Needs numpy and Pillow.
 """
 
 import sys
@@ -151,16 +152,25 @@ def compose(stage, shot, size, share, centre_x):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    backdrop_file = None
+    if "--backdrop" in args:
+        at = args.index("--backdrop")
+        backdrop_file = Path(args[at + 1])
+        del args[at : at + 2]
+    if not args:
         sys.exit(__doc__)
-    shots = Path(sys.argv[1]) / "showcase"
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else REPO / "www" / "public" / "screenshots"
+    shots = Path(args[0]) / "showcase"
+    out = Path(args[1]) if len(args) > 1 else REPO / "www" / "public" / "screenshots"
     out.mkdir(parents=True, exist_ok=True)
-    stage = Image.open(shots / "stage.png")
-    # Off with the stage's own chrome: the frame-rate card, the corner
-    # buttons, the camera rail and the transport pill.
-    w, h = stage.size
-    stage = stage.crop((round(w * 0.04), round(h * 0.07), round(w * 0.94), round(h * 0.9)))
+    if backdrop_file is not None:
+        stage = Image.open(backdrop_file).convert("RGB")
+    else:
+        stage = Image.open(shots / "stage.png")
+        # Off with the stage's own chrome: the frame-rate card, the corner
+        # buttons, the camera rail and the transport pill.
+        w, h = stage.size
+        stage = stage.crop((round(w * 0.04), round(h * 0.07), round(w * 0.94), round(h * 0.9)))
     for name, (capture, size, share, centre_x) in IMAGES.items():
         image = compose(stage, Image.open(shots / f"{capture}.png"), size, share, centre_x)
         path = out / f"{name}.webp"
