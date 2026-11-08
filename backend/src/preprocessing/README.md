@@ -87,9 +87,10 @@ See [`scheduler.rs`](scheduler.rs). Two-tier parallelism:
 preprocessor)` so user-driven re-imports never race the startup reconcile.
 
 The startup reconcile launches its workers below the UI
-(`WorkerEnvironment::in_background`, the Darwin background band on macOS), so
-a library-wide backfill never costs the stage its frame rate. Imports run at
-normal priority: someone is waiting on them.
+(`WorkerEnvironment::in_background`: `taskpolicy -b`, the Darwin background
+band, on macOS). There a library-wide backfill mostly leaves the stage's frame
+rate alone, and takes longer. Other platforms still run it at normal priority.
+Imports run at normal priority everywhere: someone is waiting on them.
 
 On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The

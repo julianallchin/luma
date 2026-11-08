@@ -29,10 +29,10 @@ impl WorkerEnvironment {
         }
     }
 
-    /// Launch every worker below the UI ([`crate::runtime::command::background`]),
-    /// for analysis nobody is waiting on, like the startup catch-up. Six MERT
-    /// workers at normal priority take a 60 Hz GPU loop down to 31-43 fps; in
-    /// the background it holds 58, and the batch takes about a quarter longer.
+    /// Launch every worker below the UI
+    /// ([`crate::runtime::command::background_command`]), for analysis nobody
+    /// is waiting on, like the startup catch-up: the stage keeps its frames,
+    /// and the batch takes longer.
     #[must_use]
     pub fn in_background(mut self) -> Self {
         self.background = true;
@@ -115,10 +115,11 @@ impl WorkerEnvironment {
             .ok_or_else(|| format!("worker script {} has no parent directory", script.display()))?
             .to_path_buf();
 
-        let mut cmd = crate::runtime::command::command(python);
-        if self.background {
-            crate::runtime::command::background(&mut cmd);
-        }
+        let mut cmd = if self.background {
+            crate::runtime::command::background_command(python)
+        } else {
+            crate::runtime::command::command(python)
+        };
         cmd.env("PYTHONUNBUFFERED", "1")
             .current_dir(workdir)
             .arg(script);
