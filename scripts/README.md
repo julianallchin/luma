@@ -7,6 +7,7 @@ Run from the repository root.
 | `setup` | Prepare a fresh clone: toolchain, submodule, LFS files, hooks, and a check of the rest. |
 | `headless/` | Drive Luma without the app: one agent turn, the MCP server, the venue-and-show gauntlet. See [headless/README.md](headless/README.md). |
 | `library/snapshot.py` | Copy a Luma library (the database and its files) to a backup folder and verify the copy: `python3 scripts/library/snapshot.py SOURCE DESTINATION`. |
+| `screenshots/` | The website's and README's screenshots. `capture` runs `showcase.test.js` in the pixel harness on a staged library (fixture definitions, art and audio in `harness/showcase/`, made by `make_assets.py`), then `composite.py` puts each window over a backdrop of Luma's own stage render into `www/public/screenshots/`. |
 | `release/` | Build the installable app. `bundle-mac` and `bundle-linux` build and package it, `stage-resources` copies the runtimes, workers and fixtures it ships, `manifest.py` writes the update manifest, and `install.sh` is the Linux installer. `macos/` and `linux/` hold the bundle's metadata and the DMG art. The release workflow runs them; see [RELEASING.md](../RELEASING.md). |
 
 A script that only one task needed does not belong here; see "Where things go"

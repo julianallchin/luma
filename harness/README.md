@@ -9,6 +9,10 @@ Reference data and image tools for native UI and renderer tests.
   app's captures beside them (`chat_captures.test.js` rewrites them).
 - `gauntlet-te/`: the track editor interaction contract.
 - `agent-gauntlet/`: the venue and show MCP gauntlet. See its README.
+- `showcase/`: the staged library behind the website's screenshots: two
+  made-up fixture definitions, cover art and one song, all made by
+  `scripts/screenshots/make_assets.py` and read by
+  `scripts/screenshots/showcase.test.js` through the fixture's `assets`.
 - `shots/`: saved captures. Ignored by git.
 
 Render the renderer goldens:
