@@ -123,7 +123,16 @@ async fn pads_press_latching_keys_set_and_any_input_can_invert() {
     services.inputs.receive(cc(21, 0.0));
     assert_eq!(value(&services, &venue, "strobe"), 0.0);
 
-    let flash = services.inputs.state().bindings[0].id.clone();
+    // By its control: the two can be learned in one millisecond, and bindings
+    // made in one millisecond have no oldest.
+    let flash = services
+        .inputs
+        .state()
+        .bindings
+        .into_iter()
+        .find(|binding| binding.control == "flash")
+        .expect("flash is bound")
+        .id;
     dispatch(
         &services,
         "input_update_binding",
