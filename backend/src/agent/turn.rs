@@ -628,9 +628,11 @@ impl Turn {
                     (call.id, output)
                 });
             }
-            while let Some((call_id, output)) = tasks.running.next().await {
+            while let Some((call_id, output)) = tasks.next().await {
                 self.emit(TurnEvent::ToolCallEnded { call_id, output });
-                self.commit(setup, &assistant_id, false).await?;
+                tasks
+                    .alongside(self.commit(setup, &assistant_id, false))
+                    .await?;
             }
             drop(tasks);
 
@@ -938,7 +940,7 @@ impl Turn {
                 tokio::pin!(next);
                 loop {
                     tokio::select! {
-                        completed = pending.running.next(), if !pending.running.is_empty() => {
+                        completed = pending.next(), if !pending.is_empty() => {
                             let (id, name, reply, output) = completed.expect("pending tool");
                             let model_output = match &output {
                                 ToolResult::Output { value } => setup.registry.get(&name)
@@ -950,7 +952,7 @@ impl Turn {
                             let replier = &replier;
                             writes.push(Box::pin(replier.reply(reply, model_output)));
                             if let Some(row) = applied.row.map(|row| self.transcript.messages[row].id.clone()) {
-                                if let Err(error) = self.commit(setup, &row, false).await { break Err(error); }
+                                if let Err(error) = pending.alongside(self.commit(setup, &row, false)).await { break Err(error); }
                             }
                             continue;
                         }
@@ -987,13 +989,14 @@ impl Turn {
                         usage: session.usage_total(),
                     });
                     if let Some(model) = model {
-                        if let Err(error) = db::set_thread_actor(
-                            &self.service.services().db().0,
-                            &self.thread_id,
-                            &model,
-                            self.principal.as_deref(),
-                        )
-                        .await
+                        if let Err(error) = pending
+                            .alongside(db::set_thread_actor(
+                                &self.service.services().db().0,
+                                &self.thread_id,
+                                &model,
+                                self.principal.as_deref(),
+                            ))
+                            .await
                         {
                             break Err(AgentError::Storage(error));
                         }
@@ -1019,7 +1022,10 @@ impl Turn {
                     stepped = true;
                     self.external_step(&session, setup, request, StopReason::ToolUse, step_started);
                     step_started = std::time::Instant::now();
-                    if let Err(error) = self.commit(setup, assistant_id, false).await {
+                    if let Err(error) = pending
+                        .alongside(self.commit(setup, assistant_id, false))
+                        .await
+                    {
                         break Err(error);
                     }
                 }
@@ -1029,8 +1035,14 @@ impl Turn {
                         let Some(prompt) = sent.remove(&id) else {
                             continue;
                         };
-                        if let Err(error) = self
-                            .steer_into(setup, assistant_id, turn_message_id, id, prompt)
+                        if let Err(error) = pending
+                            .alongside(self.steer_into(
+                                setup,
+                                assistant_id,
+                                turn_message_id,
+                                id,
+                                prompt,
+                            ))
                             .await
                         {
                             failed = Some(error);
@@ -1085,7 +1097,7 @@ impl Turn {
                     if let Some(error) = failed {
                         break Err(error);
                     }
-                    if !pending.running.is_empty() {
+                    if !pending.is_empty() {
                         break Err(AgentError::Invalid("native engine ended with unfinished tool calls; pending work was cancelled".into()));
                     }
                     break Ok(());
@@ -1093,7 +1105,7 @@ impl Turn {
             }
         };
         if let Err(error) = result {
-            pending.running.clear();
+            pending.cancel();
             for call_id in &active {
                 self.emit(TurnEvent::ToolCallEnded {
                     call_id: call_id.clone(),
@@ -1257,8 +1269,15 @@ pub(super) async fn record_stop(
 
 /// Futures remain owned by their turn: dropping it cancels running and queued
 /// calls together. Only cells sharing this turn's Python namespace serialize.
+///
+/// The calls run only while they are polled, so the turn awaits its own work
+/// through [`Self::alongside`]. A call can hold a write transaction across an
+/// await (a subagent's merge does); a commit awaited without polling it would
+/// wait on that lock until SQLite's busy timeout fails the turn.
 struct ToolTasks<'a, T> {
     running: FuturesUnordered<BoxFuture<'a, T>>,
+    /// Calls that finished while the turn was busy, in the order they did.
+    finished: std::collections::VecDeque<T>,
     python: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -1266,12 +1285,45 @@ impl<T> Default for ToolTasks<'_, T> {
     fn default() -> Self {
         Self {
             running: FuturesUnordered::new(),
+            finished: std::collections::VecDeque::new(),
             python: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
 
 impl<'a, T: Send + 'a> ToolTasks<'a, T> {
+    fn is_empty(&self) -> bool {
+        self.running.is_empty() && self.finished.is_empty()
+    }
+
+    /// Drop every call, running or finished and not yet taken.
+    fn cancel(&mut self) {
+        self.running.clear();
+        self.finished.clear();
+    }
+
+    /// The next call to finish, or `None` once every call has.
+    async fn next(&mut self) -> Option<T> {
+        match self.finished.pop_front() {
+            Some(done) => Some(done),
+            None => self.running.next().await,
+        }
+    }
+
+    /// Await `work` while the calls keep running.
+    async fn alongside<F: std::future::Future>(&mut self, work: F) -> F::Output {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                biased;
+                output = &mut work => return output,
+                Some(done) = self.running.next(), if !self.running.is_empty() => {
+                    self.finished.push_back(done);
+                }
+            }
+        }
+    }
+
     fn push(&mut self, python: bool, task: impl std::future::Future<Output = T> + Send + 'a) {
         let namespace = self.python.clone();
         self.running.push(Box::pin(async move {
@@ -1484,6 +1536,26 @@ fn clamp_tool_text(value: &mut Value, budget: usize) {
 mod scheduling_tests {
     use super::*;
     use tokio::sync::oneshot;
+
+    /// The turn's own await can depend on a running call — a commit waiting
+    /// for the write lock a subagent's merge holds — so the calls keep running
+    /// under it, and what finishes meanwhile is still handed out after.
+    #[tokio::test]
+    async fn the_turns_own_work_keeps_the_calls_running() {
+        let mut tasks = ToolTasks::default();
+        let (unlock, locked) = oneshot::channel();
+        tasks.push(false, async move {
+            tokio::task::yield_now().await;
+            unlock.send(()).unwrap();
+            "merge"
+        });
+        tasks.push(false, std::future::pending());
+        tasks.alongside(locked).await.unwrap();
+        assert_eq!(tasks.next().await, Some("merge"));
+        assert!(!tasks.is_empty(), "the unfinished call is still running");
+        tasks.cancel();
+        assert!(tasks.is_empty());
+    }
 
     #[tokio::test]
     async fn two_children_start_before_parent_read_finishes() {
