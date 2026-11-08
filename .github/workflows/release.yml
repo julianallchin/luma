@@ -84,10 +84,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # Only main saves (a nightly runs on main): a tag or a dispatch from
+      # another branch restores main's entry, and an entry of its own would
+      # crowd main's out of the 10 GB cache. See ci.yml.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gpui -> target
           key: release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install dmgbuild
         run: pipx install dmgbuild==1.6.7
       - name: Bundle, sign and notarize
@@ -128,10 +132,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libfontconfig1-dev libssl-dev libclang-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      # Saved on main only, like bundle-mac's.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gpui -> target
           key: release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Bundle
         run: scripts/release/bundle-linux
       - uses: actions/upload-artifact@v4

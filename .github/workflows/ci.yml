@@ -7,7 +7,24 @@ on:
     branches: [main, dev]
   workflow_dispatch:
 
+# A newer push to a pull request supersedes the run still going on it. Branch
+# pushes get a group of their own, so every commit on main and dev keeps its
+# full run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# The Rust jobs share the repository's 10 GB Actions cache with the release
+# workflow. A run restores entries saved on its own branch or on main, so an
+# entry saved on a pull request is one no other run can use. Past the limit,
+# GitHub evicts the least recently used entries, and main's CI and the nightly
+# then build from scratch. So only branch pushes save. A failed run saves too,
+# so the next run starts warm after a lockfile change; cargo's fingerprints
+# decide what is reused either way.
+
 jobs:
+  # `cargo check` builds metadata and `cargo test` builds code, so the two
+  # share no artifacts. As separate jobs their builds run side by side.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -24,9 +41,30 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gpui -> target
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: Check native app
         run: cargo check --workspace --all-targets
         working-directory: gpui
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libfontconfig1-dev libssl-dev libclang-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gpui -> target
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: Test scene model
         run: cargo test -p luma-scene
         working-directory: gpui
@@ -56,6 +94,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend -> target
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
       - name: Test backend
         run: cargo test --workspace --no-fail-fast
         working-directory: backend
