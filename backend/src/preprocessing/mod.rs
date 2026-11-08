@@ -19,6 +19,8 @@ pub mod failures;
 pub mod preprocessor;
 pub mod registry;
 pub mod scheduler;
+#[cfg(test)]
+mod shared_track_tests;
 pub mod task_group;
 pub mod worker_environment;
 pub mod workers;

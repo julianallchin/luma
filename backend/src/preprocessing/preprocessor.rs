@@ -164,11 +164,29 @@ pub trait Preprocessor: Send + Sync {
     }
 }
 
-/// Track IDs `p` should run for: tracks with local audio, not in failure
-/// backoff for `p`, whose artifact has fewer than `rows_per_track` rows at the
-/// current version — or for which `stale` holds. `stale` is an SQL condition
-/// over the outer track `t`; the caller passes a `&'static`-built fragment,
-/// never user input.
+/// Holds for a track `t` whose synced analysis this device may write: the
+/// signed-in principal owns it, or admission is not armed. A synced artifact
+/// row is the track owner's. The server accepts it from nobody else, so the
+/// device of a venue member who opens someone else's song reads the owner's
+/// rows as they sync, and computes only the caches no one else sees.
+pub(crate) const AUTHORS_SYNCED_ANALYSIS: &str = "NOT EXISTS (
+    SELECT 1 FROM auth_write_admission admission
+     WHERE admission.singleton = 1 AND admission.armed = 1
+       AND t.uid IS NOT admission.active_uid)";
+
+/// Whether `p`'s artifact table is synced, so its rows belong to the track's
+/// owner (see [`AUTHORS_SYNCED_ANALYSIS`]).
+pub(crate) fn writes_synced_rows(p: &(impl Preprocessor + ?Sized)) -> bool {
+    crate::sync::schema::SYNCED_TABLES
+        .iter()
+        .any(|table| table.name == p.artifact_table())
+}
+
+/// Track IDs `p` should run for: tracks with local audio whose analysis this
+/// device writes, not in failure backoff for `p`, whose artifact has fewer
+/// than `rows_per_track` rows at the current version — or for which `stale`
+/// holds. `stale` is an SQL condition over the outer track `t`; the caller
+/// passes a `&'static`-built fragment, never user input.
 pub async fn pending_tracks<P: Preprocessor + ?Sized>(
     pool: &SqlitePool,
     p: &P,
@@ -179,6 +197,7 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
           WHERE t.file_path IS NOT NULL
             AND t.file_path != ''
             AND t.file_path NOT LIKE '%.stub'
+            AND ({authors})
             AND NOT EXISTS (
                 SELECT 1 FROM preprocessing_failures f
                  WHERE f.track_id = t.id AND f.preprocessor = ?1
@@ -189,7 +208,12 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
                   WHERE a.track_id = t.id AND a.processor_version >= ?2) < ?3
                 OR ({stale})
             )",
-        table = p.artifact_table()
+        table = p.artifact_table(),
+        authors = if writes_synced_rows(p) {
+            AUTHORS_SYNCED_ANALYSIS
+        } else {
+            "1"
+        },
     );
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(p.name())

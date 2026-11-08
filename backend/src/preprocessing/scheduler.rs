@@ -36,7 +36,9 @@ use crate::models::tracks::{
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::concurrency::{analysis_worker_count, run_bounded_track_jobs};
 use crate::preprocessing::failures;
-use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext, PreprocessorRef};
+use crate::preprocessing::preprocessor::{
+    writes_synced_rows, Preprocessor, PreprocessorContext, PreprocessorRef, AUTHORS_SYNCED_ANALYSIS,
+};
 use crate::preprocessing::registry;
 use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
 use crate::storage::StorageRoot;
@@ -304,8 +306,16 @@ async fn run_track_layers(
     };
     storage.ensure_track_storage()?;
     let stems_dir = storage.stems_root();
+    let authors_synced: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {AUTHORS_SYNCED_ANALYSIS} FROM tracks t WHERE t.id = ?"
+    )))
+    .bind(track_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("Failed to read who analyses track {track_id}: {error}"))?;
 
-    // Track which artifacts failed in this run so we can skip dependents.
+    // Artifacts that failed in this run, or that are another principal's to
+    // produce and have not synced yet, so their dependents wait.
     let mut failed_artifacts: HashSet<Artifact> = HashSet::new();
     let mut track_errors = Vec::new();
 
@@ -334,6 +344,13 @@ async fn run_track_layers(
                 continue;
             }
             if p.is_complete(&ctx, track_id).await? {
+                if let Some(report) = report {
+                    report.settle(p.name(), StageOutcome::Skipped);
+                }
+                continue;
+            }
+            if !authors_synced && writes_synced_rows(p.as_ref()) {
+                failed_artifacts.insert(p.output());
                 if let Some(report) = report {
                     report.settle(p.name(), StageOutcome::Skipped);
                 }

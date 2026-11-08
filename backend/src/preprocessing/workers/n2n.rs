@@ -137,7 +137,18 @@ mod tests {
         sqlx::query(
             "CREATE TABLE tracks (
                 id TEXT PRIMARY KEY,
+                uid TEXT,
                 file_path TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE auth_write_admission (
+                singleton INTEGER PRIMARY KEY,
+                armed INTEGER NOT NULL DEFAULT 0,
+                active_uid TEXT
             )",
         )
         .execute(&pool)

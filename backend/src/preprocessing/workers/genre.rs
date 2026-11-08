@@ -123,7 +123,12 @@ mod tests {
             .expect("in-memory db");
 
         for ddl in [
-            "CREATE TABLE tracks (id TEXT PRIMARY KEY, file_path TEXT)",
+            "CREATE TABLE tracks (id TEXT PRIMARY KEY, uid TEXT, file_path TEXT)",
+            "CREATE TABLE auth_write_admission (
+                singleton INTEGER PRIMARY KEY,
+                armed INTEGER NOT NULL DEFAULT 0,
+                active_uid TEXT
+            )",
             "CREATE TABLE track_beats (
                 track_id TEXT PRIMARY KEY,
                 beats_json TEXT NOT NULL,
