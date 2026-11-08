@@ -1,7 +1,7 @@
 //! Where the bundled ffmpeg binary is.
 //!
 //! A one-shot search resolves host resources and the developer runtime. Native
-//! and headless hosts share the same fallback to system PATH.
+//! and headless hosts share the same fallback to the user's own ffmpeg.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -59,12 +59,19 @@ fn dev_runtime_dir() -> Option<PathBuf> {
 }
 
 /// Get the path to the ffmpeg binary.
-/// Returns the bundled path if available, otherwise "ffmpeg" (system PATH).
+/// Returns the bundled path if available, otherwise the user's own ffmpeg (see
+/// [`system_ffmpeg`]).
 pub fn ffmpeg_path() -> PathBuf {
     FFMPEG_PATH
         .get()
         .and_then(|opt| opt.as_ref().cloned())
-        .unwrap_or_else(|| PathBuf::from("ffmpeg"))
+        .unwrap_or_else(system_ffmpeg)
+}
+
+/// The user's own ffmpeg, found on the PATH their login shell sees; a bare
+/// `ffmpeg` (whose spawn then fails) when there is none.
+pub fn system_ffmpeg() -> PathBuf {
+    super::user_path::find("ffmpeg").unwrap_or_else(|| PathBuf::from("ffmpeg"))
 }
 
 /// Get the directory containing the bundled ffmpeg binary, if available.

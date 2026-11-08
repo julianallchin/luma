@@ -3,7 +3,7 @@
 
 use super::{
     content,
-    process::{command, Process},
+    process::{command, Cli, Process},
     protocol, AgentError, ContentBlock, Event, Request, ToolOutcome, Usage,
 };
 use serde_json::{json, Value};
@@ -42,7 +42,7 @@ const HELD_RESULT_SETTLE: Duration = Duration::from_secs(5);
 
 impl Session {
     pub async fn start(request: Request) -> Result<Self, AgentError> {
-        let mut auth = claude_command(&request.cwd);
+        let mut auth = claude_command(&request.cwd)?;
         auth.args(["auth", "status", "--json"]).kill_on_drop(true);
         let status = tokio::time::timeout(std::time::Duration::from_secs(15), auth.output())
             .await
@@ -53,7 +53,7 @@ impl Session {
         if status["loggedIn"] != true || status["authMethod"] != "claude.ai" {
             return Err(protocol("A new Claude CLI process reports no Claude.ai login. An already-open terminal session may still be signed in. Run `claude auth login` in a fresh terminal, then retry."));
         }
-        let mut cmd = stream_command(&request.cwd);
+        let mut cmd = stream_command(&request.cwd)?;
         cmd.arg("--system-prompt").arg(&request.system);
         // Without this, the CLI freezes the system prompt at a conversation's
         // first turn and reuses that snapshot verbatim on every later resume
@@ -379,8 +379,8 @@ fn steer_frame(blocks: &[String], id: &str, immediate: bool) -> Value {
 /// The CLI's own tools a Luma session may use: its web search and fetch.
 const WEB_TOOLS: &str = "WebSearch,WebFetch";
 
-fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
-    let mut cmd = claude_command(cwd);
+fn stream_command(cwd: &std::path::Path) -> Result<tokio::process::Command, AgentError> {
+    let mut cmd = claude_command(cwd)?;
     cmd.args([
         "--print",
         "--input-format",
@@ -402,7 +402,7 @@ fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
         "--max-turns",
         "64",
     ]);
-    cmd
+    Ok(cmd)
 }
 
 /// The Claude models Luma names itself, ported from zeron's
@@ -473,7 +473,7 @@ pub(super) async fn models(
 }
 
 async fn discover(cwd: &std::path::Path) -> Result<Vec<Value>, AgentError> {
-    let mut process = Process::start(stream_command(cwd))?;
+    let mut process = Process::start(stream_command(cwd)?)?;
     initialize(&mut process).await?;
     loop {
         let frame = process.read().await?;
@@ -573,7 +573,9 @@ async fn initialize(process: &mut Process) -> Result<(), AgentError> {
 /// an initialization-failure path, so a slow or failing version check never
 /// costs the happy path anything.
 async fn cli_version(cwd: &std::path::Path) -> String {
-    let mut cmd = claude_command(cwd);
+    let Ok(mut cmd) = claude_command(cwd) else {
+        return "(version unknown)".into();
+    };
     cmd.arg("--version").kill_on_drop(true);
     match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
         Ok(Ok(output)) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
@@ -581,8 +583,13 @@ async fn cli_version(cwd: &std::path::Path) -> String {
     }
 }
 
-fn claude_command(cwd: &std::path::Path) -> tokio::process::Command {
-    let mut cmd = command("claude", cwd);
+const CLAUDE: Cli = Cli {
+    name: "claude",
+    label: "Claude Code CLI",
+};
+
+fn claude_command(cwd: &std::path::Path) -> Result<tokio::process::Command, AgentError> {
+    let mut cmd = command(CLAUDE, cwd)?;
     for variable in [
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
@@ -593,7 +600,7 @@ fn claude_command(cwd: &std::path::Path) -> tokio::process::Command {
     ] {
         cmd.env_remove(variable);
     }
-    cmd
+    Ok(cmd)
 }
 
 fn claude_error(frame: &Value) -> AgentError {

@@ -1,6 +1,6 @@
 use super::{
     content,
-    process::{command, Process},
+    process::{command, Cli, Process},
     protocol, AgentError, ContentBlock, Event, Request, ToolOutcome, Usage,
 };
 use serde_json::{json, Value};
@@ -387,8 +387,13 @@ fn count(value: &Value, key: &str) -> u64 {
     value[key].as_u64().unwrap_or(0)
 }
 
+const CODEX: Cli = Cli {
+    name: "codex",
+    label: "Codex CLI",
+};
+
 fn start_process(cwd: &std::path::Path) -> Result<Process, AgentError> {
-    let mut cmd = command("codex", cwd);
+    let mut cmd = command(CODEX, cwd)?;
     cmd.args(["app-server", "--stdio"]);
     for (key, value) in isolated_config().as_object().expect("config object") {
         cmd.arg("-c").arg(format!("{key}={value}"));
@@ -496,7 +501,7 @@ pub(super) async fn models(
 /// Each model's window from `codex debug models`, the same catalog
 /// `model/list` reads, run under the same config as the app server.
 async fn windows(cwd: &std::path::Path) -> Result<HashMap<String, u32>, AgentError> {
-    let mut cmd = command("codex", cwd);
+    let mut cmd = command(CODEX, cwd)?;
     cmd.args(["debug", "models"]).kill_on_drop(true);
     for (key, value) in isolated_config().as_object().expect("config object") {
         cmd.arg("-c").arg(format!("{key}={value}"));

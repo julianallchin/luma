@@ -87,6 +87,9 @@ pub async fn open(boot: Boot) -> Result<Booted, String> {
     // Every host finds the bundled ffmpeg from the executable's own location;
     // without this one falls through to system PATH and fails at spawn time.
     crate::runtime::ffmpeg::init_headless();
+    // The login shell answers on its own thread long before an agent turn
+    // needs a user-installed CLI.
+    crate::runtime::user_path::prefetch();
 
     // A process that will not sync opens the database without the SDK:
     // loading its core extension is not free, and a library nobody is

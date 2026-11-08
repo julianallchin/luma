@@ -48,9 +48,12 @@ impl Process {
             .kill_on_drop(true);
         #[cfg(unix)]
         command.process_group(0);
-        let mut child = command
-            .spawn()
-            .map_err(|e| protocol(format!("could not start agent: {e}")))?;
+        let mut child = command.spawn().map_err(|e| {
+            protocol(format!(
+                "could not start agent {}: {e}",
+                command.as_std().get_program().to_string_lossy()
+            ))
+        })?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
         let mut errors = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
@@ -145,19 +148,71 @@ impl Drop for Process {
     }
 }
 
-pub(super) fn command(name: &str, cwd: &std::path::Path) -> Command {
-    let variable = format!("LUMA_{}_EXECUTABLE", name.to_uppercase());
-    let executable = std::env::var_os(variable)
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            dirs::home_dir()
-                .map(|home| home.join(".local/bin").join(name))
-                .filter(|path| path.is_file())
-        })
-        .unwrap_or_else(|| name.into());
-    let mut command = crate::runtime::command::async_command(executable);
+/// A user-installed agent CLI.
+#[derive(Clone, Copy)]
+pub(super) struct Cli {
+    /// The executable's name: `codex`.
+    pub name: &'static str,
+    /// What a person calls it: `Codex CLI`.
+    pub label: &'static str,
+}
+
+/// A command for `cli`, run in `cwd`: `LUMA_<NAME>_EXECUTABLE` when set,
+/// otherwise the first `cli.name` on the user's PATH as their login shell
+/// sees it (see [`crate::runtime::user_path`]). The child runs with that PATH
+/// too, so the interpreter its `#!/usr/bin/env node` names is found the same
+/// way, and with the shell-owned variables this process lacks.
+///
+/// # Errors
+///
+/// When the CLI is on none of those directories, naming it and where Luma
+/// looked.
+pub(super) fn command(cli: Cli, cwd: &std::path::Path) -> Result<Command, AgentError> {
+    use crate::runtime::user_path;
+    command_in(
+        cli,
+        cwd,
+        std::env::var_os(override_variable(cli)),
+        user_path::search_path(),
+        user_path::child_env_defaults(),
+    )
+}
+
+fn override_variable(cli: Cli) -> String {
+    format!("LUMA_{}_EXECUTABLE", cli.name.to_uppercase())
+}
+
+fn command_in(
+    cli: Cli,
+    cwd: &std::path::Path,
+    executable: Option<std::ffi::OsString>,
+    search_path: &std::ffi::OsStr,
+    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+) -> Result<Command, AgentError> {
+    let executable = match executable.filter(|path| !path.is_empty()) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => match crate::runtime::user_path::find_in(cli.name, search_path) {
+            Some(path) => path,
+            // Windows resolves a bare name itself, as it always has.
+            None if cfg!(windows) => cli.name.into(),
+            None => {
+                return Err(protocol(format!(
+                    "{} (`{}`) not found on your PATH. Install it or set {}. Luma looked in: {}",
+                    cli.label,
+                    cli.name,
+                    override_variable(cli),
+                    search_path.to_string_lossy()
+                )))
+            }
+        },
+    };
+    eprintln!("[agent] {} is {}", cli.label, executable.display());
+    let mut command = crate::runtime::command::async_command(&executable);
     command.current_dir(cwd);
-    command
+    #[cfg(unix)]
+    command.env("PATH", search_path);
+    command.envs(env);
+    Ok(command)
 }
 
 #[cfg(all(test, unix))]
@@ -188,6 +243,97 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    const CODEX: Cli = Cli {
+        name: "codex",
+        label: "Codex CLI",
+    };
+
+    fn executable(path: &std::path::Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A Finder launch: this process has only the system PATH, and `codex`
+    /// is a bun-installed script whose `#!/usr/bin/env` interpreter lives,
+    /// like it, only on the PATH the user's login shell builds.
+    #[tokio::test]
+    async fn a_cli_only_the_login_shell_can_see_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let login_bin = dir.path().join("login-bin");
+        std::fs::create_dir(&login_bin).unwrap();
+        executable(
+            &login_bin.join("fake-node"),
+            "#!/bin/sh\nprintf '{\"script\":\"%s\"}\\n' \"$1\"\n",
+        );
+        executable(&login_bin.join("codex"), "#!/usr/bin/env fake-node\n");
+        let shell = dir.path().join("shell");
+        executable(
+            &shell,
+            &format!(
+                "#!/bin/sh\necho 'rc noise'\nPATH=\"{}:/usr/bin:/bin\"; export PATH\n\
+                 while [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-c\" ]; then shift; exec /bin/sh -c \"$1\"; fi\n  shift\ndone\nexit 1\n",
+                login_bin.display()
+            ),
+        );
+        let bare = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
+        let search = crate::runtime::user_path::search_path_for(&shell, bare);
+
+        let command = command_in(CODEX, dir.path(), None, &search, Vec::new()).unwrap();
+        assert_eq!(
+            std::path::Path::new(command.as_std().get_program()),
+            login_bin.join("codex")
+        );
+        let mut process = Process::start(command).unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(10), process.read())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame["script"], login_bin.join("codex").to_str().unwrap());
+    }
+
+    #[test]
+    fn a_missing_cli_is_named_with_where_luma_looked() {
+        let dir = tempfile::tempdir().unwrap();
+        let search = std::env::join_paths([dir.path().join("a"), dir.path().join("b")]).unwrap();
+        let error = command_in(CODEX, dir.path(), None, &search, Vec::new())
+            .err()
+            .expect("no codex anywhere")
+            .to_string();
+        assert!(
+            error.contains(
+                "Codex CLI (`codex`) not found on your PATH. Install it or set LUMA_CODEX_EXECUTABLE."
+            ),
+            "{error}"
+        );
+        assert!(error.contains(search.to_str().unwrap()), "{error}");
+    }
+
+    #[test]
+    fn the_executable_override_comes_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let pinned = dir.path().join("pinned-codex");
+        executable(&pinned, "#!/bin/sh\n");
+        let found = dir.path().join("bin");
+        std::fs::create_dir(&found).unwrap();
+        executable(&found.join("codex"), "#!/bin/sh\n");
+        let command = command_in(
+            CODEX,
+            dir.path(),
+            Some(pinned.clone().into()),
+            found.as_os_str(),
+            vec![("SSL_CERT_FILE".into(), "/etc/corp.pem".into())],
+        )
+        .unwrap();
+        assert_eq!(std::path::Path::new(command.as_std().get_program()), pinned);
+        let envs: Vec<_> = command.as_std().get_envs().collect();
+        assert!(envs.contains(&(std::ffi::OsStr::new("PATH"), Some(found.as_os_str()))));
+        assert!(envs.contains(&(
+            std::ffi::OsStr::new("SSL_CERT_FILE"),
+            Some(std::ffi::OsStr::new("/etc/corp.pem"))
+        )));
     }
 
     #[tokio::test]

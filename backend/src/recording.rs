@@ -364,7 +364,7 @@ fn pick_encoder() -> (PathBuf, Codec) {
             .status()
             .is_ok_and(|status| status.success())
     };
-    [bundled.clone(), PathBuf::from("ffmpeg")]
+    [bundled.clone(), crate::runtime::ffmpeg::system_ffmpeg()]
         .into_iter()
         .find(|ffmpeg| nvenc(ffmpeg))
         .map_or((bundled, Codec::X264), |ffmpeg| (ffmpeg, Codec::Nvenc))
