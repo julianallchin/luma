@@ -469,9 +469,15 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     let out = created_restore.run(
         &support::script(
             r#"
-        const shot = until("the created venue restore", (s) =>
-            s.find({ role: "button", label: "Morning Room" }) !== undefined);
-        shot.find({ role: "card", label: "Morning Room" }) === undefined
+        // Restored, not picked: the picker never opens on the way in. (Its
+        // dialog, not a card named after the venue — the venue's own pages
+        // carry its name too.)
+        let pickerSeen = false;
+        until("the created venue restore", (s) => {
+            pickerSeen ||= s.find({ role: "card", label: "Venue dialog" }) !== undefined;
+            return s.find({ role: "button", label: "Morning Room" }) !== undefined;
+        });
+        !pickerSeen
     "#,
         ),
         Duration::from_secs(90),
