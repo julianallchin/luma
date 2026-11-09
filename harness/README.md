@@ -20,10 +20,3 @@ Render the renderer goldens:
 ```sh
 cargo run --manifest-path gpui/Cargo.toml -p luma-render --release --bin render-goldens -- single-mover
 ```
-
-Compare two capture directories:
-
-```sh
-cd harness && bun install
-bun compare-shots.mjs goldens/scenes-wgpu DIR_B
-```
