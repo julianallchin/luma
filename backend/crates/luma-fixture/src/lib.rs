@@ -78,19 +78,21 @@
 )]
 
 mod built;
+pub mod control;
 mod face;
 mod head;
+mod light;
 mod mesh;
 mod mount;
 mod nodes;
 mod rig;
-pub mod control;
 pub mod spec;
 
 pub use built::{
     bounds_at, Built, Cell, Emitter, EmitterShape, Head, Joint, JointKind, Material, Mesh, Node,
     Source,
 };
+pub use light::{CellEmitters, EmitterColour, EmitterSet, Mismatch};
 pub use rig::BuildError;
 pub use spec::{Fixture, MaterialSlot};
 
