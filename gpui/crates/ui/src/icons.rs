@@ -96,6 +96,7 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "luma/mark.svg" => Some(include_bytes!("../assets/luma/mark.svg")),
             "nucleo/copy.svg" => Some(include_bytes!("../assets/nucleo/copy.svg")),
             "nucleo/expand.svg" => Some(include_bytes!("../assets/nucleo/expand.svg")),
             "nucleo/minimize.svg" => Some(include_bytes!("../assets/nucleo/minimize.svg")),

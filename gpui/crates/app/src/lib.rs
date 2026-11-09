@@ -447,13 +447,13 @@ impl Render for Luma {
         // Nobody is signed in yet, so there is no library to show and no shell
         // to show it in — the gate is the app, not a plane over it.
         if self.refreshing_session {
-            return signin::splash(window, "Signing in…");
+            return signin::splash(window, "Signing in", cx);
         }
         if self.session_refresh_failed {
             return signin::refresh_error(window, cx);
         }
         if self.restoring_venue {
-            return signin::splash(window, "Opening your library…");
+            return signin::splash(window, "Loading", cx);
         }
         if self.sign_in.is_some() {
             return signin::screen(self, window, cx);
