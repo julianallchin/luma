@@ -57,3 +57,6 @@ harness/goldens/scenes-live/
 
 # The PowerSync test stack's run directory
 deploy/test-stack/run/
+
+# Supabase CLI state (`supabase db push` writes it)
+supabase/.temp/

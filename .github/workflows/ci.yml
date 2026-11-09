@@ -100,6 +100,22 @@ jobs:
         run: cargo test --workspace --no-fail-fast
         working-directory: backend
 
+  # The release applies every pending Supabase migration, and refuses one that
+  # breaks the expand/contract rule; this catches it while it is a pull
+  # request. See deploy/README.md.
+  migrations:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check added and changed migrations
+        run: |
+          git diff --name-only --diff-filter=AMR "origin/$GITHUB_BASE_REF...HEAD" -- 'supabase/migrations/*.sql' > changed.txt
+          cat changed.txt
+          xargs --no-run-if-empty python3 scripts/release/check_migrations.py < changed.txt
+
   python:
     runs-on: ubuntu-latest
     steps:

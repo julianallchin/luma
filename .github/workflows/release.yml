@@ -66,8 +66,83 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-  bundle-mac:
+  # The server side of the release, before any of it is built: the pending
+  # Supabase migrations, then the PowerSync sync rules if they changed. A
+  # failure here ships nothing, so no install meets a server older than the
+  # one it was built for. A run from main or a tag changes production; a
+  # manual run from another branch only checks that production already
+  # matches. See deploy/README.md.
+  migrate:
     needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A stable tag and a nightly may run at once; they never push together.
+    concurrency:
+      group: production-schema
+      cancel-in-progress: false
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PS_ADMIN_TOKEN: ${{ secrets.POWERSYNC_TOKEN }}
+      APPLY: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.1
+      - name: List pending migrations
+        run: |
+          if [[ -z "$SUPABASE_DB_URL" || -z "$PS_ADMIN_TOKEN" ]]; then
+            echo "::error::SUPABASE_DB_URL and POWERSYNC_TOKEN must be set; see RELEASING.md"
+            exit 1
+          fi
+          if [[ "$SUPABASE_DB_URL" != *smuuycypmsutwrkpctws* ]]; then
+            echo "::error::SUPABASE_DB_URL does not name the production project smuuycypmsutwrkpctws"
+            exit 1
+          fi
+          # --include-all: a file merged from a branch can be older than the
+          # newest one already applied, and it is pending all the same.
+          if ! supabase db push --dry-run --include-all --output-format json --db-url "$SUPABASE_DB_URL" > pending.json; then
+            jq . pending.json || cat pending.json
+            exit 1
+          fi
+          jq -r '.migrations[] | "supabase/migrations/" + .' pending.json > pending.txt
+          echo "Pending: $(wc -l < pending.txt)"
+          cat pending.txt
+      - name: Check the contract rule
+        run: xargs --no-run-if-empty python3 scripts/release/check_migrations.py < pending.txt
+      - name: Apply migrations
+        run: |
+          if [[ ! -s pending.txt ]]; then
+            echo "Production has every migration."
+          elif [[ $APPLY != true ]]; then
+            echo "::error::Production lacks the migrations above. Only a run from main or a tag applies them."
+            exit 1
+          else
+            supabase db push --include-all --yes --db-url "$SUPABASE_DB_URL"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Deploy sync rules
+        run: |
+          npm install --global powersync@0.10.3
+          powersync fetch config --directory=deploy/powersync --output=json > deployed.json
+          jq -j '.syncRules // ""' deployed.json > deployed-sync-config.yaml
+          if cmp -s deployed-sync-config.yaml deploy/powersync/sync-config.yaml; then
+            echo "The deployed sync rules match deploy/powersync/sync-config.yaml."
+            exit 0
+          fi
+          diff -u deployed-sync-config.yaml deploy/powersync/sync-config.yaml || true
+          if [[ $APPLY != true ]]; then
+            echo "::error::The deployed sync rules differ. Only a run from main or a tag deploys them."
+            exit 1
+          fi
+          powersync deploy sync-config --directory=deploy/powersync
+
+  bundle-mac:
+    needs: [prepare, migrate]
     # Apple silicon only: PyTorch publishes no macOS x86_64 wheels past 2.2,
     # so the managed Python environment could not be built on an Intel Mac.
     runs-on: macos-15
@@ -112,7 +187,7 @@ jobs:
           if-no-files-found: error
 
   bundle-linux:
-    needs: prepare
+    needs: [prepare, migrate]
     # The oldest supported runner, for the oldest glibc the binary needs.
     runs-on: ubuntu-22.04
     timeout-minutes: 120

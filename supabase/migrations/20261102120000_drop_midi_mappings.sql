@@ -9,6 +9,7 @@
 --
 -- Idempotent.
 
+-- contract: after 0.6.0
 begin;
 
 drop trigger if exists midi_modifiers_history on public.midi_modifiers;

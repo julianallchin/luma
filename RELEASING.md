@@ -2,6 +2,8 @@
 
 `.github/workflows/release.yml` builds, signs and publishes the native app.
 Installs update themselves from what it publishes (`gpui/crates/update`).
+Before it builds, it applies the release's Supabase migrations and PowerSync
+sync rules to production; see [deploy/README.md](deploy/README.md).
 
 | Platform | Download | Update archive |
 |---|---|---|
@@ -49,6 +51,17 @@ Set these under Settings → Secrets and variables → Actions.
 | `APPLE_SIGNING_IDENTITY` | variable, optional | codesign identity; defaults to the one in `release.yml` |
 | `TAURI_SIGNING_PRIVATE_KEY` | secret | minisign key that signs update archives (the name is the one the signer, `@tauri-apps/cli signer`, reads) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | secret | its password (may be empty) |
+| `SUPABASE_DB_URL` | secret | the production database's session-pooler connection string, which the `migrate` job pushes migrations through |
+| `POWERSYNC_TOKEN` | secret | a PowerSync personal access token, which the `migrate` job deploys the sync rules with |
+
+`SUPABASE_DB_URL` comes from the Supabase dashboard: project
+`smuuycypmsutwrkpctws` → Connect → Session pooler, with the database password
+filled in and percent-encoded. It must be the pooler (port 5432 on
+`*.pooler.supabase.com`): the direct `db.<project>.supabase.co` host is IPv6
+only, and GitHub's runners are not. The job refuses a URL that does not name
+the project. `POWERSYNC_TOKEN` comes from the PowerSync dashboard → Account →
+Access tokens; `deploy/powersync/cli.yaml` names the instance it deploys to.
+Without either, the release fails before building anything.
 
 Without the Apple secrets the DMG is ad-hoc signed and not notarized:
 Gatekeeper blocks it on other Macs. Without the update key the publish job

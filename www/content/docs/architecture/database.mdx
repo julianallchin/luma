@@ -24,7 +24,10 @@ File: `backend/src/database/local/database.rs`
 - Migrations are append-only. A changed file breaks the sqlx checksum. To change
   the schema, add a new file.
 - Remote migrations are in `supabase/migrations`. A schema change to a synced
-  table needs a file in both directories.
+  table needs a file in both directories. Each release applies the pending
+  ones to the server before it builds the app. A migration that removes
+  something carries a `-- contract: after <version>` line and runs only in a
+  release after the one whose clients stopped using it.
 
 ## Sync
 

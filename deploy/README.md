@@ -2,12 +2,64 @@
 
 See [docs/design/sync.md](../docs/design/sync.md).
 
-## Supabase
+## Releases deploy the server
 
-Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
-`20260912000000_row_model.sql` on into the SQL editor, in filename order. The
-list below is every one of them; a note says what must happen before or after.
-A new migration adds its line here.
+The release workflow's `migrate` job (`.github/workflows/release.yml`) runs
+before anything is built, on every nightly from `main` and every `v*` tag:
+
+1. `supabase db push --include-all` against project `smuuycypmsutwrkpctws`
+   applies each file in `../supabase/migrations/` that
+   `supabase_migrations.schema_migrations` does not list, in filename order,
+   one transaction per file. A failure stops the release, so no build ships
+   ahead of its schema; rerunning applies only what is still pending. Before
+   pushing, the job lists the pending files and checks them against the
+   contract rule below.
+2. If `powersync/sync-config.yaml` differs from the deployed sync rules, it
+   runs `powersync deploy sync-config --directory=deploy/powersync`.
+
+A manual run from another branch only checks: it fails if production lacks a
+migration or sync rule that branch has. Secrets are listed in
+[RELEASING.md](../RELEASING.md).
+
+Nobody pastes migrations into the SQL editor any more: a file run by hand is
+not recorded, and the next push runs it again. To apply the pending files
+before a release, run what the job runs from the repository root:
+`supabase db push --dry-run --include-all --db-url "$SUPABASE_DB_URL"`,
+`scripts/release/check_migrations.py` on the files it lists, then the push
+without `--dry-run`.
+
+### Expand, then contract
+
+A client keeps running for weeks after a newer release ships, so a migration
+may only add to what an older client uses. One that takes something away
+(drops a table or column, deletes or truncates rows, renames, changes a type,
+adds `NOT NULL`) is a contract, and says which release stopped using the thing:
+
+```sql
+-- contract: after 0.6.3
+```
+
+It applies only in a release whose version (`backend/Cargo.toml`) is newer
+than 0.6.3, so it lands one release after the clients that stop using the
+thing. `scripts/release/check_migrations.py` enforces it: CI runs it on the
+migrations a pull request adds or changes, and the release on the pending
+ones. A destructive file without the marker, or with a version the release
+is not past, stops both. The marker is also the go-ahead: nothing that
+deletes data runs until someone has written one.
+
+The same check refuses a file not named `<14-digit version>_<name>.sql` (the
+CLI would skip it) or sharing another's version, and a `pg_temp` function
+created without `or replace`: the push runs every pending file over one
+connection, so the next file may create the same helper.
+
+Sync rules deploy after the migrations, so a rule may name a table the same
+release creates. A rule that stops naming a table ships in the release before
+the contract that drops it.
+
+### Migrations
+
+Every file in `../supabase/migrations/`, with what must happen before or
+after it. A new migration adds its line here.
 
 - `20260912000000_row_model.sql`
 - `20260916000000_stage_child_venue_id.sql`
@@ -30,15 +82,18 @@ A new migration adds its line here.
 - `20261002000000_placement_in_venue_nodes.sql`
 - `20261002100000_agent_figures.sql`
 - `20261002100100_bar_classifications_compact.sql`
-- `20261024000200_drop_venue_conversion.sql`
+- `20261024000200_drop_venue_conversion.sql` — **not applied.** Deletes
+  twelve venues and everything in them. Repeat the dry run in its header,
+  then add its contract marker to let a release apply it
 - `20261024120000_lasers.sql` — then redeploy `powersync/sync-config.yaml`, which
   names `laser_zones` and `laser_limits`
 - `20261025120000_random_node.sql`
 - `20261025130000_laser_elements.sql`
 - `20261026120000_laser_figures.sql`
-- `20261102120000_drop_midi_mappings.sql` — after redeploying
-  `powersync/sync-config.yaml`, which no longer names `midi_modifiers` or
-  `midi_bindings`, and after every client runs a build without them
+- `20261102120000_drop_midi_mappings.sql` — **not applied.** After
+  redeploying `powersync/sync-config.yaml`, which no longer names
+  `midi_modifiers` or `midi_bindings`, and after every client runs a build
+  without them; its contract marker names that build
 - `20261104120000_perform.sql` — then redeploy
   `powersync/sync-config.yaml`, which names `perform_patterns` and
   `perform_layouts`
@@ -60,8 +115,10 @@ A new migration adds its line here.
   it. From then on deleting an auth user who authored anything another
   account can read is refused instead of cascading through shared venues
 
-`row_model.sql` drops the old sync schema first, so it also runs on a project
-that has been reset.
+`row_model.sql` drops the old sync schema first and builds the row model, so
+the folder starts there and runs on a project that has been reset. On an
+empty project run the first push by hand: the release would refuse the
+unmarked drops in the oldest files, which predate the contract rule.
 
 It creates `powersync_role` with a placeholder password. Set a real one and
 keep it for the next step:
@@ -76,7 +133,8 @@ alter role powersync_role with password '<generated>';
 2. Connect it to the Supabase Postgres with `powersync_role`, its password and
    the `powersync` publication.
 3. Client Auth: enable **Use Supabase Auth**.
-4. Run `powersync deploy sync-config --directory=deploy/powersync`.
+4. Run `powersync deploy sync-config --directory=deploy/powersync` once;
+   from then on every release deploys it.
 5. Put the instance URL in `backend/src/config.rs` as `POWERSYNC_URL`.
 
 `deploy/test-stack/run.py` checks a change to either file against
