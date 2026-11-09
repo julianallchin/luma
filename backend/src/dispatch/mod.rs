@@ -7,6 +7,8 @@
 pub mod handlers;
 #[cfg(test)]
 mod manifest;
+#[cfg(test)]
+mod member_tests;
 mod services;
 
 pub use crate::engine_dj::resolve_engine_path;
