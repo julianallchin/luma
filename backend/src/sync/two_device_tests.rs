@@ -39,6 +39,8 @@ struct Containers {
     powersync: String,
     postgrest: String,
     secret: String,
+    /// Postgres itself, as its superuser: what an admin in the SQL editor is.
+    postgres: String,
 }
 
 impl Containers {
@@ -48,6 +50,7 @@ impl Containers {
             powersync: std::env::var("LUMA_TEST_POWERSYNC_URL").ok()?,
             postgrest: std::env::var("LUMA_TEST_POSTGREST_URL").ok()?,
             secret: std::env::var("LUMA_TEST_JWT_SECRET").ok()?,
+            postgres: std::env::var("LUMA_TEST_PG_URI").ok()?,
         })
     }
 }
@@ -1298,6 +1301,121 @@ async fn a_refused_write_is_one_rejection_and_reads_not_saved() {
 
     service.stop();
     a.close().await;
+}
+
+/// A member's fixture outlives the member: nothing cascades from `auth.users`
+/// into a shared venue, so deleting the member's auth user is refused while
+/// they authored anything there, and the fixture stays in the owner's venue.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn a_members_fixtures_survive_deleting_the_member() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!(
+            "skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET / _PG_URI unset"
+        );
+        return;
+    };
+    let admin = sqlx::PgPool::connect(&containers.postgres)
+        .await
+        .expect("postgres");
+    // An account of its own: this test deletes it.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let member = format!("00000000-0000-0000-0000-{:012x}", nanos & 0xffff_ffff_ffff);
+    sqlx::query("INSERT INTO auth.users (id) VALUES ($1::uuid)")
+        .bind(&member)
+        .execute(&admin)
+        .await
+        .expect("the member's auth user");
+
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, &member).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    let code = unique("code");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(&code)
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("share code");
+    wait_for_upload(&a.sql).await;
+    assert_eq!(rpc_join(&containers, &member, &code).await, venue);
+    settles(
+        &b.sql,
+        &count("venues", "id", &venue),
+        "1",
+        "the venue never reached the member",
+    )
+    .await;
+
+    let fixture = unique("fixture");
+    sqlx::query(
+        "INSERT INTO fixtures
+             (id, uid, venue_id, address, num_channels, manufacturer, model,
+              mode_name, fixture_path)
+         VALUES (?, ?, ?, 1, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf')",
+    )
+    .bind(&fixture)
+    .bind(&member)
+    .bind(&venue)
+    .execute(&b.sql)
+    .await
+    .expect("member fixture");
+    wait_for_upload(&b.sql).await;
+    settles(
+        &a.sql,
+        &count("fixtures", "id", &fixture),
+        "1",
+        "the owner never saw the member's fixture",
+    )
+    .await;
+
+    // An admin deleting the auth user outright is refused: the fixture names
+    // its author, and nothing cascades from auth.users into a shared venue.
+    let refused = sqlx::query("DELETE FROM auth.users WHERE id = $1::uuid")
+        .bind(&member)
+        .execute(&admin)
+        .await
+        .expect_err("deleting an author's auth user must be refused");
+    assert!(
+        refused
+            .as_database_error()
+            .is_some_and(|error| error.code().as_deref() == Some("23503")),
+        "refused for the wrong reason: {refused}"
+    );
+
+    // The fixture, and the membership, stay where they were.
+    assert_eq!(
+        get(
+            &containers,
+            USER,
+            &format!("/fixtures?id=eq.{fixture}&select=uid"),
+        )
+        .await,
+        serde_json::json!([{ "uid": member }]),
+        "the member's fixture did not survive deleting their auth user"
+    );
+    for (table, column, scope) in [
+        ("fixtures", "id", fixture.as_str()),
+        ("venue_members", "venue_id", venue.as_str()),
+    ] {
+        settles(
+            &a.sql,
+            &count(table, column, scope),
+            "1",
+            &format!("{table} left the owner's device with the member's auth user"),
+        )
+        .await;
+    }
+
+    a.close().await;
+    b.close().await;
 }
 
 /// One PostgREST read as `user`.
