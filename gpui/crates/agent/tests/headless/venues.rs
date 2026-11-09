@@ -178,7 +178,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     let out = browse.run(
         &support::script(r#"
         const initial = app.snapshot();
-        const loading = initial.find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = initial.find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const dialog = until("the venue catalogue", (s) =>
             s.find({ role: "card", label: "Alpha Hall" }) !== undefined
                 && s.find({ role: "card", label: "Beta Room" }) !== undefined
@@ -366,7 +366,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = restored.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         let pickerSeen = false;
         const shot = until("the restored Beta venue", (s) => {
             pickerSeen ||= s.find({ role: "card", label: "Venue dialog" }) !== undefined;
@@ -405,7 +405,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = stale.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const shot = until("the stale preference fallback", (s) =>
             s.find({ role: "card", label: "Present Venue" }) !== undefined);
         app.frames(4, { waitMs: 50 });
@@ -433,7 +433,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = empty.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const create = until("first venue onboarding", (s) =>
             s.find({ role: "input", label: "Venue name" })?.focused === true);
         const input = create.find({ role: "input", label: "Venue name" });
@@ -524,7 +524,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = fifo_restore.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const shot = until("the FIFO final selection restore", (s) =>
             s.find({ role: "button", label: "Beta Room" }) !== undefined);
         ({ loading,
@@ -551,7 +551,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = failed.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const shot = until("the venue error", (s) =>
             s.find({ role: "text", label: "Could not load your venues" }) !== undefined);
         ({ loading,

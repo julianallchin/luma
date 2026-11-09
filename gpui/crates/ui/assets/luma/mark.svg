@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="644" height="552" viewBox="212 202 644 552" role="img" aria-labelledby="title desc">
+  <title id="title">Luma light mark</title>
+  <desc id="desc">A transparent-background white vector logo mark inspired by radiating light beams, for Luma, an AI lighting previs and timeline tool.</desc>
+  <defs>
+    <filter id="softGlow" x="-200%" y="-200%" width="500%" height="500%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="smallGlow" x="-300%" y="-300%" width="700%" height="700%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <linearGradient id="beamFadeV" x1="299" y1="670" x2="500" y2="245" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.98"/>
+      <stop offset="0.35" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.72"/>
+    </linearGradient>
+    <linearGradient id="beamFadeH" x1="299" y1="670" x2="850" y2="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.98"/>
+      <stop offset="0.35" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.72"/>
+    </linearGradient>
+    <linearGradient id="thinRay" x1="299" y1="670" x2="760" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="tipGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="originGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.22" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- soft support glows -->
+  <ellipse cx="300" cy="670" rx="58" ry="56" fill="url(#originGlow)" opacity="0.35" filter="url(#softGlow)"/>
+  <ellipse cx="507" cy="248" rx="34" ry="34" fill="url(#tipGlow)" opacity="0.45" filter="url(#smallGlow)"/>
+
+  <!-- faint left/behind uprights -->
+  <path d="M299 669 L307 220 L338 236 Z" fill="#ffffff" opacity="0.12"/>
+  <path d="M299 669 L341 228 L365 239 Z" fill="#ffffff" opacity="0.10"/>
+  <path d="M299 671 L302 240 L399 239 Z" fill="#ffffff" opacity="0.18"/>
+  <path d="M299 671 L333 235 L398 240 Z" fill="#ffffff" opacity="0.26"/>
+
+  <!-- main upright beam -->
+  <path d="M299 670 L428.5 245 L517.7 245 Z" fill="url(#beamFadeV)"/>
+  <path d="M299 669 L400 239 L517 246 L397 525 Z" fill="#ffffff" opacity="0.18"/>
+  <path d="M299 670 L517 245 L452 458 L350 606 Z" fill="#ffffff" opacity="0.14"/>
+  <path d="M300 670 L500 246 L518 245 L378 519 Z" fill="#ffffff" opacity="0.18"/>
+
+  <!-- middle/right rays -->
+  <path d="M299 670 L627 349 L641 380 Z" fill="#ffffff" opacity="0.26"/>
+  <path d="M299 670 L639 374 L653 402 Z" fill="url(#thinRay)" opacity="0.82"/>
+  <path d="M299 670 L701 415 L756 429 Z" fill="url(#thinRay)" opacity="0.78"/>
+  <path d="M299 670 L699 418 L740 441 Z" fill="#ffffff" opacity="0.28"/>
+  <path d="M299 670 L759 407 L355 637 Z" fill="#ffffff" opacity="0.08"/>
+  <path d="M299 670 L788 433 L380 627 Z" fill="#ffffff" opacity="0.06"/>
+
+  <!-- bottom beam stack -->
+  <path d="M299 670 L725 580 L665 701 Z" fill="#ffffff" opacity="0.55"/>
+  <path d="M299 672 L850 577 L807 671.7 Z" fill="url(#beamFadeH)" opacity="0.96"/>
+  <path d="M299 672 L810 635 L807 671.7 Z" fill="#ffffff" opacity="0.70"/>
+  <path d="M299 672 L853 578 L808 671.7 L707 670 L743 599 Z" fill="#ffffff" opacity="0.16"/>
+  <path d="M299 670 L663 701 L537 687 Z" fill="#ffffff" opacity="0.22"/>
+
+  <!-- thickened elbow connector -->
+  <path d="M292 676 C293 664 297 646 304 621 L326 621 C318 643 313 653 311 661 C346 657 378 656 408 655 L401 680 C368 681 338 681 311 681 C300 681 294 679 292 676 Z" fill="#ffffff" opacity="0.40" filter="url(#smallGlow)"/>
+  <path d="M294 675 C296 663 299 649 306 628 L319 628 C315 645 312 653 310 662 C342 659 371 659 394 659 L390 675 C366 676 339 677 312 677 C302 677 296 676 294 675 Z" fill="#ffffff" opacity="0.96"/>
+
+  <!-- source details -->
+  <path d="M299 671 L299 633 L301 664 L327 628 L303 668 L343 671 L304 672 L325 692 L301 675 L299 718 L297 675 L269 697 L295 671 L264 665 L296 669 Z" fill="#ffffff" opacity="0.32" filter="url(#smallGlow)"/>
+  <ellipse cx="299" cy="670" rx="15" ry="15" fill="#ffffff" opacity="0.95"/>
+  <circle cx="299" cy="670" r="4.2" fill="#ffffff"/>
+  <circle cx="507" cy="249" r="2.1" fill="#ffffff" opacity="0.62"/>
+</svg>
