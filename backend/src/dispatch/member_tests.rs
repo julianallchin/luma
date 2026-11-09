@@ -316,6 +316,12 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
         }),
     )
     .await;
+    run(
+        &services,
+        "duplicate_score",
+        json!({ "requestId": uuid::Uuid::new_v4().to_string(), "scoreId": score, "name": "Still mine copy" }),
+    )
+    .await;
     run(&services, "delete_score", json!({ "id": score })).await;
 
     // The Perform set.

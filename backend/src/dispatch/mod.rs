@@ -259,6 +259,7 @@ commands! {
     ) -> Score;
     scores::delete_score(id: String) -> ();
     scores::rename_score(score_id: String, name: String) -> ();
+    scores::duplicate_score(request_id: String, score_id: String, name: String) -> Score;
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
     scores::edit_score_document(score_id: String, edit: luma_patterns::ScoreEdit) -> ();
     scores::preview_score_clips(score_id: String, clip_ids: Vec<String>, score: Option<luma_patterns::Score>) -> Vec<crate::services::graph_scores::ClipStrip>;

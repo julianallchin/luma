@@ -6,7 +6,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command
 prose in it is the only hand-written part and is carried across by name.
 
-**137 commands** across **26 domains**
+**138 commands** across **26 domains**
 
 ## Domains
 
@@ -30,7 +30,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
 | `perform` | 14 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
-| `scores` | 9 | `backend/src/dispatch/handlers/scores.rs` |
+| `scores` | 10 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
@@ -38,7 +38,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **137** | |
+| **total** | **138** | |
 
 ## Commands
 
@@ -239,6 +239,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |
 | `rename_score` | `scoreId: String`<br>`name: String` | `()` |
+| `duplicate_score` | `requestId: String`<br>`scoreId: String`<br>`name: String` | `Score` |
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `edit_score_document` | `scoreId: String`<br>`edit: luma_patterns::ScoreEdit` | `()` |
 | `preview_score_clips` | `scoreId: String`<br>`clipIds: Vec<String>`<br>`score: Option<luma_patterns::Score>` | `Vec<crate::services::graph_scores::ClipStrip>` |

@@ -9,6 +9,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::database::local::auth::principal_key;
+use crate::database::local::scores::{get_score, rows};
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, VenueResource, Write};
 use crate::models::scores::Score;
 
@@ -96,6 +97,45 @@ async fn insert_score(
     let score = crate::database::local::scores::get_score(&mut access, &score_id).await?;
     access.commit().await?;
     Ok(score)
+}
+
+/// Copy `score_id` — the row and every clip on it — into a new score of the
+/// same track in the same venue, named `name`, in one transaction. The copy is
+/// the caller's, as a score they created would be; a member may copy a score
+/// they can write. Idempotent on `request_id`, like [`create_score`].
+pub async fn duplicate_score(
+    pool: &SqlitePool,
+    request_id: &str,
+    score_id: &str,
+    name: &str,
+) -> Result<Score, String> {
+    let request_id = request_uuid(request_id)?;
+    let mut access = VenueAccess::<Write>::write(pool, VenueResource::Score(score_id)).await?;
+    let owner = access.principal().map(str::to_owned);
+    let copy_id = derived_id(
+        &principal_key(owner.as_deref()),
+        "score",
+        &request_id,
+        "duplicate",
+    );
+    if let Ok(existing) = get_score(&mut access, &copy_id).await {
+        return Ok(existing);
+    }
+    let source = get_score(&mut access, score_id).await?;
+    sqlx::query("INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)")
+        .bind(&copy_id)
+        .bind(owner.as_deref())
+        .bind(&source.track_id)
+        .bind(&source.venue_id)
+        .bind(name)
+        .execute(access.connection())
+        .await
+        .map_err(|error| format!("insert the copy: {error}"))?;
+    let clips = rows::load_score(access.connection(), score_id).await?;
+    rows::save_score(access.connection(), &copy_id, &clips).await?;
+    let copy = get_score(&mut access, &copy_id).await?;
+    access.commit().await?;
+    Ok(copy)
 }
 
 /// Delete a score. Its clips, definitions and drafts cascade; the agent threads

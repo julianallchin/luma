@@ -210,13 +210,70 @@ impl Scores {
 }
 
 /// An inline rename: the score, the live field, and what the name read when
-/// the caret arrived. A commit that matches it writes nothing, so Enter and
+/// the caret arrived. The song list's column and the score menu both hold one. A commit that matches it writes nothing, so Enter and
 /// blur can both commit without a second write.
-struct Rename {
-    score_id: SharedString,
-    field: Entity<TextInput>,
+pub(crate) struct Rename {
+    pub(crate) score_id: SharedString,
+    pub(crate) field: Entity<TextInput>,
     opened_on: String,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Where a rename's field is: the song list's scores column, or the title
+/// bar's score menu. Both are this one rename; the host only says where the
+/// field is kept and where the keyboard goes after.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenameHost {
+    Songs,
+    ScoreMenu,
+}
+
+impl Rename {
+    /// A field on `opened_on`, the name `score_id` has now, its keys and blur
+    /// ending the rename in `host`. The caller keeps it and focuses it.
+    pub(crate) fn begin(
+        host: RenameHost,
+        score_id: SharedString,
+        opened_on: String,
+        window: &mut Window,
+        cx: &mut Context<Luma>,
+    ) -> Self {
+        let field = cx.new(|cx| {
+            let mut input = TextInput::search("Score name", cx);
+            input.set_text(opened_on.clone(), cx);
+            input
+        });
+        let keys = cx.subscribe_in(
+            &field,
+            window,
+            move |this: &mut Luma, _, event: &text_input::Event, window, cx| match event {
+                text_input::Event::Submitted => {
+                    this.finish_score_rename(host, true, Some(window), cx)
+                }
+                text_input::Event::Cancelled => {
+                    this.finish_score_rename(host, false, Some(window), cx)
+                }
+                // A press elsewhere. Focus goes where the press sends it.
+                text_input::Event::Blurred => this.finish_score_rename(host, true, None, cx),
+                _ => cx.notify(),
+            },
+        );
+        // Focus leaving by the keyboard, such as Tab. A press elsewhere is
+        // `Blurred` above; whichever comes second finds nothing to save.
+        let luma = cx.entity().downgrade();
+        let blur = window.on_focus_out(&field.read(cx).focus_handle(cx), cx, move |_, _, cx| {
+            luma.update(cx, |this, cx| {
+                this.finish_score_rename(host, true, None, cx)
+            })
+            .ok();
+        });
+        Self {
+            score_id,
+            field,
+            opened_on,
+            _subscriptions: vec![keys, blur],
+        }
+    }
 }
 
 /// Which score was right-clicked, where, and the two facts the delete gesture
@@ -412,11 +469,25 @@ impl Luma {
             return;
         };
         let venue_id = songs.venue_id().to_string();
-        let track_id = track_id.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let pending = self
             .library
-            .create_score(&request_id, &track_id, &venue_id, None);
+            .create_score(&request_id, track_id, &venue_id, None);
+        self.open_minted_score(track_id, pending, "Could not create the score", cx);
+    }
+
+    /// Open the score `pending` mints for `track_id` once it exists — a new
+    /// score or a copy — with the listing re-read so it is in it.
+    pub(crate) fn open_minted_score(
+        &mut self,
+        track_id: &str,
+        pending: impl std::future::Future<
+                Output = Result<luma_lib::models::scores::Score, crate::library::LibraryError>,
+            > + 'static,
+        failure: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let track_id = track_id.to_string();
         cx.spawn(async move |this, cx| {
             // Sequential on purpose: the listing has to be taken *after* the
             // score exists, or the row about to be opened is not in it yet.
@@ -429,21 +500,20 @@ impl Luma {
             let listing = listing.await;
             this.update(cx, |this, cx| {
                 let user = this.library.user_id();
-                let mut open = None;
+                let open = match (&created, &listing) {
+                    (Ok(score), Ok(summaries)) => rows(summaries, user.as_deref())
+                        .iter()
+                        .find(|row| row.id == score.id)
+                        .map(open_row),
+                    _ => None,
+                };
                 this.with_scores(&track_id, cx, |level| match (&created, listing) {
-                    (Ok(score), Ok(summaries)) => {
-                        level.rows = rows(&summaries, user.as_deref());
-                        open = level
-                            .rows
-                            .iter()
-                            .find(|row| row.id == score.id)
-                            .map(open_row);
-                    }
+                    (Ok(_), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
                     (Err(_), _) => {}
                     (_, Err(error)) => level.listing_failed(error),
                 });
                 if let Err(error) = created {
-                    this.report_failure("Could not create the score", error, cx);
+                    this.report_failure(failure, error, cx);
                 }
                 if let Some(score) = open {
                     this.open_listed_score(track_id.clone().into(), score, cx);
@@ -596,70 +666,50 @@ impl Luma {
         // The second click of the pair: the list stays for the caret.
         self.song_list_close = None;
         let opened_on = row.name.as_deref().unwrap_or_default().to_string();
-        let field = cx.new(|cx| {
-            let mut input = TextInput::search("Score name", cx);
-            input.set_text(opened_on.clone(), cx);
-            input
-        });
-        let keys = cx.subscribe_in(
-            &field,
-            window,
-            |this: &mut Luma, _, event: &text_input::Event, window, cx| match event {
-                text_input::Event::Submitted => this.finish_score_rename(true, Some(window), cx),
-                text_input::Event::Cancelled => this.finish_score_rename(false, Some(window), cx),
-                // A press elsewhere. Focus goes where the press sends it.
-                text_input::Event::Blurred => this.finish_score_rename(true, None, cx),
-                _ => cx.notify(),
-            },
-        );
-        // Focus leaving by the keyboard, such as Tab. A press elsewhere is
-        // `Blurred` above; whichever comes second finds nothing to save.
-        let luma = cx.entity().downgrade();
-        let blur = window.on_focus_out(&field.read(cx).focus_handle(cx), cx, move |_, _, cx| {
-            luma.update(cx, |this, cx| this.finish_score_rename(true, None, cx))
-                .ok();
-        });
-        let focus = field.read(cx).focus_handle(cx);
+        let rename = Rename::begin(RenameHost::Songs, score_id, opened_on, window, cx);
+        let focus = rename.field.read(cx).focus_handle(cx);
         if let Some(level) = self
             .songs
             .as_mut()
             .and_then(|songs| songs.scores_of_mut(&track_id))
         {
             level.menu = None;
-            level.rename = Some(Rename {
-                score_id,
-                field,
-                opened_on,
-                _subscriptions: vec![keys, blur],
-            });
+            level.rename = Some(rename);
         }
         window.focus(&focus, cx);
         cx.notify();
     }
 
-    /// End the rename. `save` writes the typed name when it is a different,
-    /// non-empty name; otherwise nothing is written. `window` is present when
-    /// a key ended it, and the keyboard then goes back to the list; on a
-    /// blur, focus has already gone where the person sent it.
-    fn finish_score_rename(
+    /// End the rename in `host`. `save` writes the typed name when it is a
+    /// different, non-empty name; otherwise nothing is written. `window` is
+    /// present when a key ended it, and the keyboard then goes back to the
+    /// window; on a blur, focus has already gone where the person sent it.
+    /// A name saved from the score menu closes the menu: its gesture is done.
+    pub(crate) fn finish_score_rename(
         &mut self,
+        host: RenameHost,
         save: bool,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let focus = self.focus.clone();
-        let Some(songs) = &mut self.songs else {
-            return;
+        let taken = match host {
+            RenameHost::Songs => self.songs.as_mut().and_then(|songs| {
+                let level = songs.scores.as_mut()?;
+                Some((level.track.id.clone(), level.rename.take()?))
+            }),
+            RenameHost::ScoreMenu => self
+                .score_switcher
+                .open_mut()
+                .and_then(|menu| menu.take_rename()),
         };
-        let Some((track_id, rename)) = songs
-            .scores
-            .as_mut()
-            .and_then(|level| Some((level.track.id.clone(), level.rename.take()?)))
-        else {
+        let Some((track_id, rename)) = taken else {
             return;
         };
         if let Some(window) = window {
-            window.focus(&focus, cx);
+            window.focus(&self.focus.clone(), cx);
+        }
+        if host == RenameHost::ScoreMenu && save {
+            self.close_score_switcher(cx);
         }
         cx.notify();
         let name = rename.field.read(cx).text().trim().to_string();
@@ -1023,7 +1073,7 @@ fn name_label(
 /// The name as a live field. The draft context gives the field Enter and
 /// Escape ahead of the list's own keys. Presses inside it stop here, so
 /// placing the caret does not open the score and take focus from the field.
-fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
+pub(crate) fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
     float::field()
         .id(SharedString::from(format!("score-name-field-{}", row.id)))
         .key_context(DRAFT_CONTEXT)

@@ -82,6 +82,21 @@ impl Library {
         })
     }
 
+    /// Copy a score and its clips into a new score of the same song in the
+    /// same venue, named `name`. `request_id` makes a retry idempotent.
+    pub fn duplicate_score(
+        &self,
+        request_id: &str,
+        score_id: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
+        let (request_id, score_id) = (request_id.to_owned(), score_id.to_owned());
+        let name = name.to_owned();
+        self.call("duplicate_score", |services| async move {
+            handlers::scores::duplicate_score(&services, request_id, score_id, name).await
+        })
+    }
+
     /// Atomically add a track to a venue. Repeated Add actions return the
     /// existing score even when they carry different request ids.
     pub fn ensure_track_in_venue(

@@ -8,6 +8,7 @@
 fixture({
   seconds: 4,
   extra_scores: 1,
+  clips: [{ pattern: "switcher-clip", name: "Chase", start: 1, end: 3, preset: "Chase" }],
   sql: [
     "INSERT INTO venues (id, uid, name) VALUES ('venue-warehouse', '$PRINCIPAL', 'Warehouse')",
     `INSERT INTO scores (id, uid, track_id, venue_id, name)
@@ -141,6 +142,44 @@ test("another venue's score asks, then switches venue and opens it", () => {
     return until("the menu's scores", (s) => menu(s) && scoreRows(s).length === 3 ? s : undefined);
   })();
   expect(scoreRows(back).filter((n) => n.label.endsWith(" · Test Venue")).length).toBe(2);
+});
+
+test("New score makes an empty score of the song here and opens it", () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  openMenu();
+  nav.step("New score", "row", "New score");
+  until("the new score open", (s) => trigger(s)?.label === "Aurora · #3" && crumbText(s) === "#3" && !menu(s));
+  app.click(trigger(app.snapshot()));
+  until("four scores listed", (s) => menu(s) && scoreRows(s).length === 4);
+});
+
+test("Rename names the open score in place", () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  const open = trigger(openMenu()).label.split(" · ")[1];
+  nav.step("Rename", "row", "Rename");
+  const nameField = (s) => s.find({ role: "input", label: `Score name ${open}` });
+  app.type(nameField(until("the name field", (s) => nameField(s) ? s : undefined)), "Opener");
+  app.key("enter");
+  until("the renamed crumb", (s) => crumbText(s) === "Opener" && !menu(s));
+  const listed = openMenu();
+  assert(scoreRows(listed).some((n) => n.label === `${open} Opener`),
+    `the menu does not list the new name: ${scoreRows(listed).map((n) => n.label)}`);
+});
+
+test("Duplicate copies the open score and its clips, and opens the copy", () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  const clip = (s) => s.find({ role: "card", label: "Chase" });
+  // Stand on whichever of the two scores holds the fixture's clip.
+  const first = until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) ? s : undefined);
+  if (!clip(first)) {
+    const open = trigger(first).label.split(" · ")[1];
+    app.click(scoreRows(openMenu()).find((n) => !n.label.includes(" · ") && !n.label.startsWith(`${open} `)));
+  }
+  const source = crumbText(until("the clip", (s) => clip(s) && !menu(s) ? s : undefined));
+  openMenu();
+  nav.step("Duplicate", "row", "Duplicate");
+  until("the copy open with the clip", (s) => crumbText(s) === `${source} copy`
+    && trigger(s)?.label === "Aurora · #3" && clip(s) && !menu(s));
 });
 
 test("Escape closes the menu", () => {

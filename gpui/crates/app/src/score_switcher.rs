@@ -19,10 +19,11 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use luma_ui::float::{self, RowState};
 use luma_ui::glass;
+use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument as _, Role};
 
 use crate::shell::Body;
-use crate::tracks::scores::{elsewhere, open_row, ScoreRow};
+use crate::tracks::scores::{elsewhere, name_field, open_row, Rename, RenameHost, ScoreRow};
 use crate::workspace::{Mode, Target};
 use crate::Luma;
 
@@ -32,6 +33,16 @@ pub(crate) struct ScoreSwitcher {
     track_id: String,
     /// The song's scores; `Err` when they could not be read, the cause logged.
     rows: Option<Result<Rc<[ScoreRow]>, ()>>,
+    /// The open score's name being typed, in its row — the song list's
+    /// rename, held here.
+    rename: Option<Rename>,
+}
+
+impl ScoreSwitcher {
+    /// The rename, taken to be ended, with the song it is about.
+    pub(crate) fn take_rename(&mut self) -> Option<(String, Rename)> {
+        Some((self.track_id.clone(), self.rename.take()?))
+    }
 }
 
 /// How wide the menu opens.
@@ -51,6 +62,7 @@ impl Luma {
         self.score_switcher.open(ScoreSwitcher {
             track_id: track_id.clone(),
             rows: None,
+            rename: None,
         });
         let pending = self.library.scores_across_venues(&track_id);
         let user = self.library.user_id();
@@ -90,6 +102,48 @@ impl Luma {
         self.score_switcher.begin_close(cx);
         cx.notify();
         true
+    }
+
+    /// The menu's "New score": an empty score of this song, here, opened.
+    fn new_score_from_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(track_id) = self.score_switcher.get().map(|menu| menu.track_id.clone()) else {
+            return;
+        };
+        self.close_score_switcher(cx);
+        self.create_listed_score(&track_id, cx);
+    }
+
+    /// The menu's "Rename": the open score's row becomes its name, editable.
+    fn rename_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+            return;
+        };
+        let score_id: SharedString = editor.target_score_id().into();
+        let opened_on = editor.score_name().unwrap_or_default().to_string();
+        let rename = Rename::begin(RenameHost::ScoreMenu, score_id, opened_on, window, cx);
+        let focus = rename.field.read(cx).focus_handle(cx);
+        if let Some(menu) = self.score_switcher.open_mut() {
+            menu.rename = Some(rename);
+        }
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// The menu's "Duplicate": the open score and its clips copied into a new
+    /// score here, `<name> copy`, opened.
+    fn duplicate_from_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+            return;
+        };
+        let track_id = editor.track_id().to_string();
+        let name = format!("{} copy", editor.score_title());
+        let pending = self.library.duplicate_score(
+            &uuid::Uuid::new_v4().to_string(),
+            editor.target_score_id(),
+            &name,
+        );
+        self.close_score_switcher(cx);
+        self.open_minted_score(&track_id, pending, "Could not duplicate the score", cx);
     }
 
     /// A score chosen from the menu: opened here when it is this venue's,
@@ -266,7 +320,18 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
         Target::Score { score, .. } => Some(score.clone()),
         _ => None,
     };
+    let renaming = menu
+        .rename
+        .as_ref()
+        .map(|rename| (rename.score_id.clone(), rename.field.clone()));
     let row = |row: &ScoreRow, elsewhere: bool| {
+        if let Some((_, field)) = renaming.as_ref().filter(|(id, _)| *id == row.id) {
+            return div()
+                .px(px(float::ROW_INSET))
+                .py(px(2.))
+                .child(name_field(row, field))
+                .into_any_element();
+        }
         let pressed = entity.clone();
         let id = row.id.clone();
         let label = if elsewhere {
@@ -290,6 +355,7 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
             .child(div().flex_1().min_w_0().truncate().child(row.title()))
             .child(float::check(open_score.as_deref() == Some(row.id.as_ref())))
             .agent_node(Role::Row, label)
+            .into_any_element()
     };
     let mut card = float::popover_card().w(px(MENU_WIDTH));
     match &menu.rows {
@@ -306,7 +372,15 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
                     rows.iter()
                         .filter(|listed| listed.venue_id.as_ref() == here)
                         .map(|listed| row(listed, false)),
-                );
+                )
+                .child(act(
+                    "score-switcher-new",
+                    "New score",
+                    Some(IconName::Plus),
+                    pressable,
+                    entity,
+                    |this, _, cx| this.new_score_from_menu(cx),
+                ));
             for (venue, listed) in elsewhere(rows, &here) {
                 card = card
                     .child(rule())
@@ -315,7 +389,25 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
             }
         }
     }
+    // What can be done to the open score itself.
     let card = card
+        .child(rule())
+        .child(act(
+            "score-switcher-rename",
+            "Rename",
+            None,
+            pressable && menu.rename.is_none(),
+            entity,
+            |this, window, cx| this.rename_from_menu(window, cx),
+        ))
+        .child(act(
+            "score-switcher-duplicate",
+            "Duplicate",
+            None,
+            pressable,
+            entity,
+            |this, _, cx| this.duplicate_from_menu(cx),
+        ))
         .agent_node(Role::Card, "Scores menu")
         .into_any_element();
     Some(match closing {
@@ -339,6 +431,32 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
             )
         }
     })
+}
+
+/// One of the menu's acts: a row with an optional leading glyph, which runs
+/// `run` when pressed.
+fn act(
+    key: &'static str,
+    label: &'static str,
+    icon: Option<IconName>,
+    pressable: bool,
+    entity: &Entity<Luma>,
+    run: impl Fn(&mut Luma, &mut Window, &mut Context<Luma>) + 'static,
+) -> AnyElement {
+    let pressed = entity.clone();
+    float::menu_row(RowState::Rest, key)
+        .id(key)
+        .when(pressable, |row| {
+            row.on_click(move |_, window, cx| pressed.update(cx, |this, cx| run(this, window, cx)))
+        })
+        .children(icon.map(|icon| {
+            gpui_component::Icon::new(icon)
+                .size(px(11.))
+                .text_color(glass::ink(glass::TEXT_TERTIARY))
+        }))
+        .child(div().flex_1().child(label))
+        .agent_node(Role::Row, label)
+        .into_any_element()
 }
 
 /// A hairline between the menu's sections.

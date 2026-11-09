@@ -454,6 +454,16 @@ impl Editor {
             .unwrap_or_else(|| self.score_label().into())
     }
 
+    /// The open score's id.
+    pub(crate) fn target_score_id(&self) -> &str {
+        &self.score.id
+    }
+
+    /// The open score's own name, if it has one.
+    pub(crate) fn score_name(&self) -> Option<&str> {
+        self.score.name.as_deref()
+    }
+
     /// Score `id` was renamed `name`: the open one keeps its crumb current.
     pub(crate) fn score_renamed(&mut self, id: &str, name: &str) {
         if self.score.id == id {

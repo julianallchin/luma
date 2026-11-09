@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 137,
+    "commandCount": 138,
     "domainCount": 26
   },
   "domains": [
@@ -99,7 +99,7 @@
     },
     {
       "domain": "scores",
-      "commandCount": 9,
+      "commandCount": 10,
       "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
     {
@@ -794,6 +794,28 @@
       "prose": {
         "returns": "PlacementReport"
       }
+    },
+    {
+      "name": "duplicate_score",
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "args": [
+        {
+          "name": "requestId",
+          "rust": "String"
+        },
+        {
+          "name": "scoreId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        }
+      ],
+      "returns": "Score"
     },
     {
       "name": "edit_score_document",

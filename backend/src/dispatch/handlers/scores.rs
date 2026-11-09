@@ -172,6 +172,21 @@ pub async fn rename_score(
     Ok(())
 }
 
+/// Copy a score and its clips into a new score of the same song in the same
+/// venue, named `name`. Idempotent on `request_id`.
+pub async fn duplicate_score(
+    services: &AppServices,
+    request_id: String,
+    score_id: String,
+    name: String,
+) -> Result<Score, CommandError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CommandError::Invalid("A score name cannot be empty".into()));
+    }
+    Ok(catalog::duplicate_score(&services.db.0, &request_id, &score_id, name).await?)
+}
+
 /// A delete is a delete: the score's clips, definitions and drafts go with it.
 pub async fn delete_score(services: &AppServices, id: String) -> Result<(), CommandError> {
     Ok(catalog::delete_score(&services.db.0, &id).await?)
@@ -272,6 +287,42 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    /// A copy is a new score of the same song and venue, with the source's
+    /// clips and the given name; the source is untouched, and a replay of the
+    /// request returns the same copy.
+    #[tokio::test]
+    async fn duplicate_score_copies_the_clips_under_a_new_name() {
+        let (_directory, services, id) = library().await;
+        let clips = score(&[("a", &clip("A", 0.)), ("b", &clip("B", 8.))]);
+        edit(&services, &id, &luma_patterns::Score::default(), &clips).await;
+
+        let args = json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "scoreId": id,
+            "name": "Draft copy",
+        });
+        let duplicate = || dispatch(&services, "duplicate_score", &args);
+        let copy = duplicate().await.unwrap();
+        let copy_id = copy["id"].as_str().unwrap().to_owned();
+        assert_ne!(copy_id, id);
+        assert_eq!(copy["name"], "Draft copy");
+        assert_eq!(copy["trackId"], "track");
+        assert_eq!(stored(&services, &copy_id).await, clips);
+        assert_eq!(stored(&services, &id).await, clips);
+
+        // An edit to the copy leaves the source alone: the clips are its own.
+        edit(
+            &services,
+            &copy_id,
+            &clips,
+            &score(&[("a", &clip("A", 0.))]),
+        )
+        .await;
+        assert_eq!(stored(&services, &id).await, clips);
+
+        assert_eq!(duplicate().await.unwrap()["id"], copy_id.as_str());
     }
 
     fn clip(name: &str, start: f64) -> luma_patterns::Clip {

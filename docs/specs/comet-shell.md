@@ -164,8 +164,11 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
   was on when that place lists it, in All songs otherwise.
 - **Score menu** (the score crumb; `score_switcher`): the score's name, or its
   `#n` when it has none. Its menu holds every score of the song — this
-  venue's, then each other venue's under the venue's name — the open one
-  checked. A score here opens on the spot;
+  venue's, ending in "New score", then each other venue's under the venue's
+  name — the open one checked, and under them the open score's acts: Rename
+  (its row becomes the song list's inline name field) and Duplicate (the
+  score and its clips copied here as `<name> copy`, `duplicate_score`, and
+  opened). A score here opens on the spot;
   one in another venue asks "Switch to <venue>?" (`confirm`), and on Switch
   the window switches venue and opens that score in Arrange, in place of the
   score saved for that venue.
