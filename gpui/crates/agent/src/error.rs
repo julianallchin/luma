@@ -32,6 +32,9 @@ pub enum HarnessError {
     /// The call needs a capability this mode does not have — a screenshot in
     /// headless mode, say.
     Unsupported(&'static str),
+    /// The window is gone: the app closed it, or quit. Only reads of what was
+    /// last drawn, and asking whether it is open, still answer.
+    WindowClosed,
     /// A malformed call from the JS side: unknown command, bad argument shape.
     BadCall(String),
 }
@@ -58,6 +61,7 @@ impl fmt::Display for HarnessError {
             Self::PumpGone => write!(f, "PumpGone: the app thread is no longer running"),
             Self::BadAction(message) => write!(f, "BadAction: {message}"),
             Self::Unsupported(what) => write!(f, "Unsupported: {what}"),
+            Self::WindowClosed => write!(f, "WindowClosed: the app closed its window"),
             Self::BadCall(message) => write!(f, "BadCall: {message}"),
         }
     }

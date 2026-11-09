@@ -139,6 +139,8 @@
         }),
       }),
     timings: () => call("timings", {}),
+    close: () => call("close", {}),
+    isOpen: () => call("window_open", {}).open,
     screenshot: (opts) =>
       call("screenshot", options(opts, { node: "node", restale: "restale" })),
     help: () => __help(),

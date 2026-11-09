@@ -202,6 +202,12 @@ pub enum Cmd {
         #[serde(default)]
         restale: Restale,
     },
+    /// Press the window's close button: the platform asks the app whether it
+    /// may close, and closes it if the answer is yes. Headless mode only.
+    Close,
+    /// Whether the window is still open. Answers after it closes, when every
+    /// command that would reach into it fails with `WindowClosed`.
+    WindowOpen,
     /// Tear the app down and build it again from the same factory and seed.
     Reset,
 }

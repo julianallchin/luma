@@ -265,12 +265,27 @@ fn serve(backend: &mut Backend, config: &Config, root: &RootFactory, rx: Receive
 // -- commands -----------------------------------------------------------------
 
 fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
+    let reads_only = matches!(
+        cmd,
+        Cmd::Snapshot { .. } | Cmd::Painted | Cmd::CurrentFrame | Cmd::Timings | Cmd::WindowOpen
+    );
+    if !reads_only && !backend.window_open() {
+        return Err(HarnessError::WindowClosed);
+    }
     match cmd {
         Cmd::Reset => unreachable!("handled in `serve`, which owns the backend"),
 
         Cmd::CurrentFrame => Ok(json!({ "frame": backend.frame() })),
 
         Cmd::Timings => Ok(backend.timings()),
+
+        Cmd::WindowOpen => Ok(json!({ "open": backend.window_open() })),
+
+        Cmd::Close => {
+            backend.close()?;
+            backend.settle();
+            Ok(json!({ "frame": backend.frame() }))
+        }
 
         Cmd::Painted => Ok(painted(backend)),
 
@@ -713,6 +728,9 @@ impl Backend {
     fn settle(&mut self) {
         let start = Instant::now();
         self.run_until_parked();
+        if !self.window_open() {
+            return;
+        }
         let parked = start.elapsed();
         let drawn = Instant::now();
         // Deliver the previous frame's callbacks once, just as a platform
@@ -725,6 +743,10 @@ impl Backend {
 
     /// Draw, and time it from `drawn`.
     fn draw(&mut self, parked: Duration, drawn: Instant) {
+        // Work that just ran may have closed the window: nothing to draw.
+        if !self.window_open() {
+            return;
+        }
         self.in_window(|window, cx| window.draw(cx).clear(cx));
         self.touched = false;
         self.last_draw = Instant::now();
@@ -756,6 +778,9 @@ impl Backend {
         let start = Instant::now();
         let ran = self.run_until_parked();
         let parked = start.elapsed();
+        if !self.window_open() {
+            return;
+        }
         // Delivering the callbacks is the only way to count them, and it is
         // what a draw does first anyway.
         let callbacks = self.in_window(|window, cx| window.simulate_next_frame(cx));
@@ -828,6 +853,40 @@ impl Backend {
             #[cfg(feature = "pixel")]
             Host::Pixel { cx, .. } => &cx.background_executor,
         }
+    }
+
+    /// Whether the window under test is still open: the app may close it
+    /// itself, and does when it quits.
+    pub(crate) fn window_open(&self) -> bool {
+        let window = self.window();
+        let open = |app: &App| app.windows().contains(&window);
+        match &self.host {
+            Host::Headless { cx, .. } => cx.read(open),
+            #[cfg(feature = "pixel")]
+            Host::Pixel { cx, .. } => open(&cx.app.borrow()),
+        }
+    }
+
+    /// The window's close button, as the platform presses it: ask the app's
+    /// `on_window_should_close` hook, and close on a yes. An app that says no
+    /// may still close the window itself later; `window_open` is the answer.
+    fn close(&mut self) -> Result<(), HarnessError> {
+        let window = self.window();
+        let cx = match &self.host {
+            Host::Headless { cx, .. } => cx,
+            #[cfg(feature = "pixel")]
+            Host::Pixel { .. } => {
+                return Err(HarnessError::Unsupported(
+                    "closing the window is headless-only; pixel mode has no test window to ask",
+                ))
+            }
+        };
+        self.touched = true;
+        let mut visual = gpui::VisualTestContext::from_window(window, cx);
+        if visual.simulate_close() {
+            self.in_window(|window, _| window.remove_window());
+        }
+        Ok(())
     }
 
     /// The one door to the app. Every command below goes through here.

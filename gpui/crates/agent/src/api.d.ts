@@ -319,6 +319,21 @@ interface App {
   timings(): Timings;
 
   /**
+   * Press the window's close button. The platform asks the app first (its
+   * `on_window_should_close` hook) and closes the window on a yes; an app
+   * that says no may close it itself later. Headless mode only.
+   */
+  close(): { frame: number };
+
+  /**
+   * Whether the window is still open. Luma quits by closing its one window,
+   * so this is how a script sees a quit. Once it is closed, `snapshot` and
+   * `painted` still describe the last frame, and every acting call throws
+   * `WindowClosed`.
+   */
+  isOpen(): boolean;
+
+  /**
    * Render to a PNG on disk and return where it went. Pixel mode only —
    * throws in headless mode, which has no renderer. `width`/`height` are
    * device pixels; `scale` is device pixels per logical one.
