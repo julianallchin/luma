@@ -207,5 +207,6 @@ venue between devices. Only the three hardware-port columns above are local.
 2. Connect it to the Supabase Postgres with the replication role and the
    `powersync` publication.
 3. Client Auth: enable "Use Supabase Auth".
-4. Run `powersync deploy sync-config --directory=deploy/powersync`.
+4. Run `powersync deploy sync-config --directory=deploy/powersync` once;
+   from then on every release deploys it (deploy/README.md).
 5. Put the instance URL in `backend/src/config.rs` as `POWERSYNC_URL`.
