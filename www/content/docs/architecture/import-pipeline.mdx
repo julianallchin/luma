@@ -67,6 +67,10 @@ by dependency at startup. The registry is `registry.rs`.
   output, unless one of its inputs was rebuilt in the same run. Startup forgets
   the failures of an older version of a preprocessor, and those recorded before
   the Python environment was last reinstalled.
+- A preprocessor that fails with the same error on three tracks in a row is
+  skipped on the rest of the batch (an import, or the startup catch-up),
+  because it is the preprocessor that is broken, not the tracks. The next
+  batch tries it again.
 - The scheduler emits `track-import-state` events during an import. Each
   analysed track is first `queued` with every stage it will report (each
   preprocessor plus `waveform`); each stage then starts and settles exactly

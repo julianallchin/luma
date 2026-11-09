@@ -112,6 +112,14 @@ On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The
 backoff record carries the track to a later retry.
 
+A batch (`run_for_tracks`: one import, or the startup reconcile) also has a
+circuit breaker. Once a step has failed with the same error on three tracks in
+a row, with no success between, the rest of the batch skips it and its
+dependents, and each skipped track reports that error. A step failing that way
+is broken itself, in its code or its Python environment, so this saves a
+worker launch per track. The skipped tracks record no failure, so the next
+batch tries the step again.
+
 Host events emitted: `Event::TrackImportState` throughout an import, one per
 stage start and settle included. Consumers branch on the structured
 phase/step/error fields, never human-readable status labels.
