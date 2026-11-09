@@ -30,7 +30,11 @@ stage and body:
 ```
 
 Nothing is destroyed to show something else: each mode keeps its body while
-another mode is up, and each venue keeps its modes while another venue is up.
+another mode is up, and each venue keeps its bodies while another venue is up.
+Switching venue from the venue menu keeps the page (`Luma::page`,
+`Luma::land_on`): Rig stays Rig, Live stays Live, and Arrange — the song list
+or a score — lands on the other venue's song list, with the same song selected
+when that venue has it. What the other venue had open stays parked under it.
 
 ## 1. Regions
 

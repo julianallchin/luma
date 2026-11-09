@@ -49,6 +49,14 @@ use crate::Luma;
 pub(crate) mod folders;
 pub(crate) mod scores;
 
+/// The page a venue switch keeps: a mode, and in Arrange the song list with
+/// the song it had in hand — a score's song when a score was open.
+pub(crate) enum Page {
+    Rig,
+    Live,
+    Songs(Option<String>),
+}
+
 /// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
 /// the default.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -166,6 +174,9 @@ pub struct Tracks {
     /// venue's catalogue has landed — it needs its track's row. Taken in
     /// place of the score saved for this venue.
     pub(crate) arrival: Option<(String, crate::track_editor::Score)>,
+    /// The song to select once the catalogue lands, when a venue switch
+    /// carried the song list here — see [`Luma::land_on`].
+    landing: Option<String>,
 }
 
 impl Tracks {
@@ -406,6 +417,7 @@ impl Luma {
             user: self.library.user_id(),
             search_focus,
             arrival: None,
+            landing: None,
         });
         self.song_list = false;
         self.song_list_close = None;
@@ -433,19 +445,32 @@ impl Luma {
                 // A saved score needs its track's row, so it reopens once the
                 // catalogue is here — unless another venue's menu sent the
                 // window here for a score of its own choosing.
-                let arrival = this
+                let (arrival, landing) = this
                     .songs
                     .as_mut()
                     .filter(|songs| {
                         songs.venue_id == venue_id && songs.load_generation == generation
                     })
-                    .and_then(|songs| songs.arrival.take());
+                    .map_or((None, None), |songs| {
+                        (songs.arrival.take(), songs.landing.take())
+                    });
                 if arrival.is_some() {
                     this.saved_venues.forget_score(&venue_id);
                 }
                 this.restore_venue_score(&venue_id, cx);
                 if let Some((track, score)) = arrival {
                     this.open_score(&track, score, None, cx);
+                }
+                // The song the list had selected in the venue left, when this
+                // venue has it too.
+                let here = landing.filter(|track| {
+                    this.songs
+                        .as_ref()
+                        .and_then(|songs| songs.find(track))
+                        .is_some_and(|row| row.is_in_venue)
+                });
+                if let Some(track) = here {
+                    this.show_song(&track, cx);
                 }
             })
             .ok();
@@ -585,6 +610,12 @@ impl Luma {
         self.workspace.set_mode(Mode::Arrange);
         self.song_list = false;
         self.song_list_close = None;
+        self.show_song(track_id, cx);
+    }
+
+    /// Select `track_id` in the song list, its scores listed, widening a
+    /// folder, search or ownership filter that hides it.
+    fn show_song(&mut self, track_id: &str, cx: &mut Context<Self>) {
         let listed = |state: &Tracks| {
             state
                 .shown
@@ -599,6 +630,38 @@ impl Luma {
             state.refilter();
         }
         self.select_track(track_id, cx);
+    }
+
+    /// The page on screen, as a venue switch carries it to the next venue.
+    pub(crate) fn page(&self) -> Page {
+        match self.workspace.mode() {
+            Mode::Rig => Page::Rig,
+            Mode::Live => Page::Live,
+            Mode::Arrange => Page::Songs(match self.workspace.active_body() {
+                Some(crate::shell::Body::TrackEditor(editor)) if !self.song_list_shown() => {
+                    Some(editor.track_id().to_string())
+                }
+                _ => self.songs.as_ref().and_then(|songs| songs.track.clone()),
+            }),
+        }
+    }
+
+    /// Put `page` on screen in the venue just opened, over whatever that
+    /// venue had left open: Rig and Live stay themselves, and Arrange — the
+    /// song list or a score — lands on the song list, with the same song
+    /// selected once the catalogue shows this venue has it.
+    pub(crate) fn land_on(&mut self, page: Page, cx: &mut Context<Self>) {
+        match page {
+            Page::Rig => self.set_mode(Mode::Rig, cx),
+            Page::Live => self.set_mode(Mode::Live, cx),
+            Page::Songs(track) => {
+                self.set_mode(Mode::Arrange, cx);
+                self.song_list = true;
+                if let Some(songs) = &mut self.songs {
+                    songs.landing = track;
+                }
+            }
+        }
     }
 
     /// Select `track_id` in the second column, and list its scores in the

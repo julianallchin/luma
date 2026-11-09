@@ -164,7 +164,7 @@ test("the song list takes the agent panel's room and gives it back", () => {
   assert(!agent(app.snapshot()), "closing the song list brought back a panel hidden by hand");
 });
 
-test("the song list is a page without the agent panel; only the toggle slides it", { fixture: { motion: true } }, () => {
+test("the song list is a page without the agent panel; only the toggle slides it", { fixture: { motion: true, motion_scale: 4 } }, () => {
   nav.trackEditor("Test Venue", "Aurora");
   const width = (s) => box(s, "card", "Agent")?.width ?? 0;
   const toggle = (s) => box(s, "button", "Hide agent") ?? box(s, "button", "Show agent");
@@ -172,9 +172,12 @@ test("the song list is a page without the agent panel; only the toggle slides it
   app.frames(20, { waitMs: 16 });
   const open = width(app.snapshot());
   // Every width the frames after `act` drew, the act's own included.
-  const swept = (act) => {
+  // Every width the frames after `act` drew, the act's own included, until
+  // `done` holds.
+  const swept = (act, done = () => true) => {
     const { frame } = act();
-    app.frames(20, { waitMs: 16 });
+    app.frames(4, { waitMs: 16 });
+    until("the page to settle", done);
     return app.painted().filter((s) => s.frame >= frame);
   };
   const widths = (frames) => frames.map(width);
@@ -202,7 +205,7 @@ test("the song list is a page without the agent panel; only the toggle slides it
   }
 
   // The toggle is the one thing that slides it…
-  frames = swept(() => app.action("luma::ToggleAgent"));
+  frames = swept(() => app.action("luma::ToggleAgent"), (s) => width(s) === 0);
   assert(sliding(frames), `the toggle did not slide the panel: ${widths(frames)}`);
   expect(width(frames.at(-1))).toBe(0);
 

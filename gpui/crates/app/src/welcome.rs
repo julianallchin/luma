@@ -1203,8 +1203,12 @@ impl Luma {
             .songs
             .as_ref()
             .map(|songs| songs.venue_id().to_string());
+        // The page on screen comes along: a switch changes the venue, not
+        // where the person is in it.
         if let Some(venue) = venue.filter(|venue| Some(&venue.id) != current.as_ref()) {
+            let page = self.page();
             self.open_venue(venue, cx);
+            self.land_on(page, cx);
         }
     }
 }
