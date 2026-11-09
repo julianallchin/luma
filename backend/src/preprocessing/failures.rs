@@ -24,7 +24,8 @@ use std::time::SystemTime;
 use sqlx::SqlitePool;
 
 /// Cap retry backoff at 24h: reconcile retries a failure at the cap once a
-/// day, and at once after the step's version changes.
+/// day, and at once after the step's version changes or the Python environment
+/// is reinstalled.
 const MAX_BACKOFF_SECS: i64 = 24 * 60 * 60;
 
 /// Record a failed run. Increments `attempts` and sets
@@ -113,7 +114,15 @@ pub async fn held_back(
 /// environment the workers run in was last installed. Such a failure says
 /// nothing about the environment now running, so a repaired environment
 /// retries every track at once.
+///
+/// An install time later than now means the clock was ahead when setup ran,
+/// or has been set back since. Every failure recorded until the clock catches
+/// up would then look older than the install and be forgotten at every
+/// launch, so nothing is forgotten.
 pub async fn forget_before(pool: &SqlitePool, installed: SystemTime) -> Result<(), String> {
+    if installed > SystemTime::now() {
+        return Ok(());
+    }
     let seconds = installed
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -284,20 +293,35 @@ mod tests {
     #[tokio::test]
     async fn failures_from_before_the_environment_was_installed_are_forgotten() {
         let (_directory, pool) = library().await;
-        record(&pool, "t1", "step", 1, "boom").await.unwrap();
+        record(&pool, "t1", "old", 1, "boom").await.unwrap();
+        sqlx::query(
+            "UPDATE preprocessing_failures
+                SET last_attempt = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-2 hours')
+              WHERE preprocessor = 'old'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        record(&pool, "t1", "new", 1, "boom").await.unwrap();
         let now = SystemTime::now();
         let hour = std::time::Duration::from_secs(3600);
 
         forget_before(&pool, now - hour).await.unwrap();
-        assert!(
-            last_error(&pool, "t1", "step").await.unwrap().is_some(),
-            "a failure in the environment now installed was forgotten"
-        );
-        forget_before(&pool, now + hour).await.unwrap();
         assert_eq!(
-            last_error(&pool, "t1", "step").await.unwrap(),
+            last_error(&pool, "t1", "old").await.unwrap(),
             None,
             "a failure from before the environment was installed is kept"
+        );
+        assert!(
+            last_error(&pool, "t1", "new").await.unwrap().is_some(),
+            "a failure in the environment now installed was forgotten"
+        );
+
+        // A clock set back since the install: nothing is older than it.
+        forget_before(&pool, now + hour).await.unwrap();
+        assert!(
+            last_error(&pool, "t1", "new").await.unwrap().is_some(),
+            "an install in the future forgot a failure"
         );
     }
 

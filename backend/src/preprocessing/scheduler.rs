@@ -17,10 +17,12 @@
 //! On preprocessor failure: log, record a row in
 //! `preprocessing_failures` with exponential backoff, skip downstream
 //! preprocessors for this track in this run, then continue with other tracks.
-//! Until the track's `next_retry_at` has elapsed, or the preprocessor's
-//! version has changed, the step stays skipped on that track, with its
-//! dependents: reconcile does not queue the track for it, and a run queued for
-//! another step passes it by.
+//! Until the track's `next_retry_at` has elapsed, the step stays skipped on
+//! that track, with its dependents: reconcile does not queue the track for it,
+//! and a run queued for another step passes it by. A run in which a step
+//! rewrote one of its inputs tries it anyway, and reconcile forgets the
+//! failures of a version that is no longer running, and those recorded before
+//! the Python environment was last installed.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -254,10 +256,9 @@ async fn drain_layer(
     (failed_outputs, errors)
 }
 
-fn is_blocked(p: &dyn Preprocessor, failed_artifacts: &HashSet<Artifact>) -> bool {
-    p.inputs()
-        .iter()
-        .any(|input| failed_artifacts.contains(input))
+/// Whether `p` reads any of `artifacts`.
+fn reads_any(p: &dyn Preprocessor, artifacts: &HashSet<Artifact>) -> bool {
+    p.inputs().iter().any(|input| artifacts.contains(input))
 }
 
 // -----------------------------------------------------------------------------
@@ -323,10 +324,12 @@ async fn run_track_layers(
     // Artifacts a step wrote in this run. A step that failed on the old ones
     // gets a new try on them, backoff or not.
     let mut produced: HashSet<Artifact> = HashSet::new();
-    let held = failures::held_back(pool, track_id).await?;
     let mut track_errors = Vec::new();
 
     for layer in registry::dag().layers() {
+        // Read per layer, not per run: a concurrent run of this track may
+        // have failed a later step while this one worked on the earlier ones.
+        let held = failures::held_back(pool, track_id).await?;
         // Filter layer: skip preprocessors whose inputs failed, or whose
         // output is already complete.
         let mut to_run: Vec<PreprocessorRef> = Vec::new();
@@ -339,7 +342,7 @@ async fn run_track_layers(
             analysis.clone(),
         );
         for p in layer {
-            if is_blocked(p.as_ref(), &failed_artifacts) {
+            if reads_any(p.as_ref(), &failed_artifacts) {
                 eprintln!(
                     "[preprocessing] skipping {} for track {track_id}: upstream failed",
                     p.name()
@@ -367,19 +370,20 @@ async fn run_track_layers(
             // the track is queued for another one. Its dependents wait with it,
             // and they are what keeps a track queued: nothing else stops a
             // failing upstream step from rerunning on every launch.
-            let fresh_input = p.inputs().iter().any(|input| produced.contains(input));
+            let fresh_input = reads_any(p.as_ref(), &produced);
             if let Some(error) = held.get(p.name()).filter(|_| !fresh_input) {
+                // A cancelled run reports nothing; see `run_one`.
+                analysis.checkpoint()?;
                 eprintln!(
                     "[preprocessing] skipping {} for track {track_id}: in failure backoff",
                     p.name()
                 );
                 failed_artifacts.insert(p.output());
+                let reason = failures::headline(error);
                 if let Some(report) = report {
-                    report.settle(
-                        p.name(),
-                        StageOutcome::Failed(failures::headline(error).to_owned()),
-                    );
+                    report.settle(p.name(), StageOutcome::Failed(reason.to_owned()));
                 }
+                track_errors.push(format!("{}: {reason}", p.name()));
                 continue;
             }
             to_run.push(p.clone());
@@ -696,34 +700,38 @@ mod tests {
         }
     }
 
-    /// The case that reran a broken MERT on every track at every launch: the
-    /// steps waiting on a failed one keep the track queued. Here every step
-    /// waits on the two the DAG starts from, so if anything ran, a row changed.
-    #[tokio::test]
-    async fn a_queued_track_reruns_no_step_in_failure_backoff() {
-        let directory = tempfile::tempdir().unwrap();
-        let services =
-            crate::test_support::signed_out(directory.path(), directory.path().to_path_buf()).await;
-        let pool = &services.db.0;
-        let audio = directory.path().join("song.wav");
+    /// A library holding track `t1`, with audio and no analysis.
+    async fn library(directory: &std::path::Path) -> crate::dispatch::AppServices {
+        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
+        let audio = directory.join("song.wav");
         std::fs::write(&audio, b"RIFF").unwrap();
         sqlx::query(
             "INSERT INTO tracks (id, track_hash, title, duration_seconds, file_path)
              VALUES ('t1', 'hash', 'Song', 1.0, ?)",
         )
         .bind(audio.to_string_lossy())
-        .execute(pool)
+        .execute(&services.db.0)
         .await
         .unwrap();
-        let first = &registry::dag().layers()[0];
-        for p in first {
-            let error = format!("{} worker failed: it broke\n\nTraceback …", p.name());
-            failures::record(pool, "t1", p.name(), p.version(), &error)
+        services
+    }
+
+    /// Put `held` into failure backoff on `t1`.
+    async fn hold(pool: &SqlitePool, held: &[&str]) {
+        for name in held {
+            let p = registry::dag()
+                .preprocessors()
+                .find(|p| p.name() == *name)
+                .unwrap();
+            let error = format!("{name} worker failed: it broke\n\nTraceback …");
+            failures::record(pool, "t1", name, p.version(), &error)
                 .await
                 .unwrap();
         }
-        let before = failure_rows(pool).await;
-        let mut queued_by = Vec::new();
+    }
+
+    /// Whether reconcile would queue `t1`, for any step.
+    async fn queued(pool: &SqlitePool) -> bool {
         for p in registry::dag().preprocessors() {
             if p.list_pending(pool)
                 .await
@@ -731,14 +739,18 @@ mod tests {
                 .iter()
                 .any(|id| id == "t1")
             {
-                queued_by.push(p.name());
+                return true;
             }
         }
-        assert!(
-            !queued_by.is_empty(),
-            "reconcile would not queue the track at all"
-        );
+        false
+    }
 
+    /// Run `t1` as an import does, and check that no step ran: the failure
+    /// table is as it was. Every `held` step reports the failure that holds
+    /// it, by its first line, and every other step settles as skipped.
+    async fn assert_runs_nothing(services: &crate::dispatch::AppServices, held: &[&str]) {
+        let pool = &services.db.0;
+        let before = failure_rows(pool).await;
         let settled = Settled::default();
         let import = ImportEventContext {
             import_id: "import".into(),
@@ -764,21 +776,97 @@ mod tests {
             before,
             "a step in backoff, or one waiting on it, ran"
         );
-        run.unwrap();
-        // A held step reports the failure that holds it, by its first line;
-        // what waits on it was skipped.
-        for (stage, outcome) in settled.0.lock().unwrap().iter() {
-            let expected = match first.iter().find(|p| p.name() == stage) {
-                Some(_) => StageOutcome::Failed(format!("{stage} worker failed: it broke")),
-                None => StageOutcome::Skipped,
+        let error = run.expect_err("a held step is the track's failure");
+        for name in held {
+            assert!(
+                error.contains(&format!("{name}: {name} worker failed: it broke")),
+                "{name} is missing from the track's error: {error}"
+            );
+        }
+        let settled = settled.0.lock().unwrap();
+        for (stage, outcome) in settled.iter() {
+            let expected = if held.contains(&stage.as_str()) {
+                StageOutcome::Failed(format!("{stage} worker failed: it broke"))
+            } else {
+                StageOutcome::Skipped
             };
             assert_eq!(outcome, &expected, "{stage}");
         }
         assert_eq!(
-            settled.0.lock().unwrap().len(),
+            settled.len(),
             registry::dag().preprocessors().count(),
             "a stage never settled"
         );
+    }
+
+    /// Every step waits on the two the DAG starts from.
+    #[tokio::test]
+    async fn a_queued_track_reruns_no_step_in_failure_backoff() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = library(directory.path()).await;
+        let first: Vec<_> = registry::dag().layers()[0]
+            .iter()
+            .map(|p| p.name())
+            .collect();
+        hold(&services.db.0, &first).await;
+        assert!(
+            queued(&services.db.0).await,
+            "reconcile would not queue the track at all"
+        );
+
+        assert_runs_nothing(&services, &first).await;
+    }
+
+    /// The case that reran a broken MERT on every track at every launch:
+    /// beats and stems are done, MERT is held, and the steps waiting on it
+    /// keep the track queued. The chords and genre steps, which would run
+    /// next to MERT, are held too, so a step that ran shows in the table.
+    #[tokio::test]
+    async fn a_held_step_after_complete_inputs_stays_held() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = library(directory.path()).await;
+        let pool = &services.db.0;
+        let version = |name: &str| {
+            registry::dag()
+                .preprocessors()
+                .find(|p| p.name() == name)
+                .unwrap()
+                .version()
+        };
+        sqlx::query(
+            "INSERT INTO track_beats
+                (track_id, beats_json, downbeats_json, bpm, beats_per_bar, processor_version)
+             VALUES ('t1', '[0.5,1.0,1.5,2.0]', '[0.5,2.5]', 128.0, 4, ?)",
+        )
+        .bind(i64::from(version("beat_grid")))
+        .execute(pool)
+        .await
+        .unwrap();
+        let stems = services.storage.stems_root().join("hash");
+        std::fs::create_dir_all(&stems).unwrap();
+        for stem in ["bass", "drums", "other", "vocals"] {
+            let file = stems.join(format!("{stem}.ogg"));
+            std::fs::write(&file, b"OggS").unwrap();
+            sqlx::query(
+                "INSERT INTO track_stems (track_id, stem_name, file_path, processor_version)
+                 VALUES ('t1', ?, ?, ?)",
+            )
+            .bind(stem)
+            .bind(file.to_string_lossy())
+            .bind(i64::from(version("stems")))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        let held = registry::dag().layers()[1]
+            .iter()
+            .map(|p| p.name())
+            .collect::<Vec<_>>();
+        assert!(held.contains(&"mert"), "MERT moved out of the second layer");
+        hold(pool, &held).await;
+        assert!(queued(pool).await, "reconcile would not queue the track");
+
+        assert_runs_nothing(&services, &held).await;
     }
 
     #[tokio::test]
@@ -870,7 +958,7 @@ mod tests {
             output: Artifact::Roots,
         };
         assert!(
-            is_blocked(&downstream, &failed_outputs),
+            reads_any(&downstream, &failed_outputs),
             "downstream work was not suppressed after an indeterminate layer"
         );
     }
