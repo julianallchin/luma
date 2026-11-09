@@ -24,6 +24,7 @@ use luma_fixture::{Built, Fixture, JointKind};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
+use crate::fixtures::light::{ModeLight, Slot};
 use crate::models::fixtures::{
     Capability, Channel, ChannelColour, ChannelType, Dimensions, FixtureDefinition, Head, Lens,
     Mode, ModeChannel, Physical,
@@ -52,12 +53,16 @@ pub struct Source {
     pub built: Arc<Built>,
     /// Pan and tilt travel, `[lo, hi]` degrees from home.
     pub travel: [[f32; 2]; 2],
+    /// Each mode's light, by mode name.
+    pub light: HashMap<String, Arc<ModeLight>>,
 }
 
 /// One DMX slot of a lowered mode: byte `rank` of `param`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lowered {
     pub param: Arc<Param>,
+    /// Which of the mode's params it is: its place in [`ModeLight`]'s values.
+    pub index: usize,
     pub rank: u8,
 }
 
@@ -80,12 +85,6 @@ impl Lowered {
     #[must_use]
     pub fn home(&self) -> u8 {
         self.param.byte(self.param.home, self.rank)
-    }
-
-    /// The cells it reads: `None` for the fixture primitive.
-    #[must_use]
-    pub fn cells(&self) -> Option<[u32; 2]> {
-        self.param.cell.map(luma_fixture::control::CellRef::span)
     }
 
     /// The QLC+ class the rest of Luma reads it as. A finer byte is nothing
@@ -334,15 +333,19 @@ pub fn lower(fixture: &Fixture, built: Built) -> Result<FixtureDefinition, Strin
     let travel = travel(&built, &control);
     let mut channels = Vec::new();
     let mut modes = Vec::new();
+    let mut light = HashMap::new();
     for mode in &control.modes {
         let resolved = control.resolve(&mode.name).map_err(|e| e.to_string())?;
-        modes.push(lower_mode(
+        let (lowered, mode_light) = lower_mode(
             &control,
+            &built,
             &resolved,
             cell_count,
             travel,
             &mut channels,
-        ));
+        );
+        light.insert(resolved.name.clone(), Arc::new(mode_light));
+        modes.push(lowered);
     }
     let (lo, hi) = built.bounds().unwrap_or_default();
     let size = (hi - lo) * 1000.0;
@@ -374,6 +377,7 @@ pub fn lower(fixture: &Fixture, built: Built) -> Result<FixtureDefinition, Strin
             id: meta.id.clone(),
             built: Arc::new(built),
             travel,
+            light,
         })),
     })
 }
@@ -387,11 +391,12 @@ pub fn lower(fixture: &Fixture, built: Built) -> Result<FixtureDefinition, Strin
 /// over a range of cells sits in the range's first head and reads their mean.
 fn lower_mode(
     control: &Control,
+    built: &Built,
     resolved: &Resolved,
     cell_count: usize,
     travel: [[f32; 2]; 2],
     channels: &mut Vec<Channel>,
-) -> Mode {
+) -> (Mode, ModeLight) {
     let has_emitters = resolved
         .params
         .iter()
@@ -418,18 +423,32 @@ fn lower_mode(
             preset: None,
             group: None,
             capabilities,
-            lowered: Some(Box::new(Lowered { param, rank })),
+            lowered: Some(Box::new(Lowered { param, index, rank })),
         });
         mode_channels.push(ModeChannel {
             number: offset as u32,
             name,
         });
     }
-    Mode {
-        name: resolved.name.clone(),
-        channels: mode_channels,
-        heads,
-    }
+    let light = ModeLight::new(built, resolved, &params, |p| {
+        colour_capabilities(control, p)
+            .iter()
+            .filter_map(|cap| {
+                Some(Slot {
+                    byte: cap.min,
+                    rgb: crate::fixtures::light::hex(cap.res1.as_deref()?)?,
+                })
+            })
+            .collect()
+    });
+    (
+        Mode {
+            name: resolved.name.clone(),
+            channels: mode_channels,
+            heads,
+        },
+        light,
+    )
 }
 
 /// `p` as the engine reads it. A colour macro on a fixture that mixes its

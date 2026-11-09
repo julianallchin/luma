@@ -345,7 +345,6 @@ fn hyt(rgb: PrimitiveState, white: PrimitiveState) -> Vec<(String, PrimitiveStat
 /// White asked of a cell with only red, green and blue emitters is made by
 /// them; the white emitters elsewhere on the fixture cannot light it.
 #[test]
-#[ignore = "bug: emitters are decided per mode, so an RGB cell's white goes to white channels it has none of"]
 fn white_lights_cells_without_a_white_emitter() {
     let white = lit(1.0, [1.0; 3]);
     let b = dmx(HYT, "64ch", &hyt(white.clone(), white));
@@ -361,7 +360,6 @@ fn white_lights_cells_without_a_white_emitter() {
 /// ask for: in 6ch, red is the RGB cells' red and white the white cells'
 /// white, not one average of every cell split afterwards.
 #[test]
-#[ignore = "bug: a fixture-level channel averages every cell, including cells without its emitter"]
 fn a_shared_channel_carries_the_cells_that_can_emit_through_it() {
     let b = dmx(
         HYT,
@@ -375,7 +373,6 @@ fn a_shared_channel_carries_the_cells_that_can_emit_through_it() {
 /// Dimmer reaches the light on a mode without a dimmer channel: dark at 0,
 /// brighter as it rises.
 #[test]
-#[ignore = "bug: a mode without a dimmer channel sends the colour at full whatever the dimmer"]
 fn dimmer_dims_a_mode_without_a_dimmer_channel() {
     let at = |dimmer: f32| {
         let p = lit(dimmer, [1.0, 0.5, 0.25]);
@@ -398,7 +395,6 @@ fn dimmer_dims_a_mode_without_a_dimmer_channel() {
 /// second of output frames a strobing cell goes dark and lights again, and a
 /// steady one never changes.
 #[test]
-#[ignore = "bug: when cells disagree and no strobe rung fits, the fixture does not strobe at all"]
 fn cells_that_disagree_on_strobe_each_strobe_or_hold() {
     // Red, which every RGB cell makes on its own, so only the strobe is tested.
     let steady = lit(1.0, [1.0, 0.0, 0.0]);
@@ -421,13 +417,11 @@ fn cells_that_disagree_on_strobe_each_strobe_or_hold() {
         .map(|n| dmx_at(HYT, "64ch", &primitives, f64::from(n) / 44.0))
         .collect();
     let seen = |slot: usize| -> Vec<u8> { frames.iter().map(|b| b[slot]).collect() };
-    for slot in [0] {
-        let s = seen(slot);
-        assert!(
-            s.contains(&0) && s.iter().any(|&v| v > 0),
-            "strobing slot {slot}: {s:?}"
-        );
-    }
+    let strobing = seen(0);
+    assert!(
+        strobing.contains(&0) && strobing.iter().any(|&v| v > 0),
+        "strobing slot 0: {strobing:?}"
+    );
     for slot in [3, 45] {
         let s = seen(slot);
         assert!(

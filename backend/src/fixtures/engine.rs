@@ -1,4 +1,6 @@
-use crate::fixtures::library::Lowered;
+use crate::fixtures::light::{
+    hex, luma, nearest_slot, ModeLight, Slot, Value, AMBER_EMITTER, LIME_EMITTER, WHITE_EMITTER,
+};
 use crate::models::fixtures::{
     Channel, ChannelColour, ChannelType, FixtureDefinition, Mode, PatchedFixture,
 };
@@ -411,6 +413,27 @@ pub fn generate_dmx(
             None => continue,
         };
 
+        if let Some(light) = def
+            .library
+            .as_ref()
+            .and_then(|source| source.light.get(&mode.name))
+        {
+            let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
+            let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
+            write_library(
+                state,
+                fixture,
+                def,
+                mode,
+                light,
+                max_dimmer,
+                frame_time_secs,
+                buffer,
+                prev,
+            );
+            continue;
+        }
+
         let has_master_dimmer = mode.channels.iter().any(|mode_channel| {
             let channel = match def.channels.iter().find(|c| c.name == mode_channel.name) {
                 Some(c) => c,
@@ -439,7 +462,6 @@ pub fn generate_dmx(
         }
 
         let strobe_ctx = build_strobe_ctx(state, fixture, def, mode, frame_time_secs);
-        let means = cell_means(state, fixture, def, mode);
 
         for mode_channel in &mode.channels {
             let channel_number = mode_channel.number as usize;
@@ -480,60 +502,32 @@ pub fn generate_dmx(
                 state.primitives.get(&head_id)
             });
 
-            // A library channel reads its own cell, the mean of its cells, or the
-            // fixture (CONTROL.md section 5).
-            let lowered_prim = channel.lowered.as_deref().map(|lowered| {
-                match lowered_span(lowered, mode.heads.len(), fixture_prim.is_some()) {
-                    Some(span) => means.iter().find(|(s, _)| *s == span).map(|(_, p)| p),
-                    None => lowered
-                        .cells()
-                        .and_then(|[cell, _]| {
-                            state.primitives.get(&format!("{}:{}", fixture.id, cell))
-                        })
-                        .or(fixture_prim)
-                        .or(head0_prim),
-                }
-            });
             // If a dimmer channel ends up in a <Head>, it still usually represents a
             // fixture-level master dimmer. Prefer fixture primitive dimmer in that case.
-            let prim = match lowered_prim {
-                Some(Some(prim)) => prim,
-                Some(None) => continue,
-                None => match (head_prim, fixture_prim, head0_prim) {
-                    // Most specific: exact head primitive exists
-                    (Some(h), Some(f), _) => {
-                        let ch_type = channel.get_type();
-                        let ch_colour = channel.get_colour();
-                        if ch_type == ChannelType::Intensity && ch_colour == ChannelColour::None {
-                            f
-                        } else {
-                            h
-                        }
+            let prim = match (head_prim, fixture_prim, head0_prim) {
+                // Most specific: exact head primitive exists
+                (Some(h), Some(f), _) => {
+                    let ch_type = channel.get_type();
+                    let ch_colour = channel.get_colour();
+                    if ch_type == ChannelType::Intensity && ch_colour == ChannelColour::None {
+                        f
+                    } else {
+                        h
                     }
-                    (Some(h), None, _) => h,
-                    // No head mapping (or missing head primitive): use fixture primitive if present
-                    (None, Some(f), _) => f,
-                    // Fallback: selection system often targets "fixture:0" even for single-head fixtures
-                    (None, None, Some(h0)) => h0,
-                    (None, None, None) => continue,
-                },
+                }
+                (Some(h), None, _) => h,
+                // No head mapping (or missing head primitive): use fixture primitive if present
+                (None, Some(f), _) => f,
+                // Fallback: selection system often targets "fixture:0" even for single-head fixtures
+                (None, None, Some(h0)) => h0,
+                (None, None, None) => continue,
             };
 
             // Shutter channels are owned by the strobe cascade — it knows whether
             // this fixture is using its shutter (and which value) or neutralizing it
             // because a lower rung is doing the strobe.
-            let lowered = channel.lowered.as_deref();
             let mapped = if channel.get_type() == ChannelType::Shutter {
                 shutter_action(channel, head_idx, &strobe_ctx)
-            } else if let Some(lowered) = lowered.filter(|l| !l.driven()) {
-                MapAction::Set(lowered.home())
-            } else if let Some(lowered) = lowered.filter(|l| l.param.attr.is_position()) {
-                let axis = usize::from(lowered.param.attr == Attr::Tilt);
-                if prim.position[axis].is_nan() {
-                    MapAction::Hold
-                } else {
-                    MapAction::Set(lowered.position(prim.position[axis]))
-                }
             } else {
                 let color = match colors.iter().find(|(p, _)| std::ptr::eq(*p, prim)) {
                     Some((_, color)) => color,
@@ -569,32 +563,45 @@ pub fn generate_dmx(
     buffers
 }
 
-/// The cells a library channel reads as a mean: its range of cells, or every
-/// cell for a fixture-level channel on a fixture with several when nothing
-/// drives the fixture primitive itself. `None` when it reads one primitive.
-fn lowered_span(lowered: &Lowered, heads: usize, has_fixture_primitive: bool) -> Option<[u32; 2]> {
-    match lowered.cells() {
-        Some([a, b]) if a < b => Some([a, b]),
-        Some(_) => None,
-        None if heads > 1 && !has_fixture_primitive => Some([0, heads as u32 - 1]),
-        None => None,
-    }
-}
-
-/// Every mean a library mode's channels read this frame, worked out once: the
-/// mean dimmer and colour of the cells, the rest from the first cell.
-fn cell_means(
+/// A library fixture's channels, from what its light realizes for the
+/// cells' primitives: each cell reads its own primitive, else the fixture's,
+/// else cell 0's.
+#[allow(clippy::too_many_arguments)]
+fn write_library(
     state: &UniverseState,
     fixture: &PatchedFixture,
     def: &FixtureDefinition,
     mode: &Mode,
-) -> Vec<([u32; 2], PrimitiveState)> {
-    let mut means: Vec<([u32; 2], PrimitiveState)> = Vec::new();
-    if def.library.is_none() {
-        return means;
+    light: &ModeLight,
+    max_dimmer: f32,
+    frame_time_secs: f64,
+    buffer: &mut [u8; 512],
+    prev: Option<&[u8; 512]>,
+) {
+    let requests = requests(state, &fixture.id, light.cells());
+    if requests.is_empty() {
+        return;
     }
-    let has_fixture = state.primitives.contains_key(&fixture.id);
+    let slice = luma_scene::strobe::Slice {
+        open: frame_time_secs,
+        length: 0.0,
+    };
+    let realized = light.realize(&requests, max_dimmer, slice);
+    let position = requests[0].position;
     for mode_channel in &mode.channels {
+        let dmx_address = (fixture.address - 1) as usize + mode_channel.number as usize;
+        debug_assert!(
+            dmx_address < 512,
+            "{} channel {} lands at {dmx_address}: mode {} declares more channels than the \
+             patch row's {}",
+            fixture.id,
+            mode_channel.number,
+            fixture.mode_name,
+            fixture.num_channels
+        );
+        if dmx_address >= 512 {
+            continue;
+        }
         let Some(lowered) = def
             .channels
             .iter()
@@ -603,26 +610,66 @@ fn cell_means(
         else {
             continue;
         };
-        let Some(span) = lowered_span(lowered, mode.heads.len(), has_fixture) else {
-            continue;
+        let p = &lowered.param;
+        let byte = match realized.values.get(lowered.index).copied() {
+            Some(Value::Level(v)) => Some(p.byte(
+                (f64::from(v.clamp(0.0, 1.0)) * f64::from(p.max())).round() as u32,
+                lowered.rank,
+            )),
+            Some(Value::Strobe(s)) => Some(lowered.strobe(s, f64::from(s) * STROBE_HZ_MAX)),
+            Some(Value::Open) => Some(lowered.open()),
+            Some(Value::Slot(b)) => Some(if lowered.rank == 0 { b } else { lowered.home() }),
+            Some(Value::Hold) => None,
+            Some(Value::Other) | None => {
+                if !lowered.driven() {
+                    Some(lowered.home())
+                } else if p.attr.is_position() {
+                    let axis = usize::from(p.attr == Attr::Tilt);
+                    (!position[axis].is_nan()).then(|| lowered.position(position[axis]))
+                } else {
+                    Some(lowered.home())
+                }
+            }
         };
-        if means.iter().any(|(s, _)| *s == span) {
-            continue;
+        match byte {
+            Some(v) => buffer[dmx_address] = v,
+            None => {
+                if let Some(prev) = prev {
+                    buffer[dmx_address] = prev[dmx_address];
+                }
+            }
         }
-        let cells: Vec<&PrimitiveState> = (span[0]..=span[1])
-            .filter_map(|cell| state.primitives.get(&format!("{}:{}", fixture.id, cell)))
-            .collect();
-        let Some(first) = cells.first() else {
-            continue;
-        };
-        let n = cells.len() as f32;
-        let mut mean = (*first).clone();
-        mean.dimmer = cells.iter().map(|p| p.dimmer).sum::<f32>() / n;
-        mean.color = std::array::from_fn(|i| cells.iter().map(|p| p.color[i]).sum::<f32>() / n);
-        means.push((span, mean));
     }
-    means
 }
+
+/// Each of a library fixture's `cells` cells' primitive: its own, else the
+/// fixture's, else cell 0's. Empty when the universe has none of them.
+pub(crate) fn requests(state: &UniverseState, id: &str, cells: usize) -> Vec<PrimitiveState> {
+    let fixture = state.primitives.get(id);
+    let first = state.primitives.get(&format!("{id}:0"));
+    if cells <= 1 {
+        return fixture.or(first).into_iter().cloned().collect();
+    }
+    let own: Vec<Option<&PrimitiveState>> = (0..cells)
+        .map(|c| state.primitives.get(&format!("{id}:{c}")))
+        .collect();
+    if own.iter().all(Option::is_none) && fixture.is_none() {
+        return Vec::new();
+    }
+    own.into_iter()
+        .map(|p| p.or(fixture).or(first).cloned().unwrap_or(DARK))
+        .collect()
+}
+
+/// A cell nothing lights.
+const DARK: PrimitiveState = PrimitiveState {
+    dimmer: 0.0,
+    color: [0.0; 3],
+    strobe: 0.0,
+    position: [f32::NAN, f32::NAN],
+    speed: 0.0,
+    aim: None,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapAction {
@@ -750,23 +797,17 @@ fn map_nearest_color_capability(
     channel: &crate::models::fixtures::Channel,
     desired_rgb: [f32; 3],
 ) -> Option<u8> {
-    let mut best: Option<(f32, u8)> = None;
-
-    for cap in &channel.capabilities {
-        let Some(rgb) = capability_rgb(cap) else {
-            continue;
-        };
-        let d = perceptual_color_distance(rgb, desired_rgb);
-        let value = cap.min;
-
-        match best {
-            None => best = Some((d, value)),
-            Some((best_d, _)) if d < best_d => best = Some((d, value)),
-            _ => {}
-        }
-    }
-
-    best.map(|(_, v)| v)
+    let slots: Vec<Slot> = channel
+        .capabilities
+        .iter()
+        .filter_map(|cap| {
+            Some(Slot {
+                byte: cap.min,
+                rgb: capability_rgb(cap)?,
+            })
+        })
+        .collect();
+    nearest_slot(&slots, desired_rgb).map(|slot| slot.byte)
 }
 
 fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]> {
@@ -780,9 +821,9 @@ fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]>
     // If it's a split/double color capability, approximate by averaging.
     let secondary = cap.res2.as_deref().or(cap.color_2.as_deref());
 
-    let c1 = parse_hex_color(primary)?;
+    let c1 = hex(primary)?;
     if let Some(s) = secondary {
-        if let Some(c2) = parse_hex_color(s) {
+        if let Some(c2) = hex(s) {
             return Some([
                 (c1[0] + c2[0]) * 0.5,
                 (c1[1] + c2[1]) * 0.5,
@@ -794,86 +835,14 @@ fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]>
     Some(c1)
 }
 
-fn parse_hex_color(s: &str) -> Option<[f32; 3]> {
-    // Expect "#RRGGBB"
-    let s = s.trim();
-    let hex = s.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
-    Some([r, g, b])
-}
-
-fn color_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let dr = a[0] - b[0];
-    let dg = a[1] - b[1];
-    let db = a[2] - b[2];
-    dr * dr + dg * dg + db * db
-}
-
-/// Perceptual color distance that considers saturation.
-/// Desaturated colors (grays) should match white/neutral colors on wheels,
-/// not saturated colors that happen to be close in RGB space.
-fn perceptual_color_distance(wheel_rgb: [f32; 3], desired_rgb: [f32; 3]) -> f32 {
-    // Calculate saturation (HSV-style): (max - min) / max
-    fn saturation(rgb: [f32; 3]) -> f32 {
-        let max = rgb[0].max(rgb[1]).max(rgb[2]);
-        let min = rgb[0].min(rgb[1]).min(rgb[2]);
-        if max < 0.0001 {
-            0.0
-        } else {
-            (max - min) / max
-        }
-    }
-
-    let desired_sat = saturation(desired_rgb);
-    let wheel_sat = saturation(wheel_rgb);
-
-    // Base RGB distance
-    let rgb_dist = color_distance(wheel_rgb, desired_rgb);
-
-    // Saturation difference penalty:
-    // If desired color is desaturated (gray-ish), strongly prefer desaturated wheel colors
-    // If desired color is saturated, prefer matching hue (RGB distance handles this)
-    let sat_diff = (desired_sat - wheel_sat).abs();
-
-    // Weight saturation matching more heavily for desaturated colors
-    // When desired_sat is low, we want wheel_sat to also be low
-    let sat_penalty = if desired_sat < 0.3 {
-        // For grays: heavily penalize saturated wheel colors
-        wheel_sat * wheel_sat * 2.0
-    } else {
-        // For saturated colors: small penalty for saturation mismatch
-        sat_diff * 0.5
-    };
-
-    rgb_dist + sat_penalty
-}
-
 fn is_black(rgb: [f32; 3]) -> bool {
     rgb[0] <= 0.0001 && rgb[1] <= 0.0001 && rgb[2] <= 0.0001
-}
-
-/// Rec. 601 luma of a gamma-encoded color (0.0 to 1.0).
-fn color_luminance(rgb: [f32; 3]) -> f32 {
-    0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
 }
 
 /// A 0–1 level as a DMX byte.
 fn level_u8(level: f32) -> u8 {
     (level.clamp(0.0, 1.0) * 255.0).round() as u8
 }
-
-/// Where a fixture's extra emitters sit, as linear sRGB at their full level.
-/// Fixture definitions do not say, so these are assumptions, like the sRGB
-/// primaries assumed for red, green and blue: a D65 white, a 590 nm amber
-/// and a phosphor lime (CIE xy 0.40, 0.55), each clipped into sRGB.
-const WHITE_EMITTER: [f64; 3] = [1.0, 1.0, 1.0];
-const AMBER_EMITTER: [f64; 3] = [1.0, 0.2, 0.0];
-const LIME_EMITTER: [f64; 3] = [0.66, 1.0, 0.0];
 
 /// The emitters a fixture mode mixes color with, besides red, green and
 /// blue.
@@ -945,7 +914,7 @@ impl HeadColor {
         let mut color = Self {
             dimmer: if wheel {
                 // A wheel cannot dim its color, so a dark color dims the lamp.
-                brightness as f32 * color_luminance(srgb)
+                brightness as f32 * luma(srgb)
             } else {
                 brightness as f32
             },

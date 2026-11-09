@@ -61,9 +61,10 @@ What a lowered mode looks like:
 - One head per canonical cell (CONTROL.md §5) when the fixture has more than
   one, in every mode, so `fixture:<cell>` is the same primitive whatever mode
   is patched. A channel with `cell: k` sits in head `k`; one over `[a, b]` sits
-  in head `a` and reads the mean dimmer and colour of cells `a..=b`. A channel
-  with no cell reads the fixture primitive, or the mean of every cell when
-  nothing drives the fixture primitive.
+  in head `a`. Each cell reads its own primitive, else the fixture's, else
+  cell 0's.
+- A `fixtures::light::ModeLight` per mode, on `library::Source::light`: which
+  emitters reach each cell and what each param does to the light.
 - The QLC+ `Type` comes from the library category (`moving_head_*` → Moving
   Head, a many-celled bar or panel → LED Bar (Pixels), …), because role
   derivation keys on it.
@@ -72,19 +73,39 @@ What a lowered mode looks like:
 
 ### What the engine does with it
 
-- **Intensity and colour.** `dimmer`, `colour/red green blue white amber lime
-  uv` and `cmy/*` drive the existing mixer. Warm and cool white are both white.
+- **The light** (`fixtures::light`). `ModeLight::realize` turns each cell's
+  request into the values of the mode's dimmer, emitter, CMY, shutter and
+  colour wheel params, and `ModeLight::emit` turns those values back into each
+  cell's light. The engine encodes what `realize` decides, at the param's full
+  width (a 16-bit dimmer or colour sends both bytes).
+  - A cell emits through a `colour/<emitter>` param only where the param
+    covers it and the cell's geometry has a die the param lights
+    (`emitter.colour`; a white param lights any white die). A cell's emitters
+    split its colour among themselves (white, amber and lime take what they
+    can make, red, green and blue the rest); a colour it has no die for is
+    lost. A param shared by several cells carries the mean of what the cells
+    that can emit through it ask for.
+  - Brightness goes to the dimmers over a cell, widest first, each at the
+    brightest of its cells; what they do not make scales the emitters, so a
+    mode without a dimmer still dims. The grand master scales it all.
+  - A shutter strobes when every cell it covers asks for the same rate,
+    narrowest shutter first; any other strobing cell is gated on the strobe
+    clock through its brightness.
+  - A colour wheel or preset picks the nearest slot for a cell with no
+    emitters, and a dark colour dims its lamp. CMY flags pass `1 − level` of a
+    white lamp.
+  - Two params driving one emitter on a cell show the higher, not the sum.
 - **Pan and tilt.** Mapped through the channel's own `phys` degree range at
   full width, rank-0 and rank-1 bytes both, so a 16-bit pan is 16-bit and an
   asymmetric travel (`[-270, 360]`) puts 0° where the fixture has it. Past the
   travel, the nearest end. The aim solver solves within `travel()`'s `[lo, hi]`.
-- **Shutter.** `open` is the middle of the `open` range; strobing maps the
+- **Shutter bytes.** `open` is the middle of the `open` range; strobing maps the
   requested rate (`strobe · 20 Hz`) through the `strobe` range's Hz `phys`, or
   across the range when it has none. A shutter without ranges is a plain
   0–100 % channel.
-- **Colour wheels and presets.** A wheel's `slot` ranges become capabilities
-  with the slot's `rgb` (open is white), so the nearest-colour pick chooses a
-  slot. A `colour/macro` engages only on a fixture with no colour emitters.
+- **Colour wheel slots.** A wheel's `slot` ranges carry the slot's `rgb` (open
+  is white). A `colour/macro` engages only on a fixture with no colour
+  emitters.
 - **Everything else** is written at its home value (CONTROL.md §7, resolved in
   `Control::resolve`), never at 0 by default.
 
@@ -141,8 +162,6 @@ files stay on disk for the venues that use them.
 The engine still walks QLC+-shaped channels. To read `Resolved` directly it
 must add:
 
-- 16-bit (and 24-bit) intensity and colour: only pan and tilt send their fine
-  bytes; a fine dimmer or colour byte sits at home.
 - Additive `colour/cyan`, `indigo`, `mint`, `orange` and `uv` in the mixer, and
   the spec's measured emitter colours (`control.emitters`, `native_cct_k`)
   instead of the fixed sRGB, amber and lime assumptions; `colour/cct`, `tint`,
