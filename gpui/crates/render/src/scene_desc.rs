@@ -430,7 +430,7 @@ pub struct Look {
     pub tone: ToneCurve,
     /// How bright the scene is taken to be.
     pub exposure: Exposure,
-    /// Bloom, star streaks and lens glow around hot sources.
+    /// Bloom and star streaks around hot sources.
     pub glare: Glare,
     /// What a video camera adds: sensor noise and a hand on the camera.
     /// Absent in a look stored before it existed, which means off.
@@ -603,7 +603,7 @@ impl Default for Footage {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Glare {
-    /// Overall strength; 0 turns the glare and lens glow off.
+    /// Overall strength; 0 turns the glare off.
     pub strength: f32,
     /// Exposed scene light above which a pixel glares, as a multiple of
     /// diffuse white.
