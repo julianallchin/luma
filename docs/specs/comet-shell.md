@@ -36,7 +36,7 @@ another mode is up, and each venue keeps its modes while another venue is up.
 
 | Region | What it is | Code |
 |---|---|---|
-| Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it; stands aside while the song list is up | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
+| Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it, the only change that slides; absent from the song list and settings, which are pages without it | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
 | Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, the `venue / song / score` trail, the mode switch | `shell::title_bar`, `chrome` |
 | Page | the inset card on the trim, rounded `PAGE_RADIUS` (12), `WINDOW_TRIM` (8) from the window's sides; holds the agent panel and the content | `shell::regions`, `glass::window_trim` |
 | Stage | the venue, lit by the mode's body; collapsible, height-resizable. In Live a deck panel sits at its left, drag-resizable, its width kept per device (`deck-panel-width`) | `shell::stage_body`, `perform::deck_panel` |
@@ -117,9 +117,11 @@ keep at least 260. A search lists matches from every place, with All songs
 selected, and choosing a place ends it.
 
 ⌘P and the song crumb open the page (the crumb closing the score); ⌘P and Escape close it.
-The list takes the window's width: the agent panel stands aside while it is
-up and comes back when it closes, unless it had been hidden by hand; ⌘B over
-the list shows it for that visit only.
+The list is a page without an agent panel (`Luma::page_has_agent`), and the
+title bar's panel toggle is disabled while it is up. The panel's open or
+hidden state is remembered across it: Rig, Live and a score show the panel as
+it was last left, at once. Only the person's own toggle (the button, ⌘B)
+slides it.
 
 ## 5. Surfaces
 

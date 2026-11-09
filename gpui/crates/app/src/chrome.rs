@@ -157,24 +157,37 @@ pub(crate) fn band(lights: bool, anchored: bool) -> Div {
 }
 
 /// The agent panel's show/hide toggle: the window's fixed left anchor, one
-/// gap right of the traffic lights.
-pub(crate) fn agent_toggle(app: &Entity<Luma>, open: bool, lights: bool) -> impl IntoElement {
-    let toggled = app.clone();
-    anchor(px(left_toggle_x(lights)), None).child(
-        div()
-            .child(
-                luma_ui::icon_toggle(IconName::PanelLeft, open)
-                    .id("agent-toggle")
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, _, cx| {
-                        toggled.update(cx, |this, cx| {
-                            this.toggle_agent();
-                            cx.notify();
-                        });
-                    }),
-            )
-            .agent_node(Role::Button, if open { "Hide agent" } else { "Show agent" }),
-    )
+/// gap right of the traffic lights. `open` is the panel's remembered state;
+/// on a page without the panel (`has_panel` false) the toggle stays in its
+/// place, disabled — there is nothing there to show or hide.
+pub(crate) fn agent_toggle(
+    app: &Entity<Luma>,
+    open: bool,
+    has_panel: bool,
+    lights: bool,
+) -> impl IntoElement {
+    let label = if open { "Hide agent" } else { "Show agent" };
+    let toggle = if has_panel {
+        let toggled = app.clone();
+        luma_ui::icon_toggle(IconName::PanelLeft, open)
+            .id("agent-toggle")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| {
+                toggled.update(cx, |this, cx| {
+                    this.toggle_agent();
+                    cx.notify();
+                });
+            })
+            .agent_node(Role::Button, label)
+            .into_any_element()
+    } else {
+        luma_ui::icon_button(IconName::PanelLeft, luma_ui::Enabled::No)
+            .id("agent-toggle")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .agent_node(Role::Button, label)
+            .into_any_element()
+    };
+    anchor(px(left_toggle_x(lights)), None).child(toggle)
 }
 
 /// How wide [`mode_switch`] is. Fixed, because the right anchor is reserved

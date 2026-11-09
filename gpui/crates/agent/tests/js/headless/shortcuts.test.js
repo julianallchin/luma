@@ -39,7 +39,11 @@ function record(name, key) {
 // The agent panel's state, read off its toggle: `true` up, `false` away.
 const agentUp = (s) => s.find({ role: "button", label: "Hide agent" }) !== undefined
   ? true : s.find({ role: "button", label: "Show agent" }) !== undefined ? false : undefined;
-const shell = () => until("the shell", (s) => agentUp(s) !== undefined ? s : undefined);
+// Rig: a page that has the panel (the song list a venue opens on has none).
+const shell = () => {
+  app.action("luma::ShowRig");
+  return until("the shell", (s) => agentUp(s) !== undefined ? s : undefined);
+};
 const agentIs = (up) => until(`the agent panel ${up ? "up" : "away"}`, (s) => agentUp(s) === up);
 
 test("a rebound command answers its new key and not its old one", () => {

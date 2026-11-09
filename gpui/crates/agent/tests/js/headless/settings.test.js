@@ -189,6 +189,8 @@ test("Back leaves the settings page for the mode it was opened over", () => {
 // with no room held for the anchors the page puts away.
 test("Back sits right after the window controls", () => {
   nav.venue("Test Venue");
+  // Rig: a page with the agent panel, so its toggle is up to measure.
+  app.action("luma::ShowRig");
   const agentToggle = (s) =>
     s.find({ role: "button", label: "Hide agent" }) ?? s.find({ role: "button", label: "Show agent" });
   const shell = until("the agent toggle", (s) => agentToggle(s) ? s : undefined);

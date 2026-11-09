@@ -164,6 +164,55 @@ test("the song list takes the agent panel's room and gives it back", () => {
   assert(!agent(app.snapshot()), "closing the song list brought back a panel hidden by hand");
 });
 
+test("the song list is a page without the agent panel; only the toggle slides it", { fixture: { motion: true } }, () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  const width = (s) => box(s, "card", "Agent")?.width ?? 0;
+  const toggle = (s) => box(s, "button", "Hide agent") ?? box(s, "button", "Show agent");
+  until("the agent beside the score", (s) => width(s) > 0 && box(s, "card", "Waveform"));
+  app.frames(20, { waitMs: 16 });
+  const open = width(app.snapshot());
+  // Every width the frames after `act` drew, the act's own included.
+  const swept = (act) => {
+    const { frame } = act();
+    app.frames(20, { waitMs: 16 });
+    return app.painted().filter((s) => s.frame >= frame);
+  };
+  const widths = (frames) => frames.map(width);
+  const sliding = (frames) => widths(frames).some((w) => w > 1 && w < open - 1);
+
+  // To the list and back: the panel is absent from the first frame, then
+  // back at its width from the first frame, never part way.
+  let frames = swept(() => app.action("luma::ToggleSongList"));
+  assert(frames.some((s) => songList(s)), "the song list did not come up");
+  expect(widths(frames.filter((s) => songList(s))).every((w) => w === 0)).toBe(true);
+  const listed = frames.at(-1);
+  const dead = listed.find({ role: "button", label: "Hide agent" });
+  assert(dead && dead.enabled === false, `the list's agent toggle is not disabled: ${JSON.stringify(dead)}`);
+  app.click(dead);
+  app.frames(4);
+  expect(width(app.snapshot())).toBe(0);
+  frames = swept(() => app.action("luma::ToggleSongList"));
+  assert(!sliding(frames), `the panel slid back in: ${widths(frames)}`);
+  expect(Math.abs(width(frames.at(-1)) - open) <= 1).toBe(true);
+
+  // Switching mode shows each page's panel as it rests.
+  for (const key of ["1", "3", "2"]) {
+    frames = swept(() => app.key(key));
+    assert(widths(frames).every((w) => Math.abs(w - open) <= 1), `the panel moved on ${key}: ${widths(frames)}`);
+  }
+
+  // The toggle is the one thing that slides it…
+  frames = swept(() => app.action("luma::ToggleAgent"));
+  assert(sliding(frames), `the toggle did not slide the panel: ${widths(frames)}`);
+  expect(width(frames.at(-1))).toBe(0);
+
+  // …and a visit to the list neither shows it nor forgets it was hidden.
+  swept(() => app.action("luma::ToggleSongList"));
+  frames = swept(() => app.action("luma::ToggleSongList"));
+  assert(widths(frames).every((w) => w === 0), `the hidden panel came back: ${widths(frames)}`);
+  assert(box(frames.at(-1), "button", "Show agent"), "the toggle does not offer the hidden panel");
+});
+
 test("Live's deck panel sits beside the stage and keeps its dragged width", () => {
   nav.venue("Test Venue");
   nav.live();

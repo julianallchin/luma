@@ -292,11 +292,6 @@ impl Luma {
         } else {
             self.song_list = !self.song_list_shown();
         }
-        // The list takes the window's width: the agent panel stands aside
-        // until it closes (`agent_wanted`).
-        if self.song_list {
-            self.agent_over_songs = false;
-        }
         self.song_list_close = None;
         cx.notify();
     }
@@ -710,36 +705,38 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         .child(row)
         .child(page_corners())
         .agent_node(Role::Card, "Page");
-    let mut window_root =
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .relative()
-            .bg(glass::window_trim())
-            // The title bar spans the window: it is on the trim, not on the
-            // page, so the agent panel's coming and going never moves it.
-            .child(title_bar(app, lights, &entity, cx))
-            .child(page)
-            .child(cached(
-                status_bar,
-                gpui::StyleRefinement::default()
-                    .w_full()
-                    .h(px(STATUS_BAR_HEIGHT))
-                    .flex_none(),
-            ))
-            // The title bar's two fixed ends. Above the page, but *below* the
-            // overlay, unlike the traffic lights: a control reachable through a
-            // scrim would move the regions behind a modal that is meant to own
-            // the window. See [`crate::chrome`] for the anchor rule.
-            .children(app.settings.is_none().then(|| {
-                chrome::agent_toggle(&entity, app.agent_wanted(), lights).into_any_element()
-            }))
-            .children(
-                app.settings
-                    .is_none()
-                    .then(|| chrome::mode_switch(app, &entity, cx).into_any_element()),
-            );
+    let mut window_root = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .relative()
+        .bg(glass::window_trim())
+        // The title bar spans the window: it is on the trim, not on the
+        // page, so the agent panel's coming and going never moves it.
+        .child(title_bar(app, lights, &entity, cx))
+        .child(page)
+        .child(cached(
+            status_bar,
+            gpui::StyleRefinement::default()
+                .w_full()
+                .h(px(STATUS_BAR_HEIGHT))
+                .flex_none(),
+        ))
+        // The title bar's two fixed ends. Above the page, but *below* the
+        // overlay, unlike the traffic lights: a control reachable through a
+        // scrim would move the regions behind a modal that is meant to own
+        // the window. See [`crate::chrome`] for the anchor rule.
+        // Disabled on a page without the panel (the song list): there is
+        // nothing to toggle, and the remembered state is what it names.
+        .children(app.settings.is_none().then(|| {
+            chrome::agent_toggle(&entity, !app.agent_hidden, app.page_has_agent(), lights)
+                .into_any_element()
+        }))
+        .children(
+            app.settings
+                .is_none()
+                .then(|| chrome::mode_switch(app, &entity, cx).into_any_element()),
+        );
     if let Some(overlay) = app.overlay.get() {
         window_root = window_root.child(overlay_layer(app, overlay, &entity, window, cx));
     }
@@ -764,8 +761,12 @@ fn working_row(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> D
     } else {
         0.0
     };
+    // Only the person's toggle slides the panel (`agent_slide`); a page
+    // arriving with or without it shows it as it rests. A slide under way
+    // runs on while its page stays.
     let toggled = (resting > 0.0) != (app.agent_width.target() > 0.0);
-    if app.shell_presented && (toggled || !app.agent_width.settled()) {
+    let slide = std::mem::take(&mut app.agent_slide);
+    if app.shell_presented && ((toggled && slide) || (!toggled && !app.agent_width.settled())) {
         app.agent_width.retarget(resting, cx);
     } else {
         app.agent_width.set(resting);

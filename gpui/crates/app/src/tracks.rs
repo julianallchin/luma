@@ -585,7 +585,6 @@ impl Luma {
         self.workspace.set_mode(Mode::Arrange);
         self.song_list = false;
         self.song_list_close = None;
-        self.agent_over_songs = false;
         let listed = |state: &Tracks| {
             state
                 .shown
