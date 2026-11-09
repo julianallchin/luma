@@ -265,18 +265,6 @@ impl Patch {
             .unwrap_or_default()
     }
 
-    /// The rig's size, in a few words: the status bar's line in Rig.
-    pub(crate) fn rig_line(&self) -> Option<String> {
-        let data = self.data.as_ref()?;
-        let plural =
-            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-        Some(format!(
-            "{} · {}",
-            plural(data.fixtures.len(), "fixture", "fixtures"),
-            plural(data.universes.len(), "universe", "universes"),
-        ))
-    }
-
     pub(crate) fn any_pinned(&self) -> bool {
         self.rows().iter().any(|row| row.address_pinned)
     }

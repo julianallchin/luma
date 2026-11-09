@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use luma_lib::dispatch::handlers;
+use luma_lib::models::background::BackgroundWork;
 use luma_lib::models::beat_grid::BeatGrid;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
@@ -23,6 +24,25 @@ pub enum TrackImportRequest {
 }
 
 impl Library {
+    /// What the app is doing in the background: Python setup, analysis, the
+    /// steps held back after failures, media transfers.
+    pub(crate) fn background_work(
+        &self,
+    ) -> impl Future<Output = Result<BackgroundWork, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.background_work_fixture.clone();
+        let pending = self.call("background_work", |services| async move {
+            handlers::background::background_work(&services).await
+        });
+        async move {
+            #[cfg(feature = "agent")]
+            if let Some(fixture) = fixture {
+                return Ok(fixture.lock().unwrap().clone());
+            }
+            pending.await
+        }
+    }
+
     /// The track browser's rows for `venue_id`, carrying that venue's
     /// annotation counts.
     pub fn tracks(

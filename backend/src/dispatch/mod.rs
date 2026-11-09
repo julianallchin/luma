@@ -110,6 +110,7 @@ use crate::models::agent_threads::{
     AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
     CreateAgentThreadInput,
 };
+use crate::models::background::BackgroundWork;
 use crate::models::beat_grid::BeatGrid;
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::distribute::{DistributeLayout, DistributeReport};
@@ -405,6 +406,8 @@ commands! {
 
     sync::sync_status() -> SyncStatus;
     sync::dismiss_sync_refusals() -> ();
+
+    background::background_work() -> BackgroundWork;
 
     rekordbox::rekordbox_open_library() -> RekordboxLibraryInfo;
     rekordbox::rekordbox_list_tracks() -> Vec<RekordboxTrack>;

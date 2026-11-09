@@ -41,6 +41,7 @@ use gpui::*;
 
 mod add_tracks;
 mod agent;
+mod background_work;
 mod chat_history;
 mod chrome;
 mod confirm;
@@ -213,6 +214,7 @@ pub struct Luma {
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
     pub(crate) sync_status: sync_status::SyncState,
+    pub(crate) background: background_work::BackgroundState,
     /// The status bar's line about something just done that did not land —
     /// see [`failure`].
     pub(crate) failure: failure::Failure,
@@ -324,6 +326,7 @@ impl Luma {
             sign_in: None,
             refreshing_session: false,
             sync_status: sync_status::SyncState::default(),
+            background: background_work::BackgroundState::default(),
             failure: failure::Failure::default(),
             update: update::AutoUpdate::new(),
             overlay: luma_ui::dialog::Popup::default(),
@@ -364,6 +367,7 @@ impl Luma {
         app.load_shortcuts(cx);
         app.watch_session(cx);
         app.watch_sync(cx);
+        app.watch_background(cx);
         app.watch_replica(cx);
         app.watch_updates(cx);
         app

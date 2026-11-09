@@ -6,7 +6,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command
 prose in it is the only hand-written part and is carried across by name.
 
-**138 commands** across **26 domains**
+**139 commands** across **27 domains**
 
 ## Domains
 
@@ -15,6 +15,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 7 | `backend/src/dispatch/handlers/agent_threads.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
+| `background` | 1 | `backend/src/dispatch/handlers/background.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controls` | 1 | `backend/src/dispatch/handlers/controls.rs` |
@@ -38,7 +39,7 @@ prose in it is the only hand-written part and is carried across by name.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **138** | |
+| **total** | **139** | |
 
 ## Commands
 
@@ -74,6 +75,12 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `set_session_item` | `key: String`<br>`value: String` | `()` |
 | `remove_session_item` | `key: String` | `()` |
 | `wipe_database` | — | `()` |
+
+### `background`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `background_work` | — | `BackgroundWork` |
 
 ### `composable_patterns`
 

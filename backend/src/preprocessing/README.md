@@ -123,6 +123,13 @@ is broken itself, in its code or its Python environment, so this saves a
 worker launch per track. The skipped tracks record no failure, so the next
 batch tries the step again.
 
+What runs is also reported, for the status bar, in
+[`activity.rs`](activity.rs): each batch holds its tracks there until it is
+done with them, each step marks itself running while its worker runs, and the
+breaker's paused steps last as long as their batch. Guards let go on every
+path out, cancellation included. The `background_work` command reads that,
+the steps in backoff, Python setup and media transfers in one snapshot.
+
 Host events emitted: `Event::TrackImportState` throughout an import, one per
 stage start and settle included. Consumers branch on the structured
 phase/step/error fields, never human-readable status labels.

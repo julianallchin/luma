@@ -1,11 +1,10 @@
-//! The status bar on the window's trim, under the page: what the app is
-//! doing in the background, and one line about the mode on screen.
+//! The status bar on the window's trim, under the page: the app's quiet
+//! states, each one [`Item`], drawn one way.
 //!
-//! Left, the quiet states — sync, DMX output, an import running, an update
-//! ready, something just done that did not land — each one [`Item`], drawn
-//! one way. Right,
-//! the mode's context line: in Arrange the open song, in Live what is
-//! followed, in Rig the size of the rig.
+//! Left, sync, DMX output, an update ready, something just done that did not
+//! land. Right, what the app is doing in the background
+//! ([`crate::background_work`]): an import, analysis, Python setup, media
+//! transfers.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -14,8 +13,6 @@ use luma_ui::icons::IconName;
 use luma_ui::ladder;
 use luma_ui::node::{Instrument, Role};
 
-use crate::shell::Body;
-use crate::workspace::Mode;
 use crate::Luma;
 
 /// One thing the bar says: a word or two, and what pressing it does.
@@ -29,7 +26,8 @@ pub(crate) struct Item {
     /// A healthy steady state gets the green dot ahead of its word.
     pub(crate) ok: bool,
     pub(crate) press: Option<fn(&mut Luma, &mut Context<Luma>)>,
-    /// What hangs off the item while it is open — the sync details.
+    /// What hangs off the item while it is open: the refused changes, the
+    /// background work.
     pub(crate) detail: Option<AnyElement>,
 }
 
@@ -54,7 +52,6 @@ pub(crate) fn bar(app: &mut Luma, _: &mut Window, cx: &mut Context<Luma>) -> Any
     let items = [
         crate::sync_status::item(app, &entity),
         output(app),
-        crate::add_tracks::progress::item(app),
         crate::update::item(app),
         crate::failure::item(app),
     ];
@@ -75,12 +72,7 @@ pub(crate) fn bar(app: &mut Luma, _: &mut Window, cx: &mut Context<Luma>) -> Any
                 .map(|item| render(item, &entity)),
         )
         .child(div().flex_1())
-        .children(app.context_line().map(|line| {
-            div()
-                .truncate()
-                .child(line.clone())
-                .agent_node(Role::Text, line)
-        }))
+        .children(crate::background_work::item(app, &entity).map(|item| render(item, &entity)))
         .agent_node(Role::Card, "Status bar")
         .into_any_element()
 }
@@ -135,31 +127,4 @@ fn output(app: &Luma) -> Option<Item> {
     item.ok = app.dmx_output;
     item.press = Some(|this, cx| this.open_settings(cx));
     Some(item)
-}
-
-impl Luma {
-    /// The mode's one line: in Arrange the open song, in Live what is
-    /// followed, in Rig the size of the rig.
-    fn context_line(&self) -> Option<String> {
-        match (self.workspace.mode(), self.workspace.active_body()) {
-            (Mode::Arrange, Some(Body::TrackEditor(editor))) => {
-                let track = self.songs.as_ref()?.find(editor.track_id())?;
-                let mut line = crate::tracks::track_name(&track);
-                if let Some(artist) = track.artist.as_deref().filter(|a| !a.is_empty()) {
-                    line.push_str(&format!(" — {artist}"));
-                }
-                if let Some(bpm) = track.bpm {
-                    line.push_str(&format!(" · {bpm:.1} BPM"));
-                }
-                if let Some(seconds) = track.duration_seconds {
-                    let total = seconds.max(0.).round() as u64;
-                    line.push_str(&format!(" · {}:{:02}", total / 60, total % 60));
-                }
-                Some(line)
-            }
-            (Mode::Live, Some(Body::Perform(_))) => self.live_line(),
-            (Mode::Rig, Some(Body::Patch(page))) => page.rig_line(),
-            _ => None,
-        }
-    }
 }

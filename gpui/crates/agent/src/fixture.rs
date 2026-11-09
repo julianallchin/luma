@@ -148,6 +148,10 @@ pub struct Fixture {
     /// Shared with the test that set it, so it has no JSON form.
     #[serde(skip)]
     sync_status: Option<Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>>,
+    /// The background work the app reports instead of its own: the harness
+    /// sets no Python up, runs no analysis and moves no media, so a test of
+    /// the status bar's item states the work it shows.
+    background_work: Option<luma_lib::models::background::BackgroundWork>,
     /// Raw DJ-adapter answers. The UI still crosses the production Library
     /// normalization and import seams; only the external database read is
     /// substituted.
@@ -226,6 +230,7 @@ impl Default for Fixture {
             track_created_at: None,
             window: None,
             sync_status: None,
+            background_work: None,
             source_fixture: None,
             source_fixture_delay: None,
             source_search_responses: Vec::new(),
@@ -309,6 +314,10 @@ impl Fixture {
         // this fixture wrote rather than the developer's.
         let fixtures_root = Some(config_dir.join("fixtures")).filter(|root| root.is_dir());
         let sync_status = self.sync_status.clone();
+        let background_work = self
+            .background_work
+            .clone()
+            .map(|work| Arc::new(std::sync::Mutex::new(work)));
         let source_fixture = self
             .source_fixture
             .clone()
@@ -331,6 +340,9 @@ impl Fixture {
                     luma_app::Library::open().expect("failed to open the fixture library");
                 if let Some(status) = sync_status.clone() {
                     library.set_sync_status_fixture(status);
+                }
+                if let Some(work) = background_work.clone() {
+                    library.set_background_work_fixture(work);
                 }
                 if let Some(fixture) = source_fixture.clone() {
                     library.set_source_adapter_fixture(fixture);

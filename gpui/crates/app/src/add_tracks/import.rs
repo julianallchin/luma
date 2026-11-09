@@ -1,6 +1,7 @@
 //! Importing: the per-song progress an import reports, starting one from
 //! files or a source selection, and adding what it brought in to the venue.
 
+use luma_lib::models::background::step_label;
 use luma_lib::models::tracks::{
     StageOutcome, TrackAnalysisEvent, TrackImportPhase, TrackImportProgress,
 };
@@ -83,7 +84,7 @@ impl ItemAnalysis {
                 let stages = self
                     .failures
                     .iter()
-                    .map(|stage| stage_label(stage))
+                    .map(|stage| step_label(stage))
                     .collect::<Vec<_>>()
                     .join(", ");
                 return ItemStatus::Failed(format!("Could not analyze {stages}"));
@@ -126,23 +127,6 @@ impl ItemAnalysis {
                 }
             }
         }
-    }
-}
-
-/// A stage's wire name as a person reads it. The wire names are stable
-/// identifiers (`beat_grid`), not prose; one that is not listed here shows
-/// as itself rather than disappearing.
-pub(super) fn stage_label(stage: &str) -> &str {
-    match stage {
-        "beat_grid" => "beats",
-        "stems" => "stems",
-        "mert" => "features",
-        "roots" => "chords",
-        "n2n" => "drums",
-        "classifier" => "sections",
-        "genre" => "genre",
-        "waveform" => "waveform",
-        other => other,
     }
 }
 

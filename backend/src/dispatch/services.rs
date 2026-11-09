@@ -157,6 +157,9 @@ pub struct AppServices {
     /// process — a test, or a build with no PowerSync instance configured —
     /// and every command still works; only `sync_status` has less to say.
     pub(crate) sync: Option<crate::sync::service::Service>,
+    /// Media transfer, when this host runs it: only its progress is read here,
+    /// for the status bar.
+    pub(crate) media: Option<crate::sync::media::Media>,
 }
 
 /// An owning, cloneable handle to services, for work that outlives the
@@ -254,6 +257,7 @@ impl AppServices {
             events: Events::discard(),
             fixture_principal: None,
             sync: None,
+            media: None,
         }
     }
 
@@ -273,6 +277,14 @@ impl AppServices {
     #[must_use]
     pub(crate) fn with_sync(mut self, sync: crate::sync::service::Service) -> Self {
         self.sync = Some(sync);
+        self
+    }
+
+    /// Report `media`'s transfers among the background work. The host runs
+    /// its loop; this keeps a handle on its progress.
+    #[must_use]
+    pub fn with_media(mut self, media: crate::sync::media::Media) -> Self {
+        self.media = Some(media);
         self
     }
 

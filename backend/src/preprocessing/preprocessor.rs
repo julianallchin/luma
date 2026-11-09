@@ -87,6 +87,11 @@ impl<'a> PreprocessorContext<'a> {
         self.workers.ready(&self.analysis).await
     }
 
+    /// Where this run reports what it is doing.
+    pub(crate) fn activity(&self) -> &crate::preprocessing::activity::AnalysisActivity {
+        self.analysis.activity()
+    }
+
     pub fn stems_dir(&self) -> &std::path::Path {
         &self.stems_dir
     }

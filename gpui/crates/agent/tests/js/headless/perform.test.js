@@ -327,15 +327,10 @@ test("a source picked in the deck panel is followed, and disconnecting returns t
   expect(source(followed).label).toMatch(/^Source: Virtual deck/);
   assert(followed.find({ role: "card", label: "Source picker" }) === undefined, "the picker stayed open after a pick");
   assert(followed.find({ role: "button", label: "Add source" }) === undefined, "a followed source still offers Add source");
-  // The status bar says so; the title bar's middle says nothing, in Live
-  // as everywhere.
-  const said = until("the status bar says so", (s) => {
-    const bar = s.find({ role: "card", label: "Status bar" })?.bounds;
-    return bar && s.find((n) => n.role === "text" && n.label.startsWith("Virtual deck")
-      && n.bounds.y >= bar.y && n.bounds.y < bar.y + bar.height) ? s : undefined;
-  });
-  const title = said.find({ role: "card", label: "Title bar" }).bounds;
-  expect(said.findAll((n) => n.role === "text" && n.bounds.width > 0 && n.bounds.y >= title.y
+  // The panel says so; the title bar's middle says nothing, in Live as
+  // everywhere.
+  const title = followed.find({ role: "card", label: "Title bar" }).bounds;
+  expect(followed.findAll((n) => n.role === "text" && n.bounds.width > 0 && n.bounds.y >= title.y
     && n.bounds.y + n.bounds.height <= title.y + title.height).map((n) => n.label)).toEqual([]);
 
   // Disconnecting puts the set back on the tapped tempo.

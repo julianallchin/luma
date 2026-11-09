@@ -1,5 +1,5 @@
-//! The import's progress, drawn: the Progress route's per-song rows and the
-//! status bar item that stays up while an import runs or after one fails.
+//! The import's progress, drawn: the Progress route's per-song rows, and
+//! where the import stands for the status bar's background-work item.
 
 use std::rc::Rc;
 
@@ -11,7 +11,9 @@ use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument, Role};
 use luma_ui::{glass, ladder};
 
-use super::import::{stage_label, ItemStatus, TrackImportActivity};
+use luma_lib::models::background::step_label;
+
+use super::import::{ItemStatus, TrackImportActivity};
 use super::rows::{empty_body, loading_body, track_row};
 use crate::Luma;
 
@@ -96,7 +98,7 @@ fn import_status_words(status: &ItemStatus) -> (String, Option<String>) {
         } => {
             let stages = running
                 .iter()
-                .map(|stage| stage_label(stage))
+                .map(|stage| step_label(stage))
                 .collect::<Vec<_>>()
                 .join(", ");
             let label = if stages.is_empty() {
@@ -182,17 +184,22 @@ fn import_status_mark(status: &ItemStatus, label: &str) -> Div {
         }))
 }
 
-/// The status bar's item for an import: there while one runs, and after one
-/// that failed until its page has been opened. A press opens that page.
-pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
+/// Where an import stands, as the status bar's background-work item says it:
+/// there while one runs, and after one that failed until its page has been
+/// opened.
+pub(crate) struct ImportStatus {
+    pub(crate) summary: String,
+    pub(crate) failed: bool,
+}
+
+pub(crate) fn status(shell: &Luma) -> Option<ImportStatus> {
     let activity = shell.track_import.as_ref()?;
     let failed = !activity.active && (activity.failed() > 0 || activity.error.is_some());
     if !activity.active && (!failed || activity.seen) {
         return None;
     }
-    let mut item = crate::status_bar::Item::new("track-import-status", activity.summary());
-    item.icon = Some(IconName::ArrowDown);
-    item.attention = failed;
-    item.press = Some(|this, cx| this.show_track_import(cx));
-    Some(item)
+    Some(ImportStatus {
+        summary: activity.summary(),
+        failed,
+    })
 }

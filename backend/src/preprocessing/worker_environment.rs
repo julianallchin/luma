@@ -59,6 +59,11 @@ impl WorkerEnvironment {
         setup
     }
 
+    /// The host's background setup of this environment, when it runs one.
+    pub fn setup(&self) -> Option<&BackgroundSetup> {
+        self.setup.as_ref()
+    }
+
     /// Wait for this environment's setup, if it has one, to settle either way.
     pub async fn setup_settled(&self) {
         if let Some(setup) = &self.setup {
