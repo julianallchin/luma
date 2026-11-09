@@ -77,7 +77,7 @@ test(`deleting a score with clips asks first and the answer decides`, () => {
 });
 
 test(`deleting the open score closes it`, () => {
-  const ordinal = (s) => s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"));
+  const ordinal = (s) => nav.openOrdinal(s);
   const level = toScores();
   const before = labels(level);
 

@@ -14,8 +14,8 @@ test("the stage is lit by the score the timeline opened", () => {
   nav.venue("Test Venue");
   nav.scores("Aurora");
   const rows = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
-  // `Score #n` is the timeline's readout; `RIG SCORE #n` the stage's.
-  const timeline = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"))?.label;
+  // The score crumb's `#n` is what the timeline opened; `RIG SCORE #n` the stage's.
+  const timeline = () => nav.openOrdinal(app.snapshot());
   const rig = () => app.snapshot().findAll({ role: "card" }).find((n) => n.label.startsWith("RIG SCORE #"))?.label;
   const ordinal = (label) => label?.slice(label.indexOf("#"));
 

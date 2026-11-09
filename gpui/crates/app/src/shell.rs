@@ -888,6 +888,7 @@ fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) ->
             let slash = || {
                 div()
                     .flex_none()
+                    .mx(px(6.))
                     .text_size(px(13.))
                     .text_color(luma_ui::glass::ink(0.3))
                     .child("/")

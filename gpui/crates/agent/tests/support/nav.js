@@ -86,7 +86,7 @@ globalThis.nav = {
 		if (snapshot.find({ role: "button", label: "Edit layout" })
 			|| snapshot.find({ role: "button", label: "Done" })?.bounds.y < 120) return "Live";
 		if (snapshot.find({ role: "card", label: "Song list" })
-			|| snapshot.findAll({ role: "text" }).some((n) => n.label.startsWith("Score #"))) return "Arrange";
+			|| nav.openOrdinal(snapshot) !== undefined) return "Arrange";
 		if (snapshot.findAll({ role: "card" }).some((n) => n.label.endsWith(" Venue"))) return "Rig";
 		return undefined;
 	},
@@ -143,7 +143,7 @@ globalThis.nav = {
 		const level = app.snapshot();
 		app.click(nav.scoreRows(level, name)[0] ?? nav.inScores(level, name, "button", "New score")[0]);
 		until("the timeline", (s) =>
-			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined
+			nav.openOrdinal(s) !== undefined
 				&& s.find({ role: "card", label: "Song list" }) === undefined);
 		app.frames(2);
 	},
@@ -168,6 +168,13 @@ globalThis.nav = {
 			&& s.find({ role: "card", label: "Song list" }) === undefined
 			&& s.find({ role: "card", label: "Waveform" }) !== undefined);
 		app.frames(2);
+	},
+
+	// The open score's `#n`, read off the title bar's score crumb, or
+	// undefined when no score is open.
+	openOrdinal(snapshot) {
+		const crumb = snapshot.findAll({ role: "button" }).find((n) => / · #\d+$/.test(n.label));
+		return crumb?.label.slice(crumb.label.lastIndexOf("#"));
 	},
 
 	// The open score of `track`, as `Aurora · #2`, or undefined when none is:

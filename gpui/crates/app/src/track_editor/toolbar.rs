@@ -188,10 +188,6 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
                 })
                 .when(state.follow, |el| el.child(luma_ui::caption("Follow"))),
         )
-        .child(div().flex_1())
-        // Which score is on the timeline, by the handle the song list names it
-        // by.
-        .child(luma_ui::caption(format!("Score #{}", state.score.ordinal)))
 }
 
 /// The transport at the strip's head: play or pause, where the song is

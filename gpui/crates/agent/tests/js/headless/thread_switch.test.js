@@ -22,11 +22,11 @@ test("switching score switches to that score's chat", () => {
   nav.dismiss();
   until("history dismissed", (s) => !s.find({ role: "input", label: "Search chats…" }));
 
-  // The ordinal the editor shows, as the scores list spells it.
-  const opened = app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")).label;
+  // The open score's ordinal, as the scores list spells it.
+  const opened = nav.openOrdinal(app.snapshot());
   nav.scores("Aurora");
   const other = app.snapshot().findAll({ role: "row" })
-    .find((n) => n.label.startsWith("#") && !n.label.startsWith(`${opened.slice("Score ".length)} `));
+    .find((n) => n.label.startsWith("#") && !n.label.startsWith(`${opened} `));
   app.click(other);
   until("the other score's chat", (s) => {
     const text = seeded(s);

@@ -14,7 +14,7 @@ const songList = (s) => s.find({ role: "card", label: "Song list" }) !== undefin
 const unfolded = (s) => s.find({ role: "card", label: "Scores of Aurora" }) !== undefined;
 
 test("the row lists a song's scores, and they switch, mint and go away", () => {
-  const ordinal = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"))?.label;
+  const ordinal = () => nav.openOrdinal(app.snapshot());
   const rows = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
   const ordinals = (labels) => labels.map((l) => l.split(" ")[0]).sort();
 
@@ -31,7 +31,7 @@ test("the row lists a song's scores, and they switch, mint and go away", () => {
   expect(app.snapshot().find({ role: "card", label: "Waveform" })).toBe(undefined);
 
   // Choosing opens the score and closes the list over it.
-  const other = rows().find((n) => !n.label.startsWith(`${opened.slice("Score ".length)} `));
+  const other = rows().find((n) => !n.label.startsWith(`${opened} `));
   app.click(other);
   until("the timeline on the other score", (s) => ordinal() !== opened && !songList(s));
 
@@ -39,7 +39,7 @@ test("the row lists a song's scores, and they switch, mint and go away", () => {
   // pair.
   nav.scores("Aurora");
   app.click(app.snapshot().find({ role: "button", label: "New score" }));
-  until("a fourth score, open", (s) => ordinal() === "Score #4" && !songList(s));
+  until("a fourth score, open", (s) => ordinal() === "#4" && !songList(s));
   nav.scores("Aurora");
   until("four scores listed", () => rows().length === 4);
   expect(ordinals(rows().map((n) => n.label))).toEqual(["#1", "#2", "#3", "#4"]);
