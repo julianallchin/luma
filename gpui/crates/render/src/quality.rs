@@ -59,10 +59,12 @@ pub(crate) struct QualityBudget {
     pub glare_fft: usize,
     /// Whether floors load their maps at full size and draw parallax.
     pub floor_detail: bool,
-    /// The haze target's fraction of the output resolution.
-    pub haze_resolution: f32,
-    /// Stochastic samples per gobo beam.
-    pub haze_steps: u32,
+    /// Most of the output resolution the haze target may take, if the level
+    /// limits the viewer's own setting.
+    pub haze_resolution_cap: Option<f32>,
+    /// Most stochastic samples per gobo beam, if the level limits the
+    /// viewer's own setting.
+    pub haze_steps_cap: Option<u32>,
     /// Most pixels a live viewport renders before the compositor upscales,
     /// when the level sets its own limit.
     pub pixel_budget: Option<f64>,
@@ -97,8 +99,8 @@ impl QualityBudget {
                 },
                 glare_fft: 0,
                 floor_detail: true,
-                haze_resolution: crate::LIVE_HAZE_RESOLUTION,
-                haze_steps: 8,
+                haze_resolution_cap: None,
+                haze_steps_cap: None,
                 pixel_budget: None,
             },
             // A laptop budget: twice the shadow walk's footprint allowance
@@ -130,15 +132,15 @@ impl QualityBudget {
                 },
                 glare_fft: 1,
                 floor_detail: false,
-                haze_resolution: 0.5,
-                haze_steps: 4,
+                haze_resolution_cap: Some(0.5),
+                haze_steps_cap: Some(4),
                 pixel_budget: Some(1.0e6),
             },
             Quality::Low => Self {
                 marched: false,
                 fixture_shadows: false,
                 ambient_divisor: 2,
-                haze_resolution: 0.25,
+                haze_resolution_cap: Some(0.25),
                 ..Self::of(Quality::Medium)
             },
         }
@@ -176,8 +178,11 @@ mod tests {
         for pair in Quality::ALL.windows(2) {
             let (above, below) = (QualityBudget::of(pair[0]), QualityBudget::of(pair[1]));
             assert!(below.msaa <= above.msaa);
-            assert!(below.haze_resolution <= above.haze_resolution);
-            assert!(below.haze_steps <= above.haze_steps);
+            let (steps, resolution) = (8, 1.0);
+            let (above_steps, above_resolution) = pair[0].limit_haze(steps, resolution);
+            let (below_steps, below_resolution) = pair[1].limit_haze(steps, resolution);
+            assert!(below_steps <= above_steps && above_steps <= steps);
+            assert!(below_resolution <= above_resolution && above_resolution <= resolution);
             assert!(below.ambient_divisor >= above.ambient_divisor);
             assert!(above.marched || !below.marched);
             assert!(above.fixture_shadows || !below.fixture_shadows);

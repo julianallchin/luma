@@ -355,16 +355,18 @@ impl Quality {
         Self::ALL.into_iter().find(|level| level.as_str() == name)
     }
 
-    /// The haze target's fraction of the output resolution.
+    /// The viewer's haze `steps` (stochastic samples per gobo beam) and
+    /// `resolution` (the haze target's fraction of the output), limited to
+    /// what this level affords.
     #[must_use]
-    pub fn haze_resolution(self) -> f32 {
-        crate::quality::QualityBudget::of(self).haze_resolution
-    }
-
-    /// Stochastic samples per gobo beam.
-    #[must_use]
-    pub fn haze_steps(self) -> u32 {
-        crate::quality::QualityBudget::of(self).haze_steps
+    pub fn limit_haze(self, steps: u32, resolution: f32) -> (u32, f32) {
+        let budget = crate::quality::QualityBudget::of(self);
+        (
+            budget.haze_steps_cap.map_or(steps, |cap| steps.min(cap)),
+            budget
+                .haze_resolution_cap
+                .map_or(resolution, |cap| resolution.min(cap)),
+        )
     }
 
     /// Most pixels a live viewport renders before the compositor upscales,

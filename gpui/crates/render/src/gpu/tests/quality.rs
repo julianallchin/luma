@@ -22,8 +22,7 @@ fn beam_frame(quality: Quality, haze: f32) -> Frame {
     frame.fixture_surface_lighting = false;
     frame.geometry_shadows = true;
     frame.haze_density = haze;
-    frame.haze_steps = quality.haze_steps();
-    frame.haze_resolution = quality.haze_resolution();
+    (frame.haze_steps, frame.haze_resolution) = quality.limit_haze(8, crate::LIVE_HAZE_RESOLUTION);
     frame.quality = quality;
     let light = &mut frame.fixture_cones[0];
     light.position = Vec3::new(0.0, 0.0, 3.0);

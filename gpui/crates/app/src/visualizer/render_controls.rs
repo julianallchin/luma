@@ -122,12 +122,9 @@ impl RenderControls {
         render.sky = house::fill(self.house).sky;
         // `room` already carried the venue's own haze in. These two are the
         // local cost knobs it deliberately does not hold.
-        render.haze.steps = self.haze_steps;
-        render.haze.resolution = self.haze_resolution;
-        if self.quality != scene_desc::Quality::High {
-            render.haze.steps = render.haze.steps.min(self.quality.haze_steps());
-            render.haze.resolution = render.haze.resolution.min(self.quality.haze_resolution());
-        }
+        (render.haze.steps, render.haze.resolution) = self
+            .quality
+            .limit_haze(self.haze_steps, self.haze_resolution);
         render.quality = self.quality;
         render.show_grid = self.grid_enabled;
         render.show_gizmos = self.gizmos_enabled;

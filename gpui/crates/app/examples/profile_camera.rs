@@ -112,12 +112,8 @@ fn main() -> Result<(), String> {
     scene.editing = true;
     let render = &mut scene.render;
     render.fov = export.camera.fov_y_deg;
-    render.haze.steps = 8;
-    render.haze.resolution = luma_render::LIVE_HAZE_RESOLUTION;
-    if quality != Quality::High {
-        render.haze.steps = render.haze.steps.min(quality.haze_steps());
-        render.haze.resolution = render.haze.resolution.min(quality.haze_resolution());
-    }
+    (render.haze.steps, render.haze.resolution) =
+        quality.limit_haze(8, luma_render::LIVE_HAZE_RESOLUTION);
     render.quality = quality;
     render.show_grid = settings.stage_grid;
     render.show_gizmos = settings.stage_gizmos;
