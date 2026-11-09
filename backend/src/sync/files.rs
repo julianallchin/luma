@@ -176,7 +176,7 @@ pub async fn upload_pending_audio(
     .fetch_all(pool)
     .await?;
 
-    progress.phase("Uploading audio", Some(rows.len()), "files");
+    progress.upload_phase("Uploading audio", Some(rows.len()), "files");
     for row in &rows {
         let _item = progress.item();
         let file_path = std::path::Path::new(&row.file_path);
@@ -261,7 +261,7 @@ pub async fn upload_pending_stems(
     .fetch_all(pool)
     .await?;
 
-    progress.phase("Uploading stems", Some(rows.len()), "files");
+    progress.upload_phase("Uploading stems", Some(rows.len()), "files");
     for row in &rows {
         let _item = progress.item();
         let file_path = std::path::Path::new(&row.stem_file_path);
@@ -342,7 +342,7 @@ pub async fn upload_pending_album_art(
     .fetch_all(pool)
     .await?;
 
-    progress.phase("Uploading cover art", Some(rows.len()), "files");
+    progress.upload_phase("Uploading cover art", Some(rows.len()), "files");
     for row in &rows {
         let _item = progress.item();
         let file_path = std::path::Path::new(&row.album_art_path);
@@ -408,7 +408,7 @@ pub async fn upload_pending_agent_figures(
             .fetch_all(pool)
             .await?;
 
-    progress.phase("Uploading figures", Some(paths.len()), "files");
+    progress.upload_phase("Uploading figures", Some(paths.len()), "files");
     for path in &paths {
         let _item = progress.item();
         let object = &path[figures::BUCKET.len() + 1..];

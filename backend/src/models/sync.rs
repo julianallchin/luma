@@ -78,6 +78,24 @@ pub enum SyncSummary {
 }
 
 impl SyncStatus {
+    /// Local work that is on this machine only: rows waiting in the upload
+    /// queue (PowerSync keeps a row there until the server acknowledges it),
+    /// and the files an upload phase has still to move. Downloads are not
+    /// counted, because nothing is lost if they stop.
+    #[must_use]
+    pub fn unsynced(&self) -> usize {
+        let files = self
+            .media
+            .as_ref()
+            .filter(|media| media.uploading)
+            .map_or(0, |media| {
+                media
+                    .total
+                    .map_or(1, |total| total.saturating_sub(media.completed))
+            });
+        self.pending_uploads + files
+    }
+
     #[must_use]
     pub fn summary(&self) -> SyncSummary {
         if !self.refused.is_empty() {
@@ -120,6 +138,11 @@ pub struct SyncProgress {
     pub completed: usize,
     pub total: Option<usize>,
     pub unit: String,
+    /// The phase moves files from this machine up to storage: work that
+    /// exists nowhere else until it finishes. A download can always be
+    /// fetched again, so quitting waits on this and not on that.
+    #[serde(default)]
+    pub uploading: bool,
 }
 
 #[cfg(test)]
@@ -169,9 +192,33 @@ mod tests {
                 completed: 0,
                 total: Some(2),
                 unit: "files".into(),
+                uploading: true,
             }),
             ..SyncStatus::default()
         };
         assert_eq!(status.summary(), SyncSummary::Syncing);
+    }
+
+    /// What only this machine has: queued rows and files still to go up. A
+    /// download is not counted, however much of it is left.
+    #[test]
+    fn unsynced_counts_uploads_and_never_downloads() {
+        let media = |uploading, completed| SyncProgress {
+            phase: String::new(),
+            completed,
+            total: Some(5),
+            unit: "files".into(),
+            uploading,
+        };
+        let mut status = SyncStatus {
+            pending_uploads: 2,
+            media: Some(media(true, 1)),
+            ..SyncStatus::default()
+        };
+        assert_eq!(status.unsynced(), 6);
+        status.media = Some(media(false, 1));
+        assert_eq!(status.unsynced(), 2);
+        status.pending_uploads = 0;
+        assert_eq!(status.unsynced(), 0);
     }
 }

@@ -16,6 +16,7 @@ impl Progress {
                 completed: 0,
                 total: None,
                 unit: "items".into(),
+                uploading: false,
             },
         ));
         Run(self)
@@ -30,13 +31,25 @@ impl Progress {
             .map(|(_, progress)| progress.clone())
     }
 
+    /// Begin a phase that moves nothing off this machine: a download, or a
+    /// check.
     pub fn phase(&self, phase: impl Into<String>, total: Option<usize>, unit: &str) {
+        self.begin(phase.into(), total, unit, false);
+    }
+
+    /// Begin a phase that uploads local files — see [`SyncProgress::uploading`].
+    pub fn upload_phase(&self, phase: impl Into<String>, total: Option<usize>, unit: &str) {
+        self.begin(phase.into(), total, unit, true);
+    }
+
+    fn begin(&self, phase: String, total: Option<usize>, unit: &str, uploading: bool) {
         if let Some((_, progress)) = self.0.lock().unwrap().as_mut() {
             *progress = SyncProgress {
-                phase: phase.into(),
+                phase,
                 completed: 0,
                 total,
                 unit: unit.into(),
+                uploading,
             };
         }
     }
@@ -73,15 +86,17 @@ mod tests {
         let progress = Progress::default();
         let run = progress.start("alice");
         assert!(progress.snapshot("bob").is_none());
-        progress.phase("Uploading audio", Some(3), "files");
+        progress.upload_phase("Uploading audio", Some(3), "files");
         {
             let _item = progress.item();
         }
         assert_eq!(progress.snapshot("alice").unwrap().completed, 1);
+        assert!(progress.snapshot("alice").unwrap().uploading);
         progress.phase("Checking cloud changes", None, "items");
         let snapshot = progress.snapshot("alice").unwrap();
         assert_eq!(snapshot.completed, 0);
         assert_eq!(snapshot.total, None);
+        assert!(!snapshot.uploading);
         drop(run);
         assert!(progress.snapshot("alice").is_none());
     }
