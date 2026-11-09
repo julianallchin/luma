@@ -170,8 +170,15 @@ fn build_strobe_inventory(def: &FixtureDefinition, mode: &Mode) -> StrobeInvento
 /// does the flashing, rather than the engine pulsing a dimmer or a color. The
 /// stage view simulates that clock for these fixtures so it flashes as the rig
 /// does. An unknown mode is `false`.
+///
+/// A library fixture's light ([`ModeLight`]) folds a strobe the engine gates
+/// into its brightness, so any strobe the stage still sees on one is its own
+/// shutter's.
 #[must_use]
 pub fn strobes_on_own_clock(def: &FixtureDefinition, mode_name: &str) -> bool {
+    if def.library.is_some() {
+        return true;
+    }
     def.modes
         .iter()
         .find(|m| m.name == mode_name)

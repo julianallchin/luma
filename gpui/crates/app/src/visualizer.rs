@@ -282,6 +282,8 @@ struct Stage {
     /// The rig. `None` until the load lands.
     scene: Option<scene_desc::Scene>,
     definitions: BTreeMap<String, luma_scene::definition::Definition>,
+    /// The light the rig's fixtures make of a universe.
+    lights: luma_lib::stage_render::StageLights,
     /// The rig's fixtures that strobe on their own clock, and that clock.
     strobes: FixtureStrobes,
     /// The rig's laser projectors and zones, solved each frame.

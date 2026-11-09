@@ -706,6 +706,7 @@ impl Session {
                 });
                 Ok(())
             };
+        let lights = self.geometry.lights();
         for (time, kept) in self.axis.ticks() {
             if cancel.load(Ordering::Relaxed) {
                 cancelled = true;
@@ -725,10 +726,11 @@ impl Session {
                 .next();
             let universe = motors.step(time, score, state);
             let moment = self.axis.moment(time, self.bass.bass_at(score));
+            let frame_lights = lights.frame(universe.as_ref(), moment.slice);
             let mut frame = build_frame_at(
                 &scene,
                 &definitions,
-                &|id, head| stage_render::primitive_state(universe.as_ref(), id, head),
+                &|id, head| frame_lights.primitive(id, head),
                 moment,
                 &mut assets,
             )

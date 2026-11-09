@@ -28,11 +28,14 @@ use luma_render::scene_desc::{self, RenderSettings};
 use luma_render::{assets, build_frame_at, footage, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::coords;
 use luma_scene::environment::{VenueEnvironment, VenueHaze};
+use luma_scene::strobe::Slice;
 use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
 
 use crate::database::local;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
+use crate::fixtures::engine::requests;
+use crate::fixtures::light::{CellLight, ModeLight};
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::selection::Selection;
 use crate::models::universe::{PrimitiveState, UniverseState};
@@ -241,6 +244,12 @@ impl VenueGeometry {
     /// A `cdj` beats a `mixer` because a booth with decks in it is where the
     /// operator stands; a mixer alone is the fallback. Returned in render-world
     /// space (Z-up), which is the space [`Camera::for_view`] works in.
+    /// The light the rig's fixtures make ([`StageLights`]).
+    #[must_use]
+    pub fn lights(&self) -> StageLights {
+        StageLights::new(&self.fixtures, &self.definitions)
+    }
+
     #[must_use]
     pub fn booth(&self) -> Option<Vec3> {
         BOOTH_KINDS.iter().find_map(|kind| {
@@ -315,37 +324,114 @@ fn catalog_kind(catalog_ref: Option<&str>) -> &'static str {
         .map_or("", |p| p.kind.as_str())
 }
 
-/// One head's state out of an evaluated universe.
-///
-/// The eval engine keys a single-head fixture by its bare id and a multi-head
-/// one by `"<id>:<head>"`; the renderer asks for `(id, head)` and does not know
-/// which it has. Answering both here is what lets it stay ignorant.
-#[must_use]
-pub fn primitive_state(
-    state: Option<&UniverseState>,
-    id: &str,
-    head: usize,
-) -> Option<scene_desc::PrimitiveState> {
-    let state = state?;
-    let p = state
-        .primitives
-        .get(&format!("{id}:{head}"))
-        .or_else(|| state.primitives.get(id))?;
-    // The renderer works in linear light with sRGB primaries and presents it
-    // in sRGB, SDR or HDR alike; a wider color is mapped into sRGB by the
-    // same rule a fixture's emitters use.
-    let (color, dimmer) =
-        luma_patterns::color_space::Gamut::SRGB.split(p.color.map(f64::from), f64::from(p.dimmer));
-    Some(scene_desc::PrimitiveState {
-        dimmer: dimmer as f32,
-        color: color.map(|v| v as f32),
-        strobe: p.strobe,
-        position: p.position,
-        // Fixture wheel slots are not in `UniverseState` yet. Open is the
-        // explicit identity until that evaluated-state contract grows them.
-        gobo: 0,
-        gobo_rotation: 0.0,
-    })
+/// What the stage draws for a rig: each library fixture's mode light, so a
+/// frame shows the light its channels make rather than the light its cells
+/// ask for. Built once per patch.
+#[derive(Debug, Clone, Default)]
+pub struct StageLights {
+    library: HashMap<String, std::sync::Arc<ModeLight>>,
+}
+
+impl StageLights {
+    /// The library fixtures among `fixtures`, each with its patched mode's
+    /// light. A fixture whose definition or mode no longer resolves draws as
+    /// its cells ask.
+    #[must_use]
+    pub fn new(
+        fixtures: &[PatchedFixture],
+        definitions: &HashMap<String, FixtureDefinition>,
+    ) -> Self {
+        let library = fixtures
+            .iter()
+            .filter_map(|fixture| {
+                let light = definitions
+                    .get(&fixture.fixture_path)?
+                    .library
+                    .as_ref()?
+                    .light
+                    .get(&fixture.mode_name)?;
+                Some((fixture.id.clone(), light.clone()))
+            })
+            .collect();
+        Self { library }
+    }
+
+    /// The rig's light in `state` over `slice` of the strobe clock.
+    #[must_use]
+    pub fn frame<'a>(&self, state: Option<&'a UniverseState>, slice: Slice) -> FrameLights<'a> {
+        let cells = state
+            .map(|state| {
+                self.library
+                    .iter()
+                    .filter_map(|(id, light)| {
+                        let requests = requests(state, id, light.cells());
+                        if requests.is_empty() {
+                            return None;
+                        }
+                        let realized = light.realize(&requests, 1.0, slice);
+                        Some((id.clone(), light.emit(&realized)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        FrameLights { state, cells }
+    }
+}
+
+/// One frame of a rig's light, as the renderer asks for it: `(fixture, head)`.
+pub struct FrameLights<'a> {
+    state: Option<&'a UniverseState>,
+    /// The library fixtures' cells, by fixture id.
+    cells: HashMap<String, Vec<CellLight>>,
+}
+
+impl FrameLights<'_> {
+    /// One head's state. A library fixture's cell is the light it gives,
+    /// strobing only where its own shutter flashes it (a strobe the engine
+    /// gates is already in its brightness). Any other head is its primitive
+    /// as asked: the eval engine keys a single-head fixture by its bare id
+    /// and a multi-head one by `"<id>:<head>"`, and both answer here, so the
+    /// renderer need not know which it has.
+    #[must_use]
+    pub fn primitive(&self, id: &str, head: usize) -> Option<scene_desc::PrimitiveState> {
+        let state = self.state?;
+        let p = state
+            .primitives
+            .get(&format!("{id}:{head}"))
+            .or_else(|| state.primitives.get(id));
+        if let Some(cells) = self.cells.get(id) {
+            let cell = cells.get(head)?;
+            let peak = cell.rgb.iter().copied().fold(0.0_f32, f32::max);
+            return Some(scene_desc::PrimitiveState {
+                dimmer: peak,
+                color: if peak > 0.0 {
+                    cell.rgb.map(|v| v / peak)
+                } else {
+                    [0.0; 3]
+                },
+                strobe: cell.own_strobe,
+                position: p.map_or([0.0, 0.0], |p| p.position),
+                gobo: 0,
+                gobo_rotation: 0.0,
+            });
+        }
+        let p = p?;
+        // The renderer works in linear light with sRGB primaries and presents
+        // it in sRGB, SDR or HDR alike; a wider color is mapped into sRGB by
+        // the same rule a fixture's emitters use.
+        let (color, dimmer) = luma_patterns::color_space::Gamut::SRGB
+            .split(p.color.map(f64::from), f64::from(p.dimmer));
+        Some(scene_desc::PrimitiveState {
+            dimmer: dimmer as f32,
+            color: color.map(|v| v as f32),
+            strobe: p.strobe,
+            position: p.position,
+            // Fixture wheel slots are not in `UniverseState` yet. Open is the
+            // explicit identity until that evaluated-state contract grows them.
+            gobo: 0,
+            gobo_rotation: 0.0,
+        })
+    }
 }
 
 /// `selection` resolved in the venue behind `access` and drawn as a highlight
@@ -381,7 +467,7 @@ const MARKED: PrimitiveState = PrimitiveState {
 /// venue is pictured, not two.
 ///
 /// A whole-fixture match is stored under the bare fixture id, which is
-/// [`primitive_state`]'s "every head of this fixture" key — so no head count is
+/// [`FrameLights::primitive`]'s "every head of this fixture" key — so no head count is
 /// needed to expand one. An unmatched head has no entry at all, and a head with
 /// no state is drawn dark.
 #[must_use]
@@ -422,6 +508,8 @@ pub struct Shot {
     pub size: (u32, u32),
     /// The projectors that draw `state`'s beams.
     pub lasers: crate::laser::LaserRig,
+    /// The light the rig's fixtures make of `state`.
+    pub lights: StageLights,
 }
 
 /// Render one frame of `scene` as tightly packed RGBA8, plus its true size.
@@ -445,6 +533,7 @@ pub fn render_rgba(
         scene,
         definitions,
         shot.lasers,
+        shot.lights,
         meshes_root,
         Aim::View(shot.view),
         shot.booth,
@@ -542,10 +631,12 @@ impl Sequence {
     ///
     /// # Errors
     /// Fails if the render thread has stopped.
+    #[allow(clippy::too_many_arguments)]
     pub fn install(
         scene: scene_desc::Scene,
         definitions: BTreeMap<String, luma_scene::definition::Definition>,
         lasers: crate::laser::LaserRig,
+        lights: StageLights,
         meshes_root: PathBuf,
         aim: Aim,
         booth: Option<Vec3>,
@@ -561,6 +652,7 @@ impl Sequence {
                 scene,
                 definitions,
                 lasers,
+                lights,
                 camera,
                 size,
                 meshes_root,
@@ -678,6 +770,7 @@ struct Installed {
     camera: Camera,
     definitions: BTreeMap<String, luma_scene::definition::Definition>,
     lasers: crate::laser::LaserRig,
+    lights: StageLights,
     size: (u32, u32),
     meshes_root: PathBuf,
 }
@@ -805,10 +898,11 @@ fn one_frame(
         target: scene.camera.target,
         fov_y_deg: scene.camera.fov_y_deg,
     };
+    let lights = scene.lights.frame(state, moment.slice);
     let mut frame = build_frame_at(
         &scene.scene,
         &scene.definitions,
-        &|id, head| primitive_state(state, id, head),
+        &|id, head| lights.primitive(id, head),
         moment,
         library,
     )
@@ -880,6 +974,22 @@ mod tests {
     use luma_patterns::laser::{Element, Outline, Sample};
     use luma_scene::venue::NodeKind as VenueNodeKind;
 
+    /// A head as the renderer is handed it, for a rig with no library
+    /// fixtures: its primitive as asked.
+    fn asked(
+        state: Option<&UniverseState>,
+        id: &str,
+        head: usize,
+    ) -> Option<scene_desc::PrimitiveState> {
+        let still = Slice {
+            open: 0.0,
+            length: 0.0,
+        };
+        StageLights::default()
+            .frame(state, still)
+            .primitive(id, head)
+    }
+
     fn patched(id: &str) -> PatchedFixture {
         PatchedFixture {
             id: id.into(),
@@ -906,13 +1016,13 @@ mod tests {
             heads: None,
         }]);
         for head in [0, 1, 7] {
-            let lit = primitive_state(Some(&state), "mover", head)
+            let lit = asked(Some(&state), "mover", head)
                 .expect("a whole-fixture match answers for every head");
             assert!((lit.dimmer - 1.0).abs() < f32::EPSILON);
             assert_eq!(lit.color, [1.0, 1.0, 1.0]);
             assert!(lit.strobe.abs() < f32::EPSILON);
         }
-        assert!(primitive_state(Some(&state), "other", 0).is_none());
+        assert!(asked(Some(&state), "other", 0).is_none());
     }
 
     /// A partial match lights exactly the heads it names; the rest of the
@@ -924,10 +1034,10 @@ mod tests {
             heads: Some(vec![1, 3]),
         }]);
         for head in [1, 3] {
-            assert!(primitive_state(Some(&state), "bar", head).is_some());
+            assert!(asked(Some(&state), "bar", head).is_some());
         }
         for head in [0, 2, 4] {
-            assert!(primitive_state(Some(&state), "bar", head).is_none());
+            assert!(asked(Some(&state), "bar", head).is_none());
         }
     }
 
@@ -937,7 +1047,7 @@ mod tests {
     fn an_empty_match_lights_nothing() {
         let state = highlight_state(&[]);
         assert!(state.primitives.is_empty());
-        assert!(primitive_state(Some(&state), "anything", 0).is_none());
+        assert!(asked(Some(&state), "anything", 0).is_none());
     }
 
     /// An array node is the seat, not a copy. The solve gives it a pose so a
@@ -1123,7 +1233,7 @@ mod tests {
                 .into(),
                 lasers: Vec::new(),
             };
-            primitive_state(Some(&state), "par", 0).unwrap()
+            asked(Some(&state), "par", 0).unwrap()
         };
         let red = luma_patterns::color_space::from_srgb([1., 0., 0.]);
         let peak = red.iter().copied().fold(0., f64::max);
@@ -1142,6 +1252,55 @@ mod tests {
         assert!(deep.dimmer > 0.5 && deep.dimmer <= 1.0);
     }
 
+    /// The stage draws a library fixture's light, not its request: the
+    /// HYT's white strip asked for red stays dark, as it does on the rig,
+    /// and its RGB cells asked for white are white.
+    #[test]
+    fn the_stage_draws_a_library_fixtures_light_not_its_request() {
+        let root = crate::resources::source_fixtures_root().expect("the shipped bundle");
+        let path = crate::fixtures::library::fixture_path("oppsk/hyt-006-384sl");
+        let def = crate::fixtures::definition(&root, &path).unwrap();
+        let fixture = PatchedFixture {
+            mode_name: "64ch".into(),
+            fixture_path: path.clone(),
+            num_channels: 64,
+            ..patched("hyt")
+        };
+        let lights = StageLights::new(&[fixture], &HashMap::from([(path, (*def).clone())]));
+        let ask = |color: [f32; 3]| PrimitiveState {
+            dimmer: 1.0,
+            color,
+            strobe: 0.0,
+            position: [0.0, 0.0],
+            speed: 0.0,
+            aim: None,
+        };
+        let red = luma_patterns::color_space::from_linear_srgb([1.0, 0.0, 0.0]).map(|v| v as f32);
+        let state = UniverseState {
+            primitives: (0..48)
+                .map(|c| {
+                    (
+                        format!("hyt:{c}"),
+                        ask(if c % 3 == 2 { red } else { [1.0; 3] }),
+                    )
+                })
+                .collect(),
+            lasers: Vec::new(),
+        };
+        let still = Slice {
+            open: 0.0,
+            length: 0.0,
+        };
+        let frame = lights.frame(Some(&state), still);
+        let white_strip = frame.primitive("hyt", 2).unwrap();
+        assert!(white_strip.dimmer < 1e-4, "{white_strip:?}");
+        let rgb = frame.primitive("hyt", 0).unwrap();
+        assert!(
+            rgb.dimmer > 0.99 && rgb.color.iter().all(|&v| v > 0.99),
+            "{rgb:?}"
+        );
+    }
+
     #[test]
     fn head_state_falls_back_to_the_bare_fixture_id() {
         let mut state = UniverseState::default();
@@ -1156,12 +1315,9 @@ mod tests {
                 aim: None,
             },
         );
-        assert_eq!(
-            primitive_state(Some(&state), "par", 0).map(|p| p.dimmer),
-            Some(0.5)
-        );
-        assert!(primitive_state(Some(&state), "other", 0).is_none());
-        assert!(primitive_state(None, "par", 0).is_none());
+        assert_eq!(asked(Some(&state), "par", 0).map(|p| p.dimmer), Some(0.5));
+        assert!(asked(Some(&state), "other", 0).is_none());
+        assert!(asked(None, "par", 0).is_none());
     }
 
     #[test]

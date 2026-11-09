@@ -184,6 +184,7 @@ impl VenueHost {
         }
         let booth = geometry.booth();
         let lasers = geometry.lasers.clone();
+        let lights = geometry.lights();
         let meshes_root = crate::resources::meshes_root(Some(&self.resource_root));
 
         // The GPU render is a blocking submit-and-map. Running it on a blocking
@@ -199,6 +200,7 @@ impl VenueHost {
                     time,
                     size: (width, height),
                     lasers,
+                    lights,
                 },
                 meshes_root,
             )

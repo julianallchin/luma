@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 
 use luma_lib::eval::{Arena, Scope};
 use luma_lib::resources::meshes_root;
-use luma_lib::stage_render::{primitive_state, VenueGeometry};
+use luma_lib::stage_render::VenueGeometry;
 use luma_lib::storage::StorageRoot;
 use luma_render::camera_export::CameraExport;
 use luma_render::scene_desc::{Look, Quality};
@@ -131,10 +131,14 @@ fn main() -> Result<(), String> {
         None => None,
     };
     let mut library = Library::new(meshes_root(Some(&fixtures)));
+    let lights = geometry.lights().frame(
+        state.as_ref(),
+        luma_render::Moment::at(f64::from(playhead)).slice,
+    );
     let mut frame = build_frame_with(
         &scene,
         &definitions,
-        &|id, head| primitive_state(state.as_ref(), id, head),
+        &|id, head| lights.primitive(id, head),
         playhead,
         &mut library,
     )

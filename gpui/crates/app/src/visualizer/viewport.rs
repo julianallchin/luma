@@ -430,6 +430,7 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                             match gpu.frame(LiveFrameInputs {
                                 scene,
                                 definitions: &stage.definitions,
+                                lights: &stage.lights,
                                 strobes: &mut stage.strobes,
                                 moment,
                                 state: universe.as_ref(),

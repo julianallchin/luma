@@ -90,6 +90,7 @@ pub async fn run(mut args: super::Args) -> Result<(), String> {
         time: 0.,
         size: (width, height),
         lasers: geometry.lasers.clone(),
+        lights: geometry.lights(),
     };
     let meshes = luma_lib::resources::meshes_root(Some(&fixtures_root));
     let png = tokio::task::spawn_blocking(move || {

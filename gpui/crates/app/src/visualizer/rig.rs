@@ -345,6 +345,7 @@ impl Visualizer {
         });
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
+        stage.lights = luma_lib::stage_render::StageLights::new(&rig.fixtures, &rig.definitions);
         stage.strobes = FixtureStrobes::new(&rig);
         stage.lasers = rig.lasers.clone();
         stage.scene = Some(scene);
