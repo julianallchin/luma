@@ -4,7 +4,7 @@ use super::{
     color::{ColorArg, ColorArgEditor, ColorArgEvent},
     number::{DraftedNumber, NumberEvent},
 };
-use crate::node::{Instrument, Role};
+use crate::node::Role;
 use crate::Enabled;
 use gpui::prelude::*;
 use gpui::{div, px, Context, Entity, EventEmitter, SharedString, Subscription, Window};

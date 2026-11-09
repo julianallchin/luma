@@ -3,6 +3,7 @@
 //! bordered, uppercase button style.
 
 use crate::icons::IconName;
+use crate::node::{AgentNode as _, Instrument, Role};
 use crate::rpx;
 use crate::{float, glass, ladder, radius, CONTROL_HEIGHT};
 use gpui::prelude::FluentBuilder;
@@ -20,18 +21,8 @@ pub enum Enabled {
     /// Rounded chip with a subtle hover wash.
     Yes,
     /// Dimmed to [`ladder::DISABLED_OPACITY`], inert under the pointer: a
-    /// click handler the caller attaches never runs (see [`inert`]), so a
-    /// caller attaches its handler whatever the state.
+    /// [`Control`] drops the click handler a caller attaches.
     No,
-}
-
-/// The cover that makes a disabled control inert. gpui has no way to drop the
-/// click handler a caller attaches after the constructor returns, so the
-/// control is never hovered instead: this layer sits in front of it and takes
-/// every mouse event except the scroll wheel, which still reaches the list or
-/// panel the control sits in.
-pub(crate) fn inert() -> Div {
-    div().absolute().inset_0().block_mouse_except_scroll()
 }
 
 impl From<bool> for Enabled {
@@ -47,16 +38,141 @@ impl From<bool> for Enabled {
     }
 }
 
+/// A shared control: what [`button`], [`icon_button`] and
+/// [`pill::primary`](crate::pill::primary) return. It knows whether it is
+/// enabled, so the caller attaches its click handler and names its automation
+/// node whatever the state: a disabled control drops the handler and reports
+/// itself disabled.
+///
+/// Press it like a `Div`: [`Self::id`], then [`StatefulControl::on_click`].
+pub struct Control {
+    el: Div,
+    enabled: Enabled,
+}
+
+/// A [`Control`] with an id, which is what can take a click handler.
+pub struct StatefulControl {
+    el: Stateful<Div>,
+    enabled: Enabled,
+}
+
+impl Control {
+    pub(crate) fn new(el: Div, enabled: Enabled) -> Self {
+        Self { el, enabled }
+    }
+
+    /// See [`InteractiveElement::id`].
+    pub fn id(self, id: impl Into<ElementId>) -> StatefulControl {
+        StatefulControl {
+            el: self.el.id(id),
+            enabled: self.enabled,
+        }
+    }
+
+    /// See [`Instrument::agent_node`]. A disabled control is reported disabled.
+    pub fn agent_node(
+        self,
+        role: Role,
+        label: impl Into<SharedString>,
+    ) -> <Div as Instrument>::Output {
+        self.el
+            .agent_node(role, label)
+            .agent_disabled(self.enabled == Enabled::No)
+    }
+}
+
+impl StatefulControl {
+    /// Run `listener` when the control is clicked, by pointer or by key. A
+    /// disabled control drops it, so nothing that reaches the control can run
+    /// it. A press on a disabled control still reaches what is around it.
+    pub fn on_click(
+        mut self,
+        listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        if self.enabled == Enabled::Yes {
+            self.el = self.el.on_click(listener);
+        }
+        self
+    }
+
+    /// See [`StatefulInteractiveElement::tooltip`]. A disabled control shows
+    /// its tooltip too, which is where to say why it is disabled.
+    pub fn tooltip(mut self, build: impl Fn(&mut Window, &mut App) -> AnyView + 'static) -> Self {
+        self.el = self.el.tooltip(build);
+        self
+    }
+
+    /// See [`Instrument::agent_node`]. A disabled control is reported disabled.
+    pub fn agent_node(
+        self,
+        role: Role,
+        label: impl Into<SharedString>,
+    ) -> <Stateful<Div> as Instrument>::Output {
+        self.el
+            .agent_node(role, label)
+            .agent_disabled(self.enabled == Enabled::No)
+    }
+}
+
+impl Styled for Control {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.el.style()
+    }
+}
+
+impl Styled for StatefulControl {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.el.style()
+    }
+}
+
+impl ParentElement for Control {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.el.extend(elements);
+    }
+}
+
+impl ParentElement for StatefulControl {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.el.extend(elements);
+    }
+}
+
+/// Focus, keys and mouse handlers other than the click, which only
+/// [`StatefulControl::on_click`] attaches.
+impl InteractiveElement for StatefulControl {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.el.interactivity()
+    }
+}
+
+impl IntoElement for Control {
+    type Element = Div;
+
+    fn into_element(self) -> Div {
+        self.el
+    }
+}
+
+impl IntoElement for StatefulControl {
+    type Element = Stateful<Div>;
+
+    fn into_element(self) -> Stateful<Div> {
+        self.el
+    }
+}
+
 /// A compact rounded action button. The caller adds its id and handler.
-pub fn button(label: &str, enabled: Enabled) -> Div {
-    float::chip_plate(enabled)
+pub fn button(label: &str, enabled: Enabled) -> Control {
+    let el = float::chip_plate(enabled)
         .justify_center()
         .px(rpx(float::PICKER_CHIP_PAD))
         .map(|el| match enabled {
             Enabled::Yes => el.tab_index(0),
-            Enabled::No => el.opacity(ladder::DISABLED_OPACITY).child(inert()),
+            Enabled::No => el.opacity(ladder::DISABLED_OPACITY),
         })
-        .when(!label.is_empty(), |el| el.child(label.to_string()))
+        .when(!label.is_empty(), |el| el.child(label.to_string()));
+    Control::new(el, enabled)
 }
 
 /// The glyph size inside an [`icon_button`].
@@ -67,8 +183,8 @@ const ICON: f32 = 14.;
 ///
 /// The caller adds the id, the handlers and the automation node. Do not add a
 /// second `hover` style: gpui allows only one.
-pub fn icon_button(icon: IconName, enabled: Enabled) -> Div {
-    icon_plate(icon, false, enabled)
+pub fn icon_button(icon: IconName, enabled: Enabled) -> Control {
+    Control::new(icon_plate(icon, false, enabled), enabled)
 }
 
 /// An [`icon_button`] that shows its own state. While `active`, it keeps the
@@ -108,7 +224,6 @@ fn icon_plate(icon: IconName, active: bool, enabled: Enabled) -> Div {
         Enabled::Yes => toggle_paint(plate.cursor_pointer(), active),
         Enabled::No => plate
             .text_color(glass::ink(0.55))
-            .opacity(ladder::DISABLED_OPACITY)
-            .child(inert()),
+            .opacity(ladder::DISABLED_OPACITY),
     }
 }

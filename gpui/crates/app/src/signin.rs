@@ -675,7 +675,6 @@ fn primary(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
             submit.update(cx, |this, cx| this.sign_in_submit(cx));
         })
         .agent_node(Role::Button, label)
-        .agent_disabled(!enabled)
         .agent_focused(state.action_focus.is_focused(window))
         .into_any_element()
 }

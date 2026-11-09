@@ -106,7 +106,9 @@ pub fn rem_scale(window: &gpui::Window) -> f32 {
     f32::from(window.rem_size()) / BASE_REM
 }
 
-pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
+pub use button::{
+    button, icon_button, icon_toggle, toggle_paint, Control, Enabled, StatefulControl,
+};
 pub use rem_scale::rem_scaled;
 pub use select::luma_select_item;
 pub use slider::{fader_track, luma_fader, luma_slider};

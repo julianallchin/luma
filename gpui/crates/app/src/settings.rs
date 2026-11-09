@@ -1027,8 +1027,7 @@ fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Row {
                 .on_click(move |_, _, cx| {
                     save.update(cx, |this, cx| this.save_api_key(provider, cx));
                 })
-                .agent_node(Role::Button, format!("Save {label}"))
-                .agent_disabled(!key.has_draft),
+                .agent_node(Role::Button, format!("Save {label}")),
         )
         .when(status.hint.is_some(), |row| {
             row.child(
@@ -1155,7 +1154,6 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
                     act.update(cx, |this, cx| this.switch_identity(cx));
                 })
                 .agent_node(Role::Button, label)
-                .agent_disabled(!pressable)
                 .into_any_element(),
         ),
     ];
@@ -1226,8 +1224,7 @@ fn shortcuts(shell: &Luma, state: &Settings, app: &Entity<Luma>, cx: &App) -> Ve
     let button = luma_ui::button("Reset all", if any { Enabled::Yes } else { Enabled::No })
         .id("shortcuts-reset-all")
         .on_click(move |_, _, cx| reset.update(cx, |this, cx| this.reset_all_shortcuts(cx)))
-        .agent_node(Role::Button, "Reset all shortcuts")
-        .agent_disabled(!any);
+        .agent_node(Role::Button, "Reset all shortcuts");
     let mut sections = vec![section(
         "Defaults",
         vec![row(

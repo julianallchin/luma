@@ -15,7 +15,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, PromptLevel, Render, ScrollWheelEvent, Window,
 };
 use gpui_agent::{Config, Harness, Mode};
-use luma_ui::node::{agent_paint_node, AgentNode, Instrument, Role};
+use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::Enabled;
 use serde_json::Value;
 
@@ -31,6 +31,9 @@ struct Counter {
     count: usize,
     /// How many parcels have been dropped on the target.
     dropped: usize,
+    /// Presses the disabled button's container has seen. A disabled button
+    /// drops its own click, not the press around it.
+    around: usize,
     /// Which answer a modal prompt came back with, once one has.
     answered: Option<usize>,
     /// Set on the button that deliberately blocks the app thread, so the
@@ -103,6 +106,7 @@ impl Counter {
         Self {
             count: 0,
             dropped: 0,
+            around: 0,
             answered: None,
             stall,
             focus: cx.focus_handle(),
@@ -188,16 +192,26 @@ impl Render for Counter {
                     .agent_node(Role::Button, "Modal"),
             )
             .child(
-                // Wired like any button, so a click that got through would
-                // count.
-                luma_ui::button("Locked", Enabled::No)
-                    .id("locked")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.count += 1;
-                        cx.notify();
-                    }))
-                    .agent_node(Role::Button, "Locked")
-                    .agent_disabled(true),
+                div()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.around += 1;
+                            cx.notify();
+                        }),
+                    )
+                    // Wired like any button, so a click that got through would
+                    // count.
+                    .child(
+                        luma_ui::button("Locked", Enabled::No)
+                            .id("locked")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.count += 1;
+                                cx.notify();
+                            }))
+                            .agent_node(Role::Button, "Locked"),
+                    )
+                    .agent_node(Role::Card, format!("around {}", self.around)),
             )
             // A virtualized list: gpui only builds the rows in view, so the
             // snapshot names those and no others. That is the case the whole
@@ -449,6 +463,7 @@ fn a_snapshot_names_every_instrumented_control() {
             "dropped 0",
             "Increment",
             "Modal",
+            "around 0",
             "Locked",
             "row 0",
             "row 1",
@@ -1059,13 +1074,15 @@ fn a_disabled_control_says_so() {
 }
 
 #[test]
-fn a_disabled_button_ignores_its_click() {
+fn a_disabled_button_drops_its_click_but_not_the_press_around_it() {
     let mut harness = harness();
-    let count = harness.run(
-        &format!(r#"app.click(app.snapshot().find({{ label: "Locked" }})); {COUNT_LABEL}"#),
+    let labels = harness.run(
+        r#"app.click(app.snapshot().find({ label: "Locked" }));
+           const after = app.snapshot();
+           ["count", "around"].map((word) => after.find((node) => node.label.startsWith(word)).label)"#,
         SCRIPT_TIMEOUT,
     );
-    assert_eq!(count, "count 0");
+    assert_eq!(labels, serde_json::json!(["count 0", "around 1"]));
 }
 
 #[test]
