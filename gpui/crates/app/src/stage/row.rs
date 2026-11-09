@@ -143,13 +143,12 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Some(build) = this.build_mut() {
                     build.committing = false;
-                    build.report = match &report {
-                        Ok(report) => report.warnings.clone(),
-                        Err(error) => vec![error.to_string()],
-                    };
                     if report.as_ref().is_ok_and(|report| report.refusal.is_none()) {
                         build.remember(snapshot);
                     }
+                }
+                if let Err(error) = &report {
+                    this.report_failure("The lights were not placed", error, cx);
                 }
                 // The row's own report carries no venue, so the room is re-read
                 // rather than adopted — one more round trip, and the only verb

@@ -553,9 +553,10 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
         const shot = until("the venue error", (s) =>
-            s.find((n) => n.role === "text" && n.label.includes("fixture catalogue failure")) !== undefined);
+            s.find({ role: "text", label: "Could not load your venues" }) !== undefined);
         ({ loading,
-           error: shot.find((n) => n.role === "text" && n.label.includes("fixture catalogue failure")) !== undefined,
+           // The plain line, and none of the backend's text: that is the log's.
+           error: !shot.nodes.some((n) => (n.label || "").includes("fixture catalogue failure")),
            retry: shot.find({ role: "button", label: "Retry" }) !== undefined,
            empty: shot.find({ role: "text", label: "Create your first venue" }) !== undefined })
     "#),

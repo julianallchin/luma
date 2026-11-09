@@ -45,6 +45,7 @@ mod chat_history;
 mod chrome;
 mod confirm;
 mod export_dialog;
+mod failure;
 mod fixture_library;
 mod fixture_picker;
 mod fullscreen;
@@ -172,7 +173,9 @@ pub struct Luma {
     pub(crate) settings: Option<settings::Settings>,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
-    pub(crate) session_refresh_error: Option<String>,
+    /// The stored session could not be refreshed for a reason other than a
+    /// refusal — the network, most likely. The cause is in the log.
+    pub(crate) session_refresh_failed: bool,
     /// How the window divides between the agent panel and the content. The
     /// panel's width is *derived* from it every frame rather than stored, so
     /// the two can never disagree. Session-lived: a split chosen for one
@@ -210,6 +213,9 @@ pub struct Luma {
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
     pub(crate) sync_status: sync_status::SyncState,
+    /// The status bar's line about something just done that did not land —
+    /// see [`failure`].
+    pub(crate) failure: failure::Failure,
     /// The self-updater and what it last said — see [`update`].
     pub(crate) update: update::AutoUpdate,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
@@ -306,7 +312,7 @@ impl Luma {
             settings: None,
             shell_presented: false,
             restoring_venue: false,
-            session_refresh_error: None,
+            session_refresh_failed: false,
             agent_split: shell::agent_split(),
             scale_factor: 1.0,
             visualizer: None,
@@ -318,6 +324,7 @@ impl Luma {
             sign_in: None,
             refreshing_session: false,
             sync_status: sync_status::SyncState::default(),
+            failure: failure::Failure::default(),
             update: update::AutoUpdate::new(),
             overlay: luma_ui::dialog::Popup::default(),
             account_action: settings::AccountAction::default(),
@@ -441,8 +448,8 @@ impl Render for Luma {
         if self.refreshing_session {
             return signin::splash(window, "Signing in…");
         }
-        if let Some(error) = &self.session_refresh_error {
-            return signin::refresh_error(window, error, cx);
+        if self.session_refresh_failed {
+            return signin::refresh_error(window, cx);
         }
         if self.restoring_venue {
             return signin::splash(window, "Opening your library…");

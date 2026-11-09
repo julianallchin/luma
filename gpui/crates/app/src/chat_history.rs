@@ -72,7 +72,8 @@ pub(crate) struct ChatHistory {
     /// picker's own match rule is a pass-through: what "matches" means here is
     /// [`History::search`], and it runs before the picker sees a row.
     picker: Picker<Row>,
-    error: Option<String>,
+    /// The conversations could not be read. The cause is in the log.
+    load_failed: bool,
     search: Entity<TextInput>,
     search_focus: FocusHandle,
     close_focus: FocusHandle,
@@ -109,7 +110,7 @@ impl ChatHistory {
             generation,
             history: None,
             picker: Picker::new(|_, _| true),
-            error: None,
+            load_failed: false,
             search,
             search_focus,
             close_focus: cx.focus_handle().tab_stop(true),
@@ -123,12 +124,13 @@ impl ChatHistory {
 
     fn finish(&mut self, history: History, cx: &mut Context<Luma>) {
         self.history = Some(history);
-        self.error = None;
+        self.load_failed = false;
         self.rebuild_rows(cx);
     }
 
-    fn fail(&mut self, error: String) {
-        self.error = Some(error);
+    fn fail(&mut self, error: impl std::fmt::Display) {
+        log::warn!("Could not load the chats: {error}");
+        self.load_failed = true;
         self.history = Some(History::default());
     }
 
@@ -228,7 +230,7 @@ impl Luma {
                 }
                 match listed {
                     Ok(history) => state.finish(history, cx),
-                    Err(error) => state.fail(format!("Failed to load chats: {error}")),
+                    Err(error) => state.fail(error),
                 }
                 cx.notify();
             })
@@ -406,12 +408,9 @@ fn list(
     window: &gpui::Window,
     cx: &mut gpui::App,
 ) -> gpui::AnyElement {
-    if let Some(error) = &state.error {
+    if state.load_failed {
         return float::viewport()
-            .child(
-                float::list()
-                    .child(float::error_row(error.clone()).agent_node(Role::Text, error.clone())),
-            )
+            .child(float::list().child(float::empty_row("Could not load the chats")))
             .into_any_element();
     }
     let Some(history) = &state.history else {

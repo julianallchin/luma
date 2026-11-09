@@ -270,13 +270,17 @@ impl Luma {
         ) {
             self.close_overlay(cx);
         }
+        let mut failed = None;
         self.track_command(
             |editor| {
                 if let Err(error) = editor.insert_preset(menu, choice, selection) {
-                    editor.error = Some(error);
+                    failed = Some(error);
                 }
             },
             cx,
         );
+        if let Some(error) = failed {
+            self.report_failure("Could not insert the pattern", error, cx);
+        }
     }
 }

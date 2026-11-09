@@ -35,8 +35,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Animation, AnimationElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba,
-    Styled,
+    Animation, AnimationElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba, Styled,
 };
 
 pub use gpui::AnimationExt;
@@ -615,12 +614,6 @@ mod tests {
         assert_eq!(lerp(208.0, 400.0, 1.0), 400.0);
         assert_eq!(lerp(0.0, 10.0, 0.5), 5.0);
     }
-
-
-
-
-
-
 
     #[test]
     fn mix_endpoints_and_transparent_blend() {

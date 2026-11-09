@@ -95,8 +95,11 @@ pub(super) fn compact(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .overflow_y_scroll()
         .flex()
         .flex_col();
-    if let Some(error) = &state.error {
-        rows = rows.child(luma_ui::plate(error.clone(), ladder::danger()));
+    if state.load_failed {
+        rows = rows.child(luma_ui::plate(
+            "Could not read the fixtures".to_string(),
+            ladder::muted_foreground(),
+        ));
     } else if state.data.is_none() {
         rows = rows.child(float::empty_row("Loading fixtures…"));
     } else if state.rows().is_empty() {
@@ -248,10 +251,7 @@ fn compact_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             div()
                 .px(px(COMPACT_INSET))
                 .py(px(6.0))
-                .text_size(px(11.0))
-                .text_color(ladder::danger())
-                .child(refusal.message.clone())
-                .agent_node(Role::Text, refusal.message.clone()),
+                .child(luma_ui::notice::line(refusal.message.clone())),
         );
     }
     item.agent_node(Role::Row, name)
@@ -260,22 +260,22 @@ fn compact_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
 }
 
 pub(super) fn table(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let body: AnyElement = match (&state.error, state.data.as_ref()) {
-        (Some(error), _) => luma_ui::plate(
-            format!("Failed to load the patch: {error}"),
-            ladder::danger(),
+    let body: AnyElement = match (state.load_failed, state.data.as_ref()) {
+        (true, _) => luma_ui::plate(
+            "Could not read the patch".to_string(),
+            ladder::muted_foreground(),
         )
         .into_any_element(),
-        (None, None) => {
+        (false, None) => {
             luma_ui::plate("Reading the patch…".to_string(), ladder::muted_foreground())
                 .into_any_element()
         }
-        (None, Some(data)) if data.fixtures.is_empty() => luma_ui::plate(
+        (false, Some(data)) if data.fixtures.is_empty() => luma_ui::plate(
             "Nothing is patched in this venue yet.".to_string(),
             ladder::muted_foreground(),
         )
         .into_any_element(),
-        (None, Some(_)) => rows(state, app),
+        (false, Some(_)) => rows(state, app),
     };
     div()
         .id("patch-table")
@@ -453,10 +453,7 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
                 div()
                     .px(px(20.0))
                     .pb(px(8.0))
-                    .text_size(px(11.5))
-                    .text_color(ladder::danger())
-                    .child(refusal.message.clone())
-                    .agent_node(Role::Text, refusal.message.clone()),
+                    .child(luma_ui::notice::line(refusal.message.clone())),
             )
             .into_any_element(),
     }

@@ -149,6 +149,18 @@ impl LibraryError {
         }
     }
 
+    /// What the refusal says to a person: the seam's own prose, without the
+    /// wire name `Display` leads with. For the few screens whose refusals are
+    /// written for the person acting — a wrong sign-in code, a share code that
+    /// matches nothing. A call that never reached a command has no such
+    /// prose, and is a bug.
+    pub fn prose(&self) -> String {
+        match &self.cause {
+            Cause::Command(error) => error.to_string(),
+            Cause::Shape(_) | Cause::Cancelled(_) => "Luma could not finish that".to_owned(),
+        }
+    }
+
     fn at(command: &'static str, cause: Cause) -> Self {
         Self { command, cause }
     }

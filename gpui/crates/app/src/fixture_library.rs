@@ -47,7 +47,6 @@ pub(crate) struct FixtureLibrary {
     /// The last page came back short, so there is nothing further to ask for.
     exhausted: bool,
     loading: bool,
-    error: Option<SharedString>,
     /// Bumped per query; a page landing under an older one is dropped.
     generation: u64,
     _subscription: Subscription,
@@ -82,7 +81,6 @@ impl FixtureLibrary {
             offset: 0,
             exhausted: false,
             loading: true,
-            error: None,
             generation: 0,
             _subscription: subscription,
         }
@@ -116,7 +114,6 @@ impl FixtureLibrary {
         self.offset = 0;
         self.exhausted = false;
         self.loading = true;
-        self.error = None;
         self.generation += 1;
     }
 
@@ -150,9 +147,10 @@ impl FixtureLibrary {
                 self.exhausted = page.len() < PAGE;
                 self.offset += page.len();
                 self.entries.extend(page);
-                self.error = None;
             }
-            Err(error) => self.error = Some(error.to_string().into()),
+            // A page that did not come is a list that stops short; the
+            // dialog has no line of its own for it.
+            Err(error) => log::warn!("could not search the fixture library: {error}"),
         }
     }
 }

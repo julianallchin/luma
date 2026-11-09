@@ -167,8 +167,10 @@ impl<T: Row> Combo<T> {
         self.arrive(MorphTransition::Forward, cx);
     }
 
-    /// Give the level keyed `key` its rows, or the reason it has none. A
-    /// level the reader has left is not filled.
+    /// Give the level keyed `key` its rows, or the reason it has none — in
+    /// plain words for the person reading the list, shown as a
+    /// [`notice`](crate::notice) line. A level the reader has left is not
+    /// filled.
     pub fn fill(&mut self, key: &str, rows: Result<Vec<T>, String>, cx: &mut Context<Self>) {
         let level = &mut self.levels[self.depth];
         if level.key != key {
@@ -296,9 +298,10 @@ impl<T: Row> Combo<T> {
             }
             Listing::Failed(error) => {
                 return list
-                    .child(float::list().child(
-                        float::error_row(error.clone()).agent_node(Role::Text, error.clone()),
-                    ))
+                    .child(
+                        float::list()
+                            .child(div().p(px(8.)).child(crate::notice::line(error.clone()))),
+                    )
                     .into_any_element();
             }
             Listing::Ready if !level.picker.is_empty() => None,

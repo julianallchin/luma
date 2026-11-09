@@ -38,10 +38,7 @@ pub(super) fn import_progress(
             .clone()
             .unwrap_or_else(|| "Nothing was imported".to_string());
         return float::viewport()
-            .child(
-                float::list()
-                    .child(float::error_row(message.clone()).agent_node(Role::Text, message)),
-            )
+            .child(float::list().child(div().p(px(8.0)).child(luma_ui::notice::line(message))))
             .into_any_element();
     }
     let rows: Vec<(String, String, Option<String>, ItemStatus)> = activity
@@ -138,7 +135,7 @@ fn import_status_mark(status: &ItemStatus, label: &str) -> Div {
         ItemStatus::Queued => ("Queued", ladder::muted_foreground().into()),
         ItemStatus::Analyzing { .. } => ("Analyzing", ladder::foreground_alpha(0.7)),
         ItemStatus::Ready => ("Ready", ladder::muted_foreground().into()),
-        ItemStatus::Failed(_) => ("Failed", ladder::danger().into()),
+        ItemStatus::Failed(_) => ("Failed", ladder::muted_foreground().into()),
     };
     let fraction = match status {
         ItemStatus::Analyzing { settled, total, .. } if *total > 0 => {
@@ -162,6 +159,9 @@ fn import_status_mark(status: &ItemStatus, label: &str) -> Div {
                 .text_color(color)
                 .when(*status == ItemStatus::Ready, |el| {
                     el.child(Icon::new(IconName::Check).size(px(11.0)))
+                })
+                .when(matches!(status, ItemStatus::Failed(_)), |el| {
+                    el.child(luma_ui::notice::mark())
                 })
                 .child(word.to_string())
                 .agent_node(Role::Text, format!("Import status: {label}")),
@@ -192,7 +192,7 @@ pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
     }
     let mut item = crate::status_bar::Item::new("track-import-status", activity.summary());
     item.icon = Some(IconName::ArrowDown);
-    item.danger = failed;
+    item.attention = failed;
     item.press = Some(|this, cx| this.show_track_import(cx));
     Some(item)
 }

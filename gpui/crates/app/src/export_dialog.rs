@@ -55,10 +55,16 @@ impl Resolution {
 }
 
 enum Phase {
-    Setup { error: Option<String> },
+    /// Choosing; `refused` says in plain words why the last Start did not.
+    Setup {
+        refused: Option<&'static str>,
+    },
     Running(Export),
-    Done { path: PathBuf },
-    Failed(String),
+    Done {
+        path: PathBuf,
+    },
+    /// The render stopped on its own. The cause is in the log.
+    Failed,
 }
 
 /// What the open score gives an export: see
@@ -157,7 +163,7 @@ impl Luma {
                 output: default_output(&source.track_name),
                 source,
                 resolution: Resolution::Uhd,
-                phase: Phase::Setup { error: None },
+                phase: Phase::Setup { refused: None },
             })));
         cx.notify();
     }
@@ -224,15 +230,16 @@ impl Luma {
         }
         let Some(camera) = camera else {
             dialog.phase = Phase::Setup {
-                error: Some("Open the stage to choose the camera, then try again.".into()),
+                refused: Some("Open the stage to choose the camera, then try again"),
             };
             cx.notify();
             return;
         };
         if let Some(folder) = dialog.output.parent() {
             if let Err(error) = std::fs::create_dir_all(folder) {
+                log::warn!("Could not create {}: {error}", folder.display());
                 dialog.phase = Phase::Setup {
-                    error: Some(format!("Could not create {}: {error}", folder.display())),
+                    refused: Some("Could not make the folder to save the video in"),
                 };
                 cx.notify();
                 return;
@@ -297,7 +304,10 @@ impl Luma {
                     Ok(recorded) => Phase::Done {
                         path: recorded.path,
                     },
-                    Err(error) => Phase::Failed(error.to_string()),
+                    Err(error) => {
+                        log::warn!("The show export stopped: {error}");
+                        Phase::Failed
+                    }
                 };
                 cx.notify();
             })
@@ -310,7 +320,7 @@ impl Luma {
     /// file, as a stopped `luma-cli record` leaves it.
     fn cancel_show_export(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.show_export_mut() {
-            dialog.phase = Phase::Setup { error: None };
+            dialog.phase = Phase::Setup { refused: None };
             cx.notify();
         }
     }
@@ -374,7 +384,7 @@ pub(crate) fn render(state: &ExportDialog, app: &Entity<Luma>) -> AnyElement {
         .child(text("Export show", 15., 0.95))
         .child(text(state.source.track_name.clone(), 13., 0.6));
     let content = match &state.phase {
-        Phase::Setup { error } => setup(state, error.as_deref(), app),
+        Phase::Setup { refused } => setup(state, *refused, app),
         Phase::Running(export) => running(export, app),
         Phase::Done { path } => {
             let reveal = app.clone();
@@ -395,17 +405,13 @@ pub(crate) fn render(state: &ExportDialog, app: &Entity<Luma>) -> AnyElement {
                     button("Close", "show-export-close", true, app, Luma::close_overlay),
                 ]))
         }
-        Phase::Failed(error) => div()
+        Phase::Failed => div()
             .flex()
             .flex_col()
             .gap(px(16.))
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(ladder::danger())
-                    .child(error.clone())
-                    .agent_node(Role::Text, error.clone()),
-            )
+            .child(luma_ui::notice::line(
+                "The export stopped before it finished",
+            ))
             .child(actions(vec![button(
                 "Close",
                 "show-export-close",
@@ -430,7 +436,7 @@ pub(crate) fn render(state: &ExportDialog, app: &Entity<Luma>) -> AnyElement {
     )
 }
 
-fn setup(state: &ExportDialog, error: Option<&str>, app: &Entity<Luma>) -> gpui::Div {
+fn setup(state: &ExportDialog, refused: Option<&'static str>, app: &Entity<Luma>) -> gpui::Div {
     let mut sizes = float::segmented();
     for resolution in Resolution::ALL {
         let label = resolution.label();
@@ -487,8 +493,8 @@ fn setup(state: &ExportDialog, error: Option<&str>, app: &Entity<Luma>) -> gpui:
             clock(f64::from(state.source.duration)),
             FPS
         )))
-        .when_some(error, |el, error| {
-            el.child(float::error_row(error.to_string()))
+        .when_some(refused, |el, refused| {
+            el.child(luma_ui::notice::line(refused))
         })
         .child(actions(vec![
             button(

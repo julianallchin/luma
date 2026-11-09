@@ -76,13 +76,16 @@ pub(crate) fn image_from_rgba(
     Ok(image)
 }
 
+/// The preview box: the frame, a line while it is lit, or — when `failed`
+/// holds the reason it could not be drawn — a plain line saying there is no
+/// preview. The reason is the caller's to log; it is never shown.
 pub(crate) fn image(
     label: &'static str,
     image: Option<&Arc<RenderImage>>,
-    error: Option<&String>,
+    failed: Option<&String>,
 ) -> AnyElement {
-    let body: AnyElement = match (image, error) {
-        (_, Some(error)) => centered(error.clone()),
+    let body: AnyElement = match (image, failed) {
+        (_, Some(_)) => centered("No preview".to_string()),
         (Some(image), None) => {
             let image = Arc::clone(image);
             canvas(

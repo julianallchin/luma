@@ -33,13 +33,7 @@ pub(super) fn footprint(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .child(selector(state, app))
         .child(grid(state, app))
         .children(collision_notes(state))
-        .children(state.strip_refusal.as_ref().map(|message| {
-            div()
-                .text_size(px(11.5))
-                .text_color(ladder::danger())
-                .child(message.clone())
-                .agent_node(Role::Text, message.clone())
-        }))
+        .children(state.strip_refusal.clone().map(luma_ui::notice::line))
         .into_any_element()
 }
 
@@ -231,10 +225,5 @@ fn collision_note(universe: u16, start: u16, end: u16) -> AnyElement {
     } else {
         format!("Collision at {universe}:{start}–{end}")
     };
-    div()
-        .text_size(px(11.0))
-        .text_color(ladder::danger())
-        .child(text.clone())
-        .agent_node(Role::Text, text)
-        .into_any_element()
+    luma_ui::notice::line(text).into_any_element()
 }

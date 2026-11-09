@@ -126,11 +126,14 @@ pub(crate) struct Patch {
     pub(crate) stage: crate::stage::StagePage,
     pub(crate) details_open: bool,
     pub(crate) group_editor: Option<groups::Editor>,
-    pub(crate) group_error: Option<String>,
+    /// Why the group being edited was refused — a name the backend will not
+    /// take — under its field until the next save or cancel.
+    pub(crate) group_refusal: Option<SharedString>,
     pub(crate) group_busy: bool,
     pub(crate) repair_after_save: bool,
     pub(crate) data: Option<PatchData>,
-    pub(crate) error: Option<String>,
+    /// The patch could not be read. The cause is in the log.
+    pub(crate) load_failed: bool,
 
     /// The universe the strip is showing, and its 512 cells.
     pub(crate) strip_universe: u16,
@@ -141,7 +144,7 @@ pub(crate) struct Patch {
 
     /// The DMX devices the drivers can see, or why there are none.
     pub(crate) devices: Vec<OutputDevice>,
-    pub(crate) devices_error: Option<SharedString>,
+    pub(crate) devices_unavailable: Option<SharedString>,
     /// Which universe row has its device menu open.
     pub(crate) bind_menu: Option<i64>,
     /// The one panel hanging off the header, if any. One at a time, because
@@ -178,18 +181,18 @@ impl Patch {
             stage: crate::stage::StagePage::new(cx),
             details_open: false,
             group_editor: None,
-            group_error: None,
+            group_refusal: None,
             group_busy: false,
             repair_after_save: false,
             venue_name,
             data: None,
-            error: None,
+            load_failed: false,
             strip_universe: 1,
             cells: Vec::new(),
             drag: None,
             strip_refusal: None,
             devices: Vec::new(),
-            devices_error: None,
+            devices_unavailable: None,
             bind_menu: None,
             panel: None,
             universe_menu: false,
@@ -434,24 +437,34 @@ impl Patch {
                 self.selected
                     .retain(|id| data.fixtures.iter().any(|f| &f.id == id));
                 self.data = Some(data);
-                self.error = None;
+                self.load_failed = false;
             }
-            Err(error) => self.error = Some(error.to_string()),
+            Err(error) => {
+                log::warn!("could not read the patch of {}: {error}", self.venue_id);
+                self.load_failed = true;
+            }
         }
         self.cells = cells.unwrap_or_default();
         match devices {
             Ok(devices) => {
                 self.devices = devices;
-                self.devices_error = None;
+                self.devices_unavailable = None;
             }
             // A host with no output at all is a state the panel says out loud;
-            // an empty list would read as an empty room.
+            // an empty list would read as an empty room. The seam says that
+            // in its own sentence, as a not-found; anything else is a bug,
+            // logged.
             Err(error) => {
                 self.devices.clear();
-                // The seam's own sentence, without the wire verb it prefixes:
-                // an operator never typed `list_output_devices` and should not
-                // have to read it to learn their machine sends no DMX.
-                self.devices_error = Some(refusal_message(&error).into());
+                self.devices_unavailable = Some(match error.command() {
+                    Some(luma_lib::error::CommandError::NotFound(message)) => {
+                        message.clone().into()
+                    }
+                    _ => {
+                        log::warn!("could not list DMX devices: {error}");
+                        "Could not list the DMX devices.".into()
+                    }
+                });
             }
         }
     }
@@ -658,11 +671,17 @@ impl Luma {
                     // Refused. The row keeps the address it had — nothing was
                     // written — and the sentence saying why sits under it until
                     // the next edit on that row.
+                    let Some(message) = refusal(&error) else {
+                        if let Some(state) = this.patch_mut(&venue) {
+                            state.clear_edit();
+                        }
+                        return this.report_failure("The address was not saved", error, cx);
+                    };
                     if let Some(state) = this.patch_mut(&venue) {
                         state.clear_edit();
                         state.refusal = Some(Refusal {
                             fixture: id,
-                            message: refusal_message(&error).into(),
+                            message,
                         });
                     }
                     this.select_occupant(venue, universe, address, cx);
@@ -738,7 +757,7 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| match result {
                 Ok(_) => this.reload_patch(venue_id, cx),
-                Err(error) if !allow_move && is_addressing_refusal(&error) => {
+                Err(error) if !allow_move && refusal(&error).is_some() => {
                     // The refusal *is* the question: the width does not fit
                     // where it stands, so ask before letting the allocator
                     // move it. Only an addressing refusal asks it — offering
@@ -747,7 +766,7 @@ impl Luma {
                     this.ask(
                         Confirm {
                             title: format!("Move {name} to fit {mode_name}?").into(),
-                            body: refusal_message(&error).into(),
+                            body: refusal(&error).unwrap_or_default(),
                             verb: "Repatch".into(),
                             action: Action::RepatchMode {
                                 venue_id: venue_id.into(),
@@ -758,15 +777,15 @@ impl Luma {
                         cx,
                     );
                 }
-                Err(error) => {
-                    if let Some(state) = this.patch_mut(&venue_id) {
-                        state.refusal = Some(Refusal {
-                            fixture,
-                            message: refusal_message(&error).into(),
-                        });
+                Err(error) => match refusal(&error) {
+                    Some(message) => {
+                        if let Some(state) = this.patch_mut(&venue_id) {
+                            state.refusal = Some(Refusal { fixture, message });
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
+                    None => this.report_failure("The mode was not changed", error, cx),
+                },
             })
             .ok();
         })
@@ -840,14 +859,14 @@ impl Luma {
             let mut failure = None;
             for call in pending {
                 if let Err(error) = call.await {
-                    // The first refusal is the one worth reading; the rest are
-                    // usually the same sentence about the same venue.
-                    failure.get_or_insert_with(|| refusal_message(&error));
+                    // The first failure is the one worth logging; the rest are
+                    // usually the same one about the same venue.
+                    failure.get_or_insert(error);
                 }
             }
             this.update(cx, |this, cx| {
-                if let (Some(failure), Some(state)) = (failure, this.patch_mut(&venue_id)) {
-                    state.say(failure);
+                if let Some(error) = failure {
+                    this.report_failure("Some fixtures were not removed", error, cx);
                 }
                 this.reload_patch(venue_id, cx);
             })
@@ -887,7 +906,7 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let report = pending.await;
             this.update(cx, |this, cx| {
-                let notice: SharedString = match &report {
+                let notice: SharedString = match report {
                     Ok(report) => {
                         let mut line = format!(
                             "Auto patch moved {}, discarded {} overrides",
@@ -899,7 +918,10 @@ impl Luma {
                         }
                         line.into()
                     }
-                    Err(error) => error.to_string().into(),
+                    Err(error) => {
+                        this.report_failure("Auto patch did not run", error, cx);
+                        return this.reload_patch(venue_id, cx);
+                    }
                 };
                 if let Some(state) = this.patch_mut(&venue_id) {
                     state.say(notice);
@@ -1060,8 +1082,11 @@ impl Luma {
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.reload_patch(venue_id, cx),
                 Err(error) => {
+                    let Some(message) = refusal(&error) else {
+                        return this.report_failure("The fixture was not moved", error, cx);
+                    };
                     if let Some(state) = this.patch_mut(&venue_id) {
-                        state.strip_refusal = Some(refusal_message(&error).into());
+                        state.strip_refusal = Some(message);
                     }
                     this.select_occupant(venue_id, universe, start, cx);
                     cx.notify();
@@ -1156,29 +1181,22 @@ impl Luma {
     }
 }
 
-/// What a refused write says, with the command name the seam prefixes stripped.
+/// The backend's sentence for a refusal a person can act on where they are —
+/// an address taken, a footprint off the end of a universe, a group name it
+/// will not take — or `None` for a failure that is not theirs to fix.
 ///
-/// The allocator's sentence already names the universe, the address and the
-/// fixture in the way; a page that prefixed it with the wire verb would be
-/// showing an operator a command name they never typed.
-pub(crate) fn refusal_message(error: &LibraryError) -> String {
-    error
-        .command()
-        .map_or_else(|| error.to_string(), std::string::ToString::to_string)
-}
-
-/// Whether a refusal is about *addressing* — a collision or a footprint off
-/// the end of a universe — rather than about the write failing.
-///
-/// The seam draws that line already: `PatchError`'s two addressing variants
-/// arrive as [`CommandError::Invalid`] and everything else as an internal
-/// failure, so this reads the distinction rather than re-deciding it from the
-/// sentence.
-fn is_addressing_refusal(error: &LibraryError) -> bool {
-    matches!(
-        error.command(),
-        Some(luma_lib::error::CommandError::Invalid(_))
-    )
+/// The seam draws that line already: refusals arrive as
+/// [`CommandError::Invalid`], whose sentence names the universe, the address
+/// and the fixture in the way, and everything else as an internal failure,
+/// which is reported in the status bar and logged. The sentence is the
+/// command's, without the wire verb the seam prefixes.
+pub(crate) fn refusal(error: &LibraryError) -> Option<SharedString> {
+    match error.command() {
+        Some(invalid @ luma_lib::error::CommandError::Invalid(_)) => {
+            Some(invalid.to_string().into())
+        }
+        _ => None,
+    }
 }
 
 /// Wide enough for `512` and its caret with room to spare, narrow enough that
@@ -1319,8 +1337,8 @@ fn subtitle(state: &Patch) -> SharedString {
     if let Some(notice) = &state.notice {
         return notice.message.clone();
     }
-    if let Some(error) = &state.error {
-        return format!("Could not read the patch: {error}").into();
+    if state.load_failed {
+        return "Could not read the patch".into();
     }
     let Some(data) = state.data.as_ref() else {
         return "Reading the patch…".into();

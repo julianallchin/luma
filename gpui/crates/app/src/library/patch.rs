@@ -29,13 +29,16 @@ impl Library {
             let groups = handlers::groups::list_group_tree(&services, venue_id.clone())
                 .await
                 .map_err(refused("list_group_tree"))?;
-            let (missing, missing_error) =
+            let (missing, missing_unchecked) =
                 match handlers::group_references::missing_venue_groups(&services, venue_id.clone())
                     .await
                     .map_err(refused("missing_venue_groups"))
                 {
-                    Ok(missing) => (missing, None),
-                    Err(error) => (Vec::new(), Some(error.to_string())),
+                    Ok(missing) => (missing, false),
+                    Err(error) => {
+                        log::warn!("could not check which groups the scores use: {error}");
+                        (Vec::new(), true)
+                    }
                 };
             let universes = handlers::fixtures::universes_in_use(&services, venue_id)
                 .await
@@ -63,7 +66,7 @@ impl Library {
                 definitions,
                 groups,
                 missing,
-                missing_error,
+                missing_unchecked,
                 universes,
                 routes,
             })
@@ -231,7 +234,9 @@ pub struct Patch {
     /// Saved fixture collections.
     pub groups: Vec<GroupTreeNode>,
     pub missing: Vec<luma_lib::models::groups::MissingGroup>,
-    pub missing_error: Option<String>,
+    /// The check for groups the scores name but the venue lacks did not
+    /// run; the cause is in the log.
+    pub missing_unchecked: bool,
     /// Every universe the venue patches into, ascending.
     pub universes: Vec<u16>,
     /// Where each universe goes. Not per-venue: an output is a fact about

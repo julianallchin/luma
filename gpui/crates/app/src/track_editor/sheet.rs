@@ -1157,14 +1157,13 @@ fn body(sheet: &State, built: &Built, app: &Entity<Luma>, lead: Option<AnyElemen
         .as_ref()
         .filter(|_| built.shape.is_some())
         .map(|error| {
+            // Validation as the graph is edited: why the edit did not take,
+            // under the header it was made in.
             div()
                 .flex_none()
                 .px(px(12.))
                 .py(px(6.))
-                .text_size(px(12.))
-                .text_color(ladder::danger())
-                .child(error.clone())
-                .agent_node(Role::Text, error.clone())
+                .child(luma_ui::notice::line(error.clone()))
         });
     let graph = match (&built.shape, &built.controls, &built.graph) {
         (Some(_), Some(controls), Some(shown)) => Some(graph::editor(sheet, controls, shown, app)),

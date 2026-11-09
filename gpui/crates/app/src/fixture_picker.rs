@@ -110,7 +110,8 @@ struct Preview {
     /// is what keeps a sweep down the list from queueing twenty frames.
     inflight: Option<Selection>,
     attempted: Option<Selection>,
-    /// Why there is no picture. Shown in place of one.
+    /// Why there is no picture, once logged. The box says only that there
+    /// is none.
     error: Option<String>,
 }
 
@@ -255,7 +256,10 @@ impl Luma {
                 }
                 match installed {
                     Ok(sequence) => state.preview.sequence = Some(sequence),
-                    Err(error) => state.preview.error = Some(error),
+                    Err(error) => {
+                        log::warn!("the selection preview could not load the rig: {error}");
+                        state.preview.error = Some(error);
+                    }
                 }
                 cx.notify();
             })
@@ -330,7 +334,10 @@ impl Luma {
                         state.preview.error = None;
                         state.preview.shown = Some((wanted, image));
                     }
-                    Err(error) => state.preview.error = Some(error),
+                    Err(error) => {
+                        log::warn!("the selection preview could not draw: {error}");
+                        state.preview.error = Some(error);
+                    }
                 }
                 cx.notify();
             })

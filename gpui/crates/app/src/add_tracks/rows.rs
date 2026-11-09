@@ -111,9 +111,13 @@ pub(super) fn retry_body(message: String, mode: ContentMode, app: &Entity<Luma>)
     float::viewport()
         .child(
             float::list().child(
-                float::error_row(message.clone())
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
                     .px(px(14.0))
                     .py(px(10.0))
+                    .child(luma_ui::notice::line(message))
                     .child(
                         float::btn("Retry", "add-tracks-retry")
                             .id("add-tracks-retry")
@@ -124,8 +128,7 @@ pub(super) fn retry_body(message: String, mode: ContentMode, app: &Entity<Luma>)
                             })
                             .agent_node(Role::Button, "Retry")
                             .agent_disabled(mode != ContentMode::Interactive),
-                    )
-                    .agent_node(Role::Text, message),
+                    ),
             ),
         )
         .into_any_element()

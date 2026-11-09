@@ -86,7 +86,10 @@ impl Exports {
                 self.png = Some((serial, path.with_extension("png")));
                 self.show(format!("Camera exported to {}", path.display()));
             }
-            Err(error) => self.show(format!("Could not export the camera: {error}")),
+            Err(error) => {
+                log::warn!("could not export the stage camera: {error}");
+                self.show("Could not export the camera".to_owned());
+            }
         }
     }
 
@@ -102,7 +105,8 @@ impl Exports {
         let written = luma_render::image_out::rgba8_from_presented(&bytes, size.0, size.1)
             .and_then(|rgba| luma_render::image_out::write(&path, &rgba, size.0, size.1));
         if let Err(error) = written {
-            self.show(format!("Could not save the frame: {error}"));
+            log::warn!("could not save the exported frame: {error}");
+            self.show("Could not save the frame".to_owned());
         }
     }
 

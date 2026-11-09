@@ -1689,19 +1689,6 @@ const SKELETON_DIM: f32 = 0.35;
 /// …and never reaches full strength either, so it can't be mistaken for content.
 const SKELETON_LIFT: f32 = 0.40;
 
-/// Inline failure inside a picker: what went wrong, in the danger tone, where
-/// the list would have been. The caller appends its own retry affordance.
-pub fn error_row(message: impl Into<SharedString>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(rpx(6.0))
-        .p(rpx(8.0))
-        .text_size(rpx(12.0))
-        .text_color(ladder::danger())
-        .child(message.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

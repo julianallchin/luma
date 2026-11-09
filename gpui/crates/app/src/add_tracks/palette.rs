@@ -221,7 +221,7 @@ fn submit_chip(
     cx: &App,
 ) -> Option<AnyElement> {
     // Choosing a song to play imports nothing.
-    if matches!(state.purpose, Purpose::PlayVirtual(_)) {
+    if matches!(state.purpose, Purpose::PlayVirtual) {
         return None;
     }
     let interactive = mode == ContentMode::Interactive;
@@ -406,14 +406,11 @@ fn import_status(activity: &TrackImportActivity) -> Div {
         line = line.child(div().child(count.clone()).agent_node(Role::Text, count));
     }
     if let Some(error) = &activity.error {
-        let label = format!("Track import error: {error}");
         line = line.child(
             div()
                 .max_w(px(200.0))
                 .truncate()
-                .text_color(ladder::danger())
-                .child(label.clone())
-                .agent_node(Role::Text, label),
+                .child(luma_ui::notice::line(error.clone())),
         );
     }
     line

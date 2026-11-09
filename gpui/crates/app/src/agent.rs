@@ -273,6 +273,12 @@ impl Luma {
         self.refresh_agent_bodies(cx);
         self.reload_stage(cx);
         self.refresh_score_listing(cx);
+        if tables
+            .iter()
+            .any(|table| table == "venues" || table == "venue_members")
+        {
+            self.check_open_venue(cx);
+        }
         // The venue list, when it is the thing on screen: a venue shared with
         // this account arrives as rows and nothing else would say so. In
         // place, so a download never throws away a half-typed code or the

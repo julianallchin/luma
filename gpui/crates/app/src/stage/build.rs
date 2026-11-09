@@ -49,8 +49,6 @@ pub(crate) struct Build {
     pub(super) undo: Vec<Snapshot>,
     /// What undo stepped back over, for redo. Cleared by any new verb.
     pub(super) redo: Vec<Snapshot>,
-    /// The last verb's warnings, and its refusal if it had one.
-    pub(crate) report: Vec<String>,
     /// A verb that has not come back yet. Placement is idempotent per gesture,
     /// so a second release while one is in flight is dropped rather than
     /// queued.
@@ -106,7 +104,6 @@ impl Build {
             patch: rig.fixtures.clone(),
             undo: Vec::new(),
             redo: Vec::new(),
-            report: Vec::new(),
             committing: false,
             param_scrub: None,
         })
@@ -752,7 +749,6 @@ pub(super) mod tests {
             selected: None,
             distribution: Vec::new(),
             distribution_layout: luma_scene::distribute::Layout::Even,
-            report: Vec::new(),
             committing: false,
             param_scrub: None,
             patch: Vec::new(),

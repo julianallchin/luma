@@ -15,6 +15,8 @@ pub(crate) struct TrackImportActivity {
     import_id: Option<String>,
     pub(super) progress: Option<TrackImportProgress>,
     pub(super) active: bool,
+    /// What went wrong with the import as a whole, in plain words. The
+    /// causes are in the log.
     pub(super) error: Option<String>,
     /// The venue the dialog was adding to when the import started. Every
     /// imported song joins it, which is what the person asked for by
@@ -47,7 +49,7 @@ pub(super) struct ItemAnalysis {
     /// Started and not yet settled, in the order they started.
     running: Vec<String>,
     settled: Vec<String>,
-    /// `stage: reason`, one per failed stage.
+    /// The stages that failed, by their wire names. Why is in the log.
     failures: Vec<String>,
     /// The import has ended: whatever has not settled now never will.
     ended: bool,
@@ -78,7 +80,13 @@ impl ItemAnalysis {
         let all_settled = total > 0 && self.settled.len() >= total;
         if all_settled || self.ended {
             if !self.failures.is_empty() {
-                return ItemStatus::Failed(self.failures.join("; "));
+                let stages = self
+                    .failures
+                    .iter()
+                    .map(|stage| stage_label(stage))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return ItemStatus::Failed(format!("Could not analyze {stages}"));
             }
             if total > 0 && !all_settled {
                 return ItemStatus::Failed("Analysis stopped before it finished".to_string());
@@ -113,8 +121,8 @@ impl ItemAnalysis {
                 }
                 self.settled.push(stage.clone());
                 if let StageOutcome::Failed(error) = outcome {
-                    self.failures
-                        .push(format!("{}: {error}", stage_label(stage)));
+                    log::warn!("Analysis of {stage} failed: {error}");
+                    self.failures.push(stage.clone());
                 }
             }
         }
@@ -297,8 +305,9 @@ impl Luma {
                     this.update(cx, |this, cx| {
                         if let Some(activity) = &mut this.track_import {
                             if activity.generation == generation {
+                                log::warn!("The import did not start: {error}");
                                 activity.active = false;
-                                activity.error = Some(error.to_string());
+                                activity.error = Some("Could not import the songs".to_string());
                             }
                             cx.notify();
                         }
@@ -313,13 +322,14 @@ impl Luma {
                 if let Some(activity) = &mut this.track_import {
                     if activity.generation == generation {
                         activity.import_id = Some(import_id.clone());
+                        for failure in &result.failures {
+                            log::warn!("A song was not imported: {}", failure.message);
+                        }
                         activity.error = (!result.failures.is_empty()).then(|| {
-                            result
-                                .failures
-                                .iter()
-                                .map(|failure| failure.message.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n")
+                            format!(
+                                "{} could not be imported",
+                                plural(result.failures.len(), "song")
+                            )
                         });
                         activity.items = result
                             .tracks
@@ -364,7 +374,9 @@ impl Luma {
                             activity.progress = Some(event.clone());
                             activity.active = !complete;
                             if let Some(error) = &event.error {
-                                activity.error = Some(error.clone());
+                                log::warn!("The import reported: {error}");
+                                activity.error =
+                                    Some("Some songs could not be imported".to_string());
                             }
                         }
                     }
@@ -425,13 +437,16 @@ impl Luma {
                     });
                 }
                 if !errors.is_empty() {
-                    if let Some(activity) = &mut this.track_import {
-                        let message = format!("Could not add to venue: {}", errors.join("\n"));
-                        activity.error = Some(match activity.error.take() {
-                            Some(error) => format!("{error}\n{message}"),
-                            None => message,
-                        });
+                    for error in &errors {
+                        log::warn!("An imported song did not join the venue: {error}");
                     }
+                    this.report(
+                        format!(
+                            "Could not add {} to this venue",
+                            plural(errors.len(), "imported song")
+                        ),
+                        cx,
+                    );
                 }
                 cx.notify();
             })
@@ -634,13 +649,13 @@ mod tests {
         }
         assert_eq!(
             status(&activity, 0),
-            ItemStatus::Failed("stems: boom".into())
+            ItemStatus::Failed("Could not analyze stems".into())
         );
         // A stage settles once: a repeat cannot change the song's story.
         activity.apply(&settled("a", "stems", StageOutcome::Done));
         assert_eq!(
             status(&activity, 0),
-            ItemStatus::Failed("stems: boom".into())
+            ItemStatus::Failed("Could not analyze stems".into())
         );
     }
 

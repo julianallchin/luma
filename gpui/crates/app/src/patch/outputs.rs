@@ -230,7 +230,7 @@ fn device_list(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
     }
     if choices.is_empty() {
         let message = state
-            .devices_error
+            .devices_unavailable
             .clone()
             .unwrap_or_else(|| "No other device port to send it to.".into());
         return div()
@@ -293,7 +293,7 @@ fn choice(
 fn found(state: &Patch) -> AnyElement {
     // Broadcast is listed whenever Art-Net is running, so it is not a find.
     let real = state.devices.iter().filter(|d| !d.any_port).count();
-    let message: SharedString = match (&state.devices_error, state.devices.len(), real) {
+    let message: SharedString = match (&state.devices_unavailable, state.devices.len(), real) {
         // The seam's own sentence, unprefixed: it already says the host has
         // no output, and a second clause in front of it would say it twice.
         (Some(error), _, _) => error.clone(),

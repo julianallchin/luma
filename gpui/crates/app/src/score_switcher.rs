@@ -30,7 +30,8 @@ use crate::Luma;
 /// song's scores in every venue, once they are read.
 pub(crate) struct ScoreSwitcher {
     track_id: String,
-    rows: Option<Result<Rc<[ScoreRow]>, String>>,
+    /// The song's scores; `Err` when they could not be read, the cause logged.
+    rows: Option<Result<Rc<[ScoreRow]>, ()>>,
 }
 
 /// How wide the menu opens.
@@ -78,7 +79,9 @@ impl Luma {
                             .map(|summaries| {
                                 crate::tracks::scores::rows(&summaries, user.as_deref())
                             })
-                            .map_err(|error| error.to_string()),
+                            .map_err(|error| {
+                                log::warn!("Could not load the song's scores: {error}");
+                            }),
                     );
                     cx.notify();
                 }
@@ -186,19 +189,20 @@ impl Luma {
     ) {
         let venues = self.library.venues();
         cx.spawn(async move |this, cx| {
-            let venue = match venues.await {
-                Ok(venues) => venues
-                    .into_iter()
-                    .find(|venue| venue.id == venue_id.as_ref()),
-                Err(error) => {
-                    eprintln!("[luma] venue switch: the venues could not be read: {error}");
-                    None
-                }
-            };
-            let Some(venue) = venue else {
-                return;
-            };
+            let venues = venues.await;
             this.update(cx, |this, cx| {
+                let venue = match venues {
+                    Ok(venues) => venues
+                        .into_iter()
+                        .find(|venue| venue.id == venue_id.as_ref()),
+                    Err(error) => {
+                        this.report_failure("Could not switch to that venue", error, cx);
+                        return;
+                    }
+                };
+                let Some(venue) = venue else {
+                    return;
+                };
                 this.open_venue(venue, cx);
                 if let Some(songs) = &mut this.songs {
                     songs.arrival = Some((track_id.to_string(), score));
@@ -334,7 +338,7 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<Any
     let mut card = float::popover_card().w(px(MENU_WIDTH)).child(songs);
     match &menu.rows {
         None => card = card.child(float::empty_row("Loading scores…")),
-        Some(Err(error)) => card = card.child(float::error_row(error.clone())),
+        Some(Err(())) => card = card.child(float::empty_row("Could not load the scores")),
         Some(Ok(rows)) => {
             let venue_name = app
                 .songs

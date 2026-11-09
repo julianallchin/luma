@@ -168,6 +168,13 @@ venue between devices. Only the three hardware-port columns above are local.
   Cloud endpoint and the Supabase access token. `upload_data` posts each CRUD
   transaction to Supabase PostgREST (`POST` with `Prefer:
   resolution=merge-duplicates` for PUT, `PATCH` by id, `DELETE` by id).
+  A row-level-security policy refuses an upsert with a 403 but filters an
+  update or delete to no row, which PostgREST answers with a 204. So `PATCH`
+  and `DELETE` send `Prefer: count=exact`, and zero rows changed is a refusal
+  (a delete of a row the user can no longer see is already done). Every
+  refusal is recorded in the local `sync_rejections` table and taken off the
+  queue; the next download puts the server's row back. The status bar counts
+  the undismissed ones as `N not saved`.
 - `backend/src/sync/media.rs`, `files.rs`, `progress.rs`: media transfer, on
   its own clock, independent of record sync. Bytes go through Supabase
   Storage; only the resulting `storage_path` is a row. It names the bucket

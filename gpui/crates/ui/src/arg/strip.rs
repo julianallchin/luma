@@ -966,12 +966,9 @@ impl Render for CurveStrip {
                         "Double-click adds a point · right-click removes"
                     }),
             )
-            .children(self.error.as_ref().map(|error| {
-                div()
-                    .text_size(rpx(11.))
-                    .text_color(ladder::foreground_alpha(0.6))
-                    .child(error.clone())
-            }))
+            // An edit the curve refused, said where the hand is: the one
+            // inline notice this strip has.
+            .children(self.error.clone().map(crate::notice::line))
     }
 }
 

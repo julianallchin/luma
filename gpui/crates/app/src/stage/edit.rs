@@ -44,21 +44,18 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Some(build) = this.build_mut() {
                     build.committing = false;
-                    match &result {
-                        Ok(report) => {
-                            // Warnings only: a refusal is the `Err` arm below
-                            // and cannot arrive here at all.
-                            build.report = report.warnings.clone();
-                            if let Some(snapshot) = snapshot {
-                                build.remember(snapshot);
-                            }
-                            // What the verb touched is what the inspector
-                            // should be about: the piece just placed is the
-                            // one about to be trimmed or flipped.
-                            build.select(Some(report.node_id.clone()));
+                    if let Ok(report) = &result {
+                        if let Some(snapshot) = snapshot {
+                            build.remember(snapshot);
                         }
-                        Err(error) => build.report = vec![error.to_string()],
+                        // What the verb touched is what the inspector
+                        // should be about: the piece just placed is the
+                        // one about to be trimmed or flipped.
+                        build.select(Some(report.node_id.clone()));
                     }
+                }
+                if let Err(error) = result {
+                    this.report_failure("The stage was not changed", error, cx);
                 }
                 this.reload_stage(cx);
                 cx.notify();
@@ -137,7 +134,6 @@ impl Luma {
                         }
                         if let Some(build) = this.build_mut() {
                             build.committing = false;
-                            build.report = report.warnings.clone();
                             build.select(ids.last().cloned());
                             build.distribution = ids;
                             build.remember(snapshot);
@@ -146,8 +142,8 @@ impl Luma {
                     Err(error) => {
                         if let Some(build) = this.build_mut() {
                             build.committing = false;
-                            build.report = vec![error.to_string()];
                         }
+                        this.report_failure("The lights were not spread out", error, cx);
                     }
                 }
                 this.reload_stage(cx);
@@ -284,16 +280,16 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let result = write.await;
             let Ok(reread) = this.update(cx, |this, cx| {
-                if let Some(build) = this.build_mut() {
-                    match &result {
-                        Ok(report) => {
-                            build.report = report.warnings.clone();
-                            if let Some(scrub) = build.param_scrub.as_mut() {
-                                scrub.wrote = true;
-                            }
+                match &result {
+                    Ok(_) => {
+                        if let Some(scrub) = this
+                            .build_mut()
+                            .and_then(|build| build.param_scrub.as_mut())
+                        {
+                            scrub.wrote = true;
                         }
-                        Err(error) => build.report = vec![error.to_string()],
                     }
+                    Err(error) => this.report_failure("The change was not saved", error, cx),
                 }
                 cx.notify();
                 this.library.venue_rig(&venue)
@@ -404,10 +400,20 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Some(build) = this.build_mut() {
                     build.committing = false;
-                    if let Err(error) = &result {
-                        build.report = vec![error.to_string()];
+                    if result.is_err() {
                         build.forget_history();
                     }
+                }
+                if let Err(error) = result {
+                    this.report_failure(
+                        if forward {
+                            "Could not redo that"
+                        } else {
+                            "Could not undo that"
+                        },
+                        error,
+                        cx,
+                    );
                 }
                 this.reload_stage(cx);
                 cx.notify();
@@ -496,11 +502,13 @@ impl Luma {
         let Some(node) = jobs.pop() else {
             if let Some(build) = self.build_mut() {
                 build.committing = false;
-                build.report = errors.clone();
                 build.select(None);
                 // A partial batch still changed the graph; one snapshot
                 // restores all of it.
                 build.remember(snapshot);
+            }
+            if !errors.is_empty() {
+                self.report_failure("Some pieces were not removed", errors.join("; "), cx);
             }
             self.reload_stage(cx);
             cx.notify();

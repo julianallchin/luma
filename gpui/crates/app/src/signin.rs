@@ -208,7 +208,7 @@ impl Luma {
         if self.refreshing_session {
             return;
         }
-        self.session_refresh_error = None;
+        self.session_refresh_failed = false;
         self.refreshing_session = true;
         let pending = self.library.refresh_session();
         cx.notify();
@@ -220,8 +220,8 @@ impl Luma {
                     Ok(Some(_)) => this.restore_venue(cx),
                     Ok(None) => this.show_sign_in(true, cx),
                     Err(error) => {
-                        eprintln!("[luma] the stored session could not be refreshed: {error}");
-                        this.session_refresh_error = Some(error.to_string());
+                        log::warn!("the stored session could not be refreshed: {error}");
+                        this.session_refresh_failed = true;
                     }
                 }
                 cx.notify();
@@ -313,7 +313,7 @@ impl Luma {
                             state.route = Route::Code;
                             state.focus_pending = Some(Route::Code);
                         }
-                        Err(error) => state.error = Some(error.to_string()),
+                        Err(error) => state.error = Some(error.prose()),
                     }
                 });
                 if let Some(state) = this.sign_in.as_ref() {
@@ -367,7 +367,7 @@ impl Luma {
                     }
                     Err(error) => this.with_current_sign_in(generation, cx, |state| {
                         state.busy = false;
-                        state.error = Some(error.to_string());
+                        state.error = Some(error.prose());
                         state.focus_pending = Some(Route::Code);
                     }),
                 }
@@ -436,7 +436,7 @@ pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>
 /// the last venue being reopened ([`Luma::restore_venue`]): the same ground
 /// and chrome as the gate, the mark, and one quiet `line`. Not a place — the
 /// moment before one.
-pub(crate) fn refresh_error(window: &Window, error: &str, cx: &Context<Luma>) -> AnyElement {
+pub(crate) fn refresh_error(window: &Window, cx: &Context<Luma>) -> AnyElement {
     ground(
         window,
         div()
@@ -452,13 +452,6 @@ pub(crate) fn refresh_error(window: &Window, error: &str, cx: &Context<Luma>) ->
                     .agent_node(Role::Text, "Could not reconnect to your account"),
             )
             .child(
-                div()
-                    .max_w(px(480.0))
-                    .text_size(px(13.0))
-                    .text_color(ladder::muted_foreground())
-                    .child(error.to_string()),
-            )
-            .child(
                 luma_ui::button("Retry", Enabled::Yes)
                     .id("retry-session")
                     .on_click(cx.listener(|this, _, _, cx| this.refresh_session(cx)))
@@ -468,7 +461,7 @@ pub(crate) fn refresh_error(window: &Window, error: &str, cx: &Context<Luma>) ->
                 luma_ui::button("Sign in again", Enabled::Yes)
                     .id("sign-in-again")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.session_refresh_error = None;
+                        this.session_refresh_failed = false;
                         this.show_sign_in(false, cx);
                     }))
                     .agent_node(Role::Button, "Sign in again"),
@@ -647,12 +640,10 @@ fn field(state: &SignIn, window: &Window) -> Div {
             column.child(
                 div()
                     .w(px(pill::WIDTH))
+                    .flex()
+                    .justify_center()
                     .truncate()
-                    .text_center()
-                    .text_size(px(12.5))
-                    .text_color(ladder::danger())
-                    .child(error.clone())
-                    .agent_node(Role::Text, error),
+                    .child(luma_ui::notice::line(error)),
             )
         })
 }

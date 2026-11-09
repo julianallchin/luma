@@ -17,19 +17,16 @@ impl Luma {
     /// A library row picked, by click or Enter: what that means depends on
     /// why the dialog is open.
     pub(super) fn pick_library_track(&mut self, track_id: String, cx: &mut Context<Self>) {
-        let play = match self.overlay.as_open() {
-            Some(crate::shell::Overlay::AddTracks(state)) => match &state.purpose {
-                Purpose::PlayVirtual(target) => Some(target.clone()),
-                Purpose::AddToVenue => None,
-            },
-            _ => None,
-        };
-        match play {
-            Some(target) => {
-                self.dismiss_overlay(cx);
-                self.play_virtual(&target, &track_id, cx);
-            }
-            None => self.add_track_to_venue(track_id, cx),
+        let play = matches!(
+            self.overlay.as_open(),
+            Some(crate::shell::Overlay::AddTracks(state))
+                if matches!(state.purpose, Purpose::PlayVirtual)
+        );
+        if play {
+            self.dismiss_overlay(cx);
+            self.play_virtual(&track_id, cx);
+        } else {
+            self.add_track_to_venue(track_id, cx);
         }
     }
 
@@ -41,7 +38,7 @@ impl Luma {
                     .checked_add(1)
                     .expect("track browser generation exhausted");
                 state.browser_loaded = false;
-                state.browser_error = None;
+                state.browser_failed = false;
                 (state.instance_id, state.browser_generation)
             }
             _ => return,
@@ -62,7 +59,10 @@ impl Luma {
                         state.browser_rows = rows.into();
                         state.refilter_browser();
                     }
-                    Err(error) => state.browser_error = Some(error.to_string()),
+                    Err(error) => {
+                        log::warn!("Could not load the library's songs: {error}");
+                        state.browser_failed = true;
+                    }
                 }
                 cx.notify();
             })
@@ -129,12 +129,12 @@ impl Luma {
             }
             Err(error) => {
                 this.update(cx, |this, cx| {
-                    if let Some(crate::shell::Overlay::AddTracks(state)) = this.overlay.open_mut() {
-                        if state.instance_id != instance_id {
-                            return;
-                        }
-                        state.browser_error = Some(error.to_string());
-                        cx.notify();
+                    if matches!(
+                        this.overlay.as_open(),
+                        Some(crate::shell::Overlay::AddTracks(state))
+                            if state.instance_id == instance_id
+                    ) {
+                        this.report_failure("Could not add the song to this venue", error, cx);
                     }
                 })
                 .ok();
@@ -151,8 +151,8 @@ pub(super) fn track_browser(
     cx: &mut gpui::App,
 ) -> AnyElement {
     let rows = Rc::clone(&state.browser_shown);
-    if let Some(error) = &state.browser_error {
-        return retry_body(format!("Failed to load tracks: {error}"), mode, app);
+    if state.browser_failed {
+        return retry_body("Could not load the songs".to_string(), mode, app);
     }
     if !state.browser_loaded {
         return loading_body(

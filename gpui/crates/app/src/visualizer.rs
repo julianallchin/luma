@@ -239,21 +239,15 @@ pub(crate) struct Visualizer {
     selection_card_side: Option<(Vec<EditorObject>, CardSide)>,
     /// Where the card was last placed, for the frames it is held still.
     selection_card_last: Option<Point<Pixels>>,
-    environment_error: Option<String>,
     environment_saving: bool,
     environment_edited: bool,
     environment_pending: Rc<RefCell<Option<VenueEnvironment>>>,
     /// The same four, for the room's haze — venue truth on the same row, so it
     /// needs the same guard. A dragged density emits a value per pointer move,
     /// and one IPC write per frame is not a thing to do to a database.
-    haze_error: Option<String>,
     haze_saving: bool,
     haze_edited: bool,
     haze_pending: Rc<RefCell<Option<luma_scene::environment::VenueHaze>>>,
-    /// Whichever of the three local device settings last failed to save. One
-    /// field for all three because they are one tier and one message: the stage
-    /// already shows the value, so the only news is that the database does not.
-    view_setting_error: Option<String>,
     /// And a coalescing pair for the scrubbed device settings — the render
     /// percent and the camera look. They are device settings rather than venue
     /// data but are scrubbed by the same kind of control, and

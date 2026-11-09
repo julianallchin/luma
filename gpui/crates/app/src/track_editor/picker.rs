@@ -119,7 +119,10 @@ pub(super) fn open(app: &mut Luma, cx: &mut Context<Luma>) {
                 }
                 match result {
                     Ok(scene) => state.sequence = Some(scene),
-                    Err(error) => state.scene_error = Some(error),
+                    Err(error) => {
+                        log::warn!("Could not light the pattern preview's room: {error}");
+                        state.scene_error = Some(error);
+                    }
                 }
                 cx.notify();
             }
@@ -288,6 +291,7 @@ fn fetch(app: &mut Luma, menu: InsertMenu, choice: InsertChoice, cx: &mut Contex
                         state.fetched.insert(id, frames);
                     }
                     Err(error) => {
+                        log::warn!("Could not preview pattern {id}: {error}");
                         if shown {
                             state.error = Some(error.clone());
                         }
@@ -366,6 +370,7 @@ fn draw(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) {
                         }
                     }
                     Err(error) => {
+                        log::warn!("Could not draw the preview of pattern {id}: {error}");
                         if state.shown.as_ref() == Some(&id) {
                             state.error = Some(error);
                         }
