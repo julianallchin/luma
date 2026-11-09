@@ -1218,7 +1218,8 @@ pub(crate) fn venue_trigger(app: &Luma, leaf: bool, entity: &Entity<Luma>, cx: &
         |songs| songs.venue_name().to_string(),
     );
     let toggled = entity.clone();
-    float::crumb(app.venue_menu.is_open(), "venue-menu-trigger")
+    let open = app.venue_menu.is_open();
+    float::nav_row(RowState::of(open, false), "venue-menu-trigger")
         .id("venue-menu-trigger")
         .relative()
         .text_size(px(13.))

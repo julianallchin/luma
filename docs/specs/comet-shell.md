@@ -37,7 +37,7 @@ another mode is up, and each venue keeps its modes while another venue is up.
 | Region | What it is | Code |
 |---|---|---|
 | Agent panel | the front body's chat; 300 min, a quarter of the window by default, drag-resizable, ⌘B hides it; stands aside while the song list is up | `shell::agent_panel`, `agent_split`, `Luma::agent_wanted` |
-| Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, the `venue / song` trail, the mode switch | `shell::title_bar`, `chrome` |
+| Title bar | 44 high, on the trim across the whole window: traffic lights, agent toggle, the `venue / song / score` trail, the mode switch | `shell::title_bar`, `chrome` |
 | Page | the inset card on the trim, rounded `PAGE_RADIUS` (12), `WINDOW_TRIM` (8) from the window's sides; holds the agent panel and the content | `shell::regions`, `glass::window_trim` |
 | Stage | the venue, lit by the mode's body; collapsible, height-resizable. In Live a deck panel sits at its left, drag-resizable, its width kept per device (`deck-panel-width`) | `shell::stage_body`, `perform::deck_panel` |
 | Body | the mode's body, or the song list in Arrange | `shell::content` |
@@ -94,10 +94,10 @@ songs (add and import). Under it, three columns left to right, with hairlines
    the folders with checkboxes to file it in.
 3. **Scores** of the selected song, filling the rest: this venue's under its
    name, "New score", then each other venue's under that venue's name — the
-   song crumb's menu's order. The open score wears a check. A score
+   score crumb's menu's order. The open score wears a check. A score
    here opens on the spot and closes the page a double-click interval later
    (so a double-click on its name renames it instead); another venue's asks
-   "Switch to <venue>?" first, the same question and path as the song crumb.
+   "Switch to <venue>?" first, the same question and path as the score crumb.
    This venue's scores take a right-click Delete.
 
 Selecting in one column fills the next, and choosing another place empties
@@ -116,7 +116,7 @@ grip's 5px reach over the hairline; double-click resets), and the scores
 keep at least 260. A search lists matches from every place, with All songs
 selected, and choosing a place ends it.
 
-⌘P and the song crumb's menu open the page; ⌘P and Escape close it.
+⌘P and the song crumb open the page; ⌘P and Escape close it.
 The list takes the window's width: the agent panel stands aside while it is
 up and comes back when it closes, unless it had been hidden by hand; ⌘B over
 the list shows it for that visit only.
@@ -150,21 +150,22 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 
 ## 6. Chrome
 
-- **The trail** (title bar, leading, after the agent toggle): `venue / song`,
-  each crumb its own button with no chevron, the `/` muted text between them.
-  A crumb takes the shared hover wash and underlines its label
-  (`luma_ui::float::crumb`). The song crumb is Arrange's open score; with
-  none, and in Rig and Live, the venue stands alone. Settings puts Back in
-  the trail's place.
+- **The trail** (title bar, leading, after the agent toggle):
+  `venue / song / score`, each crumb its own button with no chevron, the `/`
+  muted text between them. A crumb takes the shared hover wash (`nav_row`).
+  The song and score crumbs are Arrange's open score; with none, and in Rig
+  and Live, the venue stands alone. Settings puts Back in the trail's place.
 - **Venue menu** (the venue crumb). The menu holds the venues with their status dots and a
   "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
   Sign out / Sign in. The venue dialog is still what a window with no venue
   shows (browse, create, join).
-- **Song / score menu** (the song crumb; `score_switcher`): the song's title,
-  and a muted `· #n` when the song has more than one score in this venue. Its
-  menu holds "Song list" (⌘P),
-  then every score of the song — this venue's, then each other venue's under
-  the venue's name — the open one checked. A score here opens on the spot;
+- **Song crumb** (`score_switcher`): the song's title. A press opens the song
+  list with the song selected and its scores listed — in the place the list
+  was on when that place lists it, in All songs otherwise.
+- **Score menu** (the score crumb; `score_switcher`): the score's name, or its
+  `#n` when it has none. Its menu holds every score of the song — this
+  venue's, then each other venue's under the venue's name — the open one
+  checked. A score here opens on the spot;
   one in another venue asks "Switch to <venue>?" (`confirm`), and on Switch
   the window switches venue and opens that score in Arrange, in place of the
   score saved for that venue.
@@ -199,7 +200,7 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 ## 7. Escape
 
 One ladder (`shell` `dismiss_overlay`), first match wins: the venue menu, the
-song crumb's menu, score and song menus, subagents, the settings page
+score crumb's menu, score and song menus, subagents, the settings page
 (an open select first, then a search), visualizer settings, patch rungs, the stage's
 own state, an open dialog, then the song list, a sheet menu, the clip graph,
 the pattern sheet, and finally the selection.

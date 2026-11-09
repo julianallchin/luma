@@ -1,12 +1,13 @@
-//! The title bar's song crumb in Arrange — `venue / song` — and the menu hung
-//! off it.
+//! The title bar's song and score crumbs in Arrange — `venue / song / score`
+//! — and the score crumb's menu.
 //!
-//! The menu goes two places. Up, to the song list. Across, to any other score
-//! of the same song — this venue's, and the ones in other venues, since "the
-//! same song, scored in the warehouse too" is what the operator cannot
-//! otherwise find from a timeline. A score in this venue opens on the spot;
-//! one in another venue asks first, because taking it means the whole window
-//! switching venue (`docs/specs/comet-shell.md` §6).
+//! The song crumb goes up, to the song list with the song selected. The score
+//! crumb's menu goes across, to any other score of the same song — this
+//! venue's, and the ones in other venues, since "the same song, scored in the
+//! warehouse too" is what the operator cannot otherwise find from a timeline.
+//! A score in this venue opens on the spot; one in another venue asks first,
+//! because taking it means the whole window switching venue
+//! (`docs/specs/comet-shell.md` §6).
 //!
 //! The listing is the song list's own ([`Library::scores_across_venues`],
 //! resolved by [`crate::tracks::scores::rows`]), read fresh on every opening
@@ -89,14 +90,6 @@ impl Luma {
         self.score_switcher.begin_close(cx);
         cx.notify();
         true
-    }
-
-    /// The menu's "Song list" row: the page of every song, over Arrange.
-    fn score_switcher_to_songs(&mut self, cx: &mut Context<Self>) {
-        self.close_score_switcher(cx);
-        if !self.song_list_shown() {
-            self.toggle_song_list(cx);
-        }
     }
 
     /// A score chosen from the menu: opened here when it is this venue's,
@@ -204,61 +197,67 @@ impl Luma {
     }
 }
 
-/// The song crumb, after the venue's on the title bar's trail, with the menu
-/// hung off it: the open score's song, and its `#n` — quietly — when the song
-/// has more than one score here. `None` unless Arrange has a score open.
-pub(crate) fn crumb(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
+/// The song and score crumbs that follow the venue's on the title bar's
+/// trail: the open song, which reveals it in the song list, and the open
+/// score by name, with its menu hung off it. `None` unless Arrange has a
+/// score open.
+pub(crate) fn crumbs(app: &Luma, entity: &Entity<Luma>) -> Option<(AnyElement, AnyElement)> {
     if app.workspace.mode() != Mode::Arrange {
         return None;
     }
     let Some(Body::TrackEditor(editor)) = app.workspace.active_body() else {
         return None;
     };
-    let several = app
-        .songs
-        .as_ref()
-        .and_then(|songs| songs.find(editor.track_id()))
-        .is_some_and(|track| track.venue_score_count > 1);
     let title = editor.track_name().to_string();
-    let score = editor.score_label();
+    let track_id = editor.track_id().to_string();
+    let revealed = entity.clone();
+    let song = float::nav_row(RowState::Rest, "song-crumb")
+        .id("song-crumb")
+        .flex_shrink(1.)
+        .min_w_0()
+        .max_w(px(320.))
+        .text_size(px(13.))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| revealed.update(cx, |this, cx| this.reveal_song(&track_id, cx)))
+        .child(crumb_label(title.clone(), 0.6))
+        .agent_node(Role::Button, title.clone())
+        .into_any_element();
     let pressed = entity.clone();
-    Some(
-        float::crumb(app.score_switcher.is_open(), "score-switcher")
-            .id("score-switcher")
-            .relative()
-            .flex_shrink(1.)
-            .min_w_0()
-            .max_w(px(420.))
-            .gap(px(6.))
-            .text_size(px(13.))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_score_switcher(cx)))
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(glass::ink(0.95))
-                    .child(title.clone()),
-            )
-            .when(several, |crumb| {
-                crumb.child(
-                    div()
-                        .flex_none()
-                        .text_color(glass::ink(glass::TEXT_TERTIARY))
-                        .child(format!("· {score}"))
-                        .agent_node(Role::Text, score.clone()),
-                )
-            })
-            .children(menu(app, editor.target(), entity, cx))
-            .agent_node(Role::Button, format!("{title} · {score}"))
-            .into_any_element(),
+    let score = float::nav_row(
+        RowState::of(app.score_switcher.is_open(), false),
+        "score-switcher",
     )
+    .id("score-switcher")
+    .relative()
+    .flex_shrink(1.)
+    .min_w_0()
+    .max_w(px(320.))
+    .text_size(px(13.))
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_score_switcher(cx)))
+    .child({
+        let shown = editor.score_title();
+        crumb_label(shown.clone(), 0.95).agent_node(Role::Text, shown)
+    })
+    .children(menu(app, editor.target(), entity))
+    .agent_node(Role::Button, format!("{title} · {}", editor.score_label()))
+    .into_any_element();
+    Some((song, score))
 }
 
-/// The menu: the song list, then the song's scores — this venue's first,
-/// then each other venue's under its name — with the open one checked.
-fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
+/// A crumb's label, truncated when the trail runs out of room.
+fn crumb_label(text: impl Into<SharedString>, ink: f32) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(glass::ink(ink))
+        .child(text.into())
+}
+
+/// The menu: the song's scores — this venue's first, then each other venue's
+/// under its name — with the open one checked.
+fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
     let menu = app.score_switcher.get()?;
     let closing = app.score_switcher.closing_since();
     let pressable = closing.is_none();
@@ -266,19 +265,6 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<Any
     let open_score = match &open {
         Target::Score { score, .. } => Some(score.clone()),
         _ => None,
-    };
-    let songs = {
-        let pressed = entity.clone();
-        float::menu_row(RowState::Rest, "score-switcher-songs")
-            .id("score-switcher-songs")
-            .when(pressable, |row| {
-                row.on_click(move |_, _, cx| {
-                    pressed.update(cx, |this, cx| this.score_switcher_to_songs(cx))
-                })
-            })
-            .child(div().flex_1().child("Song list"))
-            .children(luma_ui::shortcut::cap(&crate::keymap::ToggleSongList, cx))
-            .agent_node(Role::Row, "Song list")
     };
     let row = |row: &ScoreRow, elsewhere: bool| {
         let pressed = entity.clone();
@@ -305,7 +291,7 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<Any
             .child(float::check(open_score.as_deref() == Some(row.id.as_ref())))
             .agent_node(Role::Row, label)
     };
-    let mut card = float::popover_card().w(px(MENU_WIDTH)).child(songs);
+    let mut card = float::popover_card().w(px(MENU_WIDTH));
     match &menu.rows {
         None => card = card.child(float::empty_row("Loading scores…")),
         Some(Err(())) => card = card.child(float::empty_row("Could not load the scores")),
@@ -315,7 +301,6 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<Any
                 .as_ref()
                 .map(|songs| songs.venue_name().to_string());
             card = card
-                .child(rule())
                 .child(float::section_heading(venue_name.unwrap_or_default()))
                 .children(
                     rows.iter()

@@ -77,11 +77,10 @@ test("choosing a score on the song list opens it and closes the list", () => {
   app.click(score ?? app.snapshot().find({ role: "button", label: "New score" }));
   const open = until("the score, and the list gone", (s) =>
     box(s, "card", "Waveform") && !songList(s) ? s : undefined);
-  // The title bar names the open score, and its menu brings the list back.
-  const title = open.findAll({ role: "button" }).find((n) => n.label.startsWith("Aurora · #"));
-  assert(title, "the stage does not name the open score");
-  app.click(title);
-  nav.step("the menu's song list row", "row", "Song list");
+  // The title bar names the open song, and its crumb brings the list back.
+  assert(open.findAll({ role: "button" }).some((n) => n.label.startsWith("Aurora · #")),
+    "the title bar does not name the open score");
+  nav.step("the song crumb", "button", "Aurora");
   until("the song list over the score", (s) => songList(s) && !box(s, "card", "Waveform"));
 });
 

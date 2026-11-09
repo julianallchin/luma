@@ -131,31 +131,6 @@ test("Reset puts a row back, and Reset all every row", () => {
   agentIs(!start);
 });
 
-test("the song list's hint in the score menu follows a rebind", () => {
-  nav.trackEditor("Test Venue", "Aurora");
-  const trigger = (s) => s.findAll({ role: "button" }).find((n) => n.label.startsWith("Aurora · #"));
-  const hint = () => {
-    app.click(until("the score trigger", trigger) && trigger(app.snapshot()));
-    const shot = until("the menu's song list row", (s) => s.find({ role: "row", label: "Song list" }) ? s : undefined);
-    const caps = capsIn(shot, shot.find({ role: "row", label: "Song list" }));
-    nav.dismiss();
-    return caps;
-  };
-  const before = hint();
-  expect(before.length).toBe(1);
-
-  const settings = openShortcuts();
-  expect(keysOf(settings, SONGS)).toEqual(before);
-  record(SONGS, "secondary-shift-j");
-  const shown = keysOf(until("the new keys", (s) =>
-    keysOf(s, SONGS)?.[0] !== before[0] ? s : undefined), SONGS);
-  nav.dismiss();
-
-  const after = hint();
-  expect(after).toEqual(shown);
-  assert(after[0] !== before[0], `the hint still says ${before}`);
-});
-
 test("Settings search finds a shortcut by its title and by its keys", () => {
   nav.venue("Test Venue");
   const page = openShortcuts();

@@ -667,6 +667,7 @@ impl Luma {
             return;
         }
         let pending = self.library.rename_score(&rename.score_id, &name);
+        let score_id = rename.score_id.clone();
         cx.spawn(async move |this, cx| {
             // The listing is read after the write: before it, the old name is
             // still in it.
@@ -678,6 +679,13 @@ impl Luma {
             };
             let listing = listing.await;
             this.update(cx, |this, cx| {
+                if renamed.is_ok() {
+                    if let Some(crate::shell::Body::TrackEditor(editor)) =
+                        this.workspace.active_body_mut()
+                    {
+                        editor.score_renamed(&score_id, &name);
+                    }
+                }
                 let user = this.library.user_id();
                 this.with_scores(&track_id, cx, |level| match (&renamed, listing) {
                     (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
@@ -701,6 +709,7 @@ pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
     crate::track_editor::Score {
         id: row.id.to_string(),
         ordinal: row.ordinal,
+        name: row.name.clone(),
     }
 }
 

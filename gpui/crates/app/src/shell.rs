@@ -875,28 +875,27 @@ fn agent_panel(app: &Luma) -> AnyElement {
 const NO_CHAT: &str = "Open a score to talk about it.";
 
 /// The window's head, on the trim above the page: the trail of where the
-/// window is — `venue / song`, each crumb its own menu — and, reserved by the
-/// band's insets, the agent toggle and the mode switch anchored over its two
-/// ends. The song crumb is Arrange's open score; with none, the venue stands
-/// alone.
+/// window is — `venue / song / score`, each crumb its own button — and,
+/// reserved by the band's insets, the agent toggle and the mode switch
+/// anchored over its two ends. The song and score are Arrange's open score;
+/// with none, the venue stands alone.
 fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
     let trail = div().flex_1().min_w_0().flex().items_center().gap(px(2.));
     let trail = match app.settings {
         Some(_) => trail.child(settings::back(entity)),
         None => {
-            let song = crate::score_switcher::crumb(app, entity, cx);
+            let crumbs = crate::score_switcher::crumbs(app, entity);
+            let slash = || {
+                div()
+                    .flex_none()
+                    .text_size(px(13.))
+                    .text_color(luma_ui::glass::ink(0.3))
+                    .child("/")
+            };
             trail
-                .child(welcome::venue_trigger(app, song.is_none(), entity, cx))
-                .when_some(song, |trail, song| {
-                    trail
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(13.))
-                                .text_color(luma_ui::glass::ink(0.3))
-                                .child("/"),
-                        )
-                        .child(song)
+                .child(welcome::venue_trigger(app, crumbs.is_none(), entity, cx))
+                .when_some(crumbs, |trail, (song, score)| {
+                    trail.child(slash()).child(song).child(slash()).child(score)
                 })
         }
     };

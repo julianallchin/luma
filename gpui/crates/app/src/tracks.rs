@@ -559,6 +559,26 @@ impl Luma {
         }
     }
 
+    /// The song list, up, with `track_id` selected and its scores listed: the
+    /// title bar's song crumb. The place stays when it lists the song, and is
+    /// All songs otherwise.
+    pub(crate) fn reveal_song(&mut self, track_id: &str, cx: &mut Context<Self>) {
+        if !self.song_list_shown() {
+            self.toggle_song_list(cx);
+        }
+        let Some(state) = &self.songs else {
+            return;
+        };
+        let listed = state
+            .shown
+            .iter()
+            .any(|row| state.rows[*row].id == track_id);
+        if !listed {
+            self.select_place(Place::All, cx);
+        }
+        self.select_track(track_id, cx);
+    }
+
     /// Select `track_id` in the second column, and list its scores in the
     /// third. Selecting the song already selected keeps its listing.
     pub(crate) fn select_track(&mut self, track_id: &str, cx: &mut Context<Self>) {

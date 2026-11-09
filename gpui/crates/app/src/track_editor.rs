@@ -310,6 +310,9 @@ pub(crate) struct Score {
     /// the toolbar name it by. A position, not identity: [`Self::id`] is the
     /// key.
     pub(crate) ordinal: i64,
+    /// Its name as the listing read it when it was opened, kept current by a
+    /// rename from the song list; `None` when it has none.
+    pub(crate) name: Option<SharedString>,
 }
 
 /// One clip, with everything a draw *and* a write need already resolved.
@@ -437,9 +440,25 @@ impl Editor {
         &self.track_name
     }
 
-    /// The open score, as the title bar names it beside its song: `#n`.
+    /// The open score's handle, `#n`: how it is spoken about.
     pub(crate) fn score_label(&self) -> String {
         format!("#{}", self.score.ordinal)
+    }
+
+    /// The open score as the title bar's crumb names it: its name, or its
+    /// `#n` when it has none.
+    pub(crate) fn score_title(&self) -> SharedString {
+        self.score
+            .name
+            .clone()
+            .unwrap_or_else(|| self.score_label().into())
+    }
+
+    /// Score `id` was renamed `name`: the open one keeps its crumb current.
+    pub(crate) fn score_renamed(&mut self, id: &str, name: &str) {
+        if self.score.id == id {
+            self.score.name = Some(name.to_string().into());
+        }
     }
 
     /// Whether the open score can be exported yet: not before the track's
