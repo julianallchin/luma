@@ -12,7 +12,7 @@ timeline, and play it live along with a DJ.
 ## Download
 
 Get the latest release for Apple silicon Macs or Linux x86_64 from
-[GitHub Releases](https://github.com/julianallchin/luma/releases/latest). An
+[GitHub Releases](https://github.com/lumashow/luma/releases/latest). An
 installed app updates itself.
 
 ## Build from source
@@ -21,7 +21,7 @@ You need [rustup](https://rust-lang.org/tools/install/),
 [Git LFS](https://git-lfs.com), Python 3, and Xcode on macOS.
 
 ```sh
-git clone git@github.com:julianallchin/luma.git
+git clone git@github.com:lumashow/luma.git
 cd luma
 scripts/setup          # toolchain, submodule, LFS files, git hooks
 python3 gpui/dev.py    # build, launch, and rebuild on save

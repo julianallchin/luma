@@ -14,7 +14,7 @@ version = "0.6.2"
 description = "Node-based lighting control software for live performance"
 authors = ["Julian Allchin <julian@allchin.com>"]
 license = "PolyForm-Shield-1.0.0"
-repository = "https://github.com/julianallchin/luma"
+repository = "https://github.com/lumashow/luma"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

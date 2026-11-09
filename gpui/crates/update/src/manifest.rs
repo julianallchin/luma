@@ -312,7 +312,7 @@ mod tests {
         let manifest = Manifest::parse(
             r#"{
                 "version": "0.6.2",
-                "notes": "https://github.com/julianallchin/luma/releases/tag/v0.6.2",
+                "notes": "https://github.com/lumashow/luma/releases/tag/v0.6.2",
                 "pub_date": "2026-11-01T12:00:00Z",
                 "commit": "bbbb",
                 "platforms": { "aarch64-apple-darwin": { "url": "https://example.com/a", "signature": "c2ln" } }

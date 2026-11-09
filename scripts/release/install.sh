@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Install Luma for the current user on Linux, as Zed's script/install.sh does:
 #
-#   curl -fsSL https://github.com/julianallchin/luma/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/lumashow/luma/releases/latest/download/install.sh | sh
 #
 # Unpacks the release tarball into ~/.local/luma.app, links ~/.local/bin/luma,
 # and adds a desktop entry. The app updates itself in place from then on.
@@ -10,7 +10,7 @@
 # release. On macOS, download the DMG from the releases page.
 set -eu
 
-repo=https://github.com/julianallchin/luma
+repo=https://github.com/lumashow/luma
 channel=${LUMA_CHANNEL:-stable}
 
 case "$(uname -s)" in

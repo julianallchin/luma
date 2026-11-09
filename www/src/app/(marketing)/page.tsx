@@ -2,7 +2,7 @@ import { ArrowRight, Download } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
-const DOWNLOAD = "https://github.com/julianallchin/luma/releases/latest";
+const DOWNLOAD = "https://github.com/lumashow/luma/releases/latest";
 
 const features = [
 	{

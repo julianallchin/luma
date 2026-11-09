@@ -92,11 +92,11 @@ impl Channel {
         match self {
             Self::Dev => None,
             Self::Nightly => {
-                Some("https://github.com/julianallchin/luma/releases/download/nightly/latest.json")
+                Some("https://github.com/lumashow/luma/releases/download/nightly/latest.json")
             }
             // `latest` skips prereleases, so the nightly never reaches here.
             Self::Stable => {
-                Some("https://github.com/julianallchin/luma/releases/latest/download/latest.json")
+                Some("https://github.com/lumashow/luma/releases/latest/download/latest.json")
             }
         }
     }
