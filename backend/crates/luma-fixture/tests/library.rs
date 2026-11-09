@@ -70,7 +70,6 @@ fn every_shipped_mode_resolves_onto_the_built_cells() {
 /// light from where the two agree, so a disagreement is a cell that is dark
 /// on the rig.
 #[test]
-#[ignore = "bug: 37 shipped fixtures drive emitters their cells' geometry lacks; fixed in the fixtures repo"]
 fn every_shipped_mode_drives_only_emitters_its_cells_draw() {
     let root = library();
     let index: serde_json::Value =
