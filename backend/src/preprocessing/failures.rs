@@ -11,19 +11,19 @@
 //! On failure: caller invokes [`record`] which increments attempts and pushes
 //! `next_retry_at` forward by 2^attempts minutes, capped at 24 hours.
 //!
-//! A failure holds a track back only from the version that failed: once a
-//! preprocessor's version is bumped, reconcile retries the track at once, and
-//! the new version's failures back off from the first attempt.
+//! A failure says something only about the version of the step that failed.
+//! Startup reconcile first calls [`forget_other_versions`] for every step, so
+//! once a step's version changes, it retries every track the old version
+//! failed on, backs off from its first attempt if it fails again, and
+//! [`last_error`] no longer reports the old version's errors.
 
 use sqlx::SqlitePool;
 
-/// Cap retry backoff at 24h — beyond this we accept the failure and only
-/// retry on user-driven actions (rerun-from-UI, app restart with version
-/// bump, etc.).
+/// Cap retry backoff at 24h: reconcile retries a failure at the cap once a
+/// day, and at once after the step's version changes.
 const MAX_BACKOFF_SECS: i64 = 24 * 60 * 60;
 
-/// Record a failed run of `version`. Increments `attempts`, counting from
-/// zero when the failure on record is from another version, and sets
+/// Record a failed run. Increments `attempts` and sets
 /// `next_retry_at = now + 2^attempts minutes` (capped).
 pub async fn record(
     pool: &SqlitePool,
@@ -35,11 +35,10 @@ pub async fn record(
     // Compute attempts first so we can derive the backoff in the same SQL.
     let prior_attempts: i64 = sqlx::query_scalar(
         "SELECT attempts FROM preprocessing_failures
-         WHERE track_id = ? AND preprocessor = ? AND version = ?",
+         WHERE track_id = ? AND preprocessor = ?",
     )
     .bind(track_id)
     .bind(preprocessor)
-    .bind(version as i64)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("Failed to read prior attempts: {e}"))?
@@ -79,6 +78,21 @@ pub async fn record(
         Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("787") => Ok(()),
         Err(e) => Err(format!("Failed to record preprocessing failure: {e}")),
     }
+}
+
+/// Forget `preprocessor`'s failures recorded by any version but `version`.
+pub async fn forget_other_versions(
+    pool: &SqlitePool,
+    preprocessor: &str,
+    version: u32,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM preprocessing_failures WHERE preprocessor = ? AND version != ?")
+        .bind(preprocessor)
+        .bind(version as i64)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to forget earlier {preprocessor} failures: {e}"))?;
+    Ok(())
 }
 
 /// Drop the failure row for a (track, preprocessor) pair. Call on a
@@ -127,7 +141,7 @@ fn backoff_for(attempts: i64) -> i64 {
 mod tests {
     use super::*;
     use crate::preprocessing::preprocessor::Preprocessor;
-    use crate::preprocessing::workers::mert::MertPreprocessor;
+    use crate::preprocessing::workers::roots::RootsPreprocessor;
 
     /// A migrated library holding one track with local audio and no analysis.
     async fn library() -> (tempfile::TempDir, SqlitePool) {
@@ -159,23 +173,30 @@ mod tests {
     #[tokio::test]
     async fn a_version_bump_retries_tracks_the_old_version_failed_on() {
         let (_directory, pool) = library().await;
-        let step = MertPreprocessor;
-        record(
-            &pool,
-            "t1",
-            step.name(),
-            step.version() - 1,
-            "old worker broke",
-        )
-        .await
-        .unwrap();
+        let step = RootsPreprocessor;
+        let old = step.version() - 1;
+        record(&pool, "t1", step.name(), old, "old worker broke")
+            .await
+            .unwrap();
+
+        forget_other_versions(&pool, step.name(), step.version())
+            .await
+            .unwrap();
         assert_eq!(
             step.list_pending(&pool).await.unwrap(),
             ["t1"],
             "a failure of the old version holds the track back"
         );
+        assert_eq!(
+            last_error(&pool, "t1", step.name()).await.unwrap(),
+            None,
+            "the old version's error is reported as the step's"
+        );
 
         record(&pool, "t1", step.name(), step.version(), "new worker broke")
+            .await
+            .unwrap();
+        forget_other_versions(&pool, step.name(), step.version())
             .await
             .unwrap();
         assert!(
@@ -195,6 +216,7 @@ mod tests {
             "a repeat failure doesn't wait longer"
         );
 
+        forget_other_versions(&pool, "step", 2).await.unwrap();
         record(&pool, "t1", "step", 2, "boom").await.unwrap();
         assert_eq!(
             backoff(&pool).await,

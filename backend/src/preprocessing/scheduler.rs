@@ -550,9 +550,10 @@ pub async fn run_for_tracks(
     }
 }
 
-/// Startup reconciliation: each preprocessor returns the IDs of tracks that
-/// need it via one bulk SQL query (artifact missing/stale and not in failure
-/// backoff). The union is queued for processing.
+/// Startup reconciliation: each preprocessor forgets the failures other
+/// versions of it recorded, then returns the IDs of tracks that need it via
+/// one bulk SQL query (artifact missing/stale and not in failure backoff). The
+/// union is queued for processing.
 pub async fn reconcile_on_startup(
     pool: SqlitePool,
     storage: StorageRoot,
@@ -563,6 +564,7 @@ pub async fn reconcile_on_startup(
     analysis.checkpoint()?;
     let mut needs: HashSet<String> = HashSet::new();
     for p in registry::dag().preprocessors() {
+        failures::forget_other_versions(&pool, p.name(), p.version()).await?;
         for id in p.list_pending(&pool).await? {
             needs.insert(id);
         }
