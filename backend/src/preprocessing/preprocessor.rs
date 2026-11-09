@@ -208,6 +208,13 @@ const SAME_BAR_SECS: f64 = 0.001;
 /// parse, is no evidence, so a row that can't record its first bar doesn't
 /// rerun its step at every launch, and one bad row can't fail the query for
 /// the whole library.
+///
+/// Only bar 0 is compared. That is enough while the beat-grid worker is the
+/// only thing that writes a grid: a re-detection moves bar 0 too, and a synced
+/// grid arrives with the owner's rows computed against it. If the grid ever
+/// becomes editable by hand, an edit that leaves bar 0 alone goes unnoticed
+/// here. Stamp each row with a revision of the grid it ran against then, and
+/// compare that instead.
 fn artifact_current(p: &(impl Preprocessor + ?Sized)) -> String {
     // Every interpolated fragment is a `&'static str` or a number from the
     // trait — never user input.
