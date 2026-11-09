@@ -206,8 +206,7 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
             AND ({authors})
             AND NOT EXISTS (
                 SELECT 1 FROM preprocessing_failures f
-                 WHERE f.track_id = t.id AND f.preprocessor = ?1
-                   AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                 WHERE f.track_id = t.id AND f.preprocessor = ?1 AND {in_backoff}
             )
             AND (
                 (SELECT COUNT(*) FROM {table} a
@@ -215,6 +214,7 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
                 OR ({stale})
             )",
         table = p.artifact_table(),
+        in_backoff = crate::preprocessing::failures::IN_BACKOFF,
         authors = if writes_synced_rows(p) {
             AUTHORS_SYNCED_ANALYSIS
         } else {
