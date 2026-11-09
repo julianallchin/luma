@@ -1,0 +1,78 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "consortium/servo-krake-innerer-ring",
+  "name": "Consortium Servo Krake Innerer Ring",
+  "manufacturer": "Consortium",
+  "model": "Servo Krake Innerer Ring",
+  "category": "multi_head_array",
+  "description": "Water fountain effect, not a luminaire. The supplied local record describes five upright tilting arms on a shared open pentagonal frame, each carrying one water nozzle and no light emitter. Exact-model product photographs, manufacturer dimensions, weight and DMX channel tables were not found. Geometry remains an unverified approximation based on the local imported record; centimetre units are assumed. Overall dimensions are retained from the import, not manufacturer verified. Independent nozzle/servo control is unknown; zero light cells does not mean zero servo DMX channels.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "multi_head",
+   "photo_pass": {
+    "verdict": "cannot",
+    "identity": "No supplied photos; no exact-model source found after exact-name, ServoKrake, Servo-Krake, manual, discontinued and Consortium Eventtechnik/Wien searches. Related Servo Krake 300 and generic Servokrake sources rejected as different/unidentified products.",
+    "corrections": "Removed invented lenses, light sources and per-arm lighting cells. Replaced round wash heads and yokes with upright bar arms directly on the carrier, following the supplied description.",
+    "geometry_basis": "facts.json: five ARM nodes; ARM mesh approximately 9.3 x 34.9 x 7.1 unspecified units; assuming centimetres gives 0.093 x 0.349 x 0.071 m. This scale, overall bbox, frame shape, pivot height and nozzle geometry are not photo verified.",
+    "control_basis": "Local record mentions Mode 1, Normal Mode, Servo Ref and Tilt, but provides no channel-count table or verified independent control mapping. No luminous emitters; servo DMX cell count unknown.",
+    "limitations": "Luma has no fountain/nozzle emitter type or explicit pentagonal open-frame carrier. Empty non-emitting face root is intentional; ring carrier is an approximation."
+   },
+   "import": {"from": "depence", "old_id": "0229a0cd-2ed1-49b5-86ca-73d12ed123d8"},
+   "sources": []
+  }
+ },
+ "template": "array",
+ "dims": {"size": [0.9979, 0.4801, 0.9576]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 0.093,
+   "len": 0.349,
+   "d": 0.071,
+   "off": 0.1745,
+   "tilt_y": 0.0,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "note": "No optical face: water nozzle, not a light. Five physical nozzles are described in the imported record, one per array arm; nozzle geometry and servo control remain unverified."
+   }
+  }
+ ],
+ "array": {
+  "n": 5,
+  "carrier": {"kind": "ring", "w": 0.9979, "d": 0.9576, "h": 0.1311},
+  "per_head": {"tilt": {"drive": "dmx", "range": [-45.0, 45.0], "per_head": true, "axis": [1, 0, 0], "rest": 0}},
+  "beam": "y",
+  "element_mount": null
+ },
+ "cells": {"count": 5, "emitters": 0},
+ "sources": [],
+ "control": {
+  "modes": [
+   {
+    "name": "6ch",
+    "options": {"channels": "6"},
+    "footprint": 6,
+    "channels": [
+     {"attr": "none", "n": 1},
+     {"attr": "none", "n": 2},
+     {"attr": "other", "rank": 1},
+     {"attr": "position/tilt"},
+     {"attr": "position/tilt", "rank": 1},
+     {"attr": "other"}
+    ],
+    "prov": {"status": "single", "agree": ["depence"]}
+   }
+  ],
+  "prov": {}
+ }
+}

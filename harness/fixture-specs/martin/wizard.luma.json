@@ -1,0 +1,56 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "martin/wizard",
+  "name": "Martin Wizard",
+  "manufacturer": "Martin",
+  "model": "Wizard",
+  "category": "effect_light",
+  "description": "This is a Martin Wizard, an effect light with a probably faceted black polyhedral body measuring about 0.26 by 0.16 by 0.55 (units probably metres). A base body carries a pan pivot that turns the whole top assembly through 540 degrees. Above it sits a tilting top hood, a smaller faceted block that swings through 270 degrees and carries a flat circular LENSE disc, about 7 units across, at its front. Behind the disc is one light source, and its output passes through a continuously rotating mirror drum and parabolic mirror, with gobo and colour wheels in the optical path. The front optic has one controllable cell and no repeated emitters. Vent slots run along both sides of the body.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "scanner",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "1252622e-c1cb-4e44-9604-02423e5fd819"},
+   "sources": []
+  }
+ },
+ "template": "deflector",
+ "dims": {"size": [0.516, 0.552, 0.208]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {
+   "pan": {"drive": "dmx", "range": [-270.0, 270.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "manual", "range": [-135.0, 135.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [{"drive": "dmx", "per_head": false, "axis": [0, 0, 1]}],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.516,
+   "len": 0.552,
+   "d": 0.208,
+   "off": 0.0,
+   "tilt_y": 0.45,
+   "lens_d": 0.12,
+   "features": ["vents"]
+  },
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.24, 0.2, 0.2],
+    "pos": [0.0, 0.5, 0.0],
+    "mat": "body",
+    "name": "drum_hood"
+   }
+  ]
+ },
+ "faces": [{"on": "front", "root": {"outline": "rect", "cell": true, "emitter": {"kind": "lens", "colour": "white"}}}],
+ "deflector": {"element": "drum", "pos": [0.0, 0.0, 0.0]},
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}]
+}

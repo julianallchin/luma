@@ -1,0 +1,164 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "eurolite/led-kls-401",
+  "name": "Eurolite LED KLS-401",
+  "manufacturer": "Eurolite",
+  "model": "LED KLS-401",
+  "category": "led_bar",
+  "description": "Four slim square LED heads on manual U-brackets below a shared horizontal control bar, facing forward at rest. Each head contains 180 single-colour 10 mm LEDs in 15 staggered rows of 12 (60 red, 60 green, 60 blue); each entire head is one independently controlled RGB cell.",
+  "provenance": {
+   "source": "QLC+ definition; exact product photographs; manufacturer manual and product page",
+   "archetype": "bar",
+   "dims_src": "QLC+ 1200 x 310 x 55 mm, confirmed by manufacturer; axes corrected to width, height, depth",
+   "qlc_id": "qlc:Eurolite/LED KLS 401",
+   "qlc_type": "Color Changer",
+   "manual": "https://www.steinigke.de/download/42109781-Manual-60661-1.10-eurolite-led-kls-401-compact-light-set-en_de.pdf",
+   "product_page": "https://www.steinigke.de/mpn42109781-eurolite-led-kls-401-kompakt-lichtset.html",
+   "photo": "https://media.steinigke.de/images/71600/09/42109781a.jpg",
+   "counts": "Four heads counted in whole-face crops. Two head close-ups show 15 staggered rows x 12 LEDs; 180/head, 720 total, 60 of each R/G/B per head, confirmed by manual pp22,31. Product-page heading mistakenly says 108/head; body text and manual consistently specify 180/head.",
+   "control": "QLC+ 4 cells and 15 channels: 4 RGB heads x 3 channels + program, master dimmer, strobe = 15. Manual pp28-30 confirms.",
+   "shape": "Photo-scaled 200 mm square, 40 mm thin heads on individual hanging U-brackets, manual pan and tilt; shared horizontal bar. Own 28 mm diameter central stand spigot specified as a primary mount part; the external stand is not supplied. Manual joint travel unspecified.",
+   "weight_kg": 8.5,
+   "format_notes": "A one-row grid carrier renders the rectangular crossbar at its true 55 mm depth; the bar-carrier implementation incorrectly derives rail depth from head face height. The builder does not apply rig.parts to arrays, so the specified single central 28 mm stand spigot is not rendered. Array head spacing is uniformly centred within carrier slots rather than near the extreme ends as photographed. The four physical groups are array.n=4; the per-head root is one cell containing a staggered 15x12 emitter grid.",
+   "import": {"from": "qlc", "old_id": "qlc:Eurolite/LED KLS 401"},
+   "sources": [
+    {"sha": "00587153d7b0b2f6f516147b2bc0f6fa6934914d17fb8a26f7374299d8110d5f", "kind": "photo"},
+    {"sha": "0d60145af22d692122c4eaa4eb484120ce1b2aa7220e56a26c353c338f8ade2f", "kind": "photo"},
+    {"sha": "1552d1b2c3ed05644c17b65298435d81926bf88f86f7038021e9a4d5eda05ccb", "kind": "photo"},
+    {"sha": "3224834b63bccf37f95b5187fb288db2c6966f95769a1e32e845a05ca845d602", "kind": "photo"},
+    {"sha": "42fce0fef65613e80d74742b0940cf77bae8edc8dee9e69a8da8444a0f6e7320", "kind": "photo"},
+    {"sha": "583c7e5fb6e24f4663aba1fcb5d3821c966c177465c51185eab257da2d201efc", "kind": "photo"},
+    {"sha": "770824b1dbe5337a8b739c04ccd4c2c7a6278cd36650a3f4b18b24e32b4c134c", "kind": "photo"},
+    {"sha": "834de2653c33fe69775fb0955292208f86fa31613b7dc3392bcc53b3c3872975", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "array",
+ "dims": {"size": [1.2, 0.31, 0.055]},
+ "optics": {
+  "type": "wash",
+  "beam_deg": {"v": 25, "src": "import", "conf": "medium"},
+  "cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}
+ },
+ "materials": {"body": {"rgb": [0.025, 0.025, 0.028]}, "body2": {"rgb": [0.035, 0.035, 0.038]}},
+ "rig": {
+  "mount": {"type": "bracket"},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "panel",
+   "outline": "square",
+   "w": 0.2,
+   "d": 0.2,
+   "len": 0.04,
+   "off": 0,
+   "tilt_y": 0.16,
+   "pods": false,
+   "features": [],
+   "corner": 0.05
+  },
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "cyl",
+    "r": 0.014,
+    "len": 0.12,
+    "pos": [0, 0.202, 0],
+    "rot": [90, 0, 0],
+    "mat": "metal",
+    "name": "central_28mm_stand_spigot"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.16, 0.16],
+    "cell": true,
+    "layout": {"kind": "grid", "rows": 15, "cols": 12, "stagger": true},
+    "child": {"outline": "circle", "fill": 0.94, "emitter": {"kind": "led", "colours": ["red", "green", "blue"]}}
+   }
+  }
+ ],
+ "array": {
+  "n": 4,
+  "carrier": {"kind": "grid", "rows": 1, "cols": 4, "w": 1.2, "d": 0.055, "h": 0.048, "hang": true},
+  "beam": "z",
+  "per_head": {
+   "tilt": {"drive": "manual", "axis": [1, 0, 0], "range": null, "rest": 90, "per_head": true},
+   "pan": {"drive": "manual", "axis": [0, 1, 0], "range": null, "per_head": true}
+  },
+  "element_mount": {
+   "type": "bail",
+   "yoke": {
+    "w": 0.21,
+    "y1": 0.16,
+    "d": 0.02,
+    "gap": 0.004,
+    "arm": {"profile": "straight", "t": 0.005, "d": [0.02, 0.02], "round_top": 0.5}
+   }
+  },
+  "cells_total": 4
+ },
+ "cells": {"count": 4, "emitters": 720},
+ "sources": [{"cell_ranges": [[0, 0]]}, {"cell_ranges": [[1, 1]]}, {"cell_ranges": [[2, 2]]}, {"cell_ranges": [[3, 3]]}],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "15ch",
+    "options": {"channels": "15"},
+    "footprint": 15,
+    "channels": [
+     {"attr": "fx/macro", "ranges": "t1"},
+     {"attr": "dimmer"},
+     {
+      "attr": "shutter",
+      "ranges": [
+       {"dmx": [0, 9], "state": "open"},
+       {"dmx": [10, 255], "state": "strobe", "phys": [1.0, 10.0], "unit": "Hz"}
+      ]
+     },
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "conflict",
+     "agree": ["onyx"],
+     "conflict": {"qlc": "slot 3: fx/speed@0 (want colour/red@0)"},
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "4 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]}
+  },
+  "tables": {
+   "t1": [
+    {"dmx": [0, 9], "state": "macro"},
+    {"dmx": [10, 29], "state": "macro"},
+    {"dmx": [30, 49], "state": "macro"},
+    {"dmx": [50, 69], "state": "macro"},
+    {"dmx": [70, 89], "state": "macro"},
+    {"dmx": [90, 109], "state": "macro"},
+    {"dmx": [110, 129], "state": "macro"},
+    {"dmx": [130, 149], "state": "macro"},
+    {"dmx": [150, 169], "state": "macro"},
+    {"dmx": [170, 189], "state": "macro"},
+    {"dmx": [190, 209], "state": "macro"},
+    {"dmx": [210, 229], "state": "macro"},
+    {"dmx": [230, 249], "state": "macro"},
+    {"dmx": [250, 255], "state": "macro"}
+   ]
+  }
+ }
+}

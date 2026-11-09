@@ -1,0 +1,43 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "generic/downlight-spotlight-matt-white",
+  "name": "_Generic Downlight Spotlight - Matt White",
+  "manufacturer": "_Generic",
+  "model": "Downlight Spotlight - Matt White",
+  "category": "architectural",
+  "description": "This is a generic matt white round recessed downlight, a single fixture. The housing is a short cylinder, probably about 8.9 cm wide and 3.1 cm deep, set into a ceiling cut-out with no yoke, arms, or pan and tilt. Its upper side carries finned black heat-sink ribs on the left and a small black rectangular driver box on the right, while thin spring clips sit on the lower-left rim. The front is a flat glass disc with a white bezel ring. Roughly four LED chips form a tight central cluster with no regular grid. It has one controllable cell, so the chips probably switch together as a single intensity group, and colour mixing is probably not modelled.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "arch_disc",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "769beeea-ea49-429d-9377-43466986f356"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.0893, 0.0314, 0.0893]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "disc",
+   "outline": "round",
+   "w": 0.0893,
+   "len": 0.0314,
+   "d": 0.0893,
+   "off": 0.0,
+   "tilt_y": 0.0157,
+   "features": ["vents"]
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [{"layout": {"kind": "hex", "n": 4, "stagger": false}, "cell": "circle", "optic": "flat", "cells": 1}]
+  }
+ ],
+ "cells": {"count": 1, "emitters": 4},
+ "sources": [{"cell_ranges": [[0, 0]]}]
+}

@@ -1,0 +1,391 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "claypaky/volero-wave-plus-pixel-engine",
+  "name": "Clay Paky Volero Wave + Pixel Engine",
+  "manufacturer": "Clay Paky",
+  "model": "Volero Wave + Pixel Engine",
+  "category": "multi_head_array",
+  "description": "Volero Wave CL3023: one horizontal bar carrying eight independently motorised 220-degree tilt modules. Each module has one 40 W RGBW LED engine with a rectangular mirror-based 86 x 114 mm optical aperture. Eight RGBW pixel cells; the Pixel Engine is a control layer, not extra physical emitters. Overall including supplied brackets: 1000 x 329 x 182 mm; 20.8 kg. Heads face forward at rest.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "multi_head",
+   "edited_by": "photo/spec-sheet verification",
+   "product_page": "https://www.claypaky.it/products/volero-wave/",
+   "datasheet": "https://service.claypaky.it/servlet/checkDocumentsFile?Id=3816",
+   "dmx_chart": "https://service.claypaky.it/servlet/checkDocumentsFile?Id=3808",
+   "photo": "https://www.claypaky.it/wp-content/uploads/2022/10/Claypaky_VoleroWave.jpg",
+   "dims_src": "Manufacturer dimension drawing: 1000 mm horizontal, 329 mm including fast-lock Omega brackets (315.7 mm without), 182 mm head swept diameter; base depth 155.4 mm.",
+   "weight_kg": 20.8,
+   "counts": "Counted eight heads in whole-face crop; individually cropped fourth and fifth heads each have one rectangular mirror aperture serving one RGBW source. Datasheet: 8 x 40 W RGBW. No extra ring emitters.",
+   "control": "Main engine Standard 20, Shape RGBW 38, Advanced 37 channels. Separate Pixel Engine RGB 24=8x3; RGBW 32=8x4. Largest combination Shape+RGBW: 38+32=70. Master/layer RGBW channels do not imply a ninth source.",
+   "geometry_notes": "Array.n=8 supplies the outer 1x8 group layout; faces[0].root is the repeated one-source head. The main photo shows individually varied tilts; rest is normalised to all heads forward (90 degrees). Head shell dimensions and support positions estimated from dimension drawing and photograph. The dark central optical assembly is represented by body.frame hub; its nominal ring and spoke are enclosed by the hub. Tall rounded side plates support the tilt axes. Two supplied under-base Omega brackets are recorded as rig.parts and rig.mount; the current array renderer ignores these global mount/parts fields.",
+   "format_gaps": [
+    "Array renderer ignores global rig.mount clamps and rig.parts: the two supplied underside Omega brackets are specified but not visible in the generated model. Shared side plates are approximated by pairs of thin per-head yoke plates. Individual per-head rest angles cannot reproduce the demonstration wave in the main photo; all heads face forward at 90 degrees."
+   ],
+   "import": {"from": "depence", "old_id": "62ad8077-cf7a-4518-8077-add9d46a86f6"},
+   "sources": [
+    {"sha": "26495da2724ecd1e7a3ac780820456e1cc92810c2756bd25b99a5f91e5c0ae7f", "kind": "photo"},
+    {"sha": "2c2ba84ac0a44ec071e6ede00079e65c7583ecfd6112fb605dccaca4e53ec246", "kind": "photo"},
+    {"sha": "4963af068b206a2605cd904f4240702240c999a127fe6cafd07ff25a94b87068", "kind": "photo"},
+    {"sha": "56987aca08931e374ec90051cf8228884d2113966e157b90f11f222693abe5e2", "kind": "photo"},
+    {"sha": "5a40cd06157e5896907b9ecafad65d47bfcb214fb8c94027819bb6d52522d281", "kind": "photo"},
+    {"sha": "827a09940eda3cd4904ba7fc06601b2f7e52d3bb62f86e74d1c2eaa1c1182052", "kind": "photo"},
+    {"sha": "a22128132a982d7574d65644b9fcf8d8025ef255b9d5376b03e8be0a017a0bae", "kind": "photo"},
+    {"sha": "f6b9d09e35fbc1403a2d94721dac66c69dfff66f9bd805ffb3fc510d5b946ab5", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "array",
+ "dims": {"size": [1.0, 0.329, 0.182]},
+ "optics": {
+  "type": "beam",
+  "beam_deg": {"v": 2.9, "src": "import", "conf": "medium"},
+  "cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}
+ },
+ "materials": {"body": {"rgb": [0.025, 0.025, 0.025]}, "body2": {"rgb": [0.035, 0.035, 0.035]}},
+ "rig": {
+  "mount": {
+   "type": "bracket",
+   "legs": 0,
+   "base": null,
+   "yoke": null,
+   "clamp": {"n": 2, "stem": 0.007, "w": 0.16, "r": 0.007, "spread": 0.38}
+  },
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.09,
+   "len": 0.182,
+   "d": 0.17,
+   "off": 0,
+   "tilt_y": 0.107,
+   "pods": false,
+   "shell": {
+    "sections": [
+     {"t": 0, "w": 1, "d": 0.25, "r": 0.12},
+     {"t": 0.12, "w": 1, "d": 0.66, "r": 0.12},
+     {"t": 0.3, "w": 1, "d": 0.94, "r": 0.12},
+     {"t": 0.5, "w": 1, "d": 1, "r": 0.12},
+     {"t": 0.72, "w": 1, "d": 0.93, "r": 0.12},
+     {"t": 1, "w": 1, "d": 0.7, "r": 0.12}
+    ],
+    "ring": {"rec": 0.004, "wall": 0.002, "bezel": true},
+    "pods": false
+   },
+   "frame": {"spokes": 1, "r": 0.0001, "w": 1e-05, "spoke_r": 1e-05, "hub": 0.0175, "depth": 0.02, "angle": 90}
+  },
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.16, 0.0133, 0.1554],
+    "pos": [-0.38, 0.00665, 0],
+    "mat": "body2",
+    "name": "supplied_omega_bracket_1"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.16, 0.0133, 0.1554],
+    "pos": [0.38, 0.00665, 0],
+    "mat": "body2",
+    "name": "supplied_omega_bracket_2"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.086, 0.114],
+    "layout": {"kind": "single"},
+    "child": {
+     "cell": true,
+     "outline": "rounded",
+     "frame": {"bezel": 0.015, "depth": 0.004},
+     "layout": {"kind": "single"},
+     "child": {"outline": "rect", "emitter": {"kind": "lens", "colour": "rgbw"}, "fill": 1.0}
+    }
+   }
+  }
+ ],
+ "array": {
+  "n": 8,
+  "carrier": {"kind": "bar", "w": 0.976, "d": 0.1554, "h": 0.131},
+  "per_head": {"tilt": {"drive": "dmx", "range": [-110, 110], "rest": 90, "per_head": true, "axis": [1, 0, 0]}},
+  "beam": "z",
+  "cells_total": 8,
+  "element_mount": {
+   "type": "yoke2",
+   "legs": 0,
+   "base": null,
+   "yoke": {
+    "w": 0.1,
+    "y1": 0.185,
+    "d": 0.182,
+    "gap": 0.002,
+    "arm": {"profile": "straight", "t": [0.006, 0.006], "d": [0.1554, 0.182], "round_top": 1.0},
+    "hull": false
+   }
+  }
+ },
+ "cells": {"count": 8, "emitters": 8},
+ "sources": [
+  {"cell_ranges": [[0, 0]]},
+  {"cell_ranges": [[1, 1]]},
+  {"cell_ranges": [[2, 2]]},
+  {"cell_ranges": [[3, 3]]},
+  {"cell_ranges": [[4, 4]]},
+  {"cell_ranges": [[5, 5]]},
+  {"cell_ranges": [[6, 6]]},
+  {"cell_ranges": [[7, 7]]}
+ ],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "24ch",
+    "options": {"channels": "24"},
+    "footprint": 24,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 7, "to": 0},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {"status": "single", "agree": ["onyx"]}
+   },
+   {
+    "name": "32ch",
+    "options": {"channels": "32"},
+    "footprint": 32,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 7, "to": 0},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     }
+    ],
+    "prov": {"status": "single", "agree": ["onyx"]}
+   },
+   {
+    "name": "44ch",
+    "options": {"channels": "44"},
+    "footprint": 44,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"},
+     {"attr": "colour/cct"},
+     {"attr": "colour/macro"},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "other", "n": 1},
+     {"attr": "control"},
+     {"attr": "other", "n": 2},
+     {"repeat": {"cells": {"from": 7, "to": 0}, "channels": [{"attr": "position/tilt"}]}},
+     {
+      "repeat": {
+       "cells": {"from": 7, "to": 0},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "52ch",
+    "options": {"channels": "52"},
+    "footprint": 52,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"},
+     {"attr": "colour/cct"},
+     {"attr": "colour/macro"},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "other", "n": 1},
+     {"attr": "control"},
+     {"attr": "other", "n": 2},
+     {"repeat": {"cells": {"from": 7, "to": 0}, "channels": [{"attr": "position/tilt"}]}},
+     {
+      "repeat": {
+       "cells": {"from": 7, "to": 0},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "69ch",
+    "options": {"channels": "69"},
+    "footprint": 69,
+    "channels": [
+     {"attr": "colour/red", "cell": 7, "n": 1},
+     {"attr": "colour/green", "cell": 7, "n": 1},
+     {"attr": "colour/blue", "cell": 7, "n": 1},
+     {"attr": "colour/white", "cell": 7, "n": 1},
+     {"attr": "colour/cct", "cell": 7},
+     {"attr": "shutter", "cell": 7, "ranges": "t1"},
+     {"attr": "dimmer", "cell": 7},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "other", "n": 1},
+     {"attr": "control"},
+     {"attr": "other", "n": 2},
+     {"attr": "other", "n": 3},
+     {"attr": "other", "n": 4},
+     {"attr": "colour/red", "cell": 6, "n": 1},
+     {"attr": "colour/green", "cell": 6, "n": 1},
+     {"attr": "colour/blue", "cell": 6, "n": 1},
+     {"attr": "colour/white", "cell": 6, "n": 1},
+     {"attr": "colour/cct", "cell": 6},
+     {
+      "attr": "shutter",
+      "cell": 6,
+      "ranges": [
+       {"dmx": [4, 103], "state": "strobe"},
+       {"dmx": [108, 207], "state": "pulse"},
+       {"dmx": [213, 251], "state": "random"}
+      ]
+     },
+     {"attr": "dimmer", "cell": 6},
+     {"attr": "fx/macro", "cell": 6, "n": 1},
+     {"attr": "fx/macro", "cell": 6, "n": 2},
+     {"attr": "fx/speed", "cell": 6},
+     {"attr": "fx/macro", "cell": 6, "n": 3},
+     {"attr": "fx/macro", "cell": 6, "n": 4},
+     {"attr": "shutter", "cell": 5},
+     {"attr": "dimmer", "cell": 5},
+     {"repeat": {"cells": {"from": 7, "to": 0}, "channels": [{"attr": "position/tilt"}]}},
+     {
+      "repeat": {
+       "cells": {"from": 7, "to": 6},
+       "channels": [
+        {"attr": "colour/red", "n": 2},
+        {"attr": "colour/green", "n": 2},
+        {"attr": "colour/blue", "n": 2},
+        {"attr": "colour/white", "n": 2}
+       ]
+      }
+     },
+     {
+      "repeat": {
+       "cells": {"from": 5, "to": 0},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "70ch",
+    "options": {"channels": "70"},
+    "footprint": 70,
+    "channels": [
+     {"attr": "colour/red", "n": 1},
+     {"attr": "colour/red", "rank": 1, "n": 1},
+     {"attr": "colour/green", "n": 1},
+     {"attr": "colour/green", "rank": 1, "n": 1},
+     {"attr": "colour/blue", "n": 1},
+     {"attr": "colour/blue", "rank": 1, "n": 1},
+     {"attr": "colour/white", "n": 1},
+     {"attr": "colour/white", "rank": 1, "n": 1},
+     {"attr": "colour/cct", "n": 1},
+     {"attr": "colour/macro"},
+     {
+      "attr": "shutter",
+      "ranges": [
+       {"dmx": [4, 103], "state": "strobe"},
+       {"dmx": [108, 207], "state": "pulse"},
+       {"dmx": [213, 251], "state": "random"}
+      ]
+     },
+     {"attr": "dimmer", "n": 1},
+     {"attr": "shutter/fx", "ranges": "t2", "n": 1},
+     {"attr": "dimmer", "n": 2},
+     {"attr": "dimmer", "rank": 1, "n": 2},
+     {"attr": "other", "n": 1},
+     {"attr": "control"},
+     {"attr": "other", "n": 2},
+     {"attr": "colour/red", "n": 2},
+     {"attr": "colour/green", "n": 2},
+     {"attr": "colour/blue", "n": 2},
+     {"attr": "colour/white", "n": 2},
+     {"attr": "colour/cct", "n": 2},
+     {"attr": "shutter/fx", "n": 2},
+     {"attr": "dimmer", "n": 3},
+     {"attr": "fx/macro", "n": 1},
+     {"attr": "fx/macro", "n": 2},
+     {"attr": "fx/speed"},
+     {"attr": "fx/macro", "n": 3},
+     {"attr": "fx/macro", "n": 4},
+     {"repeat": {"cells": {"from": 7, "to": 0}, "channels": [{"attr": "position/tilt"}]}},
+     {
+      "repeat": {
+       "cells": {"from": 7, "to": 0},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "8 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]}
+  },
+  "tables": {
+   "t1": [
+    {"dmx": [4, 103], "state": "strobe"},
+    {"dmx": [108, 207], "state": "pulse"},
+    {"dmx": [213, 251], "state": "random"},
+    {"dmx": [4, 103], "state": "strobe"},
+    {"dmx": [108, 207], "state": "pulse"},
+    {"dmx": [213, 251], "state": "random"}
+   ],
+   "t2": [
+    {"dmx": [4, 103], "state": "strobe"},
+    {"dmx": [108, 207], "state": "pulse"},
+    {"dmx": [213, 251], "state": "random"},
+    {"dmx": [4, 103], "state": "strobe"},
+    {"dmx": [108, 207], "state": "pulse"},
+    {"dmx": [213, 251], "state": "random"},
+    {"dmx": [4, 103], "state": "strobe"},
+    {"dmx": [108, 207], "state": "pulse"},
+    {"dmx": [213, 251], "state": "random"}
+   ]
+  }
+ }
+}

@@ -1,0 +1,99 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "chauvet/color-bank-led",
+  "name": "Chauvet Color Bank LED",
+  "manufacturer": "Chauvet",
+  "model": "Color Bank LED",
+  "category": "led_bar",
+  "description": "Chauvet COLORbank LED (LED-BANK4): a 572 x 146 x 97 mm black rectangular bar with a U bracket fixed by hand knobs at both ends. The front has four round LED pods in one evenly spaced row. Each pod is a circular cluster of 76 single-colour 5 mm LEDs (40 red, 18 green, 18 blue) in concentric rings around a small empty centre, 304 LEDs in total. The 4-channel DMX mode mixes RGB for the whole fixture, so all four pods form one control cell. It also has built-in colour programmes, chases and sound-active modes.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "bar",
+   "dims_src": "spec_sheet",
+   "ref_placeholder": false,
+   "face_src": "photo",
+   "import": {"from": "depence", "old_id": "f5c8c56f-6b48-43fc-9177-9e7b079166ae"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.572, 0.146, 0.097]},
+ "optics": {"cct_k": {"v": 3200, "src": "control:onyx", "conf": "medium"}},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "bail", "legs": 0, "base": null, "yoke": {"w": 0.59, "y1": 0.1, "d": 0.03}},
+  "joints": {
+   "spin": [],
+   "slide": [],
+   "tilt": {"drive": "manual", "range": [-90, 90], "axis": [1, 0, 0], "per_head": false, "rest": 90}
+  },
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 0.572,
+   "len": 0.097,
+   "d": 0.146,
+   "off": 0.0139,
+   "tilt_y": 0.1,
+   "lens_d": 0.097,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [
+    {
+     "region": [0.02, 0.05, 0.98, 0.95],
+     "emitter": {"kind": "led", "rows": 10, "cols": 10, "shape": "circle", "colour": "rgb"},
+     "cells": {"rows": 1, "cols": 4},
+     "cell_ids": [0, 0, 0, 0],
+     "cell_shape": "circle",
+     "plane": [0.56, 0.13]
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 1, "emitters": 340},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "native_cct_k": 3200,
+  "modes": [
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [
+     {"attr": "colour/macro"},
+     {"attr": "colour/red"},
+     {"attr": "colour/green", "ranges": [{"dmx": [0, 255], "state": "closed"}]},
+     {"attr": "colour/blue"}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "6ch",
+    "options": {"channels": "6"},
+    "footprint": 6,
+    "channels": [
+     {"repeat": {"cells": {"from": 0, "to": 3}, "channels": [{"attr": "dimmer"}]}},
+     {"attr": "none", "n": 1},
+     {"attr": "none", "n": 2}
+    ],
+    "prov": {"status": "single", "agree": ["onyx"]}
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "4 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]}
+  }
+ }
+}

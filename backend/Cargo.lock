@@ -2360,6 +2360,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "luma-fixture"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "luma-patterns"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,63 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "acme/led-256-d-10w",
+  "name": "Acme LED 256 D 10W",
+  "manufacturer": "Acme",
+  "model": "LED 256 D 10W",
+  "category": "effect_light",
+  "description": "Acme LED 256 D 10W is a single-unit effect light, probably built as a dome-housed mirror-style effect. It sits on a probably black cylindrical drum base, roughly 0.24 by 0.29 by 0.24 m (dimensions are an assumption, as the tree gives unspecified units). A pan hinge on the base carries a head that tilts on a second hinge, both manually aimed with a full 360-degree range. The round hemispherical dome head is about as wide as it is tall, with a flat, zero-thickness lens disc set into its opening facing outward. The front optic is probably a set of round faceted lens or mirror cells in staggered latitude rows over the upper dome, with a plain black drum below; the exact count is unknown, but roughly two dozen appear in reference images. The DMX mode gives no individually addressable cells, so treat them as one shared group. A parabolic mirror rotation control exists, but no matching node is modelled, so its motion is undetermined. A U-shaped side bracket is probably present on the drum but is not in the tree.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "dome",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "26e66093-d341-49d6-b7c9-283131322cd1"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.21, 0.179, 0.21]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0, "base": {"shape": "disc", "w": 0.21, "h": 0.072, "d": 0.21}, "yoke": null},
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.17, 0.004, 0.03],
+    "pos": [0, 0.002, 0.105],
+    "mat": "metal",
+    "name": "foot bracket"
+   }
+  ],
+  "joints": {"tilt": null, "spin": [{"drive": "dmx", "per_head": false, "axis": [0, 0, 1]}], "slide": []},
+  "body": {
+   "shape": "dome",
+   "outline": "round",
+   "w": 0.195,
+   "len": 0.107,
+   "d": 0.195,
+   "off": 0.0,
+   "tilt_y": 0.0,
+   "lens_d": 0.19,
+   "features": [],
+   "sphere": false
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [
+    {
+     "layout": {"kind": "rings", "n": 32, "rings": [8, 12, 12]},
+     "cell": "circle",
+     "optic": "lens",
+     "cells": 1
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 1, "emitters": 32},
+ "sources": [{"cell_ranges": [[0, 0]]}]
+}

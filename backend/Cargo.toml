@@ -4,6 +4,7 @@ members = [
     "crates/stagelinq",
     "crates/prodjlink",
     "crates/fixture-kinematics",
+    "crates/luma-fixture",
     "crates/patterns",
     "crates/sync",
 ]
