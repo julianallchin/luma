@@ -261,6 +261,22 @@ mod imp {
     }
 }
 
+/// A view's render count as a zero-size node, `"{label} renders = {n}"`: how
+/// a script checks that input to one view does not redraw another. Nothing
+/// without the `agent` feature.
+pub fn render_count(label: &str, renders: u32) -> gpui::AnyElement {
+    #[cfg(feature = "agent")]
+    let element = gpui::Styled::size_0(gpui::div())
+        .agent_node(Role::Text, format!("{label} renders = {renders}"))
+        .into_any_element();
+    #[cfg(not(feature = "agent"))]
+    let element = {
+        let _ = (label, renders);
+        gpui::Empty.into_any_element()
+    };
+    element
+}
+
 /// Cache an entity's rendered subtree, retaining its automation nodes on reuse.
 /// `style` must give the view a definite size, as for `Entity::cached`.
 pub fn cached_view<T: gpui::Render>(

@@ -229,7 +229,7 @@ test("a model choice is kept per conversation and carried into new chats", () =>
   // Any model but the current one. A row is labelled by its name first.
   const current = original.split(" · ").at(-1);
   const other = (s) => {
-    const search = s.find({ role: "input", label: "Search models…" });
+    const search = s.find((n) => n.role === "input" && /^Search .+ models…$/.test(n.label));
     return search && s.findAll({ role: "button" }).find((n) =>
       n.bounds.y > search.bounds.y && n.bounds.height > 0 && n.label.includes(" · ")
         && n.label.split(" · ")[0] !== current);

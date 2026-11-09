@@ -788,7 +788,7 @@ fn working_row(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> D
         // re-wrapping it.
         row = row
             .child(
-                pane::pane(px(agent_w), px(open_width), agent_panel(app))
+                pane::pane(px(agent_w), px(open_width), agent_panel(app, cx))
                     .agent_node(Role::Card, "Agent"),
             )
             .child(seam());
@@ -832,7 +832,21 @@ fn page_corners() -> Div {
 /// The agent panel: the chat of the body on screen, unchanged, flush at the
 /// page's left. With nothing open — Arrange before a score is picked — it
 /// says where a conversation comes from.
-fn agent_panel(app: &Luma) -> AnyElement {
+fn agent_panel(app: &Luma, cx: &App) -> AnyElement {
+    // The model picker is the chat's, but mounted here beside it rather than
+    // inside it: scrolling or typing in the picker then redraws only the
+    // picker, where a view nested in the chat would redraw the chat with it.
+    let picker = app.front_chat().map(|chat| {
+        let picker = chat.read(cx).model_picker().clone();
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .child(luma_ui::node::cached_view(
+                picker,
+                gpui::StyleRefinement::default().size_0(),
+            ))
+    });
     let chat = app.front_chat().cloned().map(|chat| {
         luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
             .into_any_element()
@@ -866,6 +880,7 @@ fn agent_panel(app: &Luma) -> AnyElement {
                 )
                 .into_any_element()
         }))
+        .children(picker)
         .into_any_element()
 }
 
