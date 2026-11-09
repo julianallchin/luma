@@ -35,6 +35,11 @@ fn cells(of: impl IntoIterator<Item = (usize, PrimitiveState)>) -> Vec<(String, 
 
 /// What `id` in `mode`, patched at address 1, sends for `primitives`.
 fn dmx(id: &str, mode: &str, primitives: &[(String, PrimitiveState)]) -> [u8; 512] {
+    dmx_at(id, mode, primitives, 0.0)
+}
+
+/// [`dmx`] for the output frame at `t` seconds on the output clock.
+fn dmx_at(id: &str, mode: &str, primitives: &[(String, PrimitiveState)], t: f64) -> [u8; 512] {
     let def = definition(id);
     let footprint = def
         .modes
@@ -65,7 +70,7 @@ fn dmx(id: &str, mode: &str, primitives: &[(String, PrimitiveState)]) -> [u8; 51
         lasers: Vec::new(),
     };
     let definitions = HashMap::from([(fixture.fixture_path.clone(), (*def).clone())]);
-    generate_dmx(&state, &[fixture], &definitions, None, 1.0, 0.0)[&1]
+    generate_dmx(&state, &[fixture], &definitions, None, 1.0, t)[&1]
 }
 
 fn fixture_level(p: PrimitiveState) -> Vec<(String, PrimitiveState)> {
@@ -313,6 +318,123 @@ fn oppsk_wall_washer_orders_top_bottom_and_white_cells() {
     );
     let lit_slots: Vec<usize> = (0..112).filter(|&o| b[o] > 100).collect();
     assert_eq!(lit_slots, [15, 48 + 16, 96 + 5]);
+}
+
+// HYT-006-384SL 64ch: slots 0–47 are 16 RGB triples, each driving a column's
+// top and bottom cells together; slots 48–63 are the 16 white cells (2, 5, …,
+// 47). There is no dimmer or shutter channel.
+const HYT: &str = "oppsk/hyt-006-384sl";
+const HYT_RGB: std::ops::Range<usize> = 0..48;
+const HYT_WHITE: std::ops::Range<usize> = 48..64;
+
+/// Every HYT cell, the white cells (index 2 mod 3) given `white` and the RGB
+/// cells `rgb`.
+fn hyt(rgb: PrimitiveState, white: PrimitiveState) -> Vec<(String, PrimitiveState)> {
+    cells((0..48).map(|i| {
+        (
+            i,
+            if i % 3 == 2 {
+                white.clone()
+            } else {
+                rgb.clone()
+            },
+        )
+    }))
+}
+
+/// White asked of a cell with only red, green and blue emitters is made by
+/// them; the white emitters elsewhere on the fixture cannot light it.
+#[test]
+#[ignore = "bug: emitters are decided per mode, so an RGB cell's white goes to white channels it has none of"]
+fn white_lights_cells_without_a_white_emitter() {
+    let white = lit(1.0, [1.0; 3]);
+    let b = dmx(HYT, "64ch", &hyt(white.clone(), white));
+    assert!(b[HYT_RGB].iter().all(|&v| v == 255), "{:?}", &b[HYT_RGB]);
+    assert!(
+        b[HYT_WHITE].iter().all(|&v| v == 255),
+        "{:?}",
+        &b[HYT_WHITE]
+    );
+}
+
+/// A fixture-level channel carries what the cells that can emit through it
+/// ask for: in 6ch, red is the RGB cells' red and white the white cells'
+/// white, not one average of every cell split afterwards.
+#[test]
+#[ignore = "bug: a fixture-level channel averages every cell, including cells without its emitter"]
+fn a_shared_channel_carries_the_cells_that_can_emit_through_it() {
+    let b = dmx(
+        HYT,
+        "6ch",
+        &hyt(lit(1.0, [1.0, 0.0, 0.0]), lit(1.0, [1.0; 3])),
+    );
+    // dimmer, shutter, red, green, blue, white
+    assert_eq!([b[2], b[3], b[4], b[5]], [255, 0, 0, 255], "{:?}", &b[..6]);
+}
+
+/// Dimmer reaches the light on a mode without a dimmer channel: dark at 0,
+/// brighter as it rises.
+#[test]
+#[ignore = "bug: a mode without a dimmer channel sends the colour at full whatever the dimmer"]
+fn dimmer_dims_a_mode_without_a_dimmer_channel() {
+    let at = |dimmer: f32| {
+        let p = lit(dimmer, [1.0, 0.5, 0.25]);
+        dmx(HYT, "64ch", &hyt(p.clone(), p))
+    };
+    let (dark, half, full) = (at(0.0), at(0.5), at(1.0));
+    assert!(dark[..64].iter().all(|&v| v == 0), "{:?}", &dark[..64]);
+    for slot in 0..64 {
+        assert!(half[slot] <= full[slot], "slot {slot}");
+    }
+    assert!(
+        (0..64).any(|slot| half[slot] < full[slot]),
+        "half {:?} full {:?}",
+        &half[..64],
+        &full[..64]
+    );
+}
+
+/// Cells that disagree about strobing each get what they asked for: over a
+/// second of output frames a strobing cell goes dark and lights again, and a
+/// steady one never changes.
+#[test]
+#[ignore = "bug: when cells disagree and no strobe rung fits, the fixture does not strobe at all"]
+fn cells_that_disagree_on_strobe_each_strobe_or_hold() {
+    // Red, which every RGB cell makes on its own, so only the strobe is tested.
+    let steady = lit(1.0, [1.0, 0.0, 0.0]);
+    let strobing = PrimitiveState {
+        strobe: 0.5,
+        ..steady.clone()
+    };
+    // Column 0 (red slot 0) strobes; every other cell holds.
+    let primitives = cells((0..48).map(|i| {
+        (
+            i,
+            if i < 3 {
+                strobing.clone()
+            } else {
+                steady.clone()
+            },
+        )
+    }));
+    let frames: Vec<[u8; 512]> = (0..44)
+        .map(|n| dmx_at(HYT, "64ch", &primitives, f64::from(n) / 44.0))
+        .collect();
+    let seen = |slot: usize| -> Vec<u8> { frames.iter().map(|b| b[slot]).collect() };
+    for slot in [0] {
+        let s = seen(slot);
+        assert!(
+            s.contains(&0) && s.iter().any(|&v| v > 0),
+            "strobing slot {slot}: {s:?}"
+        );
+    }
+    for slot in [3, 45] {
+        let s = seen(slot);
+        assert!(
+            s.iter().all(|&v| v == s[0]) && s[0] > 0,
+            "steady slot {slot}: {s:?}"
+        );
+    }
 }
 
 /// Atomic 3000 LED 14ch: slots 0–8 drive the strobe tube (cell 0), 9–13 the
