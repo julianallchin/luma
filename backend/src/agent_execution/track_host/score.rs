@@ -3,7 +3,7 @@
 //! whose, and whether the write lands on the live rows or on the thread's
 //! draft.
 use super::*;
-use crate::database::local::scores::rows;
+use crate::database::local::scores::{self, rows};
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
@@ -86,10 +86,9 @@ impl TrackHost {
     /// edit read — so a clip the user wrote meanwhile survives. Returns the
     /// document as it now stands.
     async fn apply_score(&self, base: &Score, candidate: &Score) -> Result<Score, HostCallError> {
-        let scope = self
-            .edit_scope
-            .as_ref()
-            .ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
+        if self.edit_scope.is_none() {
+            return Err(HostCallError::new("forbidden", "this score is read-only"));
+        }
         let mut access = VenueAccess::<Write>::write_as(
             &self.pool,
             VenueResource::Score(&self.scope.score_id),
@@ -109,10 +108,16 @@ impl TrackHost {
                     .await
                     .map_err(|error| HostCallError::new("internal", error))?;
                 let saved = ScoreEdit::between(base, candidate).applied_to(&stored);
+                // The rows a score owns carry the score's `uid`, whoever edits
+                // it: the same owner the editor's save writes.
+                let owner = scores::get_score(&mut access, &self.scope.score_id)
+                    .await
+                    .map_err(|error| HostCallError::new("internal", error))?
+                    .uid;
                 rows::save_score(
                     access.connection(),
                     &self.scope.score_id,
-                    &scope.user_id,
+                    owner.as_deref().unwrap_or_default(),
                     &saved,
                 )
                 .await

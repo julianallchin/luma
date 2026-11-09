@@ -30,17 +30,10 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
                 .agent_node(Role::Text, state.track_name.clone()),
         )
         .child(
-            luma_ui::button(
-                "Add pattern",
-                if state.writable() {
-                    Enabled::Yes
-                } else {
-                    Enabled::No
-                },
-            )
-            .id("add-score-pattern")
-            .on_click(move |_, _, cx| insert.update(cx, |app, cx| app.add_pattern(cx)))
-            .agent_node(Role::Button, "Add pattern"),
+            luma_ui::button("Add pattern", Enabled::Yes)
+                .id("add-score-pattern")
+                .on_click(move |_, _, cx| insert.update(cx, |app, cx| app.add_pattern(cx)))
+                .agent_node(Role::Button, "Add pattern"),
         )
         .child(
             luma_ui::button("Export show", state.exportable().into())
@@ -224,9 +217,6 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
                 )
             },
         )
-        .when(state.score.read_only, |el| {
-            el.child(luma_ui::caption("Read only"))
-        })
 }
 
 /// The transport at the strip's head: play or pause, where the song is

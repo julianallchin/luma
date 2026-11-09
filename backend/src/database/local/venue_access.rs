@@ -2,14 +2,58 @@ use std::marker::PhantomData;
 
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
+pub use crate::models::venues::VenueCapability;
+
 pub struct Read;
 /// A persistent edit of the venue's content: its fixtures, groups, stage,
 /// scores, environment and the rest. The owner and every member may make one;
 /// the server's `public.history` records who did.
 pub struct Write;
 /// A change to who has the venue — its share code and its memberships. The
-/// owner only.
+/// signed-in owner only.
 pub struct Owner;
+
+/// Who a principal is to one venue, and so what they may do with it.
+///
+/// [`standing`] is the whole rule and the one place it is decided: every guard
+/// here admits by it, and a venue read through one carries its answer
+/// ([`crate::models::venues::Venue::capability`]). Nothing else compares a
+/// row's `uid` with the principal to decide whether an edit is allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Standing {
+    /// The principal's own venue: an account's, or the guest namespace's
+    /// while signed out.
+    pub owner: bool,
+    pub capability: VenueCapability,
+}
+
+/// `principal`'s standing in a venue `owner_uid` owns, or `None` when they
+/// have no access to it. `is_member` is whether a membership row names them.
+///
+/// There is no permission model inside a venue: whoever can open it can edit
+/// all of it, other people's scores included. Its door — the share code and
+/// the memberships — is its owner's, and a guest venue has no door, because
+/// nobody can join one.
+pub fn standing(
+    owner_uid: Option<&str>,
+    principal: Option<&str>,
+    is_member: bool,
+) -> Option<Standing> {
+    let owner = match principal {
+        Some(principal) => owner_uid == Some(principal),
+        // A venue nobody owns is the guest namespace's, and signed out that is
+        // whose namespace this is.
+        None => owner_uid.is_none(),
+    };
+    let member = principal.is_some() && is_member;
+    (owner || member).then_some(Standing {
+        owner,
+        capability: VenueCapability {
+            edit: true,
+            manage: owner && principal.is_some(),
+        },
+    })
+}
 
 /// A fixed route from a known descendant ID to its venue root. Callers cannot
 /// authorize one venue and then operate on a resource belonging to another.
@@ -32,6 +76,7 @@ pub struct VenueAccess<'a, Mode> {
     transaction: Transaction<'a, Sqlite>,
     venue_id: String,
     principal: Option<String>,
+    standing: Standing,
     /// Whether the writes are an agent's, and so must be given back to the
     /// person before commit. See [`crate::sync::triggers::attribute`].
     attributed: bool,
@@ -47,6 +92,7 @@ mod sealed {
 pub trait AuthorizedVenue: sealed::Sealed {
     fn venue_id(&self) -> &str;
     fn principal(&self) -> Option<&str>;
+    fn standing(&self) -> Standing;
     fn connection(&mut self) -> &mut SqliteConnection;
 }
 
@@ -61,6 +107,10 @@ impl<Mode> AuthorizedVenue for VenueAccess<'_, Mode> {
         self.principal.as_deref()
     }
 
+    fn standing(&self) -> Standing {
+        self.standing
+    }
+
     fn connection(&mut self) -> &mut SqliteConnection {
         &mut self.transaction
     }
@@ -72,7 +122,7 @@ impl<'a> VenueAccess<'a, Read> {
             .begin()
             .await
             .map_err(|error| format!("Failed to begin venue access: {error}"))?;
-        authorize(transaction, resource, false).await
+        authorize(transaction, resource, |_| true).await
     }
 }
 
@@ -93,7 +143,7 @@ impl<'a> VenueAccess<'a, Write> {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
-        let mut access: Self = authorize(transaction, resource, false).await?;
+        let mut access: Self = authorize(transaction, resource, |can| can.edit).await?;
         if let Some(actor) = actor {
             crate::sync::triggers::attribute(&mut access.transaction, actor).await?;
             access.attributed = true;
@@ -113,13 +163,14 @@ impl<'a> VenueAccess<'a, Write> {
 }
 
 impl<'a> VenueAccess<'a, Owner> {
-    /// Admit the venue's owner, and nobody else, to change who has the venue.
+    /// Admit whoever may [`manage`](VenueCapability::manage) the venue — its
+    /// signed-in owner, and nobody else — to change who has it.
     pub async fn owner(pool: &'a SqlitePool, resource: VenueResource<'_>) -> Result<Self, String> {
         let transaction = pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
-        authorize(transaction, resource, true).await
+        authorize(transaction, resource, |can| can.manage).await
     }
 
     pub async fn commit(self) -> Result<(), String> {
@@ -139,6 +190,11 @@ impl<Mode> VenueAccess<'_, Mode> {
         self.principal.as_deref()
     }
 
+    /// What the admitted principal may do with this venue.
+    pub fn capability(&self) -> VenueCapability {
+        self.standing.capability
+    }
+
     pub fn require_venue(&self, venue_id: &str) -> Result<(), String> {
         if self.venue_id == venue_id {
             Ok(())
@@ -151,7 +207,7 @@ impl<Mode> VenueAccess<'_, Mode> {
 async fn authorize<'a, Mode>(
     mut transaction: Transaction<'a, Sqlite>,
     resource: VenueResource<'_>,
-    owner_only: bool,
+    admits: fn(VenueCapability) -> bool,
 ) -> Result<VenueAccess<'a, Mode>, String> {
     let venue_id = resolve_venue_id(&mut transaction, resource)
         .await?
@@ -182,23 +238,15 @@ async fn authorize<'a, Mode>(
     }
 
     let principal = active_uid;
-    // A venue nobody owns is the guest namespace's, and signed out that is
-    // whose namespace this is.
-    let guest_venue = owner_uid.is_none();
-    let owner = match principal.as_deref() {
-        Some(principal) => owner_uid.as_deref() == Some(principal),
-        None => guest_venue,
-    };
-    let member = principal.is_some() && is_member == 1;
-    let allowed = if owner_only { owner } else { owner || member };
-    if !allowed {
-        return Err(not_found());
-    }
+    let standing = standing(owner_uid.as_deref(), principal.as_deref(), is_member == 1)
+        .filter(|standing| admits(standing.capability))
+        .ok_or_else(not_found)?;
 
     Ok(VenueAccess {
         transaction,
         venue_id,
         principal,
+        standing,
         attributed: false,
         _mode: PhantomData,
     })
@@ -303,7 +351,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn members_edit_the_venue_while_only_owners_and_guests_hold_its_door() {
+    async fn members_edit_the_venue_while_only_its_signed_in_owner_holds_its_door() {
         let (_directory, pool) = test_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
@@ -389,7 +437,8 @@ mod tests {
         assert!(
             VenueAccess::<Owner>::owner(&pool, VenueResource::Venue("guest"))
                 .await
-                .is_ok()
+                .is_err(),
+            "a guest venue has no door to manage: nobody can join one"
         );
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)

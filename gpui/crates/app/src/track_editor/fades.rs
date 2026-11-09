@@ -776,9 +776,6 @@ pub(super) fn register(box_: Bounds<Pixels>, clip: &Clip, window: &mut Window, c
 impl Editor {
     /// The part of an alpha line under `at`, in window space.
     fn alpha_under(&self, at: Point<Pixels>) -> Option<(&Clip, Bounds<Pixels>, Grab)> {
-        if !self.writable() {
-            return None;
-        }
         let (canvas, layout, view) = (self.canvas.get(), self.layout(), self.view);
         let row = layout.row_at(f32::from(at.y - canvas.origin.y))?;
         self.clips

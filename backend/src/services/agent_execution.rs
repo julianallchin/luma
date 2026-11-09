@@ -111,8 +111,10 @@ struct ResolvedScope {
     /// venue and score together. It permits high-fidelity read-only candidate
     /// rendering, never mutation.
     track: Option<TrackScope>,
-    /// Present only when the durable thread scope and authenticated owner both
-    /// authorize mutation. Python never supplies any field of this capability.
+    /// Present only when the durable thread scope pins the score and the
+    /// venue's admission lets the principal edit it — anyone with access to
+    /// the venue, whoever wrote the score. Python never supplies any field of
+    /// this capability.
     track_edit: Option<TrackEditScope>,
     /// The venue whose Perform set the cell may read and change: a Perform
     /// thread's, and no other thread's.
@@ -123,7 +125,6 @@ async fn resolve_scope(
     pool: &SqlitePool,
     thread: &AgentThread,
     requested: PythonScopeInput,
-    current_user_id: Option<&str>,
 ) -> Result<ResolvedScope, String> {
     match thread.route()? {
         ThreadRoute::Unbound => Ok(ResolvedScope {
@@ -187,14 +188,11 @@ async fn resolve_scope(
                     "pinned score '{score_id}' does not belong to track '{track_id}' and venue '{venue_id}'"
                 ));
             }
-            let track_edit = current_user_id
-                .filter(|user_id| score.uid.as_deref().is_some_and(|owner| owner == *user_id))
-                .map(|user_id| TrackEditScope {
-                    score_id: score_id.to_string(),
-                    track_id: track_id.to_string(),
-                    venue_id: venue_id.to_string(),
-                    user_id: user_id.to_string(),
-                });
+            let track_edit = access.capability().edit.then(|| TrackEditScope {
+                score_id: score_id.to_string(),
+                track_id: track_id.to_string(),
+                venue_id: venue_id.to_string(),
+            });
 
             Ok(ResolvedScope {
                 bindings: BindingScope {
@@ -297,8 +295,7 @@ pub async fn run_python_cell_inner(
         crate::agent::context::execution_thread(pool, &thread_id, current_user_id.as_deref())
             .await?;
 
-    let mut resolved =
-        resolve_scope(pool, &thread, requested_scope, current_user_id.as_deref()).await?;
+    let mut resolved = resolve_scope(pool, &thread, requested_scope).await?;
     if let Some(draft) = draft_id.as_deref() {
         let mut connection = pool
             .acquire()
@@ -710,26 +707,58 @@ mod tests {
     async fn track_scope_is_derived_from_the_thread_and_auth() {
         let (_directory, pool) = scope_pool().await;
         let thread = pinned_track_thread();
-        let resolved = resolve_scope(&pool, &thread, PythonScopeInput::default(), Some("owner"))
+        let resolved = resolve_scope(&pool, &thread, PythonScopeInput::default())
             .await
             .unwrap();
         assert_eq!(resolved.bindings.track_id.as_deref(), Some("track"));
         assert_eq!(resolved.bindings.venue_id.as_deref(), Some("venue"));
         assert_eq!(resolved.bindings.score_id.as_deref(), Some("score"));
         assert!(resolved.bindings.track_editable);
-        assert_eq!(resolved.track_edit.unwrap().user_id, "owner");
+        assert_eq!(resolved.track_edit.unwrap().score_id, "score");
 
-        let read_only = resolve_scope(
-            &pool,
-            &thread,
-            PythonScopeInput::default(),
-            Some("someone-else"),
+        crate::database::local::auth::arm_write_admission(&pool, Some("outsider"))
+            .await
+            .unwrap();
+        let refused = resolve_scope(&pool, &thread, PythonScopeInput::default())
+            .await
+            .err()
+            .expect("an account without the venue reached its score");
+        assert!(refused.contains("is not available"), "{refused}");
+    }
+
+    /// No permission model inside a venue: a member's agent edits a score the
+    /// owner wrote, as the member could by hand.
+    #[tokio::test]
+    async fn a_member_s_track_thread_may_edit_another_person_s_score() {
+        let (_directory, pool) = scope_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("member"))
+            .await
+            .unwrap();
+        let mut download = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        crate::database::local::write_admission::enter_remote_writes(&mut download)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_members (id, uid, venue_id, role)
+             VALUES ('venue:member', 'member', 'venue', 'member')",
         )
+        .execute(&mut *download)
         .await
         .unwrap();
-        assert!(!read_only.bindings.track_editable);
-        assert_eq!(read_only.track.as_ref().unwrap().score_id, "score");
-        assert!(read_only.track_edit.is_none());
+        crate::database::local::write_admission::leave_remote_writes(&mut download)
+            .await
+            .unwrap();
+        download.commit().await.unwrap();
+
+        let resolved = resolve_scope(&pool, &pinned_track_thread(), PythonScopeInput::default())
+            .await
+            .unwrap();
+        assert!(resolved.bindings.track_editable);
+        assert_eq!(
+            resolved.track_edit.map(|edit| edit.score_id).as_deref(),
+            Some("score"),
+            "the owner's score was read only to a member's agent"
+        );
     }
 
     #[tokio::test]
@@ -739,7 +768,7 @@ mod tests {
             track_id: Some("another-track".into()),
             ..Default::default()
         };
-        let error = resolve_scope(&pool, &pinned_track_thread(), requested, Some("owner"))
+        let error = resolve_scope(&pool, &pinned_track_thread(), requested)
             .await
             .err()
             .unwrap();

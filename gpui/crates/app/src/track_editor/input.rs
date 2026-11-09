@@ -528,12 +528,6 @@ impl Luma {
                     end: Some(end),
                 }
             });
-            // Read-only stops here: the selection is a view of the score, the
-            // drag is a write to it.
-            if !editor.writable() {
-                return;
-            }
-
             // Within a handle's width of either end, in *pixels* — a handle is
             // a fixed size on screen, so what it covers in seconds is a
             // function of the zoom.

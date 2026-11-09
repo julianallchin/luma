@@ -62,23 +62,21 @@ pub(crate) struct ScoreRow {
     /// rather than two: the pair is always shown together and a score with a
     /// token count but no price is a run whose harness did not name one.
     spend: SharedString,
-    /// Somebody else's score: openable, not writable. The same flag the editor
-    /// computes for the open score, from the same comparison.
-    pub(crate) read_only: bool,
 }
 
 /// Resolve a listing into rows. Order is the seam's — newest-created first —
 /// and is preserved, so "which score is newest" is a property of the list and
 /// not something this level re-decides per venue.
+///
+/// `user` only names the author: every listed score is in a venue the reader
+/// can open, and whoever can open a venue can edit all of it.
 pub(crate) fn rows(summaries: &[ScoreSummary], user: Option<&str>) -> Rc<[ScoreRow]> {
     summaries
         .iter()
         .map(|score| {
-            let read_only = score.uid.is_some() && score.uid.as_deref() != user;
-            let author = if read_only {
-                SharedString::from(short_uid(score.uid.as_deref().unwrap_or_default()))
-            } else {
-                SharedString::from("You")
+            let author = match score.uid.as_deref() {
+                Some(uid) if Some(uid) != user => SharedString::from(short_uid(uid)),
+                _ => SharedString::from("You"),
             };
             ScoreRow {
                 id: score.id.clone().into(),
@@ -100,7 +98,6 @@ pub(crate) fn rows(summaries: &[ScoreSummary], user: Option<&str>) -> Rc<[ScoreR
                 )
                 .into(),
                 spend: spend(score.cost_usd, score.total_tokens).into(),
-                read_only,
             }
         })
         .collect()
@@ -563,9 +560,8 @@ impl Luma {
         .detach();
     }
 
-    /// Put the caret in `score_id`'s name. Only this venue's own scores get
-    /// here: another person's score is read only, and another venue's is not
-    /// this list's subject.
+    /// Put the caret in `score_id`'s name. Only this venue's scores get here:
+    /// another venue's is not this list's subject.
     fn start_score_rename(
         &mut self,
         track_id: SharedString,
@@ -581,9 +577,6 @@ impl Luma {
         else {
             return;
         };
-        if row.read_only {
-            return;
-        }
         // The second click of the pair: the list stays for the caret.
         self.song_list_close = None;
         let opened_on = row.name.as_deref().unwrap_or_default().to_string();
@@ -684,12 +677,11 @@ impl Luma {
 
 /// The row, as the editor holds the score it is showing. This list is the one
 /// place a row becomes the open score, so the two cannot disagree about which
-/// `#n` or which ownership the timeline is under.
+/// `#n` the timeline is under.
 pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
     crate::track_editor::Score {
         id: row.id.to_string(),
         ordinal: row.ordinal,
-        read_only: row.read_only,
     }
 }
 
@@ -876,7 +868,7 @@ fn score_row(
     track: &TrackBrowserRow,
     rename: Option<&Entity<TextInput>>,
 ) -> AnyElement {
-    let renamer = (here && !row.read_only).then(|| {
+    let renamer = here.then(|| {
         (
             app.clone(),
             SharedString::from(track.id.clone()),
@@ -885,13 +877,12 @@ fn score_row(
     });
     let id = SharedString::from(format!("score-{}", row.id));
     let label = format!(
-        "#{} · {} · {} patterns · {}{}{}{}",
+        "#{} · {} · {} patterns · {}{}{}",
         row.ordinal,
         row.author,
         row.clips,
         row.age,
         row.spend,
-        if row.read_only { " · read only" } else { "" },
         if here {
             String::new()
         } else {
@@ -954,7 +945,6 @@ fn score_row(
                 .text_color(glass::ink(glass::TEXT_TERTIARY))
                 .child(row.detail()),
         )
-        .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
         .children(
             status.map(|status| crate::agent::status_dot(status, &format!("#{}", row.ordinal))),
         )

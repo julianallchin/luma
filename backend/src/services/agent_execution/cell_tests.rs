@@ -233,9 +233,11 @@ impl Fixture {
         }
     }
 
-    /// A track thread. Its durable venue and score are one indivisible guest
-    /// scope. Mutation authorization is exercised separately; these tests care
-    /// only about analysis and namespace behavior.
+    /// A track thread with a session open on it. Its durable venue and score
+    /// are one indivisible guest scope, which the guest may edit, so its cells
+    /// attach to that session's turn ([`session_turn`]). Mutation
+    /// authorization is exercised separately; these tests care only about
+    /// analysis and namespace behavior.
     async fn thread(&self) -> String {
         sqlx::query(
             "INSERT OR IGNORE INTO scores (id, uid, track_id, venue_id, name)
@@ -250,7 +252,7 @@ impl Fixture {
         crate::database::local::auth::arm_write_admission(&self.pool, None)
             .await
             .unwrap();
-        crate::database::local::agent_threads::create_thread(
+        let thread = crate::database::local::agent_threads::create_thread(
             &self.pool,
             CreateAgentThreadInput {
                 agent_kind: "track_copilot".to_string(),
@@ -264,7 +266,24 @@ impl Fixture {
         )
         .await
         .expect("create thread")
-        .id
+        .id;
+        crate::database::local::agent_threads::append_messages(
+            &self.pool,
+            &thread,
+            AppendAgentThreadMessagesInput {
+                operation_id: session_turn(&thread),
+                expected_head_message_id: None,
+                messages: vec![NewAgentThreadMessage {
+                    id: Some(session_turn(&thread)),
+                    role: "session".into(),
+                    parts: json!([{ "type": "text", "text": "Session opened." }]),
+                }],
+            },
+            None,
+        )
+        .await
+        .expect("open the thread's session");
+        thread
     }
 
     async fn editable_thread(&self) -> String {
@@ -317,8 +336,10 @@ impl Fixture {
         }
     }
 
+    /// A cell in a [`Self::thread`], attached to its session.
     async fn run(&self, thread_id: &str, code: &str) -> PythonCellResult {
-        self.run_scoped(thread_id, code, self.scope()).await
+        self.run_scoped(thread_id, code, self.scope(), Some(session_turn(thread_id)))
+            .await
     }
 
     async fn run_scoped(
@@ -326,6 +347,7 @@ impl Fixture {
         thread_id: &str,
         code: &str,
         scope: PythonScopeInput,
+        turn: Option<String>,
     ) -> PythonCellResult {
         run_python_cell_inner(
             &self.pool,
@@ -336,7 +358,7 @@ impl Fixture {
             thread_id.to_string(),
             code.to_string(),
             scope,
-            None,
+            turn,
             None,
             None,
             None,
@@ -740,9 +762,15 @@ impl Fixture {
                 venue_id: Some(venue_id.to_string()),
                 ..Default::default()
             },
+            None,
         )
         .await
     }
+}
+
+/// The id of the session turn [`Fixture::thread`] opens on `thread`.
+fn session_turn(thread: &str) -> String {
+    format!("{thread}-session")
 }
 
 /// One program builds a whole rig out of an empty room, and reads back what it

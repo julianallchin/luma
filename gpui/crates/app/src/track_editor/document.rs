@@ -113,7 +113,7 @@ impl Editor {
         self.clips = clips?.into();
         self.beats = beats.map(Rc::new);
         self.graph_score = Some(score);
-        self.dirty = split && self.writable();
+        self.dirty = split;
         self.sheet.invalidate();
         self.previews.borrow_mut().clear();
         self.preview_errors.clear();
@@ -186,7 +186,7 @@ impl Luma {
         let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(&target) else {
             return;
         };
-        if editor.saving || !editor.dirty || !editor.writable() {
+        if editor.saving || !editor.dirty {
             return;
         }
         let score_id = editor.score.id.clone();

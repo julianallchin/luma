@@ -730,7 +730,7 @@ fn clips_live(
     edit: &mut impl FnMut(&mut luma_patterns::Clip),
 ) -> Vec<SharedString> {
     let mut touched: Vec<SharedString> = Vec::new();
-    if !editor.writable() || editor.selected.is_empty() {
+    if editor.selected.is_empty() {
         return touched;
     }
     let library = luma_patterns::standard_library();

@@ -1,74 +1,87 @@
 use uuid::Uuid;
 
-use crate::database::local::venue_access::{AuthorizedVenue, Owner, VenueAccess, Write};
-use crate::models::venues::{Venue, VenueMember};
+use sqlx::{FromRow, Row};
+
+use crate::database::local::venue_access::{
+    self, AuthorizedVenue, Owner, Standing, VenueAccess, Write,
+};
+use crate::models::venues::{Venue, VenueMember, ROLE_MEMBER, ROLE_OWNER};
 use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
-/// `role` is not read off the row: it is derived per reader — see
-/// [`get_venue`] — so a venue the admitted principal does not own reads as a
-/// member's however the column was written.
-const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, 'owner' AS role, environment, haze, created_at, updated_at";
+/// The stored columns of a venue aliased `venue`. Its `role` and `capability`
+/// are not among them: they are the reader's, set by [`read_by`].
+macro_rules! venue_columns {
+    () => {
+        "venue.id, venue.uid, venue.name, venue.description, venue.share_code,
+         venue.environment, venue.haze, venue.created_at, venue.updated_at"
+    };
+}
+
+/// `venue` as the principal `standing` describes reads it.
+fn read_by(mut venue: Venue, standing: Standing) -> Venue {
+    let role = if standing.owner {
+        ROLE_OWNER
+    } else {
+        ROLE_MEMBER
+    };
+    venue.role = role.into();
+    venue.capability = standing.capability;
+    venue
+}
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
     let venue_id = access.venue_id().to_string();
-    let row = sqlx::query_as::<_, Venue>(
-        "SELECT venue.id, venue.uid, venue.name, venue.description, venue.share_code,
-                CASE
-                    WHEN admission.active_uid IS NULL OR venue.uid = admission.active_uid
-                    THEN 'owner'
-                    ELSE 'member'
-                END AS role,
-                venue.environment, venue.haze, venue.created_at, venue.updated_at
-         FROM venues venue
-         CROSS JOIN auth_write_admission admission
-         WHERE venue.id = ? AND admission.singleton = 1",
-    )
+    let row = sqlx::query_as::<_, Venue>(concat!(
+        "SELECT ",
+        venue_columns!(),
+        " FROM venues venue WHERE venue.id = ?"
+    ))
     .bind(venue_id)
     .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to fetch venue: {}", e))?;
 
-    Ok(row)
+    Ok(read_by(row, access.standing()))
 }
 
 /// List exactly the venues admitted for the app database's current host-bound
-/// principal. Signed-out guest state never includes cached account venues.
+/// principal — the ones [`venue_access::standing`] gives them a standing in.
+/// Signed-out guest state never includes cached account venues.
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
-    let rows = sqlx::query_as::<_, Venue>(
-        "SELECT venue.id, venue.uid, venue.name, venue.description, venue.share_code,
-                CASE
-                    WHEN admission.active_uid IS NULL OR venue.uid = admission.active_uid
-                    THEN 'owner'
-                    ELSE 'member'
-                END AS role,
-                venue.environment, venue.haze, venue.created_at, venue.updated_at
+    let rows = sqlx::query(concat!(
+        "SELECT ",
+        venue_columns!(),
+        ", admission.active_uid AS principal,
+                EXISTS(
+                    SELECT 1 FROM venue_members membership
+                    WHERE membership.venue_id = venue.id
+                      AND membership.uid = admission.active_uid
+                ) AS is_member
          FROM venues venue
          CROSS JOIN auth_write_admission admission
          WHERE admission.singleton = 1
            AND admission.armed = 1
            AND admission.accepting = 1
            AND admission.maintenance = 0
-           AND (
-                (admission.active_uid IS NULL AND venue.uid IS NULL)
-                OR
-                (admission.active_uid IS NOT NULL AND (
-                    venue.uid = admission.active_uid
-                    OR EXISTS(
-                        SELECT 1 FROM venue_members membership
-                        WHERE membership.venue_id = venue.id
-                          AND membership.uid = admission.active_uid
-                    )
-                ))
-           )
-         ORDER BY venue.updated_at DESC",
-    )
+         ORDER BY venue.updated_at DESC"
+    ))
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to list venues: {}", e))?;
 
-    Ok(rows)
+    let mut venues = Vec::new();
+    for row in rows {
+        let venue = Venue::from_row(&row).map_err(|e| format!("Failed to read a venue: {e}"))?;
+        let principal: Option<String> = row.get("principal");
+        let is_member: bool = row.get("is_member");
+        if let Some(standing) =
+            venue_access::standing(venue.uid.as_deref(), principal.as_deref(), is_member)
+        {
+            venues.push(read_by(venue, standing));
+        }
+    }
+    Ok(venues)
 }
 
 /// Create a new venue
@@ -108,17 +121,22 @@ pub async fn create_venue(
         .execute(&mut *transaction)
         .await
         .map_err(|e| format!("Failed to create the venue's root: {e}"))?;
-    let query = format!("SELECT {} FROM venues WHERE id = ?", VENUE_COLUMNS);
-    let venue = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
-        .bind(&id)
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to read created venue: {error}"))?;
+    let venue = sqlx::query_as::<_, Venue>(concat!(
+        "SELECT ",
+        venue_columns!(),
+        " FROM venues venue WHERE venue.id = ?"
+    ))
+    .bind(&id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to read created venue: {error}"))?;
     transaction
         .commit()
         .await
         .map_err(|error| format!("Failed to commit venue creation: {error}"))?;
-    Ok(venue)
+    let creator = venue_access::standing(venue.uid.as_deref(), principal.as_deref(), false)
+        .ok_or_else(|| "The created venue is not its creator's".to_string())?;
+    Ok(read_by(venue, creator))
 }
 
 /// Set this venue's lighting environment, synced with the venue.

@@ -396,10 +396,10 @@ impl VenuePicker {
     }
 }
 
-/// Whether this account may invite people into `venue`: it owns it, and it
-/// is an account's venue rather than the signed-out guest's.
+/// Whether this account may invite people into `venue`, as the backend
+/// decided when it read the venue.
 fn shareable(venue: &Venue) -> bool {
-    venue.is_owner() && venue.uid.is_some()
+    venue.capability.manage
 }
 
 /// What a command's refusal says to a person: the seam's own prose, without
