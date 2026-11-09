@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::light_index::LightIndexStats;
+use crate::pass_profile::Base;
 use crate::viewport::{Presented, PRESENTATION_SLOTS};
 
 use super::stats::{CpuSpans, FrameTimings, ShadowStats};
@@ -355,7 +356,19 @@ impl PendingFrame {
             // A zero haze end means haze did not run; a whole-frame zero means
             // the driver dropped the samples.
             let [start, scene_end, haze_end, composite_end, index0, index1, grid0, grid1, prepared, lit] =
-                <[u64; 10]>::try_from(&timestamps[..10]).expect("base queries");
+                [
+                    Base::Start,
+                    Base::SceneEnd,
+                    Base::HazeEnd,
+                    Base::CompositeEnd,
+                    Base::LightIndexStart,
+                    Base::LightIndexEnd,
+                    Base::GridStart,
+                    Base::GridEnd,
+                    Base::GridPrepared,
+                    Base::GridLit,
+                ]
+                .map(|sample| timestamps[sample as usize]);
             let haze_ran = haze_end > 0;
             // The composite pass samples both of its predecessors' outputs, so
             // it is the frame's sink and its completion is the frame's end.
@@ -470,7 +483,7 @@ pub(super) fn claim_start_timestamp<'a>(
         .take()
         .map(|query_set| wgpu::RenderPassTimestampWrites {
             query_set,
-            beginning_of_pass_write_index: Some(0),
+            beginning_of_pass_write_index: Base::Start.index(),
             end_of_pass_write_index: None,
         })
 }

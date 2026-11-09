@@ -97,8 +97,8 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// Sample indices themselves are unrestricted
 /// (`tests/timestamp_query_contract.rs`), but *when* the set is resolved is
 /// not — see the resolve in `submit_readback`.
-const QUERY_COUNT: u32 = 10;
-const MSAA_SAMPLES: u32 = 4;
+const QUERY_COUNT: u32 = crate::pass_profile::Base::COUNT;
+pub(crate) const MSAA_SAMPLES: u32 = 4;
 pub(crate) const CAMERA_NEAR: f32 = 0.1;
 const CAMERA_FAR: f32 = 2000.0;
 

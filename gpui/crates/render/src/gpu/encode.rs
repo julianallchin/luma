@@ -10,6 +10,8 @@ use glam::{Mat4, Vec3, Vec4};
 use crate::frame::Frame;
 use crate::haze_compact::HAZE_WORKGROUP;
 use crate::light_index::{LightCore, LightIndexInput, LightRest};
+use crate::pass_profile::Base;
+use crate::quality::QualityBudget;
 use crate::shadow::{
     assign_shadow_slots, fixture_shadow_caster_hash, fixture_shadow_matrix, fixture_shadow_planes,
     fixture_shadow_texture_array, shadow_matrix_bits, ShadowCacheKey, FIXTURE_SHADOW_SIZE,
@@ -36,7 +38,7 @@ use super::uniforms::{
 };
 use super::{
     Destination, Gpu, Renderer, Transport, CAMERA_NEAR, CASCADE_BLEND, CASCADE_COUNT,
-    CASCADE_SPLITS, MSAA_SAMPLES, QUERY_COUNT, SHADOW_SIZE,
+    CASCADE_SPLITS, QUERY_COUNT, SHADOW_SIZE,
 };
 
 /// Emitted intensity times the brightest colour channel below which a cone
@@ -46,87 +48,6 @@ const DARK_CONE: f32 = 1e-4;
 /// Haze march samples per light for a light the software visibility
 /// reference (`visibility_reference`, which only tests turn on) traces.
 const REFERENCE_GEOMETRY_SHADOW_SAMPLES: f32 = 2.0;
-
-/// The per-frame work a [`Quality`](crate::scene_desc::Quality) level buys.
-/// `High` is the reference picture: its shadow walk is the one the renderer
-/// had before the levels existed. Its plain-beam piece cap and shadow redraw
-/// budget are new, and measured to leave the picture unchanged. `Low` is
-/// `Medium` without the march and without fixture shadows.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct QualityBudget {
-    /// Whether the haze is marched. Without it no volumetric pass runs —
-    /// not the fog grid, the medium cache, the lit-interval cache, the
-    /// compaction, the haze kernels, the sun shafts or the haze glow — and
-    /// `haze_analytic.wgsl` writes the haze target in closed form.
-    marched: bool,
-    /// Whether fixtures cast shadows. Without them no fixture shadow map is
-    /// assigned, drawn or reduced, and surfaces take each fixture's light
-    /// unshadowed. `Frame::fixture_shadows` can only turn them off.
-    fixture_shadows: bool,
-    /// Gauss-Legendre piece cap for a plain beam (`quadrature_pieces`).
-    plain_pieces: f32,
-    /// Scale on the haze shadow walk's pixel-footprint allowance.
-    shadow_footprint: f32,
-    /// Scale on the haze shadow walk's soft and hard step counts.
-    shadow_steps: f32,
-    /// Most moved fixture shadow maps redrawn in one frame.
-    shadow_redraws: usize,
-    /// Far-field fog grid cell size in pixels.
-    fog_tile: u32,
-    /// Scene-pass samples per pixel.
-    msaa: u32,
-    /// Output pixels per ambient-visibility texel along each axis.
-    ambient_divisor: u32,
-}
-
-impl QualityBudget {
-    fn of(quality: crate::scene_desc::Quality, camera_moving: bool) -> Self {
-        use crate::scene_desc::Quality;
-        match (quality, camera_moving) {
-            (Quality::High, _) => Self {
-                marched: true,
-                fixture_shadows: true,
-                plain_pieces: 8.0,
-                shadow_footprint: 1.0,
-                shadow_steps: 1.0,
-                shadow_redraws: 64,
-                fog_tile: crate::fog_grid::TILE_SIZE,
-                msaa: MSAA_SAMPLES,
-                ambient_divisor: 1,
-            },
-            // A laptop budget: twice the shadow walk's footprint allowance
-            // and half its steps, and twice again while the camera moves,
-            // when nothing settles anyway.
-            (Quality::Medium, moving) => Self {
-                marched: true,
-                fixture_shadows: true,
-                plain_pieces: 4.0,
-                shadow_footprint: if moving { 4.0 } else { 2.0 },
-                shadow_steps: if moving { 0.25 } else { 0.5 },
-                shadow_redraws: 16,
-                fog_tile: crate::fog_grid::LOW_TILE_SIZE,
-                msaa: 1,
-                ambient_divisor: 1,
-            },
-            (Quality::Low, moving) => Self {
-                marched: false,
-                fixture_shadows: false,
-                ambient_divisor: 2,
-                ..Self::of(Quality::Medium, moving)
-            },
-        }
-    }
-
-    /// `Haze::quality`.
-    fn haze(self) -> [f32; 4] {
-        [
-            self.plain_pieces,
-            self.shadow_footprint,
-            self.shadow_steps,
-            0.0,
-        ]
-    }
-}
 
 impl Renderer {
     pub(super) fn submit_readback(
@@ -257,7 +178,12 @@ impl Renderer {
                 .last_live_camera
                 .is_some_and(|last| last != camera_bits);
         self.last_live_camera = temporal.then_some(camera_bits);
-        let budget = QualityBudget::of(frame.quality, camera_moving);
+        let budget = QualityBudget::of(frame.quality);
+        let budget = if camera_moving {
+            budget.while_moving()
+        } else {
+            budget
+        };
         let fixture_shadows = frame.fixture_shadows && budget.fixture_shadows;
         let fog_tile = budget.fog_tile;
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
@@ -462,8 +388,8 @@ impl Renderer {
                     profile_resources.as_ref().map(|(queries, ..)| {
                         wgpu::ComputePassTimestampWrites {
                             query_set: queries,
-                            beginning_of_pass_write_index: Some(4),
-                            end_of_pass_write_index: Some(5),
+                            beginning_of_pass_write_index: Base::LightIndexStart.index(),
+                            end_of_pass_write_index: Base::LightIndexEnd.index(),
                         }
                     }),
                 ),
@@ -1544,7 +1470,7 @@ impl Renderer {
                         queries.map(|queries| wgpu::RenderPassTimestampWrites {
                             query_set: queries,
                             beginning_of_pass_write_index: None,
-                            end_of_pass_write_index: Some(1),
+                            end_of_pass_write_index: Base::SceneEnd.index(),
                         }),
                     ),
                     ..Default::default()
@@ -1976,7 +1902,7 @@ impl Renderer {
                                 wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
                                     beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(2),
+                                    end_of_pass_write_index: Base::HazeEnd.index(),
                                 }
                             }),
                         ),
@@ -2083,8 +2009,8 @@ impl Renderer {
                             profile_resources.as_ref().and_then(|(queries, ..)| {
                                 (k == 0).then_some(wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
-                                    beginning_of_pass_write_index: Some(6),
-                                    end_of_pass_write_index: Some(8),
+                                    beginning_of_pass_write_index: Base::GridStart.index(),
+                                    end_of_pass_write_index: Base::GridPrepared.index(),
                                 })
                             }),
                         ),
@@ -2156,7 +2082,7 @@ impl Renderer {
                                 wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
                                     beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(9),
+                                    end_of_pass_write_index: Base::GridLit.index(),
                                 }
                             }),
                         ),
@@ -2183,7 +2109,7 @@ impl Renderer {
                                 (k == 0).then_some(wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
                                     beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(7),
+                                    end_of_pass_write_index: Base::GridEnd.index(),
                                 })
                             }),
                         ),
@@ -2259,7 +2185,7 @@ impl Renderer {
                         wgpu::ComputePassTimestampWrites {
                             query_set: queries,
                             beginning_of_pass_write_index: None,
-                            end_of_pass_write_index: Some(2),
+                            end_of_pass_write_index: Base::HazeEnd.index(),
                         }
                     });
                     if let Some(plan) = compact_plan.as_ref() {
@@ -2317,7 +2243,7 @@ impl Renderer {
                             (k + 1 == haze_passes).then_some(wgpu::RenderPassTimestampWrites {
                                 query_set: queries,
                                 beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(2),
+                                end_of_pass_write_index: Base::HazeEnd.index(),
                             })
                         }),
                     ),
@@ -2399,7 +2325,7 @@ impl Renderer {
                     wgpu::RenderPassTimestampWrites {
                         query_set: queries,
                         beginning_of_pass_write_index: None,
-                        end_of_pass_write_index: Some(3),
+                        end_of_pass_write_index: Base::CompositeEnd.index(),
                     }
                 });
                 // Diagnostic views are exact channel dumps; the camera stays

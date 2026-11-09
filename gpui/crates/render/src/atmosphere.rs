@@ -587,7 +587,7 @@ impl AtmosphereCache {
             self.resident = None;
             return (pipelines.off.clone(), None);
         };
-        let budget = clouds::Budget::of(input.quality);
+        let budget = crate::quality::QualityBudget::of(input.quality).clouds;
         if self
             .resident
             .as_ref()

@@ -539,7 +539,7 @@ impl Cache {
             return None;
         };
         let weather = self.weather(device, queue, sky.clouds)?;
-        let budget = Budget::of(input.quality);
+        let budget = crate::quality::QualityBudget::of(input.quality).clouds;
         let layer_buffer = self.layer_uniform(
             device,
             queue,

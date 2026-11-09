@@ -13,6 +13,42 @@ pub struct GpuPassTiming {
 
 pub(crate) const QUERY_CAPACITY: u32 = 2048;
 
+/// The frame's fixed timestamp samples, the first [`Base::COUNT`] of the
+/// query set: `FrameTimings` cuts the frame's phases at them. Per-pass
+/// brackets are numbered after them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub(crate) enum Base {
+    /// The first pass's start.
+    Start,
+    /// The scene pass's end.
+    SceneEnd,
+    /// The last haze pass's end; zero when no haze ran.
+    HazeEnd,
+    /// The end of the pass that writes the output, the frame's sink.
+    CompositeEnd,
+    /// The light-index build's start and end.
+    LightIndexStart,
+    LightIndexEnd,
+    /// The fog grid's first pass's start, and its integrate's end.
+    GridStart,
+    GridEnd,
+    /// The fog grid's prepare and lighting ends.
+    GridPrepared,
+    GridLit,
+}
+
+impl Base {
+    /// How many base samples there are.
+    pub(crate) const COUNT: u32 = 10;
+
+    /// This sample's query index, as a pass's timestamp write takes it.
+    #[must_use]
+    pub(crate) fn index(self) -> Option<u32> {
+        Some(self as u32)
+    }
+}
+
 pub(crate) struct PassQueries<'a> {
     queries: Option<&'a wgpu::QuerySet>,
     pub count: u32,
@@ -27,7 +63,7 @@ impl<'a> PassQueries<'a> {
     pub fn new(queries: Option<&'a wgpu::QuerySet>) -> Self {
         Self {
             queries,
-            count: 10,
+            count: Base::COUNT,
             spans: Vec::new(),
             moved: Vec::new(),
         }
@@ -116,7 +152,7 @@ impl<'a> PassQueries<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::PassQueries;
+    use super::{Base, PassQueries};
     use crate::device::DeviceContext;
 
     #[test]
@@ -141,7 +177,9 @@ mod tests {
         };
         let mut profile = PassQueries::new(Some(&queries));
         profile.compute("earlier", None);
-        let writes = profile.compute("haze", Some(base_end(2))).unwrap();
+        let writes = profile
+            .compute("haze", Some(base_end(Base::HazeEnd as u32)))
+            .unwrap();
         let (begin, end) = (
             writes.beginning_of_pass_write_index.unwrap(),
             writes.end_of_pass_write_index.unwrap(),
@@ -155,14 +193,14 @@ mod tests {
             .all(|&(name, b, e)| name == "haze" || (b < begin && e < begin)));
         assert!(profile.spans.contains(&("haze", begin, end)));
         // The base sample is read from the end of that pair...
-        assert_eq!(profile.moved, vec![(2, end)]);
+        assert_eq!(profile.moved, vec![(Base::HazeEnd as u32, end)]);
         // ...until a later pass writes the base sample itself.
         profile.render(
             "composite",
             Some(wgpu::RenderPassTimestampWrites {
                 query_set: &queries,
                 beginning_of_pass_write_index: None,
-                end_of_pass_write_index: Some(2),
+                end_of_pass_write_index: Base::HazeEnd.index(),
             }),
         );
         assert!(profile.moved.is_empty());

@@ -25,7 +25,7 @@ impl Uniform {
         } = frame.haze_appearance.sanitized();
         // Low quality lights uniform haze: its beams are closed-form, and
         // a surface or the sky behind takes the same haze, without clouds.
-        let cloudiness = if frame.quality.marches_haze() {
+        let cloudiness = if crate::quality::QualityBudget::of(frame.quality).marched {
             cloudiness
         } else {
             0.0

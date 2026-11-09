@@ -1,0 +1,192 @@
+//! What a [`Quality`] level buys: the one table every pass reads. Nothing
+//! else in the renderer matches on a level; it reads its share of this.
+
+use crate::atmosphere::clouds;
+use crate::scene_desc::Quality;
+
+/// The per-frame work a [`Quality`] level buys.
+///
+/// `High` is the reference picture: its shadow walk is the one the renderer
+/// had before the levels existed. Its plain-beam piece cap and shadow redraw
+/// budget are new, and measured to leave the picture unchanged. `Medium` is
+/// a laptop GPU's budget. `Low` is `Medium` without the march, without
+/// fixture shadows and with ambient visibility at half resolution.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct QualityBudget {
+    /// Whether the haze is marched. Without it no volumetric pass runs —
+    /// not the fog grid, the medium cache, the lit-interval cache, the
+    /// compaction, the haze kernels, the sun shafts or the haze glow — and
+    /// `haze_analytic.wgsl` writes the haze target in closed form, through
+    /// uniform haze: the medium has no clouds.
+    pub marched: bool,
+    /// Whether fixtures cast shadows. Without them no fixture shadow map is
+    /// assigned, drawn or reduced, and surfaces take each fixture's light
+    /// unshadowed. `Frame::fixture_shadows` can only turn them off.
+    pub fixture_shadows: bool,
+    /// Gauss-Legendre piece cap for a plain beam (`quadrature_pieces`).
+    pub plain_pieces: f32,
+    /// Scale on the haze shadow walk's pixel-footprint allowance.
+    pub shadow_footprint: f32,
+    /// Scale on the haze shadow walk's soft and hard step counts.
+    pub shadow_steps: f32,
+    /// How much coarser the shadow walk gets while the camera moves, when
+    /// nothing settles anyway ([`Self::while_moving`]).
+    pub moving_coarsening: f32,
+    /// Most moved fixture shadow maps redrawn in one frame.
+    pub shadow_redraws: usize,
+    /// Far-field fog grid cell size in pixels.
+    pub fog_tile: u32,
+    /// Scene-pass samples per pixel.
+    pub msaa: u32,
+    /// Output pixels per ambient-visibility texel along each axis.
+    pub ambient_divisor: u32,
+    /// Whether the local reflection probes run; without them surfaces are
+    /// lit from the sky probe alone.
+    pub reflection_probes: bool,
+    /// Probes a layer holds, and layers.
+    pub probe_grid: (u32, u32),
+    /// The probes' base mip for capture, relight and sampling.
+    pub probe_base_mip: u32,
+    /// Sun shafts: output pixels per texel along each axis, and samples per
+    /// ray.
+    pub sun_shafts: (u32, u32),
+    /// The haze glow grid's cells along each axis.
+    pub haze_glow: [u32; 3],
+    /// The cloud layer's trace.
+    pub clouds: clouds::Budget,
+    /// Which of the glare FFT pipelines (`post.rs`) runs: 0 full size, 1
+    /// half.
+    pub glare_fft: usize,
+    /// Whether floors load their maps at full size and draw parallax.
+    pub floor_detail: bool,
+    /// The haze target's fraction of the output resolution.
+    pub haze_resolution: f32,
+    /// Stochastic samples per gobo beam.
+    pub haze_steps: u32,
+    /// Most pixels a live viewport renders before the compositor upscales,
+    /// when the level sets its own limit.
+    pub pixel_budget: Option<f64>,
+}
+
+impl QualityBudget {
+    #[must_use]
+    pub(crate) fn of(quality: Quality) -> Self {
+        match quality {
+            Quality::High => Self {
+                marched: true,
+                fixture_shadows: true,
+                plain_pieces: 8.0,
+                shadow_footprint: 1.0,
+                shadow_steps: 1.0,
+                moving_coarsening: 1.0,
+                shadow_redraws: 64,
+                fog_tile: crate::fog_grid::TILE_SIZE,
+                msaa: crate::gpu::MSAA_SAMPLES,
+                ambient_divisor: 1,
+                reflection_probes: true,
+                probe_grid: (12, 2),
+                probe_base_mip: 0,
+                sun_shafts: (2, 24),
+                haze_glow: crate::haze_glow::HIGH,
+                clouds: clouds::Budget {
+                    divisor: 2,
+                    steps: 64,
+                    light_steps: 6,
+                    panorama: (512, 256),
+                    shadow: 1024,
+                },
+                glare_fft: 0,
+                floor_detail: true,
+                haze_resolution: crate::LIVE_HAZE_RESOLUTION,
+                haze_steps: 8,
+                pixel_budget: None,
+            },
+            // A laptop budget: twice the shadow walk's footprint allowance
+            // and half its steps, and twice again while the camera moves.
+            // The reflection probes cost about 0.17 ms here against a 0.1 ms
+            // budget, so surfaces light from the sky probe alone.
+            Quality::Medium => Self {
+                marched: true,
+                fixture_shadows: true,
+                plain_pieces: 4.0,
+                shadow_footprint: 2.0,
+                shadow_steps: 0.5,
+                moving_coarsening: 2.0,
+                shadow_redraws: 16,
+                fog_tile: crate::fog_grid::LOW_TILE_SIZE,
+                msaa: 1,
+                ambient_divisor: 1,
+                reflection_probes: false,
+                probe_grid: (8, 1),
+                probe_base_mip: 1,
+                sun_shafts: (4, 12),
+                haze_glow: crate::haze_glow::LOW,
+                clouds: clouds::Budget {
+                    divisor: 4,
+                    steps: 32,
+                    light_steps: 4,
+                    panorama: (256, 128),
+                    shadow: 512,
+                },
+                glare_fft: 1,
+                floor_detail: false,
+                haze_resolution: 0.5,
+                haze_steps: 4,
+                pixel_budget: Some(1.0e6),
+            },
+            Quality::Low => Self {
+                marched: false,
+                fixture_shadows: false,
+                ambient_divisor: 2,
+                haze_resolution: 0.25,
+                ..Self::of(Quality::Medium)
+            },
+        }
+    }
+
+    /// This budget while the camera moves.
+    #[must_use]
+    pub(crate) fn while_moving(self) -> Self {
+        Self {
+            shadow_footprint: self.shadow_footprint * self.moving_coarsening,
+            shadow_steps: self.shadow_steps / self.moving_coarsening,
+            ..self
+        }
+    }
+
+    /// `Haze::quality`.
+    #[must_use]
+    pub(crate) fn haze(self) -> [f32; 4] {
+        [
+            self.plain_pieces,
+            self.shadow_footprint,
+            self.shadow_steps,
+            0.0,
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QualityBudget;
+    use crate::scene_desc::Quality;
+
+    #[test]
+    fn each_level_buys_no_more_than_the_one_above() {
+        for pair in Quality::ALL.windows(2) {
+            let (above, below) = (QualityBudget::of(pair[0]), QualityBudget::of(pair[1]));
+            assert!(below.msaa <= above.msaa);
+            assert!(below.haze_resolution <= above.haze_resolution);
+            assert!(below.haze_steps <= above.haze_steps);
+            assert!(below.ambient_divisor >= above.ambient_divisor);
+            assert!(above.marched || !below.marched);
+            assert!(above.fixture_shadows || !below.fixture_shadows);
+        }
+        for quality in Quality::ALL {
+            let still = QualityBudget::of(quality);
+            let moving = still.while_moving();
+            assert!(moving.shadow_footprint >= still.shadow_footprint);
+            assert!(moving.shadow_steps <= still.shadow_steps);
+        }
+    }
+}

@@ -457,7 +457,7 @@ density (as the stage does). Every measurement above was taken at a fixed
 
 `RenderSettings::quality` is `High` (the reference) or `Low` (a laptop GPU).
 The View popover's Viewport section sets it; it is the `stage_low_quality`
-device setting. The renderer turns it into a `QualityBudget` in `gpu/encode.rs`.
+device setting. The renderer turns it into a `QualityBudget` (`quality.rs`, since 2026-11-08 the one table every pass reads; before, `gpu/encode.rs`).
 (Since 2026-11-08 that `Low` is `Medium`, and a new `Low` marches nothing; see
 "Three levels" below.)
 
@@ -518,7 +518,7 @@ setting (`"high" | "medium" | "low"`). A machine that had set the old
 
 - **Medium** is the old `Low`, unchanged: every budget above.
 - **Low** keeps Medium's budgets and marches no haze
-  (`Quality::marches_haze`, `QualityBudget::marched`). No fog grid, medium
+  (`QualityBudget::marched`). No fog grid, medium
   cache, lit-interval cache, compaction or haze kernel runs, and no sun
   shafts or haze glow. One compute pass, `shaders/haze_analytic.wgsl`, writes
   the haze target the composite already reads, at a quarter of the output

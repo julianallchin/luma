@@ -339,14 +339,6 @@ impl Quality {
         *self == Self::High
     }
 
-    /// Whether beams are marched through the haze volume. Below that, at
-    /// [`Self::Low`], they are drawn in closed form and every other
-    /// volumetric pass is off.
-    #[must_use]
-    pub fn marches_haze(self) -> bool {
-        self != Self::Low
-    }
-
     /// The level's stored and serialized name.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -366,30 +358,20 @@ impl Quality {
     /// The haze target's fraction of the output resolution.
     #[must_use]
     pub fn haze_resolution(self) -> f32 {
-        match self {
-            Self::High => crate::LIVE_HAZE_RESOLUTION,
-            Self::Medium => 0.5,
-            Self::Low => 0.25,
-        }
+        crate::quality::QualityBudget::of(self).haze_resolution
     }
 
     /// Stochastic samples per gobo beam.
     #[must_use]
     pub fn haze_steps(self) -> u32 {
-        match self {
-            Self::High => 8,
-            Self::Medium | Self::Low => 4,
-        }
+        crate::quality::QualityBudget::of(self).haze_steps
     }
 
     /// Most pixels a live viewport renders before the compositor upscales,
     /// when this level sets its own limit.
     #[must_use]
     pub fn pixel_budget(self) -> Option<f64> {
-        match self {
-            Self::High => None,
-            Self::Medium | Self::Low => Some(1.0e6),
-        }
+        crate::quality::QualityBudget::of(self).pixel_budget
     }
 }
 

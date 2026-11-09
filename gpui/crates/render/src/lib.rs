@@ -52,6 +52,7 @@ mod pass_profile;
 mod post;
 mod probes;
 mod psf;
+mod quality;
 pub mod scene_desc;
 mod shadow;
 mod shadow_hierarchy;

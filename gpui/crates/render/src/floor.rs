@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock};
 use serde::Deserialize;
 
 use crate::assets::Library;
+use crate::quality::QualityBudget;
 use crate::scene_desc::Quality;
 use luma_scene::environment::Floor;
 use luma_scene::mesh::Image;
@@ -169,9 +170,10 @@ impl Surface {
             floor,
             tile_m: set.tile_m,
             min_roughness: set.min_roughness,
-            parallax_m: match quality {
-                Quality::High => set.parallax_m,
-                Quality::Medium | Quality::Low => 0.0,
+            parallax_m: if QualityBudget::of(quality).floor_detail {
+                set.parallax_m
+            } else {
+                0.0
             },
             unevenness: set.unevenness,
             variation: set.variation,
@@ -295,7 +297,7 @@ pub(crate) fn maps(
     surface: &Surface,
     quality: Quality,
 ) -> anyhow::Result<(Maps, Option<Maps>)> {
-    let half = quality != Quality::High;
+    let half = !QualityBudget::of(quality).floor_detail;
     let own = library.floor(surface.floor.set(), half)?;
     let transition = surface
         .transition()

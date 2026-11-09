@@ -34,6 +34,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{UVec3, Vec3};
 
 use crate::frame::{Draw, EditorObject, Frame};
+use crate::quality::QualityBudget;
 use crate::scene_desc::Quality;
 
 /// Face size of a probe on High, texels. Low relights and samples mip 1.
@@ -60,18 +61,12 @@ const RADIANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Probes a layer holds, and layers, by quality.
 fn grid_budget(quality: Quality) -> (u32, u32) {
-    match quality {
-        Quality::High => (12, 2),
-        Quality::Medium | Quality::Low => (8, 1),
-    }
+    QualityBudget::of(quality).probe_grid
 }
 
 /// The base mip the capture, relight and sampling use.
 fn base_mip(quality: Quality) -> u32 {
-    match quality {
-        Quality::High => 0,
-        Quality::Medium | Quality::Low => 1,
-    }
+    QualityBudget::of(quality).probe_base_mip
 }
 
 /// Constants and shared WGSL every probe shader opens with.
@@ -155,7 +150,11 @@ impl Layout {
     /// Roughness mips from the base: to one texel on High, to four on Low,
     /// where each small dispatch costs more than its texels.
     fn mips(&self) -> u32 {
-        if self.base_mip == 0 { MIPS } else { 4 }
+        if self.base_mip == 0 {
+            MIPS
+        } else {
+            4
+        }
     }
 
     /// Whether `other` puts the same probes in the same places: a capture of
@@ -268,10 +267,11 @@ pub(crate) fn key(frame: &Frame, opaque: usize) -> u64 {
     }
     push(&fixtures.to_le_bytes());
     push(format!("{:?}", frame.floor.map(|floor| floor.floor)).as_bytes());
-    push(&[
-        u8::from(frame.sky.is_some()),
-        u8::from(frame.quality == Quality::High),
-    ]);
+    push(&[u8::from(frame.sky.is_some())]);
+    let (per_layer, layers) = grid_budget(frame.quality);
+    for value in [per_layer, layers, base_mip(frame.quality)] {
+        push(&value.to_le_bytes());
+    }
     hash
 }
 
@@ -1233,9 +1233,10 @@ impl Probes {
         frame: &Frame,
         opaque: usize,
     ) -> CaptureWork {
-        // Low lights from the sky probe alone: the probes cost about 0.17 ms
-        // there against a 0.1 ms budget.
-        self.set_enabled(queue, frame.probes.enabled && frame.quality == Quality::High);
+        self.set_enabled(
+            queue,
+            frame.probes.enabled && QualityBudget::of(frame.quality).reflection_probes,
+        );
         self.debug = frame.probes.debug;
         if !self.enabled {
             return CaptureWork { capture: 0..0 };
