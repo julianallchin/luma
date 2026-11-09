@@ -23,6 +23,9 @@
 //! rewrote one of its inputs tries it anyway, and reconcile forgets the
 //! failures of a version that is no longer running, and those recorded before
 //! the Python environment was last installed.
+//!
+//! A step that fails the same way on several tracks in a row is broken itself,
+//! not the tracks: the rest of the batch skips it ([`Breaker`]).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -222,6 +225,68 @@ fn inflight() -> &'static InflightSet {
     SET.get_or_init(InflightSet::default)
 }
 
+// -----------------------------------------------------------------------------
+// Circuit breaker
+// -----------------------------------------------------------------------------
+
+/// How many tracks in a row a step fails on the same way before the rest of
+/// its batch skips it.
+const SAME_FAILURES_TO_PAUSE: usize = 3;
+
+/// One batch's circuit breaker.
+///
+/// A step that fails with the same error on track after track is broken
+/// itself, in its code or its Python environment, and will fail that way on
+/// every track left. Per-track backoff alone would still start a worker for
+/// each of them, and for each again at every launch until the backoff outgrew
+/// the gap between launches. After [`SAME_FAILURES_TO_PAUSE`] such failures in
+/// a row, the rest of the batch skips the step, with its dependents. A skipped
+/// track records no failure, so the next batch (the next launch's reconcile)
+/// tries the step again, on that many tracks at most if it is still broken.
+#[derive(Clone, Default)]
+pub(crate) struct Breaker(Arc<Mutex<HashMap<&'static str, Streak>>>);
+
+/// A step's run of identical failures: the error's first line, and on how many
+/// tracks in a row it failed with it.
+struct Streak {
+    headline: String,
+    tracks: usize,
+}
+
+impl Breaker {
+    /// Why the rest of the batch skips `step`, once it does.
+    fn paused(&self, step: &str) -> Option<String> {
+        let streaks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let streak = streaks
+            .get(step)
+            .filter(|streak| streak.tracks >= SAME_FAILURES_TO_PAUSE)?;
+        Some(format!(
+            "{} (not run: {step} failed this way on {} tracks in a row)",
+            streak.headline, streak.tracks
+        ))
+    }
+
+    fn succeeded(&self, step: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(step);
+    }
+
+    fn failed(&self, step: &'static str, headline: &str) {
+        let mut streaks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let streak = streaks.entry(step).or_insert_with(|| Streak {
+            headline: headline.to_owned(),
+            tracks: 0,
+        });
+        if streak.headline != headline {
+            streak.headline = headline.to_owned();
+            streak.tracks = 0;
+        }
+        streak.tracks += 1;
+    }
+}
+
 /// Drain every task in one DAG layer. A [`JoinError`] has lost the task's
 /// `(name, output)` payload, so any such error makes the whole layer's outputs
 /// indeterminate. Conservatively blocking all of them is the only safe basis
@@ -265,9 +330,10 @@ fn reads_any(p: &dyn Preprocessor, artifacts: &HashSet<Artifact>) -> bool {
 // Public API
 // -----------------------------------------------------------------------------
 
-/// Plan + execute for a single track. Layers run sequentially; within each
-/// layer, siblings run concurrently. A failed preprocessor records its error
-/// and skips its downstream preprocessors for this run.
+/// Plan + execute for a single track, one of the batch whose steps share
+/// `breaker`. Layers run sequentially; within each layer, siblings run
+/// concurrently. A failed preprocessor records its error and skips its
+/// downstream preprocessors for this run.
 ///
 /// Under an import, every preprocessor settles on `report` before this
 /// returns — the ones a path out of here never reached included — unless the
@@ -279,8 +345,10 @@ pub async fn run_for_track(
     track_id: &str,
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
+    breaker: &Breaker,
 ) -> Result<(), String> {
-    let result = run_track_layers(pool, storage, workers, track_id, analysis, report).await;
+    let result =
+        run_track_layers(pool, storage, workers, track_id, analysis, report, breaker).await;
     if let Some(report) = report.filter(|_| !analysis.is_cancelled()) {
         report.settle_rest(
             registry::dag().preprocessors().map(|p| p.name()),
@@ -300,6 +368,7 @@ async fn run_track_layers(
     track_id: &str,
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
+    breaker: &Breaker,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
     let Some(track) = tracks_db::get_track_by_id(pool, track_id).await? else {
@@ -406,11 +475,13 @@ async fn run_track_layers(
             let track_id_owned = track_id.to_string();
             let analysis = analysis.clone();
             let report = report.cloned();
+            let breaker = breaker.clone();
             set.spawn(async move {
                 let ctx = PreprocessorContext::new(
                     &pool, &storage, &workers, &track, stems_dir, analysis,
                 );
-                let res = run_one(&ctx, &track_id_owned, p.as_ref(), report.as_ref()).await;
+                let res =
+                    run_one(&ctx, &track_id_owned, p.as_ref(), report.as_ref(), &breaker).await;
                 (p.name(), p.output(), res)
             });
         }
@@ -434,12 +505,13 @@ async fn run_track_layers(
 
 /// Run a single preprocessor for a single track, with failure recording,
 /// status emission, and in-flight dedup. The caller skips a step in failure
-/// backoff before it gets here.
+/// backoff before it gets here; a step `breaker` has paused stops here.
 async fn run_one(
     ctx: &PreprocessorContext<'_>,
     track_id: &str,
     p: &dyn Preprocessor,
     report: Option<&StageReport>,
+    breaker: &Breaker,
 ) -> Result<(), String> {
     ctx.checkpoint()?;
     let settle = |outcome: StageOutcome| {
@@ -474,6 +546,14 @@ async fn run_one(
         return Err(error);
     }
 
+    // Checked last, so a track that waited for setup or for a concurrent run
+    // sees a pause that came meanwhile. It records no failure: the track did
+    // nothing wrong, and the next batch tries it.
+    if let Some(reason) = breaker.paused(p.name()) {
+        settle(StageOutcome::Failed(reason.clone()));
+        return Err(reason);
+    }
+
     if let Some(report) = report {
         report.started(p.name());
     }
@@ -497,6 +577,7 @@ async fn run_one(
 
     match result {
         Ok(()) => {
+            breaker.succeeded(p.name());
             failures::clear(ctx.pool(), track_id, p.name()).await?;
             settle(StageOutcome::Done);
             Ok(())
@@ -506,6 +587,7 @@ async fn run_one(
             // The stage's outcome and the track's error carry its first line,
             // which is what the import list and the import's error show.
             let reason = failures::headline(&err).to_owned();
+            breaker.failed(p.name(), &reason);
             if let Some((_, report)) = err.split_once('\n') {
                 eprintln!(
                     "[preprocessing] {} for track {track_id} reported:\n{}",
@@ -527,7 +609,9 @@ async fn run_one(
 }
 
 /// Multi-track entry point: per-track scheduling delegates to
-/// [`run_for_track`], at most [`analysis_worker_count`] tracks at a time.
+/// [`run_for_track`], at most [`analysis_worker_count`] tracks at a time. The
+/// tracks are one batch: a step that fails the same way on several of them in
+/// a row is skipped on the rest ([`Breaker`]).
 ///
 /// Under an import each track reports its stages as it runs; the terminal
 /// event is the caller's, because the DAG is not the only branch an import
@@ -546,6 +630,7 @@ pub async fn run_for_tracks(
         import.as_ref().map_or(0, |import| import.done),
     ));
     let errors = Arc::new(Mutex::new(Vec::new()));
+    let breaker = Breaker::default();
 
     run_bounded_track_jobs(&track_ids, &analysis, max_parallel, |track_id| {
         let (pool, storage, workers, events) = (
@@ -554,11 +639,12 @@ pub async fn run_for_tracks(
             workers.clone(),
             events.clone(),
         );
-        let (completed, errors, analysis, import) = (
+        let (completed, errors, analysis, import, breaker) = (
             completed.clone(),
             errors.clone(),
             analysis.clone(),
             import.clone(),
+            breaker.clone(),
         );
         async move {
             let report = import.map(|mut import| {
@@ -572,6 +658,7 @@ pub async fn run_for_tracks(
                 &track_id,
                 &analysis,
                 report.as_ref(),
+                &breaker,
             )
             .await;
             if let Err(e) = result {
@@ -768,6 +855,7 @@ mod tests {
             "t1",
             &lease.guard(),
             Some(&report),
+            &Breaker::default(),
         )
         .await;
 
@@ -960,6 +1048,131 @@ mod tests {
         assert!(
             reads_any(&downstream, &failed_outputs),
             "downstream work was not suppressed after an indeterminate layer"
+        );
+    }
+
+    /// A step that fails on every track with the same error, as one does when
+    /// its Python environment is broken.
+    #[derive(Default)]
+    struct Broken {
+        runs: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Preprocessor for Broken {
+        fn name(&self) -> &'static str {
+            "broken_step"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn inputs(&self) -> &'static [Artifact] {
+            &[Artifact::Audio]
+        }
+        fn output(&self) -> Artifact {
+            Artifact::Genre
+        }
+        fn artifact_table(&self) -> &'static str {
+            "track_genres"
+        }
+        async fn run(&self, _ctx: &PreprocessorContext<'_>, _track_id: &str) -> Result<(), String> {
+            self.runs.fetch_add(1, Ordering::Relaxed);
+            Err("Broken worker failed: No module named 'torch'\n\nTraceback …".into())
+        }
+    }
+
+    /// Once a step has failed the same way on enough tracks in a row, the
+    /// rest of the batch doesn't start its worker. The tracks it skips record
+    /// no failure, so the next batch tries them, and report the failure that
+    /// paused it.
+    #[tokio::test]
+    async fn a_step_failing_the_same_way_track_after_track_is_paused() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = library(directory.path()).await;
+        let pool = &services.db.0;
+        let tracks: Vec<String> = (1..=SAME_FAILURES_TO_PAUSE + 2)
+            .map(|n| format!("t{n}"))
+            .collect();
+        for id in &tracks[1..] {
+            sqlx::query(
+                "INSERT INTO tracks (id, track_hash, title, duration_seconds, file_path)
+                 VALUES (?, ?, 'Song', 1.0, '/audio/song.wav')",
+            )
+            .bind(id)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        let step = Broken::default();
+        let batch = Breaker::default();
+        let epoch = services.analysis_tasks.current_epoch().unwrap();
+        let lease = services.analysis_tasks.lease(epoch).unwrap();
+
+        let mut errors = Vec::new();
+        for id in &tracks {
+            let track = tracks_db::get_track_by_id(pool, id).await.unwrap().unwrap();
+            let ctx = PreprocessorContext::new(
+                pool,
+                &services.storage,
+                &services.workers,
+                &track,
+                services.storage.stems_root(),
+                lease.guard(),
+            );
+            errors.push(run_one(&ctx, id, &step, None, &batch).await.unwrap_err());
+        }
+
+        assert_eq!(
+            step.runs.load(Ordering::Relaxed),
+            SAME_FAILURES_TO_PAUSE,
+            "the step ran on after it had failed the same way enough times"
+        );
+        let recorded: Vec<String> =
+            sqlx::query_scalar("SELECT track_id FROM preprocessing_failures ORDER BY track_id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, tracks[..SAME_FAILURES_TO_PAUSE]);
+        for error in &errors[SAME_FAILURES_TO_PAUSE..] {
+            assert!(
+                error.starts_with("Broken worker failed: No module named 'torch'"),
+                "a skipped track hides why: {error}"
+            );
+        }
+    }
+
+    /// Only an unbroken run of one failure pauses a step: a success, or a
+    /// different failure, starts the count again, and each step counts its
+    /// own.
+    #[test]
+    fn a_success_or_another_failure_starts_the_count_again() {
+        let batch = Breaker::default();
+        let one_short = |step: &'static str, headline: &str| {
+            for _ in 1..SAME_FAILURES_TO_PAUSE {
+                batch.failed(step, headline);
+            }
+        };
+        one_short("step", "the same");
+        batch.succeeded("step");
+        one_short("step", "the same");
+        assert!(
+            batch.paused("step").is_none(),
+            "a success did not start the count again"
+        );
+        batch.failed("step", "another");
+        one_short("step", "the same");
+        assert!(
+            batch.paused("step").is_none(),
+            "another failure did not start the count again"
+        );
+
+        one_short("other_step", "the same");
+        batch.failed("other_step", "the same");
+        assert!(batch.paused("other_step").is_some());
+        assert!(
+            batch.paused("step").is_none(),
+            "a step was paused for another's failures"
         );
     }
 }
