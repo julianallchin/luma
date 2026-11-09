@@ -240,9 +240,12 @@ const SAME_FAILURES_TO_PAUSE: usize = 3;
 /// every track left. Per-track backoff alone would still start a worker for
 /// each of them, and for each again at every launch until the backoff outgrew
 /// the gap between launches. After [`SAME_FAILURES_TO_PAUSE`] such failures in
-/// a row, the rest of the batch skips the step, with its dependents. A skipped
-/// track records no failure, so the next batch (the next launch's reconcile)
-/// tries the step again, on that many tracks at most if it is still broken.
+/// a row, the rest of the batch skips the step, with its dependents. Tracks
+/// already running the step finish, so a batch that runs tracks in parallel
+/// ([`analysis_worker_count`]) can start it on as many tracks as run at once.
+/// A skipped track records no failure, so the next batch (the next launch's
+/// reconcile) tries the step again, and pauses it as soon if it is still
+/// broken.
 #[derive(Clone, Default)]
 pub(crate) struct Breaker(Arc<Mutex<HashMap<&'static str, Streak>>>);
 
@@ -519,6 +522,13 @@ async fn run_one(
             report.settle(p.name(), outcome);
         }
     };
+    // Before the claim, so a paused step holds nothing another batch waits on.
+    // It records no failure: the track did nothing wrong, and the next batch
+    // tries it.
+    if let Some(reason) = breaker.paused(p.name()) {
+        settle(StageOutcome::Failed(reason.clone()));
+        return Err(reason);
+    }
     let Some(_claim) = inflight().claim(track_id, p.name()).await else {
         // Another task ran it; if it succeeded, we're done. If it failed
         // we'll see that on the next is_complete check below.
@@ -544,14 +554,6 @@ async fn run_one(
         // backoff, so the next launch with a working setup retries at once.
         settle(StageOutcome::Failed(error.clone()));
         return Err(error);
-    }
-
-    // Checked last, so a track that waited for setup or for a concurrent run
-    // sees a pause that came meanwhile. It records no failure: the track did
-    // nothing wrong, and the next batch tries it.
-    if let Some(reason) = breaker.paused(p.name()) {
-        settle(StageOutcome::Failed(reason.clone()));
-        return Err(reason);
     }
 
     if let Some(report) = report {
@@ -1133,7 +1135,9 @@ mod tests {
                 .fetch_all(pool)
                 .await
                 .unwrap();
-        assert_eq!(recorded, tracks[..SAME_FAILURES_TO_PAUSE]);
+        let mut ran = tracks[..SAME_FAILURES_TO_PAUSE].to_vec();
+        ran.sort();
+        assert_eq!(recorded, ran);
         for error in &errors[SAME_FAILURES_TO_PAUSE..] {
             assert!(
                 error.starts_with("Broken worker failed: No module named 'torch'"),
