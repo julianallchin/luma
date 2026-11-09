@@ -1,0 +1,204 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "showtec/sunstrip-active",
+  "name": "Showtec Sunstrip Active",
+  "manufacturer": "Showtec",
+  "model": "Sunstrip Active",
+  "category": "pixel_bar",
+  "description": "Original Sunstrip Active DMX, order code 30710: one black rectangular bar with a central rear dimmer housing and two folding mounting brackets. Ten evenly spaced round 240 V / 75 W GU10 halogen lamps form one horizontal row; each lamp is independently dimmable in the 10-channel mode. Face forward at rest.",
+  "provenance": {
+   "source": "QLC+ physical dimensions and largest-mode heads; original Showtec 30710 product photographs and manufacturer manual",
+   "archetype": "bar",
+   "dims_src": "qlc_physical",
+   "qlc_id": "qlc:Showtec/Sunstrip Active",
+   "qlc_type": "LED Bar (Pixels)",
+   "model_identity": "Original 30710, confirmed by QLC+ 75 W source and 5.3 kg weight, manufacturer product page and 30710 manual. MKII 30714 images excluded.",
+   "product_page": "https://www.showtec-lights.com/nl/30710-sunstrip-active-dmx.html",
+   "manual": "https://www.showtec-lights.com/nl/mwdownloads/download/link/id/17428690",
+   "dimensions": {
+    "qlc_mm": [1000, 130, 80],
+    "size_axes_m": [1.0, 0.08, 0.13],
+    "basis": "QLC+ authoritative; manufacturer manual p14 says L x W x H = 1000 x 130 x 80 mm; mapped using forward-facing product photo. Drawing shows 65 mm main housing depth and 810 mm bracket spacing. Overall envelope includes folded rear brackets. Other housing subdivisions and bracket thickness estimated from photographs within that envelope."
+   },
+   "weight_kg": 5.32,
+   "face_verification": {
+    "groups": 10,
+    "arrangement": "1 row x 10 evenly spaced square lamp openings",
+    "emitters_per_group": 1,
+    "total_emitters": 10,
+    "basis": "counted_in_crop: photo 5 whole face, first and second lamp crops; original manufacturer manual p5 confirms ten GU10 75 W lamps"
+   },
+   "control": {
+    "cells": 10,
+    "modes_channels": [1, 2, 5, 10],
+    "basis": "QLC+ authoritative 10 heads / 10 columns x 1 row; original manual p8 confirms one dimmer per lamp in 10ch mode; 10 x 1 + 0 = 10 channels"
+   },
+   "colour_basis": "Single-colour white halogen GU10 sources per original manual; warm-white appearance inferred from tungsten lamp technology; no RGB mixing.",
+   "photo_rejections": ["1: MKII in image URL despite initial EXACT label", "3: MK2 in URL"],
+   "photo_usage": "Original manufacturer photos 5 and 22-25 and original manual pages 6-21 used; photo 4 agrees with original manual; photo 2 is unconfirmed and unused.",
+   "body_verification": "One rectangular bar, central rear dimmer housing, two rear folding mounting brackets. Front-facing rest, manual adjustment only; all cosmetic details omitted.",
+   "import": {"from": "qlc", "old_id": "qlc:Showtec/Sunstrip Active"},
+   "sources": [
+    {"sha": "1b59d68ef6b892623114ffcc76938c48e7f3e6861fa387c7359acc75b6e17cec", "kind": "photo"},
+    {"sha": "2cb98d2c531bd007618f272eb18e795efa17321853a4daf009811dee63315c54", "kind": "photo"},
+    {"sha": "4a65de597399db459a66219ae4ce86761f18a69828c1bb44425e38a2bc993652", "kind": "photo"},
+    {"sha": "4f7633fa97a994cfb6f94a11d6c2885361b5c9ee2d5600c88d5d2399cb0df766", "kind": "photo"},
+    {"sha": "4ffac8aa5f990f6ed6f775ae5a2fe1007c3983f28566a8e4847d343b17d90379", "kind": "photo"},
+    {"sha": "5f9cd46de7d88c42a1a75e11e184e8e467a066d5a91c6dec0732cbf057835863", "kind": "photo"},
+    {"sha": "7c1a8fce5d12a4626340da52e59dd377f0e174f63d36bd3833145f7a88348390", "kind": "photo"},
+    {"sha": "7ec5e96f7f4548765532753afa7c5d1cbbf8ec5b7c4bb6451016b8dac62c1e5c", "kind": "photo"},
+    {"sha": "80683a89becdf25e54801a2c65205734437db9976d99cfda2d9749824f3e8960", "kind": "photo"},
+    {"sha": "809e6c687fbab7d40b54c41058bb8c4eff2531239e8995ba8f22ede31a095066", "kind": "photo"},
+    {"sha": "853dd7002f3c22763a8ca2c1258d6734cefa689ce17e5048a6c674f34f02b506", "kind": "photo"},
+    {"sha": "99c55edb57646dc9bab6f5924c08ab103e16e31d114b5c29fc91576421e76386", "kind": "photo"},
+    {"sha": "a60a911d93a5fa11a67d4c1243610344726b5053c8d29a54aa99edcba70260b2", "kind": "photo"},
+    {"sha": "a6ba67adfc90dac51e10add1c3c8cfb52b79ec77eabb677d874fc64c9e1bcf66", "kind": "photo"},
+    {"sha": "a912cec7c346a8f6a6364c94aeb0884f74b7eb6e64eb530f37198e1293db17c4", "kind": "photo"},
+    {"sha": "aef821b18a566282066cd06bddd4db99af9f2ddd92dfdba1ef6be837869cfa15", "kind": "photo"},
+    {"sha": "c424c4b32e0407a25a621ef72b07aa5258d753097a1b00145c4ce3cc3cdccc95", "kind": "photo"},
+    {"sha": "c4821815b71c72d41658d333c1f9c38e5f6f18769c3bd5883461d229776a5eda", "kind": "photo"},
+    {"sha": "d18b07e7834e7671b2f9a5c04152a656901d016117f869e75c50841577c2a51b", "kind": "photo"},
+    {"sha": "d9043df181d5edc771340e3d8fb1b3b108a3b961b97121166c81d83963900490", "kind": "photo"},
+    {"sha": "e2c2cb207b966c4a627bf6099540afba0a8cb4286f369fbeefba9615d0286374", "kind": "photo"},
+    {"sha": "e61f6e1dedb4ba2a592a79f8e204ac12520f18b16014c50d088700b5744985f5", "kind": "photo"},
+    {"sha": "e6c4f31b08dfbf0bcebc1d11fab1c92b21ab1bd0010c32f2fe95322d590e5654", "kind": "photo"},
+    {"sha": "f1421218f719f3c6f8dc35f673da579143bab0cca8dc1fa1153c0b5286f106da", "kind": "photo"},
+    {"sha": "fd1a875d94bfe16ea950afabc8b1dddf3e68097599547139140e046c050ef943", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [1.0, 0.08, 0.13]},
+ "optics": {"cct_k": {"v": 3200, "src": "control:onyx", "conf": "medium"}},
+ "materials": {
+  "body": {"rgb": [0.025, 0.027, 0.03], "rough": 0.7},
+  "body2": {"rgb": [0.012, 0.014, 0.016], "rough": 0.7},
+  "emitter_w": {"rgb": [1.0, 0.82, 0.58], "emit": [1.0, 0.75, 0.45]}
+ },
+ "rig": {
+  "mount": {"type": "bracket", "legs": 0, "base": null, "yoke": null},
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "manual", "axis": [1, 0, 0], "range": [-180, 180], "rest": 90},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 1.0,
+   "len": 0.065,
+   "d": 0.075,
+   "off": -0.005,
+   "tilt_y": 0.0375,
+   "pods": false,
+   "features": [],
+   "shell": {
+    "sections": [{"t": 0, "w": 1, "d": 1, "r": 0}, {"t": 1, "w": 1, "d": 1, "r": 0}],
+    "ring": {"rec": 0, "wall": 0.001, "bezel": false},
+    "pods": false
+   }
+  },
+  "parts": [
+   {
+    "name": "rear_dimmer_housing",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.62, 0.072, 0.04],
+    "pos": [0, 0, -0.051],
+    "mat": "body"
+   },
+   {
+    "name": "left_folded_mount_plate",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.04, 0.005, 0.08],
+    "pos": [-0.405, 0.04, -0.0511],
+    "mat": "body2"
+   },
+   {
+    "name": "left_mount_flange",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.04, 0.025, 0.004],
+    "pos": [-0.405, 0.025, -0.031],
+    "mat": "body2"
+   },
+   {
+    "name": "right_folded_mount_plate",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.04, 0.005, 0.08],
+    "pos": [0.405, 0.04, -0.0511],
+    "mat": "body2"
+   },
+   {
+    "name": "right_mount_flange",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.04, 0.025, 0.004],
+    "pos": [0.405, 0.025, -0.031],
+    "mat": "body2"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [1.0, 0.055],
+    "layout": {"kind": "line", "n": 10, "dir": "x", "gap": 0.35},
+    "child": {
+     "cell": true,
+     "outline": "rect",
+     "frame": {"bezel": 0, "depth": 0.002},
+     "layout": {"kind": "single"},
+     "child": {"outline": "circle", "fill": 0.9, "emitter": {"kind": "lens", "colour": "white"}}
+    }
+   }
+  }
+ ],
+ "cells": {"count": 10, "emitters": 10},
+ "sources": [{"cell_ranges": [[0, 9]]}],
+ "control": {
+  "native_cct_k": 3200,
+  "modes": [
+   {
+    "name": "1ch",
+    "options": {"channels": "1"},
+    "footprint": 1,
+    "channels": [{"attr": "dimmer"}],
+    "prov": {"status": "majority_only", "agree": ["onyx", "qlc"]}
+   },
+   {
+    "name": "2ch",
+    "options": {"channels": "2"},
+    "footprint": 2,
+    "channels": [{"repeat": {"cells": {"from": 0, "to": 9, "size": 5}, "channels": [{"attr": "dimmer"}]}}],
+    "prov": {"status": "agreed", "agree": ["onyx", "gdtf", "qlc"]}
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [{"repeat": {"cells": {"from": 0, "to": 9, "size": 2}, "channels": [{"attr": "dimmer"}]}}],
+    "prov": {"status": "agreed", "agree": ["onyx", "gdtf", "qlc"]}
+   },
+   {
+    "name": "10ch",
+    "options": {"channels": "10"},
+    "footprint": 10,
+    "channels": [{"repeat": {"cells": {"from": 0, "to": 9}, "channels": [{"attr": "dimmer"}]}}],
+    "prov": {"status": "agreed", "agree": ["onyx", "gdtf", "qlc"]}
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "10 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]}
+  }
+ }
+}

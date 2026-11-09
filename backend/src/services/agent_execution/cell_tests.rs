@@ -725,6 +725,10 @@ async fn dropping_a_running_cell_interrupts_it() {
 /// face holds them with room to spare.
 const MOVER: &str = "Chauvet/Chauvet-Rogue-R2-Spot.qxf";
 const MOVER_MODE: &str = "18 Channel";
+/// The same head as the library has it, which is what a search offers in
+/// place of the QLC+ file it aliases.
+const LIBRARY_MOVER: &str = "lib:chauvet/rogue-r2-spot";
+const LIBRARY_MOVER_MODE: &str = "18ch";
 
 impl Fixture {
     /// An empty room, and a `venue_rig` thread pinned to it.
@@ -1248,7 +1252,7 @@ line = [l for l in tree.splitlines() if row.fixtures[0].id in l][0]
     let repr = out.repr.clone().unwrap_or_default();
     assert!(
         repr.starts_with(&format!(
-            "('{MOVER}', True, '{MOVER_MODE}', True, True, True, True)"
+            "('{LIBRARY_MOVER}', True, '{LIBRARY_MOVER_MODE}', True, True, True, True)"
         )),
         "the library or the aim did not answer as asked: {repr}\n{}",
         out.stdout

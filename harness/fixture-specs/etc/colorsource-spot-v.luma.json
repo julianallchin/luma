@@ -1,0 +1,222 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "etc/colorsource-spot-v",
+  "name": "ETC ColorSource Spot V",
+  "manufacturer": "ETC",
+  "model": "ColorSource Spot V",
+  "category": "profile_static",
+  "description": "An ETC ColorSource Spot V, a single cylindrical stage fixture roughly 0.34 by 0.60 by 0.34 m. A U-shaped bail sits above the body, turning on a vertical pan hinge and carrying the head on a horizontal tilt hinge. Both are manual aim adjustments with no DMX control. The barrel carries a manual zoom ring, a focus knob and a gobo holder, with no gobo wheel. A flat circular lens disc, roughly 11.8 units across, fills the front. Behind it sits one multi-colour LED engine (red, green, blue, indigo, lime, CCT), making a single emitter cell with one shared dimmer. Heatsink fins probably line the rear underside, and a removable shutter barrel with blades fits the front.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "profile",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "ff9a7281-129c-4cc2-862a-51b847719c96"},
+   "sources": [
+    {"sha": "2392c696dacbfd78c2e5e7306dda27365d9c0a4e34e52b545579ddc713be0161", "kind": "photo"},
+    {"sha": "270717f8d46795c2ee3fa176b4db6d54bfa0d18f9234971f0a83becb119f8be6", "kind": "photo"},
+    {"sha": "3b7109843306441c6345858d310347eb059705fb0033481ad483b1612640aa9a", "kind": "photo"},
+    {"sha": "4b8af2cd1f6d6e6b30eff36e73a2fdf5f1d7ec355d81e89c711dc80e0dc8dcd3", "kind": "photo"},
+    {"sha": "6c8437a551d1e16b07941034b269e9c2d7c40bd96f5db04efbe54ddbf92dc2e4", "kind": "photo"},
+    {"sha": "97e357e73c96bd441bcbdd4682ec23b53cdaac448e8f4500c24136bc1fe0cb45", "kind": "photo"},
+    {"sha": "d11dbd020a2f217f57fedae75c669046333df08ae952b3766e586fce8f917e21", "kind": "photo"},
+    {"sha": "d3a1da3599627fbdd4bf5e741a495eee287b81d0ad4d57209ef534b5ecf6b5cb", "kind": "photo"},
+    {"sha": "d400be8a35e4f244788401e20c74425214980fa90db6246e9bc333288122efb4", "kind": "photo"},
+    {"sha": "eff02a00e9218194c5883988a804afa08974791176f8a5dd09520f0b6b95bf71", "kind": "photo"},
+    {"sha": "f53ce9b5a0c03b0212d364f9255b9e1d5ef40f8efaa4e98aa8ae442cbc10fd93", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.339, 0.593, 0.672]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "bail", "legs": 0, "yoke": {"w": 0.215, "y1": 0.343, "d": 0.03}},
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "manual", "rest": 90, "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "can",
+   "profile": "stepped",
+   "outline": "round",
+   "w": 0.2,
+   "len": 0.62,
+   "d": 0.2,
+   "off": 0.064,
+   "tilt_y": 0.25,
+   "lens_d": 0.14,
+   "features": ["vents", "barn_doors", "zoom_barrel"]
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "cell": true,
+    "outline": "circle",
+    "layout": {"kind": "hex", "n": 60},
+    "child": {"emitter": {"kind": "led", "colours": ["red", "green", "blue", "indigo", "lime"]}}
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 60},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "1ch",
+    "options": {"channels": "1"},
+    "footprint": 1,
+    "channels": [{"attr": "dimmer"}],
+    "prov": {"status": "single", "agree": ["depence"]}
+   },
+   {
+    "name": "3ch",
+    "options": {"channels": "3"},
+    "footprint": 3,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}],
+    "prov": {"status": "single", "agree": ["depence"]}
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "shutter", "ranges": "t1"}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "7ch",
+    "options": {"channels": "7"},
+    "footprint": 7,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "control", "n": 1},
+     {"attr": "control", "n": 2}
+    ],
+    "prov": {
+     "status": "conflict",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "8ch",
+    "options": {"channels": "8"},
+    "footprint": 8,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "other", "n": 1},
+     {"attr": "colour/lime"},
+     {"attr": "other", "ranges": [{"dmx": [0, 255], "state": "strobe"}], "n": 2},
+     {"attr": "control"}
+    ],
+    "prov": {"status": "single", "agree": ["gdtf"], "ranges": {"agree": ["gdtf"], "note": "tables taken from gdtf"}}
+   },
+   {
+    "name": "9ch",
+    "options": {"channels": "9"},
+    "footprint": 9,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/lime"},
+     {"attr": "colour/indigo"},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "control", "n": 1},
+     {"attr": "control", "n": 2}
+    ],
+    "prov": {
+     "status": "conflict",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "11ch",
+    "options": {"channels": "11"},
+    "footprint": 11,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "colour/red"},
+     {"attr": "colour/red", "rank": 1},
+     {"attr": "colour/green"},
+     {"attr": "colour/green", "rank": 1},
+     {"attr": "colour/blue"},
+     {"attr": "colour/blue", "rank": 1},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "control", "n": 1},
+     {"attr": "control", "n": 2}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "15ch",
+    "options": {"channels": "15"},
+    "footprint": 15,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "colour/red"},
+     {"attr": "colour/red", "rank": 1},
+     {"attr": "colour/green"},
+     {"attr": "colour/green", "rank": 1},
+     {"attr": "colour/blue"},
+     {"attr": "colour/blue", "rank": 1},
+     {"attr": "colour/lime"},
+     {"attr": "colour/lime", "rank": 1},
+     {"attr": "colour/indigo"},
+     {"attr": "colour/indigo", "rank": 1},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "control", "n": 1},
+     {"attr": "control", "n": 2}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {},
+  "tables": {
+   "t1": [
+    {"dmx": [0, 0], "state": "open"},
+    {"dmx": [1, 40], "state": "strobe"},
+    {"dmx": [41, 80], "state": "strobe"},
+    {"dmx": [81, 120], "state": "pulse"},
+    {"dmx": [121, 160], "state": "random"},
+    {"dmx": [201, 240], "state": "open"},
+    {"dmx": [241, 254], "state": "closed"},
+    {"dmx": [255, 255], "state": "open"}
+   ]
+  }
+ }
+}

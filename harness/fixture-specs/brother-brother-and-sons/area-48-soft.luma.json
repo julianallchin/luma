@@ -1,0 +1,224 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "brother-brother-and-sons/area-48-soft",
+  "name": "Brother Brother and Sons Area 48 Soft",
+  "manufacturer": "Brother Brother and Sons",
+  "model": "Area 48 Soft",
+  "category": "led_panel_or_tile",
+  "description": "Area 48 Soft remote-phosphor soft light: one landscape rectangular housing on a manual two-arm angled yoke with a baby-pin receiver, no motorised base. One continuous white phosphor panel covers 48 blue LED dies, all controlled as one dimmer cell. Four open barn doors; head faces forward at rest with the yoke above it, as in the manufacturer main image.",
+  "provenance": {
+   "source": "https://www.brothers-sons.dk/da_DK/shop/area-48-soft-8928",
+   "dims_src": "Manufacturer W356 H275 D115 mm with closed barn doors (2020 sheet: 360 x 280 x 130 mm). Includes closed accessories; not the main-photo open-door rest pose. Estimated head envelope 326 x 245 x 100 mm, with yoke outside it; derived from those published numbers and product photos.",
+   "weight_kg": 3.6,
+   "rest_bbox_basis": "Open-door overall estimate 625 x 447 x 285 mm including manual U-bail and baby-pin receiver. Door widths/angles and extended mount estimated from product photos, not dimensioned; overall dimensions remain unverified within 10%. External support pipe/clamp excluded.",
+   "photos": {"accepted": [2, 3, 4, 8], "rejected": {"1": "Replacement phosphor panels only, not complete fixtures."}},
+   "face_evidence": "One continuous white phosphor aperture counted in whole-face and close crops of photo 3, cross-checked in photo 2. Manufacturer specifies 48 blue dies behind it; internal placement is concealed and unverified. One emitter leaf represents the visible phosphor aperture, not a single LED die.",
+   "dmx": {
+    "modes_channels": [1, 2, 3, 4],
+    "largest_mode": "One 16-bit dimmer (2 bytes) + strobe mode + strobe length = 4 channels, one cell.",
+    "manual": "https://cdn.shopify.com/s/files/1/0225/5987/files/BB_S_Lighting_Area48_Software-Manual.pdf?v=1595792286"
+   },
+   "colour": "A48S56C93 daylight phosphor output is white; raw dies are blue. Other CCTs require changing the phosphor panel; no DMX RGB or CCT mixing.",
+   "physical_leds": {
+    "count": 48,
+    "colour": "blue",
+    "how_verified": "spec_sheet",
+    "source": "https://www.brothers-sons.dk/da_DK/shop/area-48-soft-8928",
+    "arrangement": "unverified; concealed behind phosphor panel"
+   },
+   "import": {"from": "depence", "old_id": "f3594e8c-8d87-4d55-9fa3-59b7741d9cff"},
+   "sources": [
+    {
+     "sha": "256057ba38056f7555010bbac52d292aca2cd4f82e42904d1d98dec1a373dd65",
+     "kind": "manual",
+     "verdict": "not_sure"
+    },
+    {"sha": "3b5836201feb0d05e7a356a7e4ae38c041dc3397b1399c9228a24398cd04cf8e", "kind": "photo"},
+    {"sha": "537c5a85bdfea63f91d0789a7110bfa688ec6636af2255ab444b7ff89ce21da2", "kind": "photo"},
+    {"sha": "584549dcf13b90e5adb76dd8afe27df95956f2babdcddcc878c4e72e0c8a2bc1", "kind": "photo"},
+    {"sha": "7ddacd40311ec0481eb2b6a0cdc4073c61f1628e1c9908d4b59a54745182a334", "kind": "photo"},
+    {"sha": "8dd2e1d0f3f9bd4bfab88883a7fdb029118f63490388f1caa7440357890c0959", "kind": "photo"},
+    {"sha": "a4559d4a347f064a9da4edb556103e1a9ffb9591b51f195cf221d5c4b61bb3c0", "kind": "photo"},
+    {"sha": "aa3597162979945af1ca987f75973338d4557630f4f5419f53da486d4c1be1b7", "kind": "photo"},
+    {"sha": "b7201a124ecbcb2539464691c38ffbfae4760f59fbb1aba73e7133a207a5c392", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.625, 0.447, 0.285]},
+ "optics": {"type": "wash", "beam_deg": {"v": 160, "src": "import", "conf": "medium"}},
+ "materials": {"diffuser": {"rgb": [0.94, 0.94, 0.92], "emit": [0.8, 0.8, 0.78], "rough": 0.9, "metal": 0}},
+ "rig": {
+  "mount": {
+   "type": "bail",
+   "base": {"shape": "disc", "w": 0.032, "h": 0.08, "d": 0.032},
+   "yoke": {
+    "w": 0.355,
+    "y1": 0.2425,
+    "d": 0.045,
+    "gap": 0.008,
+    "hull": false,
+    "arm": {"profile": "curved", "t": [0.006, 0.006], "d": [0.045, 0.035], "bow": 0.055, "round_top": 0.3},
+    "bar": {"y": 0.083, "h": 0.008, "d": 0.045}
+   },
+   "hang": true
+  },
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0], "rest": 90},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.326,
+   "d": 0.245,
+   "len": 0.1,
+   "off": 0.035,
+   "tilt_y": 0.2225,
+   "pods": false,
+   "features": [],
+   "shell": {
+    "sections": [
+     {"t": 0, "w": 0.94, "d": 0.94, "r": 0},
+     {"t": 0.15, "w": 1, "d": 1, "r": 0},
+     {"t": 1, "w": 1, "d": 1, "r": 0}
+    ],
+    "ring": {"rec": 0.004, "wall": 0.012},
+    "pods": false
+   }
+  },
+  "parts": [
+   {
+    "name": "barn_bottom",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.326, 0.2, 0.002],
+    "pos": [0, -0.17250000000000001, 0.13660254037844388],
+    "rot": [-60, 0, 0],
+    "mat": "body2"
+   },
+   {
+    "name": "barn_left",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.21, 0.245, 0.002],
+    "pos": [-0.2372462120245875, 0, 0.12424621202458748],
+    "rot": [0, 45, 0],
+    "mat": "body2"
+   },
+   {
+    "name": "barn_top",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.326, 0.2, 0.002],
+    "pos": [0, 0.17250000000000001, 0.13660254037844388],
+    "rot": [60, 0, 0],
+    "mat": "body2"
+   },
+   {
+    "name": "barn_right",
+    "attach": "head",
+    "shape": "box",
+    "size": [0.21, 0.245, 0.002],
+    "pos": [0.2372462120245875, 0, 0.12424621202458748],
+    "rot": [0, -45, 0],
+    "mat": "body2"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "outline": "rect",
+    "plane": [0.2955, 0.2019],
+    "layout": {"kind": "single"},
+    "child": {
+     "cell": true,
+     "outline": "rect",
+     "fill": 1,
+     "emitter": {"kind": "strip", "colour": "white"},
+     "note": "One continuous remote-phosphor emitting aperture. The manufacturer specifies 48 blue LEDs behind this panel; hidden die arrangement is not resolved and is not invented here."
+    }
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "1ch",
+    "options": {"channels": "1"},
+    "footprint": 1,
+    "channels": [{"attr": "dimmer"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "256057ba3805",
+     "page": 2,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "2ch",
+    "options": {"channels": "2"},
+    "footprint": 2,
+    "channels": [{"attr": "dimmer"}, {"attr": "dimmer", "rank": 1}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "256057ba3805",
+     "page": 2,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "3ch",
+    "options": {"channels": "3"},
+    "footprint": 3,
+    "channels": [{"attr": "dimmer"}, {"attr": "shutter", "ranges": "t1"}, {"attr": "shutter/fx"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "256057ba3805",
+     "page": 2,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "shutter/fx"}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "256057ba3805",
+     "page": 2,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {"manual": {"doc": "256057ba3805", "page": 2}},
+  "tables": {
+   "t1": [
+    {"dmx": [0, 5], "state": "open"},
+    {"dmx": [6, 125], "state": "strobe"},
+    {"dmx": [126, 130], "state": "open"},
+    {"dmx": [131, 250], "state": "random"},
+    {"dmx": [251, 255], "state": "open"}
+   ]
+  }
+ }
+}

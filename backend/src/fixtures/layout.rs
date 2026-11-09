@@ -46,8 +46,23 @@ pub fn fixture_mount(pose: &NodePose) -> Mount {
 /// Unauthored geometry, so no aperture depth: QLC+ never says where inside the
 /// housing the light leaves from, and inventing a depth here would move every
 /// pattern-space position (see `FixtureClass::aperture_depth_m`).
+///
+/// A library fixture is measured instead: its built cells, at rest, in the
+/// same frame. Its housing's origin is its pivot, which is where the mount
+/// frame's origin is, so it needs no pivot offset either; the cells sit where
+/// the emitters are, lens depth included. Every mode lays out the same cells.
 #[must_use]
 pub fn head_geometry(def: &FixtureDefinition, mode_name: &str) -> FixtureGeometry {
+    if let Some(library) = &def.library {
+        return FixtureGeometry::unauthored(
+            luma_scene::library::cell_centres(&library.built)
+                .into_iter()
+                // Housing space is three space; the (x, z, y) swap is its own
+                // inverse, so this takes it to the kinematics' data space.
+                .map(luma_scene::coords::three_from_data)
+                .collect(),
+        );
+    }
     FixtureGeometry::unauthored(
         compute_head_offsets(def, mode_name)
             .into_iter()

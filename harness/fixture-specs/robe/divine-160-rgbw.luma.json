@@ -1,0 +1,202 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "robe/divine-160-rgbw",
+  "name": "Robe Lighting Divine 160 RGBW",
+  "manufacturer": "Robe Lighting",
+  "model": "Divine 160 RGBW",
+  "category": "static_wash",
+  "description": "The Robe Lighting Divine 160 RGBW is a static IP65 multisource LED floodlight/wash, about 0.46 m wide, 0.31 m tall and 0.2 m deep. A rectangular head with a 4x10 grid of 40 round RGBW lenses (4 DMX zones of 2x5) sits in a U-shaped bracket with manual tilt knobs on a low box base with two feet. It has no motorised pan or tilt.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "moving_head",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "face_src": "record",
+   "import": {"from": "depence", "old_id": "b509d90e-f697-4150-91a5-ef32443d3890"},
+   "sources": [
+    {
+     "sha": "0bb02e5763d7dc86005fcea6423e48f03941f0de6f2df3a25b661ccc46e3f74e",
+     "kind": "manual",
+     "verdict": "not_sure"
+    },
+    {"sha": "46be13505ddbcfe4e071236616665e2b4ae2560b5227b97064f4b5ce9fdf4de3", "kind": "photo"},
+    {"sha": "9951baa93accce57c1fc3d2efab6412171c65bda8ba9ac844d23eed51537b0bc", "kind": "photo"},
+    {"sha": "b8663f31b9a53c24928999a561ae1c15a9e5e31849546be64f2bb4adaeca6a88", "kind": "photo"},
+    {"sha": "f18c305f87662eeb3fb4440c33efb5aba0e86df49ae17ad9d9f798ab2a42ae9b", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.463, 0.314, 0.2]},
+ "optics": {"type": "wash", "cct_k": {"v": 6500, "src": "control:onyx", "conf": "medium"}},
+ "materials": {},
+ "rig": {
+  "mount": {
+   "type": "bail",
+   "legs": 0,
+   "base": {"shape": "box", "w": 0.44, "h": 0.12, "d": 0.17, "feet": {"n": 2, "w": 0.04, "h": 0.01}},
+   "yoke": {"w": 0.4464, "y1": 0.19, "d": 0.1731}
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"rest": 90, "drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.4352,
+   "len": 0.0859,
+   "d": 0.1991,
+   "off": 0.0043,
+   "tilt_y": 0.19,
+   "lens_d": 0.1527,
+   "features": ["vents"]
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "layout": {"kind": "grid", "rows": 2, "cols": 2},
+    "child": {
+     "cell": true,
+     "layout": {"kind": "grid", "rows": 2, "cols": 5},
+     "child": {"emitter": {"kind": "lens", "colour": "rgbw"}}
+    }
+   }
+  }
+ ],
+ "cells": {"count": 4, "emitters": 40},
+ "sources": [{"cell_ranges": [[0, 3]]}],
+ "control": {
+  "native_cct_k": 6500,
+  "modes": [
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}],
+    "prov": {"status": "majority_only", "agree": ["onyx", "depence"]}
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"},
+     {"attr": "dimmer"}
+    ],
+    "prov": {"status": "majority_only", "agree": ["onyx", "depence"]}
+   },
+   {
+    "name": "10ch",
+    "options": {"channels": "10"},
+    "footprint": 10,
+    "channels": [
+     {"attr": "colour/macro", "ranges": "t1", "n": 1},
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"},
+     {"attr": "colour/cct", "ranges": [{"dmx": [0, 255], "phys": [2700.0, 6000.0], "unit": "K"}]},
+     {"attr": "colour/macro", "ranges": "t2", "n": 2},
+     {"attr": "shutter", "ranges": "t3"},
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {"depence": "slot 0: other (want colour/macro)"},
+     "doc": "0bb02e5763d7",
+     "page": 9,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "22ch",
+    "options": {"channels": "22"},
+    "footprint": 22,
+    "channels": [
+     {"attr": "colour/macro", "ranges": "t1", "n": 1},
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     },
+     {"attr": "colour/cct", "ranges": [{"dmx": [0, 255], "phys": [2700.0, 6000.0], "unit": "K"}]},
+     {"attr": "colour/macro", "ranges": "t2", "n": 2},
+     {"attr": "shutter", "ranges": "t3"},
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {"depence": "slot 0: other (want colour/macro)"},
+     "doc": "0bb02e5763d7",
+     "page": 9,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "4 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]},
+   "manual": {"doc": "0bb02e5763d7", "page": 9}
+  },
+  "tables": {
+   "t1": [
+    {"dmx": [0, 19]},
+    {"dmx": [20, 24]},
+    {"dmx": [25, 29]},
+    {"dmx": [30, 39]},
+    {"dmx": [40, 49]},
+    {"dmx": [50, 59]},
+    {"dmx": [60, 69]},
+    {"dmx": [70, 89]},
+    {"dmx": [90, 99]},
+    {"dmx": [100, 109]},
+    {"dmx": [110, 119]},
+    {"dmx": [120, 129]},
+    {"dmx": [130, 255]}
+   ],
+   "t2": [
+    {"dmx": [0, 0], "state": "off"},
+    {"dmx": [1, 2], "rgb": "#ffad59", "state": "macro"},
+    {"dmx": [3, 3], "rgb": "#ffad59", "state": "macro"},
+    {"dmx": [4, 5], "rgb": "#ffbe7a", "state": "macro"},
+    {"dmx": [6, 6], "rgb": "#ffbe7a", "state": "macro"},
+    {"dmx": [7, 9], "rgb": "#ffd8af", "state": "macro"},
+    {"dmx": [10, 12], "rgb": "#ffefe4", "state": "macro"},
+    {"dmx": [13, 15], "rgb": "#e3e7ff", "state": "macro"},
+    {"dmx": [16, 247], "rgb": "#0000ff", "state": "macro"},
+    {"dmx": [248, 251]},
+    {"dmx": [252, 255]}
+   ],
+   "t3": [
+    {"dmx": [0, 31], "state": "closed"},
+    {"dmx": [32, 63], "state": "open"},
+    {"dmx": [64, 95], "phys": [0.3, 30.0], "state": "strobe", "unit": "Hz"},
+    {"dmx": [96, 127], "state": "open"},
+    {"dmx": [128, 143], "phys": [0.3, 30.0], "state": "pulse", "unit": "Hz"},
+    {"dmx": [144, 159], "phys": [0.3, 30.0], "state": "pulse", "unit": "Hz"},
+    {"dmx": [160, 191], "state": "open"},
+    {"dmx": [192, 223], "state": "random"},
+    {"dmx": [224, 255], "state": "open"}
+   ]
+  }
+ }
+}

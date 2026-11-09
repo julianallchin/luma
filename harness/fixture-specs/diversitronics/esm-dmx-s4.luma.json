@@ -1,0 +1,76 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "diversitronics/esm-dmx-s4",
+  "name": "Diversitronics ESM-DMX S4",
+  "manufacturer": "Diversitronics",
+  "model": "ESM-DMX S4",
+  "category": "other",
+  "description": "This is probably a Diversitronics ESM-DMX S4, a DMX-controlled strobe supply module, not a moving head or emitter array, likely an accessory for an ETC Source Four ellipsoidal. The housing is probably a small rectangular box, roughly 0.15 x 0.1 x 0.1 m, with outline and mounting unknown. It probably has no yoke, arms or brackets and no movement on any axis. There is no optic or emitter grid; it probably offers one intensity output and one strobe control, a single controllable cell. Notably, it probably has DMX in and out on XLR, a 0-10V analog input for intensity and rate, and DIP-switch addressing.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "strobe",
+   "dims_src": "median:strobe",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "645acfb5-bdb3-448c-841b-fb0be6ebe4e4"},
+   "sources": [
+    {
+     "sha": "77a1b94a5314b8e1ef7807b920256733efb276a6a02f826497c2b8790cdcb547",
+     "kind": "manual",
+     "verdict": "not_sure"
+    },
+    {"sha": "014d47e9660738f698983c9671215dae227ed3b907b920b8933000f9b2a62439", "kind": "photo"},
+    {"sha": "4b002a3ca5e769313c96efc6ffd8c8150fbcad639f6e0d52660de72e6b4ceeca", "kind": "photo"},
+    {"sha": "7716864cf4154779ef5ee4a6aa7eace63a53b35ea1b109af21b61c72c63a252d", "kind": "photo"},
+    {"sha": "b2a26408a0cff7c98fa657d999b033c26c1ea260576305933ebb687b68cf9392", "kind": "photo"},
+    {"sha": "e0a7b12d9a3b5d2e42c00b743d09ca1a5402ece17a1fd02134ec4ffba78cec5d", "kind": "photo"},
+    {"sha": "edc14251637db5a982f4ab6fd5df1552b6aa3698a683b7c53e2335222c2214a1", "kind": "photo"},
+    {"sha": "f0aaab948ebada72b2a9795d8ca99191381d3cf9a7d52658a62cfe2b7ac1c4f8", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.15, 0.25, 0.1]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.15,
+   "len": 0.25,
+   "d": 0.1,
+   "off": 0.0,
+   "tilt_y": 0.05,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [{"layout": {"kind": "single", "n": 1, "stagger": false}, "cell": "circle", "optic": "none", "cells": 1}]
+  }
+ ],
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "2ch",
+    "options": {"channels": "2"},
+    "footprint": 2,
+    "channels": [{"attr": "dimmer"}, {"attr": "shutter", "ranges": [{"dmx": [0, 255], "state": "strobe"}]}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "77a1b94a5314",
+     "page": 2,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {"manual": {"doc": "77a1b94a5314", "page": 2}}
+ }
+}

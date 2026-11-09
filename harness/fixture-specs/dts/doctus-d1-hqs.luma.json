@@ -1,0 +1,143 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "dts/doctus-d1-hqs",
+  "name": "DTS Doctus D1 HQS",
+  "manufacturer": "DTS",
+  "model": "Doctus D1 HQS",
+  "category": "architectural_spot",
+  "description": "DTS Doctus.D 1 HQS: one RGBA LED behind one circular lens in an 80 mm cylindrical aluminium housing, on a floor/wall U-bracket with manual tilt. No motorised pan or tilt. Rest pose faces forward.",
+  "provenance": {
+   "source": "DTS manufacturer datasheet and manuals, linked from exact Doctus.D 1 HQS product page",
+   "product_page": "https://portal.fullavl.nl/spots/8204-dts-doctusd-1-hqs.html",
+   "dims_src": "https://portal.fullavl.nl/index.php?controller=attachment&id_attachment=3666",
+   "manual": "https://portal.fullavl.nl/index.php?controller=attachment&id_attachment=3665",
+   "dmx_src": "https://portal.fullavl.nl/index.php?controller=attachment&id_attachment=3667",
+   "colour_src": "https://dts-lighting.it/wp-content/uploads/2025/03/DTS_CATALOGO-ARCHITAINMENT_2025.pdf",
+   "dimensions": "Manufacturer drawing: overall bracket-inclusive W101 x H112 x D70 mm; head diameter 80 mm, tilt axis 72 mm above bracket sole, body depth 70 mm. Weight 1 kg including 5 m cable.",
+   "face": "Photo 1 whole-face and optic crops: one circular optical group, one lens; manufacturer specifies one four-colour LED.",
+   "control": "One cell. 4-channel direct colour mode; PROM 11-channel mode = one cell x four 16-bit colours (8 channels) + 16-bit master dimmer (2) + PROM (1). Generic manual calls fourth colour WHITE; exact HQS SKU 03.DTB004E28FY10 maps FY to RGBA in DTS catalogue, overriding distributor generic RGBW prose.",
+   "mount": "Single U-bracket with two side arms and floor crossbar; no separate base. Manual tilt travel 230 degrees; endpoints represented symmetrically as actual stops are unspecified.",
+   "import": {"from": "depence", "old_id": "2e2e27e1-ba03-435f-b9c8-fbca0b75ff13"},
+   "sources": [
+    {
+     "sha": "468de3209d3f62a57d40bde5a4345e52fd065b05a1ae0b624eec8e5f20d9556d",
+     "kind": "manual",
+     "verdict": "not_sure"
+    },
+    {"sha": "18bb57621dda333b502ab0011a7f8ea46aba7ad3599401592860d745f052e3fe", "kind": "photo"},
+    {"sha": "1bff6201d4b60604e6a99f93aed90795af3d936f7b2d0f8281b0f36965b9ba78", "kind": "photo"},
+    {"sha": "5786b6696bbac577c17c6b52350c9cde3dbbe69ea8f6a702b2be48a8651880b1", "kind": "photo"},
+    {"sha": "5c2d96c838f9ab7c9c52d31434c2ac384bc9351321aab9f374d62325d9c0bf8a", "kind": "photo"},
+    {"sha": "7b2d7fbade87133f8f3705503066a8c37a1963ee235c67bc91f2c2d554b40a57", "kind": "photo"},
+    {"sha": "de3e044a6100c6553b61b360768bead043c6dd741c78477a60f14ef014427d04", "kind": "photo"},
+    {"sha": "e1ec621938e6bdce71eeefb02a206333d20244ebbd3ae33705dfb63170c33b93", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.101, 0.112, 0.07]},
+ "optics": {"type": "wash"},
+ "materials": {
+  "body": {"rgb": [0.66, 0.68, 0.71], "metal": 0.45, "rough": 0.35},
+  "body2": {"rgb": [0.66, 0.68, 0.71], "metal": 0.45, "rough": 0.35}
+ },
+ "rig": {
+  "mount": {
+   "type": "bail",
+   "base": null,
+   "yoke": {
+    "w": 0.092,
+    "y1": 0.089,
+    "d": 0.035,
+    "gap": 0.002,
+    "arm": {"profile": "straight", "t": [0.004, 0.004], "d": [0.034, 0.029], "round_top": 1},
+    "hull": false
+   }
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "manual", "axis": [1, 0, 0], "range": [-115, 115], "per_head": false, "rest": 90},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "can",
+   "profile": "cylinder",
+   "outline": "round",
+   "w": 0.08,
+   "len": 0.07,
+   "d": 0.08,
+   "off": 0.007,
+   "tilt_y": 0.072,
+   "lens_d": 0.0485,
+   "features": [],
+   "shell": {
+    "sections": [
+     {"t": 0, "w": 0.86, "r": 1},
+     {"t": 0.14, "w": 0.95, "r": 1},
+     {"t": 0.55, "w": 1, "r": 1},
+     {"t": 1, "w": 1, "r": 1}
+    ],
+    "ring": {"rec": 0.003, "wall": 0.014, "scale": 1},
+    "pods": false
+   }
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "outline": "circle",
+    "plane": [0.0485, 0.0485],
+    "layout": {"kind": "single"},
+    "child": {"outline": "circle", "cell": true, "emitter": {"kind": "lens", "colour": "rgba"}}
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "468de3209d3f",
+     "page": 6,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "11ch",
+    "options": {"channels": "11"},
+    "footprint": 11,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/red", "rank": 1},
+     {"attr": "colour/green"},
+     {"attr": "colour/green", "rank": 1},
+     {"attr": "colour/blue"},
+     {"attr": "colour/blue", "rank": 1},
+     {"attr": "colour/white"},
+     {"attr": "colour/white", "rank": 1},
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "other"}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "468de3209d3f",
+     "page": 6,
+     "note": "manual not_sure"
+    }
+   }
+  ],
+  "prov": {"manual": {"doc": "468de3209d3f", "page": 6}}
+ }
+}

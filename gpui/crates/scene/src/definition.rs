@@ -6,9 +6,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The QLC+ `.qxf` subset the renderer reads.
+/// The QLC+ `.qxf` subset the renderer reads, or a library fixture's
+/// lowering of itself into it plus its [`Built`](luma_fixture::Built).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Definition {
+    /// A library (`lib:<id>`) fixture's build: its meshes, joints, cells and
+    /// lenses in housing space. When present it is what the stage draws, and
+    /// the QLC+ fields below are only what search and the patch page read.
+    /// Never serialized: it is rebuilt from the spec, not stored.
+    #[serde(skip)]
+    pub built: Option<std::sync::Arc<luma_fixture::Built>>,
     /// QLC+ fixture type; selects the mesh and the fallback cone.
     #[serde(rename = "Type")]
     pub kind: String,

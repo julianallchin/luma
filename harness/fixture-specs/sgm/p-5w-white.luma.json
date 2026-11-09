@@ -1,0 +1,112 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "sgm/p-5w-white",
+  "name": "SGM P-5W White",
+  "manufacturer": "SGM",
+  "model": "P-5W White",
+  "category": "static_led_wash",
+  "description": "The SGM P-5W is a static LED wash with a rectangular housing about 0.50 m wide, 0.20 m deep and 0.19 m high, probably. A yoke bracket with side trunnions sits under a manual tilt hinge, clamped at the rear, and a manual pan hinge turns the whole unit on the base. Both hinges declare 360-degree travel but lack DMX control. The head has rear heatsink fins, a central tube with three round vent grilles, and cable glands and XLR connectors. The front is a recessed panel of 44 round LED lens domes in a 4-by-11 square grid, rows aligned, inside a narrow dark frame. The whole fixture is one intensity cell, with strobe and shutter acting fixture-wide.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "wash_box",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "5f28fe51-d5d1-4f26-a44f-fc1f079fac31"},
+   "sources": [
+    {
+     "sha": "7434dd7071aa70cd0a8ac5559f70aaccd12ff8365d1eff5573a7e8de5d0bf5ae",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {
+     "sha": "d1da834671f101c1ae748d73419c8ff646e1f7da366e780ce9dc8c2231d80de0",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {"sha": "154e74fd39aab211310cc721f9b4325f83d49bd2634dae962e54f06127df4cc2", "kind": "photo"},
+    {"sha": "5390c6b346c53980bd6590298f0d18f688d8c1d52e70e24f6cacf952986a479b", "kind": "photo"},
+    {"sha": "80b2be2341420795f8d70768e9f0f53ad6e3af09270fcd90146634a91f78d7a7", "kind": "photo"},
+    {"sha": "8354495f66bbe0da2be25a3171822e3180ab436479060643b3aadc8c3766bc52", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.497, 0.268, 0.122]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "yoke2", "legs": 0, "yoke": {"w": 0.46, "y1": 0.19, "d": 0.09}},
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "manual", "rest": 90, "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.497,
+   "len": 0.1,
+   "d": 0.19,
+   "off": 0.0,
+   "tilt_y": 0.13,
+   "lens_d": 0.17,
+   "features": ["vents", "connectors", "foot"]
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "cell": true,
+    "layout": {"kind": "grid", "rows": 4, "cols": 11},
+    "child": {"emitter": {"kind": "lens", "colour": "white"}}
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 44},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "1ch",
+    "options": {"channels": "1"},
+    "footprint": 1,
+    "channels": [{"attr": "dimmer"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "7434dd7071aa",
+     "page": 1,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "2ch",
+    "options": {"channels": "2"},
+    "footprint": 2,
+    "channels": [{"attr": "shutter", "ranges": "t1"}, {"attr": "dimmer"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "7434dd7071aa",
+     "page": 1,
+     "note": "manual verified",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {"manual": {"doc": "7434dd7071aa", "page": 1}},
+  "tables": {
+   "t1": [
+    {"dmx": [0, 7], "state": "closed"},
+    {"dmx": [8, 15], "state": "open"},
+    {"dmx": [16, 151], "state": "strobe"},
+    {"dmx": [152, 175], "state": "pulse"},
+    {"dmx": [176, 199], "state": "pulse"},
+    {"dmx": [200, 244], "state": "random"},
+    {"dmx": [245, 255], "state": "open"}
+   ]
+  }
+ }
+}

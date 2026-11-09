@@ -136,10 +136,12 @@ pub struct FixtureGeometry {
 }
 
 impl FixtureGeometry {
-    /// Geometry for a definition that carries no pivot or aperture data — which
-    /// is every definition today, because Luma's fixture library is QLC+ `.qxf`
-    /// and QLC+ describes a housing, a pixel layout and a lens angle but never
-    /// where inside the housing the light leaves from.
+    /// Geometry for a definition that carries no pivot or aperture data — a
+    /// QLC+ `.qxf`, which describes a housing, a pixel layout and a lens angle
+    /// but never where inside the housing the light leaves from. A library
+    /// (`lib:`) fixture uses it too, with its built cells: those are measured
+    /// from the pivot, which is the mount origin, and sit on the emitters, so
+    /// neither offset applies.
     ///
     /// Both offsets are zero, so a cell's beam starts exactly at the mounting
     /// origin rotated into place. That reproduces today's behaviour.

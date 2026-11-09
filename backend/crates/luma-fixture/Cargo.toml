@@ -1,0 +1,15 @@
+[package]
+name = "luma-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A luma-fixture/0 spec, and the meshes, cells and joints Luma draws and drives it with"
+
+# Like `fixture-kinematics`, this crate is meant to be depended on from both
+# cargo workspaces (backend and gpui/), so it stays small: serde for the spec,
+# glam for the vectors Luma already speaks. Pinned to the tree's glam: a second
+# glam would be a second, incompatible `Vec3`.
+[dependencies]
+glam = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

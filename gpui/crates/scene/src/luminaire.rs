@@ -492,6 +492,7 @@ mod tests {
 
     fn typed(kind: &str) -> Definition {
         Definition {
+            built: None,
             kind: kind.into(),
             modes: Vec::new(),
             physical: None,
@@ -572,6 +573,7 @@ mod tests {
 
     fn sized(kind: &str, w: f32, h: f32, beam_deg: f32) -> Definition {
         Definition {
+            built: None,
             kind: kind.into(),
             modes: Vec::new(),
             physical: Some(crate::definition::Physical {

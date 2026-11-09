@@ -1,0 +1,68 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "color-kinetics/vaya-linear-mp-rgb",
+  "name": "Color Kinetics Vaya Linear MP RGB",
+  "manufacturer": "Color Kinetics",
+  "model": "Vaya Linear MP RGB",
+  "category": "architectural",
+  "description": "A Color Kinetics Vaya Linear MP RGB architectural bar, about 1.16 m long and roughly 9 by 7 cm in section. A bracket arm under a manual pan hinge carries it, probably with two clamp brackets on the rear face, and a tilt hinge holds the bar above. Pan turns a full 360 degrees and tilt about 70 degrees, both manual aim only, moving the whole bar. A rounded dark end cap at the lower-left end holds the connection, with two black cables leaving it. The front has a flush straight row of probably 24 domed round RGB LED lenses spaced evenly along the length. All share one RGB colour set, so it is one controllable cell.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "arch_linear",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "877bd012-bc85-4c21-89b2-162e8092ea05"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [1.16, 0.1091, 0.0735]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "bracket", "legs": 0, "yoke": {"w": 0.6542, "y1": 0.0369, "d": 0.0429}},
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "manual", "range": [-35.0, 35.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 1.16,
+   "len": 0.0902,
+   "d": 0.0735,
+   "off": 0.0339,
+   "tilt_y": 0.0302,
+   "lens_d": 0.0401,
+   "features": ["connectors"]
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [
+    {
+     "region": [0.0041, 0.0754, 0.9959, 0.9246],
+     "emitter": {"kind": "led", "rows": 1, "cols": 24, "shape": "circle", "colour": "white", "total": 24},
+     "cells": {"rows": 1, "cols": 1},
+     "plane": [1.1359, 0.0401],
+     "cell_ids": [0]
+    }
+   ]
+  },
+  {
+   "on": "back",
+   "zones": [
+    {
+     "layout": {"kind": "line", "n": 24, "rows": 1, "cols": 24, "stagger": false},
+     "cell": "circle",
+     "optic": "lens",
+     "cells": 1
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 2, "emitters": 48},
+ "sources": [{"cell_ranges": [[0, 0]]}, {"cell_ranges": [[1, 1]]}]
+}

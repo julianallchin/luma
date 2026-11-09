@@ -462,6 +462,20 @@ pub(crate) fn housing_draws(
     bank: &mut Bank,
     editor_object: Option<EditorObject>,
 ) -> anyhow::Result<Vec<Draw>> {
+    // A library fixture is its own build, emitters dark.
+    if let Some(built) = &def.built {
+        let worlds = luma_scene::library::worlds(built, pan_tilt);
+        return Ok(crate::library_housing::draws(
+            built,
+            fixture_path,
+            base,
+            &worlds,
+            lib,
+            bank,
+            editor_object.as_ref(),
+            |_| Vec3::ZERO,
+        ));
+    }
     // A bar, and anything the mesh table has no answer for. Drawing the stated
     // box is not a guess — the dimensions are the definition's own — and it is
     // the only alternative to a fixture with arrows, a cone and no body, which
@@ -962,6 +976,93 @@ pub fn build_at(
         };
         let base = to_world * three_pose_from_data(fixture.pos, fixture.rot);
 
+        if let Some(built) = &def.built {
+            let cells = built.cells.len().max(1);
+            let cell_state = |cell: usize| state(&fixture.id, cell.min(cells - 1)).unwrap_or(DARK);
+            let pan_tilt = cell_state(0).position;
+            let worlds = luma_scene::library::worlds(built, pan_tilt);
+            draws.extend(crate::library_housing::draws(
+                built,
+                &fixture.fixture_path,
+                base,
+                &worlds,
+                lib,
+                &mut bank,
+                Some(&EditorObject::Fixture(fixture.id.clone())),
+                |cell| {
+                    let s = cell_state(cell as usize);
+                    Vec3::from(s.color) * exposed(s) * 5.0
+                },
+            ));
+            // One cone per lens, lit by the cell on the lens's node. A build
+            // with no lens (an LED bar, a strip) casts one per cell instead,
+            // from the cell's own face, as a procedural bar does.
+            let mut beams: Vec<(Vec3, Vec3, usize, Lens, bool)> = Vec::new();
+            for (i, head) in built.heads.iter().enumerate() {
+                let Some((at, dir)) = luma_scene::library::beam(built, &worlds, i) else {
+                    continue;
+                };
+                let cell = built
+                    .cells
+                    .iter()
+                    .position(|c| c.node == Some(head.node))
+                    .unwrap_or(i);
+                let lens = Lens {
+                    radius: head.size[0].max(head.size[1]) / 2.0,
+                };
+                beams.push((at, dir, cell, lens, false));
+            }
+            if beams.is_empty() {
+                for (i, c) in built.cells.iter().enumerate() {
+                    let Some(node) = c.node else { continue };
+                    let lens = Lens {
+                        radius: c.size[0].min(c.size[1]).max(0.005) / 2.0,
+                    };
+                    beams.push((
+                        worlds[node].transform_point3(c.centre),
+                        worlds[node].transform_vector3(c.normal).normalize_or_zero(),
+                        i,
+                        lens,
+                        true,
+                    ));
+                }
+            }
+            let pixel = cone_from_opening(PIXEL);
+            let luminaire = cone_from_opening(luminaire_for(def, model_kind(def)));
+            let count = beams.len().max(1) as f32;
+            fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
+                .saturating_add(beams.len())
+                .min(MAX_FIXTURE_CONES);
+            for (at, dir, cell, lens, is_pixel) in beams {
+                if fixture_cones.len() >= MAX_FIXTURE_CONES {
+                    break;
+                }
+                let head_state = cell_state(cell);
+                let intensity = exposed(head_state);
+                if intensity < 0.01 {
+                    continue;
+                }
+                let cone = if is_pixel { pixel } else { luminaire };
+                fixture_cones.push(FixtureCone {
+                    position: base.transform_point3(at),
+                    range: cone.range,
+                    direction: base.transform_vector3(dir).normalize_or_zero(),
+                    cos_beam: cone.cos_beam,
+                    color: Vec3::from(head_state.color),
+                    // Overlapping cones sum in the haze, so a many-celled
+                    // fixture shares its light out as a bar's pixels do.
+                    intensity: intensity * cone.gain / count.sqrt(),
+                    cos_field: cone.cos_field,
+                    wash: cone.wash,
+                    gobo: head_state.gobo.min(2),
+                    gobo_rotation: head_state.gobo_rotation,
+                    haze_gain: 1.0,
+                    lens,
+                });
+            }
+            continue;
+        }
+
         if is_procedural(def) {
             // A QLC+ housing is authored front-facing: its emitters sit on the
             // `+depth` face and its pixel grid is `width x height`. A mounted
@@ -1375,6 +1476,7 @@ mod tests {
 
     fn definition(kind: &str, mode: &str, heads: usize) -> Definition {
         Definition {
+            built: None,
             kind: kind.into(),
             modes: vec![Mode {
                 name: mode.into(),

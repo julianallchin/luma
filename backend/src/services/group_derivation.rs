@@ -1126,6 +1126,7 @@ mod tests {
 
     fn channel(name: &str, group: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: None,
             group: Some(Group {
@@ -1138,6 +1139,7 @@ mod tests {
 
     fn coloured(name: &str, preset: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: Some(preset.into()),
             group: None,
@@ -1147,6 +1149,7 @@ mod tests {
 
     fn definition(type_: &str, channels: Vec<Channel>) -> FixtureDefinition {
         FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: type_.into(),

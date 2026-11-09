@@ -22,6 +22,9 @@ test = false
 
 [dependencies]
 luma-scene = { path = "../scene" }
+# The build a library fixture's `Definition` carries: its meshes, joints and
+# cells, which the frame builder draws. Serde and glam only.
+luma-fixture = { path = "../../../backend/crates/luma-fixture" }
 glam = "0.30"
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }

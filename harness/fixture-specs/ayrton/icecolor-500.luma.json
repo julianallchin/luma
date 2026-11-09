@@ -1,0 +1,442 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "ayrton/icecolor-500",
+  "name": "Ayrton Icecolor 500",
+  "manufacturer": "Ayrton",
+  "model": "Icecolor 500",
+  "category": "matrix_panel",
+  "description": "Static IP65 RGBW wash with two independently manually adjustable 20-lens modules on an open floor frame. Each module contains two vertically stacked 2-row by 5-column matrices; each matrix is one RGBW DMX cell. Four cells, 40 lenses total.",
+  "provenance": {
+   "source": "Manufacturer IceColor 500 specification and user manual; exact-model photos 1, 2 and manufacturer brochure cover.",
+   "dims_src": "https://www.ayrton.eu/wp-content/uploads/2015/04/IceColor-500.pdf; product 587 x 626 x 300 mm (width x height x depth), includes integrated floor stand.",
+   "manual": "https://impact-even.com/userfiles/files/telechargement/eclairage/ayrton_icecolor500_manuel.pdf",
+   "weight_kg": 36.4,
+   "dmx_modes": [4, 5, 12, 8, 9, 16, 16, 17, 24],
+   "dmx_basis": "Manual p11: Mode9 = 4 RGBW matrices x4 channels + strobe, macro, preset, colour dimmer, chase pattern/speed/fade, master dimmer =24. No motorized axes.",
+   "count_basis": "Photo2 whole-face and first/fourth matrix crops: 4 matrices each 2 rows x5 aligned lenses. Manufacturer confirms 2 modules x20 RGBW sources and 45mm optics.",
+   "rejected_photos": {
+    "3": "Wider eight-matrix fixture; inconsistent with exact-model manufacturer photographs.",
+    "4": "URL names Ice Color 250; conflicting title, excluded."
+   },
+   "body_basis": "Manual dimensional drawing: source block height261mm, depth183mm; floor frame depth300mm and height360mm. Body width360mm estimated from front drawing and photograph.",
+   "format_note": "Two rounded source-block housings are rig.parts lofts aligned with the two face-node modules. rig.body supplies their common face envelope with a minimal central carrier. Independent manual module tilts are static node/part rotations; the format cannot give these two face subtrees separate live rig joints. Exact manual rest angles are estimated from the manufacturer photo.",
+   "import": {"from": "depence", "old_id": "8bc4ef7e-ecf3-4497-93f9-6f6a85c970b4"},
+   "sources": [
+    {
+     "sha": "eb16033995a34eaa19534900bc260e5dacc2eeaab7ad42c379c1dfad18c2a814",
+     "kind": "manual",
+     "verdict": "not_sure"
+    },
+    {"sha": "0edcf465e10edf49ef0a6fb78c5027c9a04f99dc3acc60e102d3afa023cd09cf", "kind": "photo"},
+    {"sha": "1cb7f2e64708c7fb3c55c0f40e7bbc72179ca2257c7f790a7a187bdd5f7e12d3", "kind": "photo"},
+    {"sha": "3d6ea4639e86da76d459806da01903eb532843f39110804de999432aa7ef07f3", "kind": "photo"},
+    {"sha": "47fabb05fff55f0a155a11231aa63ba0eb2a95ce37f9af52007e36dd60983fba", "kind": "photo"},
+    {"sha": "4e408b652f4733030f1710ebc6f1e7e141b8c333948cd1b8af721c7b90844aa5", "kind": "photo"},
+    {"sha": "4e74012003058cf8e3e6852bd1341280f74eb1ced84839ab783a579428bdfa7c", "kind": "photo"},
+    {"sha": "4fd60743af1e7af917bfb00366f5df33e3782e4f5ef2db37270c2429f188e812", "kind": "photo"},
+    {"sha": "5e2e85dc0324e960c6f95dd89fe89708ef5918cef1ffcd6f1bf281e25860cfc3", "kind": "photo"},
+    {"sha": "785491fd226e7a4ebb51cead42620d7e4ece6f56371d90d4c335695b18e82977", "kind": "photo"},
+    {"sha": "7ed917640e2e1a9de91a2b0b594285ef5f8ebbf4c65f85ecc601e694f6c7602c", "kind": "photo"},
+    {"sha": "a28d99183f81572394a5101afad91dc258aa90d1e5777d007017b3c8a61ca062", "kind": "photo"},
+    {"sha": "a4e9f307d6c579293152d4ecad6590b0f1809ec58197922b21f03204439238b6", "kind": "photo"},
+    {"sha": "aa780de69fc39cb555465afa3075182c7dc9c520070a62c2a9521561af35daf7", "kind": "photo"},
+    {"sha": "acd7da17ce87e48b4541970148da9e2668afcee586d80bbabe4ade5edb8f7974", "kind": "photo"},
+    {"sha": "b05356d59341799b870c01e251d4f62db26eb5d4a191cf6f9cc16398fc4da995", "kind": "photo"},
+    {"sha": "c82d36347347dc0fde8b86955a770ed2ef6e3460779cae3d0ec5b2571c74aa9f", "kind": "photo"},
+    {"sha": "d954f7be132d96fe197273bf8b6a213a8236f122204503a3df46bbb068bed984", "kind": "photo"},
+    {"sha": "e1d51e3ff2e81e5294898b7f462ae7ae157833e67f46ba073cf02b072abccf97", "kind": "photo"},
+    {"sha": "e3f1e688e241393c072f9ad690eb38f3f9e9c8a5d5d2329b35c2dadd8a0c84a8", "kind": "photo"},
+    {"sha": "fc22b29f51ab3a5bcb94733084b121a63d9d330a01b2886eb29dc8e4a9b6a990", "kind": "photo"},
+    {"sha": "fce6df6cdc548caf261503e958520b5a4c1f94af1ea44f36e9009b70ff49bc23", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.587, 0.626, 0.3]},
+ "optics": {
+  "type": "wash",
+  "beam_deg": {"v": 11, "src": "import", "conf": "medium"},
+  "lumens": {"v": 10000, "src": "import", "conf": "medium"},
+  "cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}
+ },
+ "materials": {},
+ "rig": {
+  "mount": {
+   "type": "bracket",
+   "legs": 0,
+   "base": null,
+   "yoke": {
+    "w": 0.39,
+    "y1": 0.36,
+    "d": 0.3,
+    "gap": 0.01,
+    "shape": "arm",
+    "arm": {
+     "profile": "tapered",
+     "t": [0.024, 0.024],
+     "d": [0.3, 0.04],
+     "round_top": 0.5,
+     "cutout": {"y0": 0.13, "y1": 0.74, "strut": 0.025}
+    },
+    "hull": false
+   }
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "fixed", "axis": [1, 0, 0], "range": [90, 90], "rest": 90},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.36,
+   "len": 0.002,
+   "d": 0.573,
+   "off": 0,
+   "tilt_y": 0.3665,
+   "pods": false,
+   "shell": {
+    "sections": [{"t": 0, "w": 0.01, "d": 0.01, "r": 0}, {"t": 1, "w": 0.01, "d": 0.01, "r": 0}],
+    "ring": {"rec": 0.0001, "bezel": false},
+    "pods": false
+   }
+  },
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.424, 0.027, 0.028],
+    "pos": [0, 0.025, -0.136],
+    "mat": "body",
+    "name": "floor_frame_crossrail"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.424, 0.027, 0.028],
+    "pos": [0, 0.025, 0.136],
+    "mat": "body",
+    "name": "floor_frame_crossrail"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.024, 0.027, 0.3],
+    "pos": [-0.2, 0.025, 0],
+    "mat": "body",
+    "name": "floor_frame_side"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.024, 0.292, 0.035],
+    "pos": [-0.2, 0.385, 0],
+    "rot": [-25, 0, 0],
+    "mat": "body",
+    "name": "module_support_arm"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.027, 0.012, 0.028],
+    "pos": [-0.2, 0.006, -0.115],
+    "mat": "body",
+    "name": "floor_foot"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.027, 0.012, 0.028],
+    "pos": [-0.2, 0.006, 0.115],
+    "mat": "body",
+    "name": "floor_foot"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.024, 0.027, 0.3],
+    "pos": [0.2, 0.025, 0],
+    "mat": "body",
+    "name": "floor_frame_side"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.024, 0.292, 0.035],
+    "pos": [0.2, 0.385, 0],
+    "rot": [-25, 0, 0],
+    "mat": "body",
+    "name": "module_support_arm"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.027, 0.012, 0.028],
+    "pos": [0.2, 0.006, -0.115],
+    "mat": "body",
+    "name": "floor_foot"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.027, 0.012, 0.028],
+    "pos": [0.2, 0.006, 0.115],
+    "mat": "body",
+    "name": "floor_foot"
+   },
+   {
+    "attach": "head",
+    "shape": "loft",
+    "sections": [
+     [-0.183, 0.166, 0.05, 0.2],
+     [-0.145, 0.1791, 0.105, 0.12],
+     [-0.08, 0.1791, 0.1306, 0.08],
+     [0, 0.1791, 0.1306, 0.04]
+    ],
+    "pos": [0, 0.1389525, 0.105],
+    "rot": [-25, 0, 0],
+    "mat": "body",
+    "name": "source_block_housing"
+   },
+   {
+    "attach": "head",
+    "shape": "loft",
+    "sections": [
+     [-0.183, 0.166, 0.05, 0.2],
+     [-0.145, 0.1791, 0.105, 0.12],
+     [-0.08, 0.1791, 0.1306, 0.08],
+     [0, 0.1791, 0.1306, 0.04]
+    ],
+    "pos": [0, -0.1389525, 0.105],
+    "rot": [-25, 0, 0],
+    "mat": "body",
+    "name": "source_block_housing"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.36, 0.573],
+    "layout": {"kind": "line", "n": 2, "dir": "y", "gap": 0.06},
+    "child": {
+     "tilt": [-25, 0],
+     "frame": {"bezel": 0, "depth": 0.006},
+     "layout": {"kind": "line", "n": 2, "dir": "y", "gap": 0.04},
+     "child": {
+      "cell": true,
+      "fill": [0.8, 0.84],
+      "frame": {"bezel": 0.025, "depth": 0.006},
+      "layout": {"kind": "grid", "rows": 2, "cols": 5},
+      "child": {"fill": 0.88, "emitter": {"kind": "lens", "colour": "rgbw"}}
+     }
+    },
+    "z": 0.105
+   }
+  }
+ ],
+ "cells": {"count": 4, "emitters": 40},
+ "sources": [{"cell_ranges": [[0, 3]]}],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}],
+    "prov": {
+     "status": "agreed",
+     "agree": ["manual", "onyx", "depence", "gdtf"],
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"},
+     {"attr": "dimmer"}
+    ],
+    "prov": {
+     "status": "agreed",
+     "agree": ["manual", "onyx", "depence", "gdtf"],
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "8ch",
+    "options": {"channels": "8"},
+    "footprint": 8,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3, "size": 2},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "9ch",
+    "options": {"channels": "9"},
+    "footprint": 9,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3, "size": 2},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     },
+     {"attr": "dimmer"}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "12ch",
+    "options": {"channels": "12"},
+    "footprint": 12,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"},
+     {
+      "attr": "shutter",
+      "ranges": [
+       {"dmx": [0, 15], "state": "open"},
+       {"dmx": [16, 249], "state": "strobe"},
+       {"dmx": [250, 255], "state": "open"}
+      ]
+     },
+     {"attr": "other"},
+     {"attr": "colour/macro"},
+     {"attr": "dimmer", "n": 1},
+     {"attr": "fx/macro", "n": 1},
+     {"attr": "fx/speed"},
+     {"attr": "fx/macro", "n": 2},
+     {"attr": "dimmer", "n": 2}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "conflict": {"onyx": "slot 5: fx/macro (want other)", "gdtf": "slot 5: colour/macro (want other)"},
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "16ch",
+    "options": {"channels": "16"},
+    "footprint": 16,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "agreed",
+     "agree": ["manual", "onyx", "depence", "gdtf"],
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "17ch",
+    "options": {"channels": "17"},
+    "footprint": 17,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     },
+     {"attr": "dimmer"}
+    ],
+    "prov": {
+     "status": "agreed",
+     "agree": ["manual", "onyx", "depence", "gdtf"],
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "24ch",
+    "options": {"channels": "24"},
+    "footprint": 24,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/white"}]
+      }
+     },
+     {
+      "attr": "shutter",
+      "ranges": [
+       {"dmx": [0, 15], "state": "open"},
+       {"dmx": [16, 249], "state": "strobe"},
+       {"dmx": [250, 255], "state": "open"}
+      ]
+     },
+     {"attr": "other"},
+     {"attr": "colour/macro"},
+     {"attr": "dimmer", "n": 1},
+     {"attr": "fx/macro", "n": 1},
+     {"attr": "fx/speed"},
+     {"attr": "fx/macro", "n": 2},
+     {"attr": "dimmer", "n": 2}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "conflict": {"onyx": "slot 17: fx/macro (want other)", "gdtf": "slot 17: colour/macro (want other)"},
+     "doc": "eb16033995a3",
+     "page": 3,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "4 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]},
+   "manual": {"doc": "eb16033995a3", "page": 3}
+  }
+ }
+}
