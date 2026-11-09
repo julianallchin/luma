@@ -65,7 +65,8 @@ From the repository root, run:
 python3 gpui/dev.py
 ```
 
-The watcher builds and launches `luma-app`. It rebuilds after source or asset
+The watcher builds and launches `luma-app`'s `Luma` binary (capitalised so
+the macOS menu bar says Luma). It rebuilds after source or asset
 changes in `gpui/`, `backend/`, and `resources/`. It includes new untracked
 files. It ignores Git-ignored outputs and Markdown files. Saves are debounced.
 A change during a build causes another build before launch.

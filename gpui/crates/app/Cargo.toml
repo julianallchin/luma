@@ -6,8 +6,13 @@ publish = false
 
 # The window around the library crate. It has no tests of its own, so no
 # test binary is linked for it.
+#
+# Named `Luma`, capitalised, because macOS names an unbundled process's menu
+# bar menu after its executable: `cargo run` and `gpui/dev.py` would
+# otherwise say "luma-app" where the bundle, whose Info.plist says
+# `CFBundleName = Luma`, says "Luma". The bundles install it as `luma`.
 [[bin]]
-name = "luma-app"
+name = "Luma"
 path = "src/main.rs"
 test = false
 

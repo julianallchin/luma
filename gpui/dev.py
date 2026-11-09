@@ -63,7 +63,7 @@ def build():
     print("[dev] Building…", flush=True)
     process = subprocess.Popen(
         ["cargo", "build", "--manifest-path", "gpui/Cargo.toml",
-         "-p", "luma-app", "--bin", "luma-app",
+         "-p", "luma-app", "--bin", "Luma",
          "--message-format=json-render-diagnostics"],
         cwd=ROOT, stdout=subprocess.PIPE, text=True, start_new_session=True,
     )
@@ -76,7 +76,7 @@ def build():
                 print(line, end="", flush=True)
                 continue
             if message.get("reason") == "compiler-artifact":
-                if message["target"]["name"] == "luma-app" and message.get("executable"):
+                if message["target"]["name"] == "Luma" and message.get("executable"):
                     executable = message["executable"]
         if process.wait() == 0 and executable:
             return executable

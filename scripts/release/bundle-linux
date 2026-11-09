@@ -32,7 +32,7 @@ cargo build --release --locked --manifest-path gpui/Cargo.toml -p luma-app
 app="$dist/luma.app"
 rm -rf "$app"
 mkdir -p "$app/bin" "$app/share/applications" "$app/share/icons/hicolor/512x512/apps"
-install -m 755 "$target_dir/release/luma-app" "$app/bin/luma"
+install -m 755 "$target_dir/release/Luma" "$app/bin/luma"
 strip "$app/bin/luma"
 install -m 644 "$here/linux/luma.desktop" "$app/share/applications/luma.desktop"
 install -m 644 assets/app/icon.png "$app/share/icons/hicolor/512x512/apps/luma.png"

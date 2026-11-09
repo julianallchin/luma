@@ -1,4 +1,4 @@
-//! `luma-app` — the window around [`luma_app::Luma`].
+//! `Luma`, the window around [`luma_app::Luma`].
 
 use gpui::*;
 use gpui_component::Root;
@@ -9,7 +9,7 @@ fn main() {
     // reached by pressing something — a flag that jumped straight to one would
     // be a second way in, and the automation harness drives the first one.
     if let Some(arg) = std::env::args().nth(1) {
-        eprintln!("usage: luma-app  (unexpected `{arg}`)");
+        eprintln!("usage: Luma  (unexpected `{arg}`)");
         std::process::exit(2);
     }
 

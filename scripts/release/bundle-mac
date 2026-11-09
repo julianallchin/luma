@@ -43,9 +43,9 @@ cargo build --release --locked --manifest-path gpui/Cargo.toml -p luma-app
 app="$dist/Luma.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-# `luma`, not `luma-app`: an installed build relaunches
+# `luma`, not `Luma`: an installed build relaunches
 # `Contents/MacOS/luma` after it installs this bundle over itself.
-cp "$target_dir/release/luma-app" "$app/Contents/MacOS/luma"
+cp "$target_dir/release/Luma" "$app/Contents/MacOS/luma"
 cp assets/app/icon.icns "$app/Contents/Resources/luma.icns"
 sed -e "s/@VERSION@/$version/g" "$here/macos/Info.plist" > "$app/Contents/Info.plist"
 "$here/stage-resources" "$app/Contents/Resources"
