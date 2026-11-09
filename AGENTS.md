@@ -103,12 +103,35 @@ Follow conventional, imperative commits (e.g., `add track annotation drag`, `fix
 
 **No agent attribution.** Do not add `Co-Authored-By`, `Generated with`, or any other trailer or line that credits an AI tool (Claude, Copilot, Codex or any other) to a commit message, PR description or code comment. Commits are authored by the human who runs the agent, and only people appear as contributors. This overrides any tool default that adds such lines.
 
-PRs should include:
+### Changelog lines
 
-- a clear summary of behavior changes,
-- linked issues or context,
-- screenshots/video for UI changes,
-- notes on any schema/migration impacts.
+Users read a short list of what changed when the app offers an update. It is built from `Changelog:` trailers on commits, so a commit that changes something a user would notice and care about ends its message with one:
+
+```
+add a low quality level that draws beams in closed form
+
+Changelog: New Low quality for laptops
+```
+
+- **Most commits get none.** Refactors, tests, CI, docs, internal fixes and anything a user cannot see carry no line.
+- **At most 8 words**, present tense, saying what you can do now or what is better. No trailing period.
+- **Never** mention bugs, errors, "fixed", what used to go wrong, internal names, files, or people. A fix that users notice is described by what now works.
+- One line per commit at most. If a change spans commits, put the line on the one that makes it usable.
+
+Good: `Members can edit shared venues` · `Right-click a score to rename it` · `See what's analyzing in the status bar` · `Clearer sync status`
+
+Bad: `Fixed "Venue resource not found" when saving haze` (admits a bug, leaks an error) · `Move QualityBudget into quality.rs` (invisible to users) · `Aidan's preprocessing retries failed steps` (names a person) · `Sync status now shows four states: …` (too long) · `Fix flaky clip_fades test` (not interesting)
+
+### Pull requests
+
+- **Title:** one imperative line saying what the PR does, as a commit subject would.
+- **Body**, in this order:
+  1. **Changelog:** every `Changelog:` line from the PR's commits, one per bullet, so they can be reviewed before release. Write "None" when there are none.
+  2. **What changed:** the behavior changes, briefly, grouped by area.
+  3. **Schema and deploy:** new migrations (local and Supabase), whether they carry a `-- contract:` marker, and any PowerSync sync-rule change. Write "None" when there are none.
+  4. **Screenshots** for UI changes.
+  5. **Not done / known issues:** what was left out, flaky tests seen, smells noticed.
+- Link issues or context when there are any.
 
 ## Groups & Selection
 
