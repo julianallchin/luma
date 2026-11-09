@@ -56,6 +56,9 @@ A new migration adds its line here.
   client that lets members edit a shared venue: until it runs, a member's
   change to the venue row (environment, haze) uploads to no rows and is
   undone by the next download
+- `20261108140000_keep_authored_rows.sql` — any time; no client depends on
+  it. From then on deleting an auth user who authored anything another
+  account can read is refused instead of cascading through shared venues
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.
