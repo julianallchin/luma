@@ -84,7 +84,9 @@ What a lowered mode looks like:
     split its colour among themselves (white, amber and lime take what they
     can make, red, green and blue the rest); a colour it has no die for is
     lost. A param shared by several cells carries the mean of what the cells
-    that can emit through it ask for.
+    that can emit through it ask for. A channel marked `emulated` (a colour
+    the fixture mixes from its other dies in firmware) lights every cell it
+    covers.
   - Brightness goes to the dimmers over a cell, widest first, each at the
     brightest of its cells; what they do not make scales the emitters, so a
     mode without a dimmer still dims. The grand master scales it all.
