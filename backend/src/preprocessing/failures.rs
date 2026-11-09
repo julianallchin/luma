@@ -80,6 +80,34 @@ pub async fn record(
     }
 }
 
+/// Holds for an outer track `t` while preprocessor `?1`'s last failure on it
+/// is in backoff. The one statement of the rule: reconcile does not queue a
+/// track for a step in backoff ([`pending_tracks`]), and a track queued for
+/// another step skips it, with its dependents ([`in_backoff`]).
+///
+/// [`pending_tracks`]: crate::preprocessing::preprocessor::pending_tracks
+pub(crate) const IN_BACKOFF: &str = "EXISTS (
+    SELECT 1 FROM preprocessing_failures f
+     WHERE f.track_id = t.id AND f.preprocessor = ?1
+       AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))";
+
+/// Whether `preprocessor`'s last failure on the track is still in backoff.
+pub async fn in_backoff(
+    pool: &SqlitePool,
+    track_id: &str,
+    preprocessor: &str,
+) -> Result<bool, String> {
+    let held: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {IN_BACKOFF} FROM tracks t WHERE t.id = ?2"
+    )))
+    .bind(preprocessor)
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to read {preprocessor}'s backoff: {e}"))?;
+    Ok(held.unwrap_or(false))
+}
+
 /// Forget `preprocessor`'s failures recorded by any version but `version`.
 pub async fn forget_other_versions(
     pool: &SqlitePool,

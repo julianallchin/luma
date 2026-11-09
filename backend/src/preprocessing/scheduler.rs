@@ -17,8 +17,10 @@
 //! On preprocessor failure: log, record a row in
 //! `preprocessing_failures` with exponential backoff, skip downstream
 //! preprocessors for this track in this run, then continue with other tracks.
-//! Reconcile on the next startup will pick the track up again once its
-//! `next_retry_at` has elapsed, or the preprocessor's version has changed.
+//! Until the track's `next_retry_at` has elapsed, or the preprocessor's
+//! version has changed, the step stays skipped on that track, with its
+//! dependents: reconcile does not queue the track for it, and a run queued for
+//! another step passes it by.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -356,6 +358,21 @@ async fn run_track_layers(
                 }
                 continue;
             }
+            // A step that failed here recently waits out its backoff even when
+            // the track is queued for another one. Its dependents wait with it,
+            // and they are what keeps a track queued: nothing else stops a
+            // failing upstream step from rerunning on every launch.
+            if failures::in_backoff(pool, track_id, p.name()).await? {
+                eprintln!(
+                    "[preprocessing] skipping {} for track {track_id}: in failure backoff",
+                    p.name()
+                );
+                failed_artifacts.insert(p.output());
+                if let Some(report) = report {
+                    report.settle(p.name(), StageOutcome::Skipped);
+                }
+                continue;
+            }
             to_run.push(p.clone());
         }
 
@@ -397,8 +414,9 @@ async fn run_track_layers(
     }
 }
 
-/// Run a single preprocessor for a single track, with failure backoff,
-/// status emission, and in-flight dedup.
+/// Run a single preprocessor for a single track, with failure recording,
+/// status emission, and in-flight dedup. The caller skips a step in failure
+/// backoff before it gets here.
 async fn run_one(
     ctx: &PreprocessorContext<'_>,
     track_id: &str,
@@ -631,6 +649,83 @@ mod tests {
         async fn run(&self, _ctx: &PreprocessorContext<'_>, _track_id: &str) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    /// What the failure table says, step by step: a step that ran again would
+    /// have cleared its row or counted another attempt.
+    async fn failure_rows(pool: &SqlitePool) -> Vec<(String, i64)> {
+        sqlx::query_as(
+            "SELECT preprocessor, attempts FROM preprocessing_failures ORDER BY preprocessor",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The case that reran a broken MERT on every track at every launch: the
+    /// steps waiting on a failed one keep the track queued. Here every step
+    /// waits on the two the DAG starts from, so if anything ran, a row changed.
+    #[tokio::test]
+    async fn a_queued_track_reruns_no_step_in_failure_backoff() {
+        let directory = tempfile::tempdir().unwrap();
+        let services =
+            crate::test_support::signed_out(directory.path(), directory.path().to_path_buf()).await;
+        let pool = &services.db.0;
+        let audio = directory.path().join("song.wav");
+        std::fs::write(&audio, b"RIFF").unwrap();
+        sqlx::query(
+            "INSERT INTO tracks (id, track_hash, title, duration_seconds, file_path)
+             VALUES ('t1', 'hash', 'Song', 1.0, ?)",
+        )
+        .bind(audio.to_string_lossy())
+        .execute(pool)
+        .await
+        .unwrap();
+        let first: Vec<_> = registry::dag()
+            .preprocessors()
+            .filter(|p| p.inputs() == [Artifact::Audio])
+            .collect();
+        assert!(!first.is_empty());
+        for p in &first {
+            failures::record(pool, "t1", p.name(), p.version(), "worker broke")
+                .await
+                .unwrap();
+        }
+        let before = failure_rows(pool).await;
+        let mut queued_by = Vec::new();
+        for p in registry::dag().preprocessors() {
+            if p.list_pending(pool)
+                .await
+                .unwrap()
+                .iter()
+                .any(|id| id == "t1")
+            {
+                queued_by.push(p.name());
+            }
+        }
+        assert!(
+            !queued_by.is_empty(),
+            "reconcile would not queue the track at all"
+        );
+
+        let epoch = services.analysis_tasks.current_epoch().unwrap();
+        let lease = services.analysis_tasks.lease(epoch).unwrap();
+        run_for_track(
+            pool,
+            &services.storage,
+            &services.workers,
+            "t1",
+            &lease.guard(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            failure_rows(pool).await,
+            before,
+            "a step in backoff, or one waiting on it, ran"
+        );
     }
 
     #[tokio::test]
