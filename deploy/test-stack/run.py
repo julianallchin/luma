@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Disposable Postgres, PostgREST and PowerSync for the row model.
 
-Starts the three services a Luma client talks to, applies every migration
-from the row model on to an empty database, and runs whichever Rust tests were
-named against the live stack. Older migrations are not applied: the row-model
-migration is self-sufficient by design.
+Starts the three services a Luma client talks to, applies every migration to
+an empty database, and runs whichever Rust tests were named against the live
+stack.
 """
 
 import argparse
@@ -22,13 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parents[1]
-# Every migration from the row model on, in order: the row model rebuilt the
-# schema from scratch, so nothing before it applies.
-MIGRATIONS = sorted(
-    path
-    for path in (REPO / "supabase/migrations").glob("*.sql")
-    if path.name >= "20260912000000_row_model.sql"
-)
+MIGRATIONS = sorted((REPO / "supabase/migrations").glob("*.sql"))
 SYNC_RULES = REPO / "deploy/powersync/sync-config.yaml"
 
 PREFIX = "luma-rows-"
