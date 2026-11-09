@@ -313,7 +313,9 @@ impl Default for ProbeView {
 /// moves. `Low` keeps Medium's budgets and marches no haze at all: each
 /// beam is a closed-form line integral through uniform haze, with no haze
 /// shadows, gobos or density variation, and there are no sun shafts and no
-/// haze glow. Callers lower the haze and output resolutions themselves,
+/// haze glow. Low also draws no fixture shadows, so surfaces take every
+/// fixture's light unshadowed, and estimates ambient visibility at half
+/// resolution. Callers lower the haze and output resolutions themselves,
 /// because those are already their own settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -323,7 +325,7 @@ pub enum Quality {
     High,
     /// A laptop GPU's budget.
     Medium,
-    /// No volumetric marching: analytic beams.
+    /// No volumetric marching and no fixture shadows: analytic beams.
     Low,
 }
 

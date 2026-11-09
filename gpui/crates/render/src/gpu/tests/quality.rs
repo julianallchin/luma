@@ -1,11 +1,13 @@
 //! What each quality level draws a beam with: Medium marches the haze, Low
-//! draws it in closed form and marches nothing.
+//! draws it in closed form and marches nothing. And what Low leaves out:
+//! fixture shadows.
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
-use crate::frame::Frame;
+use crate::frame::{Camera, Draw, Frame, MaterialTextures};
 use crate::gpu::Renderer;
 use crate::scene_desc::Quality;
+use luma_scene::mesh::Material;
 
 use super::{fixture_surface_frame, region_mean};
 
@@ -132,5 +134,79 @@ fn analytic_beams_fade_from_the_source() -> anyhow::Result<()> {
             "{quality:?}: {near} by the lamp, {far} further down"
         );
     }
+    Ok(())
+}
+
+/// A lamp over the floor with a dark plate between them, seen from above
+/// and to the side, with no haze and no fill: every lit pixel is the lamp's.
+fn shadowed_floor_frame(quality: Quality) -> Frame {
+    let mut frame = fixture_surface_frame(1);
+    frame.fixture_cones[0].position = Vec3::new(0.0, 0.0, 3.0);
+    frame.draws.push(Draw {
+        mesh: 0,
+        model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
+            * Mat4::from_scale(Vec3::splat(0.09)),
+        material: Material {
+            base_color: Vec3::splat(0.08),
+            roughness: 0.8,
+            ..Material::default()
+        },
+        textures: MaterialTextures::default(),
+        editor_object: None,
+    });
+    frame.camera = Camera {
+        eye: Vec3::new(3.8, -6.0, 3.2),
+        target: Vec3::new(0.0, 0.0, 1.35),
+        fov_y_deg: 45.0,
+    };
+    frame.ambient = Vec3::ZERO;
+    frame.geometry_shadows = true;
+    frame.quality = quality;
+    frame
+}
+
+#[test]
+fn low_quality_draws_no_fixture_shadows() -> anyhow::Result<()> {
+    let mut renderer = Renderer::new()?;
+    let energy = |pixels: &[u8]| {
+        pixels
+            .chunks_exact(4)
+            .map(|pixel| u64::from(pixel[0]) + u64::from(pixel[1]) + u64::from(pixel[2]))
+            .sum::<u64>()
+    };
+
+    let shadowed = renderer.render(&shadowed_floor_frame(Quality::Medium), WIDTH, HEIGHT, 1)?;
+    assert!(
+        renderer.shadowed_fixture_count() > 0 && renderer.shadow_stats().redrawn_maps > 0,
+        "Medium drew no fixture shadow map"
+    );
+
+    // The same renderer, switched down: no map is assigned, drawn or
+    // reduced, and the floor under the plate takes the lamp's light.
+    let open = renderer.render(&shadowed_floor_frame(Quality::Low), WIDTH, HEIGHT, 1)?;
+    let stats = renderer.shadow_stats();
+    assert_eq!(
+        renderer.shadowed_fixture_count(),
+        0,
+        "Low kept a fixture shadow map"
+    );
+    assert_eq!(
+        (stats.redrawn_maps, stats.hierarchy_layers),
+        (0, 0),
+        "Low drew or reduced a fixture shadow map"
+    );
+    let changed = shadowed
+        .chunks_exact(4)
+        .zip(open.chunks_exact(4))
+        .filter(|(medium, low)| medium[..3] != low[..3])
+        .count();
+    assert!(
+        changed > 100,
+        "the plate shadows the floor at Low too: {changed} pixels differ"
+    );
+    assert!(
+        energy(&open) > energy(&shadowed),
+        "lighting the floor unshadowed made it darker"
+    );
     Ok(())
 }

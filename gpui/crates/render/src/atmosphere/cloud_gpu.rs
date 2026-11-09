@@ -381,7 +381,7 @@ struct ShadowMap {
 struct Key {
     sun: [u32; 3],
     cover: CloudCover,
-    quality: Quality,
+    budget: Budget,
     size: (u32, u32),
 }
 
@@ -489,11 +489,10 @@ impl Cache {
         sky: &SkyFrame,
         tables: &super::Tables<'_>,
         sky_uniform: &wgpu::Buffer,
-        quality: Quality,
+        budget: Budget,
     ) -> Option<wgpu::TextureView> {
         let layer = Layer::of(sky.clouds)?;
         let weather = self.weather(device, queue, sky.clouds)?;
-        let budget = Budget::of(quality);
         let uniform = buffer(
             device,
             LayerUniform::of(&layer, budget, sky.sun_direction, 0.0),
@@ -637,7 +636,7 @@ impl Cache {
         let key = Key {
             sun: sky.sun_direction.to_array().map(f32::to_bits),
             cover: sky.clouds,
-            quality: input.quality,
+            budget,
             size,
         };
         let view_uniform = self

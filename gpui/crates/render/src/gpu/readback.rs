@@ -112,6 +112,8 @@ pub(super) struct PendingProfile {
     pub(super) grid_fog: bool,
     pub(super) query_count: u32,
     pub(super) passes: Vec<(&'static str, u32, u32)>,
+    /// `PassQueries::moved`.
+    pub(super) moved: Vec<(u32, u32)>,
 }
 
 impl PendingProfile {
@@ -346,6 +348,9 @@ impl PendingFrame {
             }
             drop(view);
             profile.readback.unmap();
+            for &(base, sample) in &profile.moved {
+                timestamps[base as usize] = timestamps[sample as usize];
+            }
             // Consecutive end samples partition the frame, per `QUERY_COUNT`.
             // A zero haze end means haze did not run; a whole-frame zero means
             // the driver dropped the samples.

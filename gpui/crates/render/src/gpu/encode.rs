@@ -51,7 +51,7 @@ const REFERENCE_GEOMETRY_SHADOW_SAMPLES: f32 = 2.0;
 /// `High` is the reference picture: its shadow walk is the one the renderer
 /// had before the levels existed. Its plain-beam piece cap and shadow redraw
 /// budget are new, and measured to leave the picture unchanged. `Low` is
-/// `Medium` without the march.
+/// `Medium` without the march and without fixture shadows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct QualityBudget {
     /// Whether the haze is marched. Without it no volumetric pass runs —
@@ -59,6 +59,10 @@ struct QualityBudget {
     /// compaction, the haze kernels, the sun shafts or the haze glow — and
     /// `haze_analytic.wgsl` writes the haze target in closed form.
     marched: bool,
+    /// Whether fixtures cast shadows. Without them no fixture shadow map is
+    /// assigned, drawn or reduced, and surfaces take each fixture's light
+    /// unshadowed. `Frame::fixture_shadows` can only turn them off.
+    fixture_shadows: bool,
     /// Gauss-Legendre piece cap for a plain beam (`quadrature_pieces`).
     plain_pieces: f32,
     /// Scale on the haze shadow walk's pixel-footprint allowance.
@@ -71,6 +75,8 @@ struct QualityBudget {
     fog_tile: u32,
     /// Scene-pass samples per pixel.
     msaa: u32,
+    /// Output pixels per ambient-visibility texel along each axis.
+    ambient_divisor: u32,
 }
 
 impl QualityBudget {
@@ -79,24 +85,34 @@ impl QualityBudget {
         match (quality, camera_moving) {
             (Quality::High, _) => Self {
                 marched: true,
+                fixture_shadows: true,
                 plain_pieces: 8.0,
                 shadow_footprint: 1.0,
                 shadow_steps: 1.0,
                 shadow_redraws: 64,
                 fog_tile: crate::fog_grid::TILE_SIZE,
                 msaa: MSAA_SAMPLES,
+                ambient_divisor: 1,
             },
             // A laptop budget: twice the shadow walk's footprint allowance
             // and half its steps, and twice again while the camera moves,
             // when nothing settles anyway.
-            (Quality::Medium | Quality::Low, moving) => Self {
-                marched: quality.marches_haze(),
+            (Quality::Medium, moving) => Self {
+                marched: true,
+                fixture_shadows: true,
                 plain_pieces: 4.0,
                 shadow_footprint: if moving { 4.0 } else { 2.0 },
                 shadow_steps: if moving { 0.25 } else { 0.5 },
                 shadow_redraws: 16,
                 fog_tile: crate::fog_grid::LOW_TILE_SIZE,
                 msaa: 1,
+                ambient_divisor: 1,
+            },
+            (Quality::Low, moving) => Self {
+                marched: false,
+                fixture_shadows: false,
+                ambient_divisor: 2,
+                ..Self::of(Quality::Medium, moving)
             },
         }
     }
@@ -242,6 +258,7 @@ impl Renderer {
                 .is_some_and(|last| last != camera_bits);
         self.last_live_camera = temporal.then_some(camera_bits);
         let budget = QualityBudget::of(frame.quality, camera_moving);
+        let fixture_shadows = frame.fixture_shadows && budget.fixture_shadows;
         let fog_tile = budget.fog_tile;
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         // Everything `draw_depth` rasterises, fixture bodies included: the
@@ -255,10 +272,7 @@ impl Renderer {
             .max(fixture_cones.len())
             .next_power_of_two()
             .max(MAX_FIXTURE_SHADOWS);
-        if cached_shadows
-            && frame.fixture_shadows
-            && self.fixture_shadow_cache.len() < shadow_capacity
-        {
+        if cached_shadows && fixture_shadows && self.fixture_shadow_cache.len() < shadow_capacity {
             // Two banks stay inside the default 256-array-layer device limit,
             // including devices shared with GPUI's compositor.
             let (first, mut layers) =
@@ -284,7 +298,7 @@ impl Renderer {
         }
         // Full mode retains every projection; the legacy comparison keeps
         // its priority-based 16-map selection.
-        let shadow_slots = if frame.fixture_shadows {
+        let shadow_slots = if fixture_shadows {
             if cached_shadows {
                 let origins: Vec<_> = self
                     .fixture_shadow_drawn
@@ -369,7 +383,7 @@ impl Renderer {
         // sampling the map it has, with the projection that map was drawn
         // with, until its turn comes.
         let mut fixture_shadow_matrices = fixture_shadow_matrices;
-        if cached_shadows && frame.fixture_shadows {
+        if cached_shadows && fixture_shadows {
             let dirty: Vec<bool> = fixture_shadow_matrices
                 .iter()
                 .zip(&shadow_slots)
@@ -648,6 +662,7 @@ impl Renderer {
                 [width, height],
                 [CAMERA_NEAR, camera_far],
                 self.sky_visibility.active(),
+                budget.ambient_divisor,
             )],
             wgpu::BufferUsages::UNIFORM,
             "ambient-visibility-params",
@@ -798,7 +813,7 @@ impl Renderer {
             frame,
             self.visibility_reference
                 && (self.geometry_shadows || frame.geometry_shadows)
-                && frame.fixture_shadows,
+                && fixture_shadows,
         );
         let index_bindings = self.light_index.bindings();
         let overlay_buf = self.storage(
@@ -956,7 +971,9 @@ impl Renderer {
             )
         };
         let targets_done = Instant::now();
-        let ambient_visibility = self.sky_visibility.output(&self.gpu.device, width, height);
+        let ambient_visibility =
+            self.sky_visibility
+                .output(&self.gpu.device, width, height, budget.ambient_divisor);
         // Outdoor haze with a sun: the sun-shaft target, which the scene pass
         // reads per fragment through binding 16. A texel of full sun stands
         // in when the pass does not run.
@@ -1740,10 +1757,7 @@ impl Renderer {
                 .plan_interval_cache(
                     &mut encoder,
                     frame,
-                    grid_fog
-                        && cached_shadows
-                        && frame.fixture_shadows
-                        && !fixture_cones.is_empty(),
+                    grid_fog && cached_shadows && fixture_shadows && !fixture_cones.is_empty(),
                     opaque,
                     &inv_view_proj,
                     camera_far,
@@ -1875,7 +1889,7 @@ impl Renderer {
                         1.0 / FIXTURE_SHADOW_SIZE as f32,
                         if self.visibility_reference
                             && (self.geometry_shadows || frame.geometry_shadows)
-                            && frame.fixture_shadows
+                            && fixture_shadows
                         {
                             REFERENCE_GEOMETRY_SHADOW_SAMPLES
                         } else {
@@ -2616,6 +2630,7 @@ impl Renderer {
             };
             let query_count = pass_queries.count;
             let passes = pass_queries.spans;
+            let moved = pass_queries.moved;
             let pending_profile =
                 profile_resources.map(|(query_set, resolve, readback, timestamp_period_ns)| {
                     PendingProfile {
@@ -2633,6 +2648,7 @@ impl Renderer {
                         grid_fog,
                         query_count,
                         passes,
+                        moved,
                     }
                 });
             PendingFrame {

@@ -532,7 +532,8 @@ setting (`"high" | "medium" | "low"`). A machine that had set the old
   envelope). Low draws no haze shadows, no gobos in the beam and no cloud
   density; the medium uniform's cloudiness is zero, so surfaces and the sky
   see the same uniform haze. Surface lighting, fixture shadow maps on
-  surfaces and their hierarchy are unchanged.
+  surfaces and their hierarchy are unchanged. (Changed the same day; see
+  "Low without fixture shadows" below.)
 
 Gasworks Park rig with its 34 movers lit over 300 dimmed strip cells (344
 cones), outdoor at night, haze 0.12, 2227×1391 output at every level (the
@@ -551,6 +552,54 @@ The analytic pass costs about 4.3 ms of Low's frame here; its cost is per
 (pixel, light) pair whose ray crosses the cone, so a rig of many wide washes
 seen face-on is its worst case. At half resolution it cost about 15 ms on
 the same frame, which is why Low draws it at a quarter.
+
+### Low without fixture shadows (2026-11-08)
+
+After the march, most of Low's frame was surface lighting, the fixture
+shadow maps and ambient visibility. Low now also:
+
+- **Draws no fixture shadows** (`QualityBudget::fixture_shadows`). No shadow
+  slot is assigned, so no map is drawn, redrawn or reduced into its
+  hierarchy, the shadow atlas is not allocated, and surfaces take every
+  fixture's light unshadowed. A beam aimed into a deck lights the floor under
+  it. `Frame::fixture_shadows` can still turn them off at any level; the
+  budget can only turn them off too.
+- **Estimates ambient visibility at half resolution**
+  (`QualityBudget::ambient_divisor`). GTAO, the outdoor sky and ground
+  visibility and the 5×5 denoise run once per 2×2 block, at the block's
+  first pixel; the scene pass reads the texel covering its pixel. Full
+  resolution it cost about 3 ms of Low's 12 ms here; at half, under 1 ms.
+
+The atmosphere's sky tables and the cloud history are keyed by the cloud
+`Budget` they use, not by `Quality`, so a switch between Medium and Low (same
+cloud budget) rebuilds nothing.
+
+Same rig, setup and method as the table above (levels interleaved in one
+run, "Low before" is the previous Low). Other GPU work on the machine made
+the static wide case noisy; its numbers are the cleanest of three runs:
+
+| | static wide | static side | orbiting wide | orbiting side |
+|---|---:|---:|---:|---:|
+| High | 41.7 ms | 40.7 ms | 40.6 ms | 46.8 ms |
+| Medium | 20.6 ms | 23.0 ms | 21.0 ms | 21.5 ms |
+| Low before | 16.0 ms | 18.2 ms | 16.7 ms | 16.7 ms |
+| Low | 11.7 ms | 11.2 ms | 10.1 ms | 10.7 ms |
+
+Low's frame by pass (`LUMA_PROFILE_DETAIL=1`, brackets overlap, static):
+haze-analytic about 4.7 ms (the frame with haze 0.12 against haze 0:
+10.2 against 5.5 ms wide, 11.2 against 7.4 ms side), ambient visibility
+1.0 ms and its denoise 0.6 ms, surface-light-index 0.9 ms, surface depth
+0.7 ms, light index 0.6 ms, and the scene pass the rest, about 2 to 3 ms.
+Post passes are each under 0.2 ms.
+
+The analytic pass is now close to half of Low's frame, and most of it is the
+300 strip cells, which in this scene emit about 1/50 000 of a mover. Not
+drawing beams more than twelve stops under the frame's brightest cone took
+it to almost nothing, but rejected: the wide cells overlap everywhere, and
+together they are the haze's visible tone and the glow under the truss that
+Medium shows. A cull has to bound a cone's radiance along the pixel's ray,
+not compare emitted intensities, and one that keeps every visible
+contribution would keep these.
 
 ## Haze glow (2026-10-25)
 
