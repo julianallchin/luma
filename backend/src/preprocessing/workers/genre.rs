@@ -241,8 +241,9 @@ mod tests {
         sqlx::query(
             "INSERT INTO preprocessing_failures
                 (track_id, preprocessor, version, last_error, last_attempt, next_retry_at)
-             VALUES ('t1', 'genre', 1, 'model missing', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z')",
+             VALUES ('t1', 'genre', ?, 'model missing', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z')",
         )
+        .bind(GenrePreprocessor.version() as i64)
         .execute(&pool)
         .await
         .unwrap();
