@@ -52,6 +52,10 @@ A new migration adds its line here.
   before it cannot read the rewritten graphs
 - `20261108120000_track_media_read_bucket_path.sql` — any time; until it
   runs, venue members cannot download a shared track's audio or stems
+- `20261108130000_venue_member_edits.sql` — any time, before shipping the
+  client that lets members edit a shared venue: until it runs, a member's
+  change to the venue row (environment, haze) uploads to no rows and is
+  undone by the next download
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

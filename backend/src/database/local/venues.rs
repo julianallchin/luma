@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
+use crate::database::local::venue_access::{AuthorizedVenue, Owner, VenueAccess, Write};
 use crate::models::venues::{Venue, VenueMember};
 use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
@@ -170,11 +170,11 @@ pub async fn set_haze(access: &mut VenueAccess<'_, Write>, haze: VenueHaze) -> R
 
 /// Set or clear the venue's share code, synced with the venue.
 ///
-/// Owner-only by the guard's type, which is also what the server's update
-/// policy on `venues` allows. Errors with [`SHARE_CODE_TAKEN`] when another
+/// Owner-only by the guard's type, as on the server, where a trigger on
+/// `venues` refuses a member's change to the code. Errors with [`SHARE_CODE_TAKEN`] when another
 /// venue on this device already holds `code`.
 pub async fn set_share_code(
-    access: &mut VenueAccess<'_, Write>,
+    access: &mut VenueAccess<'_, Owner>,
     code: Option<&str>,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_string();
@@ -228,7 +228,7 @@ pub async fn venue_members(access: &mut impl AuthorizedVenue) -> Result<Vec<Venu
 /// anyone, and the venue's rows leave that account's devices on its next
 /// checkpoint. Whether a row went is the answer.
 pub async fn remove_venue_member(
-    access: &mut VenueAccess<'_, Write>,
+    access: &mut VenueAccess<'_, Owner>,
     uid: &str,
 ) -> Result<bool, String> {
     let venue_id = access.venue_id().to_string();

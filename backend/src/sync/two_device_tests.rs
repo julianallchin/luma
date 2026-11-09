@@ -1095,6 +1095,122 @@ async fn every_venue_child_shape_reaches_a_member() {
     b.close().await;
 }
 
+/// A member edits the venue row itself — its environment and haze — and a
+/// fixture under it, and the owner sees both. The venue's owner and share
+/// code stay the owner's to change, and the venue the owner's to delete.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn a_member_edits_the_venue_but_not_its_door() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, OTHER).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    let code = unique("code");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(&code)
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("share code");
+    wait_for_upload(&a.sql).await;
+    assert_eq!(rpc_join(&containers, OTHER, &code).await, venue);
+    settles(
+        &b.sql,
+        &count("venues", "id", &venue),
+        "1",
+        "the venue never reached the member",
+    )
+    .await;
+
+    // The member's device uploads the edits; its connector fails the test on
+    // any refusal.
+    let environment = r#"{"mode":"indoor","houseLevel":0.25}"#;
+    let haze = r#"{"enabled":false,"density":0.1}"#;
+    sqlx::query("UPDATE venues SET environment = ?, haze = ? WHERE id = ?")
+        .bind(environment)
+        .bind(haze)
+        .bind(&venue)
+        .execute(&b.sql)
+        .await
+        .expect("member venue edit");
+    let fixture = unique("fixture");
+    sqlx::query(
+        "INSERT INTO fixtures
+             (id, uid, venue_id, address, num_channels, manufacturer, model,
+              mode_name, fixture_path)
+         VALUES (?, ?, ?, 1, 8, 'Luma', 'Mover', 'Default', 'Luma/Mover.qxf')",
+    )
+    .bind(&fixture)
+    .bind(OTHER)
+    .bind(&venue)
+    .execute(&b.sql)
+    .await
+    .expect("member fixture");
+    wait_for_upload(&b.sql).await;
+    settles(
+        &a.sql,
+        &format!("SELECT environment || haze FROM venues WHERE id = '{venue}'"),
+        &format!("{environment}{haze}"),
+        "the owner never saw the member's environment and haze",
+    )
+    .await;
+    settles(
+        &a.sql,
+        &count("fixtures", "id", &fixture),
+        "1",
+        "the owner never saw the member's fixture",
+    )
+    .await;
+
+    for (column, value) in [
+        ("share_code", serde_json::json!(unique("taken"))),
+        ("uid", serde_json::json!(OTHER)),
+    ] {
+        let (status, body) = try_rest(
+            &containers,
+            OTHER,
+            reqwest::Method::PATCH,
+            &format!("/venues?id=eq.{venue}"),
+            Some(&serde_json::json!({ column: value })),
+        )
+        .await;
+        assert!(
+            status.is_client_error(),
+            "a member changed the venue's {column}: {status} {body}"
+        );
+    }
+    // Row-level security hides the row from a member's delete rather than
+    // refusing it, so the answer is what is still there.
+    try_rest(
+        &containers,
+        OTHER,
+        reqwest::Method::DELETE,
+        &format!("/venues?id=eq.{venue}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        get(
+            &containers,
+            USER,
+            &format!("/venues?id=eq.{venue}&select=uid,share_code"),
+        )
+        .await,
+        serde_json::json!([{ "uid": USER, "share_code": code }]),
+        "a member moved the venue's door"
+    );
+
+    a.close().await;
+    b.close().await;
+}
+
 /// One PostgREST read as `user`.
 async fn get(containers: &Containers, user: &str, path: &str) -> serde_json::Value {
     rest(containers, user, reqwest::Method::GET, path, None).await

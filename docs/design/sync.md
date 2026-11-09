@@ -28,8 +28,10 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   triggers spell the concatenation themselves because a generated column is not
   reliably readable from a trigger.
 - Postgres row-level security decides who may read and write a row. Owner or
-  venue member for venue content, owner for private content. The app validates before it writes. The server
-  does not re-run domain rules.
+  venue member for venue content, the venue row included; owner for private
+  content and for the venue's door (its owner, its share code, deleting it,
+  removing members). `public.history` records who made each change. The app
+  validates before it writes. The server does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync
   uploads only the columns a local write changed (`PATCH`).
 - Deletes are hard deletes on both sides. PowerSync replicates them.

@@ -3,8 +3,13 @@ use std::marker::PhantomData;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 pub struct Read;
+/// A persistent edit of the venue's content: its fixtures, groups, stage,
+/// scores, environment and the rest. The owner and every member may make one;
+/// the server's `public.history` records who did.
 pub struct Write;
-pub struct Operate;
+/// A change to who has the venue — its share code and its memberships. The
+/// owner only.
+pub struct Owner;
 
 /// A fixed route from a known descendant ID to its venue root. Callers cannot
 /// authorize one venue and then operate on a resource belonging to another.
@@ -88,7 +93,7 @@ impl<'a> VenueAccess<'a, Write> {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
-        let mut access: Self = authorize(transaction, resource, true).await?;
+        let mut access: Self = authorize(transaction, resource, false).await?;
         if let Some(actor) = actor {
             crate::sync::triggers::attribute(&mut access.transaction, actor).await?;
             access.attributed = true;
@@ -107,26 +112,21 @@ impl<'a> VenueAccess<'a, Write> {
     }
 }
 
-impl<'a> VenueAccess<'a, Operate> {
-    /// Serialize an ephemeral live/device effect with identity transitions
-    /// without granting persistent owner mutation. Members are operators; the
-    /// IMMEDIATE transaction keeps their exact admission stable until commit.
-    pub async fn operate(
-        pool: &'a SqlitePool,
-        resource: VenueResource<'_>,
-    ) -> Result<Self, String> {
+impl<'a> VenueAccess<'a, Owner> {
+    /// Admit the venue's owner, and nobody else, to change who has the venue.
+    pub async fn owner(pool: &'a SqlitePool, resource: VenueResource<'_>) -> Result<Self, String> {
         let transaction = pool
             .begin_with("BEGIN IMMEDIATE")
             .await
-            .map_err(|error| format!("Failed to begin venue operation: {error}"))?;
-        authorize(transaction, resource, false).await
+            .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
+        authorize(transaction, resource, true).await
     }
 
     pub async fn commit(self) -> Result<(), String> {
         self.transaction
             .commit()
             .await
-            .map_err(|error| format!("Failed to commit venue operation: {error}"))
+            .map_err(|error| format!("Failed to commit venue mutation: {error}"))
     }
 }
 
@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn members_are_read_only_while_owners_and_guests_can_write_their_aggregate() {
+    async fn members_edit_the_venue_while_only_owners_and_guests_hold_its_door() {
         let (_directory, pool) = test_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
@@ -333,24 +333,31 @@ mod tests {
                 .await
                 .is_ok()
         );
-        assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Venue("shared"))
+        for resource in [
+            VenueResource::Venue("shared"),
+            VenueResource::Fixture("shared-fixture"),
+            VenueResource::Group("shared-group"),
+            VenueResource::GroupMember("shared-member"),
+        ] {
+            VenueAccess::<Write>::write(&pool, resource)
                 .await
-                .is_err()
+                .unwrap_or_else(|error| panic!("a member could not edit {resource:?}: {error}"))
+                .commit()
+                .await
+                .unwrap();
+        }
+        assert!(
+            VenueAccess::<Owner>::owner(&pool, VenueResource::Venue("shared"))
+                .await
+                .is_err(),
+            "a member was admitted to manage who has the venue"
         );
         assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Fixture("shared-fixture"))
+            VenueAccess::<Write>::write(&pool, VenueResource::Venue("alice"))
                 .await
-                .is_err()
+                .is_err(),
+            "a member of one venue could edit another the owner has"
         );
-        assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Group("shared-group"))
-                .await
-                .is_err()
-        );
-        // No trigger refuses a raw UPDATE that goes round `VenueAccess`: a
-        // download writes these tables directly, in checkpoint order. The lease
-        // above is the app's check and Postgres is the authority.
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
                 .await
@@ -380,6 +387,11 @@ mod tests {
                 .is_ok()
         );
         assert!(
+            VenueAccess::<Owner>::owner(&pool, VenueResource::Venue("guest"))
+                .await
+                .is_ok()
+        );
+        assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
                 .await
                 .is_err()
@@ -390,6 +402,11 @@ mod tests {
             .unwrap();
         assert!(
             VenueAccess::<Write>::write(&pool, VenueResource::Group("shared-group"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            VenueAccess::<Owner>::owner(&pool, VenueResource::Venue("shared"))
                 .await
                 .is_ok()
         );

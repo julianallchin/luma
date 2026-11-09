@@ -2,9 +2,9 @@
 //!
 //! The owner's side is ordinary venue writes: the share code is a column on
 //! `venues` and access is a row in `venue_members`, both written locally under
-//! the owner's write lease and carried up by the upload queue. Postgres
-//! row-level security agrees: only the owner may update the venue row, and the
-//! owner may delete anyone's membership.
+//! the owner's lease ([`Owner`]) and carried up by the upload queue. Postgres
+//! agrees: members may edit the venue row, but a trigger keeps its share code
+//! and owner the owner's, and only the owner may delete anyone's membership.
 //!
 //! The joiner's side cannot be a local write. Their device has never seen the
 //! venue, and the server will not let an ordinary client insert a membership
@@ -18,7 +18,7 @@ use rand::Rng;
 use sqlx::SqlitePool;
 
 use crate::database::local::venue_access::{
-    AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
+    AuthorizedVenue, Owner, Read, VenueAccess, VenueResource,
 };
 use crate::database::local::venues as venues_db;
 use crate::error::CommandError;
@@ -382,10 +382,10 @@ fn already_open(venue: &Venue) -> CommandError {
 async fn owner_write<'a>(
     pool: &'a SqlitePool,
     venue_id: &str,
-) -> Result<VenueAccess<'a, Write>, CommandError> {
-    // The guard answers "not found" for a venue this account cannot write,
+) -> Result<VenueAccess<'a, Owner>, CommandError> {
+    // The guard answers "not found" for a venue this account does not own,
     // which for a venue on the list means someone else owns it.
-    VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id))
+    VenueAccess::<Owner>::owner(pool, VenueResource::Venue(venue_id))
         .await
         .map_err(|error| {
             if error == "Venue resource not found" {
