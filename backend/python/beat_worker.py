@@ -25,6 +25,7 @@ import json
 import math
 import pathlib
 import sys
+import traceback
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -674,6 +675,7 @@ def main() -> int:
         from beat_this.inference import Audio2Frames
         from beat_this.preprocessing import load_audio
     except Exception as exc:  # pragma: no cover - import error reporting
+        traceback.print_exc()
         print(
             json.dumps({"error": f"Failed to import beat_this: {exc}"}),
             file=sys.stderr,
@@ -701,6 +703,7 @@ def main() -> int:
             bpm_max=args.bpm_max,
         )
     except Exception as exc:  # pragma: no cover - runtime error reporting
+        traceback.print_exc()
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1
 

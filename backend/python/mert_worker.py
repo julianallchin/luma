@@ -55,6 +55,7 @@ import contextlib
 import json
 import pathlib
 import sys
+import traceback
 
 
 MERT_MODEL_ID = "m-a-p/MERT-v1-95M"
@@ -114,6 +115,7 @@ def main() -> int:
             from transformers import AutoFeatureExtractor, AutoModel
             from n2n.infer import compute_mert_features, load_audio
         except Exception as exc:
+            traceback.print_exc()
             print(json.dumps({"error": f"Failed to import deps: {exc}"}), file=sys.stderr)
             return 1
 
@@ -164,6 +166,7 @@ def main() -> int:
                 else:
                     drum_frames = int(features_np.shape[0])
         except Exception as exc:
+            traceback.print_exc()
             print(json.dumps({"error": str(exc)}), file=sys.stderr)
             return 1
 

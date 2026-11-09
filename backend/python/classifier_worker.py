@@ -71,6 +71,7 @@ import contextlib
 import json
 import pathlib
 import sys
+import traceback
 
 
 # 22-tag schema baked into bar_window_classifier.pt. Update both this constant
@@ -227,6 +228,7 @@ def main() -> int:
             import numpy as np
             import torch
         except Exception as exc:  # pragma: no cover - import error reporting
+            traceback.print_exc()
             print(json.dumps({"error": f"Missing python deps for classifier: {exc}"}), file=sys.stderr)
             return 1
 
@@ -349,6 +351,7 @@ def main() -> int:
                         }
                     )
         except Exception as exc:  # pragma: no cover - runtime error reporting
+            traceback.print_exc()
             print(json.dumps({"error": str(exc)}), file=sys.stderr)
             return 1
 
