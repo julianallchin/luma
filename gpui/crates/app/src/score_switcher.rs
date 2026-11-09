@@ -251,19 +251,32 @@ impl Luma {
     }
 }
 
-/// The song and score crumbs that follow the venue's on the title bar's
-/// trail: the open song, which reveals it in the song list, and the open
-/// score by name, with its menu hung off it. `None` unless Arrange has a
-/// score open.
-pub(crate) fn crumbs(app: &Luma, entity: &Entity<Luma>) -> Option<(AnyElement, AnyElement)> {
+/// The crumbs that follow the venue's on the title bar's trail, in Arrange.
+/// With a score open: its song, which goes up a level to the song list, and
+/// the score by name, with its menu hung off it. With none: the song the list
+/// has selected, alone. `None` when there is no song to name.
+pub(crate) fn crumbs(
+    app: &Luma,
+    entity: &Entity<Luma>,
+) -> Option<(AnyElement, Option<AnyElement>)> {
     if app.workspace.mode() != Mode::Arrange {
         return None;
     }
-    let Some(Body::TrackEditor(editor)) = app.workspace.active_body() else {
-        return None;
+    let editor = match app.workspace.active_body() {
+        Some(Body::TrackEditor(editor)) => Some(editor),
+        _ => None,
     };
-    let title = editor.track_name().to_string();
-    let track_id = editor.track_id().to_string();
+    let (track_id, title) = match editor {
+        Some(editor) => (
+            editor.track_id().to_string(),
+            editor.track_name().to_string(),
+        ),
+        None if app.song_list_shown() => {
+            let row = app.songs.as_ref()?.selected_row()?;
+            (row.id.clone(), crate::tracks::track_name(&row))
+        }
+        None => return None,
+    };
     let revealed = entity.clone();
     let song = float::nav_row(RowState::Rest, "song-crumb")
         .id("song-crumb")
@@ -273,29 +286,34 @@ pub(crate) fn crumbs(app: &Luma, entity: &Entity<Luma>) -> Option<(AnyElement, A
         .text_size(px(13.))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| revealed.update(cx, |this, cx| this.reveal_song(&track_id, cx)))
-        .child(crumb_label(title.clone(), 0.6))
+        .child(crumb_label(
+            title.clone(),
+            if editor.is_some() { 0.6 } else { 0.95 },
+        ))
         .agent_node(Role::Button, title.clone())
         .into_any_element();
-    let pressed = entity.clone();
-    let score = float::nav_row(
-        RowState::of(app.score_switcher.is_open(), false),
-        "score-switcher",
-    )
-    .id("score-switcher")
-    .relative()
-    .flex_shrink(1.)
-    .min_w_0()
-    .max_w(px(320.))
-    .text_size(px(13.))
-    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-    .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_score_switcher(cx)))
-    .child({
-        let shown = editor.score_title();
-        crumb_label(shown.clone(), 0.95).agent_node(Role::Text, shown)
-    })
-    .children(menu(app, editor.target(), entity))
-    .agent_node(Role::Button, format!("{title} · {}", editor.score_label()))
-    .into_any_element();
+    let score = editor.map(|editor| {
+        let pressed = entity.clone();
+        float::nav_row(
+            RowState::of(app.score_switcher.is_open(), false),
+            "score-switcher",
+        )
+        .id("score-switcher")
+        .relative()
+        .flex_shrink(1.)
+        .min_w_0()
+        .max_w(px(320.))
+        .text_size(px(13.))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_score_switcher(cx)))
+        .child({
+            let shown = editor.score_title();
+            crumb_label(shown.clone(), 0.95).agent_node(Role::Text, shown)
+        })
+        .children(menu(app, editor.target(), entity))
+        .agent_node(Role::Button, format!("{title} · {}", editor.score_label()))
+        .into_any_element()
+    });
     Some((song, score))
 }
 

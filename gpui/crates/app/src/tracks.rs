@@ -43,7 +43,7 @@ use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 
 use crate::agent::ChatStatus;
-use crate::workspace::Target;
+use crate::workspace::{Mode, Target};
 use crate::Luma;
 
 pub(crate) mod folders;
@@ -195,6 +195,11 @@ impl Tracks {
     /// The loaded row a click carries. Looked up by id rather than by index
     /// because the click was registered against a *filtered* list, and the
     /// filters can change before it lands.
+    /// The song selected in the second column, if any.
+    pub(crate) fn selected_row(&self) -> Option<TrackBrowserRow> {
+        self.find(self.track.as_deref()?)
+    }
+
     pub(crate) fn find(&self, track_id: &str) -> Option<TrackBrowserRow> {
         self.rows.iter().find(|row| row.id == track_id).cloned()
     }
@@ -559,22 +564,40 @@ impl Luma {
         }
     }
 
-    /// The song list, up, with `track_id` selected and its scores listed: the
-    /// title bar's song crumb. The place stays when it lists the song, and is
-    /// All songs otherwise.
+    /// Up a level, from the open score to its song: the score closes, its
+    /// pending edit written first and its playback paused by the close, and
+    /// Arrange shows the song list with `track_id` selected and its scores
+    /// listed — the title bar's song crumb. The list's folder, search and
+    /// ownership filter stay unless they hide the song; then they widen
+    /// until it is listed.
     pub(crate) fn reveal_song(&mut self, track_id: &str, cx: &mut Context<Self>) {
-        if !self.song_list_shown() {
-            self.toggle_song_list(cx);
-        }
-        let Some(state) = &self.songs else {
+        if self.songs.is_none() {
             return;
+        }
+        if let Some(open) = self
+            .workspace
+            .of_mode(Mode::Arrange)
+            .map(|slot| slot.target.clone())
+        {
+            self.commit_graph_score_for(open.clone(), cx);
+            self.close_bodies_where(|target| *target != open, cx);
+        }
+        self.workspace.set_mode(Mode::Arrange);
+        self.song_list = false;
+        self.song_list_close = None;
+        self.agent_over_songs = false;
+        let listed = |state: &Tracks| {
+            state
+                .shown
+                .iter()
+                .any(|row| state.rows[*row].id == track_id)
         };
-        let listed = state
-            .shown
-            .iter()
-            .any(|row| state.rows[*row].id == track_id);
-        if !listed {
+        if self.songs.as_ref().is_some_and(|state| !listed(state)) {
             self.select_place(Place::All, cx);
+        }
+        if let Some(state) = self.songs.as_mut().filter(|state| !listed(state)) {
+            state.ownership = Ownership::All;
+            state.refilter();
         }
         self.select_track(track_id, cx);
     }

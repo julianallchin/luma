@@ -896,7 +896,10 @@ fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) ->
             trail
                 .child(welcome::venue_trigger(app, crumbs.is_none(), entity, cx))
                 .when_some(crumbs, |trail, (song, score)| {
-                    trail.child(slash()).child(song).child(slash()).child(score)
+                    trail
+                        .child(slash())
+                        .child(song)
+                        .when_some(score, |trail, score| trail.child(slash()).child(score))
                 })
         }
     };

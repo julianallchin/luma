@@ -116,7 +116,7 @@ grip's 5px reach over the hairline; double-click resets), and the scores
 keep at least 260. A search lists matches from every place, with All songs
 selected, and choosing a place ends it.
 
-⌘P and the song crumb open the page; ⌘P and Escape close it.
+⌘P and the song crumb open the page (the crumb closing the score); ⌘P and Escape close it.
 The list takes the window's width: the agent panel stands aside while it is
 up and comes back when it closes, unless it had been hidden by hand; ⌘B over
 the list shows it for that visit only.
@@ -159,9 +159,13 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
   "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
   Sign out / Sign in. The venue dialog is still what a window with no venue
   shows (browse, create, join).
-- **Song crumb** (`score_switcher`): the song's title. A press opens the song
-  list with the song selected and its scores listed — in the place the list
-  was on when that place lists it, in All songs otherwise.
+- **Song crumb** (`score_switcher`): the song's title. A press goes up a
+  level: the open score closes (its pending edit written, its playback
+  paused, as any close does) and the song list takes its place with the song
+  selected and its scores listed. The list's folder, search and Mine / All
+  stay unless they hide the song; then they widen until it is listed. With
+  no score open the trail is `venue / song`, the song being the list's
+  selection.
 - **Score menu** (the score crumb; `score_switcher`): the score's name, or its
   `#n` when it has none. Its menu holds every score of the song — this
   venue's, ending in "New score", then each other venue's under the venue's
