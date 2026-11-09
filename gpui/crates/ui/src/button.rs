@@ -20,8 +20,11 @@ use gpui_component::Icon;
 pub enum Enabled {
     /// Rounded chip with a subtle hover wash.
     Yes,
-    /// Dimmed to [`ladder::DISABLED_OPACITY`], inert under the pointer: a
-    /// [`Control`] drops the click handler a caller attaches.
+    /// Dimmed to [`ladder::DISABLED_OPACITY`] (a [`pill::primary`] steps down
+    /// to a recessed plate instead), and its click does nothing: a [`Control`]
+    /// drops the click handler a caller attaches.
+    ///
+    /// [`pill::primary`]: crate::pill::primary
     No,
 }
 
