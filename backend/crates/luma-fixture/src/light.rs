@@ -107,8 +107,14 @@ impl EmitterColour {
 }
 
 /// A set of [`EmitterColour`]s.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct EmitterSet(u16);
+
+impl std::fmt::Debug for EmitterSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
+    }
+}
 
 impl EmitterSet {
     pub const EMPTY: Self = Self(0);
