@@ -30,10 +30,7 @@ struct Uniform {
 
 /// Pixels per shaft texel along each axis, and samples per ray.
 fn budget(quality: Quality) -> (u32, u32) {
-    match quality {
-        Quality::Low => (4, 12),
-        _ => (2, 24),
-    }
+    crate::quality::QualityBudget::of(quality).sun_shafts
 }
 
 pub(crate) struct Pipelines {

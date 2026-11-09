@@ -33,11 +33,11 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 use crate::light_index::{LightCore, LightRest};
-use crate::scene_desc::Quality;
+use crate::quality::QualityBudget;
 
 /// Cells along x, y and z: 0.6 m cells over a 40 × 40 × 20 m room at High.
-const HIGH: [u32; 3] = [64, 64, 32];
-const LOW: [u32; 3] = [32, 32, 16];
+pub(crate) const HIGH: [u32; 3] = [64, 64, 32];
+pub(crate) const LOW: [u32; 3] = [32, 32, 16];
 /// The grid's format: radiance-scale floats, filterable for the spread.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The widest a laser sheet merges to before the glow takes the next,
@@ -293,7 +293,8 @@ pub(crate) struct Glow {
     sample: wgpu::Buffer,
     /// What blocks the glow.
     occupancy: crate::glow_occupancy::Occupancy,
-    on: bool,
+    /// Whether this frame fills and samples the grid.
+    pub(crate) on: bool,
 }
 
 impl Glow {
@@ -365,7 +366,7 @@ impl Glow {
 
     /// Size the grid for `quality`, find what blocks it in `frame`, and tell
     /// the samplers where it is this frame, before anything binds it; off
-    /// when there is no haze.
+    /// when there is no haze or the quality marches none.
     pub(crate) fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -373,18 +374,15 @@ impl Glow {
         medium: &crate::medium::Uniform,
         frame: &crate::frame::Frame,
     ) {
-        let quality = frame.quality;
-        let size = match quality {
-            Quality::High => HIGH,
-            Quality::Low => LOW,
-        };
+        let budget = QualityBudget::of(frame.quality);
+        let size = budget.haze_glow;
         if size != self.size {
             *self = Self::with_size(device, queue, size);
         }
         let sigma = medium.min[3];
         let min = Vec3::from_slice(&medium.min[..3]);
         let max = Vec3::from_slice(&medium.max[..3]);
-        self.on = sigma > 0.0 && (max - min).min_element() > 0.0;
+        self.on = budget.marched && sigma > 0.0 && (max - min).min_element() > 0.0;
         let sample = if self.on {
             self.occupancy.update(
                 device,

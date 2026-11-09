@@ -230,7 +230,7 @@ live method for A/B measurements. Standalone captures accumulating multiple
 subframes retain that method for converged spatial detail. The wide-group switch
 remained the exhaustive per-ray reference and disabled the grid too.
 (Superseded 2026-10-24: the grid runs on every hazy frame, captures included,
-with 8-pixel cells on every platform (16 at low quality); the switches are gone and the per-ray
+with 8-pixel cells on every platform (16 at medium quality); the switches are gone and the per-ray
 method is `Renderer::render_reference` alone.)
 
 This is a live quality/performance tradeoff, not exact transport: fresh frames
@@ -457,7 +457,9 @@ density (as the stage does). Every measurement above was taken at a fixed
 
 `RenderSettings::quality` is `High` (the reference) or `Low` (a laptop GPU).
 The View popover's Viewport section sets it; it is the `stage_low_quality`
-device setting. The renderer turns it into a `QualityBudget` in `gpu/encode.rs`.
+device setting. The renderer turns it into a `QualityBudget` (`quality.rs`, since 2026-11-08 the one table every pass reads; before, `gpu/encode.rs`).
+(Since 2026-11-08 that `Low` is `Medium`, and a new `Low` marches nothing; see
+"Three levels" below.)
 
 Both levels:
 
@@ -507,6 +509,97 @@ because it darkened everything else under the deck. Limit: in the second
 cascade (from 12 m, about 4 cm texels), the 3×3 filter still lets a little sun
 into the first 10 cm under a flat occluder (sun visibility 0.23 at 5 cm under a
 plate from 14 m, 40° sun).
+
+## Three levels (2026-11-08)
+
+`Quality` is `High`, `Medium` or `Low`, stored as the `stage_quality` device
+setting (`"high" | "medium" | "low"`). A machine that had set the old
+`stage_low_quality` flag reads as `Medium` until a level is written.
+
+- **Medium** is the old `Low`, unchanged: every budget above.
+- **Low** keeps Medium's budgets and marches no haze
+  (`QualityBudget::marched`). No fog grid, medium
+  cache, lit-interval cache, compaction or haze kernel runs, and no sun
+  shafts or haze glow. One compute pass, `shaders/haze_analytic.wgsl`, writes
+  the haze target the composite already reads, at a quarter of the output
+  resolution. For each light in the pixel's light-index list it integrates
+  single scattering through uniform haze in closed form: in the equiangular
+  angle about the cone's virtual apex, `dt / d²` is exactly `dθ / h`, so the
+  inverse-square term integrates to `(θ₁ − θ₀) / h` over the span
+  `beam_span` clips to the cone, and a fixed three-point Gauss rule in `θ`
+  carries the slowly varying rest (angular profile, phase, range taper,
+  camera and light transmittance at the mean extinction, the medium's
+  envelope). Low draws no haze shadows, no gobos in the beam and no cloud
+  density; the medium uniform's cloudiness is zero, so surfaces and the sky
+  see the same uniform haze. Surface lighting, fixture shadow maps on
+  surfaces and their hierarchy are unchanged. (Changed the same day; see
+  "Low without fixture shadows" below.)
+
+Gasworks Park rig with its 34 movers lit over 300 dimmed strip cells (344
+cones), outdoor at night, haze 0.12, 2227×1391 output at every level (the
+app's 1 MP pixel budget for Medium and Low is not applied here), M-series
+Mac, median GPU frame time of 280 frames per level, levels interleaved in
+one run:
+
+| | static wide | static side | orbiting wide | orbiting side |
+|---|---:|---:|---:|---:|
+| High | 36.5 ms | 35.9 ms | 42.0 ms | 46.7 ms |
+| Medium | 18.6 ms | 20.6 ms | 22.5 ms | 22.6 ms |
+| Low | 14.9 ms | 17.0 ms | 17.8 ms | 17.0 ms |
+| Low, no haze | 10.4 ms | 13.2 ms | 13.5 ms | 12.4 ms |
+
+The analytic pass costs about 4.3 ms of Low's frame here; its cost is per
+(pixel, light) pair whose ray crosses the cone, so a rig of many wide washes
+seen face-on is its worst case. At half resolution it cost about 15 ms on
+the same frame, which is why Low draws it at a quarter.
+
+### Low without fixture shadows (2026-11-08)
+
+After the march, most of Low's frame was surface lighting, the fixture
+shadow maps and ambient visibility. Low now also:
+
+- **Draws no fixture shadows** (`QualityBudget::fixture_shadows`). No shadow
+  slot is assigned, so no map is drawn, redrawn or reduced into its
+  hierarchy, the shadow atlas is not allocated, and surfaces take every
+  fixture's light unshadowed. A beam aimed into a deck lights the floor under
+  it. `Frame::fixture_shadows` can still turn them off at any level; the
+  budget can only turn them off too.
+- **Estimates ambient visibility at half resolution**
+  (`QualityBudget::ambient_divisor`). GTAO, the outdoor sky and ground
+  visibility and the 5×5 denoise run once per 2×2 block, at the block's
+  first pixel; the scene pass reads the texel covering its pixel. Full
+  resolution it cost about 3 ms of Low's 12 ms here; at half, under 1 ms.
+
+The atmosphere's sky tables and the cloud history are keyed by the cloud
+`Budget` they use, not by `Quality`, so a switch between Medium and Low (same
+cloud budget) rebuilds nothing.
+
+Same rig, setup and method as the table above (levels interleaved in one
+run, "Low before" is the previous Low). Other GPU work on the machine made
+the static wide case noisy; its numbers are the cleanest of three runs:
+
+| | static wide | static side | orbiting wide | orbiting side |
+|---|---:|---:|---:|---:|
+| High | 41.7 ms | 40.7 ms | 40.6 ms | 46.8 ms |
+| Medium | 20.6 ms | 23.0 ms | 21.0 ms | 21.5 ms |
+| Low before | 16.0 ms | 18.2 ms | 16.7 ms | 16.7 ms |
+| Low | 11.7 ms | 11.2 ms | 10.1 ms | 10.7 ms |
+
+Low's frame by pass (`LUMA_PROFILE_DETAIL=1`, brackets overlap, static):
+haze-analytic about 4.7 ms (the frame with haze 0.12 against haze 0:
+10.2 against 5.5 ms wide, 11.2 against 7.4 ms side), ambient visibility
+1.0 ms and its denoise 0.6 ms, surface-light-index 0.9 ms, surface depth
+0.7 ms, light index 0.6 ms, and the scene pass the rest, about 2 to 3 ms.
+Post passes are each under 0.2 ms.
+
+The analytic pass is now close to half of Low's frame, and most of it is the
+300 strip cells, which in this scene emit about 1/50 000 of a mover. Not
+drawing beams more than twelve stops under the frame's brightest cone took
+it to almost nothing, but rejected: the wide cells overlap everywhere, and
+together they are the haze's visible tone and the glow under the truss that
+Medium shows. A cull has to bound a cone's radiance along the pixel's ray,
+not compare emitted intensities, and one that keeps every visible
+contribution would keep these.
 
 ## Haze glow (2026-10-25)
 

@@ -11,7 +11,7 @@
 //! On the GPU a set is two images in the ground draw's material slots:
 //! albedo with height in alpha (sRGB), and normal X and Y, roughness and
 //! occlusion (linear). The transition set takes two more. The maps are 2K;
-//! [`Quality::Low`] halves them on load and turns parallax off.
+//! [`Quality::Medium`] and below halve them on load and turn parallax off.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock};
 use serde::Deserialize;
 
 use crate::assets::Library;
+use crate::quality::QualityBudget;
 use crate::scene_desc::Quality;
 use luma_scene::environment::Floor;
 use luma_scene::mesh::Image;
@@ -159,7 +160,8 @@ pub struct Surface {
 }
 
 impl Surface {
-    /// `floor` as drawn at `quality`. [`Quality::Low`] draws no parallax.
+    /// `floor` as drawn at `quality`. Below [`Quality::High`] it draws no
+    /// parallax.
     #[must_use]
     pub fn of(floor: Floor, quality: Quality) -> Self {
         let set = set(floor.set());
@@ -168,9 +170,10 @@ impl Surface {
             floor,
             tile_m: set.tile_m,
             min_roughness: set.min_roughness,
-            parallax_m: match quality {
-                Quality::High => set.parallax_m,
-                Quality::Low => 0.0,
+            parallax_m: if QualityBudget::of(quality).floor_detail {
+                set.parallax_m
+            } else {
+                0.0
             },
             unevenness: set.unevenness,
             variation: set.variation,
@@ -294,7 +297,7 @@ pub(crate) fn maps(
     surface: &Surface,
     quality: Quality,
 ) -> anyhow::Result<(Maps, Option<Maps>)> {
-    let half = quality == Quality::Low;
+    let half = !QualityBudget::of(quality).floor_detail;
     let own = library.floor(surface.floor.set(), half)?;
     let transition = surface
         .transition()

@@ -5,7 +5,7 @@
 /// truss-shadow intervals stay at native resolution either way.
 pub(crate) const TILE_SIZE: u32 = 8;
 
-/// The far-field cell size in pixels at the low quality setting.
+/// The far-field cell size in pixels at the medium quality setting.
 pub(crate) const LOW_TILE_SIZE: u32 = 16;
 pub(crate) const SLICES: u32 = 128;
 pub(crate) const BLOCK_SIDE: u32 = 4;

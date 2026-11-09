@@ -546,8 +546,14 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     // surface is its own source.
     let glow = room_glow(in.world);
     // Ambient visibility of this pixel (`ambient_occlusion.wgsl`). It dims
-    // the fill and the probe only; direct light has its own shadows.
-    let visibility = textureLoad(ambient_visibility, vec2<i32>(in.clip.xy), 0);
+    // the fill and the probe only; direct light has its own shadows. Its
+    // target may be coarser than the output.
+    let ambient_size = vec2<f32>(textureDimensions(ambient_visibility));
+    let visibility = textureLoad(
+        ambient_visibility,
+        vec2<i32>(in.clip.xy * ambient_size * globals.viewport.zw),
+        0,
+    );
     let occlusion = ao * visibility.r;
     out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
     // The light the haze scatters (`haze_glow_sample.wgsl`) comes from every

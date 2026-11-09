@@ -43,7 +43,6 @@ use half::f16;
 use wgpu::util::DeviceExt;
 
 use crate::environment::{EnvironmentPipelines, CUBE_SIZE};
-use crate::scene_desc::Quality;
 use luma_scene::environment::{CloudCover, SkyParams};
 
 /// Ground sphere, kilometres.
@@ -528,7 +527,8 @@ pub(crate) struct AtmosphereCache {
 
 struct Resident {
     sky: SkyFrame,
-    quality: Quality,
+    /// The cloud budget the probe's panorama was traced at.
+    budget: clouds::Budget,
     /// Rewritten each frame with the shadow map's place and the camera.
     uniform: wgpu::Buffer,
     skyview: wgpu::TextureView,
@@ -564,7 +564,7 @@ impl AtmosphereCache {
     /// should use.
     ///
     /// The tables and the probe are rebuilt only when the sun, the weather
-    /// or the quality changes: a venue render moves the camera far more
+    /// or the cloud budget changes: a venue render moves the camera far more
     /// often than the sun. The clouds are traced every frame, because they
     /// are seen from the camera.
     #[allow(clippy::too_many_arguments)]
@@ -587,14 +587,14 @@ impl AtmosphereCache {
             self.resident = None;
             return (pipelines.off.clone(), None);
         };
-        let quality = input.quality;
+        let budget = crate::quality::QualityBudget::of(input.quality).clouds;
         if self
             .resident
             .as_ref()
-            .is_none_or(|resident| resident.sky != *sky || resident.quality != quality)
+            .is_none_or(|resident| resident.sky != *sky || resident.budget != budget)
         {
             self.resident =
-                Some(self.tables(pipelines, environment, device, queue, encoder, sky, quality));
+                Some(self.tables(pipelines, environment, device, queue, encoder, sky, budget));
         }
         let resident = self.resident.as_ref().expect("tables resident");
         let tables = Tables {
@@ -643,7 +643,7 @@ impl AtmosphereCache {
     }
 
     /// The sky-view table, the probe and the clear composite bindings for
-    /// one sun, weather and quality.
+    /// one sun, weather and cloud budget.
     #[allow(clippy::too_many_arguments)]
     fn tables(
         &mut self,
@@ -653,7 +653,7 @@ impl AtmosphereCache {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         sky: &SkyFrame,
-        quality: Quality,
+        budget: clouds::Budget,
     ) -> Resident {
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("atmosphere-sky"),
@@ -710,7 +710,7 @@ impl AtmosphereCache {
                 sky,
                 &tables,
                 &uniform,
-                quality,
+                budget,
             )
             .unwrap_or_else(|| pipelines.no_clouds.clone());
 
@@ -769,7 +769,7 @@ impl AtmosphereCache {
         });
         Resident {
             sky: *sky,
-            quality,
+            budget,
             uniform,
             skyview,
             composite,

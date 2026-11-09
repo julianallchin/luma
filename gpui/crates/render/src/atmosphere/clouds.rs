@@ -22,7 +22,6 @@ use std::sync::OnceLock;
 
 use glam::Vec2;
 
-use crate::scene_desc::Quality;
 use luma_scene::environment::CloudCover;
 
 /// Texels per side of the weather map.
@@ -285,7 +284,7 @@ impl Layer {
     }
 }
 
-/// Per-quality budget.
+/// The cloud layer's share of a [`QualityBudget`](crate::quality::QualityBudget).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Budget {
     /// The view buffer is the output divided by this, per axis.
@@ -298,28 +297,6 @@ pub(crate) struct Budget {
     pub panorama: (u32, u32),
     /// Side of the shadow map, texels.
     pub shadow: u32,
-}
-
-impl Budget {
-    #[must_use]
-    pub(crate) fn of(quality: Quality) -> Self {
-        match quality {
-            Quality::High => Self {
-                divisor: 2,
-                steps: 64,
-                light_steps: 6,
-                panorama: (512, 256),
-                shadow: 1024,
-            },
-            Quality::Low => Self {
-                divisor: 4,
-                steps: 32,
-                light_steps: 4,
-                panorama: (256, 128),
-                shadow: 512,
-            },
-        }
-    }
 }
 
 /// Side of the shadow map, kilometres: the ground around the camera whose

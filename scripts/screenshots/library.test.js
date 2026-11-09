@@ -23,7 +23,7 @@ fixture({
   window: [1440, 900],
   library: "$LUMA_SHOWCASE_LIBRARY",
   sql: [
-    "INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_low_quality', 'false')",
+    "INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_quality', 'high')",
     "INSERT OR REPLACE INTO settings (key, value) VALUES ('stage_frame_rate', 'false')",
   ],
 });

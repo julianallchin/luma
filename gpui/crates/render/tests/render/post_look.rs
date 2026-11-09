@@ -215,17 +215,17 @@ fn the_veil_reaches_far_without_a_ring() {
     }
 }
 
-/// Low quality convolves on a coarser grid; the glare around a lens is much
+/// Medium quality convolves on a coarser grid; the glare around a lens is much
 /// the same.
 #[test]
-fn low_quality_glares_alike() {
+fn medium_quality_glares_alike() {
     let mut renderer = Renderer::new().unwrap();
     let high = render(
         &mut renderer,
         &hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE)),
     );
     let mut frame = hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE));
-    frame.quality = Quality::Low;
+    frame.quality = Quality::Medium;
     let low = render(&mut renderer, &frame);
     let lens = lens_pixel(&high);
     for radius in [4.0, 8.0, 16.0] {

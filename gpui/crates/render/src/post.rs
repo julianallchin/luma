@@ -38,8 +38,8 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
 use crate::frame::FixtureCone;
-use crate::psf;
 use crate::gpu::SCENE_FORMAT;
+use crate::psf;
 use crate::scene_desc::{GlareStyle, Look, Quality};
 
 const GLARE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -958,10 +958,7 @@ impl Post {
         }
 
         // --- glare ------------------------------------------------------------
-        let index = match frame.quality {
-            Quality::High => 0,
-            Quality::Low => 1,
-        };
+        let index = crate::quality::QualityBudget::of(frame.quality).glare_fft;
         let fft = &pipelines.fft[index];
         if glare_on && targets.glare.as_ref().is_none_or(|g| g.fft != index) {
             targets.glare = Some(Glare::new(device, fft, index, targets.size));

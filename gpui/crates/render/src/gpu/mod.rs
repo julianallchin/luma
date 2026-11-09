@@ -97,8 +97,8 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// Sample indices themselves are unrestricted
 /// (`tests/timestamp_query_contract.rs`), but *when* the set is resolved is
 /// not — see the resolve in `submit_readback`.
-const QUERY_COUNT: u32 = 10;
-const MSAA_SAMPLES: u32 = 4;
+const QUERY_COUNT: u32 = crate::pass_profile::Base::COUNT;
+pub(crate) const MSAA_SAMPLES: u32 = 4;
 pub(crate) const CAMERA_NEAR: f32 = 0.1;
 const CAMERA_FAR: f32 = 2000.0;
 
@@ -383,7 +383,7 @@ pub struct Gpu {
     overlay_layout: wgpu::BindGroupLayout,
     /// Scene-pass pipelines at [`MSAA_SAMPLES`].
     scene_pipelines: ScenePipelines,
-    /// What the single-sample set is built from, on first low-quality frame.
+    /// What the single-sample set is built from, on the first frame below high quality.
     scene_source: ScenePipelineSource,
     scene_pipelines_single: std::sync::OnceLock<ScenePipelines>,
     depth_pipeline: wgpu::RenderPipeline,
@@ -397,6 +397,9 @@ pub struct Gpu {
     /// output (`interval_cache.rs`).
     haze_compute_pipeline: wgpu::ComputePipeline,
     haze_compute_layout: wgpu::BindGroupLayout,
+    /// Low quality's closed-form beams, in place of every march.
+    haze_analytic_pipeline: wgpu::ComputePipeline,
+    haze_analytic_layout: wgpu::BindGroupLayout,
     /// log2 of the payload hash table's entry count.
     interval_cache_table_bits: u32,
     /// Residual compaction of the cached kernel (`haze_compact.rs`).

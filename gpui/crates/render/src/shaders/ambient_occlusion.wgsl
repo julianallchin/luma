@@ -26,6 +26,9 @@ struct AoParams {
     forward: vec4<f32>,
     // xy: output size in pixels, zw: camera near and far planes.
     viewport: vec4<f32>,
+    // xy: this pass's target size, z: output pixels per target texel along
+    // each axis. A texel is estimated at the first pixel of its block.
+    texels: vec4<f32>,
 };
 
 @group(0) @binding(2) var<uniform> ao: AoParams;
@@ -200,21 +203,23 @@ fn ground_light(p: vec3<f32>, n: vec3<f32>, rotation: f32) -> vec2<f32> {
 
 @compute @workgroup_size(8, 8, 1)
 fn visibility(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(vec2<f32>(id.xy) >= ao.viewport.xy) {
+    if any(vec2<f32>(id.xy) >= ao.texels.xy) {
         return;
     }
-    let pixel = vec2<i32>(id.xy);
+    let texel = vec2<i32>(id.xy);
+    let pixel = texel * i32(ao.texels.z);
     let raw = textureLoad(depth_tex, pixel, 0);
     if raw <= 0.0 {
-        textureStore(raw_out, pixel, vec4<f32>(1.0));
+        textureStore(raw_out, texel, vec4<f32>(1.0));
         return;
     }
     let distance = view_distance(raw);
     let p = world_at(vec2<f32>(pixel) + 0.5, distance);
     let n = depth_normal(pixel, p);
+    // Per target texel: the denoiser averages its neighbours.
     let noise = vec2<f32>(
-        gradient_noise(vec2<f32>(pixel)),
-        gradient_noise(vec2<f32>(pixel) + vec2<f32>(5.588238, 3.0)),
+        gradient_noise(vec2<f32>(texel)),
+        gradient_noise(vec2<f32>(texel) + vec2<f32>(5.588238, 3.0)),
     );
     let occlusion = gtao(pixel, p, n, distance, noise);
     var outdoor = vec3<f32>(1.0);
@@ -222,35 +227,36 @@ fn visibility(@builtin(global_invocation_id) id: vec3<u32>) {
         let lifted = p + n * (height.march.z + height.origin.z);
         outdoor = vec3<f32>(sky_visibility(lifted, n, noise.x), ground_light(p, n, noise.y));
     }
-    textureStore(raw_out, pixel, vec4<f32>(occlusion, outdoor));
+    textureStore(raw_out, texel, vec4<f32>(occlusion, outdoor));
 }
 
 /// Depth-aware 5x5 box: averages away the per-pixel noise of both estimates
 /// without bleeding across silhouettes.
 @compute @workgroup_size(8, 8, 1)
 fn denoise(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(vec2<f32>(id.xy) >= ao.viewport.xy) {
+    if any(vec2<f32>(id.xy) >= ao.texels.xy) {
         return;
     }
-    let pixel = vec2<i32>(id.xy);
-    let raw = textureLoad(depth_tex, pixel, 0);
+    let centre = vec2<i32>(id.xy);
+    let block = i32(ao.texels.z);
+    let raw = textureLoad(depth_tex, centre * block, 0);
     if raw <= 0.0 {
-        textureStore(final_out, pixel, vec4<f32>(1.0));
+        textureStore(final_out, centre, vec4<f32>(1.0));
         return;
     }
-    let size = vec2<i32>(ao.viewport.xy) - 1;
+    let size = vec2<i32>(ao.texels.xy) - 1;
     let distance = view_distance(raw);
     let tolerance = 0.03 * distance + 0.02;
     var sum = vec4<f32>(0.0);
     var weight = 0.0;
     for (var j = -2; j <= 2; j = j + 1) {
         for (var i = -2; i <= 2; i = i + 1) {
-            let texel = clamp(pixel + vec2<i32>(i, j), vec2<i32>(0), size);
-            let other = textureLoad(depth_tex, texel, 0);
+            let texel = clamp(centre + vec2<i32>(i, j), vec2<i32>(0), size);
+            let other = textureLoad(depth_tex, texel * block, 0);
             let w = saturate(1.0 - abs(view_distance(max(other, 1e-7)) - distance) / tolerance);
             sum += textureLoad(raw_in, texel, 0) * w;
             weight += w;
         }
     }
-    textureStore(final_out, pixel, sum / max(weight, 1e-4));
+    textureStore(final_out, centre, sum / max(weight, 1e-4));
 }

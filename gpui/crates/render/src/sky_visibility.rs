@@ -51,6 +51,9 @@ pub(crate) struct AoParams {
     up: [f32; 4],
     forward: [f32; 4],
     viewport: [f32; 4],
+    /// xy: the visibility targets' size, z: the output pixels per target
+    /// texel along each axis.
+    texels: [f32; 4],
 }
 
 /// The stage slab's placement over the ground, derived from its geometry.
@@ -508,13 +511,16 @@ impl SkyVisibility {
             .map_or_else(HeightParams::default, |field| field.layout.params(sun))
     }
 
-    /// Size the per-pixel targets and return the one the scene pass reads.
+    /// Size the targets for a `width` × `height` output at one texel per
+    /// `divisor` × `divisor` pixels, and return the one the scene pass reads.
     pub(crate) fn output(
         &mut self,
         device: &wgpu::Device,
         width: u32,
         height: u32,
+        divisor: u32,
     ) -> wgpu::TextureView {
+        let (width, height) = (width.div_ceil(divisor), height.div_ceil(divisor));
         if self
             .screen
             .as_ref()
@@ -688,6 +694,7 @@ pub(crate) fn ao_params(
     size: [u32; 2],
     planes: [f32; 2],
     outdoor: bool,
+    divisor: u32,
 ) -> AoParams {
     let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
     let up = right.cross(forward).normalize_or(Vec3::Z);
@@ -699,6 +706,12 @@ pub(crate) fn ao_params(
         up: up.extend(tan_y).to_array(),
         forward: forward.extend(f32::from(u8::from(outdoor))).to_array(),
         viewport: [size[0] as f32, size[1] as f32, planes[0], planes[1]],
+        texels: [
+            size[0].div_ceil(divisor) as f32,
+            size[1].div_ceil(divisor) as f32,
+            divisor as f32,
+            0.0,
+        ],
     }
 }
 

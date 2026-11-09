@@ -10,6 +10,8 @@ use glam::{Mat4, Vec3, Vec4};
 use crate::frame::Frame;
 use crate::haze_compact::HAZE_WORKGROUP;
 use crate::light_index::{LightCore, LightIndexInput, LightRest};
+use crate::pass_profile::Base;
+use crate::quality::QualityBudget;
 use crate::shadow::{
     assign_shadow_slots, fixture_shadow_caster_hash, fixture_shadow_matrix, fixture_shadow_planes,
     fixture_shadow_texture_array, shadow_matrix_bits, ShadowCacheKey, FIXTURE_SHADOW_SIZE,
@@ -36,7 +38,7 @@ use super::uniforms::{
 };
 use super::{
     Destination, Gpu, Renderer, Transport, CAMERA_NEAR, CASCADE_BLEND, CASCADE_COUNT,
-    CASCADE_SPLITS, MSAA_SAMPLES, QUERY_COUNT, SHADOW_SIZE,
+    CASCADE_SPLITS, QUERY_COUNT, SHADOW_SIZE,
 };
 
 /// Emitted intensity times the brightest colour channel below which a cone
@@ -46,63 +48,6 @@ const DARK_CONE: f32 = 1e-4;
 /// Haze march samples per light for a light the software visibility
 /// reference (`visibility_reference`, which only tests turn on) traces.
 const REFERENCE_GEOMETRY_SHADOW_SAMPLES: f32 = 2.0;
-
-/// The per-frame work a [`Quality`](crate::scene_desc::Quality) level buys.
-/// `High` is the reference picture: its shadow walk is the one the renderer
-/// had before the levels existed. Its plain-beam piece cap and shadow redraw
-/// budget are new, and measured to leave the picture unchanged.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct QualityBudget {
-    /// Gauss-Legendre piece cap for a plain beam (`quadrature_pieces`).
-    plain_pieces: f32,
-    /// Scale on the haze shadow walk's pixel-footprint allowance.
-    shadow_footprint: f32,
-    /// Scale on the haze shadow walk's soft and hard step counts.
-    shadow_steps: f32,
-    /// Most moved fixture shadow maps redrawn in one frame.
-    shadow_redraws: usize,
-    /// Far-field fog grid cell size in pixels.
-    fog_tile: u32,
-    /// Scene-pass samples per pixel.
-    msaa: u32,
-}
-
-impl QualityBudget {
-    fn of(quality: crate::scene_desc::Quality, camera_moving: bool) -> Self {
-        use crate::scene_desc::Quality;
-        match (quality, camera_moving) {
-            (Quality::High, _) => Self {
-                plain_pieces: 8.0,
-                shadow_footprint: 1.0,
-                shadow_steps: 1.0,
-                shadow_redraws: 64,
-                fog_tile: crate::fog_grid::TILE_SIZE,
-                msaa: MSAA_SAMPLES,
-            },
-            // A laptop budget: twice the shadow walk's footprint allowance
-            // and half its steps, and twice again while the camera moves,
-            // when nothing settles anyway.
-            (Quality::Low, moving) => Self {
-                plain_pieces: 4.0,
-                shadow_footprint: if moving { 4.0 } else { 2.0 },
-                shadow_steps: if moving { 0.25 } else { 0.5 },
-                shadow_redraws: 16,
-                fog_tile: crate::fog_grid::LOW_TILE_SIZE,
-                msaa: 1,
-            },
-        }
-    }
-
-    /// `Haze::quality`.
-    fn haze(self) -> [f32; 4] {
-        [
-            self.plain_pieces,
-            self.shadow_footprint,
-            self.shadow_steps,
-            0.0,
-        ]
-    }
-}
 
 impl Renderer {
     pub(super) fn submit_readback(
@@ -233,7 +178,13 @@ impl Renderer {
                 .last_live_camera
                 .is_some_and(|last| last != camera_bits);
         self.last_live_camera = temporal.then_some(camera_bits);
-        let budget = QualityBudget::of(frame.quality, camera_moving);
+        let budget = QualityBudget::of(frame.quality);
+        let budget = if camera_moving {
+            budget.while_moving()
+        } else {
+            budget
+        };
+        let fixture_shadows = frame.fixture_shadows && budget.fixture_shadows;
         let fog_tile = budget.fog_tile;
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         // Everything `draw_depth` rasterises, fixture bodies included: the
@@ -247,10 +198,7 @@ impl Renderer {
             .max(fixture_cones.len())
             .next_power_of_two()
             .max(MAX_FIXTURE_SHADOWS);
-        if cached_shadows
-            && frame.fixture_shadows
-            && self.fixture_shadow_cache.len() < shadow_capacity
-        {
+        if cached_shadows && fixture_shadows && self.fixture_shadow_cache.len() < shadow_capacity {
             // Two banks stay inside the default 256-array-layer device limit,
             // including devices shared with GPUI's compositor.
             let (first, mut layers) =
@@ -276,7 +224,7 @@ impl Renderer {
         }
         // Full mode retains every projection; the legacy comparison keeps
         // its priority-based 16-map selection.
-        let shadow_slots = if frame.fixture_shadows {
+        let shadow_slots = if fixture_shadows {
             if cached_shadows {
                 let origins: Vec<_> = self
                     .fixture_shadow_drawn
@@ -361,7 +309,7 @@ impl Renderer {
         // sampling the map it has, with the projection that map was drawn
         // with, until its turn comes.
         let mut fixture_shadow_matrices = fixture_shadow_matrices;
-        if cached_shadows && frame.fixture_shadows {
+        if cached_shadows && fixture_shadows {
             let dirty: Vec<bool> = fixture_shadow_matrices
                 .iter()
                 .zip(&shadow_slots)
@@ -440,8 +388,8 @@ impl Renderer {
                     profile_resources.as_ref().map(|(queries, ..)| {
                         wgpu::ComputePassTimestampWrites {
                             query_set: queries,
-                            beginning_of_pass_write_index: Some(4),
-                            end_of_pass_write_index: Some(5),
+                            beginning_of_pass_write_index: Base::LightIndexStart.index(),
+                            end_of_pass_write_index: Base::LightIndexEnd.index(),
                         }
                     }),
                 ),
@@ -467,8 +415,8 @@ impl Renderer {
         // reference's per-ray fragment pass.
         let per_ray = self.reference;
         // The far-field grid chain runs under the compute kernels whenever
-        // there is haze to light.
-        let grid_fog = !per_ray && haze_density >= 0.001;
+        // there is haze to march.
+        let grid_fog = budget.marched && !per_ray && haze_density >= 0.001;
         // The far-field grid's radial extent: the haze uniform's `shadow.w`,
         // and the surface pass's `surface_fog.x` when it reads that grid.
         let fog_far = fixture_cones
@@ -640,6 +588,7 @@ impl Renderer {
                 [width, height],
                 [CAMERA_NEAR, camera_far],
                 self.sky_visibility.active(),
+                budget.ambient_divisor,
             )],
             wgpu::BufferUsages::UNIFORM,
             "ambient-visibility-params",
@@ -790,7 +739,7 @@ impl Renderer {
             frame,
             self.visibility_reference
                 && (self.geometry_shadows || frame.geometry_shadows)
-                && frame.fixture_shadows,
+                && fixture_shadows,
         );
         let index_bindings = self.light_index.bindings();
         let overlay_buf = self.storage(
@@ -948,11 +897,13 @@ impl Renderer {
             )
         };
         let targets_done = Instant::now();
-        let ambient_visibility = self.sky_visibility.output(&self.gpu.device, width, height);
+        let ambient_visibility =
+            self.sky_visibility
+                .output(&self.gpu.device, width, height, budget.ambient_divisor);
         // Outdoor haze with a sun: the sun-shaft target, which the scene pass
         // reads per fragment through binding 16. A texel of full sun stands
         // in when the pass does not run.
-        let shafts = (frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
+        let shafts = (budget.marched && frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
             self.sun_shafts
                 .target(&self.gpu.device, t_width, t_height, frame.quality)
         });
@@ -1519,7 +1470,7 @@ impl Renderer {
                         queries.map(|queries| wgpu::RenderPassTimestampWrites {
                             query_set: queries,
                             beginning_of_pass_write_index: None,
-                            end_of_pass_write_index: Some(1),
+                            end_of_pass_write_index: Base::SceneEnd.index(),
                         }),
                     ),
                     ..Default::default()
@@ -1646,7 +1597,10 @@ impl Renderer {
                 });
             self.medium_cache
                 .ensure(&self.gpu.device, fixture_cones.len());
-            let medium_cache_group = if haze_density > 0.0 && !fixture_cones.is_empty() {
+            let medium_cache_group = if budget.marched
+                && haze_density > 0.0
+                && !fixture_cones.is_empty()
+            {
                 let cache_uniform = crate::medium::CacheUniform {
                     medium,
                     count: [fixture_cones.len() as u32, 0, 0, 0],
@@ -1720,15 +1674,16 @@ impl Renderer {
                 encode_medium_cache(&mut encoder, &mut pass_queries, &self.gpu);
             }
 
-            let haze_passes = if per_ray { subframes } else { 1 };
+            let haze_passes = if per_ray && budget.marched {
+                subframes
+            } else {
+                1
+            };
             let (cache_uniform, cache_header, cache_claims, cache_table) = self
                 .plan_interval_cache(
                     &mut encoder,
                     frame,
-                    grid_fog
-                        && cached_shadows
-                        && frame.fixture_shadows
-                        && !fixture_cones.is_empty(),
+                    grid_fog && cached_shadows && fixture_shadows && !fixture_cones.is_empty(),
                     opaque,
                     &inv_view_proj,
                     camera_far,
@@ -1860,7 +1815,7 @@ impl Renderer {
                         1.0 / FIXTURE_SHADOW_SIZE as f32,
                         if self.visibility_reference
                             && (self.geometry_shadows || frame.geometry_shadows)
-                            && frame.fixture_shadows
+                            && fixture_shadows
                         {
                             REFERENCE_GEOMETRY_SHADOW_SAMPLES
                         } else {
@@ -1930,6 +1885,35 @@ impl Renderer {
                         })
                 };
                 let bind_group = haze_bind_group(&haze_buf);
+                if !budget.marched {
+                    let output = self
+                        .gpu
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("haze-analytic"),
+                            layout: &self.gpu.haze_analytic_layout,
+                            entries: &[binding(0, wgpu::BindingResource::TextureView(&haze_view))],
+                        });
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("haze-analytic"),
+                        timestamp_writes: pass_queries.compute(
+                            "haze-analytic",
+                            profile_resources.as_ref().map(|(queries, ..)| {
+                                wgpu::ComputePassTimestampWrites {
+                                    query_set: queries,
+                                    beginning_of_pass_write_index: None,
+                                    end_of_pass_write_index: Base::HazeEnd.index(),
+                                }
+                            }),
+                        ),
+                    });
+                    pass.set_pipeline(&self.gpu.haze_analytic_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(2, &output, &[]);
+                    pass.dispatch_workgroups(haze_size.0.div_ceil(8), haze_size.1.div_ceil(8), 1);
+                    continue;
+                }
                 // The fill and classify passes never sample the medium cache, but
                 // a bind group that carries it would make them wait for the
                 // medium-cache pass; this one binds the static density field in
@@ -2025,8 +2009,8 @@ impl Renderer {
                             profile_resources.as_ref().and_then(|(queries, ..)| {
                                 (k == 0).then_some(wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
-                                    beginning_of_pass_write_index: Some(6),
-                                    end_of_pass_write_index: Some(8),
+                                    beginning_of_pass_write_index: Base::GridStart.index(),
+                                    end_of_pass_write_index: Base::GridPrepared.index(),
                                 })
                             }),
                         ),
@@ -2098,7 +2082,7 @@ impl Renderer {
                                 wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
                                     beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(9),
+                                    end_of_pass_write_index: Base::GridLit.index(),
                                 }
                             }),
                         ),
@@ -2125,7 +2109,7 @@ impl Renderer {
                                 (k == 0).then_some(wgpu::ComputePassTimestampWrites {
                                     query_set: queries,
                                     beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(7),
+                                    end_of_pass_write_index: Base::GridEnd.index(),
                                 })
                             }),
                         ),
@@ -2201,7 +2185,7 @@ impl Renderer {
                         wgpu::ComputePassTimestampWrites {
                             query_set: queries,
                             beginning_of_pass_write_index: None,
-                            end_of_pass_write_index: Some(2),
+                            end_of_pass_write_index: Base::HazeEnd.index(),
                         }
                     });
                     if let Some(plan) = compact_plan.as_ref() {
@@ -2259,7 +2243,7 @@ impl Renderer {
                             (k + 1 == haze_passes).then_some(wgpu::RenderPassTimestampWrites {
                                 query_set: queries,
                                 beginning_of_pass_write_index: None,
-                                end_of_pass_write_index: Some(2),
+                                end_of_pass_write_index: Base::HazeEnd.index(),
                             })
                         }),
                     ),
@@ -2341,7 +2325,7 @@ impl Renderer {
                     wgpu::RenderPassTimestampWrites {
                         query_set: queries,
                         beginning_of_pass_write_index: None,
-                        end_of_pass_write_index: Some(3),
+                        end_of_pass_write_index: Base::CompositeEnd.index(),
                     }
                 });
                 // Diagnostic views are exact channel dumps; the camera stays
@@ -2572,6 +2556,7 @@ impl Renderer {
             };
             let query_count = pass_queries.count;
             let passes = pass_queries.spans;
+            let moved = pass_queries.moved;
             let pending_profile =
                 profile_resources.map(|(query_set, resolve, readback, timestamp_period_ns)| {
                     PendingProfile {
@@ -2589,6 +2574,7 @@ impl Renderer {
                         grid_fog,
                         query_count,
                         passes,
+                        moved,
                     }
                 });
             PendingFrame {

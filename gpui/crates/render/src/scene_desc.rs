@@ -307,11 +307,16 @@ impl Default for ProbeView {
 
 /// The renderer's cost level.
 ///
-/// `High` is the reference picture. `Low` is for a laptop GPU: it lowers
+/// `High` is the reference picture. `Medium` is for a laptop GPU: it lowers
 /// multisampling, the far-field fog grid's resolution and the haze shadow
 /// walk's detail, and it coarsens haze shadows further while the camera
-/// moves. Callers lower the haze and output resolutions themselves, because
-/// those are already their own settings.
+/// moves. `Low` keeps Medium's budgets and marches no haze at all: each
+/// beam is a closed-form line integral through uniform haze, with no haze
+/// shadows, gobos or density variation, and there are no sun shafts and no
+/// haze glow. Low also draws no fixture shadows, so surfaces take every
+/// fixture's light unshadowed, and estimates ambient visibility at half
+/// resolution. Callers lower the haze and output resolutions themselves,
+/// because those are already their own settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Quality {
@@ -319,42 +324,56 @@ pub enum Quality {
     #[default]
     High,
     /// A laptop GPU's budget.
+    Medium,
+    /// No volumetric marching and no fixture shadows: analytic beams.
     Low,
 }
 
 impl Quality {
+    /// Every level, best first.
+    pub const ALL: [Self; 3] = [Self::High, Self::Medium, Self::Low];
+
     /// Whether this is [`Self::High`]; serde's skip test.
     #[must_use]
     pub fn is_high(&self) -> bool {
         *self == Self::High
     }
 
-    /// The haze target's fraction of the output resolution.
+    /// The level's stored and serialized name.
     #[must_use]
-    pub fn haze_resolution(self) -> f32 {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::High => crate::LIVE_HAZE_RESOLUTION,
-            Self::Low => 0.5,
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
         }
     }
 
-    /// Stochastic samples per gobo beam.
+    /// The level named `name`, as [`Self::as_str`] spells it.
     #[must_use]
-    pub fn haze_steps(self) -> u32 {
-        match self {
-            Self::High => 8,
-            Self::Low => 4,
-        }
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.as_str() == name)
+    }
+
+    /// The viewer's haze `steps` (stochastic samples per gobo beam) and
+    /// `resolution` (the haze target's fraction of the output), limited to
+    /// what this level affords.
+    #[must_use]
+    pub fn limit_haze(self, steps: u32, resolution: f32) -> (u32, f32) {
+        let budget = crate::quality::QualityBudget::of(self);
+        (
+            budget.haze_steps_cap.map_or(steps, |cap| steps.min(cap)),
+            budget
+                .haze_resolution_cap
+                .map_or(resolution, |cap| resolution.min(cap)),
+        )
     }
 
     /// Most pixels a live viewport renders before the compositor upscales,
     /// when this level sets its own limit.
     #[must_use]
     pub fn pixel_budget(self) -> Option<f64> {
-        match self {
-            Self::High => None,
-            Self::Low => Some(1.0e6),
-        }
+        crate::quality::QualityBudget::of(self).pixel_budget
     }
 }
 
