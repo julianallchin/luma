@@ -1,7 +1,7 @@
 //! Capture the shared action family together so panel and dialog styles can be reviewed.
 use gpui::{div, prelude::*, px, size, AnyView, App, Context, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
-use luma_ui::node::{Instrument, Role};
+use luma_ui::node::Role;
 use luma_ui::{button, float, ladder, Enabled};
 use std::sync::Arc;
 

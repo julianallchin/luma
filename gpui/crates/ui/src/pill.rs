@@ -22,7 +22,7 @@
 use gpui::prelude::*;
 use gpui::{div, px, Div, FontWeight, SharedString};
 
-use crate::{float, glass, ladder, radius, Enabled};
+use crate::{float, glass, ladder, radius, Control, Enabled};
 
 /// The column's width — every capsule on the screen is this wide, including
 /// the field, so the stack reads as one object seen from the front rather than
@@ -70,16 +70,16 @@ fn capsule() -> Div {
 ///
 /// Extra children (a leading glyph) go on after the label, so the caller does
 /// not need a second constructor to put a mark in front of a word.
-pub fn primary(label: impl Into<SharedString>, enabled: Enabled) -> Div {
+pub fn primary(label: impl Into<SharedString>, enabled: Enabled) -> Control {
     let plate = capsule().justify_center().gap(px(8.0)).px(px(20.0));
-    match enabled {
+    let plate = match enabled {
         Enabled::Yes => float::btn_primary_paint(plate.cursor_pointer()),
         Enabled::No => plate
             .bg(glass::ink(0.13))
             .font_weight(FontWeight::MEDIUM)
             .text_color(ladder::foreground_alpha(0.38)),
-    }
-    .child(label.into())
+    };
+    Control::new(plate.child(label.into()), enabled)
 }
 
 /// The alternative to [`primary`]: the same capsule with no fill, an edge, and

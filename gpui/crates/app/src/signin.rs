@@ -669,15 +669,12 @@ fn primary(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
     pill::primary(label, Enabled::from(enabled))
         .id("sign-in-submit")
         .when(enabled, |capsule| {
-            capsule
-                .track_focus(&state.action_focus)
-                .tab_index(0)
-                .on_click(move |_, _, cx| {
-                    submit.update(cx, |this, cx| this.sign_in_submit(cx));
-                })
+            capsule.track_focus(&state.action_focus).tab_index(0)
+        })
+        .on_click(move |_, _, cx| {
+            submit.update(cx, |this, cx| this.sign_in_submit(cx));
         })
         .agent_node(Role::Button, label)
-        .agent_disabled(!enabled)
         .agent_focused(state.action_focus.is_focused(window))
         .into_any_element()
 }

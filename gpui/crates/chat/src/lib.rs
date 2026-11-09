@@ -71,7 +71,7 @@ use luma_lib::agent::{
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
 use luma_ui::float::MenuVisibility;
 use luma_ui::icons::IconName;
-use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
+use luma_ui::node::{Instrument, Role as NodeRole};
 
 use crate::composer::Composer;
 pub use crate::running::{RunningEvent, RunningTurns};
@@ -2262,11 +2262,8 @@ fn header_button(
 ) -> impl IntoElement {
     luma_ui::icon_button(icon, luma_ui::Enabled::from(!disabled))
         .id(id)
-        .when(!disabled, |button| {
-            button.on_click(move |_, _, cx| pressed(cx))
-        })
+        .on_click(move |_, _, cx| pressed(cx))
         .agent_node(NodeRole::Button, label)
-        .agent_disabled(disabled)
 }
 
 /// One end of the transcript dissolving into the panel's own ground: a

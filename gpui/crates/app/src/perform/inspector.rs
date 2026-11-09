@@ -170,9 +170,7 @@ fn page_sections(
     )
     .id("perform-page-remove")
     .text_color(Hsla::from(ladder::danger()))
-    .when(removable, |button| {
-        button.on_click(on_edit(target, app, Edit::RemovePage))
-    })
+    .on_click(on_edit(target, app, Edit::RemovePage))
     .agent_node(Role::Button, "Remove page");
     vec![
         column()
@@ -261,10 +259,8 @@ fn controllers(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl Int
             if profiled { Enabled::Yes } else { Enabled::No },
         )
         .id("perform-map-page")
-        .when(profiled, |button| {
-            button.on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| this.map_page(&target, &id, cx));
-            })
+        .on_click(move |_, _, cx| {
+            app.update(cx, |this, cx| this.map_page(&target, &id, cx));
         })
         .agent_node(Role::Button, "Map this page")
     };
@@ -818,14 +814,12 @@ fn value_list(
         let at = values.len();
         luma_ui::button(label, if full { Enabled::No } else { Enabled::Yes })
             .id(key)
-            .when(!full, |button| {
-                button.on_click(move |_, _, cx| {
-                    let edit = relisted(&cell, |list| list.values.push(value));
-                    app.update(cx, |this, cx| {
-                        this.edit_surface(&target, edit, cx);
-                        this.open_value(&target, &cell.id, Some(at), cx);
-                    });
-                })
+            .on_click(move |_, _, cx| {
+                let edit = relisted(&cell, |list| list.values.push(value));
+                app.update(cx, |this, cx| {
+                    this.edit_surface(&target, edit, cx);
+                    this.open_value(&target, &cell.id, Some(at), cx);
+                });
             })
             .agent_node(Role::Button, label)
     };
@@ -870,16 +864,14 @@ fn value_list(
             luma_ui::button("Remove", if can { Enabled::Yes } else { Enabled::No })
                 .id("perform-value-remove")
                 .text_color(Hsla::from(ladder::danger()))
-                .when(can, |button| {
-                    button.on_click(move |_, _, cx| {
-                        let edit = relisted(&cell, |list| {
-                            list.values.remove(index);
-                        });
-                        app.update(cx, |this, cx| {
-                            this.open_value(&target, &cell.id, None, cx);
-                            this.edit_surface(&target, edit, cx);
-                        });
-                    })
+                .on_click(move |_, _, cx| {
+                    let edit = relisted(&cell, |list| {
+                        list.values.remove(index);
+                    });
+                    app.update(cx, |this, cx| {
+                        this.open_value(&target, &cell.id, None, cx);
+                        this.edit_surface(&target, edit, cx);
+                    });
                 })
                 .agent_node(Role::Button, format!("Remove value {}", index + 1))
         };

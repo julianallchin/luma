@@ -7,8 +7,12 @@
 //!
 //! # Interface
 //!
-//! Every control is a free function returning a [`gpui::Div`] the caller
-//! composes into its own layout:
+//! Every control is a free function returning an element the caller composes
+//! into its own layout. Most return a [`gpui::Div`]. The action buttons
+//! ([`button`], [`icon_button`], [`pill::primary`]) return a [`Control`],
+//! which a caller styles and wires like a `Div` but which knows whether it is
+//! enabled, so a disabled one drops its click handler and reports itself
+//! disabled:
 //!
 //! ```ignore
 //! use luma_ui::{ladder, button, Enabled};
@@ -16,9 +20,10 @@
 //! div().bg(ladder::background()).child(button("Import Tracks", Enabled::Yes))
 //! ```
 //!
-//! Returning `Div` rather than a component type is deliberate: these controls
-//! hold no state, so there is nothing for a component to own, and a `Div` is
-//! the one type every gpui layout already composes. A control that eventually
+//! Returning `Div`, or the thin [`Control`] around one, rather than a
+//! component type is deliberate: these controls hold no state, so there is
+//! nothing for a component to own, and a `Div` is the one type every gpui
+//! layout already composes. A control that eventually
 //! *does* need state (a real text input, an open dropdown menu) will grow an
 //! `Entity`-backed sibling; until then, paying for one would buy nothing.
 //!
@@ -106,7 +111,9 @@ pub fn rem_scale(window: &gpui::Window) -> f32 {
     f32::from(window.rem_size()) / BASE_REM
 }
 
-pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
+pub use button::{
+    button, icon_button, icon_toggle, toggle_paint, Control, Enabled, StatefulControl,
+};
 pub use rem_scale::rem_scaled;
 pub use select::luma_select_item;
 pub use slider::{fader_track, luma_fader, luma_slider};

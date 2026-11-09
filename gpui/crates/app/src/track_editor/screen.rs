@@ -126,10 +126,7 @@ pub(crate) fn fullscreen_transport(
         .child(
             luma_ui::button(
                 label,
-                (state.waveform.is_some()
-                    && state.transport.ready
-                    && state.transport.session.is_some())
-                .into(),
+                (state.transport.ready && state.transport.session.is_some()).into(),
             )
             .id("fullscreen-transport")
             .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
