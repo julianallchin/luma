@@ -522,6 +522,7 @@ impl Luma {
             cx.notify();
         }
         self.set_auto_update(values.auto_update);
+        self.set_update_channel(values.update_channel.as_deref());
     }
 
     /// The one gesture that changes who this library belongs to, in whichever
@@ -1149,12 +1150,11 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
 }
 
 fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
-    let channel = match luma_update::Channel::CURRENT {
-        luma_update::Channel::Stable => String::new(),
-        channel => format!(" ({})", channel.label()),
-    };
+    // The running build's own channel, which a switch does not change until
+    // the build it installs is the one running.
+    let build = shell.update.build();
     let (button, status) = crate::update::about(shell, app);
-    let version = format!("Luma v{}{channel}", luma_lib::VERSION);
+    let version = format!("Luma {} · {}", build.version, build.channel.name());
     let words = (version.clone(), status.clone());
     let version_row = card_row()
         .child(
@@ -1165,7 +1165,10 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Section>
                 .flex_col()
                 .gap(px(2.))
                 .child(luma_ui::caption(version))
-                .when_some(status, |el, status| el.child(help_text(&status))),
+                // Named, so a script reads the answer to a check.
+                .when_some(status, |el, status| {
+                    el.child(help_text(&status).agent_node(Role::Text, status))
+                }),
         )
         .children(button.map(control_slot));
     let version_row = Row::new(version_row, &words.0, words.1.as_deref());
@@ -1173,16 +1176,52 @@ fn about(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Vec<Section>
         section("Version", vec![version_row], None),
         section(
             "Updates",
-            vec![checkbox(
-                app,
-                key::AUTO_UPDATE,
-                "Update automatically",
-                values.auto_update,
-                Some("Checks for a new release every hour and downloads it in the background. When it is ready, Luma asks whether to relaunch now; otherwise it runs the next time you open Luma."),
-            )],
+            vec![
+                update_channel(shell, values, app),
+                checkbox(
+                    app,
+                    key::AUTO_UPDATE,
+                    "Update automatically",
+                    values.auto_update,
+                    Some("Checks for a new release every hour and downloads it in the background. When it is ready, Luma asks whether to relaunch now; otherwise it runs the next time you open Luma."),
+                ),
+            ],
             None,
         ),
     ]
+}
+
+/// Which release channel this install follows: Stable or Nightly, the
+/// build's own until someone chooses. Choosing checks that channel at once
+/// ([`Luma::set_update_channel`]); the help says what the choice means.
+fn update_channel(shell: &Luma, values: &AppSettings, app: &Entity<Luma>) -> Row {
+    let followed = shell.update.followed(values.update_channel.as_deref());
+    let help = match followed {
+        luma_update::Channel::Nightly => "A build of the newest work, most days, less tested than a release. Choosing Stable installs the latest release, even one older than this.",
+        _ => "Tested releases. Nightly is a build of the newest work, most days.",
+    };
+    let track =
+        luma_ui::float::segmented().children(luma_update::Channel::CHOICES.map(|channel| {
+            let app = app.clone();
+            luma_ui::float::segment(channel.name(), channel == followed, channel.name())
+                .id(SharedString::from(format!(
+                    "update-channel-{}",
+                    channel.label()
+                )))
+                .on_click(move |_, _, cx| {
+                    if channel != followed {
+                        app.update(cx, |this, cx| {
+                            this.write_setting(
+                                key::UPDATE_CHANNEL,
+                                channel.label().to_string(),
+                                cx,
+                            );
+                        });
+                    }
+                })
+                .agent_node(Role::Toggle, channel.name())
+        }));
+    row("Update channel", Some(help), track.into_any_element())
 }
 
 /// Keys a recorder hears go down without being a shortcut of their own.

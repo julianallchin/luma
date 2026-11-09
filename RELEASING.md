@@ -29,13 +29,26 @@ Windows build yet.
 
 ## Nightly
 
-Every push to `main` whose CI passes replaces the `nightly` prerelease with a
-build of that commit; a newer push cancels a nightly still building. To build
-another commit, run the workflow by hand (Actions → Release → Run workflow) on
-its branch. A red CI run on `main` ships nothing. Nightly builds
-poll `releases/download/nightly/latest.json` and update whenever its commit
+Every push to `dev` whose CI passes replaces the `nightly` prerelease with a
+build of that commit; a newer push cancels a nightly still building. A red CI
+run on `dev` ships nothing, and a pull request into `dev` never builds one.
+Pushes to `main` build nothing: `main` ships through tags. A manual run
+(Actions → Release → Run workflow) on `dev` builds a nightly of its tip; on
+any other branch it only checks that production has that branch's
+migrations and sync rules. Nightly builds poll
+`releases/download/nightly/latest.json` and update whenever its commit
 differs from their own. Install one on Linux with
 `LUMA_CHANNEL=nightly sh install.sh`.
+
+### Switching channels
+
+Settings → About → **Update channel** chooses Stable or Nightly. The default
+is the build's own channel; the choice is stored in the `update_channel`
+setting. Choosing checks the other channel at once and offers its release
+whatever its version, so Nightly to Stable goes back to the latest stable
+release (`Manifest::offers` in `gpui/crates/update`). Once that build is
+installed and running, the usual rule for its channel applies. About shows
+the running build's channel, not the chosen one.
 
 ## What's new
 
@@ -112,7 +125,7 @@ library that old (`backend/migrations/20261024000000_baseline.sql`).
 | `LUMA_COMMIT_SHA` | compile time | the commit a nightly compares |
 | `LUMA_UPDATE_PUBKEY` | compile time | a different update public key |
 | `LUMA_UPDATE_EXPLANATION` | compile time | turns updates off and shows this text, for distribution packages |
-| `LUMA_UPDATE_MANIFEST` | run time | poll another manifest URL, for testing an update end to end |
+| `LUMA_UPDATE_MANIFEST` | run time | poll another manifest URL, for testing an update end to end; `{channel}` in it stands for the followed channel (`stable`, `nightly`) |
 | `LUMA_RESOURCE_DIR` | run time | use another resource directory (`backend/src/resources.rs`) |
 
 ## Building locally

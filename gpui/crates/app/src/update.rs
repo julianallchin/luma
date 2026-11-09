@@ -11,7 +11,11 @@
 //!
 //! The dialog lists what the new version brings, from the manifest's
 //! changelog ([`luma_update::manifest::Manifest::changes_since`]): every
-//! release since the running one, so a skipped release is not lost.
+//! release since the running one, so a skipped release is not lost; after a
+//! channel switch, the release's own lines.
+//!
+//! The channel the updater follows is the `update_channel` setting, the
+//! build's own until someone chooses. Choosing the other checks it at once.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +28,7 @@ use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::Enabled;
 use luma_update::manifest::Change;
-use luma_update::{Status, Updater};
+use luma_update::{Channel, Status, Updater};
 
 use crate::Luma;
 
@@ -41,6 +45,9 @@ pub(crate) struct AutoUpdate {
     enabled: Option<bool>,
     /// Whether this app polls at all — see [`Luma::watch_updates`].
     polling: bool,
+    /// Whether the `update_channel` setting has been read. The launch read
+    /// sets the channel the poll follows; only a later change is a switch.
+    channel_read: bool,
     /// The version the ready dialog was raised for, so that a status the
     /// updater reports twice raises it once.
     announced: Option<String>,
@@ -63,8 +70,21 @@ impl AutoUpdate {
             updater,
             enabled: None,
             polling: false,
+            channel_read: false,
             announced: None,
         }
+    }
+
+    /// The channel a stored `update_channel` names, or the build's own.
+    pub(crate) fn followed(&self, stored: Option<&str>) -> Channel {
+        stored
+            .and_then(Channel::parse)
+            .unwrap_or(self.updater.build().channel.default_choice())
+    }
+
+    /// The running build, as the updater compares it.
+    pub(crate) fn build(&self) -> &luma_update::manifest::Current {
+        self.updater.build()
     }
 }
 
@@ -76,23 +96,7 @@ impl Luma {
         if self.update.updater.unavailable().is_some() {
             return;
         }
-        let mut statuses = self.update.updater.subscribe();
-        cx.spawn(async move |this, cx| {
-            while statuses.changed().await.is_ok() {
-                let status = statuses.borrow_and_update().clone();
-                if this
-                    .update(cx, |this, cx| {
-                        this.update.status = status;
-                        this.announce_update(cx);
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        })
-        .detach();
+        self.mirror_updates(cx);
         if !luma_ui::runtime::Runtime::with(|runtime| runtime.cloud) {
             return;
         }
@@ -116,6 +120,27 @@ impl Luma {
         .detach();
     }
 
+    /// Mirror the updater's status onto the window as it changes.
+    fn mirror_updates(&mut self, cx: &mut Context<Self>) {
+        let mut statuses = self.update.updater.subscribe();
+        cx.spawn(async move |this, cx| {
+            while statuses.changed().await.is_ok() {
+                let status = statuses.borrow_and_update().clone();
+                if this
+                    .update(cx, |this, cx| {
+                        this.update.status = status;
+                        this.announce_update(cx);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Apply a read of the `auto_update` setting. Turning it on checks now
     /// rather than at the next tick of the hourly poll; the launch read is
     /// not a turn, and leaves the first check to the poll.
@@ -125,6 +150,35 @@ impl Luma {
         if turned_on && self.update.polling {
             self.update.updater.check(false);
         }
+    }
+
+    /// Apply a read of the `update_channel` setting: the stored channel, or
+    /// the build's own while none is. A change after the launch read is
+    /// someone switching, and checks the new channel now, polling or not,
+    /// like "Check for Updates…": they asked.
+    pub(crate) fn set_update_channel(&mut self, stored: Option<&str>) {
+        let channel = self.update.followed(stored);
+        let switched = self.update.updater.set_channel(channel);
+        let first = !std::mem::replace(&mut self.update.channel_read, true);
+        if switched && !first {
+            self.update.updater.check(true);
+        }
+    }
+
+    /// Check updates against `manifest` (`{channel}` standing for the
+    /// channel) as if this were `channel`'s `version` at `commit`: the
+    /// harness's way to a channel switch, since a source build never checks.
+    /// `install` is the bundle a found release would replace.
+    pub fn update_check_fixture(
+        &mut self,
+        build: luma_update::manifest::Current,
+        manifest: String,
+        install: luma_update::install::Install,
+        cx: &mut Context<Self>,
+    ) {
+        self.update.updater = Updater::serving(build, manifest, install);
+        self.update.status = self.update.updater.status();
+        self.mirror_updates(cx);
     }
 
     /// The menu's "Check for Updates…": ask now, and show the answer where

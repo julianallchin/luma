@@ -3062,6 +3062,7 @@ dependencies = [
  "luma-patterns",
  "luma-scene",
  "luma-ui",
+ "luma-update",
  "rquickjs",
  "serde",
  "serde_json",

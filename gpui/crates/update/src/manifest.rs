@@ -1,4 +1,4 @@
-//! The release manifest, `latest.json`, and the decision whether it is newer.
+//! The release manifest, `latest.json`, and the decision whether to offer it.
 //!
 //! ```json
 //! {
@@ -18,7 +18,9 @@
 //! ```
 //!
 //! A nightly has no version worth comparing, so it is the commit that says
-//! whether it moved. Platforms are keyed by target triple, which the retired
+//! whether it moved. A build reading another channel's manifest — someone
+//! switched channels — is offered that channel's release whatever its
+//! version ([`Manifest::offers`]). Platforms are keyed by target triple, which the retired
 //! Tauri build (0.5.19 and older), polling the same URL for `darwin-aarch64`,
 //! never finds: the native app cannot open its library.
 //!
@@ -90,22 +92,32 @@ impl Manifest {
         self.platforms.get(platform)
     }
 
-    /// Whether installing this release would move `current` forward.
+    /// Whether to offer this release, published on `channel`, to `current`:
+    /// the build in the install's place, whose channel may differ.
     ///
-    /// Stable compares versions, so a manifest that lags (a CDN serving the
-    /// previous file) never downgrades anyone. Nightly compares commits: any
-    /// other commit is the newer one, because the rolling release only ever
-    /// moves forward. A dev build never updates.
-    pub fn is_newer_than(&self, current: &Current) -> Result<bool, String> {
-        match current.channel {
-            Channel::Dev => Ok(false),
-            Channel::Nightly => Ok(match (&self.commit, &current.commit) {
+    /// On the build's own channel, an offer moves it forward. Stable compares
+    /// versions, so a manifest that lags (a CDN serving the previous file)
+    /// never downgrades anyone. Nightly compares commits: any other commit is
+    /// the newer one, because the rolling release only ever moves forward.
+    ///
+    /// On another channel, the one someone switched to, every release is
+    /// offered, older or not: Nightly to Stable goes back to the latest
+    /// stable. A channel is compiled into its builds, so no build of one
+    /// channel is the build of another; once the switch has installed, the
+    /// install is on `channel` and the same-channel rule takes over.
+    ///
+    /// A dev build never updates.
+    pub fn offers(&self, channel: Channel, current: &Current) -> Result<bool, String> {
+        match (channel, current.channel) {
+            (Channel::Dev, _) | (_, Channel::Dev) => Ok(false),
+            (published, running) if published != running => Ok(true),
+            (Channel::Nightly, _) => Ok(match (&self.commit, &current.commit) {
                 (Some(published), Some(running)) => published != running,
                 // A nightly manifest without a commit is malformed; a nightly
                 // build without one cannot tell, and must not loop on updates.
                 _ => false,
             }),
-            Channel::Stable => {
+            (Channel::Stable, _) => {
                 let published = parse_version(&self.version)?;
                 let running = parse_version(&current.version)?;
                 Ok(published > running)
@@ -115,15 +127,22 @@ impl Manifest {
 }
 
 impl Manifest {
-    /// Every release newer than `current` that has something to say, newest
-    /// first. A line appears once, under the newest release that has it.
+    /// What this release, published on `channel`, brings `current`, by
+    /// release, newest first. A line appears once, under the newest release
+    /// that has it.
     ///
+    /// On the build's own channel that is every release newer than it.
     /// Stable keeps the releases with a higher version. Nightly keeps the
     /// releases above the one `current` was built from; a build older than
     /// every entry gets them all. A dev build gains nothing.
-    pub fn changes_since(&self, current: &Current) -> Vec<Change> {
+    ///
+    /// Across a channel switch there is no "since": a stable version and a
+    /// nightly commit do not order against each other. The release's own
+    /// lines stand alone.
+    pub fn changes_since(&self, channel: Channel, current: &Current) -> Vec<Change> {
         let newer: Vec<&Change> = match current.channel {
             Channel::Dev => Vec::new(),
+            _ if channel != current.channel => self.own_change().into_iter().collect(),
             Channel::Nightly => self
                 .changes
                 .iter()
@@ -161,6 +180,19 @@ impl Manifest {
             }
         }
         releases
+    }
+}
+
+impl Manifest {
+    /// The entry in `changes` for this release itself: by commit where both
+    /// say one, else by version.
+    fn own_change(&self) -> Option<&Change> {
+        self.changes
+            .iter()
+            .find(|change| match (&change.commit, &self.commit) {
+                (Some(entry), Some(release)) => entry == release,
+                _ => change.version == self.version,
+            })
     }
 }
 
@@ -230,7 +262,7 @@ mod tests {
         let manifest = Manifest::parse(MANIFEST).unwrap();
         let newer = |version| {
             manifest
-                .is_newer_than(&current(Channel::Stable, version, None))
+                .offers(Channel::Stable, &current(Channel::Stable, version, None))
                 .unwrap()
         };
         assert!(newer("0.5.19"));
@@ -245,7 +277,7 @@ mod tests {
         let mut manifest = Manifest::parse(MANIFEST).unwrap();
         manifest.version = "v0.6.0".into();
         assert!(manifest
-            .is_newer_than(&current(Channel::Stable, "0.5.19", None))
+            .offers(Channel::Stable, &current(Channel::Stable, "0.5.19", None))
             .unwrap());
     }
 
@@ -254,7 +286,7 @@ mod tests {
         let mut manifest = Manifest::parse(MANIFEST).unwrap();
         manifest.version = "latest".into();
         assert!(manifest
-            .is_newer_than(&current(Channel::Stable, "0.5.19", None))
+            .offers(Channel::Stable, &current(Channel::Stable, "0.5.19", None))
             .is_err());
     }
 
@@ -263,20 +295,15 @@ mod tests {
         let manifest = Manifest::parse(MANIFEST).unwrap();
         let newer = |commit| {
             manifest
-                .is_newer_than(&current(Channel::Nightly, "0.9.0", commit))
+                .offers(
+                    Channel::Nightly,
+                    &current(Channel::Nightly, "0.9.0", commit),
+                )
                 .unwrap()
         };
         assert!(newer(Some("aaaa")));
         assert!(!newer(Some("bbbb")));
         assert!(!newer(None));
-    }
-
-    #[test]
-    fn dev_never_updates() {
-        let manifest = Manifest::parse(MANIFEST).unwrap();
-        assert!(!manifest
-            .is_newer_than(&current(Channel::Dev, "0.0.1", Some("aaaa")))
-            .unwrap());
     }
 
     /// What every release before `changes` published: `notes` a URL.
@@ -294,7 +321,7 @@ mod tests {
         .unwrap();
         assert!(manifest.changes.is_empty());
         assert!(manifest
-            .changes_since(&current(Channel::Stable, "0.6.0", None))
+            .changes_since(Channel::Stable, &current(Channel::Stable, "0.6.0", None))
             .is_empty());
     }
 
@@ -334,8 +361,11 @@ mod tests {
     #[test]
     fn stable_shows_every_release_it_skipped() {
         let manifest = with_changes();
-        let since =
-            |version| grouped(manifest.changes_since(&current(Channel::Stable, version, None)));
+        let since = |version| {
+            grouped(
+                manifest.changes_since(Channel::Stable, &current(Channel::Stable, version, None)),
+            )
+        };
         // 0.6.0's one line is 0.7.0's too, so it shows once, under 0.7.0,
         // and 0.6.0 has nothing left to say.
         assert_eq!(
@@ -362,8 +392,12 @@ mod tests {
     #[test]
     fn nightly_shows_the_releases_above_its_commit() {
         let manifest = with_changes();
-        let since =
-            |commit| grouped(manifest.changes_since(&current(Channel::Nightly, "0.0.0", commit)));
+        let since = |commit| {
+            grouped(manifest.changes_since(
+                Channel::Nightly,
+                &current(Channel::Nightly, "0.0.0", commit),
+            ))
+        };
         assert_eq!(
             since(Some("c7")),
             [group("0.8.0", &["Clearer sync status"])]
@@ -390,8 +424,61 @@ mod tests {
     #[test]
     fn dev_gains_no_changes() {
         assert!(with_changes()
-            .changes_since(&current(Channel::Dev, "0.0.1", None))
+            .changes_since(Channel::Dev, &current(Channel::Dev, "0.0.1", None))
             .is_empty());
+    }
+
+    #[test]
+    fn stable_build_switched_to_nightly_takes_any_nightly() {
+        let mut manifest = Manifest::parse(MANIFEST).unwrap();
+        // A nightly whose version sorts below the running stable's.
+        manifest.version = "0.5.0-nightly.20261101+bbbb".into();
+        let running = current(Channel::Stable, "0.6.0", Some("bbbb"));
+        assert!(manifest.offers(Channel::Nightly, &running).unwrap());
+        let running = current(Channel::Stable, "0.6.0", None);
+        assert!(manifest.offers(Channel::Nightly, &running).unwrap());
+    }
+
+    #[test]
+    fn nightly_build_switched_to_stable_goes_back_to_the_latest_stable() {
+        let manifest = Manifest::parse(MANIFEST).unwrap();
+        // The nightly's crate version is past the stable one, and its commit
+        // is the release's own: the stable is offered all the same.
+        let running = current(Channel::Nightly, "0.7.0", Some("bbbb"));
+        assert!(manifest.offers(Channel::Stable, &running).unwrap());
+    }
+
+    #[test]
+    fn a_dev_build_is_offered_no_channel() {
+        let manifest = Manifest::parse(MANIFEST).unwrap();
+        for channel in [Channel::Stable, Channel::Nightly] {
+            assert!(!manifest
+                .offers(channel, &current(Channel::Dev, "0.0.1", Some("aaaa")))
+                .unwrap());
+        }
+    }
+
+    /// A switch lists the release it installs, not a "since" across channels.
+    #[test]
+    fn a_channel_switch_shows_the_releases_own_lines() {
+        let manifest = with_changes();
+        // A nightly build at an unrelated commit, switched to stable 0.8.0.
+        let switched = manifest.changes_since(
+            Channel::Stable,
+            &current(Channel::Nightly, "0.9.0", Some("n1")),
+        );
+        assert_eq!(
+            grouped(switched),
+            [group("0.8.0", &["Clearer sync status"])]
+        );
+        // A stable 0.5.0 switched to the nightly this manifest is: only its
+        // own release, though the stable rule would list two.
+        let switched =
+            manifest.changes_since(Channel::Nightly, &current(Channel::Stable, "0.5.0", None));
+        assert_eq!(
+            grouped(switched),
+            [group("0.8.0", &["Clearer sync status"])]
+        );
     }
 
     #[test]

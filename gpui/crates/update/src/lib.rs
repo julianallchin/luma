@@ -1,11 +1,12 @@
 //! Luma's self-updater: check, download, verify, swap, and say so.
 //!
-//! Modelled on Zed's `auto_update` crate. A build knows its channel from the
-//! environment it was compiled in; the updater polls that channel's manifest
-//! on a GitHub release, downloads the archive for this machine, checks its
-//! minisign signature, swaps the installed tree for it, and reports
-//! [`Status::Updated`] with the path to relaunch. The app shows "Restart to
-//! update" and calls gpui's `restart` with that path.
+//! Modelled on Zed's `auto_update` crate. A build knows its own channel from
+//! the environment it was compiled in, and follows it until someone chooses
+//! the other ([`Updater::set_channel`]). The updater polls the followed
+//! channel's manifest on a GitHub release, downloads the archive for this
+//! machine, checks its minisign signature, swaps the installed tree for it,
+//! and reports [`Status::Updated`] with the path to relaunch. The app shows
+//! "Restart to update" and calls gpui's `restart` with that path.
 //!
 //! Everything blocking runs on a thread of its own; the app watches
 //! [`Updater::subscribe`]. A failed *automatic* check is logged and goes back
@@ -18,7 +19,7 @@ pub mod verify;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use install::Install;
@@ -27,7 +28,8 @@ use manifest::{Current, Manifest};
 /// How often a running app looks for a release.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// Which stream of releases a build follows, fixed when it is compiled.
+/// A stream of releases. A build's own is fixed when it is compiled; the one
+/// it follows is a setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
     /// Built from source: never updates.
@@ -47,11 +49,41 @@ impl Channel {
         _ => Self::Dev,
     };
 
+    /// The channels an install may follow.
+    pub const CHOICES: [Self; 2] = [Self::Stable, Self::Nightly];
+
+    /// The stored spelling, which `LUMA_RELEASE_CHANNEL` and the
+    /// `update_channel` setting share.
     pub fn label(self) -> &'static str {
         match self {
             Self::Dev => "dev",
             Self::Nightly => "nightly",
             Self::Stable => "stable",
+        }
+    }
+
+    /// A followable channel by its stored spelling.
+    pub fn parse(label: &str) -> Option<Self> {
+        Self::CHOICES
+            .into_iter()
+            .find(|channel| channel.label() == label)
+    }
+
+    /// The channel as a person reads it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dev => "Development build",
+            Self::Nightly => "Nightly",
+            Self::Stable => "Stable",
+        }
+    }
+
+    /// What a build of this channel follows until someone chooses: its own
+    /// channel. A source build follows none, and shows stable.
+    pub fn default_choice(self) -> Self {
+        match self {
+            Self::Nightly => Self::Nightly,
+            Self::Dev | Self::Stable => Self::Stable,
         }
     }
 
@@ -124,13 +156,34 @@ impl Status {
 /// Where releases come from, who must have signed them, and where they go.
 #[derive(Clone)]
 struct Target {
-    manifest_url: String,
+    /// The manifest URL in place of each channel's own, `{channel}` standing
+    /// for the channel's label: `LUMA_UPDATE_MANIFEST`, or a harness's server.
+    manifest: Option<String>,
     public_key: String,
     install: Install,
 }
 
+impl Target {
+    fn manifest_url(&self, channel: Channel) -> Result<String, String> {
+        match &self.manifest {
+            Some(template) => Ok(template.replace("{channel}", channel.label())),
+            None => channel
+                .manifest_url()
+                .map(str::to_string)
+                .ok_or_else(|| format!("Luma publishes no {} channel.", channel.label())),
+        }
+    }
+}
+
 pub struct Updater {
-    current: Current,
+    /// The running build.
+    build: Current,
+    /// The build in the install's place: the running one, until an update
+    /// replaces the tree under it. A check compares against this, so a switch
+    /// that installed is not installed again at the next poll.
+    installed: Mutex<Current>,
+    /// The channel this install follows: [`Channel::CHOICES`], one of.
+    channel: Mutex<Channel>,
     /// Where updates come from and go, or why there is nowhere.
     target: Result<Target, String>,
     status: tokio::sync::watch::Sender<Status>,
@@ -142,21 +195,37 @@ pub struct Updater {
 impl Updater {
     /// The updater for this process, running `version`.
     pub fn new(version: &str) -> Arc<Self> {
-        let current = Current {
+        let build = Current {
             channel: Channel::CURRENT,
             version: version.to_string(),
             commit: COMMIT.map(str::to_string),
         };
-        let target = Self::target(current.channel);
+        let target = Self::target(build.channel);
         if let Err(reason) = &target {
             log::info!("automatic updates are off: {reason}");
         }
-        Self::with(current, target)
+        Self::with(build, target)
     }
 
-    fn with(current: Current, target: Result<Target, String>) -> Arc<Self> {
+    /// An updater for `build`, installed at `install`, that reads each
+    /// channel's manifest from `manifest` with `{channel}` replaced: for a
+    /// harness serving its own releases to a source build.
+    pub fn serving(build: Current, manifest: String, install: Install) -> Arc<Self> {
+        Self::with(
+            build,
+            Ok(Target {
+                manifest: Some(manifest),
+                public_key: verify::PUBLIC_KEY.to_string(),
+                install,
+            }),
+        )
+    }
+
+    fn with(build: Current, target: Result<Target, String>) -> Arc<Self> {
         Arc::new(Self {
-            current,
+            installed: Mutex::new(build.clone()),
+            channel: Mutex::new(build.channel.default_choice()),
+            build,
             target,
             status: tokio::sync::watch::channel(Status::Idle).0,
             running: AtomicBool::new(false),
@@ -169,16 +238,14 @@ impl Updater {
         if let Some(explanation) = option_env!("LUMA_UPDATE_EXPLANATION") {
             return Err(explanation.to_string());
         }
-        let manifest_url = std::env::var("LUMA_UPDATE_MANIFEST")
-            .ok()
-            .or_else(|| channel.manifest_url().map(str::to_string))
-            .ok_or_else(|| {
-                "This is a development build, which does not update itself.".to_string()
-            })?;
+        let manifest = std::env::var("LUMA_UPDATE_MANIFEST").ok();
+        if manifest.is_none() && channel.manifest_url().is_none() {
+            return Err("This is a development build, which does not update itself.".into());
+        }
         let exe = std::env::current_exe()
             .map_err(|error| format!("Could not find the running executable: {error}"))?;
         Ok(Target {
-            manifest_url,
+            manifest,
             public_key: verify::PUBLIC_KEY.to_string(),
             install: Install::locate(&exe)?,
         })
@@ -189,8 +256,22 @@ impl Updater {
         self.target.as_ref().err().map(String::as_str)
     }
 
+    /// The running build: its own channel, version and commit.
+    pub fn build(&self) -> &Current {
+        &self.build
+    }
+
+    /// The channel this install follows.
     pub fn channel(&self) -> Channel {
-        self.current.channel
+        *lock(&self.channel)
+    }
+
+    /// Follow `channel` from the next check on; `true` if that is a change.
+    /// The caller decides whether to check now: a launch's read of the
+    /// setting is not a switch.
+    pub fn set_channel(&self, channel: Channel) -> bool {
+        debug_assert!(Channel::CHOICES.contains(&channel));
+        std::mem::replace(&mut *lock(&self.channel), channel) != channel
     }
 
     pub fn status(&self) -> Status {
@@ -201,14 +282,17 @@ impl Updater {
         self.status.subscribe()
     }
 
-    /// Look for a release, and install it if there is one, on a thread of
-    /// its own. A no-op while a check runs or once an update waits for a
-    /// restart: there is nothing newer to do until it is applied.
+    /// Look for a release on the followed channel, and install it if there
+    /// is one, on a thread of its own. A no-op while a check runs, or once an
+    /// update from the followed channel waits for a restart: there is nothing
+    /// newer to do until it is applied. A switch since that install checks
+    /// the new channel, and may replace it.
     pub fn check(self: &Arc<Self>, manual: bool) {
         let Ok(target) = &self.target else {
             return;
         };
-        if matches!(*self.status.borrow(), Status::Updated { .. }) {
+        let waiting = matches!(*self.status.borrow(), Status::Updated { .. });
+        if waiting && lock(&self.installed).channel == self.channel() {
             return;
         }
         if self
@@ -222,23 +306,36 @@ impl Updater {
         let spawned = std::thread::Builder::new()
             .name("luma-update".into())
             .spawn(move || {
-                let outcome = this.run(&target);
-                let status = match outcome {
-                    Ok(status) => status,
-                    Err(error) => {
-                        log::warn!("update check failed: {error}");
-                        if manual {
-                            Status::Errored(error)
-                        } else {
-                            Status::Idle
+                // A switch while this ran asks for the new channel, and the
+                // `running` flag turned its own check away: go again.
+                loop {
+                    let channel = this.channel();
+                    let before = this.status();
+                    let outcome = this.run(&target, channel);
+                    let status = match outcome {
+                        Ok(status) => status,
+                        Err(error) => {
+                            log::warn!("update check failed: {error}");
+                            if manual {
+                                Status::Errored(error)
+                            } else {
+                                Status::Idle
+                            }
                         }
+                    };
+                    let status = match (status, before) {
+                        (updated @ Status::Updated { .. }, _) => updated,
+                        // An update already on disk still waits for its
+                        // restart, whatever this check found.
+                        (_, waiting @ Status::Updated { .. }) => waiting,
+                        (Status::UpToDate, _) if !manual => Status::Idle,
+                        (status, _) => status,
+                    };
+                    this.status.send_replace(status);
+                    if this.channel() == channel {
+                        break;
                     }
-                };
-                let status = match status {
-                    Status::UpToDate if !manual => Status::Idle,
-                    status => status,
-                };
-                this.status.send_replace(status);
+                }
                 this.running.store(false, Ordering::Release);
             });
         if let Err(error) = spawned {
@@ -247,22 +344,24 @@ impl Updater {
         }
     }
 
-    fn run(&self, target: &Target) -> Result<Status, String> {
+    fn run(&self, target: &Target, channel: Channel) -> Result<Status, String> {
         self.status.send_replace(Status::Checking);
+        let manifest_url = target.manifest_url(channel)?;
         let client = reqwest::blocking::Client::builder()
             .user_agent(concat!("luma-update/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(30))
             .build()
             .map_err(|error| format!("could not start an HTTP client: {error}"))?;
         let manifest = client
-            .get(&target.manifest_url)
+            .get(&manifest_url)
             .timeout(Duration::from_secs(30))
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .and_then(reqwest::blocking::Response::text)
             .map_err(|error| format!("could not read the release manifest: {error}"))?;
         let manifest = Manifest::parse(&manifest)?;
-        if !manifest.is_newer_than(&self.current)? {
+        let installed = lock(&self.installed).clone();
+        if !manifest.offers(channel, &installed)? {
             return Ok(Status::UpToDate);
         }
         let platform = manifest::platform().ok_or("Luma publishes no release for this machine.")?;
@@ -270,7 +369,7 @@ impl Updater {
             .asset(platform)
             .ok_or_else(|| format!("Release {} has no build for {platform}.", manifest.version))?;
         let version = manifest.version.clone();
-        let changes = manifest.changes_since(&self.current);
+        let changes = manifest.changes_since(channel, &installed);
 
         self.status.send_replace(Status::Downloading {
             version: version.clone(),
@@ -300,6 +399,11 @@ impl Updater {
             version: version.clone(),
         });
         let restart = target.install.replace(archive.path())?;
+        *lock(&self.installed) = Current {
+            channel,
+            version: version.clone(),
+            commit: manifest.commit.clone(),
+        };
         log::info!("installed Luma {version}; it runs at the next launch");
         Ok(Status::Updated {
             version,
@@ -307,6 +411,14 @@ impl Updater {
             changes,
         })
     }
+}
+
+/// A poisoned lock still holds a whole `Channel` or `Current`: each is
+/// written in one assignment.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -375,6 +487,7 @@ mod tests {
         let (key, signature) = signature_of(&archive);
         let manifest = serde_json::json!({
             "version": "1.0.0",
+            "commit": "c1",
             "changes": [
                 { "version": "1.0.0", "commit": "c1", "lines": ["Clearer sync status"] },
                 { "version": "0.9.0", "commit": "c0", "lines": ["Already running"] }
@@ -388,9 +501,10 @@ mod tests {
         let manifest = manifest
             .to_string()
             .replace("PLACEHOLDER", &format!("{base}/luma.tar.gz"));
-        let manifest_url = format!(
-            "{}/latest.json",
-            serve(vec![("/latest.json", manifest.into_bytes())])
+        // Stable's manifest only: a check of the nightly finds none.
+        let manifest = format!(
+            "{}/{{channel}}/latest.json",
+            serve(vec![("/stable/latest.json", manifest.into_bytes())])
         );
         let updater = Updater::with(
             Current {
@@ -399,7 +513,7 @@ mod tests {
                 commit: None,
             },
             Ok(Target {
-                manifest_url,
+                manifest: Some(manifest),
                 public_key: key,
                 install: install.clone(),
             }),
@@ -469,5 +583,53 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(updater.status(), Status::Idle);
+    }
+
+    /// A switch is what a check after it follows; switching back to the
+    /// channel already followed is not a change.
+    #[test]
+    fn a_switch_changes_what_the_next_check_reads() {
+        let (_dir, updater, _install) = release(verify::tests::sign);
+        assert_eq!(updater.channel(), Channel::Stable);
+        assert!(!updater.set_channel(Channel::Stable));
+        assert!(updater.set_channel(Channel::Nightly));
+        updater.check(true);
+        // The server publishes no nightly.
+        assert!(matches!(settled(&updater), Status::Errored(_)));
+        assert!(updater.set_channel(Channel::Stable));
+        updater.check(true);
+        assert!(matches!(settled(&updater), Status::Updated { .. }));
+    }
+
+    /// Once a release is on disk, the next check on its channel has nothing
+    /// to do; a switch away from it checks again, and a failure there keeps
+    /// the installed update waiting for its restart.
+    #[test]
+    fn an_installed_update_waits_unless_the_channel_moves() {
+        let (_dir, updater, _install) = release(verify::tests::sign);
+        updater.check(true);
+        let installed = settled(&updater);
+        assert!(matches!(installed, Status::Updated { .. }));
+        updater.check(true);
+        assert!(!updater.running.load(Ordering::Acquire), "checked again");
+        assert_eq!(updater.status(), installed);
+        updater.set_channel(Channel::Nightly);
+        updater.check(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while updater.running.load(Ordering::Acquire) || updater.status().busy() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(updater.status(), installed);
+    }
+
+    #[test]
+    fn channels_read_back_by_their_labels() {
+        for channel in Channel::CHOICES {
+            assert_eq!(Channel::parse(channel.label()), Some(channel));
+        }
+        assert_eq!(Channel::parse("dev"), None);
+        assert_eq!(Channel::Dev.default_choice(), Channel::Stable);
+        assert_eq!(Channel::Nightly.default_choice(), Channel::Nightly);
     }
 }

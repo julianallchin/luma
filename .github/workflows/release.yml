@@ -4,9 +4,10 @@ name: Release
 # a maintainer publishes it, because publishing is what moves
 # `releases/latest/download/latest.json` — the URL every install polls.
 #
-# Every green CI run on `main` builds that commit into the rolling `nightly`
-# prerelease, which only nightly builds poll; so does a manual run, from the
-# commit it is run on.
+# Every green CI run on a push to `dev` builds that commit into the rolling
+# `nightly` prerelease, which installs following the nightly channel poll; so
+# does a manual run, from the commit it is run on. A push to `main` builds
+# nothing: stable releases come from the `v*` tags cut from it.
 #
 # See RELEASING.md for the secrets and the steps around a release.
 on:
@@ -15,10 +16,12 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
-# A newer nightly supersedes one still building; a stable tag never waits.
+# Every run but a tag's publishes the one `nightly` prerelease, so a newer one
+# supersedes one still building; a stable tag never waits and is never
+# cancelled.
 concurrency:
   group: release-${{ github.event_name == 'push' && github.ref || 'nightly' }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
@@ -29,12 +32,20 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.97.1"
-  # The commit to build: the one CI passed, not the default branch's tip.
+  # The commit to build: the one CI passed, not the default branch's tip (a
+  # `workflow_run` runs in the default branch's context).
   SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  # Whether this run may change production: a nightly from `dev` (CI's run,
+  # or a manual one there) or a tag. Any other branch's manual run checks.
+  APPLY: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/dev' }}
 
 jobs:
   prepare:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # A CI run's branch filter matches a pull request *from* a branch named
+    # `dev`, a fork's too; only CI's run on a push to `dev` builds a nightly.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.meta.outputs.channel }}
@@ -69,9 +80,10 @@ jobs:
   # The server side of the release, before any of it is built: the pending
   # Supabase migrations, then the PowerSync sync rules if they changed. A
   # failure here ships nothing, so no install meets a server older than the
-  # one it was built for. A run from main or a tag changes production; a
+  # one it was built for. A nightly from dev or a tag changes production; a
   # manual run from another branch only checks that production already
-  # matches. See deploy/README.md.
+  # matches. Stable installs share that production with nightly ones, which
+  # the contract rule makes safe. See deploy/README.md.
   migrate:
     needs: prepare
     runs-on: ubuntu-latest
@@ -83,7 +95,6 @@ jobs:
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       PS_ADMIN_TOKEN: ${{ secrets.POWERSYNC_TOKEN }}
-      APPLY: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,13 +122,18 @@ jobs:
           echo "Pending: $(wc -l < pending.txt)"
           cat pending.txt
       - name: Check the contract rule
-        run: xargs --no-run-if-empty python3 scripts/release/check_migrations.py < pending.txt
+        run: |
+          # The latest *published* stable: `latest` skips drafts and the
+          # nightly. A contract waits for the release it names to be out, as
+          # dev's version may already be past a stable still in draft.
+          published=$(curl -fsSL --retry 3 "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json" | jq -r .version)
+          xargs --no-run-if-empty python3 scripts/release/check_migrations.py --published "$published" < pending.txt
       - name: Apply migrations
         run: |
           if [[ ! -s pending.txt ]]; then
             echo "Production has every migration."
           elif [[ $APPLY != true ]]; then
-            echo "::error::Production lacks the migrations above. Only a run from main or a tag applies them."
+            echo "::error::Production lacks the migrations above. Only a nightly from dev or a tag applies them."
             exit 1
           else
             supabase db push --include-all --yes --db-url "$SUPABASE_DB_URL"
@@ -136,7 +152,7 @@ jobs:
           fi
           diff -u deployed-sync-config.yaml deploy/powersync/sync-config.yaml || true
           if [[ $APPLY != true ]]; then
-            echo "::error::The deployed sync rules differ. Only a run from main or a tag deploys them."
+            echo "::error::The deployed sync rules differ. Only a nightly from dev or a tag deploys them."
             exit 1
           fi
           powersync deploy sync-config --directory=deploy/powersync
@@ -159,14 +175,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      # Only main saves (a nightly runs on main): a tag or a dispatch from
-      # another branch restores main's entry, and an entry of its own would
-      # crowd main's out of the 10 GB cache. See ci.yml.
+      # Only CI's nightly saves. It runs in the default branch's context, so
+      # its entry is main's, which every run can restore: a tag or a manual
+      # run restores it, and an entry of its own would crowd it out of the
+      # 10 GB cache. See ci.yml.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gpui -> target
           key: release
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'workflow_run' }}
       - name: Install dmgbuild
         run: pipx install dmgbuild==1.6.7
       - name: Bundle, sign and notarize
@@ -207,12 +224,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libfontconfig1-dev libssl-dev libclang-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      # Saved on main only, like bundle-mac's.
+      # Saved by CI's nightly only, like bundle-mac's.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gpui -> target
           key: release
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'workflow_run' }}
       - name: Bundle
         run: scripts/release/bundle-linux
       - uses: actions/upload-artifact@v4
@@ -311,7 +328,7 @@ jobs:
         if: env.CHANNEL == 'nightly'
         run: |
           {
-            echo "Built from $SHA. Nightly builds update to each newer nightly."
+            echo "Built from $SHA on dev. Installs following the nightly channel update to each newer nightly."
             if [[ -s dist/changelog.md ]]; then
               echo
               cat dist/changelog.md

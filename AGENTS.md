@@ -95,7 +95,7 @@ Always use Nucleo icons for new or replaced icons. The local bundle lives at `~/
 
 ## Releases
 
-A `v*` tag matching `backend/Cargo.toml`'s version builds a draft release; every push to `main` that passes CI builds the `nightly` prerelease, so keep `main` shippable. Installed apps update themselves from those releases (`gpui/crates/update`). An installed build reads its runtimes, workers and fixtures from a bundled resource directory (`backend/src/resources.rs`); a new runtime file needs a line in `scripts/release/stage-resources`. See [RELEASING.md](RELEASING.md) for the steps and the secrets.
+A `v*` tag matching `backend/Cargo.toml`'s version builds a draft release; every push to `dev` that passes CI builds the `nightly` prerelease, so keep `dev` shippable. Installed apps update themselves from those releases (`gpui/crates/update`). An installed build reads its runtimes, workers and fixtures from a bundled resource directory (`backend/src/resources.rs`); a new runtime file needs a line in `scripts/release/stage-resources`. See [RELEASING.md](RELEASING.md) for the steps and the secrets.
 
 ## Commit & Pull Request Guidelines
 

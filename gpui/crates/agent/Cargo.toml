@@ -22,6 +22,7 @@ app = [
     "dep:base64",
     "dep:sha2",
     "dep:async-trait",
+    "dep:luma-update",
 ]
 # Real text metrics and a real GPU renderer behind the same test platform, so
 # frames can be read back as images. Off by default: it links the platform
@@ -40,6 +41,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 luma-app = { path = "../app", features = ["agent"], optional = true }
+# A fixture's update checks hand the app an updater pointed at its own server.
+luma-update = { path = "../update", optional = true }
 
 # `test-support` is what exposes `current_headless_renderer`, the whole point
 # of pixel mode.

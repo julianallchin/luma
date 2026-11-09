@@ -15,12 +15,19 @@ NOT NULL) must say which release stopped using it:
 
     -- contract: after 0.6.3
 
-It may only run in a release newer than that one, so no install still on
-0.6.3 or older can meet a server without the thing it uses. This script fails
+It may only run in a release newer than that one, and only once that one is
+published stable (`--published`), so every install has been offered a build
+that no longer uses the thing before the server loses it. This script fails
 when a listed file takes something away without the marker, or carries a
 marker its release is not past yet. The release is backend/Cargo.toml's
 version, the one the release workflow ships; a nightly counts as that
 version's release.
+
+Nightlies build from `dev` and migrate the production database stable
+installs use, and `dev`'s version can run ahead of the latest stable: bumped
+right after a tag, while the release is still a draft. The version alone
+would then let a nightly drop what the published stable still uses; the
+published bound is what stops it. See deploy/README.md.
 
 The release workflow runs it on every migration about to be pushed, and CI
 on every migration a pull request adds or changes. See deploy/README.md.
@@ -66,7 +73,7 @@ def crate_version() -> str:
     return re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.MULTILINE).group(1)
 
 
-def check(path: pathlib.Path, release: tuple) -> list[str]:
+def check(path: pathlib.Path, release: tuple, published=None) -> list[str]:
     name = FILE_NAME.match(path.name)
     if name is None:
         return ["not named <14-digit version>_<snake_case name>.sql, so `supabase db push` would skip it"]
@@ -99,6 +106,12 @@ def check(path: pathlib.Path, release: tuple) -> list[str]:
             f"contract: after {markers[0]}, but this release is {shown}: it may only run "
             f"in a release newer than {markers[0]}"
         ]
+    if published is not None and published < after:
+        shown = ".".join(map(str, published))
+        return [
+            f"contract: after {markers[0]}, but the latest published stable release is {shown}: "
+            f"it may only run once {markers[0]} is out"
+        ]
     return []
 
 
@@ -106,6 +119,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="*", type=pathlib.Path)
     parser.add_argument("--version", help="the release version (default: backend/Cargo.toml's)")
+    parser.add_argument(
+        "--published",
+        help="the latest published stable release, which a contract's release must not be past",
+    )
     args = parser.parse_args()
 
     shipped = args.version or crate_version()
@@ -115,9 +132,16 @@ def main() -> int:
         print(f"::error::release version {shipped} is not like 0.6.3", file=sys.stderr)
         return 1
 
+    published = None
+    if args.published:
+        published = parse_version(args.published.removeprefix("v"))
+        if published is None:
+            print(f"::error::published version {args.published} is not like 0.6.3", file=sys.stderr)
+            return 1
+
     failed = False
     for path in args.files:
-        for problem in check(path, release):
+        for problem in check(path, release, published):
             failed = True
             print(f"::error file={path}::{path.name}: {problem}", file=sys.stderr)
     if not failed:

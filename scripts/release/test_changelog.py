@@ -104,6 +104,29 @@ class ChangelogTest(unittest.TestCase):
         self.assertEqual(self.repo.lines(head, previous=missing), expected)
         self.assertEqual(self.repo.lines(head, previous=self.manifest_for("0" * 40)), expected)
 
+    def test_a_nightly_from_dev_starts_where_mains_last_nightly_did(self):
+        # The last nightly was built on main; dev carries main and more.
+        built = self.repo.commit("add a", "Clearer sync status")
+        self.repo.git("checkout", "-q", "-b", "dev")
+        self.repo.commit("add b", "Members can edit shared venues")
+        self.repo.git("checkout", "-q", "main")
+        self.repo.commit("fix on main", "Faster venue loading")
+        self.repo.git("tag", "v0.2.0")
+        self.repo.git("checkout", "-q", "dev")
+        self.repo.git("merge", "-q", "--no-edit", "main")
+        head = self.repo.commit("add c", "Right-click a score to rename it")
+        self.assertEqual(
+            sorted(self.repo.lines(head, previous=self.manifest_for(built))),
+            sorted(["Right-click a score to rename it", "Members can edit shared venues", "Faster venue loading"]),
+        )
+        # Without that manifest, the stable tag cut on main bounds it, since
+        # dev has merged main.
+        missing = pathlib.Path(self.directory.name) / "missing.json"
+        self.assertEqual(
+            sorted(self.repo.lines(head, previous=missing)),
+            sorted(["Right-click a score to rename it", "Members can edit shared venues"]),
+        )
+
     def test_an_empty_range_has_no_lines(self):
         head = self.repo.commit("add a", "Clearer sync status")
         self.assertEqual(self.repo.lines(head, previous=self.manifest_for(head)), [])

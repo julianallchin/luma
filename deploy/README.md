@@ -5,7 +5,7 @@ See [docs/design/sync.md](../docs/design/sync.md).
 ## Releases deploy the server
 
 The release workflow's `migrate` job (`.github/workflows/release.yml`) runs
-before anything is built, on every nightly from `main` and every `v*` tag:
+before anything is built, on every nightly from `dev` and every `v*` tag:
 
 1. `supabase db push --include-all` against project `smuuycypmsutwrkpctws`
    applies each file in `../supabase/migrations/` that
@@ -46,6 +46,15 @@ migrations a pull request adds or changes, and the release on the pending
 ones. A destructive file without the marker, or with a version the release
 is not past, stops both. The marker is also the go-ahead: nothing that
 deletes data runs until someone has written one.
+
+Nightlies build from `dev` and migrate the same production database, and a
+nightly counts as its crate version's release. While `dev`'s version equals
+the latest stable's, that is safe: a nightly may run only what that stable's
+own release could. But `dev` is bumped right after a tag, while the release
+is still a draft, and its version alone would then let a nightly drop what
+the published stable still uses. So the release also passes the latest
+*published* stable version (`--published`): a contract runs only once the
+release it names is out.
 
 The same check refuses a file not named `<14-digit version>_<name>.sql` (the
 CLI would skip it) or sharing another's version, and a `pg_temp` function

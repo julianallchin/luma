@@ -15,10 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 # The Rust jobs share the repository's 10 GB Actions cache with the release
-# workflow. A run restores entries saved on its own branch or on main, so an
-# entry saved on a pull request is one no other run can use. Past the limit,
-# GitHub evicts the least recently used entries, and main's CI and the nightly
-# then build from scratch. So only branch pushes save. A failed run saves too,
+# workflow. A run restores entries saved on its own branch, on a pull
+# request's base branch, or on main (the default branch), so an entry saved
+# on a pull request is one no other run can use. Past the limit, GitHub evicts
+# the least recently used entries, and CI on main and dev, pull requests into
+# them and the nightly then build from scratch. So only branch pushes save:
+# main's and dev's, dev's being what the nightly's commits and pull requests
+# into dev start from. A failed run saves too,
 # so the next run starts warm after a lockfile change; cargo's fingerprints
 # decide what is reused either way.
 

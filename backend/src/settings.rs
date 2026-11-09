@@ -68,6 +68,7 @@ pub mod key {
     /// The composer's last model pick, as a serialized selection.
     pub const AGENT_SELECTION: &str = "agent_selection";
     pub const AUTO_UPDATE: &str = "auto_update";
+    pub const UPDATE_CHANNEL: &str = "update_channel";
 }
 
 /// Write one setting.
@@ -97,6 +98,10 @@ pub const STAGE_QUALITIES: [&str; 3] = ["high", "medium", "low"];
 /// The values `render_scale` may hold, as a percentage of native resolution.
 /// Past a quarter of the pixels the upscale is mush.
 pub const RENDER_SCALE_RANGE: std::ops::RangeInclusive<u8> = 25..=100;
+
+/// The values `update_channel` may hold: the release channels an install
+/// can follow, by the names `luma_update::Channel` stores.
+pub const UPDATE_CHANNELS: [&str; 2] = ["stable", "nightly"];
 
 /// Wire shape of `get_settings`. Deliberately **not** `rename_all`: the keys
 /// are `snake_case` on the wire.
@@ -147,6 +152,12 @@ pub struct AppSettings {
     /// A fact about this install, so it is not synced.
     #[serde(default = "enabled")]
     pub auto_update: bool,
+    /// The release channel this install follows, one of [`UPDATE_CHANNELS`];
+    /// `None` until someone chooses, which follows the build's own. Only the
+    /// app knows what it was compiled as, so the default is the app's. Not
+    /// synced: each machine chooses.
+    #[serde(default)]
+    pub update_channel: Option<String>,
 }
 
 fn enabled() -> bool {
@@ -175,6 +186,14 @@ fn stage_quality(map: &std::collections::HashMap<String, String>) -> String {
     } else {
         high_quality()
     }
+}
+
+/// The chosen release channel, or `None` for a row that names none this
+/// app follows: an unknown value falls back to the build's own.
+fn update_channel(map: &std::collections::HashMap<String, String>) -> Option<String> {
+    map.get(key::UPDATE_CHANNEL)
+        .filter(|channel| UPDATE_CHANNELS.contains(&channel.as_str()))
+        .cloned()
 }
 
 /// What the settings screen may know about one service's API key.
@@ -243,6 +262,7 @@ impl Default for AppSettings {
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
             agent_api_keys: api_key_statuses(&Default::default()),
             auto_update: true,
+            update_channel: None,
         }
     }
 }
@@ -303,6 +323,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .into(),
         agent_api_keys: api_key_statuses(&map),
         auto_update: flag(key::AUTO_UPDATE, defaults.auto_update),
+        update_channel: update_channel(&map),
     })
 }
 
@@ -340,6 +361,18 @@ mod tests {
             ]),
             "medium"
         );
+    }
+
+    #[test]
+    fn update_channel_reads_only_a_channel_it_knows() {
+        let read = |value: &str| {
+            update_channel(&[(key::UPDATE_CHANNEL.to_string(), value.to_string())].into())
+        };
+        for channel in UPDATE_CHANNELS {
+            assert_eq!(read(channel).as_deref(), Some(channel));
+        }
+        assert_eq!(read("dev"), None);
+        assert_eq!(update_channel(&Default::default()), None);
     }
 
     /// Every offered model resolves through the same routing catalog.

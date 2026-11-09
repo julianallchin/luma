@@ -226,6 +226,107 @@ pub struct Fixture {
     /// once the launch's venue picker has gone: what no source build reaches
     /// by itself.
     update_ready: Option<UpdateReady>,
+    /// Update checks against releases this fixture serves, as if the app
+    /// were the build it names: what a source build never does by itself.
+    update_check: Option<UpdateCheck>,
+}
+
+/// `update_check`: the build the app pretends to be, `{ channel, version,
+/// commit }`, and `manifests`, each channel's `latest.json` by its label
+/// (`stable`, `nightly`). A channel left out publishes nothing, so a check
+/// of it fails. Served on a local port: the app never leaves the machine.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateCheck {
+    channel: String,
+    version: String,
+    #[serde(default)]
+    commit: Option<String>,
+    #[serde(default)]
+    manifests: HashMap<String, Value>,
+}
+
+impl UpdateCheck {
+    /// Serve the manifests, and make the bundle a found release would
+    /// replace, under `dir`. The manifest URL's `{channel}` is the updater's
+    /// to fill.
+    fn serve(
+        &self,
+        dir: &Path,
+    ) -> (
+        luma_update::manifest::Current,
+        String,
+        luma_update::install::Install,
+    ) {
+        let channel = match self.channel.as_str() {
+            "stable" => luma_update::Channel::Stable,
+            "nightly" => luma_update::Channel::Nightly,
+            other => panic!("update_check.channel {other:?} is not stable or nightly"),
+        };
+        let build = luma_update::manifest::Current {
+            channel,
+            version: self.version.clone(),
+            commit: self.commit.clone(),
+        };
+        let routes: HashMap<String, Vec<u8>> = self
+            .manifests
+            .iter()
+            .map(|(channel, manifest)| {
+                (
+                    format!("/{channel}/latest.json"),
+                    manifest.to_string().into_bytes(),
+                )
+            })
+            .collect();
+        let base = serve(routes);
+        // The installed layout `Install::locate` reads back from the binary.
+        let exe = if cfg!(target_os = "macos") {
+            dir.join("install/Luma.app/Contents/MacOS/luma")
+        } else {
+            dir.join("install/luma.app/bin/luma")
+        };
+        std::fs::create_dir_all(exe.parent().unwrap()).expect("the fixture's install");
+        let install = luma_update::install::Install::locate(&exe).expect("the fixture's install");
+        (build, format!("{base}/{{channel}}/latest.json"), install)
+    }
+}
+
+/// Answer each GET with the body routed to its path, 404 otherwise, until
+/// the process ends. Returns the server's base URL.
+fn serve(routes: HashMap<String, Vec<u8>>) -> String {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let Ok(clone) = stream.try_clone() else {
+                continue;
+            };
+            let mut reader = BufReader::new(clone);
+            let mut request = String::new();
+            if reader.read_line(&mut request).is_err() {
+                continue;
+            }
+            // Drain the headers; the body of a GET is empty.
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                line.clear();
+            }
+            let path = request.split_whitespace().nth(1).unwrap_or("");
+            let (status, body) = match routes.get(path) {
+                Some(body) => ("200 OK", body.as_slice()),
+                None => ("404 Not Found", &b""[..]),
+            };
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    base
 }
 
 /// `update_ready`: the version installed and what it brings, as the
@@ -281,6 +382,7 @@ impl Default for Fixture {
             model_cadence: None,
             tools: None,
             update_ready: None,
+            update_check: None,
         }
     }
 }
@@ -359,6 +461,10 @@ impl Fixture {
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
         let update_ready = self.update_ready.clone();
+        let update_check = self
+            .update_check
+            .as_ref()
+            .map(|check| check.serve(&config_dir));
         let outside_score_edit = (!self.outside_clips.is_empty()).then(|| {
             serde_json::from_value::<luma_patterns::ScoreEdit>(Self::timeline(&self.outside_clips))
                 .expect("a score edit")
@@ -411,6 +517,11 @@ impl Fixture {
                             .map(|change| (change.version, change.lines))
                             .collect();
                         luma.update_ready_fixture(ready.version, changes, cx);
+                    });
+                }
+                if let Some((build, manifest, install)) = update_check.clone() {
+                    luma.update(cx, |luma, cx| {
+                        luma.update_check_fixture(build, manifest, install, cx);
                     });
                 }
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
