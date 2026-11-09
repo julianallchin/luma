@@ -638,6 +638,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if app.overlay.tick_close() {
         window.request_animation_frame();
     }
+    // An update that installed while a dialog was up is announced once it
+    // has gone; a no-op otherwise.
+    app.announce_update(cx);
     if app.venue_menu.tick_close() {
         window.request_animation_frame();
     }
