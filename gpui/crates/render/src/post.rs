@@ -960,7 +960,7 @@ impl Post {
         // --- glare ------------------------------------------------------------
         let index = match frame.quality {
             Quality::High => 0,
-            Quality::Low => 1,
+            Quality::Medium | Quality::Low => 1,
         };
         let fft = &pipelines.fft[index];
         if glare_on && targets.glare.as_ref().is_none_or(|g| g.fft != index) {

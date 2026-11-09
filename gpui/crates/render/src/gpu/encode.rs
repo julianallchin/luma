@@ -50,9 +50,15 @@ const REFERENCE_GEOMETRY_SHADOW_SAMPLES: f32 = 2.0;
 /// The per-frame work a [`Quality`](crate::scene_desc::Quality) level buys.
 /// `High` is the reference picture: its shadow walk is the one the renderer
 /// had before the levels existed. Its plain-beam piece cap and shadow redraw
-/// budget are new, and measured to leave the picture unchanged.
+/// budget are new, and measured to leave the picture unchanged. `Low` is
+/// `Medium` without the march.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct QualityBudget {
+    /// Whether the haze is marched. Without it no volumetric pass runs —
+    /// not the fog grid, the medium cache, the lit-interval cache, the
+    /// compaction, the haze kernels, the sun shafts or the haze glow — and
+    /// `haze_analytic.wgsl` writes the haze target in closed form.
+    marched: bool,
     /// Gauss-Legendre piece cap for a plain beam (`quadrature_pieces`).
     plain_pieces: f32,
     /// Scale on the haze shadow walk's pixel-footprint allowance.
@@ -72,6 +78,7 @@ impl QualityBudget {
         use crate::scene_desc::Quality;
         match (quality, camera_moving) {
             (Quality::High, _) => Self {
+                marched: true,
                 plain_pieces: 8.0,
                 shadow_footprint: 1.0,
                 shadow_steps: 1.0,
@@ -82,7 +89,8 @@ impl QualityBudget {
             // A laptop budget: twice the shadow walk's footprint allowance
             // and half its steps, and twice again while the camera moves,
             // when nothing settles anyway.
-            (Quality::Low, moving) => Self {
+            (Quality::Medium | Quality::Low, moving) => Self {
+                marched: quality.marches_haze(),
                 plain_pieces: 4.0,
                 shadow_footprint: if moving { 4.0 } else { 2.0 },
                 shadow_steps: if moving { 0.25 } else { 0.5 },
@@ -467,8 +475,8 @@ impl Renderer {
         // reference's per-ray fragment pass.
         let per_ray = self.reference;
         // The far-field grid chain runs under the compute kernels whenever
-        // there is haze to light.
-        let grid_fog = !per_ray && haze_density >= 0.001;
+        // there is haze to march.
+        let grid_fog = budget.marched && !per_ray && haze_density >= 0.001;
         // The far-field grid's radial extent: the haze uniform's `shadow.w`,
         // and the surface pass's `surface_fog.x` when it reads that grid.
         let fog_far = fixture_cones
@@ -952,7 +960,7 @@ impl Renderer {
         // Outdoor haze with a sun: the sun-shaft target, which the scene pass
         // reads per fragment through binding 16. A texel of full sun stands
         // in when the pass does not run.
-        let shafts = (frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
+        let shafts = (budget.marched && frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
             self.sun_shafts
                 .target(&self.gpu.device, t_width, t_height, frame.quality)
         });
@@ -1646,7 +1654,10 @@ impl Renderer {
                 });
             self.medium_cache
                 .ensure(&self.gpu.device, fixture_cones.len());
-            let medium_cache_group = if haze_density > 0.0 && !fixture_cones.is_empty() {
+            let medium_cache_group = if budget.marched
+                && haze_density > 0.0
+                && !fixture_cones.is_empty()
+            {
                 let cache_uniform = crate::medium::CacheUniform {
                     medium,
                     count: [fixture_cones.len() as u32, 0, 0, 0],
@@ -1720,7 +1731,11 @@ impl Renderer {
                 encode_medium_cache(&mut encoder, &mut pass_queries, &self.gpu);
             }
 
-            let haze_passes = if per_ray { subframes } else { 1 };
+            let haze_passes = if per_ray && budget.marched {
+                subframes
+            } else {
+                1
+            };
             let (cache_uniform, cache_header, cache_claims, cache_table) = self
                 .plan_interval_cache(
                     &mut encoder,
@@ -1930,6 +1945,35 @@ impl Renderer {
                         })
                 };
                 let bind_group = haze_bind_group(&haze_buf);
+                if !budget.marched {
+                    let output = self
+                        .gpu
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("haze-analytic"),
+                            layout: &self.gpu.haze_analytic_layout,
+                            entries: &[binding(0, wgpu::BindingResource::TextureView(&haze_view))],
+                        });
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("haze-analytic"),
+                        timestamp_writes: pass_queries.compute(
+                            "haze-analytic",
+                            profile_resources.as_ref().map(|(queries, ..)| {
+                                wgpu::ComputePassTimestampWrites {
+                                    query_set: queries,
+                                    beginning_of_pass_write_index: None,
+                                    end_of_pass_write_index: Some(2),
+                                }
+                            }),
+                        ),
+                    });
+                    pass.set_pipeline(&self.gpu.haze_analytic_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &light_index_bg, &[]);
+                    pass.set_bind_group(2, &output, &[]);
+                    pass.dispatch_workgroups(haze_size.0.div_ceil(8), haze_size.1.div_ceil(8), 1);
+                    continue;
+                }
                 // The fill and classify passes never sample the medium cache, but
                 // a bind group that carries it would make them wait for the
                 // medium-cache pass; this one binds the static density field in

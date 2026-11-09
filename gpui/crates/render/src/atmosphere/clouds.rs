@@ -311,7 +311,7 @@ impl Budget {
                 panorama: (512, 256),
                 shadow: 1024,
             },
-            Quality::Low => Self {
+            Quality::Medium | Quality::Low => Self {
                 divisor: 4,
                 steps: 32,
                 light_steps: 4,

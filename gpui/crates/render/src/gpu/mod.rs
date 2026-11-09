@@ -383,7 +383,7 @@ pub struct Gpu {
     overlay_layout: wgpu::BindGroupLayout,
     /// Scene-pass pipelines at [`MSAA_SAMPLES`].
     scene_pipelines: ScenePipelines,
-    /// What the single-sample set is built from, on first low-quality frame.
+    /// What the single-sample set is built from, on the first frame below high quality.
     scene_source: ScenePipelineSource,
     scene_pipelines_single: std::sync::OnceLock<ScenePipelines>,
     depth_pipeline: wgpu::RenderPipeline,
@@ -397,6 +397,9 @@ pub struct Gpu {
     /// output (`interval_cache.rs`).
     haze_compute_pipeline: wgpu::ComputePipeline,
     haze_compute_layout: wgpu::BindGroupLayout,
+    /// Low quality's closed-form beams, in place of every march.
+    haze_analytic_pipeline: wgpu::ComputePipeline,
+    haze_analytic_layout: wgpu::BindGroupLayout,
     /// log2 of the payload hash table's entry count.
     interval_cache_table_bits: u32,
     /// Residual compaction of the cached kernel (`haze_compact.rs`).

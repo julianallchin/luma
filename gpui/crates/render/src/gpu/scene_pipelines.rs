@@ -4,7 +4,7 @@
 use super::descriptors::depth_state;
 use super::{Gpu, MSAA_SAMPLES, SCENE_FORMAT};
 
-/// The scene pass's multisampled pipelines. Low quality renders single
+/// The scene pass's multisampled pipelines. Below high quality it renders single
 /// sampled, and the sample count is baked into a pipeline.
 pub(super) struct ScenePipelines {
     pub(super) scene: wgpu::RenderPipeline,

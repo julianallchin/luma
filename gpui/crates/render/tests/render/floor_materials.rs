@@ -365,14 +365,16 @@ fn anti_tiling_hides_the_tile() {
 }
 
 #[test]
-fn low_quality_draws_no_parallax() {
-    let low = frame(
-        Floor::Dirt,
-        Vec3::new(0.0, -4.0, 1.7),
-        Vec3::new(0.0, 2.0, 0.0),
-        Quality::Low,
-    );
-    assert_eq!(low.floor.unwrap().parallax_m, 0.0);
+fn reduced_quality_draws_no_parallax() {
+    for quality in [Quality::Medium, Quality::Low] {
+        let reduced = frame(
+            Floor::Dirt,
+            Vec3::new(0.0, -4.0, 1.7),
+            Vec3::new(0.0, 2.0, 0.0),
+            quality,
+        );
+        assert_eq!(reduced.floor.unwrap().parallax_m, 0.0, "{quality:?}");
+    }
     // On High the near dirt is marched as a height field, and that moves
     // the texture.
     let high = || {
@@ -549,7 +551,7 @@ fn every_floor_repeats_at_its_real_size() {
         let tile = luma_render::floor::Surface::of(*floor, Quality::High).tile_m;
         // High enough that a tile is 96 pixels across.
         let height = tile * focal / 96.0;
-        for quality in [Quality::High, Quality::Low] {
+        for quality in [Quality::High, Quality::Medium] {
             let mut above = frame(*floor, Vec3::new(0.0, -0.01, height), Vec3::ZERO, quality);
             above.floor.as_mut().unwrap().anti_tiling = false;
             let pixels = renderer.render(&above, WIDTH, HEIGHT, 1).unwrap();

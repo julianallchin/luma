@@ -340,12 +340,13 @@ fn view_value(
     })
 }
 
-/// "Quality: High / Low", the renderer's cost level. The scrub row's shape
+/// "Quality: High / Medium / Low", the renderer's cost level. The scrub row's shape
 /// with a segmented choice where the scrub would be.
 fn quality_row(quality: scene_desc::Quality, app: &Entity<Luma>) -> Div {
     let mut track = luma_ui::float::segmented();
     for (name, level) in [
         ("High", scene_desc::Quality::High),
+        ("Medium", scene_desc::Quality::Medium),
         ("Low", scene_desc::Quality::Low),
     ] {
         let app = app.clone();

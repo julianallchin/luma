@@ -59,9 +59,10 @@ pub(super) struct RenderControls {
     /// (`stage_look`), like the grid: it is how this machine looks at any
     /// venue.
     pub(super) look: scene_desc::Look,
-    /// The renderer's cost level — the `stage_low_quality` device setting.
-    /// Low lowers the haze resolution and gobo samples here, the pixel budget
-    /// in [`RenderScale::size`], and the rest inside the renderer.
+    /// The renderer's cost level — the `stage_quality` device setting.
+    /// Below high it lowers the haze resolution and gobo samples here, the
+    /// pixel budget in [`RenderScale::size`], and the rest inside the
+    /// renderer.
     pub(super) quality: scene_desc::Quality,
     /// The local reflection probes and their debug balls: a session view
     /// choice, never saved.
@@ -123,7 +124,7 @@ impl RenderControls {
         // local cost knobs it deliberately does not hold.
         render.haze.steps = self.haze_steps;
         render.haze.resolution = self.haze_resolution;
-        if self.quality == scene_desc::Quality::Low {
+        if self.quality != scene_desc::Quality::High {
             render.haze.steps = render.haze.steps.min(self.quality.haze_steps());
             render.haze.resolution = render.haze.resolution.min(self.quality.haze_resolution());
         }
@@ -192,11 +193,7 @@ impl RenderControls {
         self.gizmos_enabled = settings.stage_gizmos;
         self.render_scale_percent = settings.render_scale;
         self.look = scene_desc::Look::stored(&settings.stage_look);
-        self.quality = if settings.stage_low_quality {
-            scene_desc::Quality::Low
-        } else {
-            scene_desc::Quality::High
-        };
+        self.quality = scene_desc::Quality::parse(&settings.stage_quality).unwrap_or_default();
     }
 
     /// Re-derive the lighting from the environment the room is now drawn

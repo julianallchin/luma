@@ -293,7 +293,8 @@ pub(crate) struct Glow {
     sample: wgpu::Buffer,
     /// What blocks the glow.
     occupancy: crate::glow_occupancy::Occupancy,
-    on: bool,
+    /// Whether this frame fills and samples the grid.
+    pub(crate) on: bool,
 }
 
 impl Glow {
@@ -365,7 +366,7 @@ impl Glow {
 
     /// Size the grid for `quality`, find what blocks it in `frame`, and tell
     /// the samplers where it is this frame, before anything binds it; off
-    /// when there is no haze.
+    /// when there is no haze or the quality marches none.
     pub(crate) fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -376,7 +377,7 @@ impl Glow {
         let quality = frame.quality;
         let size = match quality {
             Quality::High => HIGH,
-            Quality::Low => LOW,
+            Quality::Medium | Quality::Low => LOW,
         };
         if size != self.size {
             *self = Self::with_size(device, queue, size);
@@ -384,7 +385,7 @@ impl Glow {
         let sigma = medium.min[3];
         let min = Vec3::from_slice(&medium.min[..3]);
         let max = Vec3::from_slice(&medium.max[..3]);
-        self.on = sigma > 0.0 && (max - min).min_element() > 0.0;
+        self.on = quality.marches_haze() && sigma > 0.0 && (max - min).min_element() > 0.0;
         let sample = if self.on {
             self.occupancy.update(
                 device,

@@ -58,6 +58,9 @@ pub mod key {
     pub const HDR_OUTPUT: &str = "hdr_output";
     pub const STAGE_FRAME_RATE: &str = "stage_frame_rate";
     pub const STAGE_LOOK: &str = "stage_look";
+    pub const STAGE_QUALITY: &str = "stage_quality";
+    /// The two-level setting [`STAGE_QUALITY`] replaced. Read only, so a
+    /// machine that chose low keeps the budget it chose, now called medium.
     pub const STAGE_LOW_QUALITY: &str = "stage_low_quality";
     pub const AGENT_ENGINE: &str = "agent_engine";
     pub const AGENT_PROVIDER: &str = "agent_provider";
@@ -86,6 +89,10 @@ pub async fn write(pool: &SqlitePool, name: &str, value: &str) -> Result<(), Str
 
 /// The values `max_dimmer` may hold, as a percentage of full output.
 pub const MAX_DIMMER_RANGE: std::ops::RangeInclusive<u8> = 0..=100;
+
+/// The values `stage_quality` may hold, best first: the renderer's cost
+/// levels, by the names its `Quality` serializes to.
+pub const STAGE_QUALITIES: [&str; 3] = ["high", "medium", "low"];
 
 /// The values `render_scale` may hold, as a percentage of native resolution.
 /// Past a quarter of the pixels the upscale is mush.
@@ -121,10 +128,11 @@ pub struct AppSettings {
     /// opaque here: the backend has no renderer types, and a value the
     /// renderer cannot parse falls back to its default there.
     pub stage_look: String,
-    /// Whether the visualizer renders at low quality, for a laptop GPU. A
-    /// cost knob of this machine, like `render_scale`.
-    #[serde(default)]
-    pub stage_low_quality: bool,
+    /// The visualizer's cost level, one of [`STAGE_QUALITIES`]: `medium`
+    /// for a laptop GPU, `low` for one that cannot march haze. A cost knob
+    /// of this machine, like `render_scale`.
+    #[serde(default = "high_quality")]
+    pub stage_quality: String,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -143,6 +151,30 @@ pub struct AppSettings {
 
 fn enabled() -> bool {
     true
+}
+
+fn high_quality() -> String {
+    STAGE_QUALITIES[0].to_string()
+}
+
+/// The stored cost level. Before there were three, `stage_low_quality` held
+/// a flag whose low is today's medium; it answers only while no level has
+/// been written.
+fn stage_quality(map: &std::collections::HashMap<String, String>) -> String {
+    if let Some(level) = map
+        .get(key::STAGE_QUALITY)
+        .filter(|level| STAGE_QUALITIES.contains(&level.as_str()))
+    {
+        return level.clone();
+    }
+    let legacy_low = map
+        .get(key::STAGE_LOW_QUALITY)
+        .is_some_and(|value| value == "true");
+    if legacy_low {
+        STAGE_QUALITIES[1].to_string()
+    } else {
+        high_quality()
+    }
 }
 
 /// What the settings screen may know about one service's API key.
@@ -205,7 +237,7 @@ impl Default for AppSettings {
             hdr_output: true,
             stage_frame_rate: true,
             stage_look: String::new(),
-            stage_low_quality: false,
+            stage_quality: high_quality(),
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -258,7 +290,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .get(key::STAGE_LOOK)
             .cloned()
             .unwrap_or(defaults.stage_look),
-        stage_low_quality: flag(key::STAGE_LOW_QUALITY, defaults.stage_low_quality),
+        stage_quality: stage_quality(&map),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
@@ -277,6 +309,38 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stored level reads back as itself; with none, the two-level flag's
+    /// low reads as medium, and anything else as high.
+    #[test]
+    fn stage_quality_reads_the_legacy_low_flag_as_medium() {
+        let read = |rows: &[(&str, &str)]| {
+            let map = rows
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            stage_quality(&map)
+        };
+        assert_eq!(read(&[]), "high");
+        assert_eq!(read(&[(key::STAGE_LOW_QUALITY, "true")]), "medium");
+        assert_eq!(read(&[(key::STAGE_LOW_QUALITY, "false")]), "high");
+        for level in STAGE_QUALITIES {
+            assert_eq!(
+                read(&[
+                    (key::STAGE_QUALITY, level),
+                    (key::STAGE_LOW_QUALITY, "true")
+                ]),
+                level
+            );
+        }
+        assert_eq!(
+            read(&[
+                (key::STAGE_QUALITY, "ultra"),
+                (key::STAGE_LOW_QUALITY, "true")
+            ]),
+            "medium"
+        );
+    }
 
     /// Every offered model resolves through the same routing catalog.
     #[test]

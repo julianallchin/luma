@@ -449,13 +449,13 @@ fn a_clear_sky_is_left_as_it_was_after_a_storm() {
 }
 
 #[test]
-fn low_quality_draws_the_same_weather_for_less() {
+fn medium_quality_draws_the_same_weather_for_less() {
     // Timings come from the live path, where the trace is spread over
     // frames, with the camera turning so every frame reprojects. A report,
     // not a bound: GPU time on a shared machine is not a contract.
     let mut renderer = Renderer::new_profiled().unwrap();
     let mut coverage = Vec::new();
-    for quality in [Quality::High, Quality::Low] {
+    for quality in [Quality::High, Quality::Medium] {
         let frame = self::frame(
             outdoor(50.0, CloudCover::Scattered),
             Vec3::new(0.0, 0.0, 2.0),

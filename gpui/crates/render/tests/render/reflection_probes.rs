@@ -868,9 +868,9 @@ fn reflection_probe_timings() {
         v[v.len() / 2]
     };
     let qualities: Vec<Quality> = match std::env::var("LUMA_PROBE_TIMING").as_deref() {
-        Ok("low") => vec![Quality::Low],
+        Ok("medium") => vec![Quality::Medium],
         Ok("high") => vec![Quality::High],
-        _ => vec![Quality::High, Quality::Low],
+        _ => vec![Quality::High, Quality::Medium],
     };
     for quality in qualities {
         let at = |step: usize, probes: bool| {

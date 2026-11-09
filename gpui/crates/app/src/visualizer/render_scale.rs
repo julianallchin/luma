@@ -1,5 +1,5 @@
 //! How many pixels the stage renders: the fixed pixel budget, the
-//! environment overrides, the operator's percent and low quality's dynamic share.
+//! environment overrides, the operator's percent and a reduced level's dynamic share.
 use super::*;
 
 /// The most pixels the stage renders, whatever the size of its element.
@@ -12,10 +12,10 @@ use super::*;
 /// stays native.
 const RENDER_BUDGET_PIXELS: f64 = 2227.0 * 1391.0;
 
-/// GPU frame time low quality aims under: a 60 Hz frame with room for the UI.
+/// GPU frame time a reduced quality level aims under: a 60 Hz frame with room for the UI.
 const DYNAMIC_TARGET_GPU_MS: f32 = 14.0;
 
-/// Low quality's dynamic resolution: the share of its pixel budget the stage
+/// A reduced quality level's dynamic resolution: the share of its pixel budget the stage
 /// renders, driven by measured GPU frame time.
 ///
 /// It steps down fast (three slow samples in a row take a fifth of the pixels
@@ -129,7 +129,7 @@ impl RenderScale {
     ///   travel would do nothing at all, which reads as a broken control.
     ///
     /// `limit` is a quality level's own pixel budget, when it has one, and it
-    /// caps every variant: low quality on a laptop must not render a native
+    /// caps every variant: a reduced level on a laptop must not render a native
     /// 4K window because `LUMA_RENDER_BUDGET=off` was set for a desktop.
     pub(super) fn size(
         self,
@@ -154,7 +154,7 @@ impl RenderScale {
 mod render_scale_tests {
     use super::{DynamicBudget, RenderScale};
 
-    /// Low quality's pixel budget caps every variant, native included, and
+    /// A reduced level's pixel budget caps every variant, native included, and
     /// composes with the operator's percent.
     #[test]
     fn a_quality_limit_caps_every_variant() {

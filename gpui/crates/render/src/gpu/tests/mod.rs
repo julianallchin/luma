@@ -2,6 +2,7 @@
 //! the frames they draw.
 
 mod haze;
+mod quality;
 mod shadows;
 
 use std::sync::Arc;

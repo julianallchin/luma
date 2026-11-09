@@ -62,7 +62,7 @@ const RADIANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 fn grid_budget(quality: Quality) -> (u32, u32) {
     match quality {
         Quality::High => (12, 2),
-        Quality::Low => (8, 1),
+        Quality::Medium | Quality::Low => (8, 1),
     }
 }
 
@@ -70,7 +70,7 @@ fn grid_budget(quality: Quality) -> (u32, u32) {
 fn base_mip(quality: Quality) -> u32 {
     match quality {
         Quality::High => 0,
-        Quality::Low => 1,
+        Quality::Medium | Quality::Low => 1,
     }
 }
 

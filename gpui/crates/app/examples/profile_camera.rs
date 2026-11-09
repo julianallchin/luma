@@ -12,7 +12,7 @@
 //! # live one out of reach. Only luma.db and the score's track files are read.
 //! LUMA_CONFIG_DIR=/path/to/library/copy LUMA_PROFILE_DETAIL=1 \
 //! cargo run --release --manifest-path gpui/Cargo.toml -p luma-app \
-//!     --example profile_camera -- EXPORT.json [--quality=high|low] \
+//!     --example profile_camera -- EXPORT.json [--quality=high|medium|low] \
 //!     [--warmup=120] [--frames=300] [--png=OUT.png] [--compare=BASE.png]
 //! ```
 //!
@@ -56,13 +56,10 @@ fn main() -> Result<(), String> {
     let export_path = args
         .iter()
         .find(|a| !a.starts_with("--"))
-        .ok_or("usage: profile_camera EXPORT.json [--quality=high|low] [--warmup=N] [--frames=N] [--png=OUT] [--compare=BASE]")?;
+        .ok_or("usage: profile_camera EXPORT.json [--quality=high|medium|low] [--warmup=N] [--frames=N] [--png=OUT] [--compare=BASE]")?;
     let export = CameraExport::read(Path::new(export_path)).map_err(|e| e.to_string())?;
-    let quality = match flag("quality").unwrap_or(&export.quality.to_lowercase()) {
-        "high" => Quality::High,
-        "low" => Quality::Low,
-        other => return Err(format!("unknown quality {other:?}")),
-    };
+    let name = flag("quality").map_or_else(|| export.quality.to_lowercase(), str::to_owned);
+    let quality = Quality::parse(&name).ok_or_else(|| format!("unknown quality {name:?}"))?;
     let (warmup, measured) = (count("warmup", 120)?, count("frames", 300)?.max(1));
 
     let config_dir = PathBuf::from(
@@ -117,7 +114,7 @@ fn main() -> Result<(), String> {
     render.fov = export.camera.fov_y_deg;
     render.haze.steps = 8;
     render.haze.resolution = luma_render::LIVE_HAZE_RESOLUTION;
-    if quality == Quality::Low {
+    if quality != Quality::High {
         render.haze.steps = render.haze.steps.min(quality.haze_steps());
         render.haze.resolution = render.haze.resolution.min(quality.haze_resolution());
     }

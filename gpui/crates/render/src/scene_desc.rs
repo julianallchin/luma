@@ -307,11 +307,14 @@ impl Default for ProbeView {
 
 /// The renderer's cost level.
 ///
-/// `High` is the reference picture. `Low` is for a laptop GPU: it lowers
+/// `High` is the reference picture. `Medium` is for a laptop GPU: it lowers
 /// multisampling, the far-field fog grid's resolution and the haze shadow
 /// walk's detail, and it coarsens haze shadows further while the camera
-/// moves. Callers lower the haze and output resolutions themselves, because
-/// those are already their own settings.
+/// moves. `Low` keeps Medium's budgets and marches no haze at all: each
+/// beam is a closed-form line integral through uniform haze, with no haze
+/// shadows, gobos or density variation, and there are no sun shafts and no
+/// haze glow. Callers lower the haze and output resolutions themselves,
+/// because those are already their own settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Quality {
@@ -319,14 +322,43 @@ pub enum Quality {
     #[default]
     High,
     /// A laptop GPU's budget.
+    Medium,
+    /// No volumetric marching: analytic beams.
     Low,
 }
 
 impl Quality {
+    /// Every level, best first.
+    pub const ALL: [Self; 3] = [Self::High, Self::Medium, Self::Low];
+
     /// Whether this is [`Self::High`]; serde's skip test.
     #[must_use]
     pub fn is_high(&self) -> bool {
         *self == Self::High
+    }
+
+    /// Whether beams are marched through the haze volume. Below that, at
+    /// [`Self::Low`], they are drawn in closed form and every other
+    /// volumetric pass is off.
+    #[must_use]
+    pub fn marches_haze(self) -> bool {
+        self != Self::Low
+    }
+
+    /// The level's stored and serialized name.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+
+    /// The level named `name`, as [`Self::as_str`] spells it.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.as_str() == name)
     }
 
     /// The haze target's fraction of the output resolution.
@@ -334,7 +366,8 @@ impl Quality {
     pub fn haze_resolution(self) -> f32 {
         match self {
             Self::High => crate::LIVE_HAZE_RESOLUTION,
-            Self::Low => 0.5,
+            Self::Medium => 0.5,
+            Self::Low => 0.25,
         }
     }
 
@@ -343,7 +376,7 @@ impl Quality {
     pub fn haze_steps(self) -> u32 {
         match self {
             Self::High => 8,
-            Self::Low => 4,
+            Self::Medium | Self::Low => 4,
         }
     }
 
@@ -353,7 +386,7 @@ impl Quality {
     pub fn pixel_budget(self) -> Option<f64> {
         match self {
             Self::High => None,
-            Self::Low => Some(1.0e6),
+            Self::Medium | Self::Low => Some(1.0e6),
         }
     }
 }

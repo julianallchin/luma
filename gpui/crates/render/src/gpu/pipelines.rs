@@ -942,6 +942,40 @@ impl Gpu {
                 cache: None,
             });
 
+        // Low quality's closed-form beams (`haze_analytic.wgsl`): the
+        // transport's ray and span, none of its march.
+        let haze_analytic_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("haze-analytic"),
+                entries: &[haze_output_entry(0)],
+            });
+        let haze_analytic_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("haze-analytic"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("haze-analytic"),
+                        bind_group_layouts: &[
+                            Some(&haze_layout),
+                            Some(light_index_pipelines.layout()),
+                            Some(&haze_analytic_layout),
+                        ],
+                        immediate_size: 0,
+                    }),
+                ),
+                module: &shader(
+                    &device,
+                    "haze-analytic",
+                    &format!(
+                        "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
+                        include_str!("../shaders/haze_analytic.wgsl")
+                    ),
+                ),
+                entry_point: Some("analytic_haze"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("composite"),
@@ -1212,6 +1246,8 @@ impl Gpu {
             haze_pipeline,
             haze_compute_pipeline,
             haze_compute_layout,
+            haze_analytic_pipeline,
+            haze_analytic_layout,
             interval_cache_table_bits,
             haze_compact_pipelines,
             fog_grid_pipeline,

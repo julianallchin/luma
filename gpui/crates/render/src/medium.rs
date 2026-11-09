@@ -23,6 +23,13 @@ impl Uniform {
             wind_speed,
             wind_direction,
         } = frame.haze_appearance.sanitized();
+        // Low quality lights uniform haze: its beams are closed-form, and
+        // a surface or the sky behind takes the same haze, without clouds.
+        let cloudiness = if frame.quality.marches_haze() {
+            cloudiness
+        } else {
+            0.0
+        };
         let angle = wind_direction.to_radians();
         // Outdoors these bounds schedule fixture lighting only. The density
         // field is global; a rig's dimensions must never cut a hole in it.
