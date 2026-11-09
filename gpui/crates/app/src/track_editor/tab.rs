@@ -90,12 +90,11 @@ impl Luma {
             beat_reason: None,
             beat_reason_menu: Default::default(),
             beat_validation_pending: false,
-            beat_validation_error: None,
             clips: Vec::new().into(),
             graph_score: None,
             previews: Rc::new(RefCell::new(HashMap::new())),
             preview_inflight: HashSet::new(),
-            preview_errors: HashMap::new(),
+            preview_failed: HashSet::new(),
             preview_queued: HashSet::new(),
             history: History::default(),
             clipboard: None,
@@ -129,7 +128,7 @@ impl Luma {
             dirty: false,
             saving: false,
             writes: 0,
-            error: None,
+            load_failed: false,
             loaded: false,
             composited: None,
             compositing: false,
@@ -158,7 +157,10 @@ impl Luma {
                             editor.transport.duration = waveform.duration_seconds as f32;
                             editor.waveform = Some(Rc::new(waveform));
                         }
-                        Err(error) => editor.error = Some(error.to_string()),
+                        Err(error) => {
+                            log::warn!("Could not open the song's waveform: {error}");
+                            editor.load_failed = true;
+                        }
                     }
                     editor.beats = beats.ok().flatten().map(Rc::new);
                     match validation {
@@ -170,7 +172,9 @@ impl Luma {
                                 editor.beat_reason = validation.reason;
                             }
                         }
-                        Err(error) => editor.beat_validation_error = Some(error.to_string()),
+                        // The verdict is a nicety on a timeline that works
+                        // without it.
+                        Err(error) => log::warn!("Could not read the beat check: {error}"),
                     }
                 });
                 this.install_score(target, contents, cx);
@@ -190,16 +194,20 @@ impl Luma {
     ) {
         let mut previews = Vec::new();
         let mut split = false;
+        let mut failed = None;
         self.edit_track_tab(&target, cx, |editor| match contents {
             Ok(resolved) => match editor.install_contents(resolved) {
                 Ok(()) => {
                     previews = editor.clips.iter().map(|clip| clip.id.clone()).collect();
                     split = editor.dirty;
                 }
-                Err(error) => editor.error = Some(error),
+                Err(error) => failed = Some(error),
             },
-            Err(error) => editor.error = Some(error.to_string()),
+            Err(error) => failed = Some(error.to_string()),
         });
+        if let Some(error) = failed {
+            self.report_failure("Could not open this score", error, cx);
+        }
         self.refresh_clip_previews_for(target.clone(), previews, cx);
         self.refresh_working_scene_for(&target, cx);
         if split {

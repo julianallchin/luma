@@ -112,12 +112,15 @@ enum FocusTarget {
 /// The Share route's subject: one venue this account owns.
 struct Sharing {
     venue: Venue,
-    /// `None` while the first read is in flight.
-    members: Option<Result<Vec<VenueMember>, String>>,
+    /// `None` while the first read is in flight; `Err` when it failed, the
+    /// cause logged.
+    members: Option<Result<Vec<VenueMember>, ()>>,
     member_focuses: HashMap<String, FocusHandle>,
     /// A code write in flight; the code's buttons are inert until it lands.
     busy: bool,
-    error: Option<String>,
+    /// What the last code write or removal did not do, in plain words, under
+    /// the code. The cause is in the log.
+    refused: Option<&'static str>,
     /// The code on screen was just copied. Cleared when the code changes.
     copied: bool,
     /// The member whose Remove was pressed once and now asks to be confirmed.
@@ -131,7 +134,7 @@ impl Sharing {
             members: None,
             member_focuses: HashMap::new(),
             busy: false,
-            error: None,
+            refused: None,
             copied: false,
             confirm_remove: None,
         }
@@ -145,11 +148,13 @@ pub(crate) struct VenuePicker {
     venues: Rc<[Venue]>,
     shown: Rc<[Venue]>,
     loaded: bool,
-    error: Option<String>,
+    /// The catalogue could not be read. The cause is in the log.
+    load_failed: bool,
     query: String,
     morph: MorphDialog<Route>,
     create_name: String,
-    create_error: Option<String>,
+    /// The last create did not land, said in the dialog that asked for it.
+    create_failed: bool,
     creating: bool,
     join_code: String,
     join_error: Option<String>,
@@ -235,11 +240,11 @@ impl VenuePicker {
             venues: Rc::from(Vec::new()),
             shown: Rc::from(Vec::new()),
             loaded: false,
-            error: None,
+            load_failed: false,
             query: String::new(),
             morph: MorphDialog::new(Route::Browse.descriptor(), PICKER_SIZE),
             create_name: String::new(),
-            create_error: None,
+            create_failed: false,
             creating: false,
             join_code: String::new(),
             join_error: None,
@@ -271,7 +276,7 @@ impl VenuePicker {
     fn finish(&mut self, venues: Vec<Venue>, cx: &mut Context<Luma>) {
         self.adopt(venues, cx);
         self.loaded = true;
-        self.error = None;
+        self.load_failed = false;
         let shared = match &self.entry {
             Some(Entry::Share(id)) => self
                 .venues
@@ -340,9 +345,10 @@ impl VenuePicker {
         self.venues = venues.into();
     }
 
-    fn fail(&mut self, error: impl Into<String>) {
+    fn fail(&mut self, cause: impl std::fmt::Display) {
+        log::warn!("could not read the venues: {cause}");
         self.loaded = true;
-        self.error = Some(error.into());
+        self.load_failed = true;
         self.shown = Rc::from(Vec::new());
     }
 
@@ -402,13 +408,9 @@ fn shareable(venue: &Venue) -> bool {
     venue.capability.manage
 }
 
-/// What a command's refusal says to a person: the seam's own prose, without
-/// the wire name the `Display` of a [`LibraryError`] leads with.
+/// What a command's refusal says to a person — see [`LibraryError::prose`].
 fn prose(error: &LibraryError) -> String {
-    error
-        .command()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| error.to_string())
+    error.prose()
 }
 
 /// A member as the owner sees them. The server keeps no profile another
@@ -470,7 +472,7 @@ impl Luma {
                 let rows = match venues {
                     Ok(rows) => rows,
                     Err(error) => {
-                        state.fail(format!("Failed to load venues: {error}"));
+                        state.fail(error);
                         cx.notify();
                         return;
                     }
@@ -478,7 +480,7 @@ impl Luma {
                 let remembered = match remembered {
                     Ok(remembered) => remembered,
                     Err(error) => {
-                        state.fail(format!("Failed to restore last venue: {error}"));
+                        state.fail(error);
                         cx.notify();
                         return;
                     }
@@ -537,7 +539,7 @@ impl Luma {
                 }
                 match result {
                     Ok(rows) => state.finish(rows, cx),
-                    Err(error) => state.fail(format!("Failed to load venues: {error}")),
+                    Err(error) => state.fail(error),
                 }
                 let sharing = state
                     .sharing
@@ -559,7 +561,7 @@ impl Luma {
     /// sync arriving mid-join would bounce the person back to the list.
     pub(crate) fn refresh_venues(&mut self, cx: &mut Context<Self>) {
         let (generation, sharing) = match self.overlay.as_open() {
-            Some(Overlay::Venues(state)) if state.loaded && state.error.is_none() => (
+            Some(Overlay::Venues(state)) if state.loaded && !state.load_failed => (
                 state.generation,
                 state
                     .sharing
@@ -603,7 +605,7 @@ impl Luma {
     fn venue_name_changed(&mut self, name: String, cx: &mut Context<Self>) {
         self.with_venue_picker(cx, |state| {
             state.create_name = name;
-            state.create_error = None;
+            state.create_failed = false;
         });
     }
 
@@ -694,7 +696,7 @@ impl Luma {
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
             state.go(Route::Create, reduced);
-            state.create_error = None;
+            state.create_failed = false;
             state.focus_pending = Some(FocusTarget::CreateName);
         });
     }
@@ -721,7 +723,7 @@ impl Luma {
             return;
         }
         state.creating = true;
-        state.create_error = None;
+        state.create_failed = false;
         let generation = state.generation;
         let pending = self.library.create_venue(&name, None);
         cx.notify();
@@ -742,9 +744,10 @@ impl Luma {
                         this.open_rig(None, cx);
                     }
                     Err(error) => {
+                        log::warn!("could not create a venue: {error}");
                         if let Some(Overlay::Venues(state)) = this.overlay.open_mut() {
                             state.creating = false;
-                            state.create_error = Some(format!("Failed to create venue: {error}"));
+                            state.create_failed = true;
                             cx.notify();
                         }
                     }
@@ -762,7 +765,7 @@ impl Luma {
     fn show_join_venue(&mut self, cx: &mut Context<Self>) {
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
-            if !state.loaded || state.error.is_some() {
+            if !state.loaded || state.load_failed {
                 return;
             }
             state.go(Route::Join, reduced);
@@ -908,7 +911,9 @@ impl Luma {
                         sharing.member_focuses.insert(member.uid.clone(), focus);
                     }
                 }
-                sharing.members = Some(result.map_err(|error| prose(&error)));
+                sharing.members = Some(result.map_err(|error| {
+                    log::warn!("could not read who has the venue: {error}");
+                }));
                 cx.notify();
             })
             .ok();
@@ -940,7 +945,7 @@ impl Luma {
         };
         let sharing = state.sharing.as_mut().filter(|sharing| !sharing.busy)?;
         sharing.busy = true;
-        sharing.error = None;
+        sharing.refused = None;
         sharing.confirm_remove = None;
         Some(sharing.venue.id.clone())
     }
@@ -992,7 +997,10 @@ impl Luma {
                             .collect::<Vec<_>>()
                             .into();
                     }
-                    Err(error) => sharing.error = Some(prose(&error)),
+                    Err(error) => {
+                        log::warn!("could not change the invite code: {error}");
+                        sharing.refused = Some("The invite code was not changed");
+                    }
                 }
                 cx.notify();
             })
@@ -1036,7 +1044,7 @@ impl Luma {
             return;
         }
         sharing.confirm_remove = None;
-        sharing.error = None;
+        sharing.refused = None;
         let venue_id = sharing.venue.id.clone();
         let pending = self.library.remove_venue_member(&venue_id, uid);
         cx.notify();
@@ -1051,9 +1059,10 @@ impl Luma {
                     return;
                 }
                 if let Err(error) = result {
+                    log::warn!("could not remove a member: {error}");
                     if let Some(Overlay::Venues(state)) = this.overlay.open_mut() {
                         if let Some(sharing) = state.sharing.as_mut() {
-                            sharing.error = Some(prose(&error));
+                            sharing.refused = Some("That person still has the venue");
                         }
                     }
                 }
@@ -1112,8 +1121,9 @@ impl Luma {
 /// for what needs a field: the menu's acts open it straight at their route.
 pub(crate) struct VenueMenu {
     generation: u64,
-    /// The catalogue, read fresh on every opening; `None` while it is out.
-    venues: Option<Result<Vec<Venue>, String>>,
+    /// The catalogue, read fresh on every opening; `None` while it is out,
+    /// `Err` when it failed, the cause logged.
+    venues: Option<Result<Vec<Venue>, ()>>,
 }
 
 impl Luma {
@@ -1135,7 +1145,9 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Some(menu) = this.venue_menu.open_mut() {
                     if menu.generation == generation {
-                        menu.venues = Some(result.map_err(|error| error.to_string()));
+                        menu.venues = Some(result.map_err(|error| {
+                            log::warn!("could not read the venues: {error}");
+                        }));
                         cx.notify();
                     }
                 }
@@ -1150,6 +1162,32 @@ impl Luma {
     pub(crate) fn close_venue_menu(&mut self, cx: &mut Context<Self>) {
         self.venue_menu.begin_close(cx);
         cx.notify();
+    }
+
+    /// Whether the open venue is still in this library. A download that
+    /// removes it — its owner took this account off it, or it was deleted —
+    /// leaves it on screen, so the venue menu says what became of it.
+    pub(crate) fn check_open_venue(&mut self, cx: &mut Context<Self>) {
+        let Some(venue_id) = self.songs.as_ref().map(|songs| songs.venue_id().to_owned()) else {
+            return;
+        };
+        let pending = self.library.venues();
+        cx.spawn(async move |this, cx| {
+            let Ok(venues) = pending.await else {
+                return;
+            };
+            let gone = !venues.iter().any(|venue| venue.id == venue_id);
+            this.update(cx, |this, cx| {
+                if let Some(songs) = this.songs.as_mut().filter(|s| s.venue_id() == venue_id) {
+                    if songs.venue_gone != gone {
+                        songs.venue_gone = gone;
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Switch to the venue `id` names, from the menu's list.
@@ -1223,10 +1261,25 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
         .child(menu_heading("Venues"));
     match &menu.venues {
         None => card = card.child(menu_note("Loading venues…")),
-        Some(Err(error)) => {
-            card = card.child(menu_note(format!("Failed to load venues: {error}")));
-        }
+        Some(Err(())) => card = card.child(menu_note("Could not load your venues")),
         Some(Ok(venues)) => {
+            // The open venue, when it has left the library: still on screen,
+            // so still in the list, with what became of it.
+            if let Some((name, state)) = app
+                .songs
+                .as_ref()
+                .and_then(|songs| Some((songs.venue_name().to_owned(), songs.venue_gone_state()?)))
+            {
+                card = card.child(
+                    row("venue-menu:gone".to_owned(), name.clone().into()).child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(glass::ink(glass::TEXT_TERTIARY))
+                            .child(state)
+                            .agent_node(Role::Text, format!("{name}: {state}")),
+                    ),
+                );
+            }
             for venue in venues {
                 let here = current.as_deref() == Some(venue.id.as_str());
                 let (picked, id) = (entity.clone(), venue.id.clone());
@@ -1570,7 +1623,7 @@ fn header(
         _ => field(state, route, mode, window),
     });
 
-    if route == Route::Browse && state.loaded && state.error.is_none() {
+    if route == Route::Browse && state.loaded && !state.load_failed {
         band = band.child(join_entry(state, interactive, app, window, cx));
     }
     if let Some(chip) = commit_chip(state, route, mode, app, window, cx) {
@@ -1751,7 +1804,7 @@ fn commit_chip(
 ) -> Option<AnyElement> {
     let interactive = mode == ContentMode::Interactive;
     let (glyph, label, enabled, act): (_, _, _, fn(&mut Luma, &mut Context<Luma>)) = match route {
-        Route::Browse if !state.loaded || state.error.is_some() => return None,
+        Route::Browse if !state.loaded || state.load_failed => return None,
         Route::Browse => (
             luma_ui::shortcut::text(&crate::keymap::CreateVenue, cx),
             "Create venue",
@@ -1848,9 +1901,9 @@ fn browser(
     window: &Window,
     cx: &mut gpui::App,
 ) -> AnyElement {
-    match &state.error {
-        Some(error) => venue_error(error, app),
-        None if !state.loaded => float::viewport()
+    match state.load_failed {
+        true => venue_error(app),
+        false if !state.loaded => float::viewport()
             .child(
                 float::list().child(
                     float::skeleton_rows(5, app.entity_id(), cx)
@@ -1858,12 +1911,12 @@ fn browser(
                 ),
             )
             .into_any_element(),
-        None if state.shown.is_empty() => float::viewport()
+        false if state.shown.is_empty() => float::viewport()
             .child(float::list().child(
                 float::empty_row("No matching venues").agent_node(Role::Text, "No matching venues"),
             ))
             .into_any_element(),
-        None => venue_list(state, statuses, mode, app, window),
+        false => venue_list(state, statuses, mode, app, window),
     }
 }
 
@@ -2017,11 +2070,9 @@ fn venue_card(
 
 /// The load failure, with its own clipped viewport.
 ///
-/// A backend can hand back thousands of lines or one enormous token, and gpui
-/// wraps at whitespace with no break-anywhere mode — so the visual surface is
-/// a bounded ellipsis while the semantic node keeps the complete error for
-/// anything reading the tree.
-fn venue_error(error: &str, app: &Entity<Luma>) -> AnyElement {
+/// The words are fixed and the backend's text is in the log: a catalogue read
+/// that fails is a bug, and a backend can hand back thousands of lines.
+fn venue_error(app: &Entity<Luma>) -> AnyElement {
     let retry = app.clone();
     div()
         .size_full()
@@ -2039,15 +2090,8 @@ fn venue_error(error: &str, app: &Entity<Luma>) -> AnyElement {
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .child(
-                    div()
-                        .w_full()
-                        .truncate()
-                        .text_center()
-                        .text_color(ladder::danger())
-                        .child(error.to_string())
-                        .agent_node(Role::Text, error.to_string()),
-                )
+                .justify_center()
+                .child(luma_ui::notice::line("Could not load your venues"))
                 .agent_node(Role::Card, "Venue error viewport"),
         )
         .child(
@@ -2059,9 +2103,10 @@ fn venue_error(error: &str, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// A route's centred prompt: the heading, the line under it, then whatever
-/// went wrong. Create and Join are the same screen asking different things.
-fn prompt(heading: &str, line: &str, error: Option<String>) -> Div {
+/// A route's centred prompt: the heading, the line under it, then what the
+/// last answer refused, as a notice. Create and Join are the same screen
+/// asking different things.
+fn prompt(heading: &str, line: &str, refused: Option<String>) -> Div {
     div()
         .size_full()
         .flex()
@@ -2083,16 +2128,8 @@ fn prompt(heading: &str, line: &str, error: Option<String>) -> Div {
                 .text_color(ladder::muted_foreground())
                 .child(line.to_string()),
         )
-        .when_some(error, |column, error| {
-            column.child(
-                div()
-                    .max_w(px(560.0))
-                    .text_center()
-                    .text_size(px(12.5))
-                    .text_color(ladder::danger())
-                    .child(error.clone())
-                    .agent_node(Role::Text, error),
-            )
+        .when_some(refused, |column, refused| {
+            column.child(div().max_w(px(560.0)).child(luma_ui::notice::line(refused)))
         })
 }
 
@@ -2113,7 +2150,9 @@ fn create(state: &VenuePicker, mode: ContentMode, app: &Entity<Luma>) -> AnyElem
     prompt(
         heading,
         "Name it in the field above, then press ↵.",
-        state.create_error.clone(),
+        state
+            .create_failed
+            .then(|| "The venue was not created".to_owned()),
     )
     .when(onboarding && state.loaded, |column| {
         column.child(
@@ -2295,15 +2334,8 @@ fn code_section(
                 .text_color(ladder::muted_foreground())
                 .child(note),
         )
-        .when_some(sharing.error.clone(), |column, error| {
-            column.child(
-                div()
-                    .px(px(2.0))
-                    .text_size(px(12.0))
-                    .text_color(ladder::danger())
-                    .child(error.clone())
-                    .agent_node(Role::Text, error),
-            )
+        .when_some(sharing.refused, |column, refused| {
+            column.child(div().px(px(2.0)).child(luma_ui::notice::line(refused)))
         })
 }
 
@@ -2319,9 +2351,8 @@ fn people_section(
     };
     let rows: Vec<AnyElement> = match &sharing.members {
         None => vec![float::empty_row("Loading…").into_any_element()],
-        Some(Err(error)) => vec![float::empty_row(error.clone())
-            .text_color(ladder::danger())
-            .agent_node(Role::Text, error.clone())
+        Some(Err(())) => vec![float::empty_row("Could not load who has the venue")
+            .agent_node(Role::Text, "Could not load who has the venue")
             .into_any_element()],
         Some(Ok(members)) => {
             let mut rows: Vec<AnyElement> = members

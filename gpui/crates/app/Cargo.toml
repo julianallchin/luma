@@ -13,6 +13,7 @@ test = false
 
 [dependencies]
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+log = "0.4"
 luma-patterns = { path = "../../../backend/crates/patterns" }
 luma-ui = { workspace = true }
 luma-chat = { path = "../chat" }

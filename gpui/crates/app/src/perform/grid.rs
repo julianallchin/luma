@@ -177,16 +177,15 @@ fn tabs(
             })
         })
         .child(div().flex_1().min_w(px(12.)))
+        // A problem with what Perform follows is the deck's own state: the
+        // notice mark ahead of it, the words in the line's usual ink.
+        .when(problem.is_some(), |row| row.child(luma_ui::notice::mark()))
         .child(
             div()
                 .min_w_0()
                 .truncate()
                 .text_size(px(11.5))
-                .text_color(if problem.is_some() {
-                    Hsla::from(ladder::danger())
-                } else {
-                    ladder::foreground_alpha(0.45)
-                })
+                .text_color(ladder::foreground_alpha(0.45))
                 .child(note.clone())
                 .agent_node(Role::Text, note),
         )

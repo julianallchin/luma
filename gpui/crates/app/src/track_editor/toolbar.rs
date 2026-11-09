@@ -158,13 +158,6 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
                 ))
             },
         )
-        .when_some(state.beat_validation_error.clone(), |el, message| {
-            el.child(
-                luma_ui::float::label(message.clone())
-                    .text_color(ladder::danger())
-                    .agent_node(Role::Text, message),
-            )
-        })
         // What the edit is on: the selection, the cursor, the loop, follow.
         // One slot, its width held whether or not anything is selected, so
         // selecting a pattern never reflows the toolbar and moves the
@@ -199,24 +192,6 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
         // Which score is on the timeline, by the handle the song list names it
         // by.
         .child(luma_ui::caption(format!("Score #{}", state.score.ordinal)))
-        // A refused write, over the timeline it was refused for.
-        .when_some(
-            state
-                .error
-                .clone()
-                .or_else(|| state.gpu_waveform.borrow().error.clone())
-                .or_else(|| state.timeline_waveform.error.clone())
-                .or_else(|| state.overview_waveform.error.clone())
-                .or_else(|| state.preview_errors.values().next().cloned())
-                .filter(|_| state.waveform.is_some()),
-            |el, message| {
-                el.child(
-                    luma_ui::float::label(message.clone())
-                        .text_color(ladder::danger())
-                        .agent_node(Role::Text, message),
-                )
-            },
-        )
 }
 
 /// The transport at the strip's head: play or pause, where the song is
@@ -326,21 +301,21 @@ impl Luma {
         self.edit_track_tab(&target, cx, |editor| {
             editor.beat_reason_menu.close();
             editor.beat_validation_pending = true;
-            editor.beat_validation_error = None;
         });
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |this, cx| {
+                let saved = result.is_ok();
                 this.edit_track_tab(&target, cx, |editor| {
                     editor.beat_validation_pending = false;
-                    match result {
-                        Ok(()) => {
-                            editor.beat_verdict = verdict;
-                            editor.beat_reason = reason;
-                        }
-                        Err(error) => editor.beat_validation_error = Some(error.to_string()),
+                    if saved {
+                        editor.beat_verdict = verdict;
+                        editor.beat_reason = reason;
                     }
                 });
+                if let Err(error) = result {
+                    this.report_failure("Could not save the beat check", error, cx);
+                }
             })
             .ok();
         })

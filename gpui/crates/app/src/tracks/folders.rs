@@ -96,7 +96,7 @@ impl Luma {
                         state.folders = folders.into();
                         state.refilter();
                     }
-                    Err(error) => state.folder_error = Some(error.to_string()),
+                    Err(error) => this.report_failure("Could not load the folders", error, cx),
                 }
                 cx.notify();
             })
@@ -119,11 +119,16 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                let Some(state) = this.songs.as_mut().filter(|state| state.venue_id == venue)
-                else {
+                if !this
+                    .songs
+                    .as_ref()
+                    .is_some_and(|state| state.venue_id == venue)
+                {
                     return;
-                };
-                state.folder_error = result.err().map(|error| error.to_string());
+                }
+                if let Err(error) = result {
+                    this.report_failure("Could not change the folders", error, cx);
+                }
                 this.reload_folders(cx);
             })
             .ok();
@@ -149,7 +154,6 @@ impl Luma {
                     // Listed at once, from the row the backend wrote, so the
                     // field has a row to sit in; the next read replaces it.
                     Ok(folder) => {
-                        state.folder_error = None;
                         let id = folder.id.clone();
                         let mut folders = state.folders.to_vec();
                         folders.push(folder);
@@ -158,7 +162,7 @@ impl Luma {
                         state.refilter();
                         this.start_folder_rename(id, window, cx);
                     }
-                    Err(error) => state.folder_error = Some(error.to_string()),
+                    Err(error) => this.report_failure("Could not create the folder", error, cx),
                 }
                 cx.notify();
             })

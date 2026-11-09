@@ -14,12 +14,8 @@ impl Luma {
     }
 
     /// The same dialog, to choose a song for Perform's virtual deck.
-    pub(crate) fn show_track_to_play(
-        &mut self,
-        target: crate::workspace::Target,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_add_tracks(Route::TrackBrowser, Purpose::PlayVirtual(target), cx);
+    pub(crate) fn show_track_to_play(&mut self, cx: &mut Context<Self>) {
+        self.open_add_tracks(Route::TrackBrowser, Purpose::PlayVirtual, cx);
     }
 
     /// The status bar's import item: the dialog, opened on the import's progress.
@@ -177,7 +173,7 @@ impl Luma {
         matches!(
             self.overlay.as_open(),
             Some(crate::shell::Overlay::AddTracks(state))
-                if matches!(state.purpose, Purpose::PlayVirtual(_))
+                if matches!(state.purpose, Purpose::PlayVirtual)
         )
     }
 

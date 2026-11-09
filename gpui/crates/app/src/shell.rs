@@ -410,7 +410,7 @@ impl Luma {
                 }
                 if page.group_editor.is_some() && !page.group_busy {
                     page.group_editor = None;
-                    page.group_error = None;
+                    page.group_refusal = None;
                     cx.notify();
                     return;
                 }

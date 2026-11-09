@@ -79,8 +79,7 @@ impl Luma {
                 }
                 if let Err(error) = result {
                     editor.transport.ready = false;
-                    editor.error = Some(error.to_string());
-                    cx.notify();
+                    this.report_failure("Could not load the song for playback", error, cx);
                     return None;
                 }
                 Some(this.library.restore_audio(
@@ -102,7 +101,7 @@ impl Luma {
                 }
                 editor.transport.ready = result.is_ok();
                 if let Err(error) = result {
-                    editor.error = Some(error.to_string());
+                    this.report_failure("Could not load the song for playback", error, cx);
                 }
                 this.poll_transport_for(&target, session, cx);
                 cx.notify();
@@ -145,7 +144,10 @@ impl Luma {
                 }
                 match result {
                     Ok(()) => this.poll_transport_for(&target, session, cx),
-                    Err(error) => editor.error = Some(error.to_string()),
+                    Err(error) if playing => {
+                        this.report_failure("Could not start playback", error, cx)
+                    }
+                    Err(error) => this.report_failure("Could not pause playback", error, cx),
                 }
                 cx.notify();
             })

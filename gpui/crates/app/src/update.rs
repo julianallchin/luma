@@ -180,7 +180,8 @@ pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Op
             "Luma {version} is installed and runs after a restart."
         )),
         (None, Status::UpToDate) => Some("Luma is up to date.".into()),
-        (None, Status::Errored(error)) => Some(format!("Could not update: {error}")),
+        // The updater logged why; a person reads that it did not happen.
+        (None, Status::Errored(_)) => Some("Could not check for updates.".into()),
         (None, Status::Idle) => None,
     };
     let button = matches!(status, Status::Updated { .. }).then(|| {

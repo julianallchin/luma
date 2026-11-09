@@ -597,13 +597,8 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         .rename_error
         .as_ref()
         .filter(|(at, _)| at == id)
-        .map(|(_, error)| {
-            div()
-                .text_size(rpx(12.))
-                .text_color(ladder::danger())
-                .child(error.clone())
-                .agent_node(Role::Text, error.clone())
-        });
+        // A rename refused as it is typed: why, under the title it was typed in.
+        .map(|(_, error)| luma_ui::notice::line(error.clone()));
     plate(if wide { NODE_W_WIDE } else { NODE_W }, selected)
         .id(SharedString::from(format!("node-{id}")))
         // A press anywhere on the card selects it; only its title takes the

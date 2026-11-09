@@ -17,7 +17,7 @@ use tokio::sync::watch;
 
 use crate::database::local::venue_graph;
 use crate::events::{Event, Events};
-use crate::models::sync::SyncStatus;
+use crate::models::sync::{SyncRefusal, SyncStatus};
 
 use super::connector::Connector;
 use super::schema;
@@ -40,6 +40,9 @@ struct Observed {
     uploading: bool,
     downloading: bool,
     last_synced_at: Option<String>,
+    /// The last transport error, logged once when it changes. It is not part
+    /// of the status: a connection that keeps failing reads as offline, and
+    /// its text is for the log, not for the status bar.
     error: Option<String>,
 }
 
@@ -126,6 +129,7 @@ impl Service {
             .fetch_one(&self.database.sql)
             .await
             .map_err(|error| error.to_string())?;
+        let refused = refusals(&self.database.sql).await?;
         let observed = self.observed.lock().expect("poisoned");
         Ok(SyncStatus {
             connected: observed.connected,
@@ -133,8 +137,25 @@ impl Service {
             downloading: observed.downloading,
             last_synced_at: observed.last_synced_at.clone(),
             pending_uploads: usize::try_from(pending).unwrap_or(0),
-            error: observed.error.clone(),
+            refused,
         })
+    }
+
+    /// Mark every refusal shown so far as read. The rows stay, so a refused
+    /// change can still be recovered from `sync_rejections`.
+    ///
+    /// # Errors
+    ///
+    /// If the table cannot be written.
+    pub async fn dismiss_refusals(&self) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE sync_rejections SET dismissed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE dismissed_at IS NULL",
+        )
+        .execute(&self.database.sql)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     /// Stop the tasks, the SDK's own among them. Dropping the last `Service`
@@ -251,10 +272,9 @@ async fn statuses(
             observed.connected = status.is_connected();
             observed.downloading = status.is_downloading();
             observed.uploading = status.is_uploading();
-            // The SDK retries forever and reports the failure on one tick. Keeping
-            // the last one is the difference between a user seeing "sync is
-            // rejecting your sign-in" and seeing nothing at all while nothing
-            // syncs; it is cleared when a direction actually succeeds.
+            // The SDK retries forever and reports the failure on every tick.
+            // Remembering the last one logs it once per change; it is cleared
+            // when a direction actually succeeds.
             match status
                 .download_error()
                 .or_else(|| status.upload_error())
@@ -284,6 +304,29 @@ async fn statuses(
             log::warn!("[sync] {}", refused(&database.sql).await);
         }
     }
+}
+
+/// The refusals nobody has dismissed, newest first. A hundred is more than a
+/// person reads; the count past it is not worth a second query.
+async fn refusals(pool: &SqlitePool) -> Result<Vec<SyncRefusal>, String> {
+    let rows: Vec<(String, String, String, String, i64, String)> = sqlx::query_as(
+        "SELECT id, table_name, row_id, op, status, at FROM sync_rejections
+         WHERE dismissed_at IS NULL ORDER BY at DESC LIMIT 100",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, table, row_id, op, status, at)| SyncRefusal {
+            id,
+            table,
+            row_id,
+            op,
+            status: u16::try_from(status).unwrap_or(0),
+            at,
+        })
+        .collect())
 }
 
 /// Which downloaded row the local schema refuses, named.

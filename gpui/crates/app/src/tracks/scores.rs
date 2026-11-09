@@ -139,10 +139,11 @@ pub(crate) struct Scores {
     pub(crate) track: TrackBrowserRow,
     pub(crate) rows: Rc<[ScoreRow]>,
     /// Whether the listing has come back. Written in the same assignment as
-    /// [`Self::rows`] and [`Self::error`], so "still loading" and "no scores"
-    /// can never be confused for one another.
+    /// [`Self::rows`] and [`Self::load_failed`], so "still loading" and "no
+    /// scores" can never be confused for one another.
     pub(crate) loaded: bool,
-    pub(crate) error: Option<String>,
+    /// The listing could not be read. The cause is in the log.
+    pub(crate) load_failed: bool,
     /// The keyboard's place in the column, an index into [`Self::items`].
     pub(crate) cursor: Option<usize>,
     /// The context menu a right-click raised, or none. Held here and not by
@@ -163,12 +164,18 @@ pub(crate) enum Item {
 }
 
 impl Scores {
+    /// The listing could not be read: the column says so, the log says why.
+    fn listing_failed(&mut self, error: impl std::fmt::Display) {
+        log::warn!("Could not load the scores: {error}");
+        self.load_failed = true;
+    }
+
     pub(crate) fn new(track: TrackBrowserRow) -> Self {
         Self {
             track,
             rows: Vec::new().into(),
             loaded: false,
-            error: None,
+            load_failed: false,
             cursor: None,
             menu: None,
             rename: None,
@@ -308,9 +315,9 @@ impl Luma {
                     match listing {
                         Ok(summaries) => {
                             level.rows = rows(&summaries, user.as_deref());
-                            level.error = None;
+                            level.load_failed = false;
                         }
-                        Err(error) => level.error = Some(error.to_string()),
+                        Err(error) => level.listing_failed(error),
                     }
                 });
             })
@@ -333,7 +340,10 @@ impl Luma {
             this.update(cx, |this, cx| {
                 this.with_tracks_for_venue(&venue, generation, cx, |songs| match result {
                     Ok(rows) => songs.replace_rows(rows),
-                    Err(error) => songs.error = Some(error.to_string()),
+                    Err(error) => {
+                        log::warn!("Could not reload the songs: {error}");
+                        songs.load_failed = true;
+                    }
                 });
             })
             .ok();
@@ -429,9 +439,12 @@ impl Luma {
                             .find(|row| row.id == score.id)
                             .map(open_row);
                     }
-                    (Err(error), _) => level.error = Some(error.to_string()),
-                    (_, Err(error)) => level.error = Some(error.to_string()),
+                    (Err(_), _) => {}
+                    (_, Err(error)) => level.listing_failed(error),
                 });
+                if let Err(error) = created {
+                    this.report_failure("Could not create the score", error, cx);
+                }
                 if let Some(score) = open {
                     this.open_listed_score(track_id.clone().into(), score, cx);
                 }
@@ -549,11 +562,14 @@ impl Luma {
             let listing = listing.await;
             this.update(cx, |this, cx| {
                 let user = this.library.user_id();
-                this.with_scores(&track_id, cx, |level| match (deleted, listing) {
+                this.with_scores(&track_id, cx, |level| match (&deleted, listing) {
                     (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
-                    (Err(error), _) => level.error = Some(error.to_string()),
-                    (_, Err(error)) => level.error = Some(error.to_string()),
+                    (Err(_), _) => {}
+                    (_, Err(error)) => level.listing_failed(error),
                 });
+                if let Err(error) = deleted {
+                    this.report_failure("Could not delete the score", error, cx);
+                }
             })
             .ok();
         })
@@ -663,11 +679,14 @@ impl Luma {
             let listing = listing.await;
             this.update(cx, |this, cx| {
                 let user = this.library.user_id();
-                this.with_scores(&track_id, cx, |level| match (renamed, listing) {
+                this.with_scores(&track_id, cx, |level| match (&renamed, listing) {
                     (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
-                    (Err(error), _) => level.error = Some(error.to_string()),
-                    (_, Err(error)) => level.error = Some(error.to_string()),
+                    (Err(_), _) => {}
+                    (_, Err(error)) => level.listing_failed(error),
                 });
+                if let Err(error) = renamed {
+                    this.report_failure("Could not rename the score", error, cx);
+                }
             })
             .ok();
         })
@@ -773,8 +792,10 @@ pub(super) fn column(
                 .px(px(ROW_INSET))
                 .pt(px(10.)),
         )
-        .children(scores.error.clone().map(float::error_row))
-        .when(scores.error.is_none() && !scores.loaded, |el| {
+        .when(scores.load_failed, |el| {
+            el.child(float::empty_row("Could not load the scores"))
+        })
+        .when(!scores.load_failed && !scores.loaded, |el| {
             el.child(float::empty_row("Loading scores…"))
         })
         .children(here.iter().enumerate().map(|(run, row)| draw(run, row)))

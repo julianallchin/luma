@@ -278,9 +278,8 @@ impl Luma {
         let candidate = match state.graph_candidate() {
             Ok(score) => score,
             Err(error) => {
-                for id in wanted {
-                    state.preview_errors.insert(id, error.clone());
-                }
+                log::warn!("Could not preview the score's clips: {error}");
+                state.preview_failed.extend(wanted);
                 return;
             }
         };
@@ -298,7 +297,7 @@ impl Luma {
                 else {
                     return;
                 };
-                let shown = editor.preview_errors.is_empty();
+                let shown = editor.preview_failed.is_empty();
                 let mut again = Vec::new();
                 let mut landed =
                     |editor: &mut Editor,
@@ -313,14 +312,13 @@ impl Luma {
                         }
                         match preview {
                             Ok(row) => {
-                                editor.preview_errors.remove(&id);
+                                editor.preview_failed.remove(&id);
                                 editor.install_preview(id, Preview::decode(row));
                             }
                             Err(error) => {
+                                log::warn!("Could not preview clip {id}: {error}");
                                 editor.previews.borrow_mut().remove(&id);
-                                editor
-                                    .preview_errors
-                                    .insert(id, format!("Preview: {error}"));
+                                editor.preview_failed.insert(id);
                             }
                         }
                     };
@@ -336,10 +334,10 @@ impl Luma {
                         }
                     }
                 }
-                // Pictures land on the timeline alone; an error reads out on
-                // the toolbar, which is the tab's too.
+                // Pictures land on the timeline alone; a failure changes what
+                // the whole tab draws.
                 match editor.playback_surface.clone() {
-                    Some(surface) if shown && editor.preview_errors.is_empty() => {
+                    Some(surface) if shown && editor.preview_failed.is_empty() => {
                         surface.update(cx, |_, cx| cx.notify())
                     }
                     _ => cx.notify(),

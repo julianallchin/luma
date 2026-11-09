@@ -200,23 +200,31 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
             ..Default::default()
         },
     );
-    let error_shots = error.run(&support::script(r#"
+    let error_shots = error.run(
+        &support::script(
+            r#"
         until("the loading route", (s) =>
             s.find({ role: "text", label: "Loading venues…" }) !== undefined);
         const errorLoading = app.screenshot().path;
         const shot = until("the pixel error route", (s) =>
-            s.find((n) => n.role === "text" && n.label.includes("Pixel catalogue failure")) !== undefined);
+            s.find({ role: "text", label: "Could not load your venues" }) !== undefined);
         const card = shot.find({ role: "card", label: "Venue dialog" });
         const errorViewport = shot.find({ role: "card", label: "Venue error viewport" });
-        const errorText = shot.find((n) => n.role === "text" && n.label.includes("Pixel catalogue failure"));
+        const errorText = shot.find({ role: "text", label: "Could not load your venues" });
+        // The backend's text is for the log: none of it reaches the dialog.
+        const leaked = shot.nodes.some((n) => (n.label || "").includes("Pixel catalogue failure")
+            || (n.label || "").includes("UNBROKEN_ERROR_TOKEN_"));
         ({ errorLoading,
            error: app.screenshot().path,
            errorCardShot: app.screenshot({ node: card }).path,
            errorBounds: card.bounds,
            errorViewportBounds: errorViewport.bounds,
            errorTextBounds: errorText.bounds,
-           errorLabelLength: errorText.label.length })
-        "#), GPU_LIVENESS_TIMEOUT);
+           leaked })
+        "#,
+        ),
+        GPU_LIVENESS_TIMEOUT,
+    );
 
     for (label, bounds) in [
         ("loading", &launch_shots["loadingBounds"]),
@@ -258,9 +266,10 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
             && text_y + text_height <= viewport_y + viewport_height,
         "ellipsized error text escaped its clip viewport: text={error_text:#}, viewport={error_viewport:#}"
     );
-    assert!(
-        error_shots["errorLabelLength"].as_u64().unwrap() > 4_000,
-        "the semantic node did not retain the complete adversarial error"
+    assert_eq!(
+        error_shots["leaked"],
+        serde_json::Value::Bool(false),
+        "the backend's adversarial error text reached the venue dialog"
     );
     println!(
         "venue error geometry: card=({card_x:.0},{card_y:.0}) {card_width:.0}x{card_height:.0}; viewport=({viewport_x:.0},{viewport_y:.0}) {viewport_width:.0}x{viewport_height:.0}; text=({text_x:.0},{text_y:.0}) {text_width:.0}x{text_height:.0}"

@@ -111,7 +111,9 @@ pub struct Settings {
     tab: Tab,
     /// `None` until the first `get_settings` lands.
     values: Option<AppSettings>,
-    error: Option<String>,
+    /// The first read failed, so there is nothing to show. The cause is in
+    /// the log; a failed write says so in the status bar instead.
+    load_failed: bool,
     /// The setting key of the select whose menu is open. One at a time, and
     /// the key is enough of an identity because no two selects on this screen
     /// write the same setting.
@@ -150,7 +152,7 @@ impl Settings {
         Self {
             tab: Tab::General,
             values: None,
-            error: None,
+            load_failed: false,
             open_menu: None,
             keys: AGENT_PROVIDERS
                 .iter()
@@ -223,13 +225,12 @@ impl Settings {
 /// the cache of that and is written through at every transition, so a second
 /// copy would only be able to name the previous account. What lives here is
 /// the part of the gesture that is not durable: whether the one multi-command
-/// sign-out is mid-flight, and what it said if it failed.
+/// sign-out is mid-flight. A sign-out that fails says so in the status bar.
 #[derive(Default)]
 pub(crate) struct AccountAction {
     /// A sign-out is in flight. It is a multi-command durability boundary —
     /// flush, wipe, release — and pressing it twice would race its own journal.
     pub(crate) signing_out: bool,
-    pub(crate) error: Option<String>,
 }
 
 // -- navigation and writes ----------------------------------------------------
@@ -319,27 +320,22 @@ impl Luma {
         if self.account_action.signing_out {
             return;
         }
-        self.account_action = AccountAction {
-            signing_out: true,
-            error: None,
-        };
+        self.account_action = AccountAction { signing_out: true };
         let pending = self.library.sign_out();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                this.account_action = AccountAction {
-                    signing_out: false,
-                    error: result
-                        .as_ref()
-                        .err()
-                        .map(|error| format!("Could not sign out: {error}")),
-                };
+                this.account_action = AccountAction { signing_out: false };
                 // Signed out is the interval before the next sign-in, not a
                 // state the shell shows: the library is nobody's now, so the
                 // gate is the next screen.
-                if result.is_ok() {
-                    this.show_sign_in(false, cx);
+                match result {
+                    Ok(_) => this.show_sign_in(false, cx),
+                    // Pressed from a menu that has since closed: a report
+                    // that lived only in Settings would be a gesture that
+                    // silently did nothing.
+                    Err(error) => this.report_failure("Could not sign out", error, cx),
                 }
                 cx.notify();
             })
@@ -358,7 +354,7 @@ impl Luma {
             }
             Err(error) => {
                 this.update(cx, |this, cx| {
-                    this.with_settings(cx, |state| state.error = Some(error.to_string()))
+                    this.report_failure("The setting was not saved", error, cx)
                 })
                 .ok();
             }
@@ -431,7 +427,7 @@ impl Luma {
                     }
                     this.reload_settings(cx);
                 }
-                Err(error) => this.with_settings(cx, |state| state.error = Some(error.to_string())),
+                Err(error) => this.report_failure("The key was not saved", error, cx),
             })
             .ok();
         })
@@ -472,9 +468,12 @@ impl Luma {
                 this.with_settings(cx, |state| match result {
                     Ok(values) => {
                         state.values = Some(values);
-                        state.error = None;
+                        state.load_failed = false;
                     }
-                    Err(error) => state.error = Some(error.to_string()),
+                    Err(error) => {
+                        log::warn!("could not read the settings: {error}");
+                        state.load_failed = state.values.is_none();
+                    }
                 })
             })
             .ok();
@@ -661,15 +660,12 @@ pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>, cx: &App) ->
                 .flex()
                 .flex_col()
                 .items_center()
-                .child(match (&state.values, &state.error) {
-                    (None, None) => luma_ui::plate("Loading…", ladder::muted_foreground()),
-                    (None, Some(error)) => luma_ui::plate(
-                        format!("Failed to load settings: {error}"),
-                        ladder::danger(),
-                    ),
-                    (Some(values), error) => {
-                        page(shell, state, values, error.as_deref(), app, cx).into_any_element()
+                .child(match &state.values {
+                    None if state.load_failed => {
+                        luma_ui::plate("Could not load the settings", ladder::muted_foreground())
                     }
+                    None => luma_ui::plate("Loading…", ladder::muted_foreground()),
+                    Some(values) => page(shell, state, values, app, cx).into_any_element(),
                 }),
         )
 }
@@ -778,17 +774,10 @@ impl Query {
     }
 }
 
-/// The page column: a refused write, then the shown section's title,
+/// The page column: the shown section's title,
 /// description and groups — or, while there is a search, every section's
 /// matching rows under their section's title.
-fn page(
-    shell: &Luma,
-    state: &Settings,
-    values: &AppSettings,
-    error: Option<&str>,
-    app: &Entity<Luma>,
-    cx: &App,
-) -> Div {
+fn page(shell: &Luma, state: &Settings, values: &AppSettings, app: &Entity<Luma>, cx: &App) -> Div {
     let column = div()
         .w_full()
         .max_w(px(PAGE_WIDTH))
@@ -797,17 +786,7 @@ fn page(
         .gap(px(SECTION_GAP))
         .px(px(24.))
         .pt(px(40.))
-        .pb(px(48.))
-        .when_some(error, |el, message| {
-            el.child(
-                div()
-                    .px(px(TEXT_INSET))
-                    .text_size(px(12.))
-                    .text_color(ladder::danger())
-                    .child(format!("Failed to save: {message}"))
-                    .agent_node(Role::Text, format!("Failed to save: {message}")),
-            )
-        });
+        .pb(px(48.));
     let sections = |tab| match tab {
         Tab::General => general(values, app),
         Tab::Account => account(shell, app),
@@ -1139,7 +1118,7 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
     };
     let pressable = !shell.account_action.signing_out;
     let act = app.clone();
-    let mut rows = vec![
+    let rows = vec![
         row("Signed in as", None, readonly_value(&identity, "")),
         row(
             if signed_in { "Sign out" } else { "Sign in" },
@@ -1157,20 +1136,6 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
                 .into_any_element(),
         ),
     ];
-    if let Some(error) = &shell.account_action.error {
-        rows.push(Row::new(
-            card_row().child(
-                div()
-                    .flex_1()
-                    .text_size(px(12.))
-                    .text_color(ladder::danger())
-                    .child(error.clone())
-                    .agent_node(Role::Text, error.clone()),
-            ),
-            error,
-            None,
-        ));
-    }
     vec![section("Account", rows, None)]
 }
 
@@ -1335,14 +1300,10 @@ fn shortcut_row(
                         .font_weight(FontWeight::MEDIUM)
                         .child(shortcut.title),
                 )
+                // The shortcut just typed is someone else's: validation,
+                // said on the row being typed into.
                 .when_some(refused, |el, message| {
-                    el.child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(ladder::danger())
-                            .child(message.clone())
-                            .agent_node(Role::Text, message),
-                    )
+                    el.child(luma_ui::notice::line(message))
                 }),
         )
         .child(control_slot(control));

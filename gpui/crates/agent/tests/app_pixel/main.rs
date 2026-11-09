@@ -12,6 +12,7 @@
 mod support;
 
 mod add_tracks_pixels;
+mod sync_status_pixels;
 mod track_editor_waveform_pixels;
 mod venues_pixels;
 mod visualizer_playback_soak;

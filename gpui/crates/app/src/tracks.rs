@@ -113,6 +113,12 @@ pub struct Tracks {
     /// under rather than re-derived from the screen that opened this one.
     venue_id: String,
     venue_name: String,
+    /// The venue is someone else's, shared with this account.
+    venue_shared: bool,
+    /// The venue left this library while it was open: its owner removed this
+    /// account, or it was deleted. A fact about the venue, said in the venue
+    /// menu — see [`Luma::check_open_venue`].
+    pub(crate) venue_gone: bool,
     load_generation: u64,
     rows: Rc<[TrackBrowserRow]>,
     /// The venue's folders, by name, each with the songs it holds. Re-read
@@ -140,13 +146,12 @@ pub struct Tracks {
     menu: Option<folders::Menu>,
     /// The folder whose name is being typed, or none.
     rename: Option<folders::Rename>,
-    /// Why the last folder change failed, until the next one lands.
-    folder_error: Option<String>,
     /// Whether the venue's query has come back. Written in the same
-    /// assignment as [`Self::rows`] and [`Self::error`], so "still loading"
-    /// and "nothing to show" can never be confused for one another.
+    /// assignment as [`Self::rows`] and [`Self::load_failed`], so "still
+    /// loading" and "nothing to show" can never be confused for one another.
     loaded: bool,
-    error: Option<String>,
+    /// The venue's songs could not be read. The cause is in the log.
+    load_failed: bool,
     ownership: Ownership,
     /// The typed query, mirrored out of [`Self::search`] on every edit. The
     /// field is the editor; this is what `refilter` reads.
@@ -167,6 +172,15 @@ impl Tracks {
     /// The venue this page was opened for.
     pub(crate) fn venue_name(&self) -> &str {
         &self.venue_name
+    }
+
+    /// What became of the open venue, if it has left this library.
+    pub(crate) fn venue_gone_state(&self) -> Option<&'static str> {
+        self.venue_gone.then_some(if self.venue_shared {
+            "No longer shared with you"
+        } else {
+            "Deleted"
+        })
     }
 
     /// The venue a score opens in.
@@ -194,7 +208,7 @@ impl Tracks {
     pub(crate) fn replace_rows(&mut self, rows: Vec<TrackBrowserRow>) {
         self.rows = rows.into();
         self.loaded = true;
-        self.error = None;
+        self.load_failed = false;
         self.refilter();
     }
 
@@ -360,6 +374,8 @@ impl Luma {
             .as_ref()
             .map_or(DEFAULT_WIDTHS, |songs| songs.widths);
         self.songs = Some(Tracks {
+            venue_shared: venue.is_member(),
+            venue_gone: false,
             venue_id: venue.id,
             venue_name: venue.name,
             load_generation: generation,
@@ -376,9 +392,8 @@ impl Luma {
             songs_scroll: UniformListScrollHandle::new(),
             menu: None,
             rename: None,
-            folder_error: None,
             loaded: false,
-            error: None,
+            load_failed: false,
             ownership: Ownership::Mine,
             query: String::new(),
             search,
@@ -404,7 +419,10 @@ impl Luma {
                             state.rows = rows.into();
                             state.refilter();
                         }
-                        Err(error) => state.error = Some(error.to_string()),
+                        Err(error) => {
+                            log::warn!("Could not load the songs: {error}");
+                            state.load_failed = true;
+                        }
                     }
                 });
                 // A saved score needs its track's row, so it reopens once the
@@ -755,21 +773,15 @@ pub(crate) fn page(
         .flex_col()
         .text_color(glass::ink(0.95))
         .child(header(state, app, window))
-        .children(
-            state
-                .folder_error
-                .clone()
-                .map(|error| float::error_row(error).mx(px(PAD_X))),
-        )
-        .child(match &state.error {
-            Some(message) => luma_ui::plate(
-                format!("Failed to load tracks: {message}"),
-                ladder::danger(),
+        .child(match state.load_failed {
+            true => luma_ui::plate(
+                "Could not load the songs".to_string(),
+                ladder::muted_foreground(),
             ),
-            None if !state.loaded => {
+            false if !state.loaded => {
                 luma_ui::plate("Loading tracks…".to_string(), ladder::muted_foreground())
             }
-            None => columns(shell, state, statuses, app, cx).into_any_element(),
+            false => columns(shell, state, statuses, app, cx).into_any_element(),
         })
         // Siblings of the columns, not children of a row: a column clips,
         // and a menu inside it would be cut off at its edge.

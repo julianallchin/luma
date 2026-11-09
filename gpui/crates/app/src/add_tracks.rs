@@ -141,7 +141,7 @@ pub(crate) enum Purpose {
     /// Add it to the venue: the dialog's ordinary job.
     AddToVenue,
     /// Play it on the Perform tab's virtual deck, then close.
-    PlayVirtual(crate::workspace::Target),
+    PlayVirtual,
 }
 
 pub(crate) struct AddTracks {
@@ -160,14 +160,16 @@ pub(crate) struct AddTracks {
     /// The filter changes on keystrokes; the frames in between are free.
     browser_shown: Rc<[TrackBrowserRow]>,
     browser_loaded: bool,
-    browser_error: Option<String>,
+    /// The library's songs could not be read. The cause is in the log.
+    browser_failed: bool,
     source: Option<TrackSource>,
     source_library: Option<SourceLibrary>,
     playlists: Rc<[SourcePlaylist]>,
     source_scope: SourceRowScope,
     source_rows: Rc<[SourceTrack]>,
     source_loaded: bool,
-    source_error: Option<String>,
+    /// The source library could not be read. The cause is in the log.
+    source_failed: bool,
     source_generation: u64,
     source_row_generation: u64,
     selected: HashSet<String>,
@@ -218,6 +220,13 @@ pub(crate) struct AddTracks {
 }
 
 impl AddTracks {
+    /// The source library could not be read: the list says so, the log says
+    /// why.
+    fn fail_source(&mut self, error: impl std::fmt::Display) {
+        log::warn!("Could not read the source library: {error}");
+        self.source_failed = true;
+    }
+
     fn new(venue_id: String, route: Route, purpose: Purpose, cx: &mut Context<Luma>) -> Self {
         let browser_filter = cx.new(|cx| TextInput::search("Search all tracks…", cx));
         let source_filter = cx.new(|cx| TextInput::search("Search source…", cx));
@@ -252,14 +261,14 @@ impl AddTracks {
             browser_rows: Rc::from(Vec::new()),
             browser_shown: Rc::from(Vec::new()),
             browser_loaded: false,
-            browser_error: None,
+            browser_failed: false,
             source: None,
             source_library: None,
             playlists: Rc::from(Vec::new()),
             source_scope: SourceRowScope::All,
             source_rows: Rc::from(Vec::new()),
             source_loaded: false,
-            source_error: None,
+            source_failed: false,
             source_generation: 0,
             source_row_generation: 0,
             selected: HashSet::new(),
@@ -364,7 +373,7 @@ impl AddTracks {
             .expect("source row generation exhausted");
         self.source_scope = scope;
         self.source_loaded = false;
-        self.source_error = None;
+        self.source_failed = false;
         self.selected.clear();
         self.source_row_generation
     }

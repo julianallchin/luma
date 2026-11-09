@@ -4672,6 +4672,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "image",
+ "log",
  "luma",
  "luma-chat",
  "luma-patterns",

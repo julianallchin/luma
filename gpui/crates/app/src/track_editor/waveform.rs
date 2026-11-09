@@ -9,7 +9,9 @@ use luma_render::{
 pub(super) struct Resource {
     gpu: Option<Arc<Waveform>>,
     loading: bool,
-    pub error: Option<String>,
+    /// The GPU waveform could not be built; it is not asked for again. The
+    /// cause is in the log.
+    failed: bool,
 }
 
 pub(super) enum Image {
@@ -29,7 +31,6 @@ pub(super) struct Strip {
     pub frame: Option<Rc<Painted>>,
     pending: bool,
     failed: Option<GpuView>,
-    pub error: Option<String>,
 }
 
 impl Editor {
@@ -83,7 +84,7 @@ pub(super) fn prepaint(
         return;
     }
     let Some(gpu) = resource.gpu.clone() else {
-        if resource.loading || resource.error.is_some() || editor.waveform.is_none() {
+        if resource.loading || resource.failed || editor.waveform.is_none() {
             return;
         }
         // Headless Linux has no compositor device. It can still exercise the
@@ -133,7 +134,10 @@ pub(super) fn prepaint(
                     resource.loading = false;
                     match result {
                         Ok(gpu) => resource.gpu = Some(gpu),
-                        Err(error) => resource.error = Some(format!("Waveform: {error}")),
+                        Err(error) => {
+                            log::warn!("Could not build the waveform: {error}");
+                            resource.failed = true;
+                        }
                     }
                 })
             });
@@ -255,11 +259,10 @@ pub(super) fn prepaint(
                                     image,
                                 }));
                                 strip.failed = None;
-                                strip.error = None;
                             }
                             Err(error) => {
+                                log::warn!("Could not draw the waveform: {error}");
                                 strip.failed = Some(desired);
-                                strip.error = Some(format!("Waveform: {error}"));
                             }
                         }
                     })

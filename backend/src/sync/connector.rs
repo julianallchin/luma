@@ -8,6 +8,13 @@
 //! An entry an agent wrote carries its actor as metadata (see `triggers.rs`),
 //! and the request carries it as [`ACTOR_HEADER`] for the server's history
 //! trigger. A request without it is the signed-in person's.
+//!
+//! A refusal is never silent. An upsert the policies refuse is a 403, but an
+//! update or a delete they refuse is filtered: PostgREST answers 204 and
+//! changes no row. So those ask for the count of rows they changed, and a
+//! count of zero is a refusal like any other — recorded in `sync_rejections`,
+//! taken off the queue, and replaced by the server's version of the row on the
+//! next download.
 
 use std::time::Duration;
 
@@ -33,6 +40,9 @@ fn upload_error(message: impl Into<String>) -> PowerSyncError {
     PowerSyncError::upload_error(UploadError(message.into()))
 }
 
+/// What a refusal the server answered with success records as its body.
+const NO_ROW_CHANGED: &str = "the server changed no row";
+
 /// What to do about a failed request.
 enum Failure {
     /// The server will never accept this entry: a policy refused it, a
@@ -48,12 +58,21 @@ pub struct Connector {
     db: PowerSyncDatabase,
     /// The app database — where rejected entries are recorded.
     pool: SqlitePool,
-    /// The state database, which holds the Supabase session.
-    state_pool: SqlitePool,
+    credentials: Credentials,
     http: reqwest::Client,
     postgrest_url: String,
     powersync_url: String,
     anon_key: String,
+}
+
+/// Where the access token comes from.
+enum Credentials {
+    /// The state database, which holds the Supabase session.
+    Session(SqlitePool),
+    /// A token minted for a test against the container stack, which has no
+    /// Supabase auth to sign in through.
+    #[cfg(test)]
+    Fixed(String),
 }
 
 impl Connector {
@@ -68,7 +87,7 @@ impl Connector {
         Ok(Self {
             db,
             pool,
-            state_pool,
+            credentials: Credentials::Session(state_pool),
             http: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(60))
@@ -80,11 +99,40 @@ impl Connector {
         })
     }
 
+    /// The production connector signed in with `token` against the given
+    /// PostgREST and PowerSync — the container stack's.
+    #[cfg(test)]
+    pub(super) fn with_token(
+        db: PowerSyncDatabase,
+        pool: SqlitePool,
+        token: String,
+        postgrest_url: String,
+        powersync_url: String,
+    ) -> Self {
+        Self {
+            db,
+            pool,
+            anon_key: token.clone(),
+            credentials: Credentials::Fixed(token),
+            http: reqwest::Client::new(),
+            postgrest_url,
+            powersync_url,
+        }
+    }
+
     async fn token(&self) -> Result<String, PowerSyncError> {
-        auth::get_current_access_token(&self.state_pool)
-            .await
-            .map_err(|error| upload_error(error.to_string()))?
-            .ok_or_else(|| upload_error("no signed-in session"))
+        match &self.credentials {
+            Credentials::Session(state_pool) => auth::get_current_access_token(state_pool)
+                .await
+                .map_err(|error| upload_error(error.to_string()))?
+                .ok_or_else(|| upload_error("no signed-in session")),
+            #[cfg(test)]
+            Credentials::Fixed(token) => Ok(token.clone()),
+        }
+    }
+
+    fn url(&self, table: &str) -> String {
+        format!("{}/{table}", self.postgrest_url.trim_end_matches('/'))
     }
 
     /// One PostgREST request for one CRUD entry.
@@ -94,12 +142,11 @@ impl Connector {
     /// client supplies for every synced table — including the tables whose `id`
     /// is generated locally from a natural key, because the same expression is
     /// generated in Postgres and the value agrees.
+    ///
+    /// `PATCH` and `DELETE` ask for the count of rows they changed: a policy
+    /// refuses them by filtering the row out, not with an error.
     fn request(&self, entry: &CrudEntry, token: &str) -> reqwest::RequestBuilder {
-        let url = format!(
-            "{}/{}",
-            self.postgrest_url.trim_end_matches('/'),
-            entry.table
-        );
+        let url = self.url(&entry.table);
         let filter = [("id", format!("eq.{}", entry.id))];
         let builder = match entry.update_type {
             UpdateType::Put => return self.put_request(entry.table.as_ref(), &[entry], token),
@@ -107,13 +154,13 @@ impl Connector {
                 .http
                 .patch(&url)
                 .query(&filter)
-                .header("Prefer", "return=minimal")
+                .header("Prefer", COUNTED)
                 .json(&Value::Object(body(entry))),
             UpdateType::Delete => self
                 .http
                 .delete(&url)
                 .query(&filter)
-                .header("Prefer", "return=minimal"),
+                .header("Prefer", COUNTED),
         };
         attributed(builder, entry)
             .header("apikey", &self.anon_key)
@@ -135,7 +182,7 @@ impl Connector {
         entries: &[&CrudEntry],
         token: &str,
     ) -> reqwest::RequestBuilder {
-        let url = format!("{}/{}", self.postgrest_url.trim_end_matches('/'), table);
+        let url = self.url(table);
         let builder = self
             .http
             .post(&url)
@@ -208,7 +255,7 @@ impl Connector {
                 .map_err(|error| Failure::Transient(error.to_string()))?;
             let status = response.status();
             if status.is_success() {
-                return Ok(());
+                return self.changed(entry, &response, &token).await;
             }
             let body = response.text().await.unwrap_or_default();
             let code = status.as_u16();
@@ -228,8 +275,59 @@ impl Connector {
         unreachable!("the retry loop returns on every path")
     }
 
+    /// Whether a successful `PATCH` or `DELETE` changed its row.
+    ///
+    /// Zero rows is a refusal, with one exception: a delete of a row that is
+    /// not there for this user any more — another device removed it, or it
+    /// was never theirs to see — already has the outcome it asked for.
+    async fn changed(
+        &self,
+        entry: &CrudEntry,
+        response: &reqwest::Response,
+        token: &str,
+    ) -> Result<(), Failure> {
+        if matches!(entry.update_type, UpdateType::Put) || changed_rows(response) != Some(0) {
+            return Ok(());
+        }
+        let refused = Failure::Rejected {
+            status: response.status().as_u16(),
+            body: NO_ROW_CHANGED.into(),
+        };
+        if matches!(entry.update_type, UpdateType::Patch) {
+            return Err(refused);
+        }
+        let visible = self
+            .http
+            .get(self.url(&entry.table))
+            .query(&[("id", format!("eq.{}", entry.id)), ("select", "id".into())])
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .map_err(|error| Failure::Transient(error.to_string()))?;
+        if !visible.status().is_success() {
+            let code = visible.status().as_u16();
+            return Err(Failure::Transient(format!(
+                "{code}: {}",
+                visible.text().await.unwrap_or_default()
+            )));
+        }
+        let rows: Vec<Value> = visible
+            .json()
+            .await
+            .map_err(|error| Failure::Transient(error.to_string()))?;
+        if rows.is_empty() {
+            Ok(())
+        } else {
+            Err(refused)
+        }
+    }
+
     /// Record an entry the server refused, so a rejected write is recoverable
     /// rather than silently dropped when the transaction completes.
+    ///
+    /// This is the one place a refusal is known. The app has no telemetry
+    /// yet; when it does, a refusal event belongs here, beside the log line.
     async fn reject(&self, entry: &CrudEntry, status: u16, body: &str) {
         let op = match entry.update_type {
             UpdateType::Put => "PUT",
@@ -310,6 +408,20 @@ fn batches(entries: &[CrudEntry]) -> Vec<&[CrudEntry]> {
 /// five hundred rows of a clip or a track is well inside both, and the
 /// remaining round trips are no longer what the first sync is waiting on.
 const PUT_BATCH: usize = 500;
+
+/// The `Prefer` header of an update or a delete: no body back, but the count
+/// of rows changed in `Content-Range`.
+const COUNTED: &str = "return=minimal,count=exact";
+
+/// The total in a counted response's `Content-Range` (`0-0/1`, `*/0`), if it
+/// has one.
+fn changed_rows(response: &reqwest::Response) -> Option<u64> {
+    content_range_total(response.headers().get("Content-Range")?.to_str().ok()?)
+}
+
+fn content_range_total(range: &str) -> Option<u64> {
+    range.rsplit_once('/')?.1.trim().parse().ok()
+}
 
 fn transient(status: u16) -> bool {
     status >= 500 || status == 408 || status == 429
@@ -395,7 +507,9 @@ mod tests {
         Connector {
             db: unreachable_database(),
             pool: SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
-            state_pool: SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
+            credentials: Credentials::Session(
+                SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
+            ),
             http: reqwest::Client::new(),
             postgrest_url: "https://example.test/rest/v1".into(),
             powersync_url: "https://example.test".into(),
@@ -588,6 +702,27 @@ mod tests {
         assert!(request
             .body()
             .is_none_or(|body| body.as_bytes() == Some(b"")));
+    }
+
+    /// An update or a delete a policy filters out answers success, so the
+    /// only sign of the refusal is the count it asks for.
+    #[tokio::test]
+    async fn an_update_and_a_delete_ask_for_the_rows_they_changed() {
+        let connector = connector();
+        for update_type in [UpdateType::Patch, UpdateType::Delete] {
+            let request = connector
+                .request(&entry(update_type, Some(row())), "token")
+                .build()
+                .expect("request");
+            assert_eq!(request.headers()["Prefer"], COUNTED);
+        }
+    }
+
+    #[test]
+    fn the_count_is_the_total_of_the_content_range() {
+        assert_eq!(content_range_total("*/0"), Some(0));
+        assert_eq!(content_range_total("0-0/1"), Some(1));
+        assert_eq!(content_range_total("*/*"), None);
     }
 
     #[test]

@@ -403,6 +403,7 @@ commands! {
     host_audio::host_snapshot() -> HostAudioSnapshot;
 
     sync::sync_status() -> SyncStatus;
+    sync::dismiss_sync_refusals() -> ();
 
     rekordbox::rekordbox_open_library() -> RekordboxLibraryInfo;
     rekordbox::rekordbox_list_tracks() -> Vec<RekordboxTrack>;

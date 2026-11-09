@@ -85,7 +85,7 @@ impl Transition {
 pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
     let toggle = app.clone();
     let close = app.clone();
-    let mut content = float::popover_card()
+    let content = float::popover_card()
         .w(px(268.))
         .p(px(14.))
         .gap(px(12.))
@@ -93,9 +93,6 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .child(super::view_controls(state, app))
         .child(float::divider())
         .child(section("Debug", debug_rows(state, app)));
-    if let Some(error) = &state.view_setting_error {
-        content = content.child(float::error_row(error.clone()));
-    }
     let open = state.settings.is_open();
     let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, open)
         .id("visualizer-settings")
@@ -174,7 +171,7 @@ pub(crate) fn environment_panel(
     window: &mut Window,
 ) -> AnyElement {
     let environment = state.venue_environment();
-    let mut rows = div()
+    let rows = div()
         .id("venue-environment-scroll")
         .flex_1()
         .min_h_0()
@@ -198,12 +195,6 @@ pub(crate) fn environment_panel(
         .child(section("Haze", super::haze_rows(state, app)));
     if state.settings_motion.borrow().switching() {
         window.request_animation_frame();
-    }
-    for error in [&state.environment_error, &state.haze_error]
-        .into_iter()
-        .flatten()
-    {
-        rows = rows.child(float::error_row(error.clone()));
     }
     div()
         .flex_none()
@@ -468,7 +459,6 @@ impl Luma {
         };
         state.set_venue_environment(environment);
         state.environment_edited = true;
-        state.environment_error = None;
         *state.environment_pending.borrow_mut() = Some(environment);
         // One write in flight. Scrubbing updates the picture immediately and
         // coalesces later values so an older write cannot win over the last.
@@ -506,10 +496,9 @@ impl Luma {
                         return;
                     };
                     state.environment_saving = queue.borrow().is_some();
-                    if !state.environment_saving {
-                        state.environment_error = result
-                            .err()
-                            .map(|error| format!("Could not save render settings: {error}"));
+                    let last = !state.environment_saving;
+                    if let (true, Err(error)) = (last, result) {
+                        this.report_failure("The room settings were not saved", error, cx);
                     }
                     cx.notify();
                 })
@@ -607,9 +596,7 @@ impl Luma {
         };
         match serde_json::to_string(&state.render_controls.look) {
             Ok(json) => self.save_view_setting(key::STAGE_LOOK, json, cx),
-            Err(error) => {
-                state.view_setting_error = Some(format!("Could not save stage_look: {error}"))
-            }
+            Err(error) => self.report_failure("The stage look was not saved", error, cx),
         }
     }
 
@@ -641,20 +628,20 @@ impl Luma {
     /// screen this panel is not. The stage already holds the new value, so the
     /// only thing left to report is a write that did not land.
     fn write_view_setting(&mut self, key: &'static str, value: String, cx: &mut Context<Self>) {
-        let Some(state) = self.visualizer_mut() else {
+        if self.visualizer.is_none() {
             return;
-        };
-        state.view_setting_error = None;
+        }
         let pending = self.library.set_setting(key, &value);
         cx.spawn(async move |this, cx| {
             let Err(error) = pending.await else {
                 return;
             };
             this.update(cx, |this, cx| {
-                if let Some(state) = this.visualizer_mut() {
-                    state.view_setting_error = Some(format!("Could not save {key}: {error}"));
-                }
-                cx.notify();
+                this.report_failure(
+                    "This view setting was not saved",
+                    format_args!("{key}: {error}"),
+                    cx,
+                );
             })
             .ok();
         })
@@ -673,7 +660,6 @@ impl Luma {
         };
         let haze = state.render_controls.haze;
         state.haze_edited = true;
-        state.haze_error = None;
         *state.haze_pending.borrow_mut() = Some(haze);
         if !state.haze_saving {
             self.drain_venue_haze(cx);
@@ -708,10 +694,9 @@ impl Luma {
                         return;
                     };
                     state.haze_saving = queue.borrow().is_some();
-                    if !state.haze_saving {
-                        state.haze_error = result
-                            .err()
-                            .map(|error| format!("Could not save haze: {error}"));
+                    let last = !state.haze_saving;
+                    if let (true, Err(error)) = (last, result) {
+                        this.report_failure("Haze was not saved", error, cx);
                     }
                     cx.notify();
                 })
@@ -730,7 +715,6 @@ impl Luma {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
-        state.view_setting_error = None;
         state.view_setting_pending.borrow_mut().insert(key, value);
         if state.view_setting_saving {
             return;
@@ -755,7 +739,11 @@ impl Luma {
                 };
                 state.view_setting_saving = !queue.borrow().is_empty();
                 if let Err(error) = result {
-                    state.view_setting_error = Some(format!("Could not save {key}: {error}"));
+                    this.report_failure(
+                        "This view setting was not saved",
+                        format_args!("{key}: {error}"),
+                        cx,
+                    );
                 }
                 cx.notify();
             })

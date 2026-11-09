@@ -128,7 +128,6 @@ pub(crate) struct Perform {
     choosing: Option<Option<PerformSource>>,
     /// The deck panel's source picker is open.
     source_menu: bool,
-    error: Option<String>,
     polls: u64,
 }
 
@@ -450,7 +449,6 @@ impl Luma {
             player: None,
             choosing: None,
             source_menu: false,
-            error: None,
             polls: 0,
         };
         self.open_body(target.clone(), move || Body::Perform(Box::new(state)), cx);
@@ -464,14 +462,14 @@ impl Luma {
         let target = target.clone();
         cx.spawn(async move |this, cx| {
             let opened = opened.await;
-            this.update(cx, |this, cx| {
-                if let Some(state) = this.perform_mut(&target) {
-                    match opened {
-                        Ok(inputs) => state.inputs = Some(inputs),
-                        Err(error) => state.error = Some(error.to_string()),
+            this.update(cx, |this, cx| match opened {
+                Ok(inputs) => {
+                    if let Some(state) = this.perform_mut(&target) {
+                        state.inputs = Some(inputs);
+                        cx.notify();
                     }
-                    cx.notify();
                 }
+                Err(error) => this.report_failure("Could not open the inputs", error, cx),
             })
             .ok();
         })
@@ -550,7 +548,8 @@ impl Luma {
                     }
                     match controls {
                         Some(Ok(controls)) => state.controls = controls,
-                        Some(Err(error)) => state.error = Some(error.to_string()),
+                        // A background read: keep what we knew, as above.
+                        Some(Err(error)) => log::warn!("could not read the controls: {error}"),
                         None => {}
                     }
                     state.held.retain(|_, (_, at)| at.elapsed() < HELD_FOR);
@@ -613,7 +612,7 @@ impl Luma {
         state.held.insert(name.to_owned(), (value, Instant::now()));
         let set = self.library.perform_control(name, value);
         cx.notify();
-        self.after_request(target.clone(), set, cx);
+        self.after_request("The value was not set", set, cx);
     }
 
     /// A button of a cell pressed (`down`) or let go: a pad or another button
@@ -647,7 +646,7 @@ impl Luma {
             _ => Box::pin(self.library.perform_press(vec![(name.to_owned(), down)])),
         };
         cx.notify();
-        self.after_request(target.clone(), request, cx);
+        self.after_request("The press did not go through", request, cx);
     }
 
     /// Learn: bind the next input heard to control `name`, the way `mode`
@@ -661,7 +660,6 @@ impl Luma {
         }
         state.learning = Some(name.to_owned());
         state.learning_since = state.polls;
-        state.error = None;
         let learn = self.library.input_learn(target.venue(), name, mode);
         let (target, name) = (target.clone(), name.to_owned());
         cx.notify();
@@ -674,7 +672,7 @@ impl Luma {
                 if state.learning.as_deref() == Some(name.as_str()) {
                     state.learning = None;
                     if let Err(error) = learned {
-                        state.error = Some(error.to_string());
+                        this.report_failure("Nothing was learned", error, cx);
                     }
                 }
                 cx.notify();
@@ -689,7 +687,7 @@ impl Luma {
             if state.learning.take().is_some() {
                 let cancel = self.library.input_cancel_learn();
                 cx.notify();
-                self.after_request(target.clone(), cancel, cx);
+                self.after_request("Could not stop learning", cancel, cx);
             }
         }
     }
@@ -707,13 +705,11 @@ impl Luma {
         let map = self
             .library
             .input_map_page(target.venue(), controller_id, &page);
-        let target = target.clone();
         cx.spawn(async move |this, cx| {
             let mapped = map.await;
             this.update(cx, |this, cx| {
-                if let Some(state) = this.perform_mut(&target) {
-                    state.error = mapped.err().map(|error| error.to_string());
-                    cx.notify();
+                if let Err(error) = mapped {
+                    this.report_failure("The page was not mapped to the controller", error, cx);
                 }
             })
             .ok();
@@ -748,16 +744,13 @@ impl Luma {
         let changed = match state.surface.apply(layout, edit) {
             Ok(true) => Some(layout.clone()),
             Ok(false) => None,
-            Err(message) => {
-                state.error = Some(message);
-                None
-            }
+            // The surface's refusals are already said for a person.
+            Err(message) => return self.report(message, cx),
         };
         if let Some(layout) = changed {
             state.edits += 1;
-            state.error = None;
             let save = self.library.save_perform_layout(target.venue(), layout);
-            self.after_request(target.clone(), save, cx);
+            self.after_request("The layout was not saved", save, cx);
         }
         cx.notify();
     }
@@ -783,27 +776,25 @@ impl Luma {
             }
             BindingChange::Remove => {
                 let unbind = self.library.input_unbind(venue, &binding.id);
-                return self.after_request(target.clone(), unbind, cx);
+                return self.after_request("The binding was not removed", unbind, cx);
             }
         };
-        self.after_request(target.clone(), pending, cx);
+        self.after_request("The binding was not changed", pending, cx);
     }
 
+    /// Send `pending`; if it fails, the status bar says `what` did not happen.
     fn after_request(
         &mut self,
-        target: Target,
+        what: &'static str,
         pending: impl std::future::Future<Output = Result<(), crate::LibraryError>> + 'static,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
-            let done = pending.await;
-            this.update(cx, |this, cx| {
-                if let (Some(state), Err(error)) = (this.perform_mut(&target), done) {
-                    state.error = Some(error.to_string());
-                    cx.notify();
-                }
-            })
-            .ok();
+            let Err(error) = pending.await else {
+                return;
+            };
+            this.update(cx, |this, cx| this.report_failure(what, error, cx))
+                .ok();
         })
         .detach();
     }
@@ -817,7 +808,6 @@ impl Luma {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
-        state.error = None;
         state.choosing = Some(source.clone());
         state.source_menu = false;
         cx.notify();
@@ -829,12 +819,14 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let done = request.await;
             this.update(cx, |this, cx| {
-                if let (Some(state), Err(error)) = (this.perform_mut(&target), done) {
-                    // The backend fell back to not following; show that.
+                let Err(error) = done else {
+                    return;
+                };
+                // The backend fell back to not following; show that.
+                if let Some(state) = this.perform_mut(&target) {
                     state.choosing = None;
-                    state.error = Some(error.to_string());
-                    cx.notify();
                 }
+                this.report_failure("Could not follow that source", error, cx);
             })
             .ok();
         })
@@ -901,6 +893,7 @@ impl Luma {
                     .collect();
                 state.controls = controls;
                 let mut generated = None;
+                let mut failed = None;
                 match (patterns, layout) {
                     // Edited here since the read left: what is here is newer.
                     (Ok(_), Ok(_)) if state.edits != edits => {}
@@ -913,14 +906,19 @@ impl Luma {
                         state.patterns = Some(patterns);
                         state.layout = Some(layout);
                     }
-                    (Err(error), _) | (_, Err(error)) => state.error = Some(error.to_string()),
+                    (Err(error), _) | (_, Err(error)) => {
+                        failed = Some(("Could not load the Perform set", error));
+                    }
                 }
                 if let Err(error) = opened {
-                    state.error = Some(error.to_string());
+                    failed = Some(("The Perform set did not start playing", error));
+                }
+                if let Some((what, error)) = failed {
+                    this.report_failure(what, error, cx);
                 }
                 if let Some(layout) = generated {
                     let save = this.library.save_perform_layout(target.venue(), layout);
-                    this.after_request(target.clone(), save, cx);
+                    this.after_request("The layout was not saved", save, cx);
                 }
                 cx.notify();
             })
@@ -963,9 +961,7 @@ impl Luma {
             let saved = save.await;
             this.update(cx, |this, cx| {
                 if let Err(error) = saved {
-                    if let Some(state) = this.perform_mut(&target) {
-                        state.error = Some(error.to_string());
-                    }
+                    this.report_failure("The pattern was not saved", error, cx);
                     // What was stored is what stands.
                     this.reload_perform_set(&target, cx);
                 }
@@ -1009,8 +1005,7 @@ impl Luma {
             return;
         };
         let Some(place) = Self::new_place(state) else {
-            state.error = Some("No room on this page. Make it bigger or clear a place.".into());
-            return cx.notify();
+            return self.report("No room on this page, make it bigger or clear a place", cx);
         };
         let expression = state
             .surface
@@ -1059,13 +1054,12 @@ impl Luma {
                 };
                 match made {
                     Ok(_) => {
-                        state.error = None;
                         state.surface.page = index;
                         state.surface.selected = None;
                         state.surface.adding = None;
                         this.reload_perform_set(&target, cx);
                     }
-                    Err(error) => state.error = Some(error.to_string()),
+                    Err(error) => this.report_failure("The busk page was not added", error, cx),
                 }
                 cx.notify();
             })
@@ -1101,8 +1095,7 @@ impl Luma {
         let place =
             surface::room(page, cell.width, cell.height).or_else(|| surface::room(page, 1, 1));
         let Some(place) = place else {
-            state.error = Some("No room on this page for a copy.".into());
-            return cx.notify();
+            return self.report("No room on this page for a copy", cx);
         };
         let copy = PerformPattern {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1179,7 +1172,7 @@ impl Luma {
         }
         let delete = self.library.delete_perform_pattern(venue_id, pattern_id);
         cx.notify();
-        self.after_request(target, delete, cx);
+        self.after_request("The pattern was not deleted", delete, cx);
     }
 
     /// Start typing a name in place of `of`'s.
@@ -1321,7 +1314,7 @@ impl Luma {
                 let rename = self
                     .library
                     .input_rename_controller(target.venue(), &id, typed);
-                self.after_request(target.clone(), rename, cx);
+                self.after_request("The name was not saved", rename, cx);
             }
         }
     }
@@ -1443,7 +1436,7 @@ impl Luma {
                     .and_then(|state| state.layout.clone());
                 if let Some(layout) = layout {
                     let save = this.library.save_perform_layout(target.venue(), layout);
-                    this.after_request(target.clone(), save, cx);
+                    this.after_request("The color was not saved", save, cx);
                 }
             })
             .ok();
@@ -1503,14 +1496,13 @@ impl Luma {
     /// Set the tapped tempo, from the tempo strip's nudges.
     fn set_tap_bpm(&mut self, target: &Target, bpm: f64, cx: &mut Context<Self>) {
         let set = self.library.perform_set_bpm(target.venue(), bpm);
-        self.after_request(target.clone(), set, cx);
+        self.after_request("The tempo was not set", set, cx);
     }
 
     /// Load `track_id` onto the player and play it from the top: the
     /// virtual deck follows whatever the player has.
-    pub(crate) fn play_virtual(&mut self, target: &Target, track_id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn play_virtual(&mut self, track_id: &str, cx: &mut Context<Self>) {
         let (session, load) = self.library.load_audio(track_id);
-        let target = target.clone();
         cx.spawn(async move |this, cx| {
             // A library call starts when it is made, so the play is asked for
             // only once the load has landed: made beside it, it raced the load
@@ -1526,10 +1518,7 @@ impl Luma {
             };
             if let Err(error) = done {
                 this.update(cx, |this, cx| {
-                    if let Some(state) = this.perform_mut(&target) {
-                        state.error = Some(error.to_string());
-                        cx.notify();
-                    }
+                    this.report_failure("The song did not start playing", error, cx)
                 })
                 .ok();
             }
@@ -1537,19 +1526,13 @@ impl Luma {
         .detach();
     }
 
-    fn virtual_transport(
-        &mut self,
-        target: &Target,
-        session: u64,
-        transport: Transport,
-        cx: &mut Context<Self>,
-    ) {
+    fn virtual_transport(&mut self, session: u64, transport: Transport, cx: &mut Context<Self>) {
         let request: std::pin::Pin<Box<dyn std::future::Future<Output = _>>> = match transport {
             Transport::PlayFrom(at) => Box::pin(self.library.play(session, at)),
             Transport::Pause => Box::pin(self.library.pause(session)),
             Transport::SeekTo(at) => Box::pin(self.library.seek(session, at)),
         };
-        self.after_request(target.clone(), request, cx);
+        self.after_request("The player did not respond", request, cx);
     }
 
     fn set_perform_latency(&mut self, latency_ms: f32, cx: &mut Context<Self>) {
@@ -1650,7 +1633,6 @@ pub(crate) fn perform(state: &Perform, app: &Entity<Luma>) -> AnyElement {
         .px(px(18.))
         .pt(px(12.))
         .pb(px(16.))
-        .children(state.error.clone().map(float::error_row))
         .child(grid::surface(state, &target, app));
     div()
         .id("perform")
@@ -1986,11 +1968,11 @@ fn decks(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoEleme
         .unwrap_or_default();
     // The add-song dialog, opened to choose what the virtual deck plays.
     let pick = |label: &'static str| {
-        let (app, target) = (app.clone(), target.clone());
+        let app = app.clone();
         float::btn(label, "virtual-pick")
             .id("virtual-pick")
             .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| this.show_track_to_play(target.clone(), cx));
+                app.update(cx, |this, cx| this.show_track_to_play(cx));
             })
             .agent_node(Role::Button, label)
     };
@@ -2054,7 +2036,7 @@ fn decks(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoEleme
                         .flex()
                         .gap(px(4.))
                         .pt(px(4.))
-                        .child(deck_transport(player, target, app))
+                        .child(deck_transport(player, app))
                         .child(pick("Change song"))
                         .into_any_element()
                 });
@@ -2083,16 +2065,11 @@ fn decks(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl IntoEleme
 }
 
 /// Play or pause, and back to the top, for the virtual deck.
-fn deck_transport(
-    player: &HostAudioSnapshot,
-    target: &Target,
-    app: &Entity<Luma>,
-) -> impl IntoElement {
+fn deck_transport(player: &HostAudioSnapshot, app: &Entity<Luma>) -> impl IntoElement {
     let session = player.session;
     let at = player.current_time;
     let playing = player.is_playing;
     let (toggle_app, top_app) = (app.clone(), app.clone());
-    let (toggle_target, top_target) = (target.clone(), target.clone());
     div()
         .flex()
         .gap(px(4.))
@@ -2106,7 +2083,7 @@ fn deck_transport(
                         } else {
                             Transport::PlayFrom(at)
                         };
-                        this.virtual_transport(&toggle_target, session, transport, cx);
+                        this.virtual_transport(session, transport, cx);
                     });
                 })
                 .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
@@ -2121,7 +2098,7 @@ fn deck_transport(
                         } else {
                             Transport::SeekTo(0.)
                         };
-                        this.virtual_transport(&top_target, session, transport, cx);
+                        this.virtual_transport(session, transport, cx);
                     });
                 })
                 .agent_node(Role::Button, "From the top"),

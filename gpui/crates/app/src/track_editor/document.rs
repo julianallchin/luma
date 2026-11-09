@@ -116,7 +116,7 @@ impl Editor {
         self.dirty = split;
         self.sheet.invalidate();
         self.previews.borrow_mut().clear();
-        self.preview_errors.clear();
+        self.preview_failed.clear();
         self.composited = Some(self.clips.clone());
         Ok(())
     }
@@ -193,9 +193,8 @@ impl Luma {
         let candidate = match editor.graph_candidate() {
             Ok(score) => score,
             Err(error) => {
-                editor.error = Some(error);
                 editor.dirty = false;
-                cx.notify();
+                self.report_failure("Could not save the score", error, cx);
                 return;
             }
         };
@@ -209,13 +208,13 @@ impl Luma {
         }
         let pending = self.library.edit_score_document(&score_id, &edit);
         editor.saving = true;
-        editor.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut again = false;
                 let mut previews = Vec::new();
+                let mut failed = None;
                 this.edit_track_tab(&target, cx, |editor| {
                     editor.saving = false;
                     editor.writes += 1;
@@ -236,10 +235,13 @@ impl Luma {
                                 .retain(|id, _| candidate.clips.contains_key(id.as_ref()));
                             *base = candidate;
                         }
-                        Err(error) => editor.error = Some(error.to_string()),
+                        Err(error) => failed = Some(error),
                     }
                     again = editor.dirty;
                 });
+                if let Some(error) = failed {
+                    this.report_failure("Could not save the score", error, cx);
+                }
                 this.refresh_clip_previews_for(target.clone(), previews, cx);
                 if again {
                     this.commit_graph_score_for(target, cx);
@@ -275,6 +277,7 @@ impl Luma {
                 let mut changed = false;
                 let mut split = false;
                 let mut held = None;
+                let mut failed = None;
                 this.edit_track_tab(&target, cx, |editor| {
                     // A read that overlapped a local edit or save may be
                     // older than it: installing it would drop the selection
@@ -301,7 +304,7 @@ impl Luma {
                             // changed clips.
                             let composited = editor.composited.clone();
                             if let Err(error) = editor.install_contents(resolved) {
-                                editor.error = Some(error);
+                                failed = Some(error);
                                 return;
                             }
                             changed = true;
@@ -319,9 +322,12 @@ impl Luma {
                             editor.previews.borrow_mut().clear();
                             previews = editor.clips.iter().map(|clip| clip.id.clone()).collect();
                         }
-                        Err(error) => editor.error = Some(error.to_string()),
+                        Err(error) => failed = Some(error.to_string()),
                     }
                 });
+                if let Some(error) = failed {
+                    this.report_failure("Could not reload the score", error, cx);
+                }
                 this.refresh_clip_previews_for(target.clone(), previews, cx);
                 if changed {
                     this.refresh_working_scene_for(&target, cx);

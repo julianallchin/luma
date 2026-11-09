@@ -47,8 +47,8 @@ pub(crate) struct SourcePreview {
     /// A pointer is dragging the scrub bar: the transport's own position is
     /// stale until it lets go, so polls do not move the playhead meanwhile.
     pub(super) scrubbing: bool,
-    /// Why the file would not play, shown in place of the scrub bar.
-    pub(super) failed: Option<String>,
+    /// The file would not play: the scrub bar says so, the log says why.
+    pub(super) failed: bool,
     _poll: Option<Task<()>>,
 }
 
@@ -83,7 +83,7 @@ impl Luma {
         if let Some(preview) = self
             .source_preview
             .as_mut()
-            .filter(|preview| preview.track_id == track_id && preview.failed.is_none())
+            .filter(|preview| preview.track_id == track_id && !preview.failed)
         {
             let Some(loaded) = &preview.loaded else {
                 // Still decoding: a second press means "never mind".
@@ -138,11 +138,11 @@ impl Luma {
             playing: false,
             position: 0.0,
             scrubbing: false,
-            failed: None,
+            failed: false,
             _poll: None,
         };
         let Some(path) = track.file_path.clone() else {
-            preview.failed = Some("No audio file".to_string());
+            preview.failed = true;
             self.source_preview = Some(preview);
             cx.notify();
             return;
@@ -172,7 +172,8 @@ impl Luma {
                     // A newer load took the player first.
                     Ok(None) => None,
                     Err(error) => {
-                        preview.failed = Some(error.to_string());
+                        log::warn!("Could not load the song to preview: {error}");
+                        preview.failed = true;
                         None
                     }
                 }
@@ -192,8 +193,9 @@ impl Luma {
                 match result {
                     Ok(()) => this.poll_source_preview(session, cx),
                     Err(error) => {
+                        log::warn!("Could not play the song preview: {error}");
                         preview.playing = false;
-                        preview.failed = Some(error.to_string());
+                        preview.failed = true;
                     }
                 }
                 cx.notify();

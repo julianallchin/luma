@@ -89,11 +89,11 @@ test("HDR output is a General setting", () => {
   const row = until("the loaded General settings", (s) =>
     s.find({ role: "checkbox", label: "HDR output" }));
   app.click(row.find({ role: "checkbox", label: "HDR output" }));
-  // The write re-reads every setting; a failed write shows as a text node.
+  // The write re-reads every setting; a failed write says so in the status bar.
   const settled = until("the re-read after the write", (s) =>
     s.find({ role: "checkbox", label: "HDR output" }));
   expect(settled.findAll({ role: "checkbox" }).map((n) => n.label)).toContain("HDR output");
-  const failed = settled.nodes.some((n) => (n.label || "").startsWith("Failed to save"));
+  const failed = settled.find({ role: "button", label: "The setting was not saved" });
   assert(!failed, "the HDR write reported a save error");
 });
 

@@ -135,15 +135,12 @@ impl Visualizer {
             selection_motion: SelectionMotion::new(cx.reduce_motion()),
             selection_card_side: None,
             selection_card_last: None,
-            environment_error: None,
             environment_saving: false,
             environment_edited: false,
             environment_pending: Rc::default(),
-            haze_error: None,
             haze_saving: false,
             haze_edited: false,
             haze_pending: Rc::default(),
-            view_setting_error: None,
             view_setting_saving: false,
             view_setting_pending: Rc::default(),
             fps_panel: Default::default(),
@@ -292,7 +289,8 @@ impl Visualizer {
         let rig = match loaded {
             Ok(rig) => rig,
             Err(error) => {
-                self.status = Status::Empty(error.to_string());
+                log::warn!("could not load the rig: {error}");
+                self.status = Status::Empty("Could not load the rig".to_string());
                 return;
             }
         };

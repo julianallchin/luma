@@ -76,16 +76,15 @@ pub fn track_editor(
         .bg(ladder::background())
         .text_color(ladder::foreground())
         .child(toolbar(state, app, readout))
-        // An error only takes the screen when there is nothing behind it to
-        // show. A *write* that came back refused — an overlap the seam
-        // forbids, a document it would not validate — leaves a perfectly
-        // good timeline on screen, and
-        // replacing it with a sentence would throw away the picture the user
-        // needs in order to understand the refusal. Those read out on the
-        // toolbar instead.
-        .child(match (&state.error, state.waveform.is_some()) {
-            (Some(message), false) => luma_ui::plate(message.clone(), ladder::danger()),
-            (None, false) => {
+        // Only a song that could not be opened takes the screen: there is
+        // nothing behind it to show. A write that came back refused leaves a
+        // perfectly good timeline on screen and says so in the status bar.
+        .child(match (state.load_failed, state.waveform.is_some()) {
+            (true, false) => luma_ui::plate(
+                "Could not open this song".to_string(),
+                ladder::muted_foreground(),
+            ),
+            (false, false) => {
                 luma_ui::plate("Loading track…".to_string(), ladder::muted_foreground())
             }
             (_, true) => div()

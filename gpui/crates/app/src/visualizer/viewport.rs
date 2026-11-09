@@ -65,7 +65,8 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
     // A frame that failed drew nothing and left its reason behind; adopt it
     // before deciding what this frame shows.
     if let Some(error) = state.stage.borrow_mut().error.take() {
-        state.status = Status::Empty(error);
+        log::warn!("the stage stopped drawing: {error}");
+        state.status = Status::Empty("The stage stopped drawing".to_string());
     }
     // Device off by request: keep the pane's own node so a tree assertion
     // cannot tell the two configurations apart, and skip the renderer.
@@ -92,8 +93,9 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
         luma_render::Warming::Compiling | luma_render::Warming::Cold => {
             return plate("Compiling shaders…".to_string());
         }
-        luma_render::Warming::Unavailable(why) => {
-            return plate(format!("The GPU is unavailable: {why}"));
+        // The reason is the renderer's, and the renderer logged it.
+        luma_render::Warming::Unavailable(_) => {
+            return plate("The GPU is unavailable".to_string());
         }
         luma_render::Warming::Ready { .. } => {}
     }

@@ -1211,6 +1211,95 @@ async fn a_member_edits_the_venue_but_not_its_door() {
     b.close().await;
 }
 
+/// A write the server's policies refuse is not lost in silence. A member may
+/// read the owner's song but not retitle it: the update is filtered to no row
+/// and PostgREST answers 204. The production connector counts the rows its
+/// update changed, records the refusal once, takes it off the queue, and the
+/// next download puts the owner's title back. The status bar says so.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn a_refused_write_is_one_rejection_and_reads_not_saved() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let venue = unique("venue");
+    let score = unique("score");
+    let code = unique("code");
+    let track = format!("{venue}-track");
+    seed(&a.sql, USER, &venue, &score, &[]).await;
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(&code)
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("share code");
+    wait_for_upload(&a.sql).await;
+    assert_eq!(rpc_join(&containers, OTHER, &code).await, venue);
+
+    // The member's device, syncing the way the app does: the production
+    // connector under the production status service.
+    let b = offline_device(&directory.path().join("b"), OTHER).await;
+    let sync = b.sync.clone();
+    let state = SqlitePool::connect("sqlite::memory:").await.expect("state");
+    let service = super::service::Service::start(b, state, crate::events::Events::discard())
+        .expect("service");
+    sync.connect(SyncOptions::new(super::connector::Connector::with_token(
+        sync.clone(),
+        service.pool().clone(),
+        mint_jwt(&containers.secret, OTHER),
+        containers.postgrest.clone(),
+        containers.powersync.clone(),
+    )))
+    .await;
+    let pool = service.pool().clone();
+    settles(
+        &pool,
+        &count("tracks", "id", &track),
+        "1",
+        "the owner's song never reached the member",
+    )
+    .await;
+
+    sqlx::query("UPDATE tracks SET title = 'Retitled' WHERE id = ?")
+        .bind(&track)
+        .execute(&pool)
+        .await
+        .expect("member retitles the owner's song");
+    wait_for_upload(&pool).await;
+    settles(
+        &pool,
+        &format!("SELECT title FROM tracks WHERE id = '{track}'"),
+        "Aurora",
+        "the server's title never came back",
+    )
+    .await;
+
+    let status = service.status().await.expect("status");
+    assert_eq!(
+        status
+            .refused
+            .iter()
+            .map(|refusal| (
+                refusal.table.as_str(),
+                refusal.row_id.as_str(),
+                refusal.op.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("tracks", track.as_str(), "PATCH")],
+        "the refusal is recorded once"
+    );
+    assert_eq!(status.summary().to_string(), "1 not saved");
+
+    service.dismiss_refusals().await.expect("dismiss");
+    assert!(service.status().await.expect("status").refused.is_empty());
+
+    service.stop();
+    a.close().await;
+}
+
 /// One PostgREST read as `user`.
 async fn get(containers: &Containers, user: &str, path: &str) -> serde_json::Value {
     rest(containers, user, reqwest::Method::GET, path, None).await

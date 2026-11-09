@@ -2,7 +2,8 @@
 //! doing in the background, and one line about the mode on screen.
 //!
 //! Left, the quiet states — sync, DMX output, an import running, an update
-//! ready, a sign-out that failed — each one [`Item`], drawn one way. Right,
+//! ready, something just done that did not land — each one [`Item`], drawn
+//! one way. Right,
 //! the mode's context line: in Arrange the open song, in Live what is
 //! followed, in Rig the size of the rig.
 
@@ -22,8 +23,9 @@ pub(crate) struct Item {
     pub(crate) id: &'static str,
     pub(crate) icon: Option<IconName>,
     pub(crate) label: String,
-    /// Something is wrong: the item is painted in the danger tone.
-    pub(crate) danger: bool,
+    /// Worth a look: the item carries the notice mark ahead of its words.
+    /// The words stay in the bar's own ink — nothing here is written in red.
+    pub(crate) attention: bool,
     /// A healthy steady state gets the green dot ahead of its word.
     pub(crate) ok: bool,
     pub(crate) press: Option<fn(&mut Luma, &mut Context<Luma>)>,
@@ -37,7 +39,7 @@ impl Item {
             id,
             icon: None,
             label: label.into(),
-            danger: false,
+            attention: false,
             ok: false,
             press: None,
             detail: None,
@@ -50,11 +52,11 @@ pub(crate) fn bar(app: &mut Luma, _: &mut Window, cx: &mut Context<Luma>) -> Any
     let entity = cx.entity();
     let app = &*app;
     let items = [
-        crate::sync_status::item(app),
+        crate::sync_status::item(app, &entity),
         output(app),
         crate::add_tracks::progress::item(app),
         crate::update::item(app),
-        account_failure(app),
+        crate::failure::item(app),
     ];
     div()
         .size_full()
@@ -91,14 +93,11 @@ fn render(item: Item, app: &Entity<Luma>) -> AnyElement {
         .flex()
         .items_center()
         .gap(px(6.))
-        .text_color(if item.danger {
-            Hsla::from(ladder::danger())
-        } else {
-            glass::ink(glass::TEXT_TERTIARY)
-        })
+        .text_color(glass::ink(glass::TEXT_TERTIARY))
         .when(item.ok, |row| {
             row.child(div().size(px(6.)).rounded_full().bg(ladder::status_ok()))
         })
+        .when(item.attention, |row| row.child(luma_ui::notice::mark()))
         .children(
             item.icon
                 .map(|icon| gpui_component::Icon::new(icon).size(px(11.))),
@@ -135,16 +134,6 @@ fn output(app: &Luma) -> Option<Item> {
     );
     item.ok = app.dmx_output;
     item.press = Some(|this, cx| this.open_settings(cx));
-    Some(item)
-}
-
-/// A sign-out that could not land says so here: the gesture was pressed from
-/// a menu that has since closed, and a report that lived only in Settings
-/// would be a gesture that silently did nothing.
-fn account_failure(app: &Luma) -> Option<Item> {
-    let error = app.account_action.error.clone()?;
-    let mut item = Item::new("account-failure", error);
-    item.danger = true;
     Some(item)
 }
 

@@ -140,6 +140,25 @@ impl Library {
         }
     }
 
+    /// Stop counting the changes the server refused; they stay recorded.
+    pub(crate) fn dismiss_sync_refusals(
+        &self,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.sync_status_fixture.clone();
+        let pending = self.call("dismiss_sync_refusals", |services| async move {
+            handlers::sync::dismiss_sync_refusals(&services).await
+        });
+        async move {
+            #[cfg(feature = "agent")]
+            if let Some(fixture) = fixture {
+                fixture.lock().unwrap().refused.clear();
+                return Ok(());
+            }
+            pending.await
+        }
+    }
+
     /// Ask Supabase to turn the stored session back into a principal, and
     /// adopt whichever answer comes back.
     ///

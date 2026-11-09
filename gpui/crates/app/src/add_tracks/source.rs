@@ -64,7 +64,7 @@ impl Luma {
                                 return;
                             }
                             state.source_loaded = true;
-                            state.source_error = Some(error.to_string());
+                            state.fail_source(error);
                             cx.notify();
                         }
                     })
@@ -101,17 +101,17 @@ impl Luma {
                 state.source = Some(source);
                 match library {
                     Ok(library) => state.source_library = Some(library),
-                    Err(error) => state.source_error = Some(error.to_string()),
+                    Err(error) => state.fail_source(error),
                 }
                 match playlists {
                     Ok(playlists) => state.playlists = playlists.into(),
-                    Err(error) => state.source_error = Some(error.to_string()),
+                    Err(error) => state.fail_source(error),
                 }
                 if state.source_row_generation == row_generation {
                     state.source_loaded = true;
                     match tracks {
                         Ok(tracks) => state.source_rows = tracks.into(),
-                        Err(error) => state.source_error = Some(error.to_string()),
+                        Err(error) => state.fail_source(error),
                     }
                 }
                 cx.notify();
@@ -170,7 +170,7 @@ impl Luma {
                 state.source_loaded = true;
                 match result {
                     Ok(rows) => state.source_rows = rows.into(),
-                    Err(error) => state.source_error = Some(error.to_string()),
+                    Err(error) => state.fail_source(error),
                 }
                 cx.notify();
             })
@@ -230,7 +230,7 @@ impl Luma {
                 state.source_loaded = true;
                 match result {
                     Ok(rows) => state.source_rows = rows.into(),
-                    Err(error) => state.source_error = Some(error.to_string()),
+                    Err(error) => state.fail_source(error),
                 }
                 cx.notify();
             })
@@ -264,7 +264,7 @@ impl Luma {
             return;
         }
         let selected: Vec<String> = state.selected.iter().cloned().collect();
-        state.source_error = None;
+        state.source_failed = false;
         self.begin_track_import(
             TrackImportRequest::Source {
                 source,
@@ -282,8 +282,8 @@ pub(super) fn source_library(
     app: &Entity<Luma>,
     cx: &mut gpui::App,
 ) -> AnyElement {
-    let list = if let Some(error) = &state.source_error {
-        retry_body(format!("Source error: {error}"), mode, app)
+    let list = if state.source_failed {
+        retry_body("Could not read this library".to_string(), mode, app)
     } else if !state.source_loaded {
         loading_body(
             "add-tracks-source-skeleton",
@@ -398,7 +398,7 @@ struct RowPreview {
     playing: bool,
     /// Decoding: there is no duration or overview yet.
     loading: bool,
-    failed: Option<String>,
+    failed: bool,
     position: f32,
     duration: f32,
     fraction: f32,
@@ -414,8 +414,8 @@ impl RowPreview {
         );
         Self {
             playing: preview.playing,
-            loading: preview.loaded.is_none() && preview.failed.is_none(),
-            failed: preview.failed.clone(),
+            loading: preview.loaded.is_none() && !preview.failed,
+            failed: preview.failed,
             position: preview.position,
             duration,
             fraction: preview.fraction(),
@@ -446,7 +446,7 @@ fn preview_art(
     let group = SharedString::from(format!("{key}-art"));
     let keyboard = keyboard.clone();
     let playing = preview.is_some_and(|preview| preview.playing);
-    let held = preview.is_some_and(|preview| preview.failed.is_none());
+    let held = preview.is_some_and(|preview| !preview.failed);
     let loading = preview.is_some_and(|preview| preview.loading);
     let label = if playing {
         format!("Pause preview of {title}")
@@ -562,16 +562,10 @@ fn scrub_line(
         .gap(px(6.0))
         .text_size(px(10.0))
         .text_color(ladder::muted_foreground());
-    if let Some(error) = &preview.failed {
-        let message = format!("Can't preview: {error}");
+    if preview.failed {
         return line
-            .child(
-                div()
-                    .truncate()
-                    .text_color(ladder::danger())
-                    .child(message.clone()),
-            )
-            .agent_node(Role::Text, message)
+            .child(div().truncate().child("Cannot play this song"))
+            .agent_node(Role::Text, "Cannot play this song")
             .into_any_element();
     }
     if preview.loading {

@@ -55,6 +55,7 @@ pub mod mark;
 pub mod menu;
 pub mod motion;
 pub mod node;
+pub mod notice;
 pub mod paint;
 pub mod pane;
 pub mod pill;

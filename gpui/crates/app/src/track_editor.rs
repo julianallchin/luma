@@ -181,7 +181,6 @@ pub struct Editor {
     beat_reason: Option<BeatValidationReason>,
     beat_reason_menu: luma_ui::float::MenuVisibility,
     beat_validation_pending: bool,
-    beat_validation_error: Option<String>,
     /// The **working copy**: every clip as the screen currently has it, with
     /// its lane resolved. Rebuilt whenever the clips change and never during a
     /// draw. Rows depend on every clip's layer priority, so rebuilding them
@@ -201,7 +200,9 @@ pub struct Editor {
     previews: Rc<RefCell<HashMap<SharedString, Installed>>>,
     /// Clips whose single-clip preview render is in flight.
     preview_inflight: HashSet<SharedString>,
-    preview_errors: HashMap<SharedString, String>,
+    /// Clips whose last preview render failed. The cause is in the log; the
+    /// clip just draws without its picture.
+    preview_failed: HashSet<SharedString>,
     /// Clips edited again while their render was in flight. Re-issued when it
     /// lands — the render reads the clip's current state at issue, so one
     /// trailing render covers everything a burst of edits did.
@@ -273,7 +274,9 @@ pub struct Editor {
     /// Writes that have come back. A reload read that saw this change under
     /// it may hold the document from before our own write.
     writes: u64,
-    error: Option<String>,
+    /// The song itself could not be opened: its waveform never arrived, so
+    /// there is no timeline to show. The cause is in the log.
+    load_failed: bool,
     /// Whether the screen's first load has finished. Written in one assignment
     /// with the data, so "still loading" and "nothing here" cannot be confused.
     loaded: bool,

@@ -34,7 +34,7 @@ pub(super) fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     let candidate = match editor.graph_candidate() {
         Ok(score) => score,
         Err(error) => {
-            editor.error = Some(error);
+            crate::failure::report_later(cx, "Could not play the latest edits", error);
             return;
         }
     };
@@ -52,12 +52,12 @@ pub(super) fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
             this.edit_track_tab(&target, cx, |editor| {
                 editor.compositing = false;
                 // Remember this attempt, including a failure, so a bad input
-                // produces one useful error instead of a retry every frame.
+                // produces one report instead of a retry every frame.
                 editor.composited = Some(sent);
-                if let Err(error) = result {
-                    editor.error = Some(format!("Playback: {error}"));
-                }
             });
+            if let Err(error) = result {
+                this.report_failure("Could not play the latest edits", error, cx);
+            }
         })
         .ok();
     })

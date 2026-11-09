@@ -69,7 +69,7 @@ impl Luma {
         let subscription = cx.subscribe(&name, |_: &mut Luma, _, _, cx| cx.notify());
         window.focus(&name.read(cx).focus_handle(cx), cx);
 
-        state.group_error = None;
+        state.group_refusal = None;
         state.group_editor = Some(Editor {
             id,
             name,
@@ -101,11 +101,12 @@ impl Luma {
             self.library
                 .save_venue_group(&venue, editor.id.as_deref(), &label, &added, &removed);
         state.group_busy = true;
-        state.group_error = None;
+        state.group_refusal = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
+                let mut failed = None;
                 if let Some(state) = this.patch_mut(&venue) {
                     state.group_busy = false;
                     match result {
@@ -114,8 +115,14 @@ impl Luma {
                             state.say("Group saved");
                             state.repair_after_save = true;
                         }
-                        Err(error) => state.group_error = Some(super::refusal_message(&error)),
+                        Err(error) => match super::refusal(&error) {
+                            Some(message) => state.group_refusal = Some(message),
+                            None => failed = Some(error),
+                        },
                     }
+                }
+                if let Some(error) = failed {
+                    this.report_failure("The group was not saved", error, cx);
                 }
                 this.reload_patch(venue, cx);
             })
@@ -135,9 +142,6 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(6.0));
-    if let Some(error) = &state.group_error {
-        body = body.child(luma_ui::plate(error.clone(), ladder::danger()));
-    }
     if let Some(editor) = &state.group_editor {
         let save = app.clone();
         let cancel = app.clone();
@@ -148,6 +152,7 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                 "New group"
             }))
             .child(editor.name.clone())
+            .children(state.group_refusal.clone().map(luma_ui::notice::line))
             .child(
                 div()
                     .flex()
@@ -173,7 +178,7 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                                     if let Some(Body::Patch(s)) = this.workspace.active_body_mut() {
                                         if !s.group_busy {
                                             s.group_editor = None;
-                                            s.group_error = None;
+                                            s.group_refusal = None;
                                         }
                                     }
                                     cx.notify();
@@ -255,10 +260,10 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                 ),
         );
     if let Some(data) = &state.data {
-        if let Some(error) = &data.missing_error {
+        if data.missing_unchecked {
             section = section.child(luma_ui::plate(
-                format!("Could not check score groups: {error}"),
-                ladder::danger(),
+                "Could not check which groups the scores use".to_string(),
+                ladder::muted_foreground(),
             ));
         }
         if !data.missing.is_empty() {
@@ -370,7 +375,8 @@ pub(crate) struct Repair {
     fixtures: Vec<String>,
     selected: Option<String>,
     busy: bool,
-    error: Option<String>,
+    /// Why the backend refused the last resolve, in its words.
+    refusal: Option<SharedString>,
 }
 impl Luma {
     pub(crate) fn open_group_repair(&mut self, cx: &mut Context<Self>) {
@@ -391,7 +397,7 @@ impl Luma {
                 fixtures: state.selected.iter().cloned().collect(),
                 selected: None,
                 busy: false,
-                error: None,
+                refusal: None,
             }));
         cx.notify();
     }
@@ -400,12 +406,14 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                if let Some(state) = this.patch_mut(&venue) {
-                    state.group_error = result.err().map(|e| super::refusal_message(&e));
-                    if state.group_error.is_none() {
-                        state.group_editor = None;
-                        state.repair_after_save = true;
+                match result {
+                    Ok(()) => {
+                        if let Some(state) = this.patch_mut(&venue) {
+                            state.group_editor = None;
+                            state.repair_after_save = true;
+                        }
                     }
+                    Err(error) => this.report_failure("The group was not deleted", error, cx),
                 }
                 this.reload_patch(venue, cx);
             })
@@ -428,7 +436,9 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Some(state) = this.patch_mut(&venue) {
                     state.group_busy = false;
-                    state.group_error = result.err().map(|e| super::refusal_message(&e));
+                }
+                if let Err(error) = result {
+                    this.report_failure("Groups were not generated", error, cx);
                 }
                 this.reload_patch(venue, cx);
             })
@@ -456,7 +466,7 @@ impl Luma {
             Some(name.clone())
         };
         state.busy = true;
-        state.error = None;
+        state.refusal = None;
         let venue = state.venue.clone();
         let name = missing.name.clone();
         let pending = self.library.resolve_venue_group(
@@ -468,6 +478,7 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
+                let mut failed = None;
                 if let Some(crate::shell::Overlay::GroupRepair(state)) = this.overlay.open_mut() {
                     if state.venue != venue {
                         return;
@@ -481,11 +492,17 @@ impl Luma {
                             }
                             state.selected = None;
                         }
-                        Err(error) => state.error = Some(super::refusal_message(&error)),
+                        Err(error) => match super::refusal(&error) {
+                            Some(message) => state.refusal = Some(message),
+                            None => failed = Some(error),
+                        },
                     }
                     if state.missing.is_empty() {
                         this.dismiss_overlay(cx);
                     }
+                }
+                if let Some(error) = failed {
+                    this.report_failure("The missing group was not resolved", error, cx);
                 }
                 this.reload_patch(venue, cx);
                 cx.notify();
@@ -558,8 +575,8 @@ pub(crate) fn repair_dialog(state: &Repair, app: &Entity<Luma>) -> AnyElement {
         );
     }
     body = body.child(choices);
-    if let Some(error) = &state.error {
-        body = body.child(luma_ui::plate(error.clone(), ladder::danger()));
+    if let Some(refusal) = &state.refusal {
+        body = body.child(luma_ui::notice::line(refusal.clone()));
     }
     body = body.child(
         div()
