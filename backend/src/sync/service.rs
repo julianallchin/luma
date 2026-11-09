@@ -138,6 +138,7 @@ impl Service {
             last_synced_at: observed.last_synced_at.clone(),
             pending_uploads: usize::try_from(pending).unwrap_or(0),
             refused,
+            media: None,
         })
     }
 

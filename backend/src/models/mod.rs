@@ -1,6 +1,7 @@
 pub mod actor;
 pub mod agent_execution;
 pub mod agent_threads;
+pub mod background;
 pub mod beat_grid;
 pub mod composable_patterns;
 pub mod distribute;

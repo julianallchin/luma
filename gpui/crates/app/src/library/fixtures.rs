@@ -266,6 +266,15 @@ impl Library {
         self.source_fixture.lock().unwrap().clone()
     }
 
+    /// Supply background-work snapshots to the harness: what a library with no
+    /// Python setup, no analysis and no media loop never reports.
+    pub fn set_background_work_fixture(
+        &mut self,
+        work: Arc<Mutex<luma_lib::models::background::BackgroundWork>>,
+    ) {
+        self.background_work_fixture = Some(work);
+    }
+
     /// Supply live sync snapshots to the harness without enabling networking.
     pub fn set_sync_status_fixture(
         &mut self,

@@ -214,6 +214,8 @@ pub struct Library {
     cloud: bool,
     #[cfg(feature = "agent")]
     sync_status_fixture: Option<Arc<Mutex<luma_lib::models::sync::SyncStatus>>>,
+    #[cfg(feature = "agent")]
+    background_work_fixture: Option<Arc<Mutex<luma_lib::models::background::BackgroundWork>>>,
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
@@ -379,6 +381,21 @@ impl Library {
         } else {
             services
         };
+        // Bytes move on their own clock: audio, stems and album art go through
+        // Supabase Storage, not through the row protocol, and a 40 MB stem has
+        // nothing to do with a checkpoint. The services keep a handle on its
+        // progress for the status bar; its loop starts below.
+        let media = syncing.then(|| {
+            luma_lib::sync::media::Media::new(
+                services.db().0.clone(),
+                services.state_pool().clone(),
+                services.storage().clone(),
+            )
+        });
+        let services = match &media {
+            Some(media) => services.with_media(media.clone()),
+            None => services,
+        };
         let services = services.into_shared();
         // The loop that keeps the library current after the sync that opened
         // it, on this library's reactor, for
@@ -401,15 +418,7 @@ impl Library {
             });
         }
 
-        // Bytes move on their own clock: audio, stems and album art go through
-        // Supabase Storage, not through the row protocol, and a 40 MB stem has
-        // nothing to do with a checkpoint.
-        if syncing {
-            let media = luma_lib::sync::media::Media::new(
-                services.db().0.clone(),
-                services.state_pool().clone(),
-                services.storage().clone(),
-            );
+        if let Some(media) = media {
             let media_shutdown = shutdown_rx.clone();
             runtime.spawn(async move { media.run(media_shutdown).await });
         }
@@ -449,6 +458,8 @@ impl Library {
             cloud,
             #[cfg(feature = "agent")]
             sync_status_fixture: None,
+            #[cfg(feature = "agent")]
+            background_work_fixture: None,
             session_revoked,
             replica_changed,
             sync_shutdown,

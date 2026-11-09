@@ -338,12 +338,31 @@ impl PythonSetup {
 pub struct BackgroundSetup {
     cache_dir: PathBuf,
     state: watch::Receiver<PythonSetup>,
+    /// Fetching model weights, after the packages are in.
+    preloading: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl BackgroundSetup {
     /// The setup of the environment under `cache_dir`, as `state` reports it.
     pub(crate) fn new(cache_dir: PathBuf, state: watch::Receiver<PythonSetup>) -> Self {
-        Self { cache_dir, state }
+        Self {
+            cache_dir,
+            state,
+            preloading: std::sync::Arc::default(),
+        }
+    }
+
+    /// Where setup stands now.
+    #[must_use]
+    pub fn state(&self) -> PythonSetup {
+        self.state.borrow().clone()
+    }
+
+    /// Whether setup is fetching model weights, which it does once the
+    /// packages are in and workers may already run.
+    #[must_use]
+    pub fn preloading(&self) -> bool {
+        self.preloading.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether setup is still running.
@@ -395,6 +414,7 @@ pub fn setup_python_env_background(
     crate::runtime::ffmpeg::init_headless();
     let (state, receiver) = watch::channel(PythonSetup::Running);
     let setup = BackgroundSetup::new(cache_dir.clone(), receiver);
+    let preloading = setup.preloading.clone();
     std::thread::spawn(move || {
         let python = match ensure_python_env(&cache_dir, resource_dir.as_deref()) {
             Ok(python) => python,
@@ -411,10 +431,12 @@ pub fn setup_python_env_background(
         {
             log::error!("Deploying luma_exec failed: {error}");
         }
+        preloading.store(true, std::sync::atomic::Ordering::Relaxed);
         state.send_replace(PythonSetup::Ready);
         if let Err(error) = preload_model_weights(&cache_dir, &python) {
             log::warn!("model-weights preload failed: {error}");
         }
+        preloading.store(false, std::sync::atomic::Ordering::Relaxed);
     });
     setup
 }

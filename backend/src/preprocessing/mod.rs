@@ -13,6 +13,7 @@
 //! separately in the local-only `preprocessing_failures` table for
 //! exponential-backoff retry behaviour.
 
+pub mod activity;
 pub mod artifact;
 pub mod concurrency;
 pub mod failures;

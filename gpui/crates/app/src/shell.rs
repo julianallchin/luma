@@ -351,6 +351,10 @@ impl Luma {
         if self.close_score_switcher(cx) {
             return;
         }
+        // The status bar's lists are floats over the shell too.
+        if self.close_sync_refusals(cx) || self.close_background_list(cx) {
+            return;
+        }
         // The song list's menus are on the same rung: floats over the shell,
         // closed before anything under them is.
         if self.close_score_menu(cx) || self.close_song_menu(cx) {

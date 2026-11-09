@@ -3,8 +3,8 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 138,
-    "domainCount": 26
+    "commandCount": 139,
+    "domainCount": 27
   },
   "domains": [
     {
@@ -21,6 +21,11 @@
       "domain": "auth",
       "commandCount": 7,
       "handlers": "backend/src/dispatch/handlers/auth.rs"
+    },
+    {
+      "domain": "background",
+      "commandCount": 1,
+      "handlers": "backend/src/dispatch/handlers/background.rs"
     },
     {
       "domain": "composable_patterns",
@@ -388,6 +393,15 @@
       "prose": {
         "returns": "AutoPatchReport"
       }
+    },
+    {
+      "name": "background_work",
+      "domain": "background",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/background.rs"
+      },
+      "args": [],
+      "returns": "BackgroundWork"
     },
     {
       "name": "bind_route",

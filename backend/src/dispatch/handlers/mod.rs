@@ -14,6 +14,7 @@
 pub mod agent_execution;
 pub mod agent_threads;
 pub mod auth;
+pub mod background;
 pub mod composable_patterns;
 pub mod compositor;
 pub mod controls;

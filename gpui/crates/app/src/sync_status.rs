@@ -1,7 +1,7 @@
 //! Sync, as the status bar says it — one of four states:
 //!
 //! - `Up to date`
-//! - `Syncing`
+//! - `Syncing`: records, or media moving through storage
 //! - `Offline · 3 pending`: not an error; the changes upload when the
 //!   connection is back
 //! - `2 not saved`: changes the server refused. The only one that opens: a
@@ -16,6 +16,7 @@ use crate::Luma;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity};
 use luma_lib::models::sync::{SyncStatus, SyncSummary};
+use luma_ui::dialog::Popup;
 use luma_ui::glass;
 use luma_ui::node::{Instrument as _, Role};
 
@@ -30,8 +31,8 @@ const BACKLOG: usize = 10;
 
 pub(crate) struct SyncState {
     pub status: SyncStatus,
-    /// The refused changes' list is open.
-    pub expanded: bool,
+    /// The refused changes' list.
+    pub list: Popup<()>,
     /// What the bar says: the status's summary once it has held long enough.
     shown: SyncSummary,
     /// When the status's summary became the kind it is now, while that is
@@ -45,7 +46,7 @@ impl Default for SyncState {
     fn default() -> Self {
         Self {
             status: SyncStatus::default(),
-            expanded: false,
+            list: Popup::default(),
             shown: SyncSummary::UpToDate,
             held_since: None,
             read_error: None,
@@ -84,7 +85,8 @@ impl SyncState {
             self.held_since = None;
         }
         if !matches!(shown, SyncSummary::NotSaved { .. }) {
-            self.expanded = false;
+            // The item that held it is gone, so there is no exit to play.
+            self.list.begin_close_at(true);
         }
         let changed = shown != self.shown || status != self.status;
         self.shown = shown;
@@ -122,7 +124,9 @@ impl Luma {
                 if changed {
                     cx.notify();
                 }
-                let busy = state.status.uploading || state.status.downloading;
+                let busy = state.status.uploading
+                    || state.status.downloading
+                    || state.status.media.is_some();
                 this.library
                     .debounce(Duration::from_millis(if busy { 500 } else { 1000 }))
             }) else {
@@ -133,9 +137,20 @@ impl Luma {
         .detach();
     }
 
+    /// Close the refused changes' list. Reports whether it was open:
+    /// Escape's rung.
+    pub(crate) fn close_sync_refusals(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.sync_status.list.is_open() {
+            return false;
+        }
+        self.sync_status.list.begin_close(cx);
+        cx.notify();
+        true
+    }
+
     /// The refused changes have been read: stop counting them.
     fn dismiss_sync_refusals(&mut self, cx: &mut Context<Self>) {
-        self.sync_status.expanded = false;
+        self.close_sync_refusals(cx);
         let pending = self.library.dismiss_sync_refusals();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
@@ -172,10 +187,20 @@ pub(crate) fn item(shell: &Luma, app: &Entity<Luma>) -> Option<crate::status_bar
     if matches!(state.shown, SyncSummary::NotSaved { .. }) {
         item.attention = true;
         item.press = Some(|this, cx| {
-            this.sync_status.expanded = !this.sync_status.expanded;
-            cx.notify();
+            if !this.close_sync_refusals(cx) {
+                this.sync_status.list.open(());
+                cx.notify();
+            }
         });
-        item.detail = state.expanded.then(|| refused(state, app));
+        item.detail = crate::status_bar::popover(
+            "sync-refused-float",
+            &state.list,
+            || refused(state, app),
+            app,
+            |this, cx| {
+                this.close_sync_refusals(cx);
+            },
+        );
     }
     Some(item)
 }
@@ -229,13 +254,9 @@ fn refused(state: &SyncState, app: &Entity<Luma>) -> AnyElement {
                     })
                     .agent_node(Role::Button, "Dismiss"),
             ),
-        );
-    luma_ui::float::anchored_above(
-        "sync-refused-float",
-        crate::shell::STATUS_BAR_HEIGHT,
-        luma_ui::float::Dismiss::Never,
-        card.into_any_element(),
-    )
+        )
+        .agent_node(Role::Card, "Not saved");
+    card.into_any_element()
 }
 
 /// `HH:MM` local time of an RFC 3339 instant, or the instant as written.

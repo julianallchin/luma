@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
+use crate::preprocessing::activity::AnalysisActivity;
+
 const IDENTITY_CANCELLED: &str = "Audio analysis was cancelled by an identity transition";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +17,7 @@ pub struct AnalysisGuard {
     cancelled: Arc<AtomicBool>,
     /// Announces each identity transition, after it has set `cancelled`.
     suspensions: watch::Receiver<u64>,
+    activity: AnalysisActivity,
 }
 
 impl AnalysisGuard {
@@ -24,6 +27,11 @@ impl AnalysisGuard {
         } else {
             Ok(())
         }
+    }
+
+    /// Where this analysis reports what it is doing, for the status bar.
+    pub fn activity(&self) -> &AnalysisActivity {
+        &self.activity
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -53,6 +61,9 @@ struct TaskGroupInner {
     state: Mutex<TaskGroupState>,
     drained: Notify,
     suspended_generation: watch::Sender<u64>,
+    /// What the work admitted so far is doing, across identity transitions:
+    /// a cancelled task lets go of its entries as it unwinds.
+    activity: AnalysisActivity,
 }
 
 /// Owns every background audio-analysis task admitted for one host identity.
@@ -76,6 +87,7 @@ impl Default for AnalysisTaskGroup {
                 }),
                 drained: Notify::new(),
                 suspended_generation: watch::channel(0).0,
+                activity: AnalysisActivity::default(),
             }),
         }
     }
@@ -84,6 +96,11 @@ impl Default for AnalysisTaskGroup {
 impl AnalysisTaskGroup {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// What analysis is doing right now ([`AnalysisActivity::snapshot`]).
+    pub fn activity(&self) -> &AnalysisActivity {
+        &self.inner.activity
     }
 
     pub fn current_epoch(&self) -> Result<AnalysisEpoch, String> {
@@ -105,6 +122,7 @@ impl AnalysisTaskGroup {
             guard: AnalysisGuard {
                 cancelled: Arc::clone(&state.cancelled),
                 suspensions: self.inner.suspended_generation.subscribe(),
+                activity: self.inner.activity.clone(),
             },
         })
     }

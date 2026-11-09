@@ -40,6 +40,7 @@ use crate::events::{Event, Events};
 use crate::models::tracks::{
     StageOutcome, TrackAnalysisEvent, TrackImportPhase, TrackImportProgress,
 };
+use crate::preprocessing::activity::Batch;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::concurrency::{analysis_worker_count, run_bounded_track_jobs};
 use crate::preprocessing::failures;
@@ -247,7 +248,11 @@ const SAME_FAILURES_TO_PAUSE: usize = 3;
 /// reconcile) tries the step again, and pauses it as soon if it is still
 /// broken.
 #[derive(Clone, Default)]
-pub(crate) struct Breaker(Arc<Mutex<HashMap<&'static str, Streak>>>);
+pub(crate) struct Breaker {
+    streaks: Arc<Mutex<HashMap<&'static str, Streak>>>,
+    /// The batch whose steps it pauses, which reports them as paused.
+    batch: Option<Arc<Batch>>,
+}
 
 /// A step's run of identical failures: the error's first line, and on how many
 /// tracks in a row it failed with it.
@@ -256,28 +261,45 @@ struct Streak {
     tracks: usize,
 }
 
+impl Streak {
+    fn reason(&self, step: &str) -> String {
+        format!(
+            "{} (not run: {step} failed this way on {} tracks in a row)",
+            self.headline, self.tracks
+        )
+    }
+}
+
 impl Breaker {
+    fn for_batch(batch: Arc<Batch>) -> Self {
+        Self {
+            streaks: Arc::default(),
+            batch: Some(batch),
+        }
+    }
+
+    fn streaks(&self) -> std::sync::MutexGuard<'_, HashMap<&'static str, Streak>> {
+        self.streaks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Why the rest of the batch skips `step`, once it does.
     fn paused(&self, step: &str) -> Option<String> {
-        let streaks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let streaks = self.streaks();
         let streak = streaks
             .get(step)
             .filter(|streak| streak.tracks >= SAME_FAILURES_TO_PAUSE)?;
-        Some(format!(
-            "{} (not run: {step} failed this way on {} tracks in a row)",
-            streak.headline, streak.tracks
-        ))
+        Some(streak.reason(step))
     }
 
     fn succeeded(&self, step: &str) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(step);
+        self.streaks().remove(step);
+        if let Some(batch) = &self.batch {
+            batch.resume(step);
+        }
     }
 
     fn failed(&self, step: &'static str, headline: &str) {
-        let mut streaks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut streaks = self.streaks();
         let streak = streaks.entry(step).or_insert_with(|| Streak {
             headline: headline.to_owned(),
             tracks: 0,
@@ -287,6 +309,13 @@ impl Breaker {
             streak.tracks = 0;
         }
         streak.tracks += 1;
+        if let Some(batch) = self
+            .batch
+            .as_ref()
+            .filter(|_| streak.tracks >= SAME_FAILURES_TO_PAUSE)
+        {
+            batch.pause(step, streak.reason(step));
+        }
     }
 }
 
@@ -559,6 +588,7 @@ async fn run_one(
     if let Some(report) = report {
         report.started(p.name());
     }
+    let _running = ctx.activity().running(track_id, p.name());
 
     let started = std::time::Instant::now();
     let result = p.run(ctx, track_id).await;
@@ -632,7 +662,8 @@ pub async fn run_for_tracks(
         import.as_ref().map_or(0, |import| import.done),
     ));
     let errors = Arc::new(Mutex::new(Vec::new()));
-    let breaker = Breaker::default();
+    let batch = Arc::new(analysis.activity().batch(&track_ids));
+    let breaker = Breaker::for_batch(batch.clone());
 
     run_bounded_track_jobs(&track_ids, &analysis, max_parallel, |track_id| {
         let (pool, storage, workers, events) = (
@@ -641,12 +672,13 @@ pub async fn run_for_tracks(
             workers.clone(),
             events.clone(),
         );
-        let (completed, errors, analysis, import, breaker) = (
+        let (completed, errors, analysis, import, breaker, batch) = (
             completed.clone(),
             errors.clone(),
             analysis.clone(),
             import.clone(),
             breaker.clone(),
+            batch.clone(),
         );
         async move {
             let report = import.map(|mut import| {
@@ -670,6 +702,7 @@ pub async fn run_for_tracks(
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(format!("{track_id}: {e}"));
             }
+            batch.finish(&track_id);
             completed.fetch_add(1, Ordering::Relaxed);
         }
     })

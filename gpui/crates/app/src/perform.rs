@@ -1674,26 +1674,6 @@ fn edit_layout(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl Int
         .agent_node(Role::Button, label)
 }
 
-impl Luma {
-    /// What Live is following, in a few words — the status bar's line while
-    /// Live is on screen.
-    pub(crate) fn live_line(&self) -> Option<String> {
-        let slot = self.workspace.of_mode(crate::workspace::Mode::Live)?;
-        let Body::Perform(state) = &slot.body else {
-            return None;
-        };
-        let line = match state
-            .follow
-            .as_ref()
-            .and_then(|follow| follow.problem.clone())
-        {
-            Some(problem) => problem,
-            None => following(state),
-        };
-        (!line.is_empty()).then_some(line)
-    }
-}
-
 /// What is followed, in a few words: "Pro DJ Link · 2 decks".
 fn following(state: &Perform) -> String {
     let Some(follow) = state.follow.as_ref() else {

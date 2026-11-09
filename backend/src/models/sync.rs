@@ -23,6 +23,9 @@ pub struct SyncStatus {
     /// Local changes the server refused that nobody has dismissed yet,
     /// newest first. The server's version of each row has replaced them.
     pub refused: Vec<SyncRefusal>,
+    /// Audio, stems or art moving to or from storage, once the transfer has
+    /// found files to move.
+    pub media: Option<SyncProgress>,
 }
 
 /// One local change the server would not take.
@@ -85,7 +88,11 @@ impl SyncStatus {
             SyncSummary::Offline {
                 pending: self.pending_uploads,
             }
-        } else if self.uploading || self.downloading || self.pending_uploads > 0 {
+        } else if self.uploading
+            || self.downloading
+            || self.pending_uploads > 0
+            || self.media.is_some()
+        {
             SyncSummary::Syncing
         } else {
             SyncSummary::UpToDate
@@ -149,5 +156,22 @@ mod tests {
         status.uploading = false;
         status.pending_uploads = 0;
         assert_eq!(status.summary().to_string(), "Up to date");
+    }
+
+    /// Media moving through storage is sync too: it reads as syncing, and
+    /// does not add a state of its own.
+    #[test]
+    fn a_media_transfer_reads_as_syncing() {
+        let status = SyncStatus {
+            connected: true,
+            media: Some(SyncProgress {
+                phase: "Uploading audio".into(),
+                completed: 0,
+                total: Some(2),
+                unit: "files".into(),
+            }),
+            ..SyncStatus::default()
+        };
+        assert_eq!(status.summary(), SyncSummary::Syncing);
     }
 }

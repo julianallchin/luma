@@ -110,6 +110,28 @@ pub async fn held_back(
     Ok(rows.into_iter().collect())
 }
 
+/// One step held back on one track, as [`all_held_back`] lists it.
+#[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
+pub struct HeldStep {
+    pub track_id: String,
+    pub preprocessor: String,
+    pub last_error: String,
+}
+
+/// Every step held back on any track, by track: what the status
+/// bar lists as paused after failures.
+pub async fn all_held_back(pool: &SqlitePool) -> Result<Vec<HeldStep>, String> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT f.track_id, f.preprocessor, f.last_error
+           FROM preprocessing_failures f
+          WHERE {IN_BACKOFF}
+          ORDER BY f.track_id, f.preprocessor"
+    )))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to read the steps in backoff: {e}"))
+}
+
 /// Forget every failure recorded before `installed`, when the Python
 /// environment the workers run in was last installed. Such a failure says
 /// nothing about the environment now running, so a repaired environment
