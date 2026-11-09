@@ -189,10 +189,10 @@ pub(crate) fn writes_synced_rows(p: &(impl Preprocessor + ?Sized)) -> bool {
 }
 
 /// Track IDs `p` should run for: tracks with local audio whose analysis this
-/// device writes, not in failure backoff for `p`, whose artifact has fewer
-/// than `rows_per_track` rows at the current version — or for which `stale`
-/// holds. `stale` is an SQL condition over the outer track `t`; the caller
-/// passes a `&'static`-built fragment, never user input.
+/// device writes, not in backoff from a failure of `p`'s current version,
+/// whose artifact has fewer than `rows_per_track` rows at the current version
+/// — or for which `stale` holds. `stale` is an SQL condition over the outer
+/// track `t`; the caller passes a `&'static`-built fragment, never user input.
 pub async fn pending_tracks<P: Preprocessor + ?Sized>(
     pool: &SqlitePool,
     p: &P,
@@ -207,6 +207,7 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
             AND NOT EXISTS (
                 SELECT 1 FROM preprocessing_failures f
                  WHERE f.track_id = t.id AND f.preprocessor = ?1
+                   AND f.version = ?2
                    AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')
             )
             AND (

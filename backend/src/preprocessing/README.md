@@ -70,7 +70,9 @@ automatically — no special hook. See [`mod.rs`](mod.rs) for the rationale.
 Failures live in [`failures.rs`](failures.rs) — the local-only
 `preprocessing_failures` table holds (track_id, preprocessor) PK with
 exponential backoff (cap 24h). Records are written on `Err`, cleared on `Ok`.
-Reconcile filters out tracks whose `next_retry_at` is in the future.
+Reconcile filters out tracks whose `next_retry_at` is in the future. A failure
+holds a track back only from the version that failed, so bumping `version`
+retries every track the old version failed on, with a fresh backoff.
 
 ## Scheduler
 

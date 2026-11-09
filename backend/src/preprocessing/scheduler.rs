@@ -18,7 +18,7 @@
 //! `preprocessing_failures` with exponential backoff, skip downstream
 //! preprocessors for this track in this run, then continue with other tracks.
 //! Reconcile on the next startup will pick the track up again once its
-//! `next_retry_at` has elapsed.
+//! `next_retry_at` has elapsed, or the preprocessor's version has changed.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};

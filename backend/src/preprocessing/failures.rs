@@ -10,6 +10,10 @@
 //!
 //! On failure: caller invokes [`record`] which increments attempts and pushes
 //! `next_retry_at` forward by 2^attempts minutes, capped at 24 hours.
+//!
+//! A failure holds a track back only from the version that failed: once a
+//! preprocessor's version is bumped, reconcile retries the track at once, and
+//! the new version's failures back off from the first attempt.
 
 use sqlx::SqlitePool;
 
@@ -18,7 +22,8 @@ use sqlx::SqlitePool;
 /// bump, etc.).
 const MAX_BACKOFF_SECS: i64 = 24 * 60 * 60;
 
-/// Record a failed run. Atomically increments `attempts` and sets
+/// Record a failed run of `version`. Increments `attempts`, counting from
+/// zero when the failure on record is from another version, and sets
 /// `next_retry_at = now + 2^attempts minutes` (capped).
 pub async fn record(
     pool: &SqlitePool,
@@ -30,10 +35,11 @@ pub async fn record(
     // Compute attempts first so we can derive the backoff in the same SQL.
     let prior_attempts: i64 = sqlx::query_scalar(
         "SELECT attempts FROM preprocessing_failures
-         WHERE track_id = ? AND preprocessor = ?",
+         WHERE track_id = ? AND preprocessor = ? AND version = ?",
     )
     .bind(track_id)
     .bind(preprocessor)
+    .bind(version as i64)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("Failed to read prior attempts: {e}"))?
@@ -120,6 +126,82 @@ fn backoff_for(attempts: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::preprocessing::preprocessor::Preprocessor;
+    use crate::preprocessing::workers::mert::MertPreprocessor;
+
+    /// A migrated library holding one track with local audio and no analysis.
+    async fn library() -> (tempfile::TempDir, SqlitePool) {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::local::database::init_app_db_at(directory.path())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO tracks (id, track_hash, title, file_path)
+             VALUES ('t1', 'hash', 'Song', '/audio/song.wav')",
+        )
+        .execute(&db.0)
+        .await
+        .unwrap();
+        (directory, db.0)
+    }
+
+    /// How long the failure on record holds the track back, in seconds.
+    async fn backoff(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "SELECT strftime('%s', next_retry_at) - strftime('%s', last_attempt)
+               FROM preprocessing_failures WHERE track_id = 't1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_version_bump_retries_tracks_the_old_version_failed_on() {
+        let (_directory, pool) = library().await;
+        let step = MertPreprocessor;
+        record(
+            &pool,
+            "t1",
+            step.name(),
+            step.version() - 1,
+            "old worker broke",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            step.list_pending(&pool).await.unwrap(),
+            ["t1"],
+            "a failure of the old version holds the track back"
+        );
+
+        record(&pool, "t1", step.name(), step.version(), "new worker broke")
+            .await
+            .unwrap();
+        assert!(
+            step.list_pending(&pool).await.unwrap().is_empty(),
+            "a failure of the current version doesn't hold the track back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_versions_failures_back_off_from_the_first_attempt() {
+        let (_directory, pool) = library().await;
+        record(&pool, "t1", "step", 1, "boom").await.unwrap();
+        let first = backoff(&pool).await;
+        record(&pool, "t1", "step", 1, "boom").await.unwrap();
+        assert!(
+            backoff(&pool).await > first,
+            "a repeat failure doesn't wait longer"
+        );
+
+        record(&pool, "t1", "step", 2, "boom").await.unwrap();
+        assert_eq!(
+            backoff(&pool).await,
+            first,
+            "the new version's first failure waits like a repeat"
+        );
+    }
 
     #[test]
     fn backoff_doubles_until_it_caps() {
