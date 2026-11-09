@@ -143,6 +143,12 @@ impl TorchInstall {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Write `source` to `<cache_dir>/<script_name>` for a worker to run.
+///
+/// Every worker launch calls this, several at once, while other workers'
+/// interpreters may be reading the script. The script is written beside its
+/// path and then moved onto it, so a reader sees the old script or the new
+/// one, never a file another launch has just truncated.
 pub fn ensure_worker_script_at(
     cache_dir: &Path,
     script_name: &str,
@@ -152,21 +158,28 @@ pub fn ensure_worker_script_at(
         .map_err(|e| format!("Failed to create cache dir {}: {}", cache_dir.display(), e))?;
 
     let script_path = cache_dir.join(script_name);
-    fs::write(&script_path, source).map_err(|e| {
+    let failed = |e: &dyn std::fmt::Display| {
         format!(
-            "Failed to write python worker {}: {}",
-            script_path.display(),
-            e
+            "Failed to write python worker {}: {e}",
+            script_path.display()
         )
-    })?;
+    };
+    let mut staged = tempfile::NamedTempFile::new_in(cache_dir).map_err(|e| failed(&e))?;
+    io::Write::write_all(&mut staged, source.as_bytes()).map_err(|e| failed(&e))?;
+    staged.persist(&script_path).map_err(|e| failed(&e))?;
     Ok(script_path)
 }
 
-/// Marker file stored alongside a copied resource dir. Contains the SHA256
-/// of the source dir's contents; we re-copy when the hash drifts so vendored
-/// package updates (e.g. `n2n/infer.py`) reach the user's cache automatically
-/// instead of silently presenting stale module signatures to workers.
-const RESOURCE_HASH_FILE: &str = ".luma_resource_hash";
+/// Marker file a copied resource dir carries: the SHA256 of the source dir's
+/// contents. We re-copy when the hash drifts so vendored package updates
+/// (e.g. `n2n/infer.py`) reach the user's cache automatically instead of
+/// silently presenting stale module signatures to workers.
+///
+/// The marker is written into the copy before the copy is moved into place,
+/// so a dir that carries it is complete. Copies made before that carry
+/// `.luma_resource_hash` instead, which a partial copy could carry too, so
+/// they are copied again.
+const RESOURCE_MARKER: &str = ".luma_resource_complete";
 
 pub fn ensure_python_resource_dir_at(
     cache_dir: &Path,
@@ -201,23 +214,42 @@ pub fn ensure_python_resource_dir_at(
 
     let source_hash = compute_dir_hash(source_root)
         .map_err(|e| format!("Failed to hash source resource dir: {e}"))?;
-    let hash_path = dest_root.join(RESOURCE_HASH_FILE);
-    let cached_hash = fs::read_to_string(&hash_path).ok();
-    if dest_root.exists() && cached_hash.as_deref() == Some(source_hash.as_str()) {
+    let marker = dest_root.join(RESOURCE_MARKER);
+
+    // Every worker launch deploys its resources, several at once. One deploy
+    // at a time in this process, so none of them replaces a copy that another
+    // has just put in place.
+    static DEPLOY: Mutex<()> = Mutex::new(());
+    let _deploying = DEPLOY.lock().map_err(|_| "Resource deploy lock poisoned")?;
+    if fs::read_to_string(&marker).ok().as_deref() == Some(source_hash.as_str()) {
         return Ok(dest_root);
     }
 
+    // Copy beside the destination, mark the copy complete, then move it into
+    // place: a deploy cut short leaves a stray directory, never a partial copy
+    // that a marker vouches for.
+    let failed = |what: &str, e: io::Error| {
+        format!(
+            "Failed to {what} cached resource {}: {e}",
+            dest_root.display()
+        )
+    };
+    fs::create_dir_all(cache_dir).map_err(|e| failed("stage", e))?;
+    let staged = tempfile::Builder::new()
+        .prefix(&format!(".{relative}."))
+        .tempdir_in(cache_dir)
+        .map_err(|e| failed("stage", e))?;
+    copy_dir_recursive(source_root, staged.path()).map_err(|e| failed("copy", e))?;
+    fs::write(staged.path().join(RESOURCE_MARKER), source_hash.as_bytes())
+        .map_err(|e| failed("mark", e))?;
     if dest_root.exists() {
-        fs::remove_dir_all(&dest_root).map_err(|e| {
-            format!(
-                "Failed to remove stale cached resource dir {}: {e}",
-                dest_root.display()
-            )
-        })?;
+        let retired = tempfile::Builder::new()
+            .prefix(&format!(".{relative}.retired."))
+            .tempdir_in(cache_dir)
+            .map_err(|e| failed("retire", e))?;
+        fs::rename(&dest_root, retired.path().join(relative)).map_err(|e| failed("retire", e))?;
     }
-    copy_dir_recursive(source_root, &dest_root).map_err(|e| format!("{}", e))?;
-    fs::write(&hash_path, source_hash.as_bytes())
-        .map_err(|e| format!("Failed to write resource hash marker: {e}"))?;
+    fs::rename(staged.path(), &dest_root).map_err(|e| failed("place", e))?;
     Ok(dest_root)
 }
 
@@ -855,4 +887,129 @@ fn parse_python_version(output: std::process::Output) -> Option<(u32, u32)> {
 
 fn version_in_supported_range(version: (u32, u32)) -> bool {
     version >= PY_MIN_VERSION && version < PY_MAX_VERSION_EXCLUSIVE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A vendored package in the resource dir `root`: some code, and a
+    /// checkpoint big enough that copying it takes a while.
+    fn package(root: &Path) -> PathBuf {
+        let source = root.join("python").join("n2n");
+        fs::create_dir_all(source.join("model")).unwrap();
+        fs::write(source.join("infer.py"), "def infer(): ...\n").unwrap();
+        fs::write(source.join("model").join("net.py"), "class Net: ...\n").unwrap();
+        let weights: Vec<u8> = (0..4_000_000u32).map(|i| (i % 251) as u8).collect();
+        fs::write(source.join("weights.pt"), weights).unwrap();
+        source
+    }
+
+    /// Whether `copy` holds every file of `source`, byte for byte.
+    fn same_files(source: &Path, copy: &Path) -> bool {
+        let mut files = Vec::new();
+        collect_files(source, source, &mut files).unwrap();
+        files.iter().all(|file| {
+            fs::read(copy.join(file)).ok() == Some(fs::read(source.join(file)).unwrap())
+        })
+    }
+
+    /// The state a deploy before this marker could leave: part of the
+    /// package, under a marker that vouches for all of it.
+    #[test]
+    fn a_partial_copy_from_an_earlier_deploy_is_copied_again() {
+        let root = tempfile::tempdir().unwrap();
+        let source = package(root.path());
+        let resources = root.path();
+        let cache = root.path().join("cache");
+        let partial = cache.join("n2n");
+        fs::create_dir_all(&partial).unwrap();
+        fs::copy(source.join("infer.py"), partial.join("infer.py")).unwrap();
+        fs::write(
+            partial.join(".luma_resource_hash"),
+            compute_dir_hash(&source).unwrap(),
+        )
+        .unwrap();
+
+        let deployed = ensure_python_resource_dir_at(&cache, Some(resources), "n2n").unwrap();
+
+        assert!(same_files(&source, &deployed), "the partial copy was kept");
+    }
+
+    /// Every worker that starts deploys its resources, several at once. They
+    /// all get the package, whole, and leave nothing else in the cache. A
+    /// race shows only sometimes, so this deploys into a fresh cache many
+    /// times over.
+    #[test]
+    fn deploys_at_once_leave_one_whole_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let source = package(root.path());
+        for round in 0..20 {
+            let cache = root.path().join(format!("cache-{round}"));
+            std::thread::scope(|scope| {
+                let deploys: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            ensure_python_resource_dir_at(&cache, Some(root.path()), "n2n")
+                        })
+                    })
+                    .collect();
+                for deploy in deploys {
+                    let deployed = deploy.join().unwrap().expect("a deploy failed");
+                    assert!(
+                        same_files(&source, &deployed),
+                        "a deploy saw a partial copy"
+                    );
+                }
+            });
+
+            let entries: Vec<_> = fs::read_dir(&cache)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(entries, ["n2n"], "a deploy left a stray copy behind");
+        }
+    }
+
+    /// A worker's interpreter may read its script while other launches
+    /// write it again. It reads a whole script every time.
+    #[test]
+    fn a_worker_script_is_never_read_half_written() {
+        let cache = tempfile::tempdir().unwrap();
+        let script = "# worker\n".repeat(50_000);
+        ensure_worker_script_at(cache.path(), "worker.py", &script).unwrap();
+        let path = cache.path().join("worker.py");
+        let writing = std::sync::atomic::AtomicBool::new(true);
+
+        std::thread::scope(|scope| {
+            let readers: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut torn = 0;
+                        while writing.load(std::sync::atomic::Ordering::Relaxed) {
+                            if fs::read_to_string(&path).unwrap() != script {
+                                torn += 1;
+                            }
+                        }
+                        torn
+                    })
+                })
+                .collect();
+            let writers: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        for _ in 0..200 {
+                            ensure_worker_script_at(cache.path(), "worker.py", &script).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for writer in writers {
+                writer.join().unwrap();
+            }
+            writing.store(false, std::sync::atomic::Ordering::Relaxed);
+            let torn: usize = readers.into_iter().map(|r| r.join().unwrap()).sum();
+            assert_eq!(torn, 0, "a reader saw a half-written script");
+        });
+    }
 }
