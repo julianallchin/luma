@@ -86,10 +86,9 @@ impl TrackHost {
     /// edit read — so a clip the user wrote meanwhile survives. Returns the
     /// document as it now stands.
     async fn apply_score(&self, base: &Score, candidate: &Score) -> Result<Score, HostCallError> {
-        let scope = self
-            .edit_scope
-            .as_ref()
-            .ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
+        if self.edit_scope.is_none() {
+            return Err(HostCallError::new("forbidden", "this score is read-only"));
+        }
         let mut access = VenueAccess::<Write>::write_as(
             &self.pool,
             VenueResource::Score(&self.scope.score_id),
@@ -109,14 +108,9 @@ impl TrackHost {
                     .await
                     .map_err(|error| HostCallError::new("internal", error))?;
                 let saved = ScoreEdit::between(base, candidate).applied_to(&stored);
-                rows::save_score(
-                    access.connection(),
-                    &self.scope.score_id,
-                    &scope.user_id,
-                    &saved,
-                )
-                .await
-                .map_err(|error| HostCallError::new("internal", error))?;
+                rows::save_score(access.connection(), &self.scope.score_id, &saved)
+                    .await
+                    .map_err(|error| HostCallError::new("internal", error))?;
                 saved
             }
         };

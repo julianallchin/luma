@@ -90,10 +90,10 @@ pub async fn apply(
 /// the row would be a second one nobody made.
 pub async fn merge(connection: &mut SqliteConnection, draft_id: &str) -> Result<Score, String> {
     let (base, state) = both(&mut *connection, draft_id).await?;
-    let (score_id, uid) = scope(&mut *connection, draft_id).await?;
+    let score_id = score_of(&mut *connection, draft_id).await?;
     let live = ScoreEdit::between(&base, &state)
         .applied_to(&rows::load_score(&mut *connection, &score_id).await?);
-    rows::save_score(&mut *connection, &score_id, &uid, &live).await?;
+    rows::save_score(&mut *connection, &score_id, &live).await?;
     discard(connection, draft_id).await?;
     Ok(live)
 }
@@ -119,11 +119,8 @@ async fn both(connection: &mut SqliteConnection, draft_id: &str) -> Result<(Scor
     Ok((read(&base)?, read(&state)?))
 }
 
-async fn scope(
-    connection: &mut SqliteConnection,
-    draft_id: &str,
-) -> Result<(String, String), String> {
-    sqlx::query_as("SELECT score_id, uid FROM drafts WHERE id = ?")
+async fn score_of(connection: &mut SqliteConnection, draft_id: &str) -> Result<String, String> {
+    sqlx::query_scalar("SELECT score_id FROM drafts WHERE id = ?")
         .bind(draft_id)
         .fetch_optional(&mut *connection)
         .await
@@ -179,9 +176,7 @@ mod tests {
         let mut live = Score::default();
         live.clips.insert("shared".into(), clip(0.0));
         live.clips.insert("parent".into(), clip(8.0));
-        rows::save_score(&mut connection, "s", "alice", &live)
-            .await
-            .unwrap();
+        rows::save_score(&mut connection, "s", &live).await.unwrap();
 
         let draft = create(&mut connection, "s", "child-thread", "alice")
             .await
@@ -196,7 +191,7 @@ mod tests {
         // The parent, meanwhile, edits a clip the child never touched.
         let mut parent = live.clone();
         parent.clips.get_mut("parent").unwrap().z_index = 9;
-        rows::save_score(&mut connection, "s", "alice", &parent)
+        rows::save_score(&mut connection, "s", &parent)
             .await
             .unwrap();
 
@@ -228,9 +223,7 @@ mod tests {
         let mut connection = pool.acquire().await.unwrap();
         let mut live = Score::default();
         live.clips.insert("doomed".into(), clip(0.0));
-        rows::save_score(&mut connection, "s", "alice", &live)
-            .await
-            .unwrap();
+        rows::save_score(&mut connection, "s", &live).await.unwrap();
         let draft = create(&mut connection, "s", "child", "alice")
             .await
             .unwrap();
@@ -241,7 +234,7 @@ mod tests {
 
         let mut parent = live.clone();
         parent.clips.get_mut("doomed").unwrap().z_index = 3;
-        rows::save_score(&mut connection, "s", "alice", &parent)
+        rows::save_score(&mut connection, "s", &parent)
             .await
             .unwrap();
 
@@ -273,9 +266,7 @@ mod tests {
         let mut connection = pool.acquire().await.unwrap();
         let mut live = Score::default();
         live.clips.insert("kept".into(), clip(0.0));
-        rows::save_score(&mut connection, "s", "alice", &live)
-            .await
-            .unwrap();
+        rows::save_score(&mut connection, "s", &live).await.unwrap();
         let draft = create(&mut connection, "s", "child", "alice")
             .await
             .unwrap();

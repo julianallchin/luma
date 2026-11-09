@@ -448,9 +448,6 @@ impl Luma {
             }
             None => return,
         };
-        if !editor.writable() {
-            return;
-        }
         let beats = editor.beats.as_deref();
         let playhead = f64::from(editor.transport.position);
         let start = snap(beats, playhead, editor.view.zoom, SNAP_CAPTURE).max(0.);

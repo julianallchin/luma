@@ -1,74 +1,81 @@
 use uuid::Uuid;
 
-use crate::database::local::venue_access::{AuthorizedVenue, Owner, VenueAccess, Write};
-use crate::models::venues::{Venue, VenueMember};
+use sqlx::FromRow;
+
+use crate::database::local::venue_access::{AuthorizedVenue, Owner, Standing, VenueAccess, Write};
+use crate::models::venues::{Venue, VenueMember, ROLE_MEMBER, ROLE_OWNER};
 use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
-/// `role` is not read off the row: it is derived per reader — see
-/// [`get_venue`] — so a venue the admitted principal does not own reads as a
-/// member's however the column was written.
-const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, 'owner' AS role, environment, haze, created_at, updated_at";
+/// The stored columns of a venue aliased `venue`. Its `role` and `capability`
+/// are not among them: they are the reader's, set by [`read_by`].
+macro_rules! venue_columns {
+    () => {
+        "venue.id, venue.uid, venue.name, venue.description, venue.share_code,
+         venue.environment, venue.haze, venue.created_at, venue.updated_at"
+    };
+}
+
+/// `venue` as the principal `standing` describes reads it.
+fn read_by(mut venue: Venue, standing: Standing) -> Venue {
+    let role = if standing.owner {
+        ROLE_OWNER
+    } else {
+        ROLE_MEMBER
+    };
+    venue.role = role.into();
+    venue.capability = standing.capability;
+    venue
+}
+
+/// The venues the admitted principal can open, each with its standing from
+/// the one rule, `auth_venue_access`. A query appends its own `WHERE` or
+/// `ORDER BY`; read each row with [`admitted`].
+macro_rules! admitted_venues {
+    () => {
+        concat!(
+            "SELECT ",
+            venue_columns!(),
+            ", access.owner, access.edit, access.manage
+             FROM venues venue
+             JOIN auth_venue_access access ON access.venue_id = venue.id "
+        )
+    };
+}
+
+fn admitted(row: &sqlx::sqlite::SqliteRow) -> Result<Venue, String> {
+    let venue = Venue::from_row(row).map_err(|e| format!("Failed to read a venue: {e}"))?;
+    Ok(read_by(venue, Standing::from_row(row)?))
+}
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
     let venue_id = access.venue_id().to_string();
-    let row = sqlx::query_as::<_, Venue>(
-        "SELECT venue.id, venue.uid, venue.name, venue.description, venue.share_code,
-                CASE
-                    WHEN admission.active_uid IS NULL OR venue.uid = admission.active_uid
-                    THEN 'owner'
-                    ELSE 'member'
-                END AS role,
-                venue.environment, venue.haze, venue.created_at, venue.updated_at
-         FROM venues venue
-         CROSS JOIN auth_write_admission admission
-         WHERE venue.id = ? AND admission.singleton = 1",
-    )
+    let row = sqlx::query_as::<_, Venue>(concat!(
+        "SELECT ",
+        venue_columns!(),
+        " FROM venues venue WHERE venue.id = ?"
+    ))
     .bind(venue_id)
     .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to fetch venue: {}", e))?;
 
-    Ok(row)
+    Ok(read_by(row, access.standing()))
 }
 
 /// List exactly the venues admitted for the app database's current host-bound
 /// principal. Signed-out guest state never includes cached account venues.
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
-    let rows = sqlx::query_as::<_, Venue>(
-        "SELECT venue.id, venue.uid, venue.name, venue.description, venue.share_code,
-                CASE
-                    WHEN admission.active_uid IS NULL OR venue.uid = admission.active_uid
-                    THEN 'owner'
-                    ELSE 'member'
-                END AS role,
-                venue.environment, venue.haze, venue.created_at, venue.updated_at
-         FROM venues venue
-         CROSS JOIN auth_write_admission admission
-         WHERE admission.singleton = 1
-           AND admission.armed = 1
-           AND admission.accepting = 1
-           AND admission.maintenance = 0
-           AND (
-                (admission.active_uid IS NULL AND venue.uid IS NULL)
-                OR
-                (admission.active_uid IS NOT NULL AND (
-                    venue.uid = admission.active_uid
-                    OR EXISTS(
-                        SELECT 1 FROM venue_members membership
-                        WHERE membership.venue_id = venue.id
-                          AND membership.uid = admission.active_uid
-                    )
-                ))
-           )
-         ORDER BY venue.updated_at DESC",
-    )
+    sqlx::query(concat!(
+        admitted_venues!(),
+        "ORDER BY venue.updated_at DESC"
+    ))
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to list venues: {}", e))?;
-
-    Ok(rows)
+    .map_err(|e| format!("Failed to list venues: {}", e))?
+    .iter()
+    .map(admitted)
+    .collect()
 }
 
 /// Create a new venue
@@ -82,14 +89,16 @@ pub async fn create_venue(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to begin venue creation: {error}"))?;
-    let principal: Option<String> = sqlx::query_scalar(
+    let principal: String = sqlx::query_scalar::<_, Option<String>>(
         "SELECT active_uid FROM auth_write_admission
          WHERE singleton = 1 AND armed = 1 AND accepting = 1 AND maintenance = 0",
     )
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("Failed to authorize venue creation: {error}"))?
-    .ok_or_else(|| "Venue creation is not currently admitted".to_string())?;
+    .ok_or_else(|| "Venue creation is not currently admitted".to_string())?
+    // Every venue has an owner; there is no signed-out one.
+    .ok_or_else(|| "Sign in to Luma before creating a venue".to_string())?;
 
     sqlx::query("INSERT INTO venues (id, name, description, uid) VALUES (?, ?, ?, ?)")
         .bind(&id)
@@ -108,12 +117,13 @@ pub async fn create_venue(
         .execute(&mut *transaction)
         .await
         .map_err(|e| format!("Failed to create the venue's root: {e}"))?;
-    let query = format!("SELECT {} FROM venues WHERE id = ?", VENUE_COLUMNS);
-    let venue = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
+    let row = sqlx::query(concat!(admitted_venues!(), "WHERE venue.id = ?"))
         .bind(&id)
-        .fetch_one(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await
-        .map_err(|error| format!("Failed to read created venue: {error}"))?;
+        .map_err(|error| format!("Failed to read created venue: {error}"))?
+        .ok_or_else(|| "The created venue is not its creator's".to_string())?;
+    let venue = admitted(&row)?;
     transaction
         .commit()
         .await

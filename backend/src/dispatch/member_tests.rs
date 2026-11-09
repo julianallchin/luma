@@ -350,6 +350,21 @@ async fn only_the_owner_holds_the_venue_s_door() {
         }
     };
     let issued = code(&services).await;
+    // What the venue tells its reader agrees with what the guards do: the
+    // member may edit it and not manage it, on every read of it.
+    let capability = |venue: &Value| venue["capability"].clone();
+    let listed = run(&services, "list_venues", json!({})).await;
+    let listed = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == venue.as_str())
+        .expect("the shared venue is on the member's list")
+        .clone();
+    let read = run(&services, "get_venue", json!({ "id": venue })).await;
+    for seen in [&listed, &read] {
+        assert_eq!(capability(seen), json!({ "edit": true, "manage": false }));
+    }
 
     unauthorized(
         dispatch(&services, "rotate_share_code", &json!({ "venueId": venue })).await,
@@ -383,6 +398,8 @@ async fn only_the_owner_holds_the_venue_s_door() {
     arm_write_admission(&services.db.0, Some(TEST_OWNER))
         .await
         .unwrap();
+    let read = run(&services, "get_venue", json!({ "id": venue })).await;
+    assert_eq!(capability(&read), json!({ "edit": true, "manage": true }));
     let members = run(&services, "list_venue_members", json!({ "venueId": venue })).await;
     assert_eq!(members.as_array().unwrap().len(), 2);
     run(

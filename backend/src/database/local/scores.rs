@@ -45,30 +45,6 @@ macro_rules! score_ordinal {
     };
 }
 
-/// Every venue this admission may read, spelled once. The admission view
-/// [`auth_venue_access`] says the same thing for triggers; a listing needs it
-/// inline because it filters rather than aborts.
-macro_rules! admitted_venue {
-    () => {
-        "admission.singleton = 1
-           AND admission.armed = 1
-           AND admission.accepting = 1
-           AND admission.maintenance = 0
-           AND (
-                (admission.active_uid IS NULL AND venue.uid IS NULL)
-                OR
-                (admission.active_uid IS NOT NULL AND (
-                    venue.uid = admission.active_uid
-                    OR EXISTS(
-                        SELECT 1 FROM venue_members membership
-                        WHERE membership.venue_id = venue.id
-                          AND membership.uid = admission.active_uid
-                    )
-                ))
-           )"
-    };
-}
-
 /// The provenance columns every score listing carries: when the score was last
 /// written, and what its agent threads have cost.
 ///
@@ -131,7 +107,7 @@ pub async fn list_scores_for_track(
 }
 
 /// Cross-venue score picker view filtered in one statement by the current app
-/// admission. It never returns sealed rows from another principal.
+/// admission: the venues `auth_venue_access` lets the principal open. It never returns sealed rows from another principal.
 pub async fn list_accessible_scores_for_track(
     pool: &SqlitePool,
     track_id: &str,
@@ -148,11 +124,9 @@ pub async fn list_accessible_scores_for_track(
                 score.created_at, score.updated_at
          FROM scores score
          JOIN venues venue ON venue.id = score.venue_id
-         CROSS JOIN auth_write_admission admission
+         JOIN auth_venue_access access ON access.venue_id = score.venue_id
          WHERE score.track_id = ?
-           AND ",
-        admitted_venue!(),
-        " ",
+         ",
         newest_first!()
     );
     sqlx::query_as::<_, ScoreSummary>(ACCESSIBLE)

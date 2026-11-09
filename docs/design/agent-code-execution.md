@@ -835,7 +835,7 @@ luma.track
   bpm
   key
   beat_origin_s             absolute seconds of musical beat 0
-  editable                  the owner may edit, check and apply
+  editable                  this thread may edit, check and apply
   document                  the complete saved score: clips by ID
 
 luma.audio
@@ -1435,11 +1435,12 @@ candidate through the worker's synchronous host-call seam. The host handler is
 constructed from durable-thread scope and authenticated user state; the model
 cannot select a different track, venue, score, user, or workspace, install a
 handler, or widen its method allowlist. A validated exact track scope installs
-read-only rendering even when the current user is not the score owner. The
-separate edit capability exists only for the authenticated owner, and both
-`check` and `apply` reject calls without it. The transaction service
-independently rechecks scope and ownership, so the descriptive
-`luma.track.editable` bit is never the security boundary.
+read-only rendering. The separate edit capability exists when the venue's
+admission (the `auth_venue_access` view) lets the signed-in account edit the
+venue — its owner or any member, whoever wrote the score — and both `check`
+and `apply` reject calls without it. The write takes the venue's write guard
+again, so the descriptive `luma.track.editable` bit is never the security
+boundary.
 
 The leading underscore on `_luma_host_call` is API hygiene, not protection:
 arbitrary executed code can call it directly. Therefore every handler treats
@@ -1528,7 +1529,7 @@ edit.apply()
 ### 18.2 Staged candidate
 
 `luma.track.edit()` works only when `luma.track.editable` is true: the host
-resolved owner authority for the exact score, track and venue. The edit copies
+resolved edit authority in the venue for the exact score, track and venue. The edit copies
 the complete saved score. All changes stay local until `apply()`.
 
 - Exactly one of `beats=(start, end)`, `bars=(start, end)` or

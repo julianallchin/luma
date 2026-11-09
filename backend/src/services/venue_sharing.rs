@@ -253,7 +253,7 @@ pub async fn revoke_share_code(pool: &SqlitePool, venue_id: &str) -> Result<(), 
 /// [`CommandError::Unauthorized`] for anyone but the owner.
 pub async fn members(pool: &SqlitePool, venue_id: &str) -> Result<Vec<VenueMember>, CommandError> {
     let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
-    if !venues_db::get_venue(&mut access).await?.is_owner() {
+    if !access.capability().manage {
         return Err(not_owner());
     }
     Ok(venues_db::venue_members(&mut access).await?)

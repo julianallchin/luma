@@ -15,7 +15,14 @@ pub struct Venue {
     pub description: Option<String>,
     #[sqlx(rename = "share_code")]
     pub share_code: Option<String>,
+    /// [`ROLE_OWNER`] when this is the reader's own venue, [`ROLE_MEMBER`]
+    /// when it was shared with them. Who they are to it, for display; what they
+    /// may do is [`Self::capability`]. Both are the reader's, not the row's:
+    /// set by [`crate::database::local::venues`] from the admission.
+    #[sqlx(skip)]
     pub role: String,
+    #[sqlx(skip)]
+    pub capability: VenueCapability,
     /// What kind of room this is and how far up its one dial is.
     ///
     /// Venue truth, at the tier of the name: every picture of this venue — the
@@ -39,6 +46,20 @@ pub struct Venue {
     pub created_at: String,
     #[sqlx(rename = "updated_at")]
     pub updated_at: String,
+}
+
+/// What the reader may do with a venue, as the venue's admission decides it:
+/// the `auth_venue_access` view, read as
+/// [`crate::database::local::venue_access::Standing`]. Callers read this; none
+/// of them re-derives it by comparing `uid`s.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VenueCapability {
+    /// Change anything in it — its rig, stage, groups, perform set and every
+    /// score, whoever wrote it.
+    pub edit: bool,
+    /// Change who has it: its share code and its memberships.
+    pub manage: bool,
 }
 
 impl Venue {

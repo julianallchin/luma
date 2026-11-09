@@ -125,11 +125,8 @@ impl Editor {
     /// Where a clip `bars` long would go for a gesture at `at`, a window
     /// position: the snapped time under it, and either the lane under it or
     /// a new lane at the boundary it is within a quarter-lane of. `None` off
-    /// the lanes, on a read-only score, or with no room before the end.
+    /// the lanes, or with no room before the end.
     pub(super) fn insertion_at(&self, at: Point<Pixels>, bars: usize) -> Option<InsertMenu> {
-        if !self.writable() {
-            return None;
-        }
         let canvas = self.canvas.get();
         let time = self.view.time_at(f32::from(at.x - canvas.origin.x));
         let y = f32::from(at.y - canvas.origin.y);
@@ -183,9 +180,6 @@ impl Editor {
 impl Luma {
     pub(super) fn add_pattern(&mut self, cx: &mut Context<Self>) {
         self.with_track_editor(cx, |editor| {
-            if !editor.writable() {
-                return;
-            }
             let time = editor
                 .cursor
                 .map_or(f64::from(editor.transport.position), |cursor| cursor.start);

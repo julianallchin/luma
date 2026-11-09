@@ -31,17 +31,16 @@ pub struct TrackScope {
     pub venue_id: String,
 }
 
-/// The same identity plus the principal allowed to write it. Deliberately
-/// separate from a candidate: Python may describe a score, but it may never
-/// choose which score that candidate replaces.
+/// The same identity, held only when the venue's admission let this thread
+/// edit it. Deliberately separate from a candidate: Python may describe a
+/// score, but it may never choose which score that candidate replaces. The
+/// write guard is taken again when the edit lands.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackEditScope {
     pub score_id: String,
     pub track_id: String,
     pub venue_id: String,
-    /// Authenticated user captured from the app database's active admission.
-    pub user_id: String,
 }
 
 impl From<&TrackEditScope> for TrackScope {

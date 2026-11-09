@@ -547,8 +547,7 @@ impl Luma {
     /// describes.
     ///
     /// Not [`Self::track_command`]: a loop belongs to the transport rather
-    /// than to the score, so it writes nothing, undoes nothing, and a
-    /// read-only score can still be looped over.
+    /// than to the score, so it writes nothing and undoes nothing.
     pub(crate) fn toggle_loop_region(&mut self, cx: &mut Context<Self>) {
         let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
@@ -570,8 +569,7 @@ impl Luma {
     ///
     /// Every keyboard verb goes through here, so "a command is a rewrite of
     /// the clip list followed by exactly one write" is stated once instead of
-    /// at eleven call sites — and a read-only score refuses all of them in one
-    /// place rather than eleven. The checkpoint is here for the same reason:
+    /// at eleven call sites. The checkpoint is here for the same reason:
     /// undo is a property of *being* a command, not something eleven commands
     /// each have to remember.
     pub(super) fn track_command(
@@ -589,14 +587,11 @@ impl Luma {
         );
     }
 
-    /// Rewrite the working copy of a score this host may write to, and publish
-    /// it. The step an undo takes is one of these that does *not* record a
-    /// checkpoint — it is already moving along the stack.
+    /// Rewrite the working copy of the open score, and publish it. The step an
+    /// undo takes is one of these that does *not* record a checkpoint — it is
+    /// already moving along the stack.
     fn track_edit(&mut self, edit: impl FnOnce(&mut Editor), cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
-            return;
-        };
-        if !state.writable() {
+        if !matches!(self.workspace.active_body(), Some(Body::TrackEditor(_))) {
             return;
         }
         self.with_track_editor(cx, edit);

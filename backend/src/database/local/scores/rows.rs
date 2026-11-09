@@ -159,12 +159,12 @@ pub async fn load_score(
 
 /// Write `candidate` onto the score's rows, touching only what differs.
 ///
-/// Runs in the caller's transaction and takes the owner explicitly: the rows a
-/// score owns carry the score's `uid`, not the session's.
+/// Runs in the caller's transaction. Whoever edits the score, the rows it
+/// writes carry the score's own `uid` — NULL for a guest score — read off the
+/// score row in [`insert_clip`], the one place a clip gets its owner.
 pub async fn save_score(
     connection: &mut SqliteConnection,
     score_id: &str,
-    uid: &str,
     candidate: &Score,
 ) -> Result<Changed, String> {
     let mut changed = Changed::default();
@@ -174,7 +174,7 @@ pub async fn save_score(
         let row = ClipRow::of(clip)?;
         match stored.clips.get(id) {
             None => {
-                insert_clip(&mut *connection, score_id, uid, &row_id(score_id, id), &row).await?;
+                insert_clip(&mut *connection, score_id, &row_id(score_id, id), &row).await?;
                 changed.inserted += 1;
             }
             Some(current) => {
@@ -236,7 +236,6 @@ fn read_clip(row: &sqlx::sqlite::SqliteRow) -> Result<ClipRow, String> {
 async fn insert_clip(
     connection: &mut SqliteConnection,
     score_id: &str,
-    uid: &str,
     id: &str,
     row: &ClipRow,
 ) -> Result<(), String> {
@@ -245,10 +244,9 @@ async fn insert_clip(
     sqlx::query(
         "INSERT INTO clips (id, uid, score_id, name, graph_json, graph, start, duration, seed,
                             selection_seed, selection_json, z_index, blend_mode)
-         VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?1, (SELECT uid FROM scores WHERE id = ?2), ?2, ?3, ?4, '', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )
     .bind(id)
-    .bind(uid)
     .bind(score_id)
     .bind(&row.name)
     .bind(&row.graph_json)
@@ -357,12 +355,34 @@ mod tests {
         score
             .clips
             .insert("c".into(), clip(14_772_579_305_790_499_209, 0.0));
-        save_score(&mut connection, "s", "alice", &score)
-            .await
-            .unwrap();
+        save_score(&mut connection, "s", &score).await.unwrap();
         let read = load_score(&mut connection, "s").await.unwrap();
         assert_eq!(read.clips["c"].seed, 14_772_579_305_790_499_209);
         assert_eq!(read, score);
+    }
+
+    /// A new clip belongs to its score's owner, whoever writes it. A score
+    /// with no owner holds no clip: it is refused, never given an empty id.
+    #[tokio::test]
+    async fn a_clip_carries_its_score_s_owner() {
+        let (_directory, pool) = seeded().await;
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('g', NULL, 't', 'v')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut connection = pool.acquire().await.unwrap();
+        let mut score = Score::default();
+        score.clips.insert("c".into(), clip(1, 0.0));
+        save_score(&mut connection, "s", &score).await.unwrap();
+        assert!(save_score(&mut connection, "g", &score).await.is_err());
+        let owners: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT score_id, uid FROM clips ORDER BY score_id")
+                .fetch_all(&mut *connection)
+                .await
+                .unwrap();
+        assert_eq!(owners, [("s".to_string(), Some("alice".to_string()))]);
     }
 
     /// The point of the diff: an unchanged candidate writes nothing, and a
@@ -375,9 +395,7 @@ mod tests {
         score.clips.insert("a".into(), clip(1, 0.0));
         score.clips.insert("b".into(), clip(2, 8.0));
         assert_eq!(
-            save_score(&mut connection, "s", "alice", &score)
-                .await
-                .unwrap(),
+            save_score(&mut connection, "s", &score).await.unwrap(),
             Changed {
                 inserted: 2,
                 updated: 0,
@@ -385,9 +403,7 @@ mod tests {
             }
         );
         assert_eq!(
-            save_score(&mut connection, "s", "alice", &score)
-                .await
-                .unwrap(),
+            save_score(&mut connection, "s", &score).await.unwrap(),
             Changed::default(),
             "re-sending an unchanged document must write nothing"
         );
@@ -396,9 +412,7 @@ mod tests {
         score.clips.remove("b");
         score.clips.insert("c".into(), clip(3, 16.0));
         assert_eq!(
-            save_score(&mut connection, "s", "alice", &score)
-                .await
-                .unwrap(),
+            save_score(&mut connection, "s", &score).await.unwrap(),
             Changed {
                 inserted: 1,
                 updated: 1,
@@ -453,9 +467,7 @@ mod tests {
         .expect("the spec's Chase clip");
         let mut score = Score::default();
         score.clips.insert("chase".into(), chase);
-        save_score(&mut connection, "s", "alice", &score)
-            .await
-            .unwrap();
+        save_score(&mut connection, "s", &score).await.unwrap();
         let (name, graph): (String, String) =
             sqlx::query_as("SELECT name, graph_json FROM clips WHERE id = 's:chase'")
                 .fetch_one(&mut *connection)
@@ -506,14 +518,10 @@ mod tests {
         let before = stamp(pool.clone()).await;
         let mut score = Score::default();
         score.clips.insert("a".into(), clip(1, 0.0));
-        save_score(&mut connection, "s", "alice", &score)
-            .await
-            .unwrap();
+        save_score(&mut connection, "s", &score).await.unwrap();
         let after = stamp(pool.clone()).await;
         assert_ne!(after, before);
-        save_score(&mut connection, "s", "alice", &score)
-            .await
-            .unwrap();
+        save_score(&mut connection, "s", &score).await.unwrap();
         assert_eq!(stamp(pool).await, after);
     }
 }

@@ -31,7 +31,6 @@ pub async fn edit_score_document(
 ) -> Result<(), CommandError> {
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
-    let metadata = db::get_score(&mut access, &score_id).await?;
     let stored = rows::load_score(access.connection(), &score_id).await?;
     let edited = edit.applied_to(&stored);
     // Check each clip this write changes. A stored clip that no longer
@@ -40,13 +39,7 @@ pub async fn edit_score_document(
     edited
         .validate_changes(&luma_patterns::standard_library(), &stored)
         .map_err(|error| CommandError::Invalid(error.to_string()))?;
-    rows::save_score(
-        access.connection(),
-        &score_id,
-        metadata.uid.as_deref().unwrap_or_default(),
-        &edited,
-    )
-    .await?;
+    rows::save_score(access.connection(), &score_id, &edited).await?;
     access.commit().await?;
     Ok(())
 }

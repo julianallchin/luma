@@ -211,8 +211,7 @@ pub struct Editor {
     /// The last cut or copy, in the shape a paste needs. Local to the screen.
     clipboard: Option<Clipboard>,
     /// The span the transport is looping, if any. A property of playback and
-    /// not of the score — it is never written back, and a read-only score can
-    /// still be looped over.
+    /// not of the score — it is never written back.
     loop_region: Option<(f64, f64)>,
     /// The target and keyboard cursor of the open insertion dialog.
     menu: Option<InsertMenu>,
@@ -308,8 +307,6 @@ pub(crate) struct Score {
     /// the toolbar name it by. A position, not identity: [`Self::id`] is the
     /// key.
     pub(crate) ordinal: i64,
-    /// Somebody else's score: visible, not writable.
-    pub(crate) read_only: bool,
 }
 
 /// One clip, with everything a draw *and* a write need already resolved.
@@ -460,12 +457,6 @@ impl Editor {
             score_id: self.score.id.clone(),
             score: self.graph_candidate().ok(),
         })
-    }
-
-    /// Whether an edit is allowed to land at all: a score this host owns, and
-    /// no other reason to refuse.
-    fn writable(&self) -> bool {
-        !self.score.read_only
     }
 
     /// The tab this editor is: its score, in its venue.
