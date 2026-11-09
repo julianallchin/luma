@@ -212,6 +212,27 @@ pub struct Fixture {
     /// The agent's tools instead of its kind's own set: shipped ones by name,
     /// scripted ones as objects.
     tools: Option<Vec<agent::ToolEntry>>,
+    /// An update installed as the app opens, which raises the ready dialog
+    /// once the launch's venue picker has gone: what no source build reaches
+    /// by itself.
+    update_ready: Option<UpdateReady>,
+}
+
+/// `update_ready`: the version installed and what it brings, as the
+/// manifest's `changes` spells it: `[{ version, lines }]`, newest first.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateReady {
+    version: String,
+    #[serde(default)]
+    changes: Vec<UpdateChange>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateChange {
+    version: String,
+    lines: Vec<String>,
 }
 
 impl Default for Fixture {
@@ -247,6 +268,7 @@ impl Default for Fixture {
             model: None,
             model_cadence: None,
             tools: None,
+            update_ready: None,
         }
     }
 }
@@ -319,6 +341,7 @@ impl Fixture {
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
+        let update_ready = self.update_ready.clone();
         let outside_score_edit = (!self.outside_clips.is_empty()).then(|| {
             serde_json::from_value::<luma_patterns::ScoreEdit>(Self::timeline(&self.outside_clips))
                 .expect("a score edit")
@@ -359,6 +382,16 @@ impl Fixture {
                     });
                 }
                 let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
+                if let Some(ready) = update_ready.clone() {
+                    luma.update(cx, |luma, cx| {
+                        let changes = ready
+                            .changes
+                            .into_iter()
+                            .map(|change| (change.version, change.lines))
+                            .collect();
+                        luma.update_ready_fixture(ready.version, changes, cx);
+                    });
+                }
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
                     .into()
             });

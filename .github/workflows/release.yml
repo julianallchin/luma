@@ -159,9 +159,12 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
+      # The whole history and its tags: the changelog reads the commits since
+      # the previous release.
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SHA }}
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -181,6 +184,24 @@ jobs:
           for archive in dist/Luma-aarch64.app.tar.gz dist/luma-linux-x86_64.tar.gz; do
             npx --yes @tauri-apps/cli@2.12.4 signer sign "$archive"
           done
+      - name: Collect the changelog
+        run: |
+          # The channel's manifest as installs see it now. Its commit starts
+          # a nightly's range, and its `changes` carry forward into this
+          # release's manifest. There is none the first time.
+          if [[ $CHANNEL == nightly ]]; then
+            previous_url="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/latest.json"
+          else
+            previous_url="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json"
+          fi
+          curl -fsSL "$previous_url" -o dist/previous.json || rm -f dist/previous.json
+          if [[ $CHANNEL == stable ]]; then
+            python3 scripts/release/changelog.py --commit "$SHA" --tag "$TAG" > dist/changelog.txt
+          else
+            python3 scripts/release/changelog.py --commit "$SHA" --previous dist/previous.json > dist/changelog.txt
+          fi
+          sed 's/^/- /' dist/changelog.txt > dist/changelog.md
+          cat dist/changelog.md
       - name: Write latest.json
         run: |
           # Nightly installs built before platforms were keyed by target
@@ -194,7 +215,8 @@ jobs:
             --version "$VERSION" \
             --commit "$SHA" \
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
-            --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --changes dist/changelog.txt \
+            --previous dist/previous.json \
             aarch64-apple-darwin=dist/Luma-aarch64.app.tar.gz \
             x86_64-unknown-linux-gnu=dist/luma-linux-x86_64.tar.gz \
             "${old_keys[@]}" \
@@ -204,18 +226,25 @@ jobs:
       - name: Create draft release
         if: env.CHANNEL == 'stable'
         run: |
+          # The changelog, then GitHub's generated list of pull requests.
           gh release create "$TAG" --draft --verify-tag --generate-notes \
-            --title "Luma $VERSION" \
+            --title "Luma $VERSION" --notes-file dist/changelog.md \
             dist/Luma-aarch64.dmg dist/Luma-aarch64.app.tar.gz dist/Luma-aarch64.app.tar.gz.sig \
             dist/luma-linux-x86_64.tar.gz dist/luma-linux-x86_64.tar.gz.sig \
             dist/latest.json dist/install.sh
       - name: Replace the nightly prerelease
         if: env.CHANNEL == 'nightly'
         run: |
+          {
+            echo "Built from $SHA. Nightly builds update to each newer nightly."
+            if [[ -s dist/changelog.md ]]; then
+              echo
+              cat dist/changelog.md
+            fi
+          } > dist/nightly-notes.md
           gh release delete nightly --cleanup-tag --yes || true
           gh release create nightly --prerelease --latest=false --target "$SHA" \
-            --title "Nightly $VERSION" \
-            --notes "Built from $SHA. Nightly builds update to each newer nightly." \
+            --title "Nightly $VERSION" --notes-file dist/nightly-notes.md \
             dist/Luma-aarch64.dmg dist/Luma-aarch64.app.tar.gz dist/Luma-aarch64.app.tar.gz.sig \
             dist/luma-linux-x86_64.tar.gz dist/luma-linux-x86_64.tar.gz.sig \
             dist/latest.json dist/install.sh

@@ -113,3 +113,5 @@ jobs:
         run: python backend/python/luma_exec/tests/run_tests.py
       - name: Test the analysis workers
         run: python -m unittest discover -s backend/python/tests
+      - name: Test the release scripts
+        run: python -m unittest discover -s scripts/release
