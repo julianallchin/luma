@@ -235,21 +235,43 @@ pub fn ensure_python_resource_dir_at(
         )
     };
     fs::create_dir_all(cache_dir).map_err(|e| failed("stage", e))?;
+    // A deploy killed mid-copy (a quit, a crash) leaves its staged or retired
+    // copy behind, about 100 MB for `n2n`. Clear those first: only entries
+    // named with this resource's own `.{relative}.` prefix, beside it.
+    let leftovers = format!(".{relative}.");
+    for entry in fs::read_dir(cache_dir).map_err(|e| failed("stage", e))? {
+        let entry = entry.map_err(|e| failed("stage", e))?;
+        if entry.file_name().to_string_lossy().starts_with(&leftovers)
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
     let staged = tempfile::Builder::new()
-        .prefix(&format!(".{relative}."))
+        .prefix(&leftovers)
         .tempdir_in(cache_dir)
         .map_err(|e| failed("stage", e))?;
     copy_dir_recursive(source_root, staged.path()).map_err(|e| failed("copy", e))?;
     fs::write(staged.path().join(RESOURCE_MARKER), source_hash.as_bytes())
         .map_err(|e| failed("mark", e))?;
-    if dest_root.exists() {
+    // The old copy moves aside and is deleted only once the new one is in
+    // place, when `retired` drops; if placing fails, it moves back.
+    let retired = if dest_root.exists() {
         let retired = tempfile::Builder::new()
-            .prefix(&format!(".{relative}.retired."))
+            .prefix(&format!("{leftovers}retired."))
             .tempdir_in(cache_dir)
             .map_err(|e| failed("retire", e))?;
         fs::rename(&dest_root, retired.path().join(relative)).map_err(|e| failed("retire", e))?;
+        Some(retired)
+    } else {
+        None
+    };
+    if let Err(e) = fs::rename(staged.path(), &dest_root) {
+        if let Some(retired) = &retired {
+            let _ = fs::rename(retired.path().join(relative), &dest_root);
+        }
+        return Err(failed("place", e));
     }
-    fs::rename(staged.path(), &dest_root).map_err(|e| failed("place", e))?;
     Ok(dest_root)
 }
 
@@ -971,6 +993,35 @@ mod tests {
         }
     }
 
+    /// A deploy killed mid-copy leaves its staged copy behind. The next
+    /// deploy clears it, and nothing else in the cache.
+    #[test]
+    fn a_deploy_clears_what_an_interrupted_one_left() {
+        let root = tempfile::tempdir().unwrap();
+        let source = package(root.path());
+        let cache = root.path().join("cache");
+        let left = cache.join(".n2n.a1B2c3");
+        fs::create_dir_all(left.join("model")).unwrap();
+        fs::copy(source.join("weights.pt"), left.join("weights.pt")).unwrap();
+        let kept = [
+            cache.join(".consonance-ACE.x9Y8z7"),
+            cache.join("n2n.notes"),
+            cache.join(".n2n-old"),
+        ];
+        for dir in &kept {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(cache.join(".n2n.lock"), "").unwrap();
+
+        ensure_python_resource_dir_at(&cache, Some(root.path()), "n2n").unwrap();
+
+        assert!(!left.exists(), "the interrupted copy was left behind");
+        for dir in &kept {
+            assert!(dir.exists(), "{} was removed", dir.display());
+        }
+        assert!(cache.join(".n2n.lock").exists(), "a file was removed");
+    }
+
     /// A worker's interpreter may read its script while other launches
     /// write it again. It reads a whole script every time.
     #[test]
@@ -1004,10 +1055,13 @@ mod tests {
                     })
                 })
                 .collect();
-            for writer in writers {
-                writer.join().unwrap();
-            }
+            // Stop the readers before a failed writer's panic, or they spin
+            // forever and the test hangs instead of failing.
+            let wrote: Vec<_> = writers.into_iter().map(|writer| writer.join()).collect();
             writing.store(false, std::sync::atomic::Ordering::Relaxed);
+            for result in wrote {
+                result.unwrap();
+            }
             let torn: usize = readers.into_iter().map(|r| r.join().unwrap()).sum();
             assert_eq!(torn, 0, "a reader saw a half-written script");
         });
