@@ -126,6 +126,7 @@ async fn a_member_caches_a_shared_songs_waveform_and_leaves_its_synced_analysis_
         "shared",
         &lease.guard(),
         None,
+        &scheduler::Breaker::default(),
     )
     .await
     .unwrap();

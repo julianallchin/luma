@@ -23,12 +23,11 @@ pub(crate) mod process;
 use std::path::Path;
 
 use async_trait::async_trait;
-use sqlx::SqlitePool;
 
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
-use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::preprocessing::workers::{list_pending_bar_aligned, track_bar_boundaries};
+use crate::preprocessing::preprocessor::{FirstBar, Preprocessor, PreprocessorContext};
+use crate::preprocessing::workers::track_bar_boundaries;
 
 pub struct GenrePreprocessor;
 
@@ -50,18 +49,14 @@ impl Preprocessor for GenrePreprocessor {
         "track_genres"
     }
 
-    /// Bar-aligned staleness check — see [`list_pending_bar_aligned`]. Genre
-    /// rows are indexed by `bar_idx` against the grid current at run time, so a
-    /// later beat re-detection has to re-queue the track.
-    async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
-        list_pending_bar_aligned(
-            pool,
-            self,
-            "genres_json",
-            "$.bars[0].start",
-            "$.bars[0].end",
-        )
-        .await
+    /// Genre rows index the beat grid current when the step ran, so a later
+    /// beat re-detection has to run it again.
+    fn first_bar(&self) -> Option<FirstBar> {
+        Some(FirstBar {
+            column: "genres_json",
+            start: "$.bars[0].start",
+            end: "$.bars[0].end",
+        })
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -160,28 +155,36 @@ mod tests {
         pool
     }
 
-    async fn insert_beats(pool: &SqlitePool, track_id: &str, bar_secs: f64) {
-        let bpm = 60.0 * 4.0 / bar_secs;
+    /// A beat grid whose first two downbeats are `first_bar`, at a tempo
+    /// whose bar is shorter than that: a detected grid's first bar is often
+    /// not the tempo's length.
+    async fn insert_grid(pool: &SqlitePool, track_id: &str, first_bar: (f64, f64)) {
         sqlx::query(
             "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, '[]', '[]', ?, 4)",
+             VALUES (?, '[]', ?, 128.0, 4)",
         )
         .bind(track_id)
-        .bind(bpm)
+        .bind(format!(
+            "[{},{},{}]",
+            first_bar.0,
+            first_bar.1,
+            first_bar.1 + 1.875
+        ))
         .execute(pool)
         .await
         .unwrap();
     }
 
-    /// Worker output for a synthetic two-bar stretch starting at 0, in the
-    /// exact `{"bars": [...], "track_top": [...]}` shape `run` persists.
-    async fn insert_genres(pool: &SqlitePool, track_id: &str, bar_secs: f64, version: u32) {
+    /// Worker output for two bars of a grid whose first bar was `first_bar`,
+    /// in the exact `{"bars": [...], "track_top": [...]}` shape `run`
+    /// persists.
+    async fn insert_genres(pool: &SqlitePool, track_id: &str, first_bar: (f64, f64), version: u32) {
+        let (start, end) = first_bar;
         let json = format!(
-            r#"{{"bars":[{{"bar_idx":0,"start":0.0,"end":{0},"top":[[0,0.9]]}},
-                        {{"bar_idx":1,"start":{0},"end":{1},"top":[[0,0.8]]}}],
+            r#"{{"bars":[{{"bar_idx":0,"start":{start},"end":{end},"top":[[0,0.9]]}},
+                        {{"bar_idx":1,"start":{end},"end":{},"top":[[0,0.8]]}}],
                 "track_top":[[0,0.85]]}}"#,
-            bar_secs,
-            bar_secs * 2.0,
+            end + 1.875,
         );
         sqlx::query(
             "INSERT INTO track_genres (track_id, genres_json, labels_json, processor_version)
@@ -206,24 +209,23 @@ mod tests {
         let p = GenrePreprocessor;
         assert_eq!(p.list_pending(&pool).await.unwrap(), vec!["t1".to_string()]);
 
-        insert_beats(&pool, "t1", 2.0).await;
-        insert_genres(&pool, "t1", 2.0, p.version()).await;
+        insert_grid(&pool, "t1", (0.5, 2.5)).await;
+        insert_genres(&pool, "t1", (0.5, 2.5), p.version()).await;
         assert!(p.list_pending(&pool).await.unwrap().is_empty());
     }
 
-    /// A row whose bar duration disagrees with the current beat grid must be
-    /// re-queued: `bar_idx` no longer points at the audio it described.
+    /// A row computed against another grid must be re-queued: `bar_idx` no
+    /// longer points at the audio it described.
     #[tokio::test]
-    async fn list_pending_requeues_rows_from_a_stale_beat_grid() {
+    async fn list_pending_requeues_rows_from_an_earlier_beat_grid() {
         let pool = test_pool().await;
         sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
             .execute(&pool)
             .await
             .unwrap();
-        // Grid is now 70 BPM (3.43 s/bar); the stored row was computed at 120.
-        insert_beats(&pool, "t1", 60.0 / 70.0 * 4.0).await;
+        insert_grid(&pool, "t1", (0.5, 2.5)).await;
         let p = GenrePreprocessor;
-        insert_genres(&pool, "t1", 2.0, p.version()).await;
+        insert_genres(&pool, "t1", (0.0, 2.0), p.version()).await;
 
         assert_eq!(p.list_pending(&pool).await.unwrap(), vec!["t1".to_string()]);
     }

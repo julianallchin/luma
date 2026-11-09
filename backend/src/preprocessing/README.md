@@ -19,8 +19,11 @@ optionally overrides one:
 
 Default implementations of `is_complete` and `list_pending` are derived from
 `artifact_table` + `rows_per_track` — workers don't write SQL for the happy
-path. Override `verify_disk` if your output includes side-effect files (see
-`workers/stems.rs`).
+path. Both read one definition of a current artifact, so the run path and
+startup reconcile agree on what is left to do. Override `verify_disk` if your
+output includes side-effect files (see `workers/stems.rs`); only the run path
+checks it, so reconcile doesn't notice deleted files. Declare
+`first_bar` if your rows are indexed by bar (see "Shared bar axis").
 
 ## The `Artifact` enum
 
@@ -112,6 +115,14 @@ On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The
 backoff record carries the track to a later retry.
 
+A batch (`run_for_tracks`: one import, or the startup reconcile) also has a
+circuit breaker. Once a step has failed with the same error on three tracks in
+a row, with no success between, the rest of the batch skips it and its
+dependents, and each skipped track reports that error. A step failing that way
+is broken itself, in its code or its Python environment, so this saves a
+worker launch per track. The skipped tracks record no failure, so the next
+batch tries the step again.
+
 Host events emitted: `Event::TrackImportState` throughout an import, one per
 stage start and settle included. Consumers branch on the structured
 phase/step/error fields, never human-readable status labels.
@@ -197,11 +208,12 @@ synthetic final bar. That shared definition is what lets the agent index
 `features.bars` and `features.genres` with the same integer, so keep new
 bar-indexed nodes on it rather than re-deriving boundaries.
 
-Both also share `workers::list_pending_bar_aligned`, which re-queues a track
-whose stored first-bar duration no longer matches the current `track_beats`
-row. Any bar-indexed artifact needs this: a later beat re-detection or sync
-pull silently invalidates every `bar_idx` otherwise, and the drift compounds
-bar by bar.
+Both also declare `first_bar`: where their row records bar 0 of the grid it
+was computed against. A row whose bar 0 is no longer the current
+`track_beats` row's first two downbeats is stale, so reconcile queues the
+track and its run redoes the step. Any bar-indexed artifact needs this: a
+later beat re-detection or sync pull silently invalidates every `bar_idx`
+otherwise, and the drift compounds bar by bar.
 
 ## User-provisioned model weights
 
