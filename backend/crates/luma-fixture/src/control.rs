@@ -105,6 +105,10 @@ pub struct Channel {
     pub home: Option<f64>,
     #[serde(default)]
     pub fade: Option<bool>,
+    /// A `colour/<emitter>` the fixture makes from its other dies, not a die
+    /// of its own: an "RGBW" mode's white on RGBL LEDs (§3).
+    #[serde(default)]
+    pub emulated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -385,6 +389,8 @@ pub struct Param {
     pub ranges: Vec<Range>,
     /// Where it rests, at the param's full width ([`Self::max`]).
     pub home: u32,
+    /// A colour the fixture mixes from its other dies ([`Channel::emulated`]).
+    pub emulated: bool,
 }
 
 impl Param {
@@ -513,6 +519,7 @@ impl Control {
                     bytes: vec![offset],
                     ranges,
                     home: 0,
+                    emulated: c.emulated,
                 });
                 keys.push(key(c));
                 slots.push(Some((params.len() - 1, 0)));

@@ -167,16 +167,17 @@ impl ModeLight {
         let driven = resolved.driven_emitters(n);
         // A cell's dies: what its geometry draws, plus any emitter a channel
         // scoped to it drives that the geometry leaves out (the library test
-        // holds the shipped specs to none). A cell the geometry cannot speak
-        // for has whatever drives it.
+        // holds the shipped specs to none), plus any colour an emulated
+        // channel makes from the dies it has. A cell the geometry cannot
+        // speak for has whatever drives it.
         let mut dies: Vec<EmitterSet> = (0..n)
             .map(|c| match built.cell_emitters(c) {
                 CellEmitters::Known(set) => set,
                 CellEmitters::Unknown | CellEmitters::Invalid => driven[c],
             })
             .collect();
-        for p in params {
-            if let (Some(e), Some(_)) = (EmitterColour::of(p.attr), p.cell) {
+        for p in params.iter().filter(|p| p.cell.is_some() || p.emulated) {
+            if let Some(e) = EmitterColour::of(p.attr) {
                 for c in covered(p, n) {
                     if !dies[c].lit_by(e) {
                         dies[c].insert(e);

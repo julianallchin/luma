@@ -295,7 +295,8 @@ impl Resolved {
         driven
     }
 
-    /// Every place this mode drives an emitter the geometry does not draw.
+    /// Every place this mode drives an emitter the geometry does not draw. An
+    /// emulated channel is made from the other dies, so it needs none.
     #[must_use]
     pub fn mismatches(&self, built: &Built) -> Vec<Mismatch> {
         let cells = built.cells.len().max(1);
@@ -315,7 +316,7 @@ impl Resolved {
         }
         let mut fixture_level = EmitterSet::EMPTY;
         let mut scoped = vec![EmitterSet::EMPTY; cells];
-        for p in &self.params {
+        for p in self.params.iter().filter(|p| !p.emulated) {
             let Some(e) = EmitterColour::of(p.attr) else {
                 continue;
             };
