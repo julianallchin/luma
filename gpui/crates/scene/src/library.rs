@@ -50,9 +50,16 @@ fn sign(built: &Built, index: usize) -> f32 {
 /// One angle per joint that poses the build at Luma's `[pan, tilt]` degrees.
 ///
 /// Pan and tilt joints the DMX drives take Luma's angle (an array element's
-/// as well as the fixture's own: Luma has one position per fixture). Every
-/// other joint stays at its `rest`, so a static fixture whose tilt is set to
-/// face front faces front.
+/// as well as the fixture's own: Luma has one position per fixture).
+///
+/// A hand-set tilt (a bracket or yoke you lock with a knob) sits at 0, which
+/// is beam straight out of the clamp: Luma's rule is that a fixture shines
+/// along the normal of the surface it is mounted on, and aiming it elsewhere
+/// is the placed fixture's own `pan`/`tilt`, not the spec's. The spec's `rest`
+/// says how the maker photographs it (90 = facing front off the floor), and
+/// posing a bracket there on a truss face shone it along the truss. A fixed
+/// tilt is how the head is built, and it and every other joint stay at
+/// their `rest`.
 #[must_use]
 pub fn angles(built: &Built, [pan, tilt]: [f32; 2]) -> Vec<f32> {
     built
@@ -62,6 +69,7 @@ pub fn angles(built: &Built, [pan, tilt]: [f32; 2]) -> Vec<f32> {
         .map(|(i, j)| match (j.kind, j.drive) {
             (JointKind::Pan, Drive::Dmx) => sign(built, i) * pan,
             (JointKind::Tilt, Drive::Dmx) => sign(built, i) * tilt,
+            (JointKind::Tilt, Drive::Manual) => 0.0,
             _ => j.rest,
         })
         .collect()
@@ -141,6 +149,24 @@ mod tests {
                 "{pan_tilt:?}: library {beam}, bundled {bundled}"
             );
         }
+    }
+
+    /// A par on a hand-locked yoke, whose spec rests it facing front, shines
+    /// straight out of its clamp: down off a grid, out off a truss face.
+    #[test]
+    fn a_hand_set_bracket_shines_out_of_its_clamp() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../harness/fixture-specs/chauvet/slimpar-64.luma.json"),
+        )
+        .unwrap();
+        let b = luma_fixture::build(&luma_fixture::Fixture::from_json(&text).unwrap()).unwrap();
+        assert!(b
+            .joints
+            .iter()
+            .any(|j| j.kind == JointKind::Tilt && j.drive == Drive::Manual && j.rest != 0.0));
+        let (_, dir) = beam(&b, &worlds(&b, [0.0, 0.0]), 0).unwrap();
+        assert!(dir.y < -0.99, "beam {dir}");
     }
 
     #[test]
