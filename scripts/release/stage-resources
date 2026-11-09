@@ -8,7 +8,7 @@
 #   <dest>/python-runtime/   standalone CPython (downloaded by backend/build.rs)
 #   <dest>/ffmpeg-runtime/   ffmpeg (downloaded by backend/build.rs)
 #   <dest>/python/           the analysis workers, without tests or caches
-#   <dest>/resources/        fixtures/, meshes/, skills/
+#   <dest>/resources/        fixtures/, fixture-library/, meshes/, skills/
 #
 # Run after a cargo build, which is what downloads the two runtimes.
 set -euo pipefail
@@ -37,6 +37,6 @@ copy() { rsync -a --delete --exclude '__pycache__' --exclude '*.pyc' --exclude '
 copy "$repo/backend/python-runtime/" "$dest/python-runtime/"
 copy "$repo/backend/ffmpeg-runtime/" "$dest/ffmpeg-runtime/"
 copy --exclude 'tests' --exclude '.gitkeep' "$repo/backend/python/" "$dest/python/"
-for tree in fixtures meshes skills; do
+for tree in fixtures fixture-library meshes skills; do
     copy "$repo/resources/$tree/" "$dest/resources/$tree/"
 done
