@@ -234,14 +234,14 @@ impl Fixture {
     }
 
     /// A track thread with a session open on it. Its durable venue and score
-    /// are one indivisible guest scope, which the guest may edit, so its cells
+    /// are one indivisible scope of the owner's, who may edit it, so its cells
     /// attach to that session's turn ([`session_turn`]). Mutation
     /// authorization is exercised separately; these tests care only about
     /// analysis and namespace behavior.
     async fn thread(&self) -> String {
         sqlx::query(
             "INSERT OR IGNORE INTO scores (id, uid, track_id, venue_id, name)
-             VALUES (?, NULL, ?, ?, 'Analysis')",
+             VALUES (?, 'owner', ?, ?, 'Analysis')",
         )
         .bind(ANALYSIS_SCORE_ID)
         .bind(TRACK_ID)
@@ -249,7 +249,7 @@ impl Fixture {
         .execute(&self.pool)
         .await
         .unwrap();
-        crate::database::local::auth::arm_write_admission(&self.pool, None)
+        crate::database::local::auth::arm_write_admission(&self.pool, Some("owner"))
             .await
             .unwrap();
         let thread = crate::database::local::agent_threads::create_thread(
@@ -262,7 +262,7 @@ impl Fixture {
                 score_id: Some(ANALYSIS_SCORE_ID.to_string()),
                 ..Default::default()
             },
-            None,
+            Some("owner"),
         )
         .await
         .expect("create thread")
@@ -279,7 +279,7 @@ impl Fixture {
                     parts: json!([{ "type": "text", "text": "Session opened." }]),
                 }],
             },
-            None,
+            Some("owner"),
         )
         .await
         .expect("open the thread's session");
@@ -359,7 +359,7 @@ impl Fixture {
             code.to_string(),
             scope,
             turn,
-            None,
+            Some("owner".into()),
             None,
             None,
         )
@@ -734,7 +734,7 @@ impl Fixture {
     async fn empty_venue(&self) -> (String, String) {
         let venue_id = format!("ven-empty-{}", uuid::Uuid::new_v4());
         seed_venue(&self.pool, &venue_id, "Empty Room").await;
-        crate::database::local::auth::arm_write_admission(&self.pool, None)
+        crate::database::local::auth::arm_write_admission(&self.pool, Some("owner"))
             .await
             .unwrap();
         let thread = crate::database::local::agent_threads::create_thread(
@@ -746,7 +746,7 @@ impl Fixture {
                 venue_id: Some(venue_id.clone()),
                 ..Default::default()
             },
-            None,
+            Some("owner"),
         )
         .await
         .expect("create venue thread")
@@ -1059,7 +1059,7 @@ async fn a_perform_thread_changes_the_set_and_a_venue_thread_cannot() {
             venue_id: Some(venue_id.clone()),
             ..Default::default()
         },
-        None,
+        Some("owner"),
     )
     .await
     .expect("create Perform thread")
@@ -1268,7 +1268,7 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
     };
     // The rig is built in the venue's own thread, the clip previewed from
     // the track's: nothing is applied.
-    crate::database::local::auth::arm_write_admission(&f.pool, None)
+    crate::database::local::auth::arm_write_admission(&f.pool, Some("owner"))
         .await
         .unwrap();
     let rig = crate::database::local::agent_threads::create_thread(
@@ -1280,7 +1280,7 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
             venue_id: Some(f.venue_id.clone()),
             ..Default::default()
         },
-        None,
+        Some("owner"),
     )
     .await
     .expect("create venue thread")
@@ -1606,9 +1606,9 @@ assert row.ok
     f.service.shutdown_all();
 }
 
-/// A guest venue and its root, as `create_venue` writes them.
+/// The owner's venue and its root, as `create_venue` writes them.
 async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
-    sqlx::query("INSERT INTO venues (id, name) VALUES (?, ?)")
+    sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, 'owner', ?)")
         .bind(venue_id)
         .bind(name)
         .execute(pool)

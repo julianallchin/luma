@@ -13,12 +13,16 @@ pub struct Write;
 /// signed-in owner only.
 pub struct Owner;
 
-/// Who a principal is to one venue, and so what they may do with it.
+/// Who the admitted principal is to one venue, and so what they may do with
+/// it: one row of the `auth_venue_access` view.
 ///
-/// [`standing`] is the whole rule and the one place it is decided: every guard
-/// here admits by it, and a venue read through one carries its answer
-/// ([`crate::models::venues::Venue::capability`]). Nothing else compares a
-/// row's `uid` with the principal to decide whether an edit is allowed.
+/// That view is the whole rule and the one place it is decided (see its
+/// migration, `20261109120000_one_venue_standing.sql`): every guard here admits
+/// by it, every listing and trigger that asks whether a venue is reachable
+/// joins it, and a venue read carries its answer
+/// ([`crate::models::venues::Venue::capability`]). Nothing compares a row's
+/// `uid` with the principal to decide an edit. A venue the principal cannot
+/// open has no row, so no `Standing`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Standing {
     /// The principal's own venue: an account's, or the guest namespace's
@@ -27,32 +31,22 @@ pub struct Standing {
     pub capability: VenueCapability,
 }
 
-/// `principal`'s standing in a venue `owner_uid` owns, or `None` when they
-/// have no access to it. `is_member` is whether a membership row names them.
-///
-/// There is no permission model inside a venue: whoever can open it can edit
-/// all of it, other people's scores included. Its door — the share code and
-/// the memberships — is its owner's, and a guest venue has no door, because
-/// nobody can join one.
-pub fn standing(
-    owner_uid: Option<&str>,
-    principal: Option<&str>,
-    is_member: bool,
-) -> Option<Standing> {
-    let owner = match principal {
-        Some(principal) => owner_uid == Some(principal),
-        // A venue nobody owns is the guest namespace's, and signed out that is
-        // whose namespace this is.
-        None => owner_uid.is_none(),
-    };
-    let member = principal.is_some() && is_member;
-    (owner || member).then_some(Standing {
-        owner,
-        capability: VenueCapability {
-            edit: true,
-            manage: owner && principal.is_some(),
-        },
-    })
+impl Standing {
+    /// Read off a row that selected the view's `owner`, `edit` and `manage`.
+    pub(crate) fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, String> {
+        use sqlx::Row;
+        let get = |column: &str| {
+            row.try_get::<bool, _>(column)
+                .map_err(|error| format!("Failed to read the venue's standing: {error}"))
+        };
+        Ok(Self {
+            owner: get("owner")?,
+            capability: VenueCapability {
+                edit: get("edit")?,
+                manage: get("manage")?,
+            },
+        })
+    }
 }
 
 /// A fixed route from a known descendant ID to its venue root. Callers cannot
@@ -213,34 +207,20 @@ async fn authorize<'a, Mode>(
         .await?
         .ok_or_else(not_found)?;
 
-    let row: Option<(Option<String>, i64, i64, i64, Option<String>, i64)> = sqlx::query_as(
-        "SELECT venue.uid,
-                    admission.armed, admission.accepting, admission.maintenance,
-                    admission.active_uid,
-                    EXISTS(
-                        SELECT 1 FROM venue_members membership
-                        WHERE membership.venue_id = venue.id
-                          AND membership.uid = admission.active_uid
-                    )
-             FROM venues venue
-             CROSS JOIN auth_write_admission admission
-             WHERE venue.id = ? AND admission.singleton = 1",
+    let row = sqlx::query(
+        "SELECT principal, owner, edit, manage FROM auth_venue_access WHERE venue_id = ?",
     )
     .bind(&venue_id)
     .fetch_optional(&mut *transaction)
     .await
-    .map_err(|error| format!("Failed to authorize venue access: {error}"))?;
-    let Some((owner_uid, armed, accepting, maintenance, active_uid, is_member)) = row else {
-        return Err(not_found());
-    };
-    if armed != 1 || accepting != 1 || maintenance != 0 {
+    .map_err(|error| format!("Failed to authorize venue access: {error}"))?
+    .ok_or_else(not_found)?;
+    let standing = Standing::from_row(&row)?;
+    if !admits(standing.capability) {
         return Err(not_found());
     }
-
-    let principal = active_uid;
-    let standing = standing(owner_uid.as_deref(), principal.as_deref(), is_member == 1)
-        .filter(|standing| admits(standing.capability))
-        .ok_or_else(not_found)?;
+    let principal: Option<String> = sqlx::Row::try_get(&row, "principal")
+        .map_err(|error| format!("Failed to read the admitted principal: {error}"))?;
 
     Ok(VenueAccess {
         transaction,
@@ -429,10 +409,18 @@ mod tests {
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();
+        // Signed out, the guest's own venue opens for reading, and nothing
+        // in it changes: there is no signed-out owner to write as.
         assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Venue("guest"),)
+            VenueAccess::<Read>::read(&pool, VenueResource::Venue("guest"))
                 .await
                 .is_ok()
+        );
+        assert!(
+            VenueAccess::<Write>::write(&pool, VenueResource::Venue("guest"))
+                .await
+                .is_err(),
+            "a signed-out guest edited a venue"
         );
         assert!(
             VenueAccess::<Owner>::owner(&pool, VenueResource::Venue("guest"))

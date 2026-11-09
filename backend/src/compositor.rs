@@ -121,36 +121,20 @@ mod tests {
     async fn track_cleanup_derives_the_track_from_an_admitted_score() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
-            .connect("sqlite::memory:")
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(":memory:")
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE auth_write_admission (
-                singleton INTEGER PRIMARY KEY,
-                armed INTEGER NOT NULL,
-                accepting INTEGER NOT NULL,
-                maintenance INTEGER NOT NULL,
-                active_uid TEXT
-             );
-             INSERT INTO auth_write_admission VALUES (1, 1, 1, 0, 'alice');
-             CREATE TABLE venues (
-                id TEXT PRIMARY KEY,
-                uid TEXT,
-                role TEXT NOT NULL DEFAULT 'owner'
-             );
-             CREATE TABLE venue_members (
-                id TEXT PRIMARY KEY,
-                uid TEXT NOT NULL,
-                venue_id TEXT NOT NULL,
-                role TEXT NOT NULL
-             );
-             CREATE TABLE scores (
-                id TEXT PRIMARY KEY,
-                venue_id TEXT NOT NULL,
-                track_id TEXT NOT NULL
-             );
-             INSERT INTO venues (id, uid) VALUES ('venue', 'alice');
-             INSERT INTO scores VALUES ('score', 'venue', 'track')",
+            "INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Venue');
+             INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('score', 'alice', 'track', 'venue')",
         )
         .execute(&pool)
         .await
@@ -161,8 +145,7 @@ mod tests {
         assert_eq!(track_id, "track");
         drop(access);
 
-        sqlx::query("UPDATE auth_write_admission SET active_uid = 'bob'")
-            .execute(&pool)
+        crate::database::local::auth::arm_write_admission(&pool, Some("bob"))
             .await
             .unwrap();
         let unauthorized = score_scope(&pool, "score").await.err().unwrap();

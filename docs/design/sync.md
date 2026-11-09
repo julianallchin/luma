@@ -44,15 +44,18 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   refused at the commit and refused again on every retry, so a rule that
   reaches a child reaches its parent too: the tracks behind a shared score.
 - Sign-in is required to write. Every synced row has an owner, and there is no
-  signed-out owner: `AppServices::require_session` refuses the command and the
-  shell shows the sign-in screen. Reading a library already on this machine
-  needs nothing.
+  signed-out owner. The commands that write an account's own rows — importing
+  tracks, agent threads, sharing and joining venues — ask
+  `AppServices::require_session`; venue content is written through
+  `VenueAccess`, which admits by the local view `auth_venue_access`
+  (migration `20261109120000_one_venue_standing.sql`), and that view gives a
+  signed-out principal no `edit`. Signed out, the guest namespace's venues —
+  the ones nobody owns — still open for reading. A clip carries its score's
+  `uid`, and `clips.uid` is NOT NULL, so a score nobody owns cannot hold one.
+  Reading a library already on this machine needs nothing.
 
-  Not yet true everywhere. Venue content goes through `VenueAccess`, which
-  still admits a principal-less write to a venue nobody owns, and
-  `agent_thread_messages` keeps a CHECK that admits a `signed-out`
-  `principal_key` for the rows written before the rule existed. The app never
-  reaches either — it opens on the gate — but the guard does not say so.
+  `agent_thread_messages` still keeps a CHECK that admits a `signed-out`
+  `principal_key` for the rows written before the rule existed.
 
 ## Score model
 
