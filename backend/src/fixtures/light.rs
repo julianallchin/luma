@@ -42,9 +42,7 @@ fn emitter_light(colour: EmitterColour) -> [f64; 3] {
         EmitterColour::Red => [1.0, 0.0, 0.0],
         EmitterColour::Green => [0.0, 1.0, 0.0],
         EmitterColour::Blue => [0.0, 0.0, 1.0],
-        EmitterColour::White | EmitterColour::WarmWhite | EmitterColour::CoolWhite => {
-            WHITE_EMITTER
-        }
+        EmitterColour::White | EmitterColour::WarmWhite | EmitterColour::CoolWhite => WHITE_EMITTER,
         EmitterColour::Amber => AMBER_EMITTER,
         EmitterColour::Lime => LIME_EMITTER,
         EmitterColour::Cyan => [0.0, 1.0, 1.0],
@@ -194,7 +192,7 @@ impl ModeLight {
         let mix: Vec<EmitterSet> = (0..n)
             .map(|c| driven[c].iter().filter(|&e| dies[c].lit_by(e)).collect())
             .collect();
-        let roles: Vec<Role> = params
+        let mut roles: Vec<Role> = params
             .iter()
             .map(|p| {
                 let cells = covered(p, n);
@@ -225,6 +223,41 @@ impl ModeLight {
                 }
             })
             .collect();
+        // Where channels of one colour overlap (a master colour over pixel
+        // colours), each cell is the narrowest one's: a wider one carries
+        // only the cells no narrower one reaches.
+        let spans: Vec<Option<(EmitterColour, usize)>> = roles
+            .iter()
+            .map(|r| match r {
+                Role::Emitter { colour, cells } => Some((*colour, cells.len())),
+                _ => None,
+            })
+            .collect();
+        let owner = |colour: EmitterColour, c: usize| -> Option<usize> {
+            roles
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| matches!(r, Role::Emitter { colour: e, cells } if *e == colour && cells.contains(&c)))
+                .min_by_key(|(i, _)| spans[*i].map_or(usize::MAX, |(_, w)| w))
+                .map(|(i, _)| i)
+        };
+        let owned: Vec<Vec<usize>> = roles
+            .iter()
+            .enumerate()
+            .map(|(i, r)| match r {
+                Role::Emitter { colour, cells } => cells
+                    .iter()
+                    .copied()
+                    .filter(|&c| owner(*colour, c) == Some(i))
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        for (role, own) in roles.iter_mut().zip(owned) {
+            if let Role::Emitter { cells, .. } = role {
+                *cells = own;
+            }
+        }
         let cells = (0..n)
             .map(|c| {
                 let additive = !mix[c].is_empty();
@@ -333,38 +366,56 @@ impl ModeLight {
             }
         }
 
-        // Dimmers, widest first, each at the brightest of what is left of
-        // its cells' brightness; what no dimmer makes is left for the
-        // emitters.
+        // Brightness goes to the gains over each cell, widest first: every
+        // dimmer, and every set of cells that share emitter channels. Each is
+        // set by the brightest of what is left of its cells' brightness, and
+        // the narrower ones make up the rest; on a tie a dimmer goes first,
+        // so a dimmer dims and the colour stays at full.
         let mut residual = brightness;
-        let mut dimmers: Vec<(usize, &Vec<usize>)> = self
-            .roles
-            .iter()
-            .enumerate()
-            .filter_map(|(i, r)| match r {
-                Role::Dimmer { cells } => Some((i, cells)),
-                _ => None,
-            })
-            .collect();
-        dimmers.sort_by_key(|(_, cells)| std::cmp::Reverse(cells.len()));
-        for (i, cells) in dimmers {
+        let mut gains: Vec<(&Vec<usize>, Option<usize>)> = Vec::new();
+        for (i, role) in self.roles.iter().enumerate() {
+            match role {
+                Role::Dimmer { cells } => gains.push((cells, Some(i))),
+                Role::Emitter { cells, .. }
+                    if !cells.is_empty()
+                        && !gains.iter().any(|(g, d)| d.is_none() && *g == cells) =>
+                {
+                    gains.push((cells, None));
+                }
+                _ => {}
+            }
+        }
+        gains.sort_by_key(|(cells, dimmer)| (std::cmp::Reverse(cells.len()), dimmer.is_none()));
+        let mut shared: Vec<(&Vec<usize>, f64)> = Vec::new();
+        for (cells, dimmer) in gains {
             let level = cells.iter().map(|&c| residual[c]).fold(0.0, f64::max);
             if level > 0.0 {
                 for &c in cells {
                     residual[c] = (residual[c] / level).min(1.0);
                 }
             }
-            values[i] = Value::Level(level as f32);
+            match dimmer {
+                Some(i) => values[i] = Value::Level(level as f32),
+                None => shared.push((cells, level)),
+            }
         }
 
-        // Each cell's emitter levels, at what is left of its brightness.
+        // Each emitter channel: the mean of its cells' mix of that colour, at
+        // its cells' shared gain.
         let mixes: Vec<Mix> = (0..n)
-            .map(|c| Mix::of(levels[c], self.cells[c].mix).scaled(residual[c]))
+            .map(|c| Mix::of(levels[c], self.cells[c].mix))
             .collect();
         for (i, role) in self.roles.iter().enumerate() {
             match role {
                 Role::Emitter { colour, cells } => {
-                    values[i] = Value::Level(mean(cells.iter().map(|&c| mixes[c].level(*colour))));
+                    let gain = shared
+                        .iter()
+                        .find(|(g, _)| *g == cells)
+                        .map_or(0.0, |(_, l)| *l);
+                    values[i] = Value::Level(
+                        (f64::from(mean(cells.iter().map(|&c| mixes[c].level(*colour)))) * gain)
+                            as f32,
+                    );
                 }
                 Role::Filter { primary, cells } => {
                     // A flag passes 1 − its level of the white lamp; with no
@@ -575,18 +626,6 @@ impl Mix {
             whites,
             amber,
             lime,
-        }
-    }
-
-    fn scaled(self, k: f64) -> Self {
-        Self {
-            red: self.red * k,
-            green: self.green * k,
-            blue: self.blue * k,
-            white: self.white * k,
-            whites: self.whites,
-            amber: self.amber * k,
-            lime: self.lime * k,
         }
     }
 
