@@ -145,8 +145,10 @@ pub struct Fixture {
     /// The window, instead of the default 1200×800.
     #[serde(deserialize_with = "window_size")]
     window: Option<gpui::Size<gpui::Pixels>>,
-    /// Shared with the test that set it, so it has no JSON form.
-    #[serde(skip)]
+    /// The sync status the app shows instead of its own. Shared with the test
+    /// that set it, which may change it mid-run ([`Self::with_sync_status`]);
+    /// the JSON form states one that holds.
+    #[serde(deserialize_with = "shared")]
     sync_status: Option<Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>>,
     /// The background work the app reports instead of its own: the harness
     /// sets no Python up, runs no analysis and moves no media, so a test of
@@ -281,7 +283,7 @@ impl Fixture {
     }
 
     /// The sync status the app shows, shared with the test so it can change
-    /// it mid-run. The one option with no JSON form.
+    /// it mid-run.
     pub fn with_sync_status(
         mut self,
         status: Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>,
@@ -1088,6 +1090,12 @@ fn migrated(runtime: &tokio::runtime::Runtime) -> &'static Path {
 }
 
 // -- the JSON form's value shapes ----------------------------------------------
+
+fn shared<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    de: D,
+) -> Result<Option<Arc<std::sync::Mutex<T>>>, D::Error> {
+    Ok(Option::<T>::deserialize(de)?.map(|value| Arc::new(std::sync::Mutex::new(value))))
+}
 
 fn millis<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Duration>, D::Error> {
     Ok(Option::<u64>::deserialize(de)?.map(Duration::from_millis))

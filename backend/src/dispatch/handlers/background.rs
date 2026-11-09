@@ -1,5 +1,6 @@
-//! The background work the status bar reads: one cheap snapshot of every
-//! kind, off in-memory state and one indexed read of the failure table.
+//! The background work the status bar reads: one cheap snapshot of the
+//! compute in flight, off in-memory state and one indexed read of the failure
+//! table.
 
 use std::collections::HashMap;
 
@@ -9,9 +10,9 @@ use crate::models::background::{step_doing, BackgroundJob, BackgroundWork, JobKi
 use crate::preprocessing::failures;
 use crate::runtime::python::PythonSetup;
 
-/// What the app is doing in the background right now: Python setup and its
-/// model fetch, each track's analysis, the steps held back after failures,
-/// and media transfers. Record sync is [`super::sync::sync_status`]'s.
+/// What the app is computing in the background right now: Python setup and its
+/// model fetch, each track's analysis, and the steps held back after failures.
+/// Moving records and media is [`super::sync::sync_status`]'s.
 pub async fn background_work(services: &AppServices) -> Result<BackgroundWork, CommandError> {
     let mut jobs = Vec::new();
 
@@ -90,26 +91,17 @@ pub async fn background_work(services: &AppServices) -> Result<BackgroundWork, C
             }),
     );
     jobs.extend(held.into_iter().map(|step| {
-        let tries = if step.attempts == 1 {
-            "1 failure".to_owned()
-        } else {
-            format!("{} failures", step.attempts)
-        };
         BackgroundJob {
             track: name(&step.track_id),
             track_id: Some(step.track_id),
             ..job(
                 JobKind::Analysis,
-                &format!("{} paused after {tries}", step_doing(&step.preprocessor)),
+                &format!("{} paused", step_doing(&step.preprocessor)),
                 JobState::Paused(failures::headline(&step.last_error).to_owned()),
             )
+            .with_step(step.preprocessor)
         }
-        .with_step(step.preprocessor)
     }));
-
-    if let Some(transfer) = transfer(services).await? {
-        jobs.push(transfer);
-    }
     Ok(BackgroundWork { jobs })
 }
 
@@ -120,7 +112,6 @@ fn job(kind: JobKind, what: &str, state: JobState) -> BackgroundJob {
         track_id: None,
         track: None,
         steps: Vec::new(),
-        progress: None,
         state,
     }
 }
@@ -181,26 +172,6 @@ async fn track_names<'a>(
             (id, name)
         })
         .collect())
-}
-
-/// The media transfer in flight for the signed-in account, once it has found
-/// files to move. Its discovery phases count nothing and are not shown.
-async fn transfer(services: &AppServices) -> Result<Option<BackgroundJob>, CommandError> {
-    let Some(media) = &services.media else {
-        return Ok(None);
-    };
-    let Some(uid) =
-        crate::database::local::auth::get_current_user_id(services.state_pool()).await?
-    else {
-        return Ok(None);
-    };
-    Ok(media.progress(&uid).and_then(|progress| {
-        let total = progress.total.filter(|total| *total > progress.completed)?;
-        Some(BackgroundJob {
-            progress: Some((progress.completed, total)),
-            ..job(JobKind::Transfer, &progress.phase, JobState::Running)
-        })
-    }))
 }
 
 #[cfg(test)]
@@ -293,8 +264,8 @@ mod tests {
         let held = &work.jobs[0];
         assert_eq!(held.track.as_deref(), Some("Aurora"));
         assert_eq!(held.steps, vec!["stems".to_owned()]);
+        assert_eq!(held.what, "Separating stems paused");
         assert_eq!(held.state, JobState::Paused("Out of memory".into()));
-        assert!(work.attention());
         assert_eq!(work.summary().as_deref(), Some("1 analysis step paused"));
     }
 }

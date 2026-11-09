@@ -4,13 +4,15 @@
 //!
 //! The words are [`BackgroundWork::summary`]'s, except while an import runs:
 //! then the bar says where the import stands, since its analysis is most of
-//! what is running. Sync has its own item and is not repeated here.
+//! what is running. This is compute only: moving records and media is sync's
+//! item, and is not repeated here.
 use std::time::{Duration, Instant};
 
 use crate::Luma;
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Div, Entity};
+use gpui::{div, px, AnyElement, Context, Entity};
 use luma_lib::models::background::{BackgroundJob, BackgroundWork, JobKind, JobState};
+use luma_ui::dialog::Popup;
 use luma_ui::glass;
 use luma_ui::node::{Instrument as _, Role};
 
@@ -21,8 +23,8 @@ const HOLD: Duration = Duration::from_millis(800);
 #[derive(Default)]
 pub(crate) struct BackgroundState {
     pub work: BackgroundWork,
-    /// The list is open.
-    pub expanded: bool,
+    /// The list hung above the item.
+    pub list: Popup<()>,
     /// What the bar says: the summary once work has lasted [`HOLD`].
     shown: Option<String>,
     /// When work began, while the bar does not say so yet.
@@ -94,111 +96,94 @@ impl Luma {
     }
 }
 
+impl Luma {
+    /// Close the list. Reports whether it was open: Escape's rung.
+    pub(crate) fn close_background_list(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.background.list.is_open() {
+            return false;
+        }
+        self.background.list.begin_close(cx);
+        cx.notify();
+        true
+    }
+}
+
 /// The status bar's background-work item, while there is any to speak of.
 pub(crate) fn item(shell: &Luma, app: &Entity<Luma>) -> Option<crate::status_bar::Item> {
-    let import = crate::add_tracks::progress::status(shell);
-    let state = &shell.background;
-    let label = import
-        .as_ref()
-        .map(|import| import.summary.clone())
-        .or_else(|| state.shown.clone())?;
+    let label = crate::add_tracks::progress::status(shell)
+        .map(|import| import.summary)
+        .or_else(|| shell.background.shown.clone())?;
     let mut item = crate::status_bar::Item::new("background-work", label);
-    item.attention = import.as_ref().is_some_and(|import| import.failed)
-        || (state.shown.is_some() && state.work.attention());
     item.press = Some(|this, cx| {
-        this.background.expanded = !this.background.expanded;
-        cx.notify();
+        if !this.close_background_list(cx) {
+            this.background.list.open(());
+            cx.notify();
+        }
     });
-    item.detail = state.expanded.then(|| list(shell, app));
+    item.detail = crate::status_bar::popover(
+        "background-work-float",
+        &shell.background.list,
+        || list(shell, app),
+        app,
+        |this, cx| {
+            this.close_background_list(cx);
+        },
+    );
     Some(item)
 }
 
-/// Everything in the background, in a card above the bar: the import, setup,
-/// each track's analysis, what is held back, and transfers.
+/// Everything in the background, one short line each: the import, setup, the
+/// tracks running, how many wait, and the steps held back.
 fn list(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
     let jobs = &shell.background.work.jobs;
-    let mut groups: Vec<AnyElement> = Vec::new();
+    let mut rows: Vec<AnyElement> = Vec::new();
 
     if let Some(import) = crate::add_tracks::progress::status(shell) {
         let show = app.clone();
-        groups.push(
-            group(
-                "Import",
-                vec![row(
-                    import.failed,
-                    &import.summary,
-                    None,
-                    Some(
-                        luma_ui::button("Show", luma_ui::Enabled::Yes)
-                            .id("background-import-show")
-                            .on_click(move |_, _, cx| {
-                                show.update(cx, |this, cx| {
-                                    this.background.expanded = false;
-                                    this.show_track_import(cx);
-                                })
-                            })
-                            .agent_node(Role::Button, "Show import")
-                            .into_any_element(),
-                    ),
-                )],
-            )
-            .into_any_element(),
-        );
+        rows.push(row(
+            &import.summary,
+            false,
+            Some(
+                luma_ui::button("Show", luma_ui::Enabled::Yes)
+                    .id("background-import-show")
+                    .on_click(move |_, _, cx| {
+                        show.update(cx, |this, cx| {
+                            this.close_background_list(cx);
+                            this.show_track_import(cx);
+                        })
+                    })
+                    .agent_node(Role::Button, "Show import")
+                    .into_any_element(),
+            ),
+        ));
     }
-
-    let setup: Vec<AnyElement> = jobs
-        .iter()
-        .filter(|job| matches!(job.kind, JobKind::PythonSetup | JobKind::Models))
-        .map(job_row)
-        .collect();
-    if !setup.is_empty() {
-        groups.push(group("Python", setup).into_any_element());
-    }
-
     let analysis = |state: fn(&JobState) -> bool| {
         jobs.iter()
             .filter(move |job| job.kind == JobKind::Analysis && state(&job.state))
     };
+    rows.extend(
+        jobs.iter()
+            .filter(|job| job.kind != JobKind::Analysis)
+            .map(|job| row(&job.what, false, None)),
+    );
     let running: Vec<&BackgroundJob> = analysis(|state| *state == JobState::Running).collect();
     let queued: Vec<&BackgroundJob> = analysis(|state| *state == JobState::Queued).collect();
-    let mut rows: Vec<AnyElement> = running.iter().map(|job| job_row(job)).collect();
+    rows.extend(running.iter().map(|job| row(&with_track(job), false, None)));
     match (running.len(), queued.as_slice()) {
         (_, []) => {}
-        // Nothing running yet: say why the tracks wait, once.
-        (0, [first, ..]) => rows.push(row(
-            false,
-            &format!("{} queued", tracks(queued.len())),
-            (first.what != "Queued").then(|| first.what.clone()),
+        (0, [first, ..]) if first.what != "Queued" => rows.push(row(
+            &format!("{} queued · {}", tracks(queued.len()), first.what),
+            true,
             None,
         )),
-        (_, queued) => rows.push(row(
-            false,
-            &format!("{} more queued", queued.len()),
-            None,
-            None,
-        )),
+        (0, _) => rows.push(row(&format!("{} queued", tracks(queued.len())), true, None)),
+        (_, queued) => rows.push(row(&format!("{} more queued", queued.len()), true, None)),
     }
-    if !rows.is_empty() {
-        groups.push(group("Analysis", rows).into_any_element());
-    }
-
-    let held: Vec<AnyElement> = analysis(JobState::is_trouble).map(job_row).collect();
-    if !held.is_empty() {
-        groups.push(group("Paused", held).into_any_element());
-    }
-
-    let transfers: Vec<AnyElement> = jobs
-        .iter()
-        .filter(|job| job.kind == JobKind::Transfer)
-        .map(job_row)
-        .collect();
-    if !transfers.is_empty() {
-        groups.push(group("Transfers", transfers).into_any_element());
-    }
+    rows.extend(analysis(JobState::is_trouble).map(|job| row(&with_track(job), true, None)));
 
     let card = luma_ui::float::popover_card()
         .id("background-work")
-        .w(px(300.))
+        .w(px(280.))
         .p(px(10.))
         .text_size(px(12.))
         .child(
@@ -208,16 +193,19 @@ fn list(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .gap(px(10.))
-                .children(groups),
+                .gap(px(6.))
+                .children(rows),
         )
         .agent_node(Role::Card, "Background work");
-    luma_ui::float::anchored_above(
-        "background-work-float",
-        crate::shell::STATUS_BAR_HEIGHT,
-        luma_ui::float::Dismiss::Never,
-        card.into_any_element(),
-    )
+    card.into_any_element()
+}
+
+/// A job and the track it is about: `Separating stems · Aurora`.
+fn with_track(job: &BackgroundJob) -> String {
+    match &job.track {
+        Some(track) => format!("{} · {track}", job.what),
+        None => job.what.clone(),
+    }
 }
 
 fn tracks(count: usize) -> String {
@@ -228,82 +216,27 @@ fn tracks(count: usize) -> String {
     }
 }
 
-/// A quiet heading over its rows.
-fn group(heading: &'static str, rows: Vec<AnyElement>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(glass::ink(glass::TEXT_TERTIARY))
-                .child(heading),
-        )
-        .children(rows)
-}
-
-/// One job: what, on which track, how far, and why when it is held back.
-fn job_row(job: &BackgroundJob) -> AnyElement {
-    let reason = match &job.state {
-        JobState::Paused(reason) | JobState::Failed(reason) => Some(reason.clone()),
-        JobState::Running | JobState::Queued => None,
-    };
-    let (title, detail) = match (&job.track, job.progress) {
-        // A held step names its track over why.
-        (Some(track), _) if reason.is_some() => (
-            job.what.clone(),
-            Some(format!("{track} · {}", reason.unwrap_or_default())),
-        ),
-        (Some(track), _) => (track.clone(), Some(job.what.clone())),
-        (None, Some((done, total))) => (
-            job.what.clone(),
-            Some(format!("{} of {total}", (done + 1).min(total))),
-        ),
-        (None, None) => (job.what.clone(), reason),
-    };
-    row(job.state.is_trouble(), &title, detail, None)
-}
-
-/// A row: the notice mark when it is worth a look, the title over a muted
-/// second line, and what it offers at its end.
-fn row(
-    trouble: bool,
-    title: &str,
-    detail: Option<String>,
-    trailing: Option<AnyElement>,
-) -> AnyElement {
-    let label = match &detail {
-        Some(detail) => format!("{title}: {detail}"),
-        None => title.to_owned(),
-    };
+/// One short line, muted when it is waiting or held back, with what it
+/// offers at its end.
+fn row(text: &str, muted: bool, trailing: Option<AnyElement>) -> AnyElement {
     div()
         .flex()
         .items_center()
         .gap(px(8.))
-        .when(trouble, |row| row.child(luma_ui::notice::mark()))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .truncate()
-                        .text_color(glass::ink(glass::TEXT_SECONDARY))
-                        .child(title.to_owned()),
-                )
-                .children(detail.map(|detail| {
-                    div()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(glass::ink(glass::TEXT_TERTIARY))
-                        .child(detail)
-                })),
+                .truncate()
+                .text_color(glass::ink(if muted {
+                    glass::TEXT_TERTIARY
+                } else {
+                    glass::TEXT_SECONDARY
+                }))
+                .child(text.to_owned()),
         )
         .children(trailing)
-        .agent_node(Role::Row, label)
+        .agent_node(Role::Row, text.to_owned())
         .into_any_element()
 }
 
@@ -320,7 +253,6 @@ mod tests {
                     track_id: Some(format!("t{index}")),
                     track: Some(format!("Track {index}")),
                     steps: Vec::new(),
-                    progress: None,
                     state: JobState::Queued,
                 })
                 .collect(),

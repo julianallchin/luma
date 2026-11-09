@@ -115,7 +115,6 @@ pub async fn held_back(
 pub struct HeldStep {
     pub track_id: String,
     pub preprocessor: String,
-    pub attempts: i64,
     pub last_error: String,
 }
 
@@ -123,7 +122,7 @@ pub struct HeldStep {
 /// bar lists as paused after failures.
 pub async fn all_held_back(pool: &SqlitePool) -> Result<Vec<HeldStep>, String> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT f.track_id, f.preprocessor, f.attempts, f.last_error
+        "SELECT f.track_id, f.preprocessor, f.last_error
            FROM preprocessing_failures f
           WHERE {IN_BACKOFF}
           ORDER BY f.track_id, f.preprocessor"

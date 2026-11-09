@@ -189,7 +189,6 @@ fn import_status_mark(status: &ItemStatus, label: &str) -> Div {
 /// opened.
 pub(crate) struct ImportStatus {
     pub(crate) summary: String,
-    pub(crate) failed: bool,
 }
 
 pub(crate) fn status(shell: &Luma) -> Option<ImportStatus> {
@@ -200,6 +199,5 @@ pub(crate) fn status(shell: &Luma) -> Option<ImportStatus> {
     }
     Some(ImportStatus {
         summary: activity.summary(),
-        failed,
     })
 }

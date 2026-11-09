@@ -1,9 +1,8 @@
 //! What the app is doing in the background, as the status bar reads it.
 //!
-//! One report of every kind of long-running work the user did not just ask
-//! for and is not watching: setting Python up and fetching its models, each
-//! track's analysis, steps held back after failures, and media moving to or
-//! from the server. Record sync has its own report ([`super::sync`]).
+//! One report of the compute the user is not watching: setting Python up and
+//! fetching its models, each track's analysis, and the steps held back after
+//! failures. Moving bytes is sync's, and has its own report ([`super::sync`]).
 //!
 //! Like that one, this is a report, not a control surface: the scheduler owns
 //! retries and backoff, and nothing here asks it to do anything.
@@ -13,7 +12,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundWork {
     /// The work in flight and the work held back, in the order the list shows
-    /// it: setup first, then the tracks, then held steps, then transfers.
+    /// it: setup first, then the tracks, then held steps.
     pub jobs: Vec<BackgroundJob>,
 }
 
@@ -23,7 +22,7 @@ pub struct BackgroundWork {
 pub struct BackgroundJob {
     pub kind: JobKind,
     /// What it is doing, in plain words: `Separating stems`, `Setting up
-    /// Python`, `Uploading audio`.
+    /// Python`, `Reading chords paused`.
     pub what: String,
     pub track_id: Option<String>,
     /// The track's name as the library shows it.
@@ -31,8 +30,6 @@ pub struct BackgroundJob {
     /// The analysis steps it concerns, by wire name (`stems`, `beat_grid`).
     #[serde(default)]
     pub steps: Vec<String>,
-    /// `(done, total)` when the work counts its own items.
-    pub progress: Option<(usize, usize)>,
     pub state: JobState,
 }
 
@@ -45,8 +42,6 @@ pub enum JobKind {
     Models,
     /// A track's analysis.
     Analysis,
-    /// Audio, stems or art moving to or from the server.
-    Transfer,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,7 +59,7 @@ pub enum JobState {
 }
 
 impl JobState {
-    /// Worth a look: held back or failed, not merely waiting.
+    /// Held back or failed, not merely waiting.
     #[must_use]
     pub fn is_trouble(&self) -> bool {
         matches!(self, Self::Paused(_) | Self::Failed(_))
@@ -76,9 +71,8 @@ impl BackgroundWork {
     /// `Analyzing 3 tracks`, `Separating stems · Aurora`. `None` when nothing
     /// runs and nothing is held back.
     ///
-    /// Setup outranks analysis, which waits for it anyway; analysis outranks
-    /// transfers, which only move bytes. Held-back work speaks only when
-    /// nothing runs.
+    /// Setup outranks analysis, which waits for it anyway. Held-back work
+    /// speaks only when nothing runs.
     #[must_use]
     pub fn summary(&self) -> Option<String> {
         let busy = |kind| {
@@ -101,14 +95,6 @@ impl BackgroundWork {
             }
             many => return Some(format!("Analyzing {} tracks", many.len())),
         }
-        if let Some(transfer) = busy(JobKind::Transfer).next() {
-            return Some(match transfer.progress {
-                Some((done, total)) if total > 0 => {
-                    format!("{} · {} of {total}", transfer.what, (done + 1).min(total))
-                }
-                _ => transfer.what.clone(),
-            });
-        }
         if let Some(models) = busy(JobKind::Models).next() {
             return Some(models.what.clone());
         }
@@ -129,12 +115,6 @@ impl BackgroundWork {
             1 => Some("1 analysis step paused".into()),
             n => Some(format!("{n} analysis steps paused")),
         }
-    }
-
-    /// Something in the list is held back or failed.
-    #[must_use]
-    pub fn attention(&self) -> bool {
-        self.jobs.iter().any(|job| job.state.is_trouble())
     }
 }
 
@@ -181,7 +161,6 @@ mod tests {
             track_id: None,
             track: None,
             steps: Vec::new(),
-            progress: None,
             state,
         }
     }
@@ -202,7 +181,6 @@ mod tests {
     #[test]
     fn idle_says_nothing() {
         assert_eq!(BackgroundWork::default().summary(), None);
-        assert!(!BackgroundWork::default().attention());
     }
 
     /// One track names its step and the track; several are counted.
@@ -222,45 +200,32 @@ mod tests {
         assert_eq!(three.summary().as_deref(), Some("Analyzing 3 tracks"));
     }
 
-    /// Setup outranks the analysis waiting on it, analysis outranks a
-    /// transfer, and held-back steps speak only when nothing runs.
+    /// Setup outranks the analysis waiting on it, analysis outranks the model
+    /// fetch, and held-back steps speak only when nothing runs.
     #[test]
-    fn setup_outranks_analysis_which_outranks_transfers_and_held_steps() {
+    fn setup_outranks_analysis_which_outranks_models_and_held_steps() {
         let held = track(
             "Aurora",
             &["stems"],
             JobState::Paused("out of memory".into()),
         );
         let setup = job(JobKind::PythonSetup, "Setting up Python", JobState::Running);
-        let transfer = BackgroundJob {
-            progress: Some((1, 2)),
-            ..job(JobKind::Transfer, "Uploading audio", JobState::Running)
-        };
+        let models = job(JobKind::Models, "Fetching models", JobState::Running);
         let queued = track("Borealis", &[], JobState::Queued);
 
-        let all = work(vec![
-            setup.clone(),
-            queued.clone(),
-            held.clone(),
-            transfer.clone(),
-        ]);
+        let all = work(vec![setup, queued.clone(), held.clone(), models.clone()]);
         assert_eq!(all.summary().as_deref(), Some("Setting up Python"));
-        assert!(all.attention());
 
-        let no_setup = work(vec![queued, held.clone(), transfer.clone()]);
+        let no_setup = work(vec![queued, held.clone(), models.clone()]);
         assert_eq!(no_setup.summary().as_deref(), Some("Analyzing Borealis"));
 
-        let moving = work(vec![held.clone(), transfer]);
-        assert_eq!(
-            moving.summary().as_deref(),
-            Some("Uploading audio · 2 of 2")
-        );
+        let fetching = work(vec![held.clone(), models]);
+        assert_eq!(fetching.summary().as_deref(), Some("Fetching models"));
 
         let only_held = work(vec![held]);
         assert_eq!(
             only_held.summary().as_deref(),
             Some("1 analysis step paused")
         );
-        assert!(only_held.attention());
     }
 }

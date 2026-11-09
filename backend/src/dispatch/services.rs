@@ -158,7 +158,7 @@ pub struct AppServices {
     /// and every command still works; only `sync_status` has less to say.
     pub(crate) sync: Option<crate::sync::service::Service>,
     /// Media transfer, when this host runs it: only its progress is read here,
-    /// for the status bar.
+    /// for the status bar's sync item.
     pub(crate) media: Option<crate::sync::media::Media>,
 }
 
@@ -280,8 +280,8 @@ impl AppServices {
         self
     }
 
-    /// Report `media`'s transfers among the background work. The host runs
-    /// its loop; this keeps a handle on its progress.
+    /// Report `media`'s transfers in the sync status. The host runs its loop;
+    /// this keeps a handle on its progress.
     #[must_use]
     pub fn with_media(mut self, media: crate::sync::media::Media) -> Self {
         self.media = Some(media);
