@@ -11,6 +11,11 @@ The geometry is a port of the library's Python reference builder
 glam only, so the backend and the `gpui/` crates can both depend on it, as
 they do on `fixture-kinematics`.
 
+`control` types a spec's `control` section and resolves a mode into the values
+it drives (`Control::resolve`: repeats expanded, tables looked up, byte ranks
+paired, homes from CONTROL.md §7). How Luma uses it is in
+`docs/design/fixture-library.md`.
+
 ## Tests
 
 ```sh
@@ -20,7 +25,9 @@ cargo test --manifest-path backend/Cargo.toml -p luma-fixture
 `tests/golden.rs` builds the 50 sample specs in `harness/fixture-specs/` and
 checks each one's box, cell count, cell-centre hash and joint pivots against
 `harness/goldens/fixture-builds.json`. Regenerate it with
-`LUMA_UPDATE_GOLDENS=1`, then review the diff.
+`LUMA_UPDATE_GOLDENS=1`, then review the diff. `tests/library.rs` builds every
+fixture of the library Luma ships (`resources/fixture-library/`) and resolves
+every mode it ships.
 
 ## fixture-parity
 

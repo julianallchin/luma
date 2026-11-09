@@ -84,6 +84,7 @@ mod mesh;
 mod mount;
 mod nodes;
 mod rig;
+pub mod control;
 pub mod spec;
 
 pub use built::{
