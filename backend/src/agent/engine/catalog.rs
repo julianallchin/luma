@@ -185,11 +185,22 @@ impl ModelChoice {
                 .id
                 .as_ref()
                 .map(|id| self.resolved_model.clone().unwrap_or_else(|| id.clone())),
-            effort: previous
-                .effort
-                .clone()
-                .filter(|effort| self.effort_levels.contains(effort)),
+            effort: self.effort(previous.effort.as_deref()),
         }
+    }
+
+    /// The level this model runs at when `wanted` was asked for: `wanted`
+    /// when the model offers it, else the model's default — High, else
+    /// Medium, else its lowest (Zeron's `clamp_reasoning`). `None` only for a
+    /// model with no levels to choose.
+    pub fn effort(&self, wanted: Option<&str>) -> Option<String> {
+        let offered = |level: &str| self.effort_levels.iter().find(|l| *l == level);
+        wanted
+            .and_then(offered)
+            .or_else(|| offered("high"))
+            .or_else(|| offered("medium"))
+            .or_else(|| self.effort_levels.first())
+            .cloned()
     }
 }
 
@@ -305,7 +316,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn choices_pin_versions_and_drop_unsupported_effort() {
+    fn choices_pin_versions_and_clamp_effort_to_the_model() {
         let model = ModelChoice {
             id: Some("sonnet".into()),
             resolved_model: Some("claude-sonnet-5".into()),
@@ -333,7 +344,27 @@ mod tests {
                 }
             )
             .effort
-            .is_none());
+            .as_deref()
+            .is_some_and(|effort| effort == "high"));
+        // A model with no levels runs at none; one without High or Medium at
+        // its lowest.
+        assert_eq!(
+            ModelChoice {
+                effort_levels: Vec::new(),
+                ..model.clone()
+            }
+            .effort(Some("high")),
+            None
+        );
+        assert_eq!(
+            ModelChoice {
+                effort_levels: vec!["minimal".into(), "low".into()],
+                ..model.clone()
+            }
+            .effort(None)
+            .as_deref(),
+            Some("minimal")
+        );
         let default = ModelChoice { id: None, ..model };
         assert!(default.matches(&None));
         assert!(!default.matches(&chosen.model));

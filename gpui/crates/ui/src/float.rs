@@ -835,6 +835,105 @@ pub fn switch(on: f32) -> Div {
         )
 }
 
+/// A stepped slider, as zeron's compact model picker draws its reasoning: a
+/// thick pill rail, an accent fill up to a wide pill thumb that overhangs the
+/// rail, and a notch for each step. `fraction` (0 to 1) is where the thumb's
+/// centre sits along its run and may animate between steps; `count` is how
+/// many steps there are.
+///
+/// The look alone, `width` wide. The caller supplies the `.id()`, the pointer
+/// and the keys, and maps a pointer to a step with [`step_slider_fraction`],
+/// which shares this geometry.
+pub fn step_slider(width: f32, fraction: f32, count: usize) -> Div {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let run = (width - 2.0 * STEP_THUMB_INSET).max(0.0);
+    let centre = STEP_THUMB_INSET + fraction * run;
+    let rail_top = (STEP_SLIDER_HEIGHT - STEP_RAIL_HEIGHT) / 2.0;
+    div()
+        .relative()
+        .flex_none()
+        .w(rpx(width))
+        .h(rpx(STEP_SLIDER_HEIGHT))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(rpx(rail_top))
+                .h(rpx(STEP_RAIL_HEIGHT))
+                .rounded_full()
+                .bg(glass::ink(0.06))
+                .shadow(glass::card_selected_shadows()),
+        )
+        // The fill runs a rail radius past the thumb's centre, so its end is
+        // always under the thumb.
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(rpx(rail_top))
+                .w(rpx((centre + STEP_RAIL_HEIGHT / 2.0).min(width)))
+                .h(rpx(STEP_RAIL_HEIGHT))
+                .rounded_full()
+                .bg(ladder::primary()),
+        )
+        // Quiet notches: a hint of the ladder, not a second focal point.
+        .children((0..count).map(move |step| {
+            let at = if count > 1 {
+                step as f32 / (count - 1) as f32
+            } else {
+                0.0
+            };
+            div()
+                .absolute()
+                .left(rpx(STEP_THUMB_INSET + at * run - 2.0))
+                .top(rpx(STEP_SLIDER_HEIGHT / 2.0 - 2.0))
+                .size(rpx(4.0))
+                .rounded_full()
+                .bg(if at <= fraction {
+                    glass::ink(0.5)
+                } else {
+                    ladder::foreground_alpha(0.18)
+                })
+        }))
+        .child(
+            div()
+                .absolute()
+                .left(rpx(centre - STEP_THUMB_WIDTH / 2.0))
+                .top(rpx((STEP_SLIDER_HEIGHT - STEP_THUMB_HEIGHT) / 2.0))
+                .w(rpx(STEP_THUMB_WIDTH))
+                .h(rpx(STEP_THUMB_HEIGHT))
+                .rounded_full()
+                .bg(glass::ink(1.0))
+                .shadow(vec![gpui::BoxShadow {
+                    color: glass::scrim(0.25),
+                    offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
+                    blur_radius: gpui::px(3.0),
+                    spread_radius: gpui::px(0.0),
+                    inset: false,
+                }]),
+        )
+}
+
+/// The step of [`step_slider`] a pointer `x` across its `width` asks for,
+/// as the fraction that step sits at: stops and the pointer share the
+/// thumb's centre inset, so a press on a notch takes that notch.
+#[must_use]
+pub fn step_slider_fraction(x: f32, width: f32, count: usize) -> f32 {
+    let steps = count.saturating_sub(1).max(1) as f32;
+    let fraction =
+        ((x - STEP_THUMB_INSET) / (width - 2.0 * STEP_THUMB_INSET).max(1.0)).clamp(0.0, 1.0);
+    (fraction * steps).round() / steps
+}
+
+/// A 28px rail under a 44×32 pill thumb that overhangs it by 2px, so the
+/// handle reads as the thing to grab (zeron's `pickers/compact.rs`).
+pub const STEP_SLIDER_HEIGHT: f32 = 36.0;
+const STEP_RAIL_HEIGHT: f32 = 28.0;
+const STEP_THUMB_WIDTH: f32 = 44.0;
+const STEP_THUMB_HEIGHT: f32 = 32.0;
+const STEP_THUMB_INSET: f32 = STEP_THUMB_WIDTH / 2.0;
+
 const SWITCH_WIDTH: f32 = 32.0;
 const SWITCH_HEIGHT: f32 = 18.0;
 const SWITCH_INSET: f32 = 2.0;
@@ -1854,6 +1953,29 @@ mod tests {
         p.set_query("beta");
         assert_eq!(p.get(1), Some(&"beta_two"));
         assert_eq!(p.get(2), None);
+    }
+
+    /// A pointer anywhere asks for a step, never a point between two, and
+    /// a press on a notch takes that notch.
+    #[test]
+    fn a_stepped_slider_snaps_to_its_notches() {
+        let width = 230.0;
+        for count in 2..8 {
+            let steps = (count - 1) as f32;
+            for x in -20..260 {
+                let at = step_slider_fraction(x as f32, width, count) * steps;
+                assert!((at - at.round()).abs() < 1e-4);
+                assert!((0.0..=steps).contains(&at));
+            }
+            for step in 0..count {
+                let notch =
+                    STEP_THUMB_INSET + step as f32 / steps * (width - 2.0 * STEP_THUMB_INSET);
+                let at = step_slider_fraction(notch, width, count) * steps;
+                assert_eq!(at.round() as usize, step);
+            }
+        }
+        assert_eq!(step_slider_fraction(-20.0, width, 4), 0.0);
+        assert_eq!(step_slider_fraction(400.0, width, 4), 1.0);
     }
 
     /// Every radius this module paints is on the ladder — the check that
