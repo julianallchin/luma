@@ -3,6 +3,7 @@
 
 mod haze;
 mod quality;
+mod resize;
 mod shadows;
 
 use std::sync::Arc;
@@ -79,7 +80,7 @@ fn surface_profiling_keeps_live_targets_and_reports_every_frame() -> anyhow::Res
         assert_eq!([targets.width, targets.height], size);
         #[cfg(target_os = "macos")]
         assert!(matches!(
-            targets.presentations[0],
+            targets.presentation(0),
             super::targets::PresentationTarget::Shared(_)
         ));
     }

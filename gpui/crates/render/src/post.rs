@@ -752,26 +752,30 @@ impl Post {
     pub(crate) fn scene_target(
         &mut self,
         device: &wgpu::Device,
+        memory: &mut crate::gpu::target_memory::TargetMemory,
         width: u32,
         height: u32,
     ) -> wgpu::TextureView {
         let size = [width.max(1), height.max(1)];
         if self.targets.as_ref().is_none_or(|t| t.size != size) {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("post-scene"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
+            let texture = memory.texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some("post-scene"),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: SCENE_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: SCENE_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
+            );
             self.targets = Some(Targets {
                 size,
                 scene: texture.create_view(&wgpu::TextureViewDescriptor::default()),
