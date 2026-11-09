@@ -34,21 +34,24 @@ pub(crate) const LIME_EMITTER: [f64; 3] = [0.66, 1.0, 0.0];
 const STROBE_TOLERANCE: f32 = 1.0 / 256.0;
 
 /// The light an emitter of `colour` makes at full level, linear sRGB. The
-/// mixer makes no colour out of UV, cyan, indigo, mint or orange, so they
-/// are dark.
+/// mixer makes colours only from red, green, blue, the whites, amber and
+/// lime; the rest show what they give off when a dimmer lights them: UV the
+/// faint violet a UV LED shows to the eye.
 fn emitter_light(colour: EmitterColour) -> [f64; 3] {
     match colour {
         EmitterColour::Red => [1.0, 0.0, 0.0],
         EmitterColour::Green => [0.0, 1.0, 0.0],
         EmitterColour::Blue => [0.0, 0.0, 1.0],
-        EmitterColour::White | EmitterColour::WarmWhite | EmitterColour::CoolWhite => WHITE_EMITTER,
+        EmitterColour::White | EmitterColour::WarmWhite | EmitterColour::CoolWhite => {
+            WHITE_EMITTER
+        }
         EmitterColour::Amber => AMBER_EMITTER,
         EmitterColour::Lime => LIME_EMITTER,
-        EmitterColour::Cyan
-        | EmitterColour::Indigo
-        | EmitterColour::Mint
-        | EmitterColour::Orange
-        | EmitterColour::Uv => [0.0; 3],
+        EmitterColour::Cyan => [0.0, 1.0, 1.0],
+        EmitterColour::Indigo => [0.25, 0.0, 1.0],
+        EmitterColour::Mint => [0.4, 1.0, 0.6],
+        EmitterColour::Orange => [1.0, 0.45, 0.0],
+        EmitterColour::Uv => [0.08, 0.0, 0.2],
     }
 }
 
@@ -105,6 +108,9 @@ struct Cell {
     subtractive: bool,
     /// Its colour comes from a wheel: a dark colour can only dim the lamp.
     wheel: bool,
+    /// No channel sets its colour, but a dimmer sets its brightness: it
+    /// shines in its dies' colour (white where the geometry does not say).
+    lamp: Option<[f64; 3]>,
 }
 
 /// A library fixture's mode, resolved for its light. Built once per
@@ -228,18 +234,27 @@ impl ModeLight {
                         .filter_map(want)
                         .any(|cells| cells.contains(&c))
                 };
+                let subtractive = !additive
+                    && covers(|r| match r {
+                        Role::Filter { cells, .. } => Some(cells),
+                        _ => None,
+                    });
+                let wheel = !additive
+                    && !subtractive
+                    && covers(|r| match r {
+                        Role::Wheel { cells, .. } => Some(cells),
+                        _ => None,
+                    });
+                let dimmed = covers(|r| match r {
+                    Role::Dimmer { cells } => Some(cells),
+                    _ => None,
+                });
+                let lamp = (!additive && !subtractive && !wheel && dimmed).then(|| lamp(dies[c]));
                 Cell {
                     mix: mix[c],
-                    subtractive: !additive
-                        && covers(|r| match r {
-                            Role::Filter { cells, .. } => Some(cells),
-                            _ => None,
-                        }),
-                    wheel: !additive
-                        && covers(|r| match r {
-                            Role::Wheel { cells, .. } => Some(cells),
-                            _ => None,
-                        }),
+                    subtractive,
+                    wheel,
+                    lamp,
                 }
             })
             .collect();
@@ -364,6 +379,13 @@ impl ModeLight {
                 }
                 Role::Wheel { slots, cells } => {
                     let Some(&c) = cells.first() else { continue };
+                    if self.cells[c].subtractive {
+                        // The flags make the colour; the wheel stays out of
+                        // the beam on its whitest slot.
+                        values[i] = nearest_slot(slots, [1.0; 3])
+                            .map_or(Value::Hold, |s| Value::Slot(s.byte));
+                        continue;
+                    }
                     let srgb = levels[c].map(|v| v as f32);
                     values[i] = if srgb.iter().all(|&v| v <= 1e-4) {
                         Value::Hold
@@ -424,7 +446,9 @@ impl ModeLight {
                     let level = emitters[c][e as usize];
                     std::array::from_fn(|k| sum[k] + level * light[k])
                 });
-                let colour = if cell.subtractive {
+                let colour = if let Some(lamp) = cell.lamp {
+                    lamp
+                } else if cell.subtractive {
                     flags[c].map(|f| 1.0 - f)
                 } else if cell.wheel {
                     wheel[c]
@@ -437,6 +461,25 @@ impl ModeLight {
                 }
             })
             .collect()
+    }
+}
+
+/// The colour a cell with `dies` shines in when no channel sets it: its dies'
+/// light together at a peak of 1, or white where the geometry names none.
+/// A die set the stage shows no light for is dark.
+fn lamp(dies: EmitterSet) -> [f64; 3] {
+    if dies.is_empty() {
+        return WHITE_EMITTER;
+    }
+    let sum = dies.iter().fold([0.0; 3], |sum, e| {
+        let light = emitter_light(e);
+        std::array::from_fn(|k| sum[k] + light[k])
+    });
+    let peak = sum.iter().copied().fold(0.0, f64::max);
+    if peak > 0.0 {
+        sum.map(|v| v / peak)
+    } else {
+        [0.0; 3]
     }
 }
 
@@ -687,6 +730,55 @@ mod tests {
             "{}\n{}",
             failures.len(),
             failures[..failures.len().min(20)].join("\n")
+        );
+    }
+
+    /// The stage shows a cell lit exactly when its channels light it: every
+    /// dimmer over it is up, and something sets its light (an emitter the
+    /// stage can show, flags, a wheel, or a lamp under its dimmer).
+    #[test]
+    fn a_cell_lit_on_the_wire_is_lit_on_the_stage() {
+        let mut failures = Vec::new();
+        for (id, mode, light) in every_mode() {
+            for colour in [[1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [0.2, 0.4, 1.0]] {
+                let requests = vec![lit(1.0, colour); light.cells()];
+                let realized = light.realize(&requests, 1.0, STILL);
+                let out = light.emit(&realized);
+                let level = |i: usize| match realized.values[i] {
+                    Value::Level(v) => v,
+                    _ => 0.0,
+                };
+                for (c, cell) in light.cells.iter().enumerate() {
+                    let mut dimmers_up = true;
+                    let mut set = cell.lamp.is_some() || cell.subtractive || cell.wheel;
+                    for (i, role) in light.roles.iter().enumerate() {
+                        match role {
+                            Role::Dimmer { cells } if cells.contains(&c) => {
+                                dimmers_up &= level(i) > 0.0;
+                            }
+                            Role::Emitter { colour, cells } if cells.contains(&c) => {
+                                let shown = emitter_light(*colour).iter().any(|&v| v > 0.0);
+                                set |= shown && level(i) > 0.0;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let wire = dimmers_up && set;
+                    let stage = out[c].rgb.iter().any(|&v| v > 1e-4);
+                    if wire != stage {
+                        failures.push(format!(
+                            "{id} {mode} cell {c} asked {colour:?}: wire {wire}, stage {:?}",
+                            out[c].rgb
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{}\n{}",
+            failures.len(),
+            failures[..failures.len().min(30)].join("\n")
         );
     }
 

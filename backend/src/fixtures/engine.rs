@@ -306,9 +306,6 @@ fn build_strobe_ctx(
 /// needs to neutralize a master shutter (per-head fallback selected) this is the
 /// path that writes the Open / LampOn capability instead of blindly writing 0.
 fn write_open_capability(channel: &Channel) -> MapAction {
-    if let Some(lowered) = &channel.lowered {
-        return MapAction::Set(lowered.open());
-    }
     if let Some(cap) = channel.capabilities.iter().find(|c| {
         let preset = c.preset.as_deref().unwrap_or("");
         let label = c.label.to_lowercase();
@@ -323,11 +320,6 @@ fn write_open_capability(channel: &Channel) -> MapAction {
 
 fn write_strobe_capability(channel: &Channel, strobe: f32) -> MapAction {
     let strobe = strobe.clamp(0.0, 1.0);
-    if let Some(lowered) = &channel.lowered {
-        return MapAction::Set(
-            lowered.strobe(strobe, f64::from(strobe) * luma_scene::strobe::HZ_PER_UNIT),
-        );
-    }
     if let Some(cap) = channel.capabilities.iter().find(|c| c.is_strobe()) {
         let range = (cap.max - cap.min) as f32;
         let val = cap.min as f32 + (strobe * range);
@@ -592,7 +584,6 @@ fn write_library(
         length: 0.0,
     };
     let realized = light.realize(&requests, max_dimmer, slice);
-    let position = requests[0].position;
     for mode_channel in &mode.channels {
         let dmx_address = (fixture.address - 1) as usize + mode_channel.number as usize;
         debug_assert!(
@@ -627,16 +618,16 @@ fn write_library(
             Some(Value::Open) => Some(lowered.open()),
             Some(Value::Slot(b)) => Some(if lowered.rank == 0 { b } else { lowered.home() }),
             Some(Value::Hold) => None,
-            Some(Value::Other) | None => {
-                if !lowered.driven() {
-                    Some(lowered.home())
-                } else if p.attr.is_position() {
-                    let axis = usize::from(p.attr == Attr::Tilt);
-                    (!position[axis].is_nan()).then(|| lowered.position(position[axis]))
-                } else {
-                    Some(lowered.home())
-                }
+            // Pan and tilt read the first cell they cover (the fixture's
+            // own pan reads cell 0); the rest of the light is in `realized`,
+            // and anything else rests at home.
+            Some(Value::Other) | None if p.attr.is_position() => {
+                let cell = p.cell.map_or(0, |c| c.span()[0] as usize);
+                let degrees = requests.get(cell).unwrap_or(&requests[0]).position
+                    [usize::from(p.attr == Attr::Tilt)];
+                (!degrees.is_nan()).then(|| lowered.position(degrees))
             }
+            Some(Value::Other) | None => Some(lowered.home()),
         };
         match byte {
             Some(v) => buffer[dmx_address] = v,

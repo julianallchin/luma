@@ -474,3 +474,65 @@ fn a_ranged_channel_reads_the_mean_of_its_cells() {
     assert!(one[0] > 200 && one[2] == 0, "{:?}", &one[..4]);
     assert!(mixed[0] > 100 && mixed[2] > 100, "{:?}", &mixed[..4]);
 }
+
+/// Each head aims where its own cell asks: with every cell at a different
+/// pan and tilt, every pan and tilt byte is what it would be with all cells
+/// at the angle of the first cell it covers (the fixture's own pan reads cell
+/// 0).
+#[test]
+fn every_head_aims_where_its_cell_asks() {
+    let library = crate::resources::fixture_library_root(Some(&root())).unwrap();
+    let mut failures = Vec::new();
+    for entry in &index(&library).unwrap().fixtures {
+        let def = definition(&entry.id);
+        let count = def.library.as_ref().unwrap().built.cells.len().max(1);
+        let at = |c: usize| PrimitiveState {
+            position: [3.0 * c as f32 - 20.0, 2.0 * c as f32 - 15.0],
+            ..lit(1.0, [1.0; 3])
+        };
+        let each: Vec<(String, PrimitiveState)> = if count > 1 {
+            cells((0..count).map(|c| (c, at(c))))
+        } else {
+            fixture_level(at(0))
+        };
+        for mode in &def.modes {
+            let positions: Vec<(usize, &Lowered)> = mode
+                .channels
+                .iter()
+                .filter_map(|mc| {
+                    let lowered = def
+                        .channels
+                        .iter()
+                        .find(|c| c.name == mc.name)?
+                        .lowered
+                        .as_deref()?;
+                    lowered
+                        .param
+                        .attr
+                        .is_position()
+                        .then_some((mc.number as usize, lowered))
+                })
+                .collect();
+            if positions.is_empty() {
+                continue;
+            }
+            let sent = dmx(&entry.id, &mode.name, &each);
+            for (slot, lowered) in positions {
+                let first = lowered.param.cell.map_or(0, |c| c.span()[0] as usize);
+                let all: Vec<(String, PrimitiveState)> = if count > 1 {
+                    cells((0..count).map(|c| (c, at(first))))
+                } else {
+                    fixture_level(at(first))
+                };
+                let want = dmx(&entry.id, &mode.name, &all)[slot];
+                if sent[slot] != want {
+                    failures.push(format!(
+                        "{} {} slot {slot}: sent {}, cell {first} alone sends {want}",
+                        entry.id, mode.name, sent[slot]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

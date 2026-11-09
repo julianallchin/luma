@@ -93,9 +93,14 @@ What a lowered mode looks like:
   - A shutter strobes when every cell it covers asks for the same rate,
     narrowest shutter first; any other strobing cell is gated on the strobe
     clock through its brightness.
-  - A colour wheel or preset picks the nearest slot for a cell with no
-    emitters, and a dark colour dims its lamp. CMY flags pass `1 − level` of a
-    white lamp.
+  - A colour wheel or preset picks the nearest slot; behind CMY flags it
+    stays on its whitest slot, and on a cell whose colour only it makes, a
+    dark colour dims the lamp. CMY flags pass `1 − level` of a white lamp.
+  - A cell no channel colours (a dimmer-only white, a UV bar, a hue or CCT
+    control the engine does not drive yet) shines in its dies' colour under
+    its dimmers; UV shows as the faint violet it gives off.
+  - Pan and tilt read the first cell they cover, so each head of a
+    multi-head fixture aims where its own cell asks.
   - Two params driving one emitter on a cell show the higher, not the sum.
 - **Pan and tilt.** Mapped through the channel's own `phys` degree range at
   full width, rank-0 and rank-1 bytes both, so a 16-bit pan is 16-bit and an
