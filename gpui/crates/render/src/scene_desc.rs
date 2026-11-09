@@ -430,7 +430,7 @@ pub struct Look {
     pub tone: ToneCurve,
     /// How bright the scene is taken to be.
     pub exposure: Exposure,
-    /// Bloom, star streaks and lens glow around hot sources.
+    /// Bloom and star streaks around hot sources.
     pub glare: Glare,
     /// What a video camera adds: sensor noise and a hand on the camera.
     /// Absent in a look stored before it existed, which means off.
@@ -603,7 +603,7 @@ impl Default for Footage {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Glare {
-    /// Overall strength; 0 turns the glare and lens glow off.
+    /// Overall strength; 0 turns the glare off.
     pub strength: f32,
     /// Exposed scene light above which a pixel glares, as a multiple of
     /// diffuse white.
@@ -1046,6 +1046,12 @@ pub struct Fixture {
     pub pos: [f32; 3],
     /// Euler XYZ rotation.
     pub rot: [f32; 3],
+    /// The placed fixture's own aim off its mount, `[pan, tilt]` radians.
+    /// `rot` already carries it; the renderer reads it only to put a
+    /// hand-set tilt on the bracket's joint, so the bracket stays on the
+    /// clamp and the head leans in it.
+    #[serde(default)]
+    pub aim: [f32; 2],
 }
 
 /// Where a piece's geometry comes from.
@@ -1457,6 +1463,7 @@ mod tests {
                     mode_name: "Default".into(),
                     pos: [i as f32 * 0.8 - 1.2, 0.0, 3.0],
                     rot: [0.0; 3],
+                    aim: [0.0; 2],
                 })
                 .collect(),
             pieces: vec![

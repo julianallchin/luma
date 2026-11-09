@@ -50,9 +50,16 @@ fn sign(built: &Built, index: usize) -> f32 {
 /// One angle per joint that poses the build at Luma's `[pan, tilt]` degrees.
 ///
 /// Pan and tilt joints the DMX drives take Luma's angle (an array element's
-/// as well as the fixture's own: Luma has one position per fixture). Every
-/// other joint stays at its `rest`, so a static fixture whose tilt is set to
-/// face front faces front.
+/// as well as the fixture's own: Luma has one position per fixture).
+///
+/// A hand-set tilt (a bracket or yoke you lock with a knob) sits at 0, which
+/// is beam straight out of the clamp: Luma's rule is that a fixture shines
+/// along the normal of the surface it is mounted on, and aiming it elsewhere
+/// is the placed fixture's own `pan`/`tilt`, not the spec's. The spec's `rest`
+/// says how the maker photographs it (90 = facing front off the floor), and
+/// posing a bracket there on a truss face shone it along the truss. A fixed
+/// tilt is how the head is built, and it and every other joint stay at
+/// their `rest`.
 #[must_use]
 pub fn angles(built: &Built, [pan, tilt]: [f32; 2]) -> Vec<f32> {
     built
@@ -62,9 +69,53 @@ pub fn angles(built: &Built, [pan, tilt]: [f32; 2]) -> Vec<f32> {
         .map(|(i, j)| match (j.kind, j.drive) {
             (JointKind::Pan, Drive::Dmx) => sign(built, i) * pan,
             (JointKind::Tilt, Drive::Dmx) => sign(built, i) * tilt,
+            (JointKind::Tilt, Drive::Manual) => 0.0,
             _ => j.rest,
         })
         .collect()
+}
+
+/// The fixture's hand-set tilt joint (a bracket or yoke locked by a knob), if
+/// it has one.
+fn bracket(built: &Built) -> Option<usize> {
+    built
+        .joints
+        .iter()
+        .position(|j| j.kind == JointKind::Tilt && j.drive == Drive::Manual && j.element.is_none())
+}
+
+/// A placed fixture's frames with its own aim on its bracket.
+///
+/// The solve turns a placed fixture's pose by its `[pan, tilt]` aim (radians)
+/// off the mount, as a whole, which is right for anything without a bracket:
+/// a mover is aimed by its motors on top of that, and a box has nothing else
+/// to turn. A fixture with a hand-set tilt keeps its bracket on the clamp and
+/// leans its head in it, so here the tilt half of the aim comes back out of
+/// the pose and goes onto the bracket's joint instead. The beam points the
+/// same way either way; only what is drawn turning differs.
+///
+/// Returns what to post-multiply the pose by, and every node's frame.
+#[must_use]
+pub fn aimed(built: &Built, pan_tilt: [f32; 2], aim: [f32; 2]) -> (Mat4, Vec<Mat4>) {
+    let mut angles = angles(built, pan_tilt);
+    let Some(i) = bracket(built).filter(|_| aim[1] != 0.0) else {
+        return (Mat4::IDENTITY, built.world_matrices(&angles));
+    };
+    // The tilt half of the solve's turn, in housing space: a turn about
+    // housing X, spelled exactly as the solve spells it.
+    let tilt = crate::coords::swapped_basis(fixture_kinematics::articulation_basis_d(
+        0.0,
+        f64::from(aim[1]),
+    ))
+    .as_mat3();
+    let about_x = tilt.y_axis.z.atan2(tilt.y_axis.y);
+    let joint = &built.joints[i];
+    let axis = built.world_matrices(&[])[joint.node].transform_vector3(joint.axis);
+    angles[i] = about_x.to_degrees() * axis.x.signum();
+    (
+        Mat4::from_mat3(tilt).inverse(),
+        built.world_matrices(&angles),
+    )
 }
 
 /// Every node's housing-space frame at Luma's `[pan, tilt]`.
@@ -141,6 +192,54 @@ mod tests {
                 "{pan_tilt:?}: library {beam}, bundled {bundled}"
             );
         }
+    }
+
+    fn slimpar() -> Built {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../harness/fixture-specs/chauvet/slimpar-64.luma.json"),
+        )
+        .unwrap();
+        luma_fixture::build(&luma_fixture::Fixture::from_json(&text).unwrap()).unwrap()
+    }
+
+    /// A par on a hand-locked yoke, whose spec rests it facing front, shines
+    /// straight out of its clamp: down off a grid, out off a truss face.
+    #[test]
+    fn a_hand_set_bracket_shines_out_of_its_clamp() {
+        let b = slimpar();
+        assert!(b
+            .joints
+            .iter()
+            .any(|j| j.kind == JointKind::Tilt && j.drive == Drive::Manual && j.rest != 0.0));
+        let (_, dir) = beam(&b, &worlds(&b, [0.0, 0.0]), 0).unwrap();
+        assert!(dir.y < -0.99, "beam {dir}");
+    }
+
+    /// Aimed by hand, a bracketed par leans its head and keeps its bracket:
+    /// the beam goes where the whole-body turn would send it, and the
+    /// bracket's frame, under the pose, is the bracket's frame unaimed.
+    #[test]
+    fn a_hand_aim_leans_the_head_and_keeps_the_bracket() {
+        let b = slimpar();
+        let tilt = 0.6_f32;
+        let whole = Mat4::from_mat3(
+            crate::coords::swapped_basis(fixture_kinematics::articulation_basis_d(
+                0.0,
+                f64::from(tilt),
+            ))
+            .as_mat3(),
+        );
+        let (_, plain) = beam(&b, &worlds(&b, [0.0, 0.0]), 0).unwrap();
+        let (back, frames) = aimed(&b, [0.0, 0.0], [0.0, tilt]);
+        let (_, leaned) = beam(&b, &frames, 0).unwrap();
+        let drawn = (whole * back).transform_vector3(leaned);
+        let wanted = whole.transform_vector3(plain);
+        assert!(drawn.dot(wanted) > 0.999, "drawn {drawn}, wanted {wanted}");
+        let mount = b.joints[bracket(&b).unwrap()].node;
+        let parent = b.nodes[mount].parent.unwrap();
+        let rest = worlds(&b, [0.0, 0.0]);
+        assert!((whole * back * frames[parent]).abs_diff_eq(rest[parent], 1e-5));
     }
 
     #[test]

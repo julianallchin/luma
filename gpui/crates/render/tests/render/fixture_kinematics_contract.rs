@@ -89,6 +89,7 @@ fn characterization_frame() -> Frame {
             mode_name: "Standard".into(),
             pos: MOUNT_POSITION,
             rot: MOUNT_ROTATION,
+            aim: [0.0; 2],
         }],
         pieces: Vec::new(),
         state,

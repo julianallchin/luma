@@ -980,7 +980,8 @@ pub fn build_at(
             let cells = built.cells.len().max(1);
             let cell_state = |cell: usize| state(&fixture.id, cell.min(cells - 1)).unwrap_or(DARK);
             let pan_tilt = cell_state(0).position;
-            let worlds = luma_scene::library::worlds(built, pan_tilt);
+            let (back, worlds) = luma_scene::library::aimed(built, pan_tilt, fixture.aim);
+            let base = base * back;
             draws.extend(crate::library_housing::draws(
                 built,
                 &fixture.fixture_path,
@@ -994,23 +995,29 @@ pub fn build_at(
                     Vec3::from(s.color) * exposed(s) * 5.0
                 },
             ));
-            // One cone per lens, lit by the cell on the lens's node. A build
-            // with no lens (an LED bar, a strip) casts one per cell instead,
-            // from the cell's own face, as a procedural bar does.
-            let mut beams: Vec<(Vec3, Vec3, usize, Lens, bool)> = Vec::new();
-            for (i, head) in built.heads.iter().enumerate() {
-                let Some((at, dir)) = luma_scene::library::beam(built, &worlds, i) else {
-                    continue;
-                };
-                let cell = built
-                    .cells
-                    .iter()
-                    .position(|c| c.node == Some(head.node))
-                    .unwrap_or(i);
-                let lens = Lens {
-                    radius: head.size[0].max(head.size[1]) / 2.0,
-                };
-                beams.push((at, dir, cell, lens, false));
+            // One cone per lens, lit by the cell on the lens's node, when
+            // every cell has a lens of its own (a mover, a spot, a lensed
+            // array). A face of many cells (an LED panel, a bar, a strobe)
+            // is one "lens" the size of the face, and lighting it from one
+            // cell left the rest dark and drew a lens the size of the
+            // fixture; it casts one cone per cell from the cell's own patch
+            // instead, as a procedural bar does.
+            let mut beams: Vec<(Vec3, Vec3, usize, Lens)> = Vec::new();
+            if built.cells.len() <= built.heads.len() {
+                for (i, head) in built.heads.iter().enumerate() {
+                    let Some((at, dir)) = luma_scene::library::beam(built, &worlds, i) else {
+                        continue;
+                    };
+                    let cell = built
+                        .cells
+                        .iter()
+                        .position(|c| c.node == Some(head.node))
+                        .unwrap_or(i);
+                    let lens = Lens {
+                        radius: head.size[0].max(head.size[1]) / 2.0,
+                    };
+                    beams.push((at, dir, cell, lens));
+                }
             }
             if beams.is_empty() {
                 for (i, c) in built.cells.iter().enumerate() {
@@ -1023,17 +1030,18 @@ pub fn build_at(
                         worlds[node].transform_vector3(c.normal).normalize_or_zero(),
                         i,
                         lens,
-                        true,
                     ));
                 }
             }
-            let pixel = cone_from_opening(PIXEL);
+            // Every cone shares the fixture's own output and beam angle, the
+            // library's measurement of the whole fixture: a cell of a strobe
+            // is a sixteenth of a strobe, not one pixel of a QLC+ bar.
             let luminaire = cone_from_opening(luminaire_for(def, model_kind(def)));
             let count = beams.len().max(1) as f32;
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(beams.len())
                 .min(MAX_FIXTURE_CONES);
-            for (at, dir, cell, lens, is_pixel) in beams {
+            for (at, dir, cell, lens) in beams {
                 if fixture_cones.len() >= MAX_FIXTURE_CONES {
                     break;
                 }
@@ -1042,7 +1050,7 @@ pub fn build_at(
                 if intensity < 0.01 {
                     continue;
                 }
-                let cone = if is_pixel { pixel } else { luminaire };
+                let cone = luminaire;
                 fixture_cones.push(FixtureCone {
                     position: base.transform_point3(at),
                     range: cone.range,
@@ -1493,6 +1501,7 @@ mod tests {
             mode_name: mode.into(),
             pos: [0.0, 0.0, 3.0],
             rot: [0.0; 3],
+            aim: [0.0; 2],
         }
     }
 

@@ -116,8 +116,15 @@ backend's memo). The frame builder draws a library fixture from it
 (sRGB to linear). Each cell's emitter meshes glow with that cell's primitive. A
 lens casts one cone from `heads[i]`, lit by the cell on the lens's node; a
 build with no lens (a bar, a strip) casts one per cell from the cell's face.
-Manual and fixed joints sit at their `rest`, so a static fixture set to face
-front faces front. The clamp standoff is the build's top (`bounds().max.y`),
+A fixture shines along the normal of the surface it is mounted on: a
+hand-set tilt (a bracket or yoke locked with a knob) sits at 0, beam straight
+out of the clamp, whatever `rest` the spec gives it, and aiming it elsewhere is
+the placed fixture's own `pan`/`tilt`, set from the stage inspector. A spec's
+`rest` of 90 ("facing front", the way a maker photographs it) posed on a truss
+face shone the light along the truss. Fixed joints are how the head is built
+and sit at their `rest`. The clamp's tangent is the bar's long axis and a truss
+face's tangent is its run, so a bar lies along the truss it is clamped to. The
+clamp standoff is the build's top (`bounds().max.y`),
 and the selection cage is its box. `.qxf` fixtures draw exactly as before.
 
 ## Search

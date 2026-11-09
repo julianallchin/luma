@@ -2399,12 +2399,9 @@ impl Renderer {
                         &crate::post::PostFrame {
                             look: frame.look,
                             quality: frame.quality,
-                            cones: &frame.fixture_cones,
                             view_proj,
                             eye: frame.camera.eye,
                             fov_y_deg: frame.camera.fov_y_deg,
-                            near: CAMERA_NEAR,
-                            far: camera_far,
                             width: t_width,
                             height: t_height,
                             headroom: destination.headroom(),
@@ -2424,7 +2421,6 @@ impl Renderer {
                                 (sky.sun_direction, sky.sun_radiance * through)
                             }),
                         },
-                        &depth_view,
                         &output_view,
                         &mut pass_queries,
                         last_timestamp,

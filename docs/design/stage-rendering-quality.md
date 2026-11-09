@@ -362,10 +362,6 @@ contract frames render byte-identical to the commit before this work. The
 live stage defaults to `Look::STAGE` and persists the look as the device
 setting `stage_look`. Any other look runs `post.rs`:
 
-- **Lens glow.** A camera-facing disc at each lit cone's apex, depth-tested
-  with 0.5 m of slack for the housing. Full brightness within half the beam
-  half-angle of the axis, gone at 1.5 times it (three quarters of the beam
-  angle), 2% from the side.
 - **Metering.** 128-bin log histogram of a quarter of the pixels,
   centre-weighted. The mean of the 60th–98th percentile of lit pixels is
   exposed to 0.5; the result is clamped to [-2.5, +1] EV before the
@@ -443,7 +439,9 @@ setting `stage_look`. Any other look runs `post.rs`:
 Cost, 1920×1080, RTX 5090, Get Lucky at Gasworks (140 cones), min of three
 100-frame p50s, another GPU process running (so indicative only): neutral
 5.137 ms; tonemap chain +0.02 ms; metering +0.02 ms; bloom +0.10 ms; full
-stage look with lens glow and star +0.19 ms.
+stage look with lens glow and star +0.19 ms (measured before the lens glow
+was removed: a fixture's glowing emitters are its source, and a disc drawn
+over them was a second one).
 
 Glare styles before the 2026-09-24 rework, same setup at 146 s with 162
 cones, no other GPU load, min of three 100-frame p50s: neutral 8.381 ms;

@@ -500,6 +500,11 @@ impl Build {
                         .unwrap_or(f64::from(luma_scene::catalog::DEFAULT_HINGE_ANGLE_DEG))
                 })
             }),
+            // A fixture's aim off its mount normal: radians in the graph,
+            // degrees on this sheet, like `yaw`.
+            aim: (self.graph.node(node).map(|n| n.kind)
+                == Some(luma_scene::venue::NodeKind::Fixture))
+            .then(|| luma_scene::venue::ANGLE_PARAMS.map(|key| param(key).to_degrees())),
             roll_step: self
                 .graph
                 .edge(node)
@@ -704,6 +709,9 @@ pub(crate) struct SelectedView {
     pub(crate) span: Option<f64>,
     /// A hinge's deflection, in degrees — its own "what it is" row.
     pub(crate) angle: Option<f64>,
+    /// A fixture's `[pan, tilt]` aim off the surface it is mounted on, in
+    /// degrees: `[0, 0]` shines straight out of that surface.
+    pub(crate) aim: Option<[f64; 2]>,
     /// The turn this joint's roll lands on, in degrees — `Steps(90)` for a
     /// corner on a bolt circle, `Steps(5)` for a rail at its post, a fine
     /// default for a free clamp. What the rotate buttons step by and the yaw
