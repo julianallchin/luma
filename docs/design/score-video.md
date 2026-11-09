@@ -22,7 +22,7 @@ track_scores ⋈ scores (filtered by venue_id)
   → compositor::build_scene_strict(...)             compile once; PLAN_CACHE + bake_prologue
   → eval::Scene
   → Scene::render(&times, Scope::Composite, &mut Arena) -> Vec<UniverseState>
-  → stage_render::primitive_state(state, id, head)
+  → StageLights::frame(state, slice).primitive(id, head)   each cell's light, as the rig makes it
   → luma_render::build_frame_with(scene_desc, definitions, source, t, &mut assets) -> Frame
   → Renderer::render(&frame, w, h, subframes) -> Vec<u8>   sRGB RGBA8, packed
 ```

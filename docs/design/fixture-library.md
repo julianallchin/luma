@@ -134,7 +134,9 @@ groups and spatial selection all read cells through it.
 backend's memo). The frame builder draws a library fixture from it
 (`luma-render`'s `library_housing`): every node's meshes posed by
 `world_matrices`, interned once per `lib:` path, with the build's materials
-(sRGB to linear). Each cell's emitter meshes glow with that cell's primitive. A
+(sRGB to linear). Each cell's emitter meshes glow with that cell's light as
+`ModeLight::emit` gives it (`stage_render::StageLights`), so the stage shows
+what the DMX makes rather than what was asked for. A
 lens casts one cone from `heads[i]`, lit by the cell on the lens's node; a
 build with no lens (a bar, a strip) casts one per cell from the cell's face.
 A fixture shines along the normal of the surface it is mounted on: a
