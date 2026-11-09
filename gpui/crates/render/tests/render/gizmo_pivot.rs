@@ -60,6 +60,7 @@ fn scene() -> Scene {
             mode_name: "Default".into(),
             pos: MOVER_POS,
             rot: [0.0; 3],
+            aim: [0.0; 2],
         }],
         pieces: vec![Piece {
             id: "deck".into(),

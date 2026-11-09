@@ -654,6 +654,7 @@ mod tests {
                 mode_name: "Default".into(),
                 pos: [0.0, 0.0, 1.0],
                 rot: [0.0; 3],
+                aim: [0.0; 2],
             }],
         });
         // Numeric scrubbing has neither a camera drag nor a gizmo drag to

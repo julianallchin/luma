@@ -197,13 +197,16 @@ impl VenueGeometry {
                 .iter()
                 .filter(|f| definitions.contains_key(&f.fixture_path))
                 .filter_map(|f| {
-                    let (pos, rot) = self.venue.pose(&f.id)?.data_pose();
+                    let pose = self.venue.pose(&f.id)?;
+                    let (pos, rot) = pose.data_pose();
                     Some(scene_desc::Fixture {
                         id: f.id.clone(),
                         fixture_path: f.fixture_path.clone(),
                         mode_name: f.mode_name.clone(),
                         pos: pos.map(|v| v as f32),
                         rot: rot.map(|v| v as f32),
+                        aim: luma_scene::venue::ANGLE_PARAMS
+                            .map(|key| pose.params.get(key, 0.0) as f32),
                     })
                 })
                 .collect(),

@@ -80,6 +80,7 @@ fn frame(path: &str, position: [f32; 2]) -> Frame {
             mode_name: "Standard".into(),
             pos: POSE.0,
             rot: POSE.1,
+            aim: [0.0; 2],
         }],
         pieces: Vec::new(),
         state,

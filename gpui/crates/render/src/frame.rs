@@ -980,7 +980,8 @@ pub fn build_at(
             let cells = built.cells.len().max(1);
             let cell_state = |cell: usize| state(&fixture.id, cell.min(cells - 1)).unwrap_or(DARK);
             let pan_tilt = cell_state(0).position;
-            let worlds = luma_scene::library::worlds(built, pan_tilt);
+            let (back, worlds) = luma_scene::library::aimed(built, pan_tilt, fixture.aim);
+            let base = base * back;
             draws.extend(crate::library_housing::draws(
                 built,
                 &fixture.fixture_path,
@@ -1493,6 +1494,7 @@ mod tests {
             mode_name: mode.into(),
             pos: [0.0, 0.0, 3.0],
             rot: [0.0; 3],
+            aim: [0.0; 2],
         }
     }
 
