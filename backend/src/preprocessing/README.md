@@ -72,9 +72,11 @@ Failures live in [`failures.rs`](failures.rs) — the local-only
 exponential backoff (cap 24h). Records are written on `Err`, cleared on `Ok`.
 While a failure's `next_retry_at` is in the future, the step is skipped on
 that track, with its dependents: reconcile does not queue the track for it, and
-a track queued for another step passes it by. Reconcile first forgets the
-failures other versions of each preprocessor recorded, so bumping `version`
-retries every track the old version failed on, with a fresh backoff.
+a track queued for another step passes it by, unless one of the step's inputs
+was rebuilt in the same run. Reconcile first forgets the failures recorded
+before the Python environment was last installed, and those other versions of
+each preprocessor recorded, so a repaired environment or a bumped `version`
+retries every track the old one failed on, with a fresh backoff.
 
 ## Scheduler
 

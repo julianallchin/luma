@@ -11,11 +11,15 @@
 //! On failure: caller invokes [`record`] which increments attempts and pushes
 //! `next_retry_at` forward by 2^attempts minutes, capped at 24 hours.
 //!
-//! A failure says something only about the version of the step that failed.
-//! Startup reconcile first calls [`forget_other_versions`] for every step, so
-//! once a step's version changes, it retries every track the old version
-//! failed on, backs off from its first attempt if it fails again, and
-//! [`last_error`] no longer reports the old version's errors.
+//! A failure says something only about the version of the step that failed,
+//! in the Python environment it failed in. Startup reconcile first forgets the
+//! failures of other versions ([`forget_other_versions`]) and those recorded
+//! before the environment was last installed ([`forget_before`]). A step whose
+//! version changed, or a repaired environment, retries every track at once,
+//! backs off from the first attempt if it fails again, and [`last_error`] no
+//! longer reports the old errors.
+
+use std::time::SystemTime;
 
 use sqlx::SqlitePool;
 
@@ -80,32 +84,48 @@ pub async fn record(
     }
 }
 
-/// Holds for an outer track `t` while preprocessor `?1`'s last failure on it
-/// is in backoff. The one statement of the rule: reconcile does not queue a
-/// track for a step in backoff ([`pending_tracks`]), and a track queued for
-/// another step skips it, with its dependents ([`in_backoff`]).
+/// Holds for a failure row `f` that still holds its track back. The one
+/// statement of the rule: reconcile does not queue a track for a step in
+/// backoff ([`pending_tracks`]), and a track queued for another step skips it,
+/// with its dependents ([`held_back`]).
 ///
 /// [`pending_tracks`]: crate::preprocessing::preprocessor::pending_tracks
-pub(crate) const IN_BACKOFF: &str = "EXISTS (
-    SELECT 1 FROM preprocessing_failures f
-     WHERE f.track_id = t.id AND f.preprocessor = ?1
-       AND f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))";
+pub(crate) const IN_BACKOFF: &str = "f.next_retry_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 
-/// Whether `preprocessor`'s last failure on the track is still in backoff.
-pub async fn in_backoff(
+/// The steps whose last failure on the track is still in backoff, each with
+/// that failure's error.
+pub async fn held_back(
     pool: &SqlitePool,
     track_id: &str,
-    preprocessor: &str,
-) -> Result<bool, String> {
-    let held: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT {IN_BACKOFF} FROM tracks t WHERE t.id = ?2"
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT f.preprocessor, f.last_error FROM preprocessing_failures f
+          WHERE f.track_id = ? AND {IN_BACKOFF}"
     )))
-    .bind(preprocessor)
     .bind(track_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to read {preprocessor}'s backoff: {e}"))?;
-    Ok(held.unwrap_or(false))
+    .map_err(|e| format!("Failed to read the steps in backoff for track {track_id}: {e}"))?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Forget every failure recorded before `installed`, when the Python
+/// environment the workers run in was last installed. Such a failure says
+/// nothing about the environment now running, so a repaired environment
+/// retries every track at once.
+pub async fn forget_before(pool: &SqlitePool, installed: SystemTime) -> Result<(), String> {
+    let seconds = installed
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    sqlx::query(
+        "DELETE FROM preprocessing_failures
+          WHERE last_attempt < strftime('%Y-%m-%dT%H:%M:%SZ', ?, 'unixepoch')",
+    )
+    .bind(i64::try_from(seconds).unwrap_or(i64::MAX))
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to forget failures from an earlier environment: {e}"))?;
+    Ok(())
 }
 
 /// Forget `preprocessor`'s failures recorded by any version but `version`.
@@ -258,6 +278,26 @@ mod tests {
             backoff(&pool).await,
             first,
             "the new version's first failure waits like a repeat"
+        );
+    }
+
+    #[tokio::test]
+    async fn failures_from_before_the_environment_was_installed_are_forgotten() {
+        let (_directory, pool) = library().await;
+        record(&pool, "t1", "step", 1, "boom").await.unwrap();
+        let now = SystemTime::now();
+        let hour = std::time::Duration::from_secs(3600);
+
+        forget_before(&pool, now - hour).await.unwrap();
+        assert!(
+            last_error(&pool, "t1", "step").await.unwrap().is_some(),
+            "a failure in the environment now installed was forgotten"
+        );
+        forget_before(&pool, now + hour).await.unwrap();
+        assert_eq!(
+            last_error(&pool, "t1", "step").await.unwrap(),
+            None,
+            "a failure from before the environment was installed is kept"
         );
     }
 

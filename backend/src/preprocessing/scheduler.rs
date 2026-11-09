@@ -316,9 +316,14 @@ async fn run_track_layers(
     .await
     .map_err(|error| format!("Failed to read who analyses track {track_id}: {error}"))?;
 
-    // Artifacts that failed in this run, or that are another principal's to
-    // produce and have not synced yet, so their dependents wait.
+    // Artifacts that failed in this run, whose step is in failure backoff, or
+    // that are another principal's to produce and have not synced yet, so
+    // their dependents wait.
     let mut failed_artifacts: HashSet<Artifact> = HashSet::new();
+    // Artifacts a step wrote in this run. A step that failed on the old ones
+    // gets a new try on them, backoff or not.
+    let mut produced: HashSet<Artifact> = HashSet::new();
+    let held = failures::held_back(pool, track_id).await?;
     let mut track_errors = Vec::new();
 
     for layer in registry::dag().layers() {
@@ -362,14 +367,18 @@ async fn run_track_layers(
             // the track is queued for another one. Its dependents wait with it,
             // and they are what keeps a track queued: nothing else stops a
             // failing upstream step from rerunning on every launch.
-            if failures::in_backoff(pool, track_id, p.name()).await? {
+            let fresh_input = p.inputs().iter().any(|input| produced.contains(input));
+            if let Some(error) = held.get(p.name()).filter(|_| !fresh_input) {
                 eprintln!(
                     "[preprocessing] skipping {} for track {track_id}: in failure backoff",
                     p.name()
                 );
                 failed_artifacts.insert(p.output());
                 if let Some(report) = report {
-                    report.settle(p.name(), StageOutcome::Skipped);
+                    report.settle(
+                        p.name(),
+                        StageOutcome::Failed(failures::headline(error).to_owned()),
+                    );
                 }
                 continue;
             }
@@ -403,6 +412,11 @@ async fn run_track_layers(
         }
 
         let (layer_failures, layer_errors) = drain_layer(&mut set, &layer_outputs, track_id).await;
+        produced.extend(
+            layer_outputs
+                .iter()
+                .filter(|output| !layer_failures.contains(output)),
+        );
         failed_artifacts.extend(layer_failures);
         track_errors.extend(layer_errors);
     }
@@ -579,8 +593,9 @@ pub async fn run_for_tracks(
     }
 }
 
-/// Startup reconciliation: each preprocessor forgets the failures other
-/// versions of it recorded, then returns the IDs of tracks that need it via
+/// Startup reconciliation: forget the failures recorded before the Python
+/// environment was last installed; each preprocessor then forgets the failures
+/// other versions of it recorded, and returns the IDs of tracks that need it via
 /// one bulk SQL query (artifact missing/stale and not in failure backoff). The
 /// union is queued for processing.
 pub async fn reconcile_on_startup(
@@ -591,6 +606,9 @@ pub async fn reconcile_on_startup(
     analysis: AnalysisGuard,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
+    if let Some(installed) = workers.environment_installed_at() {
+        failures::forget_before(&pool, installed).await?;
+    }
     let mut needs: HashSet<String> = HashSet::new();
     for p in registry::dag().preprocessors() {
         failures::forget_other_versions(&pool, p.name(), p.version()).await?;
@@ -662,6 +680,22 @@ mod tests {
         .unwrap()
     }
 
+    /// The stages a track's run settled, in order.
+    #[derive(Clone, Default)]
+    struct Settled(Arc<std::sync::Mutex<Vec<(String, StageOutcome)>>>);
+
+    impl crate::events::EventSink for Settled {
+        fn emit(&self, event: Event) {
+            if let Event::TrackImportState(TrackImportProgress {
+                analysis: Some(TrackAnalysisEvent::StageSettled { stage, outcome }),
+                ..
+            }) = event
+            {
+                self.0.lock().unwrap().push((stage, outcome));
+            }
+        }
+    }
+
     /// The case that reran a broken MERT on every track at every launch: the
     /// steps waiting on a failed one keep the track queued. Here every step
     /// waits on the two the DAG starts from, so if anything ran, a row changed.
@@ -681,13 +715,10 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
-        let first: Vec<_> = registry::dag()
-            .preprocessors()
-            .filter(|p| p.inputs() == [Artifact::Audio])
-            .collect();
-        assert!(!first.is_empty());
-        for p in &first {
-            failures::record(pool, "t1", p.name(), p.version(), "worker broke")
+        let first = &registry::dag().layers()[0];
+        for p in first {
+            let error = format!("{} worker failed: it broke\n\nTraceback …", p.name());
+            failures::record(pool, "t1", p.name(), p.version(), &error)
                 .await
                 .unwrap();
         }
@@ -708,23 +739,45 @@ mod tests {
             "reconcile would not queue the track at all"
         );
 
+        let settled = Settled::default();
+        let import = ImportEventContext {
+            import_id: "import".into(),
+            source: "test".into(),
+            done: 0,
+            total: 1,
+        };
+        let report = StageReport::new(import, Events::new(settled.clone()), "t1");
         let epoch = services.analysis_tasks.current_epoch().unwrap();
         let lease = services.analysis_tasks.lease(epoch).unwrap();
-        run_for_track(
+        let run = run_for_track(
             pool,
             &services.storage,
             &services.workers,
             "t1",
             &lease.guard(),
-            None,
+            Some(&report),
         )
-        .await
-        .unwrap();
+        .await;
 
         assert_eq!(
             failure_rows(pool).await,
             before,
             "a step in backoff, or one waiting on it, ran"
+        );
+        run.unwrap();
+        // A held step reports the failure that holds it, by its first line;
+        // what waits on it was skipped.
+        for (stage, outcome) in settled.0.lock().unwrap().iter() {
+            let expected = match first.iter().find(|p| p.name() == stage) {
+                Some(_) => StageOutcome::Failed(format!("{stage} worker failed: it broke")),
+                None => StageOutcome::Skipped,
+            };
+            assert_eq!(outcome, &expected, "{stage}");
+        }
+        assert_eq!(
+            settled.0.lock().unwrap().len(),
+            registry::dag().preprocessors().count(),
+            "a stage never settled"
         );
     }
 

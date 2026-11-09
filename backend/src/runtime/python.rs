@@ -683,6 +683,15 @@ pub fn installed(cache_dir: &Path) -> bool {
     venv_dir(cache_dir).join(REQUIREMENTS_MARKER).exists()
 }
 
+/// When setup last finished installing the environment under `cache_dir`, if
+/// it ever has: setup writes the marker only when it installs.
+#[must_use]
+pub fn installed_at(cache_dir: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(venv_dir(cache_dir).join(REQUIREMENTS_MARKER))
+        .and_then(|marker| marker.modified())
+        .ok()
+}
+
 /// The managed interpreter, if it already exists under `cache_dir`.
 ///
 /// This never creates, validates or memoizes anything —

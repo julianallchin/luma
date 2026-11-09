@@ -204,7 +204,10 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
             AND t.file_path != ''
             AND t.file_path NOT LIKE '%.stub'
             AND ({authors})
-            AND NOT {in_backoff}
+            AND NOT EXISTS (
+                SELECT 1 FROM preprocessing_failures f
+                 WHERE f.track_id = t.id AND f.preprocessor = ?1 AND {in_backoff}
+            )
             AND (
                 (SELECT COUNT(*) FROM {table} a
                   WHERE a.track_id = t.id AND a.processor_version >= ?2) < ?3

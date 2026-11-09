@@ -41,6 +41,11 @@ impl WorkerEnvironment {
         self
     }
 
+    /// When the Python environment the workers run in was last installed.
+    pub fn environment_installed_at(&self) -> Option<std::time::SystemTime> {
+        python_env::installed_at(&self.cache_dir)
+    }
+
     /// Set this environment up in the background
     /// ([`python_env::setup_python_env_background`]) and hold every worker
     /// until that is ready; see [`Self::ready`]. Returns the setup, for

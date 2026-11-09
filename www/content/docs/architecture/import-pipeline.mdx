@@ -62,8 +62,11 @@ by dependency at startup. The registry is `registry.rs`.
 - Each artifact row has a `processor_version`. A row with an older version runs
   again. A row downloaded by sync counts as complete.
 - A failure is stored in the local `preprocessing_failures` table. The retry
-  uses exponential backoff, up to 24 hours. Preprocessors that depend on the
-  failed output are skipped for that run.
+  uses exponential backoff, up to 24 hours. Until then the preprocessor is
+  skipped on that track, and so are the preprocessors that depend on its
+  output, unless one of its inputs was rebuilt in the same run. Startup forgets
+  the failures of an older version of a preprocessor, and those recorded before
+  the Python environment was last reinstalled.
 - The scheduler emits `track-import-state` events during an import. Each
   analysed track is first `queued` with every stage it will report (each
   preprocessor plus `waveform`); each stage then starts and settles exactly
