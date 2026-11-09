@@ -1964,6 +1964,13 @@ impl AgentChat {
                     .rows
                     .get(ix + 1)
                     .is_none_or(|next| next.turn != key.turn);
+                // Live state of the shown thread's turn, which outlives this
+                // panel's attachment to it.
+                let awaiting_setup = state
+                    .thread_id()
+                    .and_then(|thread| state.running.read(cx).live(thread))
+                    .map(|live| live.awaiting_setup.clone())
+                    .unwrap_or_default();
                 transcript::row(
                     &key,
                     turn,
@@ -1988,6 +1995,7 @@ impl AgentChat {
                         agent: &state.agent,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         fold_px: &state.fold_px,
+                        awaiting_setup: &awaiting_setup,
                         theme: &state.theme,
                     },
                     window,

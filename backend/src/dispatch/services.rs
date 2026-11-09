@@ -277,11 +277,13 @@ impl AppServices {
     }
 
     /// Set this host's Python environment up in the background, and make
-    /// analysis wait for it instead of failing while it runs. Only the desktop
-    /// sets Python up; harnesses and the CLI fail fast without one.
+    /// analysis and the agent's cells wait for it instead of failing while it
+    /// runs. Only the desktop sets Python up; harnesses and the CLI fail fast
+    /// without one.
     #[must_use]
     pub fn start_python_setup(mut self) -> Self {
-        self.workers = self.workers.start_setup();
+        let setup = self.workers.start_setup();
+        self.workspaces.attach_setup(setup);
         self
     }
 

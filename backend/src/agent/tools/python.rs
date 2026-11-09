@@ -5,6 +5,7 @@
 //! context, never from model tool arguments.
 
 use std::borrow::Cow;
+use std::future::Future;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,11 +14,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{clamp_for_model, Tool, ToolContext, ToolOutcome};
+use super::{clamp_for_model, Tool, ToolContext, ToolOutcome, ToolProgress};
 use crate::agent::figures;
 use crate::agent::model::ContentBlock;
 use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::models::agent_execution::{PythonCellResult, PythonStoredFigure, PythonToolOutput};
+use crate::runtime::python::BackgroundSetup;
 use crate::services::agent_execution::{
     cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner,
 };
@@ -110,12 +112,13 @@ impl Tool for PythonTool {
             .admitted_principal()
             .await
             .map_err(|error| error.to_string())?;
-        let result = run_python_cell_inner(
+        let live = ctx.services().live_handles();
+        let cell = run_python_cell_inner(
             &ctx.services().db.0,
             &ctx.services().storage,
             &ctx.services().fixtures_root,
             &ctx.services().workspaces,
-            &ctx.services().live_handles(),
+            &live,
             ctx.thread_id.to_string(),
             args.code,
             ctx.scope.clone(),
@@ -123,8 +126,9 @@ impl Tool for PythonTool {
             principal.clone(),
             ctx.execution_id.map(str::to_string),
             ctx.draft_id.map(str::to_string),
-        )
-        .await;
+        );
+        let setup = ctx.services().workspaces.running_setup().cloned();
+        let result = telling_setup_waits(ctx.progress, ctx.call_id, setup, cell).await;
         drop(guard.disarm());
 
         let mut result = result?;
@@ -187,6 +191,31 @@ impl Drop for InterruptOnDrop {
         if self.armed {
             cancel_python_cell_inner(&self.workspaces, &self.execution_id);
         }
+    }
+}
+
+/// Await `cell`, telling the host while it waits for the Python setup that was
+/// still running when it started: on a first launch that is minutes in which
+/// the chip would otherwise claim work that has not begun.
+async fn telling_setup_waits<T>(
+    progress: &ToolProgress,
+    call_id: &str,
+    setup: Option<BackgroundSetup>,
+    cell: impl Future<Output = T>,
+) -> T {
+    let Some(setup) = setup else {
+        return cell.await;
+    };
+    progress.python_setup_wait(call_id, true);
+    tokio::pin!(cell);
+    let finished = tokio::select! {
+        output = &mut cell => Some(output),
+        _ = setup.settled() => None,
+    };
+    progress.python_setup_wait(call_id, false);
+    match finished {
+        Some(output) => output,
+        None => cell.await,
     }
 }
 
@@ -288,7 +317,55 @@ fn model_output(output: &PythonToolOutput, images: Vec<Option<String>>) -> Vec<C
 
 #[cfg(test)]
 mod tests {
+    use std::task::Poll;
+
+    use futures_util::poll;
+    use tokio::sync::{mpsc, oneshot, watch};
+
     use super::*;
+    use crate::agent::TurnEvent;
+    use crate::runtime::python::PythonSetup;
+
+    #[tokio::test]
+    async fn a_cell_tells_the_host_while_it_waits_for_python_setup() {
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let progress = ToolProgress::new(events_tx);
+        let (setup, state) = watch::channel(PythonSetup::Running);
+        let (finish, finished) = oneshot::channel::<&str>();
+
+        let cell = telling_setup_waits(
+            &progress,
+            "call-1",
+            Some(BackgroundSetup::new("cache".into(), state)),
+            async { finished.await.unwrap() },
+        );
+        tokio::pin!(cell);
+        assert!(poll!(&mut cell).is_pending());
+        assert_eq!(
+            events.try_recv(),
+            Ok(TurnEvent::PythonSetupWait {
+                call_id: "call-1".into(),
+                waiting: true,
+            })
+        );
+
+        setup.send_replace(PythonSetup::Ready);
+        assert!(
+            poll!(&mut cell).is_pending(),
+            "the cell runs on once setup is ready"
+        );
+        assert_eq!(
+            events.try_recv(),
+            Ok(TurnEvent::PythonSetupWait {
+                call_id: "call-1".into(),
+                waiting: false,
+            })
+        );
+
+        finish.send("done").unwrap();
+        assert_eq!(poll!(&mut cell), Poll::Ready("done"));
+        assert!(events.try_recv().is_err(), "nothing more to tell");
+    }
 
     fn tool(dir: &tempfile::TempDir) -> PythonTool {
         PythonTool::new(StorageRoot::from_path(dir.path().to_path_buf()))

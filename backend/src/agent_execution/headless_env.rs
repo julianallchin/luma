@@ -1,7 +1,9 @@
 //! Resolve the path-based Python worker environment shared by every host.
 //!
 //! Resolution stays cheap: the native desktop prepares the environment in the
-//! background at startup; tool calls only locate the interpreter and script.
+//! background at startup, and a cell waits for that
+//! ([`PythonWorkspaceService::workspace_for_cell`]), so resolving only locates
+//! the interpreter and script.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

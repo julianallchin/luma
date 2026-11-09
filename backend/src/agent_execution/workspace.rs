@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -24,6 +24,7 @@ use crate::agent_execution::worker_process::{
     CancelToken, ExecOutcome, ExecStatus, FigureRef, HostCallHandler, HostOperationScope,
     Truncation, WorkerConfig, WorkerHandle,
 };
+use crate::runtime::python::BackgroundSetup;
 
 /// The default wall-clock ceiling for one cell (design §16.3).
 pub const DEFAULT_CELL_TIMEOUT: Duration = Duration::from_secs(90);
@@ -69,9 +70,10 @@ impl std::fmt::Debug for WorkerEnv {
 /// Resolves the worker environment once, on first use.
 ///
 /// Startup must not block on `ensure_python_env` (venv creation can take
-/// minutes on a cold machine, and `setup_python_env_background` is already
-/// warming it), so the service is registered eagerly and the environment is
-/// resolved the first time a cell actually runs.
+/// minutes on a cold machine), so the service is registered eagerly and the
+/// environment is resolved the first time a cell actually runs, after the
+/// host's background setup is ready
+/// ([`PythonWorkspaceService::workspace_for_cell`]).
 struct EnvCell {
     resolve: EnvResolver,
     cached: Mutex<Option<WorkerEnv>>,
@@ -412,6 +414,8 @@ impl Drop for CellExecutionLease {
 pub struct PythonWorkspaceService {
     root: PathBuf,
     env: Arc<EnvCell>,
+    /// The host's background Python setup, when it runs one.
+    setup: OnceLock<BackgroundSetup>,
     workspaces: Mutex<HashMap<String, Arc<Workspace>>>,
     execution_gates: Mutex<HashMap<String, Arc<ThreadExecutionGate>>>,
     identity_admission: Mutex<bool>,
@@ -437,6 +441,7 @@ impl PythonWorkspaceService {
                 resolve,
                 cached: Mutex::new(None),
             }),
+            setup: OnceLock::new(),
             workspaces: Mutex::new(HashMap::new()),
             execution_gates: Mutex::new(HashMap::new()),
             identity_admission: Mutex::new(true),
@@ -451,6 +456,20 @@ impl PythonWorkspaceService {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Attach the host's background Python setup, which every cell then waits
+    /// for before it gets a workspace; see [`Self::workspace_for_cell`]. A host
+    /// sets Python up once.
+    pub(crate) fn attach_setup(&self, setup: BackgroundSetup) {
+        let first = self.setup.set(setup).is_ok();
+        debug_assert!(first, "a host sets its Python environment up once");
+    }
+
+    /// The host's Python setup while it is still running, which a cell admitted
+    /// now waits for in [`Self::workspace_for_cell`].
+    pub(crate) fn running_setup(&self) -> Option<&BackgroundSetup> {
+        self.setup.get().filter(|setup| setup.running())
     }
 
     /// Admit one complete cell operation. A thread has at most one cell because
@@ -557,13 +576,33 @@ impl PythonWorkspaceService {
         }
     }
 
-    /// Get (creating on first touch) the workspace owned by an admitted cell.
-    /// Requiring the lease at this API boundary prevents future command paths
-    /// from accidentally creating a workspace outside deletion's drain set.
-    pub(crate) fn workspace_for_cell(
+    /// Get (creating on first touch) the workspace owned by an admitted cell,
+    /// once Python can run in it. Requiring the lease at this API boundary
+    /// prevents future command paths from accidentally creating a workspace
+    /// outside deletion's drain set, or reaching Python before setup.
+    ///
+    /// On a host that sets Python up in the background this first waits for
+    /// that setup to be ready ([`BackgroundSetup::ready`]). Setup takes minutes
+    /// on a first launch, and an update that changes the requirements
+    /// reinstalls them, so a cell can arrive first and would find an
+    /// interpreter with missing or half-replaced packages. Cancelling the cell
+    /// ends the wait, so a stop, a deletion or an identity switch need not wait
+    /// for setup; the cancelled cell then returns `interrupted` from its
+    /// workspace without touching Python.
+    pub(crate) async fn workspace_for_cell(
         &self,
         lease: &CellExecutionLease,
     ) -> Result<Arc<Workspace>, String> {
+        if let Some(setup) = self.setup.get() {
+            tokio::select! {
+                ready = setup.ready() => ready?,
+                () = lease.cancel.cancel_requested() => {}
+            }
+        }
+        self.leased_workspace(lease)
+    }
+
+    fn leased_workspace(&self, lease: &CellExecutionLease) -> Result<Arc<Workspace>, String> {
         let thread_id = &lease.thread_id;
         let gate = self.execution_gate(thread_id)?;
         // Hold admission across registry lookup and creation. Deletion either
@@ -607,7 +646,7 @@ impl PythonWorkspaceService {
     #[cfg(test)]
     pub(crate) fn workspace_for_test(&self, thread_id: &str) -> Result<Arc<Workspace>, String> {
         let lease = self.claim_cell(thread_id)?;
-        self.workspace_for_cell(&lease)
+        self.leased_workspace(&lease)
     }
 
     /// Close admission, cancel and drain the complete starting/running cell,
@@ -677,13 +716,76 @@ impl PythonWorkspaceService {
 
 #[cfg(test)]
 mod tests {
+    use std::task::Poll;
+
+    use futures_util::poll;
+    use tokio::sync::watch;
+
     use super::*;
+    use crate::runtime::python::PythonSetup;
 
     fn service(root: PathBuf) -> PythonWorkspaceService {
         PythonWorkspaceService::new(
             root,
             Arc::new(|| Err("no python environment in this test".to_string())),
         )
+    }
+
+    fn waiting_on(root: &Path, state: watch::Receiver<PythonSetup>) -> PythonWorkspaceService {
+        let service = service(root.join("workspaces"));
+        service.attach_setup(BackgroundSetup::new(root.join("cache"), state));
+        service
+    }
+
+    #[tokio::test]
+    async fn a_cell_waits_for_running_setup_and_starts_once_it_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (setup, state) = watch::channel(PythonSetup::Running);
+        let service = waiting_on(tmp.path(), state);
+        let lease = service.claim_cell("thread-a").unwrap();
+
+        let workspace = service.workspace_for_cell(&lease);
+        tokio::pin!(workspace);
+        assert!(
+            poll!(&mut workspace).is_pending(),
+            "a cell got its workspace while setup was still running"
+        );
+        setup.send_replace(PythonSetup::Ready);
+        assert!(matches!(poll!(&mut workspace), Poll::Ready(Ok(_))));
+    }
+
+    #[tokio::test]
+    async fn an_identity_switch_completes_while_a_cell_waits_for_setup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_setup, state) = watch::channel(PythonSetup::Running);
+        let service = waiting_on(tmp.path(), state);
+        // The waiting cell holds its lease, which the switch waits for.
+        let lease = service.claim_cell("thread-a").unwrap();
+        let cancel = lease.cancel_token();
+        let switch = service.suspend_for_identity_switch();
+        tokio::pin!(switch);
+        {
+            let workspace = service.workspace_for_cell(&lease);
+            tokio::pin!(workspace);
+            assert!(poll!(&mut workspace).is_pending());
+            assert!(
+                poll!(&mut switch).is_pending(),
+                "the switch should wait for the cell's lease"
+            );
+            assert!(
+                poll!(&mut workspace).is_ready(),
+                "the cell kept waiting for setup through the switch"
+            );
+        }
+        assert!(
+            cancel.is_cancelled(),
+            "the cell must not go on to start Python"
+        );
+        drop(lease);
+        assert!(
+            poll!(&mut switch).is_ready(),
+            "the switch did not complete once the cell let go"
+        );
     }
 
     #[test]
@@ -759,7 +861,7 @@ mod tests {
         .await
         .expect("deletion closes admission and cancels the paused start");
 
-        assert!(service.workspace_for_cell(&starting).is_err());
+        assert!(service.workspace_for_cell(&starting).await.is_err());
         assert!(!workspace_dir.exists());
         assert!(
             !deletion.is_finished(),
@@ -820,6 +922,7 @@ mod tests {
         let cancel = lease.cancel_token();
         let workspace_dir = service
             .workspace_for_cell(&lease)
+            .await
             .unwrap()
             .dir()
             .to_path_buf();

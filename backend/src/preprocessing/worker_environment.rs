@@ -8,17 +8,15 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tokio::sync::watch;
-
 use crate::preprocessing::AnalysisGuard;
-use crate::runtime::python::{self as python_env, PythonSetup};
+use crate::runtime::python::{self as python_env, BackgroundSetup};
 
 #[derive(Clone, Debug)]
 pub struct WorkerEnvironment {
     cache_dir: PathBuf,
     resource_dir: Option<PathBuf>,
     /// The host's background Python setup, when it runs one.
-    setup: Option<watch::Receiver<PythonSetup>>,
+    setup: Option<BackgroundSetup>,
     background: bool,
 }
 
@@ -45,48 +43,36 @@ impl WorkerEnvironment {
 
     /// Set this environment up in the background
     /// ([`python_env::setup_python_env_background`]) and hold every worker
-    /// until that settles; see [`Self::ready`].
-    #[must_use]
-    pub fn start_setup(self) -> Self {
+    /// until that is ready; see [`Self::ready`]. Returns the setup, for
+    /// anything else that runs Python in this environment to wait on.
+    pub fn start_setup(&mut self) -> BackgroundSetup {
         let setup = python_env::setup_python_env_background(
             self.cache_dir.clone(),
             self.resource_dir.clone(),
         );
-        self.after_setup(setup)
-    }
-
-    fn after_setup(mut self, setup: watch::Receiver<PythonSetup>) -> Self {
-        self.setup = Some(setup);
-        self
+        self.setup = Some(setup.clone());
+        setup
     }
 
     /// Wait for this environment's setup, if it has one, to settle either way.
     pub async fn setup_settled(&self) {
         if let Some(setup) = &self.setup {
-            let _ = PythonSetup::settled(&mut setup.clone()).await;
+            let _ = setup.settled().await;
         }
     }
 
     /// Wait until workers can start: at once when there is no setup to wait
-    /// for, otherwise once it settles. Setup takes minutes on a first launch,
-    /// and an update that changes the requirements reinstalls them, so an
-    /// import can arrive first. An identity transition ends the wait. A failed
-    /// setup still lets workers run on an environment an earlier setup finished
-    /// installing.
+    /// for, otherwise once it is ready ([`BackgroundSetup::ready`]). Setup
+    /// takes minutes on a first launch, and an update that changes the
+    /// requirements reinstalls them, so an import can arrive first. An
+    /// identity transition ends the wait.
     pub async fn ready(&self, analysis: &AnalysisGuard) -> Result<(), String> {
         let Some(setup) = &self.setup else {
             return Ok(());
         };
-        let mut setup = setup.clone();
-        let settled = tokio::select! {
-            settled = PythonSetup::settled(&mut setup) => settled,
-            () = analysis.cancelled() => return analysis.checkpoint(),
-        };
-        match settled {
-            Err(step) if !python_env::installed(&self.cache_dir) => {
-                Err(format!("Python setup failed: {step}"))
-            }
-            _ => Ok(()),
+        tokio::select! {
+            ready = setup.ready() => ready,
+            () = analysis.cancelled() => analysis.checkpoint(),
         }
     }
 
@@ -155,9 +141,11 @@ mod tests {
     use std::task::Poll;
 
     use futures_util::poll;
+    use tokio::sync::watch;
 
     use super::*;
     use crate::preprocessing::AnalysisTaskGroup;
+    use crate::runtime::python::PythonSetup;
 
     fn lease(group: &AnalysisTaskGroup) -> crate::preprocessing::task_group::AnalysisLease {
         group
@@ -165,8 +153,10 @@ mod tests {
             .expect("lease")
     }
 
-    fn waiting_on(cache: &Path, setup: watch::Receiver<PythonSetup>) -> WorkerEnvironment {
-        WorkerEnvironment::new(cache.to_path_buf(), None).after_setup(setup)
+    fn workers(cache: &Path, state: watch::Receiver<PythonSetup>) -> WorkerEnvironment {
+        let mut workers = WorkerEnvironment::new(cache.to_path_buf(), None);
+        workers.setup = Some(BackgroundSetup::new(cache.to_path_buf(), state));
+        workers
     }
 
     /// A cache holding a venv's interpreter, as setup leaves it before it has
@@ -197,7 +187,7 @@ mod tests {
         // An installed environment, as during an update's reinstall.
         let cache = installed_environment();
         let (setup, state) = watch::channel(PythonSetup::Running);
-        let workers = waiting_on(cache.path(), state);
+        let workers = workers(cache.path(), state);
         let group = AnalysisTaskGroup::new();
         let stage = lease(&group);
 
@@ -216,7 +206,7 @@ mod tests {
     async fn an_identity_switch_completes_while_a_stage_waits_for_setup() {
         let cache = tempfile::tempdir().expect("temp dir");
         let (_setup, state) = watch::channel(PythonSetup::Running);
-        let workers = waiting_on(cache.path(), state);
+        let workers = workers(cache.path(), state);
         let group = AnalysisTaskGroup::new();
         // The waiting stage holds its lease, which the switch waits for.
         let stage = lease(&group);
@@ -252,7 +242,7 @@ mod tests {
         let group = AnalysisTaskGroup::new();
         let stage = lease(&group);
 
-        let failure = waiting_on(cache.path(), state)
+        let failure = workers(cache.path(), state)
             .ready(&stage.guard())
             .await
             .expect_err("there is no installed environment to run on");
@@ -273,7 +263,7 @@ mod tests {
         let stage = lease(&group);
 
         assert_eq!(
-            waiting_on(cache.path(), state).ready(&stage.guard()).await,
+            workers(cache.path(), state).ready(&stage.guard()).await,
             Ok(())
         );
     }

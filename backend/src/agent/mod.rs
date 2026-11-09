@@ -540,6 +540,14 @@ pub enum TurnEvent {
         thread_id: String,
         event: Box<TurnEvent>,
     },
+    /// A running `python` call started (`waiting`) or stopped waiting for the
+    /// host's Python setup, which takes minutes on a first launch. Never
+    /// persisted: like a subagent milestone it is live state, and the reducer
+    /// drops it on sight.
+    PythonSetupWait {
+        call_id: String,
+        waiting: bool,
+    },
     /// The score moved; the editor should re-read it.
     DocumentChanged,
     /// Ephemeral editor state the host may honour or ignore.

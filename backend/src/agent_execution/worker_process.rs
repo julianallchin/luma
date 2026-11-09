@@ -69,6 +69,7 @@ const SIG_KILL: i32 = 9;
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken {
     state: Arc<AtomicU8>,
+    requested: Arc<tokio::sync::Notify>,
 }
 
 const CANCEL_REQUESTED: u8 = 1;
@@ -81,6 +82,22 @@ impl CancelToken {
 
     pub fn cancel(&self) {
         self.state.fetch_or(CANCEL_REQUESTED, Ordering::SeqCst);
+        self.requested.notify_waiters();
+    }
+
+    /// Resolves once cancellation is requested, for a cell waiting before it
+    /// starts. Unlike [`Self::is_cancelled`] it does not wait out an
+    /// irreversible section, which a cell that has not started cannot be in.
+    pub async fn cancel_requested(&self) {
+        loop {
+            let requested = self.requested.notified();
+            tokio::pin!(requested);
+            requested.as_mut().enable();
+            if self.state.load(Ordering::SeqCst) & CANCEL_REQUESTED != 0 {
+                return;
+            }
+            requested.await;
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {

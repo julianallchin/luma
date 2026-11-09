@@ -698,10 +698,20 @@ pub struct RowCtx<'a> {
     /// Where the folding call's chip writes its card's height this layout,
     /// for the send room that is laid out after it.
     pub fold_px: &'a std::cell::Cell<f32>,
+    /// The running turn's `python` calls that are waiting for the host's
+    /// Python setup, by call id ([`crate::running::Live::awaiting_setup`]).
+    pub awaiting_setup: &'a HashSet<String>,
     pub theme: &'a Theme,
 }
 
 impl RowCtx<'_> {
+    /// Whether this call is waiting for the host's Python setup. Only a live
+    /// row's can be: a settled turn's calls are not waiting for anything.
+    #[must_use]
+    pub fn awaits_setup(&self, tool: &ToolPart) -> bool {
+        self.live && self.awaiting_setup.contains(&tool.call_id)
+    }
+
     /// Whether this call's detail is showing.
     #[must_use]
     pub fn is_expanded(&self, call_id: &str) -> bool {
@@ -764,7 +774,7 @@ pub fn row(
                 .collect();
             let plain = tools
                 .iter()
-                .map(|tool| chip::label(tool).to_string())
+                .map(|tool| chip::label(tool, ctx.awaits_setup(tool)).to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             (chip::rail(&tools, ctx, window, cx), plain)
