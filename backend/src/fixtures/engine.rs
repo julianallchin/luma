@@ -14,10 +14,6 @@ use std::collections::HashMap;
 /// so they're treated as the same value for cascade decisions.
 const HEADS_AGREE_TOLERANCE: f32 = 1.0 / 256.0;
 
-/// Square-wave gate frequency: `hz = strobe * STROBE_HZ_MAX`. The visualizer uses
-/// the same maximum so on-screen and physical strobe stay phase-coherent.
-const STROBE_HZ_MAX: f64 = 20.0;
-
 /// Cascade rung chosen for the fixture this frame. The cascade prefers, in order:
 /// per-head shutter → master shutter (if heads agree) → per-head dimmer pulse →
 /// master dimmer pulse (if heads agree) → per-head color pulse → master color pulse
@@ -62,16 +58,16 @@ struct FixtureStrobeCtx {
     head_strobes: Vec<f32>,
 }
 
+/// The strobe gate at `t` on the strobe clock: the one the stage draws
+/// ([`luma_scene::strobe::gain`]), sampled as the output tick samples it.
 fn strobe_gate_open(strobe: f32, t: f64) -> bool {
-    if strobe <= 0.0 {
-        return true;
-    }
-    let hz = (strobe as f64) * STROBE_HZ_MAX;
-    if hz <= 0.0 {
-        return true;
-    }
-    let period = 1.0 / hz;
-    (t.rem_euclid(period)) <= period * 0.5
+    luma_scene::strobe::gain(
+        strobe,
+        luma_scene::strobe::Slice {
+            open: t,
+            length: 0.0,
+        },
+    ) > 0.5
 }
 
 fn heads_agree(values: &[f32]) -> bool {
@@ -328,7 +324,9 @@ fn write_open_capability(channel: &Channel) -> MapAction {
 fn write_strobe_capability(channel: &Channel, strobe: f32) -> MapAction {
     let strobe = strobe.clamp(0.0, 1.0);
     if let Some(lowered) = &channel.lowered {
-        return MapAction::Set(lowered.strobe(strobe, f64::from(strobe) * STROBE_HZ_MAX));
+        return MapAction::Set(
+            lowered.strobe(strobe, f64::from(strobe) * luma_scene::strobe::HZ_PER_UNIT),
+        );
     }
     if let Some(cap) = channel.capabilities.iter().find(|c| c.is_strobe()) {
         let range = (cap.max - cap.min) as f32;
@@ -623,7 +621,9 @@ fn write_library(
                 (f64::from(v.clamp(0.0, 1.0)) * f64::from(p.max())).round() as u32,
                 lowered.rank,
             )),
-            Some(Value::Strobe(s)) => Some(lowered.strobe(s, f64::from(s) * STROBE_HZ_MAX)),
+            Some(Value::Strobe(s)) => {
+                Some(lowered.strobe(s, f64::from(s) * luma_scene::strobe::HZ_PER_UNIT))
+            }
             Some(Value::Open) => Some(lowered.open()),
             Some(Value::Slot(b)) => Some(if lowered.rank == 0 { b } else { lowered.home() }),
             Some(Value::Hold) => None,

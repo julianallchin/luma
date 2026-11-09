@@ -357,7 +357,14 @@ impl AppServices {
         let Some(output) = &self.output else {
             return;
         };
-        let mut ticks = tokio::time::interval(std::time::Duration::from_millis(23));
+        // One tick per output frame, mid-frame on the strobe clock, so every
+        // tick samples one frame of the strobe gate (`luma_scene::strobe`).
+        let frame = std::time::Duration::from_secs_f64(luma_scene::strobe::FRAME_S);
+        let first = luma_scene::strobe::epoch()
+            + std::time::Duration::from_secs_f64(luma_scene::strobe::next_frame_middle(
+                luma_scene::strobe::clock(),
+            ));
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::from_std(first), frame);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut had_output = false;
         loop {
