@@ -511,9 +511,9 @@ fn aims(graph: &luma_patterns::ClipGraph) -> bool {
 
 /// Heads in the stand-in rig of [`stand_in_strip`].
 const STAND_IN_HEADS: usize = 16;
-/// How far a stand-in head turns, pan then tilt, end to end, in degrees: a
-/// common moving head's.
-const STAND_IN_RANGE: [f64; 2] = [540., 270.];
+/// How far a stand-in head turns, pan then tilt, `[lo, hi]` degrees from
+/// home: a common moving head's.
+const STAND_IN_RANGE: [[f64; 2]; 2] = [[-270., 270.], [-135., 135.]];
 
 /// The strip of a clip `graph`, such as a preset's, over `beats` beats on a
 /// stand-in rig: a straight line of moving heads at 120 BPM. It needs no
@@ -583,7 +583,7 @@ fn stand_in_rig(cells: &[luma_patterns::Cell]) -> crate::eval::aim::Rig {
         );
         rig.insert(
             cell.id.clone(),
-            crate::eval::aim::Head::with_range(mount, STAND_IN_RANGE),
+            crate::eval::aim::Head::with_travel(mount, STAND_IN_RANGE),
         );
     }
     rig

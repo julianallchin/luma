@@ -1,7 +1,9 @@
+use crate::fixtures::library::Lowered;
 use crate::models::fixtures::{
     Channel, ChannelColour, ChannelType, FixtureDefinition, Mode, PatchedFixture,
 };
 use crate::models::universe::{PrimitiveState, UniverseState};
+use luma_fixture::control::Attr;
 use luma_patterns::color_space::Gamut;
 use std::collections::HashMap;
 
@@ -299,6 +301,9 @@ fn build_strobe_ctx(
 /// needs to neutralize a master shutter (per-head fallback selected) this is the
 /// path that writes the Open / LampOn capability instead of blindly writing 0.
 fn write_open_capability(channel: &Channel) -> MapAction {
+    if let Some(lowered) = &channel.lowered {
+        return MapAction::Set(lowered.open());
+    }
     if let Some(cap) = channel.capabilities.iter().find(|c| {
         let preset = c.preset.as_deref().unwrap_or("");
         let label = c.label.to_lowercase();
@@ -313,6 +318,9 @@ fn write_open_capability(channel: &Channel) -> MapAction {
 
 fn write_strobe_capability(channel: &Channel, strobe: f32) -> MapAction {
     let strobe = strobe.clamp(0.0, 1.0);
+    if let Some(lowered) = &channel.lowered {
+        return MapAction::Set(lowered.strobe(strobe, f64::from(strobe) * STROBE_HZ_MAX));
+    }
     if let Some(cap) = channel.capabilities.iter().find(|c| c.is_strobe()) {
         let range = (cap.max - cap.min) as f32;
         let val = cap.min as f32 + (strobe * range);
@@ -417,7 +425,7 @@ pub fn generate_dmx(
         // Each head's color in channel terms, worked out once per head.
         let mut colors: Vec<(*const PrimitiveState, HeadColor)> = Vec::new();
 
-        let [pan_max, tilt_max] = def.focus_range();
+        let [pan_max, tilt_max] = def.travel().map(|[lo, hi]| hi - lo);
 
         let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
         let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
@@ -431,6 +439,7 @@ pub fn generate_dmx(
         }
 
         let strobe_ctx = build_strobe_ctx(state, fixture, def, mode, frame_time_secs);
+        let means = cell_means(state, fixture, def, mode);
 
         for mode_channel in &mode.channels {
             let channel_number = mode_channel.number as usize;
@@ -471,32 +480,60 @@ pub fn generate_dmx(
                 state.primitives.get(&head_id)
             });
 
+            // A library channel reads its own cell, the mean of its cells, or the
+            // fixture (CONTROL.md section 5).
+            let lowered_prim = channel.lowered.as_deref().map(|lowered| {
+                match lowered_span(lowered, mode.heads.len(), fixture_prim.is_some()) {
+                    Some(span) => means.iter().find(|(s, _)| *s == span).map(|(_, p)| p),
+                    None => lowered
+                        .cells()
+                        .and_then(|[cell, _]| {
+                            state.primitives.get(&format!("{}:{}", fixture.id, cell))
+                        })
+                        .or(fixture_prim)
+                        .or(head0_prim),
+                }
+            });
             // If a dimmer channel ends up in a <Head>, it still usually represents a
             // fixture-level master dimmer. Prefer fixture primitive dimmer in that case.
-            let prim = match (head_prim, fixture_prim, head0_prim) {
-                // Most specific: exact head primitive exists
-                (Some(h), Some(f), _) => {
-                    let ch_type = channel.get_type();
-                    let ch_colour = channel.get_colour();
-                    if ch_type == ChannelType::Intensity && ch_colour == ChannelColour::None {
-                        f
-                    } else {
-                        h
+            let prim = match lowered_prim {
+                Some(Some(prim)) => prim,
+                Some(None) => continue,
+                None => match (head_prim, fixture_prim, head0_prim) {
+                    // Most specific: exact head primitive exists
+                    (Some(h), Some(f), _) => {
+                        let ch_type = channel.get_type();
+                        let ch_colour = channel.get_colour();
+                        if ch_type == ChannelType::Intensity && ch_colour == ChannelColour::None {
+                            f
+                        } else {
+                            h
+                        }
                     }
-                }
-                (Some(h), None, _) => h,
-                // No head mapping (or missing head primitive): use fixture primitive if present
-                (None, Some(f), _) => f,
-                // Fallback: selection system often targets "fixture:0" even for single-head fixtures
-                (None, None, Some(h0)) => h0,
-                (None, None, None) => continue,
+                    (Some(h), None, _) => h,
+                    // No head mapping (or missing head primitive): use fixture primitive if present
+                    (None, Some(f), _) => f,
+                    // Fallback: selection system often targets "fixture:0" even for single-head fixtures
+                    (None, None, Some(h0)) => h0,
+                    (None, None, None) => continue,
+                },
             };
 
             // Shutter channels are owned by the strobe cascade — it knows whether
             // this fixture is using its shutter (and which value) or neutralizing it
             // because a lower rung is doing the strobe.
+            let lowered = channel.lowered.as_deref();
             let mapped = if channel.get_type() == ChannelType::Shutter {
                 shutter_action(channel, head_idx, &strobe_ctx)
+            } else if let Some(lowered) = lowered.filter(|l| !l.driven()) {
+                MapAction::Set(lowered.home())
+            } else if let Some(lowered) = lowered.filter(|l| l.param.attr.is_position()) {
+                let axis = usize::from(lowered.param.attr == Attr::Tilt);
+                if prim.position[axis].is_nan() {
+                    MapAction::Hold
+                } else {
+                    MapAction::Set(lowered.position(prim.position[axis]))
+                }
             } else {
                 let color = match colors.iter().find(|(p, _)| std::ptr::eq(*p, prim)) {
                     Some((_, color)) => color,
@@ -530,6 +567,61 @@ pub fn generate_dmx(
     }
 
     buffers
+}
+
+/// The cells a library channel reads as a mean: its range of cells, or every
+/// cell for a fixture-level channel on a fixture with several when nothing
+/// drives the fixture primitive itself. `None` when it reads one primitive.
+fn lowered_span(lowered: &Lowered, heads: usize, has_fixture_primitive: bool) -> Option<[u32; 2]> {
+    match lowered.cells() {
+        Some([a, b]) if a < b => Some([a, b]),
+        Some(_) => None,
+        None if heads > 1 && !has_fixture_primitive => Some([0, heads as u32 - 1]),
+        None => None,
+    }
+}
+
+/// Every mean a library mode's channels read this frame, worked out once: the
+/// mean dimmer and colour of the cells, the rest from the first cell.
+fn cell_means(
+    state: &UniverseState,
+    fixture: &PatchedFixture,
+    def: &FixtureDefinition,
+    mode: &Mode,
+) -> Vec<([u32; 2], PrimitiveState)> {
+    let mut means: Vec<([u32; 2], PrimitiveState)> = Vec::new();
+    if def.library.is_none() {
+        return means;
+    }
+    let has_fixture = state.primitives.contains_key(&fixture.id);
+    for mode_channel in &mode.channels {
+        let Some(lowered) = def
+            .channels
+            .iter()
+            .find(|c| c.name == mode_channel.name)
+            .and_then(|c| c.lowered.as_deref())
+        else {
+            continue;
+        };
+        let Some(span) = lowered_span(lowered, mode.heads.len(), has_fixture) else {
+            continue;
+        };
+        if means.iter().any(|(s, _)| *s == span) {
+            continue;
+        }
+        let cells: Vec<&PrimitiveState> = (span[0]..=span[1])
+            .filter_map(|cell| state.primitives.get(&format!("{}:{}", fixture.id, cell)))
+            .collect();
+        let Some(first) = cells.first() else {
+            continue;
+        };
+        let n = cells.len() as f32;
+        let mut mean = (*first).clone();
+        mean.dimmer = cells.iter().map(|p| p.dimmer).sum::<f32>() / n;
+        mean.color = std::array::from_fn(|i| cells.iter().map(|p| p.color[i]).sum::<f32>() / n);
+        means.push((span, mean));
+    }
+    means
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -926,23 +1018,27 @@ mod tests {
     #[test]
     fn uses_mode_channel_number_for_addressing_and_prefers_fixture_dimmer_over_head() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
             channels: vec![
                 Channel {
+                    lowered: None,
                     name: "Pan".into(),
                     preset: Some("PositionPan".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Master Dimmer".into(),
                     preset: Some("IntensityMasterDimmer".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Red".into(),
                     preset: Some("IntensityRed".into()),
                     group: None,
@@ -1018,10 +1114,12 @@ mod tests {
     #[test]
     fn falls_back_to_head0_when_fixture_primitive_missing() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
             channels: vec![Channel {
+                lowered: None,
                 name: "Master Dimmer".into(),
                 preset: Some("IntensityMasterDimmer".into()),
                 group: None,
@@ -1080,6 +1178,7 @@ mod tests {
     #[test]
     fn maps_color_wheel_to_nearest_capability() {
         let channel = Channel {
+            lowered: None,
             name: "Colors".into(),
             preset: None,
             group: Some(crate::models::fixtures::Group {
@@ -1140,6 +1239,7 @@ mod tests {
     #[test]
     fn holds_wheel_value_when_color_is_black() {
         let channel = Channel {
+            lowered: None,
             name: "Colors".into(),
             preset: None,
             group: Some(crate::models::fixtures::Group {
@@ -1189,6 +1289,7 @@ mod tests {
         }];
 
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
@@ -1236,17 +1337,20 @@ mod tests {
     #[test]
     fn holds_pan_when_position_axis_is_nan() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
             channels: vec![
                 Channel {
+                    lowered: None,
                     name: "Pan".into(),
                     preset: Some("PositionPan".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Pan fine".into(),
                     preset: Some("PositionPanFine".into()),
                     group: None,
@@ -1324,6 +1428,7 @@ mod tests {
 
     fn dim_ch(name: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: Some("IntensityMasterDimmer".into()),
             group: None,
@@ -1333,18 +1438,21 @@ mod tests {
     fn rgb_chs() -> Vec<Channel> {
         vec![
             Channel {
+                lowered: None,
                 name: "Red".into(),
                 preset: Some("IntensityRed".into()),
                 group: None,
                 capabilities: vec![],
             },
             Channel {
+                lowered: None,
                 name: "Green".into(),
                 preset: Some("IntensityGreen".into()),
                 group: None,
                 capabilities: vec![],
             },
             Channel {
+                lowered: None,
                 name: "Blue".into(),
                 preset: Some("IntensityBlue".into()),
                 group: None,
@@ -1354,6 +1462,7 @@ mod tests {
     }
     fn shutter_ch_with_caps() -> Channel {
         Channel {
+            lowered: None,
             name: "Shutter".into(),
             preset: Some("ShutterStrobe".into()),
             group: None,
@@ -1385,6 +1494,7 @@ mod tests {
     }
     fn shutter_ch_no_open_cap() -> Channel {
         Channel {
+            lowered: None,
             name: "Shutter".into(),
             preset: Some("ShutterStrobe".into()),
             group: None,
@@ -1424,6 +1534,7 @@ mod tests {
     #[test]
     fn strobe_via_master_shutter_when_present() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1475,6 +1586,7 @@ mod tests {
         // ch 4: Red head 1
         let mut channels = vec![shutter_ch_with_caps(), dim_ch("Dim0")];
         channels.push(Channel {
+            lowered: None,
             name: "Red0".into(),
             preset: Some("IntensityRed".into()),
             group: None,
@@ -1482,12 +1594,14 @@ mod tests {
         });
         channels.push(dim_ch("Dim1"));
         channels.push(Channel {
+            lowered: None,
             name: "Red1".into(),
             preset: Some("IntensityRed".into()),
             group: None,
             capabilities: vec![],
         });
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "Bar".into(),
@@ -1571,6 +1685,7 @@ mod tests {
         let mut channels = vec![dim_ch("Dimmer")];
         channels.extend(rgb_chs());
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1628,6 +1743,7 @@ mod tests {
     #[test]
     fn strobe_via_master_color_when_no_dimmer_or_shutter() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "RGB".into(),
@@ -1678,6 +1794,7 @@ mod tests {
     #[test]
     fn shutter_open_capability_used_when_strobe_zero() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1715,6 +1832,7 @@ mod tests {
     #[test]
     fn shutter_holds_when_no_open_capability_and_strobe_zero() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1756,17 +1874,20 @@ mod tests {
     #[test]
     fn strobe_does_not_gate_pan_tilt() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "Mover".into(),
             channels: vec![
                 Channel {
+                    lowered: None,
                     name: "Pan".into(),
                     preset: Some("PositionPan".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Tilt".into(),
                     preset: Some("PositionTilt".into()),
                     group: None,
@@ -1819,6 +1940,7 @@ mod tests {
         let mut channels = vec![dim_ch("Dimmer")];
         channels.extend(rgb_chs());
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1877,18 +1999,21 @@ mod tests {
         let mut channels = vec![shutter_ch_with_caps()];
         for i in 0..2 {
             channels.push(Channel {
+                lowered: None,
                 name: format!("R{i}"),
                 preset: Some("IntensityRed".into()),
                 group: None,
                 capabilities: vec![],
             });
             channels.push(Channel {
+                lowered: None,
                 name: format!("G{i}"),
                 preset: Some("IntensityGreen".into()),
                 group: None,
                 capabilities: vec![],
             });
             channels.push(Channel {
+                lowered: None,
                 name: format!("B{i}"),
                 preset: Some("IntensityBlue".into()),
                 group: None,
@@ -1914,6 +2039,7 @@ mod tests {
             });
         }
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "Bar".into(),
@@ -1960,6 +2086,7 @@ mod tests {
     #[test]
     fn speed_presets_are_speed_and_run_fastest_by_their_direction() {
         let speed = |preset: &str| Channel {
+            lowered: None,
             name: "Speed".into(),
             preset: Some(preset.into()),
             group: None,
@@ -1996,6 +2123,7 @@ mod tests {
 
     fn intensity(name: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: Some(format!("Intensity{name}")),
             group: None,
@@ -2008,6 +2136,7 @@ mod tests {
     fn drive(names: &[&str], color: [f64; 3], dimmer: f32) -> Vec<u8> {
         let channels: Vec<Channel> = names.iter().map(|name| intensity(name)).collect();
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "LED".into(),

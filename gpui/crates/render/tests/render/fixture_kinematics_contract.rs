@@ -35,6 +35,7 @@ const TILT_DEG: f32 = -19.0;
 
 fn mover_definition() -> Definition {
     Definition {
+        built: None,
         kind: "Moving Head".into(),
         modes: vec![Mode {
             name: "Standard".into(),

@@ -1428,6 +1428,7 @@ mod tests {
         BTreeMap::from([(
             "Luma/Mover.qxf".to_string(),
             Definition {
+                built: None,
                 kind: "Moving Head".into(),
                 modes: Vec::new(),
                 physical: None,

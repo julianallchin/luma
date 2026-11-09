@@ -85,11 +85,13 @@ prodjlink = { path = "crates/prodjlink" }
 # the CLI's render commands use it: it links wgpu, and everything else reaches
 # venue types through `luma-scene`. It reaches across into the `gpui/`
 # workspace; that direction is safe because `luma-render` and `luma-scene`
-# depend on nothing here but `fixture-kinematics`.
+# depend on nothing here but `fixture-kinematics` and `luma-fixture`.
 luma-render = { path = "../gpui/crates/render" }
 # Where a fixture's light comes from and where it points — the single
 # implementation the renderer, the eval engine and the agent bindings share.
 fixture-kinematics = { path = "crates/fixture-kinematics" }
+# The fixture library's specs: what a `lib:` fixture is built and driven from.
+luma-fixture = { path = "crates/luma-fixture" }
 # The vector type those two speak. Pinned to their version by definition: a
 # second glam here would be a second, incompatible `Vec3`.
 glam = "0.30"
