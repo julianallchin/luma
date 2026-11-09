@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 136,
+    "commandCount": 137,
     "domainCount": 26
   },
   "domains": [
@@ -114,7 +114,7 @@
     },
     {
       "domain": "sync",
-      "commandCount": 1,
+      "commandCount": 2,
       "handlers": "backend/src/dispatch/handlers/sync.rs"
     },
     {
@@ -707,6 +707,15 @@
       "prose": {
         "returns": "ResolvedVenue"
       }
+    },
+    {
+      "name": "dismiss_sync_refusals",
+      "domain": "sync",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/sync.rs"
+      },
+      "args": [],
+      "returns": "()"
     },
     {
       "name": "distribute",

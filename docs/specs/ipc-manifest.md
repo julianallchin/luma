@@ -6,7 +6,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command
 prose in it is the only hand-written part and is carried across by name.
 
-**136 commands** across **26 domains**
+**137 commands** across **26 domains**
 
 ## Domains
 
@@ -33,12 +33,12 @@ prose in it is the only hand-written part and is carried across by name.
 | `scores` | 9 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
-| `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
+| `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **136** | |
+| **total** | **137** | |
 
 ## Commands
 
@@ -271,6 +271,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `sync_status` | — | `SyncStatus` |
+| `dismiss_sync_refusals` | — | `()` |
 
 ### `telemetry`
 
