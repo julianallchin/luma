@@ -378,7 +378,9 @@ pub(crate) const SHORTCUTS: &[Shortcut] = &[
     row!("mode.live", "Live", "Modes", ["3"], Shell, ShowLive),
     row!("app.hide", "Hide Luma", "Window", ["secondary-h"], App, HideLuma),
     row!("app.hide_others", "Hide other apps", "Window", ["alt-secondary-h"], App, HideOthers),
-    row!("window.close", "Close the window", "Window", ["secondary-w"], App, CloseWindow),
+    // The shell's, not the app's: over a dialog or the fullscreen room the
+    // chord belongs to what is up, and the menu item still closes.
+    row!("window.close", "Close the window", "Window", ["secondary-w"], Shell, CloseWindow),
     row!("window.minimize", "Minimize the window", "Window", ["secondary-m"], App, Minimize),
     row!("window.fullscreen", "Full screen", "Window", ["ctrl-cmd-f"], App, ToggleFullScreen),
     // The ids say `arrange.` because that is where these began; an id is a

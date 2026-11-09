@@ -682,7 +682,7 @@ fn a_page_changed_just_before_quitting_survives_the_relaunch() {
         nav.mode("Rig");
         until("Rig", (s) => s.find({ role: "card", label: "Alpha Hall Venue" }));
         // No wait for the debounce: quit at once.
-        app.key("cmd-q");
+        app.key("secondary-q");
         until("the window to close", () => !app.isOpen());
         true
         "#,

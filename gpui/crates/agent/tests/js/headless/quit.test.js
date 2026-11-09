@@ -36,7 +36,7 @@ test("closing the window with nothing to upload quits", { fixture: { sync_status
 
 test("⌘Q with nothing to upload quits", { fixture: { sync_status: status({}) } }, () => {
   nav.trackEditor("Test Venue", "Aurora");
-  app.key("cmd-q");
+  app.key("secondary-q");
   closed();
 });
 
@@ -44,7 +44,7 @@ test("⌘Q with changes uploading asks, and Quit Now quits", {
   fixture: { sync_status: status({ uploading: true, pendingUploads: 3 }) },
 }, () => {
   nav.trackEditor("Test Venue", "Aurora");
-  app.key("cmd-q");
+  app.key("secondary-q");
   const s = until("the dialog", (s) => dialog(s) && s);
   assert(s.find({ role: "text", label: "Syncing your changes" }), "the dialog does not say it is syncing");
   assert(s.find({ role: "text", label: "3 changes left. Luma quits when they are uploaded." }), "no count");
@@ -63,7 +63,7 @@ test("the close button asks the same, and Cancel stays", {
   until("the dialog gone", (s) => !dialog(s));
   assert(app.isOpen(), "Cancel quit");
   // Asking again asks again: nothing about the first answer stuck.
-  app.key("cmd-w");
+  app.key("secondary-w");
   until("the dialog again", (s) => dialog(s));
 });
 
@@ -71,7 +71,7 @@ test("offline, the changes wait for next time and Quit quits", {
   fixture: { sync_status: status({ connected: false, pendingUploads: 2 }) },
 }, () => {
   nav.trackEditor("Test Venue", "Aurora");
-  app.key("cmd-q");
+  app.key("secondary-q");
   const s = until("the dialog", (s) => dialog(s) && s);
   assert(s.find({ role: "text", label: "2 changes will sync the next time you open Luma." }), "no promise");
   assert(!s.find({ role: "button", label: "Quit Now" }), "offline offers to wait");

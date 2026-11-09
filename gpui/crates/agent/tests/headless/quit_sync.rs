@@ -36,7 +36,7 @@ fn quitting_waits_for_the_queue_and_quits_when_it_drains() {
             super::support::NAV,
             r#"
             nav.trackEditor("Test Venue", "Aurora");
-            app.key("cmd-q");
+            app.key("secondary-q");
             until("the dialog, nothing uploaded yet", (s) =>
                 s.find({ role: "text", label: "4 changes left. Luma quits when they are uploaded." })
                 && uploaded(s) === 0);
