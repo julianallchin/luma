@@ -13,6 +13,7 @@ test("the minimap pans, resizes and clamps the viewport", () => {
   const node = (label) => app.snapshot().find({ role: "slider", label });
   const settle = () => app.frames(12, { waitMs: 60 });
   const near = (a, b) => Math.abs(a - b) < 1;
+  until("the minimap", () => node("Timeline minimap") && node("Minimap viewport"));
   settle();
   const map = node("Timeline minimap").bounds;
   const before = node("Minimap viewport").bounds;

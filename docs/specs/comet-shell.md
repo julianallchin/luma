@@ -100,11 +100,12 @@ songs (add and import). Under it, three columns left to right, with hairlines
    the folders with checkboxes to file it in.
 3. **Scores** of the selected song, filling the rest: this venue's under its
    name, "New score", then each other venue's under that venue's name — the
-   score crumb's menu's order. The open score wears a check. A score
-   here opens on the spot and closes the page a double-click interval later
-   (so a double-click on its name renames it instead); another venue's asks
+   score crumb's menu's order. The open score wears a check. A click on a
+   score here opens it in the page's place at once; another venue's asks
    "Switch to <venue>?" first, the same question and path as the score crumb.
-   This venue's scores take a right-click Delete.
+   This venue's scores take a right-click menu: Rename (the inline field the
+   score crumb's Rename uses), Duplicate (`Luma::duplicate_score`, as the
+   crumb's), and Delete, confirmed when the score holds patterns.
 
 Selecting in one column fills the next, and choosing another place empties
 the songs' selection. Every row in every column is one height (36,
@@ -125,9 +126,7 @@ selected, and choosing a place ends it.
 ⌘P and the song crumb go to the page: from a score they close it (its edit
 written, its playback paused) and select its song (`Luma::show_song_list`,
 `Luma::reveal_song`). On the list ⌘P stays, and Escape does not leave it:
-there is no score under it to return to. Choosing a score opens it in the
-list's place, a double-click interval later so the second click of a rename
-still finds its row.
+there is no score under it to return to.
 The list is a page without an agent panel (`Luma::page_has_agent`), and the
 title bar's panel toggle is disabled while it is up. The panel's open or
 hidden state is remembered across it: Rig, Live and a score show the panel as

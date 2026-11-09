@@ -135,15 +135,13 @@ impl Luma {
         let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
             return;
         };
-        let track_id = editor.track_id().to_string();
-        let name = format!("{} copy", editor.score_title());
-        let pending = self.library.duplicate_score(
-            &uuid::Uuid::new_v4().to_string(),
-            editor.target_score_id(),
-            &name,
+        let (track_id, score_id) = (
+            editor.track_id().to_string(),
+            editor.target_score_id().to_string(),
         );
+        let title = editor.score_title();
         self.close_score_switcher(cx);
-        self.open_minted_score(&track_id, pending, "Could not duplicate the score", cx);
+        self.duplicate_score(&track_id, &score_id, &title, cx);
     }
 
     /// A score chosen from the menu: opened here when it is this venue's,

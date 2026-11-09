@@ -57,6 +57,16 @@ test(`a right-click on a score raises a findable menu and escape takes it away`,
   until("the menu to close", (s) => menu(s) === undefined);
 });
 
+test(`Duplicate on a score's menu copies it, clips and all, and opens the copy`, () => {
+  const level = toScores();
+  const listed = labels(level);
+  app.click(openMenu(withClips(level)).find({ role: "button", label: "Duplicate" }));
+  until("the copy open", (s) => nav.openOrdinal(s) === `#${listed.length + 1}` && menu(s) === undefined);
+  nav.scores("Aurora");
+  const after = until("the copy listed", (s) => labels(s).length === listed.length + 1 ? s : undefined);
+  expect(labels(after).filter((l) => l.includes("· 1 patterns ·")).length).toBe(2);
+});
+
 test(`deleting a score with clips asks first and the answer decides`, () => {
   const level = toScores();
   const listed = labels(level);

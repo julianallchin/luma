@@ -128,10 +128,6 @@ pub struct Luma {
     /// venue is open, which is also when the venue picker keeps itself open:
     /// the two states are one fact read twice.
     pub(crate) songs: Option<tracks::Tracks>,
-    /// A score chosen on the song list, opening once a double-click could
-    /// no longer be a rename — see [`Luma::open_listed_score`]. Dropping it
-    /// cancels the open.
-    pub(crate) listed_score_open: Option<gpui::Task<()>>,
     /// Whether the agent panel is put away by hand: the remembered state
     /// every page that has the panel shows it in. A page without one (the
     /// song list) leaves it alone — see [`Luma::page_has_agent`].
@@ -294,7 +290,6 @@ impl Luma {
             source_art: add_tracks::ArtCache::default(),
             next_track_import: 0,
             songs: None,
-            listed_score_open: None,
             agent_hidden: false,
             agent_slide: false,
             regions: shell::Regions::default(),

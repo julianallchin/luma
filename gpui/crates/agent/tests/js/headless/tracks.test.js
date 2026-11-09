@@ -91,7 +91,7 @@ test("the browser filters a seeded library by venue, ownership and search", () =
 
   // Opening a venue lists that venue's tracks, not the whole library.
   nav.venue("Test Venue");
-  app.frames(6);
+  until("the songs counted", (s) => s.find((node) => /^All songs songs: \d+$/.test(node.label)));
   const opened = read();
   expect(opened.count).toBe(`${MINE} songs`);
   expect(opened.rows.slice(0, 3)).toEqual(["Aurora", "Basslines", "Cascade"]);

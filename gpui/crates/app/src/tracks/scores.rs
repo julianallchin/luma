@@ -292,6 +292,8 @@ pub(crate) struct ScoreMenu {
     /// What the row said when it was clicked. The confirmation quotes it, so
     /// the sentence the operator reads is the number they were looking at.
     clips: i64,
+    /// What a copy is named after: the score's name, or its `#n`.
+    title: SharedString,
 }
 
 impl ScoreRow {
@@ -350,7 +352,7 @@ impl Luma {
             return;
         };
         if venue_id.as_ref() == here {
-            self.open_listed_score(track_id.to_string().into(), score, cx);
+            self.open_score(track_id, score, None, cx);
         } else {
             self.ask_to_switch_venue(venue_id, venue, track_id, score, cx);
         }
@@ -433,31 +435,6 @@ impl Luma {
         cx.notify();
     }
 
-    /// Open `score` from the song list, in its place.
-    ///
-    /// The open waits [`DOUBLE_CLICK`]: the click that lands here may be the
-    /// first of a rename double-click, and the second click has to find its
-    /// row. A rename in that time cancels the open.
-    pub(crate) fn open_listed_score(
-        &mut self,
-        track_id: SharedString,
-        score: crate::track_editor::Score,
-        cx: &mut Context<Self>,
-    ) {
-        if self.songs.is_none() {
-            return;
-        }
-        let wait = self.library.debounce(DOUBLE_CLICK);
-        self.listed_score_open = Some(cx.spawn(async move |this, cx| {
-            wait.await;
-            this.update(cx, |this, cx| {
-                this.listed_score_open = None;
-                this.open_score(&track_id, score, None, cx);
-            })
-            .ok();
-        }));
-    }
-
     /// Mint `track_id` another score in the open venue and open it.
     ///
     /// `create_score`, not `ensure_track_in_venue`: the row says *new*, and
@@ -472,6 +449,24 @@ impl Luma {
             .library
             .create_score(&request_id, track_id, &venue_id, None);
         self.open_minted_score(track_id, pending, "Could not create the score", cx);
+    }
+
+    /// Copy `score_id` of `track_id`, clips and all, into a new score here
+    /// named `<title> copy`, and open it — the song list's menu and the score
+    /// crumb's both.
+    pub(crate) fn duplicate_score(
+        &mut self,
+        track_id: &str,
+        score_id: &str,
+        title: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = self.library.duplicate_score(
+            &uuid::Uuid::new_v4().to_string(),
+            score_id,
+            &format!("{title} copy"),
+        );
+        self.open_minted_score(track_id, pending, "Could not duplicate the score", cx);
     }
 
     /// Open the score `pending` mints for `track_id` once it exists — a new
@@ -661,8 +656,6 @@ impl Luma {
         else {
             return;
         };
-        // The second click of the pair: the list stays for the caret.
-        self.listed_score_open = None;
         let opened_on = row.name.as_deref().unwrap_or_default().to_string();
         let rename = Rename::begin(RenameHost::Songs, score_id, opened_on, window, cx);
         let focus = rename.field.read(cx).focus_handle(cx);
@@ -762,11 +755,6 @@ pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
 }
 
 // -- rendering ----------------------------------------------------------------
-
-/// How long a click on a score waits before it closes the song list, so the
-/// second click of a double-click still finds the row. About the platform's
-/// double-click interval: gpui does not publish it.
-const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// The third column: the selected song's scores in this venue, the way to
 /// mint another, then each other venue's under its name. Says what to do when
@@ -884,15 +872,32 @@ pub(super) fn column(
         .into_any_element()
 }
 
-/// The context menu over a right-clicked score, if one is up.
+/// The context menu over a right-clicked score, if one is up: the score
+/// crumb's acts on this row's score — Rename in place, Duplicate — and Delete.
 pub(super) fn menu(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
     let level = state.scores.as_ref()?;
     let open = level.menu.as_ref()?;
     let track_id = SharedString::from(level.track.id.clone());
-    let deleted = app.clone();
+    let (renamed, duplicated, deleted) = (app.clone(), app.clone(), app.clone());
     let dismissed = app.clone();
+    let (rename_track, rename_score) = (track_id.clone(), open.score_id.clone());
+    let (copy_track, copy_score, copy_title) =
+        (track_id.clone(), open.score_id.clone(), open.title.clone());
     Some(
         luma_ui::menu::ContextMenu::new("score-menu", open.at)
+            .item("Rename", move |window, cx| {
+                let (track_id, score_id) = (rename_track.clone(), rename_score.clone());
+                renamed.update(cx, |this, cx| {
+                    this.start_score_rename(track_id, score_id, window, cx)
+                });
+            })
+            .item("Duplicate", move |_, cx| {
+                duplicated.update(cx, |this, cx| {
+                    this.close_score_menu(cx);
+                    this.duplicate_score(&copy_track, &copy_score, &copy_title, cx)
+                });
+            })
+            .separator()
             .destructive("Delete score", move |_, cx| {
                 let track_id = track_id.clone();
                 deleted.update(cx, |this, cx| this.request_delete_score(track_id, cx));
@@ -946,13 +951,6 @@ fn score_row(
     track: &TrackBrowserRow,
     rename: Option<&Entity<TextInput>>,
 ) -> AnyElement {
-    let renamer = here.then(|| {
-        (
-            app.clone(),
-            SharedString::from(track.id.clone()),
-            row.id.clone(),
-        )
-    });
     let id = SharedString::from(format!("score-{}", row.id));
     let label = format!(
         "#{} · {} · {} patterns · {}{}{}",
@@ -976,6 +974,10 @@ fn score_row(
             let menu_track = track.id.clone();
             let (score_id, venue_id, ordinal, clips) =
                 (row.id.clone(), row.venue_id.clone(), row.ordinal, row.clips);
+            let title: SharedString = row
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("#{}", row.ordinal).into());
             el.on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
                 let menu = ScoreMenu {
@@ -984,6 +986,7 @@ fn score_row(
                     ordinal,
                     venue_id: venue_id.clone(),
                     clips,
+                    title: title.clone(),
                 };
                 raised.update(cx, |this, cx| this.open_score_menu(&menu_track, menu, cx));
             })
@@ -1013,7 +1016,7 @@ fn score_row(
                 .overflow_hidden()
                 .child(match rename {
                     Some(field) => name_field(row, field),
-                    None => name_label(row, open, renamer),
+                    None => name_label(row, open),
                 }),
         )
         .child(
@@ -1031,36 +1034,15 @@ fn score_row(
         .into_any_element()
 }
 
-/// The score's name, or its owner when it has none. A double-click on it
-/// starts a rename when `renamer` is present — this venue's own score.
-///
-/// The first click of the pair goes to the row, which opens the score and
-/// closes the list after [`DOUBLE_CLICK`]. The second click stops here, so
-/// the row does not see it, and the rename cancels the close.
-fn name_label(
-    row: &ScoreRow,
-    open: bool,
-    renamer: Option<(Entity<Luma>, SharedString, SharedString)>,
-) -> AnyElement {
+/// The score's name, or its owner when it has none. Renamed from the row's
+/// right-click menu.
+fn name_label(row: &ScoreRow, open: bool) -> AnyElement {
     let name = row.title();
     div()
-        .id(SharedString::from(format!("score-name-{}", row.id)))
         .truncate()
         .text_size(px(12.))
         .text_color(glass::ink(if open { 0.95 } else { 0.8 }))
         .child(name.clone())
-        .when_some(renamer, |el, (app, track_id, score_id)| {
-            el.on_click(move |event, window, cx| {
-                if event.click_count() != 2 {
-                    return;
-                }
-                cx.stop_propagation();
-                let (track_id, score_id) = (track_id.clone(), score_id.clone());
-                app.update(cx, |this, cx| {
-                    this.start_score_rename(track_id, score_id, window, cx)
-                });
-            })
-        })
         .agent_node(
             Role::Text,
             format!("Score name #{} = {}", row.ordinal, name),

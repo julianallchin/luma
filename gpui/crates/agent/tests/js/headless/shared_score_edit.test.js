@@ -36,11 +36,12 @@ test("a member edits and renames a score another person wrote", () => {
   nav.reopen("Aurora");
   until("the clip, stored", (s) => s.findAll({ role: "card", label: CARD }).length === 1);
 
-  // On the list the row still says whose it is, and its name takes a rename.
+  // On the list the row still says whose it is, and its menu renames it.
   nav.scores("Aurora");
   const listed = until("their score", (s) => theirs(s) ? s : undefined);
   expect(theirs(listed).label).toContain(OTHER.slice(0, 6));
-  app.click(nameOf(listed), { count: 2 });
+  app.click(nameOf(listed), { button: "right" });
+  nav.step("Rename", "button", "Rename");
   const field = () => app.snapshot().find({ role: "input", label: "Score name #1" });
   until("the name is a field", () => field() !== undefined);
   app.key("ctrl-a backspace");

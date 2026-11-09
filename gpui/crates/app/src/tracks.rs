@@ -419,7 +419,6 @@ impl Luma {
             arrival: None,
             landing: None,
         });
-        self.listed_score_open = None;
         // The arriving venue's state goes on screen now, so a body opened
         // before the next draw opens into it.
         self.sync_venue_modes(cx);
@@ -607,7 +606,6 @@ impl Luma {
             self.close_bodies_where(|target| *target != open, cx);
         }
         self.workspace.set_mode(Mode::Arrange);
-        self.listed_score_open = None;
         self.show_song(track_id, cx);
     }
 
