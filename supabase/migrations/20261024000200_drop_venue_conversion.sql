@@ -35,6 +35,7 @@
 -- The matching local change is
 -- `backend/migrations/20261024000200_drop_venue_conversion.sql`.
 
+-- contract: after 0.6.0
 begin;
 
 delete from public.venues

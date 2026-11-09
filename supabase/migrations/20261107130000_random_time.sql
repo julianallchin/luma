@@ -22,7 +22,7 @@ begin;
 -- History names the migration as the actor of the clips it rewrites.
 select set_config('request.headers', '{"x-luma-actor": "migration:20261107130000_random_time"}', true);
 
-create function pg_temp.random_clocks(graph jsonb) returns jsonb
+create or replace function pg_temp.random_clocks(graph jsonb) returns jsonb
 language plpgsql immutable as $$
 declare
     random record;
@@ -54,13 +54,13 @@ begin
 end
 $$;
 
-create function pg_temp.has_random(graph jsonb) returns boolean
+create or replace function pg_temp.has_random(graph jsonb) returns boolean
 language sql immutable as $$
     select exists (select 1 from jsonb_each(graph -> 'nodes') where value ->> 'kind' = 'random')
 $$;
 
 -- A draft holds a score: each clip's graph.
-create function pg_temp.random_draft(score text) returns text
+create or replace function pg_temp.random_draft(score text) returns text
 language sql immutable as $$
     select jsonb_set(score::jsonb, '{clips}', jsonb_object_agg(
         key,
@@ -70,7 +70,7 @@ language sql immutable as $$
     from jsonb_each(score::jsonb -> 'clips')
 $$;
 
-create function pg_temp.draft_has_random(score text) returns boolean
+create or replace function pg_temp.draft_has_random(score text) returns boolean
 language sql immutable as $$
     select exists (
         select 1 from jsonb_each(score::jsonb -> 'clips')
