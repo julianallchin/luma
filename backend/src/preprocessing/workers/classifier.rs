@@ -318,6 +318,71 @@ mod tests {
         assert_eq!(pending, vec!["t1".to_string()]);
     }
 
+    /// A row stored the way `run` stores one, from bar 0 of the grid's bar
+    /// axis, is current against that grid. If the axis and the staleness test
+    /// ever disagree about bar 0, every fresh row would look stale and the
+    /// classifier would rerun on every track at every launch.
+    #[tokio::test]
+    async fn a_row_stored_from_the_bar_axis_is_current() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_grid(&pool, "t1", (0.5123, 2.4987)).await;
+        let downbeats = [0.5123, 2.4987, 4.3737];
+        let bars =
+            crate::preprocessing::workers::build_bar_boundaries(&downbeats, Some(128.0), Some(4));
+        let analysis = ClassifierAnalysis {
+            tag_order: vec!["kick".into()],
+            bars: Vec::new(),
+        };
+        let stored = StoredBarClassifications::new(&analysis, bars[0]).unwrap();
+        let p = ClassifierPreprocessor;
+        sqlx::query(
+            r#"INSERT INTO track_bar_classifications
+                (track_id, classifications_json, tag_order_json, processor_version)
+             VALUES ('t1', ?, '["kick"]', ?)"#,
+        )
+        .bind(serde_json::to_string(&stored).unwrap())
+        .bind(p.version() as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(p.list_pending(&pool).await.unwrap().is_empty());
+    }
+
+    /// A grid that doesn't record a first bar, or doesn't parse, is no
+    /// evidence that a row is stale, and doesn't fail the query that queues
+    /// the whole library.
+    #[tokio::test]
+    async fn a_grid_without_a_first_bar_leaves_a_row_current() {
+        let pool = test_pool().await;
+        let p = ClassifierPreprocessor;
+        for (id, downbeats) in [("t1", "[]"), ("t2", ""), ("t3", "[0.5,")] {
+            sqlx::query("INSERT INTO tracks (id, file_path) VALUES (?, '/audio/song.mp3')")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO track_beats
+                    (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+                 VALUES (?, '[]', ?, 128.0, 4)",
+            )
+            .bind(id)
+            .bind(downbeats)
+            .execute(&pool)
+            .await
+            .unwrap();
+            insert_classifications(&pool, id, (0.5, 2.5), p.version()).await;
+        }
+
+        let pending = p.list_pending(&pool).await.unwrap();
+        assert!(pending.is_empty(), "queued: {pending:?}");
+    }
+
     /// Failure-backoff still wins over staleness: a track in backoff
     /// shouldn't be retried until its window elapses, even if its row
     /// is stale. (Otherwise a permanently-broken classifier run on a track

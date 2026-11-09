@@ -21,7 +21,8 @@ Default implementations of `is_complete` and `list_pending` are derived from
 `artifact_table` + `rows_per_track` — workers don't write SQL for the happy
 path. Both read one definition of a current artifact, so the run path and
 startup reconcile agree on what is left to do. Override `verify_disk` if your
-output includes side-effect files (see `workers/stems.rs`), and declare
+output includes side-effect files (see `workers/stems.rs`); only the run path
+checks it, so reconcile doesn't notice deleted files. Declare
 `first_bar` if your rows are indexed by bar (see "Shared bar axis").
 
 ## The `Artifact` enum

@@ -6,7 +6,7 @@
 //! [`Preprocessor::is_complete`] and [`Preprocessor::list_pending`] derived
 //! from those declarations — workers don't write SQL. Both read one
 //! definition of a current artifact, so the run path and startup reconcile
-//! agree on what is left to do.
+//! agree on what is left to do, files on disk apart.
 //!
 //! Override [`Preprocessor::verify_disk`] for preprocessors whose output
 //! includes side-effect files (e.g. stems on disk) so a user-deleted
@@ -196,15 +196,18 @@ const SAME_BAR_SECS: f64 = 0.001;
 /// Holds for a track `t` whose `p` artifact is current: it has
 /// `rows_per_track` rows at `p.version()` or later, and none of them was
 /// computed against a beat grid the track no longer has
-/// ([`Preprocessor::first_bar`]). The one statement of the rule: a queued
-/// track skips a step for which it holds ([`Preprocessor::is_complete`]), and
-/// reconcile queues a track for a step for which it doesn't
-/// ([`pending_tracks`]).
+/// ([`Preprocessor::first_bar`]). The one statement of the rule in SQL: a
+/// queued track skips a step for which it holds ([`Preprocessor::is_complete`]),
+/// and reconcile queues a track for a step for which it doesn't
+/// ([`pending_tracks`]). Only the run path also checks the step's files on
+/// disk ([`Preprocessor::verify_disk`]), so reconcile doesn't notice deleted
+/// stems or MERT caches; a run queued for another step redoes them.
 ///
 /// A row is stale only on evidence: a bar boundary it records that the grid
-/// has somewhere else. A value missing on either side is no evidence, so a
-/// row that can't record its first bar doesn't rerun its step at every
-/// launch.
+/// has somewhere else. A value missing on either side, or JSON that doesn't
+/// parse, is no evidence, so a row that can't record its first bar doesn't
+/// rerun its step at every launch, and one bad row can't fail the query for
+/// the whole library.
 fn artifact_current(p: &(impl Preprocessor + ?Sized)) -> String {
     // Every interpolated fragment is a `&'static str` or a number from the
     // trait — never user input.
@@ -218,15 +221,25 @@ fn artifact_current(p: &(impl Preprocessor + ?Sized)) -> String {
     let Some(FirstBar { column, start, end }) = p.first_bar() else {
         return rows;
     };
+    // `json_extract` raises on text that isn't JSON; `CASE` makes that NULL.
+    let at = |json: &str, path: &str| {
+        format!("CASE WHEN json_valid({json}) THEN json_extract({json}, '{path}') END")
+    };
+    let (row_start, row_end) = (
+        at(&format!("a.{column}"), start),
+        at(&format!("a.{column}"), end),
+    );
+    let (grid_start, grid_end) = (
+        at("b.downbeats_json", "$[0]"),
+        at("b.downbeats_json", "$[1]"),
+    );
     format!(
         "({rows} AND NOT EXISTS (
             SELECT 1 FROM {table} a
               JOIN track_beats b ON b.track_id = a.track_id
              WHERE a.track_id = t.id
-               AND (ABS(json_extract(a.{column}, '{start}')
-                        - json_extract(b.downbeats_json, '$[0]')) >= {SAME_BAR_SECS:?}
-                 OR ABS(json_extract(a.{column}, '{end}')
-                        - json_extract(b.downbeats_json, '$[1]')) >= {SAME_BAR_SECS:?})
+               AND (ABS(({row_start}) - ({grid_start})) >= {SAME_BAR_SECS:?}
+                 OR ABS(({row_end}) - ({grid_end})) >= {SAME_BAR_SECS:?})
         ))"
     )
 }

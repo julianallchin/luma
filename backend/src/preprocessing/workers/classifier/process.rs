@@ -65,7 +65,10 @@ pub struct ClassifierAnalysis {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredBarClassifications {
     /// `[start, end]` of bar 0 of the grid the classifier ran against, so
-    /// `list_pending_bar_aligned` can tell when the grid has moved since.
+    /// the scheduler can tell when the grid has moved since
+    /// ([`Preprocessor::first_bar`]).
+    ///
+    /// [`Preprocessor::first_bar`]: crate::preprocessing::preprocessor::Preprocessor::first_bar
     pub first_bar: (f64, f64),
     /// The continuous intensity head, per bar.
     pub intensity: Vec<Option<f64>>,
