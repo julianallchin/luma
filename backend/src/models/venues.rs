@@ -48,9 +48,10 @@ pub struct Venue {
     pub updated_at: String,
 }
 
-/// What the reader may do with a venue, as the venue's admission decides it
-/// ([`crate::database::local::venue_access::standing`]). Callers read this;
-/// none of them re-derives it by comparing `uid`s.
+/// What the reader may do with a venue, as the venue's admission decides it:
+/// the `auth_venue_access` view, read as
+/// [`crate::database::local::venue_access::Standing`]. Callers read this; none
+/// of them re-derives it by comparing `uid`s.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct VenueCapability {

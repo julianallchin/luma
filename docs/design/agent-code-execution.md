@@ -1436,7 +1436,7 @@ constructed from durable-thread scope and authenticated user state; the model
 cannot select a different track, venue, score, user, or workspace, install a
 handler, or widen its method allowlist. A validated exact track scope installs
 read-only rendering. The separate edit capability exists when the venue's
-admission (`venue_access::standing`) lets the signed-in account edit the
+admission (the `auth_venue_access` view) lets the signed-in account edit the
 venue — its owner or any member, whoever wrote the score — and both `check`
 and `apply` reject calls without it. The write takes the venue's write guard
 again, so the descriptive `luma.track.editable` bit is never the security
