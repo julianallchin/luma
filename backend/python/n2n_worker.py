@@ -42,6 +42,7 @@ import contextlib
 import json
 import pathlib
 import sys
+import traceback
 
 # Peak-pick threshold defaults by checkpoint family. v11 diffusion outputs are
 # in [-1, +1], so 0.0 splits the bipolar onset/no-onset target. v12 sigmoid
@@ -137,6 +138,7 @@ def main() -> int:
                 transcribe_sliding,
             )
         except Exception as exc:
+            traceback.print_exc()
             print(
                 json.dumps({"error": f"Failed to import n2n: {exc}"}),
                 file=sys.stderr,
@@ -194,6 +196,7 @@ def main() -> int:
             for ev in events:
                 onsets[ev.drum_name].append(float(ev.time_seconds))
         except Exception as exc:
+            traceback.print_exc()
             print(json.dumps({"error": str(exc)}), file=sys.stderr)
             return 1
 

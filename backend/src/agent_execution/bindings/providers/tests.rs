@@ -948,7 +948,10 @@ async fn a_failed_separation_leaves_every_stem_and_rest_unavailable_with_its_err
         TRACK_ID,
         "stems",
         1,
-        "demucs ran out of memory",
+        "Stem worker failed: demucs ran out of memory\n\n\
+         Traceback (most recent call last):\n  \
+           File \"audio_preprocessor.py\", line 120, in main\n\
+         RuntimeError: demucs ran out of memory",
     )
     .await
     .unwrap();
@@ -964,6 +967,10 @@ async fn a_failed_separation_leaves_every_stem_and_rest_unavailable_with_its_err
     ] {
         let r = reason(&v, path);
         assert!(r.contains("demucs ran out of memory"), "{path}: {r}");
+        assert!(
+            !r.contains("Traceback"),
+            "{path} repeats the worker's traceback: {r}"
+        );
     }
     assert_eq!(shape(&v, "audio.mix"), vec![3, 2]);
 }

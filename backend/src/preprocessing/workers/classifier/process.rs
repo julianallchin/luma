@@ -168,12 +168,10 @@ pub fn classify_bars(
         .map_err(|e| format!("Failed to wait on classifier worker: {e}"))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "Classifier worker exited unsuccessfully".to_string()
-        } else {
-            format!("Classifier worker failed: {stderr}")
-        });
+        return Err(crate::preprocessing::workers::failed(
+            "Classifier worker",
+            &String::from_utf8_lossy(&output.stderr),
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout)

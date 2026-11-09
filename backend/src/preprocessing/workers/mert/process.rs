@@ -64,12 +64,10 @@ pub fn compute_mert_cache(
         .map_err(|e| format!("Failed to launch MERT worker: {e}"))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "MERT worker exited unsuccessfully".to_string()
-        } else {
-            format!("MERT worker failed: {stderr}")
-        });
+        return Err(crate::preprocessing::workers::failed(
+            "MERT worker",
+            &String::from_utf8_lossy(&output.stderr),
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout)

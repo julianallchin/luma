@@ -60,12 +60,10 @@ pub fn compute_drum_onsets(
         .map_err(|e| format!("Failed to launch n2n worker: {e}"))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "n2n worker exited unsuccessfully".to_string()
-        } else {
-            format!("n2n worker failed: {stderr}")
-        });
+        return Err(crate::preprocessing::workers::failed(
+            "n2n worker",
+            &String::from_utf8_lossy(&output.stderr),
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout)

@@ -466,15 +466,26 @@ async fn run_one(
             Ok(())
         }
         Err(err) => {
+            // The record keeps the worker's whole report, traceback included.
+            // The stage's outcome and the track's error carry its first line,
+            // which is what the import list and the import's error show.
+            let reason = failures::headline(&err).to_owned();
+            if let Some((_, report)) = err.split_once('\n') {
+                eprintln!(
+                    "[preprocessing] {} for track {track_id} reported:\n{}",
+                    p.name(),
+                    report.trim_start()
+                );
+            }
             if let Err(record_error) =
                 failures::record(ctx.pool(), track_id, p.name(), p.version(), &err).await
             {
                 return Err(format!(
-                    "{err}; additionally failed to record the preprocessing failure: {record_error}"
+                    "{reason}; additionally failed to record the preprocessing failure: {record_error}"
                 ));
             }
-            settle(StageOutcome::Failed(err.clone()));
-            Err(err)
+            settle(StageOutcome::Failed(reason.clone()));
+            Err(reason)
         }
     }
 }

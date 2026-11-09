@@ -102,9 +102,9 @@ pub fn separate_stems(
     let stderr_text = stderr_vec.join("\n");
 
     if !status.success() {
-        return Err(format!(
-            "Stem worker failed (code {}): {}",
-            status, stderr_text
+        return Err(crate::preprocessing::workers::failed(
+            &format!("Stem worker ({status})"),
+            &stderr_text,
         ));
     }
 
