@@ -153,8 +153,8 @@ actions!(
         ShowRig,
         ShowArrange,
         ShowLive,
-        /// Open or close the song list page over Arrange.
-        ToggleSongList,
+        /// Go to the song list: from a score, back to it — the score closes.
+        ShowSongList,
         /// In Arrange, put the selected clip's graph where the timeline is —
         /// what a double-click on the clip does.
         OpenClipGraph,
@@ -349,7 +349,7 @@ pub(crate) const SHORTCUTS: &[Shortcut] = &[
     row!("app.settings", "Open settings", "General", ["secondary-,"], Shell, APP, OpenSettings),
     row!("app.quit", "Quit Luma", "General", ["secondary-q"], App, APP, Quit),
     row!("view.agent", "Show or hide the agent panel", "View", ["secondary-b"], Shell, VIEW, ToggleAgent),
-    row!("view.song_list", "Song list", "View", ["secondary-p"], Shell, VIEW, ToggleSongList),
+    row!("view.song_list", "Song list", "View", ["secondary-p"], Shell, VIEW, ShowSongList),
     // Not a bare letter: the track editor's alphabet is already spoken for,
     // and this reshapes the column that editor sits in.
     row!("view.visualizer", "Show or hide the visualizer", "View", ["secondary-shift-v"], Shell, VIEW, ToggleVisualizer),

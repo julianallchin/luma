@@ -3,8 +3,7 @@
 // opens a menu of every score of the song — this venue's opened on the spot,
 // another venue's after asking, and then in that venue.
 
-// Aurora, scored twice here and once in the Warehouse; Borealis filed in a
-// folder Aurora is not in.
+// Aurora, scored twice here and once in the Warehouse.
 fixture({
   seconds: 4,
   extra_scores: 1,
@@ -13,19 +12,6 @@ fixture({
     "INSERT INTO venues (id, uid, name) VALUES ('venue-warehouse', '$PRINCIPAL', 'Warehouse')",
     `INSERT INTO scores (id, uid, track_id, venue_id, name)
        VALUES ('score-warehouse', '$PRINCIPAL', 'track-aurora', 'venue-warehouse', 'Warehouse cut')`,
-    `INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
-       VALUES ('track-borealis', '$PRINCIPAL', 'hash-borealis', 'Borealis', 'Fixture', 60.0, '/fixture/borealis.wav')`,
-    `INSERT INTO scores (id, uid, track_id, venue_id, name)
-       VALUES ('score-borealis', '$PRINCIPAL', 'track-borealis', 'venue-main', 'Borealis cut')`,
-    // Echoes is another person's song, scored here: Mine hides it.
-    `INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
-       VALUES ('track-echoes', 'another-principal', 'hash-echoes', 'Echoes', 'Guest', 60.0, '/fixture/echoes.wav')`,
-    `INSERT INTO scores (id, uid, track_id, venue_id, name)
-       VALUES ('score-echoes', '$PRINCIPAL', 'track-echoes', 'venue-main', 'Echoes cut')`,
-    `INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_json, blend_mode)
-       VALUES ('clip-echoes', '$PRINCIPAL', 'score-echoes', 'pattern', 0.0, 4.0, '0', '{"expression":"all"}', 'replace')`,
-    "INSERT INTO folders (id, uid, venue_id, name) VALUES ('folder-openers', '$PRINCIPAL', 'venue-main', 'Openers')",
-    "INSERT INTO folder_tracks (folder_id, track_id, uid, venue_id) VALUES ('folder-openers', 'track-borealis', '$PRINCIPAL', 'venue-main')",
   ],
 });
 
@@ -100,12 +86,6 @@ const leftForSong = (s, track) => !trigger(s) && nav.openOrdinal(s) === undefine
 
 test("the song crumb leaves the score for the song list, with the song selected", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  // Leave the list on a folder Aurora is not in, so the crumb has to move it.
-  nav.songs();
-  nav.step("the folder", "row", "Folder Openers");
-  until("the folder", (s) => s.find({ role: "row", label: "Borealis" }) && !s.find({ role: "row", label: "Aurora" }));
-  app.key("escape");
-  until("the score again", (s) => !s.find({ role: "card", label: "Song list" }));
   app.click(until("the song crumb", songCrumb) && songCrumb(app.snapshot()));
   const shot = until("the list in the score's place", (s) => leftForSong(s, "Aurora"));
   assert(shot.find({ role: "row", label: "Aurora" }), "Aurora is not listed in the songs column");
@@ -115,24 +95,6 @@ test("the song crumb leaves the score for the song list, with the song selected"
   // A score from the list goes forward again.
   app.click(nav.scoreRows(shot, "Aurora")[0]);
   until("a score open again", (s) => trigger(s) && !s.find({ role: "card", label: "Song list" }));
-});
-
-test("the song crumb widens Mine to All when the song is someone else's", () => {
-  nav.venue("Test Venue");
-  nav.songs();
-  nav.step("All songs, every owner", "toggle", "All");
-  nav.track("Echoes");
-  const open = (s) => s.findAll({ role: "button" }).some((n) => n.label.startsWith("Echoes · #"));
-  until("Echoes' score", open);
-  nav.songs();
-  nav.step("Mine", "toggle", "Mine");
-  until("Echoes hidden", (s) => !s.find({ role: "row", label: "Echoes" }));
-  app.key("escape");
-  until("the score again", (s) => open(s) && !s.find({ role: "card", label: "Song list" }));
-  const crumb = (s) => s.findAll({ role: "button", label: "Echoes" }).find((n) => n.bounds.y < 44);
-  app.click(crumb(until("the song crumb", (s) => crumb(s) ? s : undefined)));
-  const shot = until("the list on Echoes", (s) => leftForSong(s, "Echoes"));
-  assert(shot.find({ role: "row", label: "Echoes" }), "Echoes is not listed");
 });
 
 test("the menu lists every score of the song, other venues' by venue", () => {

@@ -19,11 +19,11 @@ stage and body:
  ●●● ◧  Venue ▾                                     [Rig|Arrange|Live]
  ╭────────────┬─────────────────────────────────────────────────────╮
  │         ↶+ │  stage (the venue lit by the mode's body)           │
- │            │           [ Aurora / #1 ▾ ]  (Arrange)              │
+ │            │                                                     │
  │  agent     ├─────────────────────────────────────────────────────┤
  │  panel     │  the mode's body: the venue page, the score,        │
- │  (the      │  or the Perform set — or the song list over Arrange │
- │  body's    │                                                     │
+ │  (the      │  or the Perform set (the song list, Arrange with no │
+ │  body's    │  score, is a page of its own, without the agent)    │
  │  chat)     │                                                     │
  ╰────────────┴─────────────────────────────────────────────────────╯
  sync · DMX output · import · update                     context line
@@ -34,7 +34,8 @@ another mode is up, and each venue keeps its bodies while another venue is up.
 Switching venue from the venue menu keeps the page (`Luma::page`,
 `Luma::land_on`): Rig stays Rig, Live stays Live, and Arrange — the song list
 or a score — lands on the other venue's song list, with the same song selected
-when that venue has it. What the other venue had open stays parked under it.
+when that venue has it. That landing closes the arriving venue's Arrange score
+(and drops a saved one waiting to be restored): nothing sits under the list.
 
 ## 1. Regions
 
@@ -81,7 +82,8 @@ chat is working, or finished unseen, carries a status dot on its toggle.
 
 ## 4. The song list
 
-The venue's songs as a page over Arrange, laid out as Finder's column view
+The venue's songs as Arrange's page while no score is open — the page a
+score is "back" from, with nothing under it — laid out as Finder's column view
 (`tracks`). The head holds the title and count, the search, Mine/All and Add
 songs (add and import). Under it, three columns left to right, with hairlines
 (`panel_seam`) between them:
@@ -120,7 +122,12 @@ grip's 5px reach over the hairline; double-click resets), and the scores
 keep at least 260. A search lists matches from every place, with All songs
 selected, and choosing a place ends it.
 
-⌘P and the song crumb open the page (the crumb closing the score); ⌘P and Escape close it.
+⌘P and the song crumb go to the page: from a score they close it (its edit
+written, its playback paused) and select its song (`Luma::show_song_list`,
+`Luma::reveal_song`). On the list ⌘P stays, and Escape does not leave it:
+there is no score under it to return to. Choosing a score opens it in the
+list's place, a double-click interval later so the second click of a rename
+still finds its row.
 The list is a page without an agent panel (`Luma::page_has_agent`), and the
 title bar's panel toggle is disabled while it is up. The panel's open or
 hidden state is remembered across it: Rig, Live and a score show the panel as
@@ -215,5 +222,5 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
 One ladder (`shell` `dismiss_overlay`), first match wins: the venue menu, the
 score crumb's menu, score and song menus, subagents, the settings page
 (an open select first, then a search), visualizer settings, patch rungs, the stage's
-own state, an open dialog, then the song list, a sheet menu, the clip graph,
+own state, an open dialog, then a sheet menu, the clip graph,
 the pattern sheet, and finally the selection.

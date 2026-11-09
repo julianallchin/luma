@@ -91,12 +91,12 @@ globalThis.nav = {
 		return undefined;
 	},
 
-	// The song list page, over Arrange. Up by itself while no score is open;
-	// otherwise the title bar's song title opens it.
+	// The song list page: Arrange with no score open. From a score it is a
+	// step back — the score closes.
 	songs() {
 		const shot = app.snapshot();
 		if (shot.find({ role: "card", label: "Song list" }) === undefined) {
-			app.action("luma::ToggleSongList");
+			app.action("luma::ShowSongList");
 		}
 		until("the song list", (s) =>
 			s.find({ role: "card", label: "Song list" }) !== undefined

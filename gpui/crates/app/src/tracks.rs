@@ -419,8 +419,7 @@ impl Luma {
             arrival: None,
             landing: None,
         });
-        self.song_list = false;
-        self.song_list_close = None;
+        self.listed_score_open = None;
         // The arriving venue's state goes on screen now, so a body opened
         // before the next draw opens into it.
         self.sync_venue_modes(cx);
@@ -608,8 +607,7 @@ impl Luma {
             self.close_bodies_where(|target| *target != open, cx);
         }
         self.workspace.set_mode(Mode::Arrange);
-        self.song_list = false;
-        self.song_list_close = None;
+        self.listed_score_open = None;
         self.show_song(track_id, cx);
     }
 
@@ -638,7 +636,7 @@ impl Luma {
             Mode::Rig => Page::Rig,
             Mode::Live => Page::Live,
             Mode::Arrange => Page::Songs(match self.workspace.active_body() {
-                Some(crate::shell::Body::TrackEditor(editor)) if !self.song_list_shown() => {
+                Some(crate::shell::Body::TrackEditor(editor)) => {
                     Some(editor.track_id().to_string())
                 }
                 _ => self.songs.as_ref().and_then(|songs| songs.track.clone()),
@@ -655,8 +653,24 @@ impl Luma {
             Page::Rig => self.set_mode(Mode::Rig, cx),
             Page::Live => self.set_mode(Mode::Live, cx),
             Page::Songs(track) => {
+                // The list has nothing under it: the score this venue had
+                // open, live or saved for its restore, closes.
+                if let Some(venue) = self
+                    .songs
+                    .as_ref()
+                    .map(|songs| songs.venue_id().to_string())
+                {
+                    self.saved_venues.forget_score(&venue);
+                }
+                if let Some(open) = self
+                    .workspace
+                    .of_mode(Mode::Arrange)
+                    .map(|slot| slot.target.clone())
+                {
+                    self.commit_graph_score_for(open.clone(), cx);
+                    self.close_bodies_where(|target| *target != open, cx);
+                }
                 self.set_mode(Mode::Arrange, cx);
-                self.song_list = true;
                 if let Some(songs) = &mut self.songs {
                     songs.landing = track;
                 }

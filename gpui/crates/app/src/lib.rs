@@ -128,12 +128,10 @@ pub struct Luma {
     /// venue is open, which is also when the venue picker keeps itself open:
     /// the two states are one fact read twice.
     pub(crate) songs: Option<tracks::Tracks>,
-    /// Whether the song list page is up over Arrange. Arrange with no score
-    /// open shows it whatever this says — see [`Luma::song_list_shown`].
-    pub(crate) song_list: bool,
-    /// A score click's pending close of the song list — see
-    /// [`Luma::open_listed_score`]. Dropping it cancels the close.
-    pub(crate) song_list_close: Option<gpui::Task<()>>,
+    /// A score chosen on the song list, opening once a double-click could
+    /// no longer be a rename — see [`Luma::open_listed_score`]. Dropping it
+    /// cancels the open.
+    pub(crate) listed_score_open: Option<gpui::Task<()>>,
     /// Whether the agent panel is put away by hand: the remembered state
     /// every page that has the panel shows it in. A page without one (the
     /// song list) leaves it alone — see [`Luma::page_has_agent`].
@@ -296,8 +294,7 @@ impl Luma {
             source_art: add_tracks::ArtCache::default(),
             next_track_import: 0,
             songs: None,
-            song_list: false,
-            song_list_close: None,
+            listed_score_open: None,
             agent_hidden: false,
             agent_slide: false,
             regions: shell::Regions::default(),
@@ -583,9 +580,7 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::ShowLive, _, cx| {
                 this.set_mode(workspace::Mode::Live, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &keymap::ToggleSongList, _, cx| this.toggle_song_list(cx)),
-            )
+            .on_action(cx.listener(|this, _: &keymap::ShowSongList, _, cx| this.show_song_list(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::OpenClipGraph, _, cx| this.open_clip_graph(cx)),
             )

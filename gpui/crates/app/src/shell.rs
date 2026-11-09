@@ -267,45 +267,35 @@ impl Luma {
         cx.notify();
     }
 
-    /// Whether the song list is the content this frame: asked for over
-    /// Arrange, or Arrange with no score to show instead — unless the score
-    /// saved for this venue is still on its way back.
+    /// Whether the song list is the content this frame: Arrange with no
+    /// score open — the list is the page a score is "back" from, and nothing
+    /// sits under it. Not while the score saved for this venue is still on
+    /// its way back.
     pub(crate) fn song_list_shown(&self) -> bool {
         let Some(songs) = &self.songs else {
             return false;
         };
         self.workspace.mode() == Mode::Arrange
-            && (self.song_list
-                || (self.workspace.active().is_none()
-                    && !self.saved_venues.restoring(songs.venue_id())))
+            && self.workspace.active().is_none()
+            && !self.saved_venues.restoring(songs.venue_id())
     }
 
-    /// Open or close the song list: the title bar's song title and ⌘P. Opening
-    /// it from another mode goes to Arrange.
-    pub(crate) fn toggle_song_list(&mut self, cx: &mut Context<Self>) {
+    /// ⌘P: go to the song list. From a score that is the song crumb's step
+    /// back — the score closes and its song is selected; from Rig or Live it
+    /// is Arrange's list, closing Arrange's score the same way. On the list
+    /// it is already there.
+    pub(crate) fn show_song_list(&mut self, cx: &mut Context<Self>) {
         if self.songs.is_none() {
             return;
         }
-        if self.workspace.mode() != Mode::Arrange {
-            self.workspace.set_mode(Mode::Arrange);
-            self.song_list = true;
-        } else {
-            self.song_list = !self.song_list_shown();
+        let open = match self.workspace.of_mode(Mode::Arrange).map(|slot| &slot.body) {
+            Some(Body::TrackEditor(editor)) => Some(editor.track_id().to_string()),
+            _ => None,
+        };
+        match open {
+            Some(track_id) => self.reveal_song(&track_id, cx),
+            None => self.set_mode(Mode::Arrange, cx),
         }
-        self.song_list_close = None;
-        cx.notify();
-    }
-
-    /// Close the song list when there is something under it to go back to.
-    /// Reports whether it closed — Escape's rung for it.
-    pub(crate) fn close_song_list(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.song_list_shown() || self.workspace.active().is_none() {
-            return false;
-        }
-        self.song_list = false;
-        self.song_list_close = None;
-        cx.notify();
-        true
     }
 
     /// A closed body's exit rites. The only caller of anything here is a
@@ -445,9 +435,6 @@ impl Luma {
             // would have to out-scope the shell's and would then be the only
             // Escapes in the app that do not mean "close what is over me".
             None => {
-                if self.close_song_list(cx) {
-                    return;
-                }
                 if self.dismiss_sheet_menu() {
                     cx.notify();
                     return;

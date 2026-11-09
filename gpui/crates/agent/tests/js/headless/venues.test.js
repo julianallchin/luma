@@ -17,7 +17,22 @@ const shared = [
   ...["alpha", "beta"].map((venue) => `INSERT INTO scores (id, uid, track_id, venue_id, name)
      VALUES ('score-both-${venue}', '$PRINCIPAL', 'track-both', '${venue}', 'Both')`),
 ];
-fixture({ track: false, seconds: 1, sql: [...room("alpha", "Alpha Hall"), ...room("beta", "Beta Room"), ...shared] });
+// And another person's song in both rooms, which "Mine" hides.
+const theirs = [
+  `INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
+     VALUES ('track-theirs', 'another-principal', 'hash-theirs', 'Their Song', 'Guest', 60.0, '/fixture/theirs.wav')`,
+  ...["alpha", "beta"].flatMap((venue) => [
+    `INSERT INTO scores (id, uid, track_id, venue_id, name)
+       VALUES ('score-theirs-${venue}', '$PRINCIPAL', 'track-theirs', '${venue}', 'Theirs')`,
+    `INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_json, blend_mode)
+       VALUES ('clip-theirs-${venue}', '$PRINCIPAL', 'score-theirs-${venue}', 'pattern', 0.0, 4.0, '0', '{"expression":"all"}', 'replace')`,
+  ]),
+];
+fixture({
+  track: false,
+  seconds: 1,
+  sql: [...room("alpha", "Alpha Hall"), ...room("beta", "Beta Room"), ...shared, ...theirs],
+});
 
 const titled = (s, label) => s.find({ role: "button", label }) !== undefined;
 
@@ -25,9 +40,9 @@ const songList = (s) => s.find({ role: "card", label: "Song list" }) !== undefin
 const selected = (s, track) => s.find({ role: "card", label: `Scores of ${track}` }) !== undefined;
 
 // A switch changes the venue, not the page: Rig stays Rig, and Arrange —
-// the song list or a score — lands on the other venue's song list. What the
-// venue left had open stays parked, not closed.
-test("a venue switch keeps the page, and each venue its own open score", () => {
+// the song list or a score — lands on the other venue's song list, with
+// nothing open under it.
+test("a venue switch keeps the page, and a score lands on the other venue's list", () => {
   const alphaScore = "Alpha Hall Track · #1";
   nav.venue("Alpha Hall");
   nav.track("Alpha Hall Track");
@@ -44,21 +59,22 @@ test("a venue switch keeps the page, and each venue its own open score", () => {
   nav.track("Beta Room Track");
   until("Beta's score", (s) => titled(s, "Beta Room Track · #1"));
 
-  // From a score, the switch lands on Alpha's song list; Beta's song is not
-  // Alpha's, so nothing is selected.
+  // From a score, the switch lands on Alpha's song list with no score open
+  // (Alpha's own score is not kept under it); Beta's song is not Alpha's, so
+  // nothing is selected.
   nav.switchVenue("Alpha Hall");
   const alpha = until("Alpha's song list", (s) =>
     songList(s) && s.find({ role: "row", label: "Alpha Hall Track" }) ? s : undefined);
-  expect(nav.shownMode(alpha)).toBe("Arrange");
-  expect(selected(alpha, "Beta Room Track")).toBe(false);
-  // Parked is not closed: under the list, Alpha's score is still open.
-  app.action("luma::ToggleSongList");
-  until("Alpha's score again", (s) => titled(s, alphaScore) && !songList(s));
-
-  // And Beta kept its own.
-  nav.switchVenue("Beta Room");
-  app.action("luma::ToggleSongList");
-  until("Beta's score again", (s) => titled(s, "Beta Room Track · #1") && !songList(s));
+  app.frames(4);
+  const settled = app.snapshot();
+  expect(nav.shownMode(settled)).toBe("Arrange");
+  expect(nav.openOrdinal(settled)).toBe(undefined);
+  expect(selected(settled, "Beta Room Track")).toBe(false);
+  // ⌘P on the list stays on it: there is no score under it.
+  app.action("luma::ShowSongList");
+  app.frames(4);
+  assert(songList(app.snapshot()) && nav.openOrdinal(app.snapshot()) === undefined, "a score was under the list");
+  expect(alpha.find({ role: "row", label: "Beta Room Track" })).toBe(undefined);
 });
 
 test("the song list stays the song list across a switch, with a song both venues have", () => {
@@ -78,6 +94,20 @@ test("the song list stays the song list across a switch, with a song both venues
   app.frames(4);
   expect(selected(app.snapshot(), "Beta Room Track")).toBe(false);
   expect(nav.shownMode(alpha)).toBe("Arrange");
+});
+
+test("a song the arriving list's Mine hides is shown under All", () => {
+  nav.venue("Alpha Hall");
+  nav.songs();
+  nav.step("every owner's songs", "toggle", "All");
+  nav.scores("Their Song");
+  until("Their Song selected", (s) => selected(s, "Their Song"));
+  // Beta's list opens on Mine, which hides another person's song; the
+  // landing widens it.
+  nav.switchVenue("Beta Room");
+  until("Beta's list on Their Song", (s) =>
+    songList(s) && s.find({ role: "row", label: "Beta Room Track" }) && selected(s, "Their Song")
+      && s.find({ role: "row", label: "Their Song" }));
 });
 
 test("Live stays Live across a switch", () => {

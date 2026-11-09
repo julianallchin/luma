@@ -84,7 +84,7 @@ test("choosing a score on the song list opens it and closes the list", () => {
   until("the song list over the score", (s) => songList(s) && !box(s, "card", "Waveform"));
 });
 
-test("Escape backs out of the clip graph, then the song list", () => {
+test("Escape backs out of the clip graph, and not out of the song list", () => {
   nav.trackEditor("Test Venue", "Aurora");
   const rest = until("the timeline", (s) => box(s, "card", "Waveform") && box(s, "card", "Chase") ? s : undefined);
   const timeline = box(rest, "card", "Waveform");
@@ -105,14 +105,18 @@ test("Escape backs out of the clip graph, then the song list", () => {
   app.key("escape");
   until("the timeline after Escape", (s) => box(s, "card", "Waveform") && !box(s, "button", "Back to timeline"));
 
-  app.action("luma::ToggleSongList");
-  until("the song list", (s) => songList(s));
-  app.key("escape");
-  until("the score after Escape", (s) => box(s, "card", "Waveform") && !songList(s));
-  // With nothing left to back out of, Escape does not bring the list back.
+  // With nothing left to back out of, Escape does not bring the list up.
   app.key("escape");
   app.frames(4);
   assert(!songList(app.snapshot()), "Escape on the timeline opened the song list");
+
+  // The list is a page the score is back from, not something over it:
+  // Escape there has no score to return to.
+  app.action("luma::ShowSongList");
+  until("the song list", (s) => songList(s) && !box(s, "card", "Waveform"));
+  app.key("escape");
+  app.frames(4);
+  assert(songList(app.snapshot()), "Escape left the song list");
 });
 
 test("hiding the agent panel leaves the title bar and its controls where they are", () => {
@@ -139,29 +143,27 @@ test("hiding the agent panel leaves the title bar and its controls where they ar
   until("the agent panel back", (s) => box(s, "card", "Agent") && box(s, "button", "Hide agent"));
 });
 
-test("the song list takes the agent panel's room and gives it back", () => {
+test("the song list is a full-width page, and ⌘P on it stays", () => {
   nav.trackEditor("Test Venue", "Aurora");
   const agent = (s) => box(s, "card", "Agent") !== undefined;
   until("the agent beside the score", (s) => agent(s) && box(s, "button", "Hide agent"));
 
-  // Opening the list puts the panel away; closing it brings it back.
-  app.action("luma::ToggleSongList");
-  const listed = until("the song list, full width", (s) => songList(s) && !agent(s) ? s : undefined);
+  // ⌘P steps back from the score: it closes, and the list takes the page.
+  app.action("luma::ShowSongList");
+  const listed = until("the song list, full width", (s) =>
+    songList(s) && !agent(s) && nav.openOrdinal(s) === undefined ? s : undefined);
   const list = box(listed, "card", "Song list");
   const page = box(listed, "card", "Page");
   assert(list.x <= page.x + 1, `the song list does not start at the page's edge: ${JSON.stringify({ list, page })}`);
-  app.action("luma::ToggleSongList");
-  until("the agent back", (s) => !songList(s) && agent(s));
-
-  // A panel put away by hand stays away when the list closes.
-  app.action("luma::ToggleAgent");
-  until("the agent hidden", (s) => !agent(s));
-  app.action("luma::ToggleSongList");
-  until("the song list", (s) => songList(s));
-  app.action("luma::ToggleSongList");
-  until("the score again", (s) => !songList(s) && box(s, "card", "Waveform"));
+  // Again, on the list: there is nothing under it to reveal.
+  app.action("luma::ShowSongList");
   app.frames(4);
-  assert(!agent(app.snapshot()), "closing the song list brought back a panel hidden by hand");
+  assert(songList(app.snapshot()) && nav.openOrdinal(app.snapshot()) === undefined, "⌘P on the list left it");
+
+  // A score from the list brings the page with the panel back.
+  app.click(nav.scoreRows(until("the scores", (s) =>
+    nav.scoreRows(s, "Aurora").length > 0 ? s : undefined), "Aurora")[0]);
+  until("the agent back", (s) => !songList(s) && agent(s));
 });
 
 test("the song list is a page without the agent panel; only the toggle slides it", { fixture: { motion: true, motion_scale: 4 } }, () => {
@@ -185,7 +187,7 @@ test("the song list is a page without the agent panel; only the toggle slides it
 
   // To the list and back: the panel is absent from the first frame, then
   // back at its width from the first frame, never part way.
-  let frames = swept(() => app.action("luma::ToggleSongList"));
+  let frames = swept(() => app.action("luma::ShowSongList"));
   assert(frames.some((s) => songList(s)), "the song list did not come up");
   expect(widths(frames.filter((s) => songList(s))).every((w) => w === 0)).toBe(true);
   const listed = frames.at(-1);
@@ -194,7 +196,9 @@ test("the song list is a page without the agent panel; only the toggle slides it
   app.click(dead);
   app.frames(4);
   expect(width(app.snapshot())).toBe(0);
-  frames = swept(() => app.action("luma::ToggleSongList"));
+  const reopen = () => app.click(nav.scoreRows(until("the scores", (s) =>
+    nav.scoreRows(s, "Aurora").length > 0 ? s : undefined), "Aurora")[0]);
+  frames = swept(reopen, (s) => box(s, "card", "Waveform"));
   assert(!sliding(frames), `the panel slid back in: ${widths(frames)}`);
   expect(Math.abs(width(frames.at(-1)) - open) <= 1).toBe(true);
 
@@ -210,8 +214,8 @@ test("the song list is a page without the agent panel; only the toggle slides it
   expect(width(frames.at(-1))).toBe(0);
 
   // …and a visit to the list neither shows it nor forgets it was hidden.
-  swept(() => app.action("luma::ToggleSongList"));
-  frames = swept(() => app.action("luma::ToggleSongList"));
+  swept(() => app.action("luma::ShowSongList"));
+  frames = swept(reopen, (s) => box(s, "card", "Waveform"));
   assert(widths(frames).every((w) => w === 0), `the hidden panel came back: ${widths(frames)}`);
   assert(box(frames.at(-1), "button", "Show agent"), "the toggle does not offer the hidden panel");
 });

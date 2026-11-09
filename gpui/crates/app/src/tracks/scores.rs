@@ -433,11 +433,11 @@ impl Luma {
         cx.notify();
     }
 
-    /// Open `score` and close the song list so the timeline has the room.
+    /// Open `score` from the song list, in its place.
     ///
-    /// The close waits [`DOUBLE_CLICK`]: the click that lands here may be the
+    /// The open waits [`DOUBLE_CLICK`]: the click that lands here may be the
     /// first of a rename double-click, and the second click has to find its
-    /// row. A rename in that time cancels the close.
+    /// row. A rename in that time cancels the open.
     pub(crate) fn open_listed_score(
         &mut self,
         track_id: SharedString,
@@ -447,14 +447,12 @@ impl Luma {
         if self.songs.is_none() {
             return;
         }
-        self.open_score(&track_id, score, None, cx);
         let wait = self.library.debounce(DOUBLE_CLICK);
-        self.song_list_close = Some(cx.spawn(async move |this, cx| {
+        self.listed_score_open = Some(cx.spawn(async move |this, cx| {
             wait.await;
             this.update(cx, |this, cx| {
-                this.song_list_close = None;
-                this.song_list = false;
-                cx.notify();
+                this.listed_score_open = None;
+                this.open_score(&track_id, score, None, cx);
             })
             .ok();
         }));
@@ -516,7 +514,7 @@ impl Luma {
                     this.report_failure(failure, error, cx);
                 }
                 if let Some(score) = open {
-                    this.open_listed_score(track_id.clone().into(), score, cx);
+                    this.open_score(&track_id, score, None, cx);
                 }
             })
             .ok();
@@ -664,7 +662,7 @@ impl Luma {
             return;
         };
         // The second click of the pair: the list stays for the caret.
-        self.song_list_close = None;
+        self.listed_score_open = None;
         let opened_on = row.name.as_deref().unwrap_or_default().to_string();
         let rename = Rename::begin(RenameHost::Songs, score_id, opened_on, window, cx);
         let focus = rename.field.read(cx).focus_handle(cx);

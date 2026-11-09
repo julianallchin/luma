@@ -152,7 +152,9 @@ test("closing the dialog stops the preview and gives the song its player back", 
   until("the dialog gone", (s) => !s.find({ role: "button", label: "Close" }));
   // The song let go of the player for the preview, and has it back: it plays
   // its own 20 s audio, not the 40 s preview's.
-  app.action("luma::ToggleSongList");
+  // The list is the page the score is back from: open it again.
+  app.click(nav.scoreRows(until("the scores", (s) =>
+    nav.scoreRows(s, "Aurora").length > 0 ? s : undefined), "Aurora")[0]);
   until("the score again", (s) => !s.find({ role: "card", label: "Song list" }));
   nav.step("the song's player", "button", "Play");
   until("Aurora playing again", (s) => button(s, "Pause"));
