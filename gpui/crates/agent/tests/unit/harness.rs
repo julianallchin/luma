@@ -188,8 +188,14 @@ impl Render for Counter {
                     .agent_node(Role::Button, "Modal"),
             )
             .child(
+                // Wired like any button, so a click that got through would
+                // count.
                 luma_ui::button("Locked", Enabled::No)
                     .id("locked")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.count += 1;
+                        cx.notify();
+                    }))
                     .agent_node(Role::Button, "Locked")
                     .agent_disabled(true),
             )
@@ -1050,6 +1056,16 @@ fn a_disabled_control_says_so() {
             ["Stall", true],
         ])
     );
+}
+
+#[test]
+fn a_disabled_button_ignores_its_click() {
+    let mut harness = harness();
+    let count = harness.run(
+        &format!(r#"app.click(app.snapshot().find({{ label: "Locked" }})); {COUNT_LABEL}"#),
+        SCRIPT_TIMEOUT,
+    );
+    assert_eq!(count, "count 0");
 }
 
 #[test]

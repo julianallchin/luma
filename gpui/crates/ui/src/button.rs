@@ -19,8 +19,19 @@ use gpui_component::Icon;
 pub enum Enabled {
     /// Rounded chip with a subtle hover wash.
     Yes,
-    /// Dimmed to [`ladder::DISABLED_OPACITY`], inert under the pointer.
+    /// Dimmed to [`ladder::DISABLED_OPACITY`], inert under the pointer: a
+    /// click handler the caller attaches never runs (see [`inert`]), so a
+    /// caller attaches its handler whatever the state.
     No,
+}
+
+/// The cover that makes a disabled control inert. gpui has no way to drop the
+/// click handler a caller attaches after the constructor returns, so the
+/// control is never hovered instead: this layer sits in front of it and takes
+/// every mouse event except the scroll wheel, which still reaches the list or
+/// panel the control sits in.
+pub(crate) fn inert() -> Div {
+    div().absolute().inset_0().block_mouse_except_scroll()
 }
 
 impl From<bool> for Enabled {
@@ -43,7 +54,7 @@ pub fn button(label: &str, enabled: Enabled) -> Div {
         .px(rpx(float::PICKER_CHIP_PAD))
         .map(|el| match enabled {
             Enabled::Yes => el.tab_index(0),
-            Enabled::No => el.opacity(ladder::DISABLED_OPACITY),
+            Enabled::No => el.opacity(ladder::DISABLED_OPACITY).child(inert()),
         })
         .when(!label.is_empty(), |el| el.child(label.to_string()))
 }
@@ -97,6 +108,7 @@ fn icon_plate(icon: IconName, active: bool, enabled: Enabled) -> Div {
         Enabled::Yes => toggle_paint(plate.cursor_pointer(), active),
         Enabled::No => plate
             .text_color(glass::ink(0.55))
-            .opacity(ladder::DISABLED_OPACITY),
+            .opacity(ladder::DISABLED_OPACITY)
+            .child(inert()),
     }
 }

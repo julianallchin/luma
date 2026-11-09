@@ -2262,9 +2262,7 @@ fn header_button(
 ) -> impl IntoElement {
     luma_ui::icon_button(icon, luma_ui::Enabled::from(!disabled))
         .id(id)
-        .when(!disabled, |button| {
-            button.on_click(move |_, _, cx| pressed(cx))
-        })
+        .on_click(move |_, _, cx| pressed(cx))
         .agent_node(NodeRole::Button, label)
         .agent_disabled(disabled)
 }

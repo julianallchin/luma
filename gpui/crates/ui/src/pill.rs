@@ -77,7 +77,8 @@ pub fn primary(label: impl Into<SharedString>, enabled: Enabled) -> Div {
         Enabled::No => plate
             .bg(glass::ink(0.13))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(ladder::foreground_alpha(0.38)),
+            .text_color(ladder::foreground_alpha(0.38))
+            .child(crate::button::inert()),
     }
     .child(label.into())
 }

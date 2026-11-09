@@ -1024,10 +1024,8 @@ fn api_key(key: &KeyField, status: &ApiKeyStatus, app: &Entity<Luma>) -> Row {
         .child(
             luma_ui::button("Save", Enabled::from(key.has_draft))
                 .id(SharedString::from(format!("save-key-{provider}")))
-                .when(key.has_draft, |button| {
-                    button.on_click(move |_, _, cx| {
-                        save.update(cx, |this, cx| this.save_api_key(provider, cx));
-                    })
+                .on_click(move |_, _, cx| {
+                    save.update(cx, |this, cx| this.save_api_key(provider, cx));
                 })
                 .agent_node(Role::Button, format!("Save {label}"))
                 .agent_disabled(!key.has_draft),
@@ -1153,10 +1151,8 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
             }),
             luma_ui::button(label, Enabled::from(pressable))
                 .id("settings-account-action")
-                .when(pressable, |button| {
-                    button.on_click(move |_, _, cx| {
-                        act.update(cx, |this, cx| this.switch_identity(cx));
-                    })
+                .on_click(move |_, _, cx| {
+                    act.update(cx, |this, cx| this.switch_identity(cx));
                 })
                 .agent_node(Role::Button, label)
                 .agent_disabled(!pressable)
@@ -1229,10 +1225,7 @@ fn shortcuts(shell: &Luma, state: &Settings, app: &Entity<Luma>, cx: &App) -> Ve
     let any = !shell.shortcuts.value().is_empty();
     let button = luma_ui::button("Reset all", if any { Enabled::Yes } else { Enabled::No })
         .id("shortcuts-reset-all")
-        .when(any, |button| {
-            button
-                .on_click(move |_, _, cx| reset.update(cx, |this, cx| this.reset_all_shortcuts(cx)))
-        })
+        .on_click(move |_, _, cx| reset.update(cx, |this, cx| this.reset_all_shortcuts(cx)))
         .agent_node(Role::Button, "Reset all shortcuts")
         .agent_disabled(!any);
     let mut sections = vec![section(
