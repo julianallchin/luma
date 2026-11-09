@@ -874,23 +874,34 @@ fn agent_panel(app: &Luma) -> AnyElement {
 /// What the agent panel says while the mode on screen has nothing open.
 const NO_CHAT: &str = "Open a score to talk about it.";
 
-/// The window's head, on the trim above the page: the venue menu and —
-/// reserved by the band's insets — the agent toggle and the mode switch
-/// anchored over its two ends. Its middle is empty in every mode: what the
-/// mode is working on is the page's to say.
+/// The window's head, on the trim above the page: the trail of where the
+/// window is — `venue / song`, each crumb its own menu — and, reserved by the
+/// band's insets, the agent toggle and the mode switch anchored over its two
+/// ends. The song crumb is Arrange's open score; with none, the venue stands
+/// alone.
 fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
+    let trail = div().flex_1().min_w_0().flex().items_center().gap(px(2.));
+    let trail = match app.settings {
+        Some(_) => trail.child(settings::back(entity)),
+        None => {
+            let song = crate::score_switcher::crumb(app, entity, cx);
+            trail
+                .child(welcome::venue_trigger(app, song.is_none(), entity, cx))
+                .when_some(song, |trail, song| {
+                    trail
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(13.))
+                                .text_color(luma_ui::glass::ink(0.3))
+                                .child("/"),
+                        )
+                        .child(song)
+                })
+        }
+    };
     chrome::band(lights, app.settings.is_none())
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .child(match app.settings {
-                    Some(_) => settings::back(entity),
-                    None => welcome::venue_trigger(app, entity, cx),
-                }),
-        )
+        .child(trail)
         .agent_node(Role::Card, "Title bar")
 }
 
@@ -961,9 +972,6 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
         _ => None,
     };
     let stage = stage_region(app, cx);
-    // Arrange names its song and score over the stage's top edge, between
-    // the corner controls: the door to the song's other scores.
-    let switcher = crate::score_switcher::trigger(app, &cx.entity(), cx);
     let mut band = div()
         .h(px(stage_height))
         .flex_none()
@@ -977,9 +985,7 @@ fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyEl
             .child(seam())
             .child(deck_grip(width + SEAM_WIDTH / 2.0, cx));
     }
-    let band = band
-        .child(stage_slot(stage).relative().children(switcher))
-        .children(environment);
+    let band = band.child(stage_slot(stage)).children(environment);
     div()
         .flex_1()
         .min_h_0()

@@ -1,7 +1,7 @@
-// The stage's song / score menu in Arrange: the open song and score named
-// over the stage, and a menu that goes to the song list or to any other
-// score of the song — this venue's opened on the spot, another venue's after
-// asking, and then in that venue.
+// The title bar's song crumb in Arrange: `venue / song`, the song's crumb a
+// menu that goes to the song list or to any other score of the song — this
+// venue's opened on the spot, another venue's after asking, and then in that
+// venue.
 
 // Aurora, scored twice here and once in the Warehouse.
 fixture({
@@ -18,27 +18,37 @@ const trigger = (s) => s.findAll({ role: "button" }).find((n) => n.label.startsW
 const menu = (s) => s.find({ role: "card", label: "Scores menu" });
 const scoreRows = (s) => s.findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
 const openMenu = () => {
-  app.click(until("the stage's score trigger", trigger) && trigger(app.snapshot()));
+  app.click(until("the song crumb", trigger) && trigger(app.snapshot()));
   return until("the menu's scores", (s) => menu(s) && scoreRows(s).length === 3 ? s : undefined);
 };
+const within = (inner, outer) => inner.y >= outer.y - 1 && inner.y + inner.height <= outer.y + outer.height + 1;
+// The number of the open score, as the crumb shows it beside the song.
+const shownNumber = (s) => texts(s).find((t) => /^#\d+$/.test(t));
 
-test("the title bar's middle is empty and the stage names the open score", () => {
+test("the title bar reads venue / song, and the stage carries no title", () => {
   nav.trackEditor("Test Venue", "Aurora");
-  const shot = until("the score on the stage", (s) => trigger(s) ? s : undefined);
-  const named = trigger(shot).bounds;
-  const stage = shot.find({ role: "card", label: "Stage" }).bounds;
+  const shot = until("the song crumb", (s) => trigger(s) ? s : undefined);
+  const song = trigger(shot).bounds;
+  const venue = shot.find({ role: "button", label: "Test Venue" }).bounds;
   const bar = shot.find({ role: "card", label: "Title bar" }).bounds;
-  // Over the stage's top edge, centred on it.
-  assert(named.y >= stage.y && named.y + named.height <= stage.y + stage.height / 2,
-    `the trigger is not over the stage's top: ${JSON.stringify({ named, stage })}`);
-  assert(Math.abs(named.x + named.width / 2 - (stage.x + stage.width / 2)) <= 1,
-    `the trigger is not centred on the stage: ${JSON.stringify({ named, stage })}`);
-  // Nothing in the title bar but the venue menu, the agent toggle, the modes
-  // and the window's own corner.
-  const inBar = shot.nodes.filter((n) => n.bounds.width > 0 && n.bounds.y >= bar.y
-    && n.bounds.y + n.bounds.height <= bar.y + bar.height && n.bounds.x > bar.x + bar.width * 0.3
-    && n.bounds.x + n.bounds.width < bar.x + bar.width * 0.7);
-  expect(inBar.map((n) => `${n.role}:${n.label}`)).toEqual([]);
+  const stage = shot.find({ role: "card", label: "Stage" }).bounds;
+  assert(within(song, bar) && within(venue, bar),
+    `the crumbs are not in the title bar: ${JSON.stringify({ venue, song, bar })}`);
+  assert(song.x >= venue.x + venue.width, `the song does not follow the venue: ${JSON.stringify({ venue, song })}`);
+  assert(song.y + song.height <= stage.y, `the song crumb is over the stage: ${JSON.stringify({ song, stage })}`);
+  // Two scores here: the open one's number rides beside the song.
+  expect(shownNumber(shot)).toBe(trigger(shot).label.split(" · ")[1]);
+});
+
+test("in Rig and Live the venue stands alone", () => {
+  nav.trackEditor("Test Venue", "Aurora");
+  until("the song crumb", trigger);
+  for (const key of ["1", "3"]) {
+    app.key(key);
+    until(`the venue alone after ${key}`, (s) => !trigger(s) && s.find({ role: "button", label: "Test Venue" }));
+  }
+  app.key("2");
+  until("the song crumb back in Arrange", trigger);
 });
 
 test("the menu lists every score of the song, other venues' by venue", () => {
@@ -86,6 +96,8 @@ test("another venue's score asks, then switches venue and opens it", () => {
       && s.find({ role: "card", label: "Waveform" })
       && !s.find({ role: "card", label: "Song list" }) ? s : undefined);
   expect(nav.shownMode(there)).toBe("Arrange");
+  // The song's only score there needs no number.
+  expect(shownNumber(there)).toBe(undefined);
   // And the menu there lists the Test Venue's two as the other venue's.
   const back = openMenu();
   expect(scoreRows(back).filter((n) => n.label.endsWith(" · Test Venue")).length).toBe(2);

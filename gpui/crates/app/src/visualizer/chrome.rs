@@ -253,12 +253,7 @@ pub(crate) fn visualizer(
                         })
                 })),
         )
-        .children(
-            state
-                .audition
-                .as_ref()
-                .map(|audition| audition_badge(audition, state.presentation)),
-        )
+        .children(state.audition.as_ref().map(audition_badge))
         .agent_node(
             Role::Card,
             state.lit.as_ref().map_or_else(
@@ -372,18 +367,13 @@ fn overlay_toolbar(
 }
 
 /// What says the stage is playing a hovered preset, not the score: the
-/// preset's name on the toolbar's surface, at the top of the stage — under
-/// the song / score menu's trigger when the stage is embedded and carries it.
-fn audition_badge(audition: &crate::track_editor::Audition, presentation: bool) -> AnyElement {
+/// preset's name on the toolbar's surface, centred on the stage's top edge,
+/// on the corner controls' line.
+fn audition_badge(audition: &crate::track_editor::Audition) -> AnyElement {
     let label: gpui::SharedString = format!("Preview · {}", audition.name).into();
-    let top = if presentation {
-        12.
-    } else {
-        crate::score_switcher::TRIGGER_ROOM + 8.
-    };
     div()
         .absolute()
-        .top(px(top))
+        .top(CORNER_INSET)
         .left_0()
         .right_0()
         .flex()

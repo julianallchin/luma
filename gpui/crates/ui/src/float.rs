@@ -126,7 +126,17 @@ impl RowState {
     }
 }
 
-/// Paint `row` for `state`. The selection recipe lives here once, so every row
+/// What a row at rest does under the pointer, beyond the wash every row takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hover {
+    /// The wash alone.
+    Wash,
+    /// The wash, and its label underlined: a link's affordance, for a row
+    /// that reads as text — see [`crumb`].
+    Underline,
+}
+
+/// Paint `row` for `state`, and for `hover` while at rest. The selection recipe lives here once, so every row
 /// shape below wears the same three states.
 ///
 /// Rest vs Cursor is the only state pair separated by *value alone* — the
@@ -134,7 +144,12 @@ impl RowState {
 /// ring or glyph to fall back on, where Selected always has its ring. Retuning
 /// the ladder or a surface's lightness can collapse that step before anything
 /// else breaks; whoever touches those re-checks this pair.
-fn row_state_paint(row: Div, state: RowState, _fade_key: impl Into<SharedString>) -> Div {
+fn row_state_paint(
+    row: Div,
+    state: RowState,
+    _fade_key: impl Into<SharedString>,
+    hover: Hover,
+) -> Div {
     match state {
         // Fill and ring, from the one selection recipe. Nothing paints behind
         // a glass chip — see [`glass::card_selected_shadows`].
@@ -146,7 +161,15 @@ fn row_state_paint(row: Div, state: RowState, _fade_key: impl Into<SharedString>
         // The wash fades out on leave; it needs the `.id(…)` callers give.
         RowState::Rest => row
             .bg(glass::wash(0.0))
-            .hover(|style| style.bg(glass::glass_hover()))
+            // One hover style per element in gpui, so the underline rides in
+            // the wash's.
+            .hover(move |style| {
+                let style = style.bg(glass::glass_hover());
+                match hover {
+                    Hover::Wash => style,
+                    Hover::Underline => style.underline(),
+                }
+            })
             .fade_hover(),
     }
 }
@@ -186,6 +209,7 @@ pub fn menu_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
             .cursor_pointer(),
         state,
         fade_key,
+        Hover::Wash,
     )
 }
 
@@ -197,21 +221,35 @@ pub fn menu_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
 /// next to the list, and a rail whose rows changed height as their labels
 /// wrapped would make the column jitter while the list beside it scrolled.
 pub fn nav_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
+    row_state_paint(nav_shape(), state, fade_key, Hover::Wash)
+}
+
+/// One crumb of a breadcrumb trail (`venue / song`): a [`nav_row`] whose
+/// label also underlines under the pointer, so a run of plain names reads as
+/// places to go. `open` while the menu it opens is up. The caller adds the
+/// id, the click and the children, as for [`nav_row`].
+pub fn crumb(open: bool, fade_key: impl Into<SharedString>) -> Div {
     row_state_paint(
-        div()
-            .h(rpx(NAV_ROW_HEIGHT))
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(rpx(8.0))
-            .px(rpx(ROW_INSET))
-            .rounded(rpx(radius::ROW))
-            .text_size(rpx(12.5))
-            .cursor_pointer(),
-        state,
+        nav_shape(),
+        RowState::of(open, false),
         fade_key,
+        Hover::Underline,
     )
+}
+
+/// The [`nav_row`] shape, before its state is painted.
+fn nav_shape() -> Div {
+    div()
+        .h(rpx(NAV_ROW_HEIGHT))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(rpx(8.0))
+        .px(rpx(ROW_INSET))
+        .rounded(rpx(radius::ROW))
+        .text_size(rpx(12.5))
+        .cursor_pointer()
 }
 
 /// The rail column itself: a fixed-width scroller divided from the list by its

@@ -1209,33 +1209,26 @@ impl Luma {
     }
 }
 
-/// The venue's name in the title bar: the menu's trigger, and the menu hung
-/// off it.
-pub(crate) fn venue_trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> AnyElement {
+/// The venue's name in the title bar — the first crumb of its trail, and the
+/// venue menu's trigger, with the menu hung off it. `leaf` when nothing
+/// follows it on the trail, which gives it the trail's full ink.
+pub(crate) fn venue_trigger(app: &Luma, leaf: bool, entity: &Entity<Luma>, cx: &App) -> AnyElement {
     let name = app.songs.as_ref().map_or_else(
         || "Venues".to_string(),
         |songs| songs.venue_name().to_string(),
     );
-    let open = app.venue_menu.is_open();
     let toggled = entity.clone();
-    float::nav_row(RowState::of(open, false), "venue-menu-trigger")
+    float::crumb(app.venue_menu.is_open(), "venue-menu-trigger")
         .id("venue-menu-trigger")
-        .flex_none()
         .relative()
-        .px(px(10.))
         .text_size(px(13.))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| toggled.update(cx, |this, cx| this.toggle_venue_menu(cx)))
         .child(
             div()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(glass::ink(0.95))
+                .text_color(glass::ink(if leaf { 0.95 } else { 0.6 }))
                 .child(name.clone()),
-        )
-        .child(
-            gpui_component::Icon::new(IconName::ChevronDown)
-                .size(px(11.))
-                .text_color(glass::ink(0.42)),
         )
         .children(venue_menu(app, entity, cx))
         .agent_node(Role::Button, name)

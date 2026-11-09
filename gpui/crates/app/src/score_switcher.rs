@@ -1,5 +1,5 @@
-//! The stage's title in Arrange: the open song and score, centred over the
-//! top of the stage, and the menu hung off it.
+//! The title bar's song crumb in Arrange — `venue / song` — and the menu hung
+//! off it.
 //!
 //! The menu goes two places. Up, to the song list. Across, to any other score
 //! of the same song — this venue's, and the ones in other venues, since "the
@@ -18,7 +18,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use luma_ui::float::{self, RowState};
 use luma_ui::glass;
-use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument as _, Role};
 
 use crate::shell::Body;
@@ -36,15 +35,6 @@ pub(crate) struct ScoreSwitcher {
 
 /// How wide the menu opens.
 const MENU_WIDTH: f32 = 300.;
-/// How tall the trigger is: the stage's corner controls' height, so the three
-/// along the stage's top edge share one line.
-const TRIGGER_HEIGHT: f32 = 32.;
-/// How far the trigger sits from the stage's top edge — the corner controls'
-/// inset, for the same reason.
-pub(crate) const TRIGGER_TOP: f32 = 16.;
-/// The room the trigger takes from the top of the stage, its inset included:
-/// where anything else centred along the stage's top edge has to start.
-pub(crate) const TRIGGER_ROOM: f32 = TRIGGER_TOP + TRIGGER_HEIGHT;
 
 impl Luma {
     /// Open or close the menu, reading the open song's scores afresh.
@@ -142,7 +132,7 @@ impl Luma {
     }
 
     /// Ask before opening `score` of `track_id` in another venue, `venue_id`
-    /// named `venue`: taking it switches the whole window there. The stage's
+    /// named `venue`: taking it switches the whole window there. The song crumb's
     /// menu and the song list both ask this one question.
     pub(crate) fn ask_to_switch_venue(
         &mut self,
@@ -214,74 +204,54 @@ impl Luma {
     }
 }
 
-/// The trigger, centred along the top of the stage, with the menu hung off
-/// it: the open score's song and `#n`, and its album art when it has some.
-/// `None` unless Arrange has a score open.
-pub(crate) fn trigger(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
+/// The song crumb, after the venue's on the title bar's trail, with the menu
+/// hung off it: the open score's song, and its `#n` — quietly — when the song
+/// has more than one score here. `None` unless Arrange has a score open.
+pub(crate) fn crumb(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement> {
     if app.workspace.mode() != Mode::Arrange {
         return None;
     }
     let Some(Body::TrackEditor(editor)) = app.workspace.active_body() else {
         return None;
     };
-    let art = app
+    let several = app
         .songs
         .as_ref()
         .and_then(|songs| songs.find(editor.track_id()))
-        .and_then(|track| track.album_art_path);
+        .is_some_and(|track| track.venue_score_count > 1);
     let title = editor.track_name().to_string();
     let score = editor.score_label();
-    let open = app.score_switcher.is_open();
     let pressed = entity.clone();
-    let button = luma_ui::button("", luma_ui::Enabled::Yes)
-        .id("score-switcher")
-        .relative()
-        .h(px(TRIGGER_HEIGHT))
-        .gap(px(8.))
-        .max_w(px(420.))
-        // Opaque over the stage, so the pointer it covers is its own and not
-        // the camera's.
-        .occlude()
-        .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_score_switcher(cx)))
-        .children(
-            art.is_some()
-                .then(|| crate::tracks::album_art(art.as_deref(), 20.)),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(glass::ink(0.95))
-                .child(title.clone()),
-        )
-        .child(div().text_color(glass::ink(0.4)).child("/"))
-        .child(
-            div()
-                .flex_none()
-                .text_color(glass::ink(0.6))
-                .child(score.clone()),
-        )
-        .child(
-            gpui_component::Icon::new(if open {
-                IconName::ChevronUp
-            } else {
-                IconName::ChevronDown
-            })
-            .size(px(11.))
-            .text_color(glass::ink(0.42)),
-        )
-        .children(menu(app, editor.target(), entity, cx))
-        .agent_node(Role::Button, format!("{title} · {score}"));
     Some(
-        div()
-            .absolute()
-            .top(px(TRIGGER_TOP))
-            .left_0()
-            .right_0()
-            .flex()
-            .justify_center()
-            .child(button)
+        float::crumb(app.score_switcher.is_open(), "score-switcher")
+            .id("score-switcher")
+            .relative()
+            .flex_shrink(1.)
+            .min_w_0()
+            .max_w(px(420.))
+            .gap(px(6.))
+            .text_size(px(13.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| pressed.update(cx, |this, cx| this.toggle_score_switcher(cx)))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(glass::ink(0.95))
+                    .child(title.clone()),
+            )
+            .when(several, |crumb| {
+                crumb.child(
+                    div()
+                        .flex_none()
+                        .text_color(glass::ink(glass::TEXT_TERTIARY))
+                        .child(format!("· {score}"))
+                        .agent_node(Role::Text, score.clone()),
+                )
+            })
+            .children(menu(app, editor.target(), entity, cx))
+            .agent_node(Role::Button, format!("{title} · {score}"))
             .into_any_element(),
     )
 }
@@ -366,7 +336,7 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<Any
     Some(match closing {
         Some(since) => float::anchored_below_closing(
             "score-switcher-menu",
-            TRIGGER_HEIGHT,
+            float::NAV_ROW_HEIGHT,
             card,
             luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since),
         ),
@@ -374,7 +344,7 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>, cx: &App) -> Option<Any
             let dismiss = entity.clone();
             float::anchored_below(
                 "score-switcher-menu",
-                TRIGGER_HEIGHT,
+                float::NAV_ROW_HEIGHT,
                 float::Dismiss::on_press_out(move |_, cx| {
                     dismiss.update(cx, |this, cx| {
                         this.close_score_switcher(cx);

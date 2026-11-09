@@ -170,16 +170,10 @@ globalThis.nav = {
 		app.frames(2);
 	},
 
-	// The open score of `track`, as `Aurora · #2`, or undefined when none is.
-	// Read off the stage's song / score trigger, or — with the stage put
-	// away, which takes the trigger with it — off the timeline's own
-	// readouts: its song's name and `Score #2`.
+	// The open score of `track`, as `Aurora · #2`, or undefined when none is:
+	// read off the title bar's song crumb.
 	openScore(snapshot, track) {
-		const trigger = snapshot.findAll({ role: "button" }).find((n) => n.label.startsWith(`${track} · #`));
-		if (trigger) return trigger.label;
-		const score = snapshot.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"));
-		if (score === undefined || snapshot.find({ role: "text", label: track }) === undefined) return undefined;
-		return `${track} · ${score.label.slice("Score ".length)}`;
+		return snapshot.findAll({ role: "button" }).find((n) => n.label.startsWith(`${track} · #`))?.label;
 	},
 
 	// Both halves of the commonest walk in the suite.

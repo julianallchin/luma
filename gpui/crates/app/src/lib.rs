@@ -10,10 +10,10 @@
 //! main         window + chrome, one root entity      (main.rs)
 //!  └ Luma      the persistent shell, one open venue  (this file + shell.rs)
 //!     ├ agent      the chat, full height on the left (luma-chat, agent.rs)
-//!     ├ title bar  venue menu · modes                (chrome.rs, welcome.rs)
+//!     ├ title bar  venue / song crumbs · modes       (chrome.rs, welcome.rs,
+//!     │             each crumb a menu                 score_switcher.rs)
 //!     ├ content    the stage over the mode's body:   (shell.rs, workspace.rs)
-//!     │             Rig, Arrange or Live; in Arrange
-//!     │             the stage's song / score menu     (score_switcher.rs)
+//!     │             Rig, Arrange or Live
 //!     ├ song list  the venue's songs, over Arrange   (tracks.rs)
 //!     ├ status bar sync, output, the mode's line     (status_bar.rs)
 //!     ├ settings   a page in place of the content    (settings.rs)
@@ -165,7 +165,7 @@ pub struct Luma {
     /// The title bar's venue menu while it is open or leaving — see
     /// [`welcome::VenueMenu`].
     pub(crate) venue_menu: luma_ui::dialog::Popup<welcome::VenueMenu>,
-    /// The stage's song / score menu in Arrange while it is open or leaving —
+    /// The title bar's song / score menu in Arrange while it is open or leaving —
     /// see [`score_switcher`].
     pub(crate) score_switcher: luma_ui::dialog::Popup<score_switcher::ScoreSwitcher>,
     /// The settings page while it is up, in place of the page's content —
