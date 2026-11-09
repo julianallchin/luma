@@ -269,15 +269,21 @@ pub(crate) fn put_event_times(
 }
 
 /// The honest reason a preprocessed artifact is missing: the worker's own error
-/// when it failed, otherwise "has not run" (report §7e).
+/// when it failed, otherwise "has not run" (report §7e). Only the error's
+/// first line: the worker's traceback is a record of the app's own failure,
+/// not of the agent's code, and every binding the step feeds repeats it.
 pub(crate) async fn missing_reason(
     pool: &SqlitePool,
     track_id: &str,
     preprocessor: &str,
     what: &str,
 ) -> String {
-    match crate::preprocessing::failures::last_error(pool, track_id, preprocessor).await {
-        Ok(Some(error)) => format!("{what} preprocessing failed: {error}"),
+    use crate::preprocessing::failures;
+    match failures::last_error(pool, track_id, preprocessor).await {
+        Ok(Some(error)) => format!(
+            "{what} preprocessing failed: {}",
+            failures::headline(&error)
+        ),
         _ => format!("{what} preprocessing has not run for this track"),
     }
 }

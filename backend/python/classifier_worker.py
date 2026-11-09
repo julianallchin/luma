@@ -227,7 +227,7 @@ def main() -> int:
         try:
             import numpy as np
             import torch
-        except Exception as exc:  # pragma: no cover - import error reporting
+        except Exception as exc:
             traceback.print_exc()
             print(json.dumps({"error": f"Missing python deps for classifier: {exc}"}), file=sys.stderr)
             return 1
@@ -350,7 +350,7 @@ def main() -> int:
                             "predictions": preds,
                         }
                     )
-        except Exception as exc:  # pragma: no cover - runtime error reporting
+        except Exception as exc:
             traceback.print_exc()
             print(json.dumps({"error": str(exc)}), file=sys.stderr)
             return 1

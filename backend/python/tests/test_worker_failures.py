@@ -17,8 +17,8 @@ import unittest
 WORKERS = pathlib.Path(__file__).resolve().parents[1]
 
 # Runs a worker with `beat_this`, `n2n`, `torch` and `transformers` replaced by
-# stand-ins: every attribute and call works and is falsy, except the named
-# call, which raises.
+# stand-ins: every import, attribute and call works and is falsy, except the
+# named module or call, which raises.
 #   python -c RUN <failing call> <worker script> <worker args...>
 RUN = r"""
 import importlib.abc
@@ -55,6 +55,8 @@ class Library(types.ModuleType):
 
 class StandIns(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def find_spec(self, name, path, target=None):
+        if name == failing:
+            raise ImportError(f"planted failure in {failing}")
         if name.split(".")[0] in {"beat_this", "n2n", "torch", "transformers"}:
             return importlib.util.spec_from_loader(name, self, is_package=True)
         return None
@@ -96,17 +98,27 @@ class FailedWorkersReportTheirTraceback(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertIn("Traceback (most recent call last)", result.stderr)
         self.assertIn(f'{script}", line', result.stderr)
-        self.assertIn(f"RuntimeError: planted failure in {failing}", result.stderr)
+        self.assertIn(f"Error: planted failure in {failing}", result.stderr)
+
+    def assert_each_reports_traceback(self, worker, failing, args, stdin=""):
+        for planted in failing:
+            with self.subTest(failing=planted):
+                self.assert_reports_traceback(worker, planted, args, stdin)
+
+    # Each worker fails once while importing its libraries and once while
+    # using them.
 
     def test_beats(self):
-        self.assert_reports_traceback(
-            "beat_worker.py", "beat_this.preprocessing.load_audio", [self.audio]
+        self.assert_each_reports_traceback(
+            "beat_worker.py",
+            ["beat_this.inference", "beat_this.preprocessing.load_audio"],
+            [self.audio],
         )
 
     def test_features(self):
-        self.assert_reports_traceback(
+        self.assert_each_reports_traceback(
             "mert_worker.py",
-            "transformers.AutoFeatureExtractor.from_pretrained",
+            ["torch", "transformers.AutoFeatureExtractor.from_pretrained"],
             [
                 "--fullmix", self.audio,
                 "--drum", self.audio,
@@ -116,16 +128,16 @@ class FailedWorkersReportTheirTraceback(unittest.TestCase):
         )
 
     def test_drums(self):
-        self.assert_reports_traceback(
+        self.assert_each_reports_traceback(
             "n2n_worker.py",
-            "n2n.infer.load_checkpoint",
+            ["torch", "n2n.infer.load_checkpoint"],
             [self.audio, "--ckpt", self.file("n2n.pt"), "--mert", self.file("mert.npy")],
         )
 
     def test_sections(self):
-        self.assert_reports_traceback(
+        self.assert_each_reports_traceback(
             "classifier_worker.py",
-            "torch.load",
+            ["torch", "torch.load"],
             [self.file("mert.npy"), self.file("classifier.pt")],
             stdin="[[0.0, 2.0]]",
         )

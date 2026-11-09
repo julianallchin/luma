@@ -156,12 +156,10 @@ pub fn analyze_genres(
         .map_err(|e| format!("Failed to wait on genre worker: {e}"))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "Genre worker exited unsuccessfully".to_string()
-        } else {
-            format!("Genre worker failed: {stderr}")
-        });
+        return Err(crate::preprocessing::workers::failed(
+            "Genre worker",
+            &String::from_utf8_lossy(&output.stderr),
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout)

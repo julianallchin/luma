@@ -674,7 +674,7 @@ def main() -> int:
     try:
         from beat_this.inference import Audio2Frames
         from beat_this.preprocessing import load_audio
-    except Exception as exc:  # pragma: no cover - import error reporting
+    except Exception as exc:
         traceback.print_exc()
         print(
             json.dumps({"error": f"Failed to import beat_this: {exc}"}),
@@ -702,7 +702,7 @@ def main() -> int:
             bpm_min=args.bpm_min,
             bpm_max=args.bpm_max,
         )
-    except Exception as exc:  # pragma: no cover - runtime error reporting
+    except Exception as exc:
         traceback.print_exc()
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1

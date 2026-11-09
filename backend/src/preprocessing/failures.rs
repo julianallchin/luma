@@ -110,6 +110,14 @@ pub async fn last_error(
     .map_err(|e| format!("Failed to read preprocessing failure: {e}"))
 }
 
+/// The first line of a step's error, which says what failed. A worker's error
+/// goes on with everything the worker wrote to stderr (see
+/// [`workers::failed`](crate::preprocessing::workers::failed)): the record
+/// keeps all of it, and the import list and the agent show this line.
+pub fn headline(error: &str) -> &str {
+    error.lines().next().unwrap_or(error)
+}
+
 /// Exponential backoff in seconds: `min(2^attempts * 60, MAX_BACKOFF_SECS)`.
 fn backoff_for(attempts: i64) -> i64 {
     let shift = attempts.clamp(0, 30);
