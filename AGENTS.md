@@ -32,7 +32,7 @@ Every committed file has a home and a reader. Before adding one, find its place 
 - **Tests** live with the code they test: Rust unit tests in the module, integration tests in the crate's `tests/`, UI tests as `.test.js` under `gpui/crates/agent/tests/js/`, Python tests under `backend/python/luma_exec/tests/` for the agent executor and `backend/python/tests/` for the analysis workers.
 - **Test reference data** (goldens, reference captures, style specs) goes in `harness/`. Assets the app ships go in `assets/` or `resources/`.
 - **Docs**: how a system works and why goes in `docs/design/` or `docs/specs/` (indexed in `docs/README.md`); user-facing docs go in `www/`; build and test know-how in `gpui/BUILD.md` or the crate's README. No dated handoff notes, audits or friction logs: fix the thing, or put the knowledge where the next reader looks.
-- **Names**: Rust programs are kebab-case (`luma-cli`), Rust files and Python files snake_case, docs kebab-case.
+- **Names**: Rust programs are kebab-case (`luma-cli`), except the app's own binary, `Luma`, which macOS shows as the menu bar name; Rust files and Python files snake_case, docs kebab-case.
 
 Delete what you added once it has served its purpose.
 
