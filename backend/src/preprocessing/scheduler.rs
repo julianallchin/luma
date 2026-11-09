@@ -869,6 +869,79 @@ mod tests {
         assert_runs_nothing(&services, &held).await;
     }
 
+    /// The two places that decide whether a step has work left agree about a
+    /// row computed against a beat grid the track no longer has: reconcile
+    /// queues the track for the step, and the run that follows doesn't pass
+    /// the step by as done. Before they agreed, such a track was queued at
+    /// every launch and never redone.
+    #[tokio::test]
+    async fn a_step_from_an_earlier_beat_grid_is_redone() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = library(directory.path()).await;
+        let pool = &services.db.0;
+        let classifier = registry::dag()
+            .preprocessors()
+            .find(|p| p.name() == "classifier")
+            .unwrap();
+        // The grid's first bar is longer than its tempo's, as a detected
+        // grid's often is.
+        sqlx::query(
+            "INSERT INTO track_beats
+                (track_id, beats_json, downbeats_json, bpm, beats_per_bar, processor_version)
+             VALUES ('t1', '[]', '[0.5,2.5,4.5]', 128.0, 4, 1)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO track_bar_classifications
+                (track_id, classifications_json, tag_order_json, processor_version)
+             VALUES ('t1', '{"first_bar":[0.5,2.5],"intensity":[1.0],"scores":[[0.1]]}',
+                     '["kick"]', ?)"#,
+        )
+        .bind(i64::from(classifier.version()))
+        .execute(pool)
+        .await
+        .unwrap();
+        let track = tracks_db::get_track_by_id(pool, "t1")
+            .await
+            .unwrap()
+            .unwrap();
+        let epoch = services.analysis_tasks.current_epoch().unwrap();
+        let lease = services.analysis_tasks.lease(epoch).unwrap();
+        let ctx = PreprocessorContext::new(
+            pool,
+            &services.storage,
+            &services.workers,
+            &track,
+            services.storage.stems_root(),
+            lease.guard(),
+        );
+        let queued = || async {
+            classifier
+                .list_pending(pool)
+                .await
+                .unwrap()
+                .contains(&"t1".to_string())
+        };
+
+        assert!(classifier.is_complete(&ctx, "t1").await.unwrap());
+        assert!(!queued().await, "a row from the current grid was queued");
+
+        // Another device's grid syncs in.
+        sqlx::query(
+            "UPDATE track_beats SET downbeats_json = '[0.0,2.0,4.0]' WHERE track_id = 't1'",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        assert!(queued().await, "reconcile would not queue the track");
+        assert!(
+            !classifier.is_complete(&ctx, "t1").await.unwrap(),
+            "the run would pass by a row from an earlier grid as done"
+        );
+    }
+
     #[tokio::test]
     async fn owned_inflight_claim_releases_on_early_error() {
         const PROCESSOR: &str = "inflight_release_regression";

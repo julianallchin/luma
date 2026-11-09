@@ -3,9 +3,13 @@
 //! Each module is one [`Preprocessor`]: it owns the DB persistence and the
 //! scheduler wiring, and its `process` submodule runs the Python worker.
 //!
-//! Bar-indexed preprocessors (`classifier`, `genre`) additionally share the
-//! two helpers below, so they agree on what "bar N" means and self-heal the
-//! same way when the beat grid moves underneath them.
+//! Bar-indexed preprocessors (`classifier`, `genre`) additionally share
+//! [`track_bar_boundaries`], so they agree on what "bar N" means, and each
+//! declares where its row records bar 0 ([`Preprocessor::first_bar`]), so
+//! both run again when the beat grid moves underneath them.
+//!
+//! [`Preprocessor`]: crate::preprocessing::preprocessor::Preprocessor
+//! [`Preprocessor::first_bar`]: crate::preprocessing::preprocessor::Preprocessor::first_bar
 
 pub mod beat_grid;
 pub mod classifier;
@@ -19,7 +23,6 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::database::local::tracks as tracks_db;
-use crate::preprocessing::preprocessor::{pending_tracks, Preprocessor};
 
 /// The error of a worker process that exited unsuccessfully: one line naming
 /// the worker and what it last said, then everything it wrote to stderr.
@@ -55,13 +58,6 @@ pub(crate) fn failed(worker: &str, stderr: &str) -> String {
         format!("{worker} failed: {said}\n\n{stderr}")
     }
 }
-
-/// Tolerance (seconds) for "first-bar duration matches current beat grid"
-/// staleness detection in [`list_pending_bar_aligned`]. A real re-detection
-/// that flips BPM (e.g. 120 → 70) shifts the bar duration by >1s, well above
-/// this floor; floating-point round-trips through `serde_json` are well below
-/// it.
-const ALIGNED_BAR_TOLERANCE_SECS: f64 = 0.1;
 
 /// Build `[(start, end), ...]` bar boundaries from downbeat times, falling
 /// back to a synthetic final bar of `60/bpm * beats_per_bar` seconds.
@@ -107,51 +103,6 @@ pub async fn track_bar_boundaries(
         beats.bpm,
         beats.beats_per_bar,
     ))
-}
-
-/// Self-correcting `list_pending` for artifacts whose rows are indexed by bar.
-///
-/// The default trait impl only asks "does a row exist at the right
-/// `processor_version`?", but a bar-indexed artifact also encodes the beat grid
-/// that was current when it ran (`bar_idx` → `(downbeats[i], downbeats[i+1])`).
-/// When that grid is later overwritten — re-detection, sync pull from another
-/// device — the indices no longer line up with the audio and the drift
-/// compounds bar by bar.
-///
-/// Detection is cheap because each worker persists its first bar's
-/// start and end: compare that span against `60/bpm * beats_per_bar` of the
-/// *current* `track_beats` row and re-queue on disagreement. The worker's
-/// normal run-and-upsert path then overwrites the stale row.
-///
-/// `first_bar_start` / `first_bar_end` are SQLite JSON paths into `json_column`
-/// (e.g. `$.first_bar[0]`, `$.bars[0].start`), which keeps the parse out of
-/// Rust so the bulk reconcile query stays a single round-trip.
-pub async fn list_pending_bar_aligned<P: Preprocessor + ?Sized>(
-    pool: &SqlitePool,
-    p: &P,
-    json_column: &str,
-    first_bar_start: &str,
-    first_bar_end: &str,
-) -> Result<Vec<String>, String> {
-    // Every interpolated fragment is a `&'static str` from the calling
-    // preprocessor — never user input.
-    let stale = format!(
-        "EXISTS (
-            SELECT 1
-              FROM {table} a
-              JOIN track_beats b ON b.track_id = a.track_id
-             WHERE a.track_id = t.id
-               AND b.bpm IS NOT NULL AND b.bpm > 0
-               AND b.beats_per_bar IS NOT NULL
-               AND ABS(
-                     (CAST(json_extract(a.{json_column}, '{first_bar_end}')   AS REAL)
-                    - CAST(json_extract(a.{json_column}, '{first_bar_start}') AS REAL))
-                   - (60.0 / b.bpm * b.beats_per_bar)
-                   ) > {ALIGNED_BAR_TOLERANCE_SECS:?}
-        )",
-        table = p.artifact_table()
-    );
-    pending_tracks(pool, p, &stale).await
 }
 
 #[cfg(test)]

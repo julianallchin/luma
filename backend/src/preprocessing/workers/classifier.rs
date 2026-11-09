@@ -41,13 +41,12 @@ pub(crate) mod process;
 use std::path::Path;
 
 use async_trait::async_trait;
-use sqlx::SqlitePool;
 
 use self::process::StoredBarClassifications;
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
-use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::preprocessing::workers::{list_pending_bar_aligned, track_bar_boundaries};
+use crate::preprocessing::preprocessor::{FirstBar, Preprocessor, PreprocessorContext};
+use crate::preprocessing::workers::track_bar_boundaries;
 
 pub struct ClassifierPreprocessor;
 
@@ -72,18 +71,14 @@ impl Preprocessor for ClassifierPreprocessor {
         "track_bar_classifications"
     }
 
-    /// Bar-aligned staleness check — see [`list_pending_bar_aligned`]. The
-    /// classifier's bars index the beat grid that was current when it
-    /// ran, so a later grid change has to re-queue the track.
-    async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
-        list_pending_bar_aligned(
-            pool,
-            self,
-            "classifications_json",
-            "$.first_bar[0]",
-            "$.first_bar[1]",
-        )
-        .await
+    /// The classifier's bars index the beat grid current when it ran, so a
+    /// later grid change has to run it again.
+    fn first_bar(&self) -> Option<FirstBar> {
+        Some(FirstBar {
+            column: "classifications_json",
+            start: "$.first_bar[0]",
+            end: "$.first_bar[1]",
+        })
     }
 
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
@@ -214,32 +209,38 @@ mod tests {
         pool
     }
 
-    /// Insert a beat-grid row used by the staleness branch of `list_pending`.
-    /// `bar_secs` is round-tripped through the `bpm` column (one bar at
-    /// 4/4 = `60/bpm * 4`), so callers think in human-readable bar widths.
-    async fn insert_beats(pool: &SqlitePool, track_id: &str, bar_secs: f64) {
-        let bpm = 60.0 * 4.0 / bar_secs;
+    /// A beat grid whose first two downbeats are `first_bar`, at a tempo
+    /// whose bar is shorter than that: a detected grid's first bar is often
+    /// not the tempo's length.
+    async fn insert_grid(pool: &SqlitePool, track_id: &str, first_bar: (f64, f64)) {
         sqlx::query(
             "INSERT INTO track_beats
                 (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, '[]', '[]', ?, 4)",
+             VALUES (?, '[]', ?, 128.0, 4)",
         )
         .bind(track_id)
-        .bind(bpm)
+        .bind(format!(
+            "[{},{},{}]",
+            first_bar.0,
+            first_bar.1,
+            first_bar.1 + 1.875
+        ))
         .execute(pool)
         .await
         .unwrap();
     }
 
-    /// Classifier output whose first bar starts at 0 and lasts `bar_secs`.
+    /// Classifier output computed against a grid whose first bar was
+    /// `first_bar`.
     async fn insert_classifications(
         pool: &SqlitePool,
         track_id: &str,
-        bar_secs: f64,
+        first_bar: (f64, f64),
         version: u32,
     ) {
         let json = format!(
-            r#"{{"first_bar":[0.0,{bar_secs}],"intensity":[1.0,2.0],"scores":[[0.1],[0.2]]}}"#
+            r#"{{"first_bar":[{},{}],"intensity":[1.0,2.0],"scores":[[0.1],[0.2]]}}"#,
+            first_bar.0, first_bar.1
         );
         sqlx::query(
             r#"INSERT INTO track_bar_classifications
@@ -279,45 +280,39 @@ mod tests {
         assert!(pending.is_empty());
     }
 
-    /// A row whose first bar matches the current beat grid is healthy and
-    /// must NOT be re-queued — sync writes that don't actually change BPM
-    /// would otherwise thrash the classifier.
+    /// A row computed against the current grid is current, so a sync write
+    /// that doesn't move the grid doesn't rerun the classifier.
     #[tokio::test]
-    async fn list_pending_skips_aligned_classifications() {
+    async fn list_pending_skips_a_row_from_the_current_grid() {
         let pool = test_pool().await;
         sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
             .execute(&pool)
             .await
             .unwrap();
-        // 147 BPM × 4/4 → 1.6327s/bar. Insert beats and classifier with
-        // matching span.
-        insert_beats(&pool, "t1", 60.0 / 147.0 * 4.0).await;
+        insert_grid(&pool, "t1", (0.5, 2.5)).await;
         let p = ClassifierPreprocessor;
-        insert_classifications(&pool, "t1", 60.0 / 147.0 * 4.0, p.version()).await;
+        insert_classifications(&pool, "t1", (0.5, 2.5), p.version()).await;
 
         let pending = p.list_pending(&pool).await.unwrap();
         assert!(
             pending.is_empty(),
-            "aligned classifier row must not be re-queued, got {pending:?}"
+            "a row from the current grid was re-queued: {pending:?}"
         );
     }
 
-    /// A row whose bar duration disagrees with the current beat grid (the
-    /// real-world bug: classifier ran at BPM=120, beats later overwritten
-    /// to BPM=70) must be re-queued so the existing run-and-upsert path
-    /// can self-heal it.
+    /// A row computed against another grid is re-queued, so the run that
+    /// follows can redo it, even when its first bar is as long as the
+    /// current grid's.
     #[tokio::test]
-    async fn list_pending_requeues_stale_classifications() {
+    async fn list_pending_requeues_a_row_from_an_earlier_grid() {
         let pool = test_pool().await;
         sqlx::query("INSERT INTO tracks (id, file_path) VALUES ('t1', '/audio/t1.mp3')")
             .execute(&pool)
             .await
             .unwrap();
-        // Current grid is 70 BPM (3.43s/bar), but the cached classifier
-        // output is at 120 BPM (2.0s/bar) — a real Relax-track scenario.
-        insert_beats(&pool, "t1", 60.0 / 70.0 * 4.0).await;
+        insert_grid(&pool, "t1", (0.5, 2.5)).await;
         let p = ClassifierPreprocessor;
-        insert_classifications(&pool, "t1", 2.0, p.version()).await;
+        insert_classifications(&pool, "t1", (0.0, 2.0), p.version()).await;
 
         let pending = p.list_pending(&pool).await.unwrap();
         assert_eq!(pending, vec!["t1".to_string()]);
@@ -334,9 +329,9 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        insert_beats(&pool, "t1", 60.0 / 70.0 * 4.0).await;
+        insert_grid(&pool, "t1", (0.5, 2.5)).await;
         let p = ClassifierPreprocessor;
-        insert_classifications(&pool, "t1", 2.0, p.version()).await;
+        insert_classifications(&pool, "t1", (0.0, 2.0), p.version()).await;
         sqlx::query(
             "INSERT INTO preprocessing_failures
                 (track_id, preprocessor, version, last_error, last_attempt, next_retry_at)

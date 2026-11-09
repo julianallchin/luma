@@ -4,11 +4,14 @@
 //! output, the artifact table it persists into) and **how** it computes
 //! ([`Preprocessor::run`]). The trait provides default implementations of
 //! [`Preprocessor::is_complete`] and [`Preprocessor::list_pending`] derived
-//! from those declarations — workers don't write SQL.
+//! from those declarations — workers don't write SQL. Both read one
+//! definition of a current artifact, so the run path and startup reconcile
+//! agree on what is left to do.
 //!
 //! Override [`Preprocessor::verify_disk`] for preprocessors whose output
 //! includes side-effect files (e.g. stems on disk) so a user-deleted
-//! directory triggers re-execution.
+//! directory triggers re-execution. Declare [`Preprocessor::first_bar`] for
+//! one whose rows are indexed by bar, so a moved beat grid reruns it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -122,6 +125,15 @@ pub trait Preprocessor: Send + Sync {
         1
     }
 
+    /// For a step whose rows are indexed by bar of the track's beat grid
+    /// (bar `i` of `workers::track_bar_boundaries`): where a row records the
+    /// first bar of the grid it ran against. Such a row describes the audio
+    /// only while that grid is current. A later beat re-detection, or a sync
+    /// pull of another device's grid, makes it stale, and the step runs again.
+    fn first_bar(&self) -> Option<FirstBar> {
+        None
+    }
+
     /// Run for one track. Implementations are responsible for persisting
     /// their typed outputs (e.g. to `track_beats`) with
     /// `processor_version = self.version()`, and any side-effect files.
@@ -137,37 +149,86 @@ pub trait Preprocessor: Send + Sync {
         Ok(true)
     }
 
-    /// Has this preprocessor's output been produced for this track at the
-    /// current `version()`? Default: `rows_per_track` rows exist with
-    /// `processor_version >= self.version()`, AND `verify_disk` passes.
+    /// Has this preprocessor's output been produced for this track, and is
+    /// it still current ([`artifact_current`])? Default: that, AND
+    /// `verify_disk` passes.
     async fn is_complete(
         &self,
         ctx: &PreprocessorContext<'_>,
         track_id: &str,
     ) -> Result<bool, String> {
-        // Table name is a `&'static str` from the trait — never user input.
         let sql = format!(
-            "SELECT COUNT(*) FROM {} WHERE track_id = ? AND processor_version >= ?",
-            self.artifact_table()
+            "SELECT {} FROM tracks t WHERE t.id = ?",
+            artifact_current(self)
         );
-        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        let current: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(track_id)
-            .bind(self.version() as i64)
-            .fetch_one(ctx.pool())
+            .fetch_optional(ctx.pool())
             .await
             .map_err(|e| format!("{} is_complete: {e}", self.name()))?;
-        if count < self.rows_per_track() {
+        if current != Some(true) {
             return Ok(false);
         }
         self.verify_disk(ctx, track_id).await
     }
 
     /// Bulk reconcile query: track IDs that need this preprocessor to run
-    /// because the artifact is missing or stale. Default: see
-    /// [`pending_tracks`] with no extra staleness condition.
+    /// because the artifact is missing or stale. See [`pending_tracks`].
     async fn list_pending(&self, pool: &SqlitePool) -> Result<Vec<String>, String> {
-        pending_tracks(pool, self, "0").await
+        pending_tracks(pool, self).await
     }
+}
+
+/// Where a row records the first bar of the beat grid it was computed
+/// against ([`Preprocessor::first_bar`]): SQLite JSON paths into one column
+/// of the artifact table, e.g. `$.first_bar[0]` and `$.first_bar[1]`.
+pub struct FirstBar {
+    pub column: &'static str,
+    pub start: &'static str,
+    pub end: &'static str,
+}
+
+/// How far (seconds) a row's first bar may sit from the grid's first two
+/// downbeats and still be that bar. Both are copies of the same numbers, so
+/// only rounding separates them; a grid that moved moves by more.
+const SAME_BAR_SECS: f64 = 0.001;
+
+/// Holds for a track `t` whose `p` artifact is current: it has
+/// `rows_per_track` rows at `p.version()` or later, and none of them was
+/// computed against a beat grid the track no longer has
+/// ([`Preprocessor::first_bar`]). The one statement of the rule: a queued
+/// track skips a step for which it holds ([`Preprocessor::is_complete`]), and
+/// reconcile queues a track for a step for which it doesn't
+/// ([`pending_tracks`]).
+///
+/// A row is stale only on evidence: a bar boundary it records that the grid
+/// has somewhere else. A value missing on either side is no evidence, so a
+/// row that can't record its first bar doesn't rerun its step at every
+/// launch.
+fn artifact_current(p: &(impl Preprocessor + ?Sized)) -> String {
+    // Every interpolated fragment is a `&'static str` or a number from the
+    // trait — never user input.
+    let table = p.artifact_table();
+    let rows = format!(
+        "((SELECT COUNT(*) FROM {table} a
+            WHERE a.track_id = t.id AND a.processor_version >= {version}) >= {rows})",
+        version = p.version(),
+        rows = p.rows_per_track(),
+    );
+    let Some(FirstBar { column, start, end }) = p.first_bar() else {
+        return rows;
+    };
+    format!(
+        "({rows} AND NOT EXISTS (
+            SELECT 1 FROM {table} a
+              JOIN track_beats b ON b.track_id = a.track_id
+             WHERE a.track_id = t.id
+               AND (ABS(json_extract(a.{column}, '{start}')
+                        - json_extract(b.downbeats_json, '$[0]')) >= {SAME_BAR_SECS:?}
+                 OR ABS(json_extract(a.{column}, '{end}')
+                        - json_extract(b.downbeats_json, '$[1]')) >= {SAME_BAR_SECS:?})
+        ))"
+    )
 }
 
 /// Holds for a track `t` whose synced analysis this device may write: the
@@ -189,14 +250,11 @@ pub(crate) fn writes_synced_rows(p: &(impl Preprocessor + ?Sized)) -> bool {
 }
 
 /// Track IDs `p` should run for: tracks with local audio whose analysis this
-/// device writes, not in failure backoff for `p`, whose artifact has fewer
-/// than `rows_per_track` rows at the current version — or for which `stale`
-/// holds. `stale` is an SQL condition over the outer track `t`; the caller
-/// passes a `&'static`-built fragment, never user input.
+/// device writes, not in failure backoff for `p`, whose artifact is missing
+/// or stale ([`artifact_current`]).
 pub async fn pending_tracks<P: Preprocessor + ?Sized>(
     pool: &SqlitePool,
     p: &P,
-    stale: &str,
 ) -> Result<Vec<String>, String> {
     let sql = format!(
         "SELECT t.id FROM tracks t
@@ -208,12 +266,8 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
                 SELECT 1 FROM preprocessing_failures f
                  WHERE f.track_id = t.id AND f.preprocessor = ?1 AND {in_backoff}
             )
-            AND (
-                (SELECT COUNT(*) FROM {table} a
-                  WHERE a.track_id = t.id AND a.processor_version >= ?2) < ?3
-                OR ({stale})
-            )",
-        table = p.artifact_table(),
+            AND NOT {current}",
+        current = artifact_current(p),
         in_backoff = crate::preprocessing::failures::IN_BACKOFF,
         authors = if writes_synced_rows(p) {
             AUTHORS_SYNCED_ANALYSIS
@@ -223,8 +277,6 @@ pub async fn pending_tracks<P: Preprocessor + ?Sized>(
     );
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(p.name())
-        .bind(p.version() as i64)
-        .bind(p.rows_per_track())
         .fetch_all(pool)
         .await
         .map_err(|e| format!("{} list_pending: {e}", p.name()))
