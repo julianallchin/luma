@@ -252,6 +252,15 @@ impl Luma {
         self.reload_settings(cx);
     }
 
+    /// The menu's "About Luma": the page, on its About section.
+    pub(crate) fn open_about(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(cx);
+        if let Some(state) = &mut self.settings {
+            state.tab = Tab::About;
+        }
+        cx.notify();
+    }
+
     /// Take the page down: Back or Escape. Reports whether it was up —
     /// Escape's rung.
     pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) -> bool {

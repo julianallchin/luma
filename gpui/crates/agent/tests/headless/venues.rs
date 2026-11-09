@@ -647,6 +647,43 @@ fn each_venue_keeps_its_mode_and_score_across_a_relaunch() {
     assert_eq!(out["score"], true);
 }
 
+/// A page changed just before quitting is the page the next launch opens on:
+/// quitting writes the save that was still waiting out its debounce.
+#[test]
+fn a_page_changed_just_before_quitting_survives_the_relaunch() {
+    let dir = fixture_dir("quit-page", &[("alpha", "Alpha Hall")], None, true);
+    let mut first = harness(&dir, luma_app::NavigationFixture::default());
+    first.run(
+        &support::script(
+            r#"
+        nav.venue("Alpha Hall");
+        nav.mode("Rig");
+        until("Rig", (s) => s.find({ role: "card", label: "Alpha Hall Venue" }));
+        // No wait for the debounce: quit at once.
+        app.key("cmd-q");
+        until("the window to close", () => !app.isOpen());
+        true
+        "#,
+        ),
+        Duration::from_secs(90),
+    );
+    drop(first);
+
+    let mut second = harness(&dir, luma_app::NavigationFixture::default());
+    let out = second.run(
+        &support::script(
+            r#"
+        const shown = until("Alpha, restored", (s) =>
+            s.find({ role: "button", label: "Alpha Hall" })?.bounds.y < 44
+            && s.find({ role: "card", label: "Alpha Hall Venue" }) !== undefined ? s : undefined);
+        ({ rig: nav.shownMode(shown) === "Rig" })
+        "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(out["rig"], true);
+}
+
 /// Live's deck panel keeps the width it was dragged to across a relaunch.
 #[test]
 fn the_deck_panel_width_survives_a_relaunch() {

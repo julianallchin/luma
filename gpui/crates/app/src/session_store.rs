@@ -78,17 +78,36 @@ impl Luma {
         stored.value = value;
         stored.writes += 1;
         let (key, generation) = (stored.key, stored.writes);
+        self.unsaved_session.insert(key, json);
         let wait = self.library.debounce(SAVE_WAIT);
         cx.spawn(async move |this, cx| {
             wait.await;
             let Ok(Some(write)) = this.update(cx, |this, _| {
-                (item(this).writes == generation).then(|| this.library.set_session_item(key, &json))
+                if item(this).writes != generation {
+                    return None;
+                }
+                let json = this.unsaved_session.remove(key)?;
+                Some(this.library.set_session_item(key, &json))
             }) else {
                 return;
             };
             let _ = write.await;
         })
         .detach();
+    }
+
+    /// Write every item still waiting out its debounce, now: the shell is
+    /// going away, and the timer that would have written them goes with it.
+    pub(crate) fn flush_session(&mut self) -> Vec<impl std::future::Future<Output = ()> + use<>> {
+        std::mem::take(&mut self.unsaved_session)
+            .into_iter()
+            .map(|(key, json)| {
+                let write = self.library.set_session_item(key, &json);
+                async move {
+                    let _ = write.await;
+                }
+            })
+            .collect()
     }
 }
 

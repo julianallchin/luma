@@ -90,6 +90,9 @@ pub(crate) struct Perform {
     /// that left before an edit would put back what the edit replaced, so it
     /// lands only if nothing was edited since it left.
     edits: u64,
+    /// A color dragged in Setup waits out its debounce before the layout
+    /// holding it is saved: what a quit must save sooner.
+    color_owed: bool,
     /// The bank's count of sets installed, as of the last poll: when it
     /// moves, the set as stored may have changed, and is read again.
     installs: u64,
@@ -431,6 +434,7 @@ impl Luma {
             patterns: None,
             layout: None,
             edits: 0,
+            color_owed: false,
             installs: 0,
             controls: Vec::new(),
             groups: Vec::new(),
@@ -1422,6 +1426,7 @@ impl Luma {
         };
         *value = ListValue::Color(rgb);
         state.edits += 1;
+        state.color_owed = true;
         let edits = state.edits;
         let wait = self.library.debounce(SAVE_COLOR_AFTER);
         let target = target.clone();
@@ -1430,18 +1435,41 @@ impl Luma {
             wait.await;
             this.update(cx, |this, cx| {
                 // A later edit saves the layout, this color in it.
-                let layout = this
+                let due = this
                     .perform_mut(&target)
-                    .filter(|state| state.edits == edits)
-                    .and_then(|state| state.layout.clone());
-                if let Some(layout) = layout {
-                    let save = this.library.save_perform_layout(target.venue(), layout);
-                    this.after_request("The color was not saved", save, cx);
+                    .is_some_and(|state| state.edits == edits);
+                if due {
+                    this.save_owed_color(&target, cx);
                 }
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Save every layout a dragged color is waiting on, in every venue.
+    pub(crate) fn flush_owed_colors(&mut self, cx: &mut Context<Self>) {
+        let owed: Vec<Target> = self
+            .venues
+            .slots(&self.workspace)
+            .filter(|slot| matches!(&slot.body, Body::Perform(state) if state.color_owed))
+            .map(|slot| slot.target.clone())
+            .collect();
+        for target in owed {
+            self.save_owed_color(&target, cx);
+        }
+    }
+
+    /// Save `target`'s layout if a dragged color is waiting on it.
+    pub(crate) fn save_owed_color(&mut self, target: &Target, cx: &mut Context<Self>) {
+        let Some(state) = self.perform_mut(target).filter(|state| state.color_owed) else {
+            return;
+        };
+        state.color_owed = false;
+        if let Some(layout) = state.layout.clone() {
+            let save = self.library.save_perform_layout(target.venue(), layout);
+            self.after_request("The color was not saved", save, cx);
+        }
     }
 
     /// Open or close the inspector's group menu.

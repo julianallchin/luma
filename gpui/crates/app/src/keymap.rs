@@ -34,9 +34,10 @@
 //!
 //! Every shortcut a person can see and change is a row of [`SHORTCUTS`]: its
 //! action, a stable id, a title, the group Settings lists it under, its
-//! default keys, where it is live and the menu it sits in. The keymap's
-//! bindings, the menu bar and Settings → Shortcuts are all read off it, so the
-//! three cannot disagree. A rebind is an [`Overrides`] entry (id → keys),
+//! default keys and where it is live. The keymap's bindings and Settings →
+//! Shortcuts are read off it, and the menu bar ([`menus`]) names its items'
+//! rows by id, so a menu shows the key the keyboard answers to and the three
+//! cannot disagree. A rebind is an [`Overrides`] entry (id → keys),
 //! kept per machine in the session store; [`apply`] rebuilds the keymap and
 //! the menus from it, live.
 //!
@@ -51,7 +52,7 @@ use std::rc::Rc;
 
 use gpui::{
     actions, Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate,
-    KeyBindingMetaIndex, KeyContext, Keystroke, Menu, MenuItem,
+    KeyBindingMetaIndex, KeyContext, Keystroke, Menu, MenuItem, OsAction, SystemMenuType,
 };
 
 /// The key contexts a dispatch path can carry: the window's, each region's,
@@ -99,6 +100,8 @@ pub(crate) mod context {
     pub const CONFIRM: &str = "Confirm";
     /// "An update is ready" — see [`crate::update`].
     pub const UPDATE_READY: &str = "UpdateReady";
+    /// "Syncing your changes", on the way out — see [`crate::quit`].
+    pub const QUIT_SYNC: &str = "QuitSync";
     /// The "Export show" dialog — see [`crate::export_dialog`].
     pub const SHOW_EXPORT: &str = "ShowExport";
     /// The full-screen sign-in state. Not in [`DIALOGS`]: it is not a plane
@@ -113,7 +116,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 10] = [
+    pub const DIALOGS: [&str; 11] = [
         VENUES,
         SETTINGS,
         ADD_TRACKS,
@@ -123,6 +126,7 @@ pub(crate) mod context {
         PATTERN_INSERT,
         CONFIRM,
         UPDATE_READY,
+        QUIT_SYNC,
         SHOW_EXPORT,
     ];
     /// Declared by a focused field that is taking typed text. Any binding on
@@ -167,7 +171,37 @@ actions!(
         ToggleVisualizer,
         ToggleVisualizerFullscreen,
         DismissVisualizerFullscreen,
+        /// Quit, once local changes are on the server — see [`crate::quit`].
         Quit,
+        /// Close the window. Luma has one, so this is a quit too.
+        CloseWindow,
+        /// The window's and the app's own platform verbs, for the menu bar.
+        HideLuma,
+        HideOthers,
+        ShowAll,
+        Minimize,
+        Zoom,
+        ToggleFullScreen,
+        /// Settings, opened on About.
+        About,
+        /// Ask the updater now rather than at the next hourly poll.
+        CheckForUpdates,
+        /// Open the user guide on luma.show.
+        OpenDocs,
+        /// The add-track dialog, over the open venue.
+        AddSongs,
+        /// A new, empty score of the song open in Arrange.
+        NewScore,
+        /// The editing verbs. Each goes to whatever has the keyboard: a text
+        /// field, the timeline's clips or the stage builder — see
+        /// [`crate::Luma::edit`]. One action per verb, so the Edit menu has
+        /// one item per verb and shows the key that does it.
+        Undo,
+        Redo,
+        Cut,
+        Copy,
+        Paste,
+        SelectAll,
         /// Copy the stage builder's selected subtree onto the cursor. Scoped
         /// to the stage page, because ⌘D means nothing anywhere else and a
         /// shell-wide binding would take the chord from every tab that might
@@ -184,9 +218,6 @@ actions!(
         DeleteStageElement,
         /// Open the stage builder's add-element dialog, caret in its search.
         AddStageElement,
-        /// Restore the stage graph a verb replaced / step forward again.
-        UndoStage,
-        RedoStage,
         /// Zoom the stage camera a step in / out at the pane's centre — the
         /// wheel's verb on a key.
         ZoomStageIn,
@@ -199,9 +230,6 @@ actions!(
         ExportStageCamera,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
-        /// Undo / redo the track editor's last edit.
-        UndoClips,
-        RedoClips,
         /// Loop the track editor's cursor range, or clear the loop it already
         /// describes.
         ToggleLoopRegion,
@@ -210,9 +238,6 @@ actions!(
         DeleteClips,
         /// Cut every clip the track editor's cursor crosses in two.
         SplitClips,
-        CopyClips,
-        CutClips,
-        PasteClips,
         /// Lay a copy of the selection down immediately after it.
         DuplicateClips,
         /// Move the track editor's selection one lane up / down.
@@ -254,8 +279,9 @@ pub(crate) enum Scope {
     Shell,
     /// Arrange's timeline.
     Timeline,
-    /// The timeline and the clip graph page, which keeps the score's undo.
-    Clips,
+    /// Wherever there is an undo history: the timeline, the clip graph page
+    /// (which keeps the score's) and the stage builder.
+    Undoable,
     /// The timeline or the room, wherever either is drawn.
     Transport,
     /// The stage builder, embedded or fullscreen.
@@ -289,7 +315,12 @@ impl Scope {
             // `secondary-c` is the clipboard a field already owns, so the
             // editor's chords leave fields alone as its letters do.
             Scope::Timeline => no_text(context::TRACK_EDITOR),
-            Scope::Clips => either(context::TRACK_EDITOR, context::CLIP_GRAPH),
+            Scope::Undoable => no_text(&format!(
+                "({} || {} || {})",
+                context::TRACK_EDITOR,
+                context::CLIP_GRAPH,
+                context::STAGE
+            )),
             Scope::Transport => either(context::TRACK_EDITOR, context::VISUALIZER),
             Scope::Stage => no_text(context::STAGE),
             Scope::Room => no_text(context::VISUALIZER),
@@ -299,13 +330,6 @@ impl Scope {
             Scope::AddTracks => context::ADD_TRACKS.to_string(),
         })
     }
-}
-
-/// The menu-bar menu a row sits in, if any.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuSlot {
-    App,
-    View,
 }
 
 /// One shortcut a person can see and rebind.
@@ -318,76 +342,79 @@ pub(crate) struct Shortcut {
     /// The default keys, first the one a hint shows.
     pub(crate) keys: &'static [&'static str],
     pub(crate) scope: Scope,
-    pub(crate) menu: Option<MenuSlot>,
     action: fn() -> Box<dyn Action>,
 }
 
 macro_rules! row {
-    ($id:literal, $title:literal, $group:literal, [$($key:literal),*], $scope:ident, $menu:expr, $action:ident) => {
+    ($id:literal, $title:literal, $group:literal, [$($key:literal),*], $scope:ident, $action:ident) => {
         Shortcut {
             id: $id,
             title: $title,
             group: $group,
             keys: &[$($key),*],
             scope: Scope::$scope,
-            menu: $menu,
             action: || Box::new($action),
         }
     };
 }
 
-const APP: Option<MenuSlot> = Some(MenuSlot::App);
-const VIEW: Option<MenuSlot> = Some(MenuSlot::View);
-
-/// Every rebindable shortcut, in the order Settings and the menus list them.
+/// Every rebindable shortcut, in the order Settings lists them.
 ///
 /// An editing chord is listed under `secondary-` and `ctrl-` both: control
 /// works on macOS too, so the hand that learned it on one platform keeps it
 /// on the next. Elsewhere the two spellings are one binding.
 #[rustfmt::skip]
 pub(crate) const SHORTCUTS: &[Shortcut] = &[
-    row!("app.settings", "Open settings", "General", ["secondary-,"], Shell, APP, OpenSettings),
-    row!("app.quit", "Quit Luma", "General", ["secondary-q"], App, APP, Quit),
-    row!("view.agent", "Show or hide the agent panel", "View", ["secondary-b"], Shell, VIEW, ToggleAgent),
-    row!("view.song_list", "Song list", "View", ["secondary-p"], Shell, VIEW, ShowSongList),
+    row!("app.settings", "Open settings", "General", ["secondary-,"], Shell, OpenSettings),
+    row!("app.quit", "Quit Luma", "General", ["secondary-q"], App, Quit),
+    row!("view.agent", "Show or hide the agent panel", "View", ["secondary-b"], Shell, ToggleAgent),
+    row!("view.song_list", "Song list", "View", ["secondary-p"], Shell, ShowSongList),
     // Not a bare letter: the track editor's alphabet is already spoken for,
     // and this reshapes the column that editor sits in.
-    row!("view.visualizer", "Show or hide the visualizer", "View", ["secondary-shift-v"], Shell, VIEW, ToggleVisualizer),
-    row!("view.fullscreen", "Fullscreen visualizer", "View", ["shift-f"], Room, VIEW, ToggleVisualizerFullscreen),
-    row!("mode.rig", "Rig", "Modes", ["1"], Shell, VIEW, ShowRig),
-    row!("mode.arrange", "Arrange", "Modes", ["2"], Shell, VIEW, ShowArrange),
-    row!("mode.live", "Live", "Modes", ["3"], Shell, VIEW, ShowLive),
-    row!("arrange.play", "Play or pause", "Arrange", ["space"], Transport, None, PlayPause),
-    row!("arrange.follow", "Follow the playhead", "Arrange", ["f"], Timeline, None, FollowPlayhead),
+    row!("view.visualizer", "Show or hide the visualizer", "View", ["secondary-shift-v"], Shell, ToggleVisualizer),
+    row!("view.fullscreen", "Fullscreen visualizer", "View", ["shift-f"], Room, ToggleVisualizerFullscreen),
+    row!("mode.rig", "Rig", "Modes", ["1"], Shell, ShowRig),
+    row!("mode.arrange", "Arrange", "Modes", ["2"], Shell, ShowArrange),
+    row!("mode.live", "Live", "Modes", ["3"], Shell, ShowLive),
+    row!("app.hide", "Hide Luma", "Window", ["secondary-h"], App, HideLuma),
+    row!("app.hide_others", "Hide other apps", "Window", ["alt-secondary-h"], App, HideOthers),
+    row!("window.close", "Close the window", "Window", ["secondary-w"], App, CloseWindow),
+    row!("window.minimize", "Minimize the window", "Window", ["secondary-m"], App, Minimize),
+    row!("window.fullscreen", "Full screen", "Window", ["ctrl-cmd-f"], App, ToggleFullScreen),
+    // The ids say `arrange.` because that is where these began; an id is a
+    // stored rebind's key and never changes.
+    row!("arrange.undo", "Undo", "Edit", ["secondary-z", "ctrl-z"], Undoable, Undo),
+    row!("arrange.redo", "Redo", "Edit", ["secondary-shift-z", "ctrl-shift-z"], Undoable, Redo),
+    row!("arrange.cut", "Cut", "Edit", ["secondary-x", "ctrl-x"], Timeline, Cut),
+    row!("arrange.copy", "Copy", "Edit", ["secondary-c", "ctrl-c"], Timeline, Copy),
+    row!("arrange.paste", "Paste", "Edit", ["secondary-v", "ctrl-v"], Timeline, Paste),
+    // Bound on the shell so the menu can show it; a field's own ⌘A sits
+    // deeper and wins, and nothing outside a field selects all yet.
+    row!("edit.select_all", "Select all", "Edit", ["secondary-a"], Shell, SelectAll),
+    row!("arrange.play", "Play or pause", "Arrange", ["space"], Transport, PlayPause),
+    row!("arrange.follow", "Follow the playhead", "Arrange", ["f"], Timeline, FollowPlayhead),
     // The other escape hatch from a lane stack taller than the canvas.
-    row!("arrange.fit", "Fit every lane", "Arrange", ["h"], Timeline, None, FitLanes),
-    row!("arrange.undo", "Undo", "Arrange", ["secondary-z", "ctrl-z"], Clips, None, UndoClips),
-    row!("arrange.redo", "Redo", "Arrange", ["secondary-shift-z", "ctrl-shift-z"], Clips, None, RedoClips),
-    row!("arrange.loop", "Loop the selection", "Arrange", ["secondary-l", "ctrl-l"], Timeline, None, ToggleLoopRegion),
-    row!("arrange.split", "Split at the cursor", "Arrange", ["secondary-e", "ctrl-e"], Timeline, None, SplitClips),
-    row!("arrange.copy", "Copy", "Arrange", ["secondary-c", "ctrl-c"], Timeline, None, CopyClips),
-    row!("arrange.cut", "Cut", "Arrange", ["secondary-x", "ctrl-x"], Timeline, None, CutClips),
-    row!("arrange.paste", "Paste", "Arrange", ["secondary-v", "ctrl-v"], Timeline, None, PasteClips),
-    row!("arrange.duplicate", "Duplicate", "Arrange", ["secondary-d", "ctrl-d"], Timeline, None, DuplicateClips),
-    row!("arrange.delete", "Delete", "Arrange", ["delete", "backspace"], Timeline, None, DeleteClips),
-    row!("arrange.move_up", "Move up a lane", "Arrange", ["alt-up"], Timeline, None, MoveClipsUp),
-    row!("arrange.move_down", "Move down a lane", "Arrange", ["alt-down"], Timeline, None, MoveClipsDown),
-    row!("rig.add", "Add an element", "Rig", ["a"], Stage, None, AddStageElement),
-    row!("rig.duplicate", "Duplicate", "Rig", ["secondary-d"], Stage, None, DuplicateSubtree),
-    row!("rig.delete", "Delete", "Rig", ["delete", "backspace"], Stage, None, DeleteStageElement),
-    row!("rig.undo", "Undo", "Rig", ["secondary-z", "ctrl-z"], Stage, None, UndoStage),
-    row!("rig.redo", "Redo", "Rig", ["secondary-shift-z", "ctrl-shift-z"], Stage, None, RedoStage),
-    row!("rig.move", "Move tool", "Rig", ["w"], Stage, None, GizmoTranslate),
-    row!("rig.rotate", "Rotate tool", "Rig", ["e"], Stage, None, GizmoRotate),
-    row!("room.frame", "Frame the selection", "Visualizer", ["f"], Framing, None, FocusStageSelection),
-    row!("room.zoom_in", "Zoom in", "Visualizer", ["="], Room, None, ZoomStageIn),
-    row!("room.zoom_out", "Zoom out", "Visualizer", ["-"], Room, None, ZoomStageOut),
-    row!("room.export_camera", "Export the camera", "Visualizer", ["secondary-shift-e"], Room, None, ExportStageCamera),
-    row!("venues.create", "Create a venue", "Venues", ["secondary-enter"], Venues, None, CreateVenue),
-    row!("venues.join", "Join with a code", "Venues", ["secondary-j"], Venues, None, JoinVenue),
-    row!("venues.share", "Share a venue", "Venues", ["secondary-i"], Venues, None, ShareVenue),
-    row!("venues.copy_code", "Copy the share code", "Venues", ["secondary-c"], VenuesUntyped, None, CopyShareCode),
-    row!("add_tracks.import", "Import", "Add tracks", ["secondary-enter"], AddTracks, None, ImportTracks),
+    row!("arrange.fit", "Fit every lane", "Arrange", ["h"], Timeline, FitLanes),
+    row!("arrange.loop", "Loop the selection", "Arrange", ["secondary-l", "ctrl-l"], Timeline, ToggleLoopRegion),
+    row!("arrange.split", "Split at the cursor", "Arrange", ["secondary-e", "ctrl-e"], Timeline, SplitClips),
+    row!("arrange.duplicate", "Duplicate", "Arrange", ["secondary-d", "ctrl-d"], Timeline, DuplicateClips),
+    row!("arrange.delete", "Delete", "Arrange", ["delete", "backspace"], Timeline, DeleteClips),
+    row!("arrange.move_up", "Move up a lane", "Arrange", ["alt-up"], Timeline, MoveClipsUp),
+    row!("arrange.move_down", "Move down a lane", "Arrange", ["alt-down"], Timeline, MoveClipsDown),
+    row!("rig.add", "Add an element", "Rig", ["a"], Stage, AddStageElement),
+    row!("rig.duplicate", "Duplicate", "Rig", ["secondary-d"], Stage, DuplicateSubtree),
+    row!("rig.delete", "Delete", "Rig", ["delete", "backspace"], Stage, DeleteStageElement),
+    row!("rig.move", "Move tool", "Rig", ["w"], Stage, GizmoTranslate),
+    row!("rig.rotate", "Rotate tool", "Rig", ["e"], Stage, GizmoRotate),
+    row!("room.frame", "Frame the selection", "Visualizer", ["f"], Framing, FocusStageSelection),
+    row!("room.zoom_in", "Zoom in", "Visualizer", ["="], Room, ZoomStageIn),
+    row!("room.zoom_out", "Zoom out", "Visualizer", ["-"], Room, ZoomStageOut),
+    row!("room.export_camera", "Export the camera", "Visualizer", ["secondary-shift-e"], Room, ExportStageCamera),
+    row!("venues.create", "Create a venue", "Venues", ["secondary-enter"], Venues, CreateVenue),
+    row!("venues.join", "Join with a code", "Venues", ["secondary-j"], Venues, JoinVenue),
+    row!("venues.share", "Share a venue", "Venues", ["secondary-i"], Venues, ShareVenue),
+    row!("venues.copy_code", "Copy the share code", "Venues", ["secondary-c"], VenuesUntyped, CopyShareCode),
+    row!("add_tracks.import", "Import", "Add tracks", ["secondary-enter"], AddTracks, ImportTracks),
 ];
 
 /// What this machine has rebound: a row's id to the keys it has instead of
@@ -490,28 +517,79 @@ pub(crate) fn from_table(binding: &KeyBinding) -> bool {
     binding.meta() == Some(TABLE)
 }
 
-/// The menu bar, from the table: each row with a menu, in table order, a
-/// rule between groups. gpui shows each item's key from the keymap.
+/// Where the user guide lives: the Help menu's one item.
+const DOCS_URL: &str = "https://luma.show/docs/user-guide/why-luma";
+
+/// The menu bar: the standard macOS menus, holding only what this app does.
+///
+/// An item with a key names its [`SHORTCUTS`] row by id, and gpui reads the
+/// key it shows off the keymap, so a rebind moves the menu's key too and an
+/// item can only show a key the keyboard answers to. An item without a row
+/// carries an action nothing binds, so it shows no key at all. The
+/// `menu_keys_are_the_tables` test holds both halves.
 fn menus() -> Vec<Menu> {
-    let menu = |name: &'static str, slot: MenuSlot| {
-        let mut items = Vec::new();
-        let mut group = None;
-        for row in SHORTCUTS.iter().filter(|row| row.menu == Some(slot)) {
-            if group.is_some_and(|group| group != row.group) {
-                items.push(MenuItem::separator());
-            }
-            group = Some(row.group);
-            items.push(MenuItem::Action {
-                name: row.title.into(),
-                action: row.action(),
-                os_action: None,
-                checked: false,
-                disabled: false,
-            });
+    let row = |name: &'static str, id: &str, os_action: Option<OsAction>| {
+        let row = Shortcut::by_id(id).unwrap_or_else(|| panic!("no shortcut row {id}"));
+        MenuItem::Action {
+            name: name.into(),
+            action: row.action(),
+            os_action,
+            checked: false,
+            disabled: false,
         }
-        Menu::new(name).items(items)
     };
-    vec![menu("Luma", MenuSlot::App), menu("View", MenuSlot::View)]
+    let key = |name, id| row(name, id, None);
+    // The editing verbs also answer the platform's own selectors, so a
+    // system panel's field gets Cut and Paste from this menu as well.
+    let edit = |name, id, os| row(name, id, Some(os));
+    vec![
+        Menu::new("Luma").items([
+            MenuItem::action("About Luma", About),
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
+            key("Settings…", "app.settings"),
+            MenuItem::separator(),
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            key("Hide Luma", "app.hide"),
+            key("Hide Others", "app.hide_others"),
+            MenuItem::action("Show All", ShowAll),
+            MenuItem::separator(),
+            key("Quit Luma", "app.quit"),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("Add Songs…", AddSongs),
+            MenuItem::action("New Score", NewScore),
+            MenuItem::separator(),
+            key("Close Window", "window.close"),
+        ]),
+        Menu::new("Edit").items([
+            edit("Undo", "arrange.undo", OsAction::Undo),
+            edit("Redo", "arrange.redo", OsAction::Redo),
+            MenuItem::separator(),
+            edit("Cut", "arrange.cut", OsAction::Cut),
+            edit("Copy", "arrange.copy", OsAction::Copy),
+            edit("Paste", "arrange.paste", OsAction::Paste),
+            edit("Select All", "edit.select_all", OsAction::SelectAll),
+        ]),
+        Menu::new("View").items([
+            key("Rig", "mode.rig"),
+            key("Arrange", "mode.arrange"),
+            key("Live", "mode.live"),
+            MenuItem::separator(),
+            key("Agent Panel", "view.agent"),
+            key("Song List", "view.song_list"),
+            key("Visualizer", "view.visualizer"),
+            key("Fullscreen Visualizer", "view.fullscreen"),
+            MenuItem::separator(),
+            key("Enter Full Screen", "window.fullscreen"),
+        ]),
+        Menu::new("Window").items([
+            key("Minimize", "window.minimize"),
+            MenuItem::action("Zoom", Zoom),
+        ]),
+        Menu::new("Help").items([MenuItem::action("Luma Documentation", OpenDocs)]),
+    ]
 }
 
 /// Put the table's bindings for `overrides` in place of the ones bound now,
@@ -664,6 +742,35 @@ pub(crate) fn init_field_overrides(cx: &mut App) {
 /// Called from [`crate::init`], so the real binary and the harness get the
 /// same keyboard; a machine's rebinds land later, through [`apply`].
 pub(crate) fn init(cx: &mut App) {
+    let mut bindings = fixed_bindings();
+    bindings.extend(table_bindings(&Overrides::new()));
+    cx.bind_keys(bindings);
+    // Luma is one window, so closing it is quitting, on every platform.
+    cx.set_quit_mode(gpui::QuitMode::LastWindowClosed);
+    cx.on_action(|_: &Quit, cx| crate::quit::request(cx));
+    cx.on_action(|_: &CloseWindow, cx| crate::quit::request(cx));
+    cx.on_action(|_: &HideLuma, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+    cx.on_action(|_: &OpenDocs, cx| cx.open_url(DOCS_URL));
+    cx.on_action(|_: &Minimize, cx| in_window(cx, |window| window.minimize_window()));
+    cx.on_action(|_: &Zoom, cx| in_window(cx, |window| window.zoom_window()));
+    cx.on_action(|_: &ToggleFullScreen, cx| {
+        in_window(cx, |window| window.toggle_fullscreen());
+    });
+    cx.set_menus(menus());
+}
+
+/// Run `f` on the window in front, if there is one.
+fn in_window(cx: &mut App, f: impl FnOnce(&mut gpui::Window)) {
+    if let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) {
+        window.update(cx, |_, window, _| f(window)).ok();
+    }
+}
+
+/// The bindings outside the table: Escape, which dismisses whatever is
+/// innermost and is not a person's to move, and the insertion menu's walk.
+fn fixed_bindings() -> Vec<KeyBinding> {
     let escape = format!(
         "{} && !{} && !{}",
         context::ROOT,
@@ -676,7 +783,7 @@ pub(crate) fn init(cx: &mut App) {
     let dialog = context::DIALOGS.join(" || ");
     // The insertion menu's walk, in its own context and in the editor.
     let editing = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
-    let mut bindings = vec![
+    vec![
         KeyBinding::new("down", NextInsertOption, Some(context::PATTERN_INSERT)),
         KeyBinding::new("up", PrevInsertOption, Some(context::PATTERN_INSERT)),
         KeyBinding::new("enter", CommitInsertOption, Some(context::PATTERN_INSERT)),
@@ -692,11 +799,7 @@ pub(crate) fn init(cx: &mut App) {
             DismissVisualizerFullscreen,
             Some(context::VISUALIZER_FULLSCREEN),
         ),
-    ];
-    bindings.extend(table_bindings(&Overrides::new()));
-    cx.bind_keys(bindings);
-    cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.set_menus(menus());
+    ]
 }
 
 #[cfg(test)]
@@ -795,6 +898,69 @@ mod tests {
         assert_eq!(bound[0].keystrokes()[0].key(), "u");
         overrides.insert("arrange.undo".into(), vec!["ctrl-u-v".into()]);
         assert!(undo.bindings(&overrides).is_empty());
+    }
+
+    /// Every menu item shows the key its row is bound to, rebound or not,
+    /// and an item that is no row's shows none, because nothing binds its
+    /// action. gpui shows an item the first binding of its action, so that
+    /// is what is read here, over the whole keymap the app binds.
+    #[test]
+    fn menu_keys_are_the_tables() {
+        fn actions(items: &[MenuItem], out: &mut Vec<(String, Box<dyn Action>)>) {
+            for item in items {
+                match item {
+                    MenuItem::Action { name, action, .. } => {
+                        out.push((name.to_string(), action.boxed_clone()))
+                    }
+                    MenuItem::Submenu(menu) => actions(&menu.items, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut rebound = Overrides::new();
+        rebound.insert("app.settings".into(), vec!["alt-secondary-s".into()]);
+        rebound.insert("arrange.undo".into(), vec!["alt-u".into()]);
+        for overrides in [Overrides::new(), rebound] {
+            let keymap: Vec<KeyBinding> = fixed_bindings()
+                .into_iter()
+                .chain(table_bindings(&overrides))
+                .collect();
+            let mut items = Vec::new();
+            for menu in menus() {
+                actions(&menu.items, &mut items);
+            }
+            let mut keyed = 0;
+            for (name, action) in &items {
+                let shown = keymap
+                    .iter()
+                    .find(|binding| binding.action().name() == action.name())
+                    .map(|binding| binding.keystrokes()[0].unparse());
+                match Shortcut::of(action.as_ref()) {
+                    Some(row) => {
+                        let first = row.keys(&overrides)[0];
+                        let first = Keystroke::parse(first).unwrap().unparse();
+                        assert_eq!(shown.as_deref(), Some(first.as_str()), "{name}");
+                        keyed += 1;
+                    }
+                    None => assert_eq!(shown, None, "{name} shows a key no row owns"),
+                }
+            }
+            assert!(keyed > 10, "the menus show {keyed} keys");
+        }
+    }
+
+    /// Each menu item is there once: a verb in two menus is a menu that
+    /// disagrees with itself the first time one of them changes.
+    #[test]
+    fn no_menu_item_is_listed_twice() {
+        let mut seen = HashSet::new();
+        for menu in menus() {
+            for item in &menu.items {
+                if let MenuItem::Action { action, .. } = item {
+                    assert!(seen.insert(action.name()), "{} twice", action.name());
+                }
+            }
+        }
     }
 
     #[test]

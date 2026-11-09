@@ -13,11 +13,11 @@ use luma_lib::stage_render::Aim;
 use tokio::sync::watch;
 
 use gpui::prelude::*;
-use gpui::{div, px, relative, AnyElement, Context, Entity, SharedString};
+use gpui::{div, px, AnyElement, Context, Entity, SharedString};
 
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::{float, glass, ladder};
+use luma_ui::{float, glass};
 
 use crate::shell::{Body, Overlay};
 use crate::Luma;
@@ -528,18 +528,7 @@ fn running(export: &Export, app: &Entity<Luma>) -> gpui::Div {
     } else {
         clock((total - done) as f64 / fps)
     };
-    let bar = div()
-        .w_full()
-        .h(px(6.))
-        .rounded(px(3.))
-        .bg(glass::ink(0.08))
-        .child(
-            div()
-                .h_full()
-                .w(relative(fraction))
-                .rounded(px(3.))
-                .bg(ladder::foreground()),
-        );
+    let bar = luma_ui::progress::bar(fraction);
     div()
         .flex()
         .flex_col()

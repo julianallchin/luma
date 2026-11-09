@@ -59,6 +59,7 @@ pub mod notice;
 pub mod paint;
 pub mod pane;
 pub mod pill;
+pub mod progress;
 pub mod radius;
 pub mod rem_scale;
 pub mod runtime;

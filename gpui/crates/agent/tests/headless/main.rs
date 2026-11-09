@@ -19,3 +19,5 @@ mod venue_builder;
 mod venues;
 
 mod sync_status;
+
+mod quit_sync;

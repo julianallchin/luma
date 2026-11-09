@@ -325,7 +325,7 @@ function placeAndType() {
 
 test("height drags, types and undoes a free placement", () => {
   const lifted = placeAndType();
-  app.action("luma::UndoStage");
+  app.action("luma::Undo");
   until("the dragged height back", () => height() === lifted);
   expect(one("Edge: ")).toContain("venue floor");
 });
@@ -527,9 +527,9 @@ test("undo takes a placement back and redo replays it", () => {
   settle("the placement to land", () => there() > 0);
   app.key("escape");
   app.frames(4);
-  app.action("luma::UndoStage");
+  app.action("luma::Undo");
   settle("the placement to unwind", () => there() === 0);
-  app.action("luma::RedoStage");
+  app.action("luma::Redo");
   settle("the piece to come back", () => there() > 0);
 });
 
@@ -553,7 +553,7 @@ test("the element list removes immediately and undo restores it", () => {
   // A light never outlives its place: the lights hung on the element go
   // with it, and undo brings them back with their patch rows.
   until("the fixture inventory after removal", () => fixtures().length <= fixtureCount);
-  app.action("luma::UndoStage");
+  app.action("luma::Undo");
   until("the restored fixtures", () => fixtures().length === fixtureCount);
   nav.step("the restored objects", "toggle", "Stage objects");
   until("the restored elements", () => elements().length === before);
@@ -570,7 +570,7 @@ test("deleting a light unpatches it and undo patches it again", () => {
   app.action("luma::DeleteStageElement");
   until("the light to leave the patch", () => !fixtures().includes("Mover 0"));
   expect(fixtures().length).toBe(before.length - 1);
-  app.action("luma::UndoStage");
+  app.action("luma::Undo");
   until("the light to come back", () => fixtures().includes("Mover 0"));
   expect(fixtures()).toEqual(before);
 });

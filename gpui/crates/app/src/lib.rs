@@ -45,6 +45,7 @@ mod background_work;
 mod chat_history;
 mod chrome;
 mod confirm;
+mod edit;
 mod export_dialog;
 mod failure;
 mod fixture_library;
@@ -56,6 +57,7 @@ mod library;
 mod patch;
 mod perform;
 mod picker_preview;
+mod quit;
 mod saved_cameras;
 mod saved_venues;
 mod score_switcher;
@@ -274,6 +276,12 @@ pub struct Luma {
     /// The `dmx_output_enabled` setting, as last read: what the status bar
     /// says about output.
     pub(crate) dmx_output: bool,
+    /// Whether this shell has taken the window's close button and the app's
+    /// quit — see [`Luma::guard_quit`].
+    pub(crate) quit_guarded: bool,
+    /// Session items changed but not yet written, by key: what a quit must
+    /// write before the debounce would have — see [`session_store`].
+    pub(crate) unsaved_session: std::collections::BTreeMap<&'static str, String>,
 }
 
 impl Luma {
@@ -344,6 +352,8 @@ impl Luma {
             venue_selection_generation: 0,
             hdr_output_allowed: true,
             dmx_output: false,
+            quit_guarded: false,
+            unsaved_session: Default::default(),
         };
         // Which door the app opens on. Nothing opens without a principal: a
         // stored session that still proves one goes straight in; one that
@@ -444,6 +454,7 @@ impl Render for Luma {
         // the value changed; when it did, the frame this render builds is the
         // first one presented in the new mode.
         window.set_hdr_output_allowed(self.hdr_output_allowed);
+        self.guard_quit(window, cx);
         // Nobody is signed in yet, so there is no library to show and no shell
         // to show it in — the gate is the app, not a plane over it.
         if self.refreshing_session {
@@ -524,8 +535,6 @@ impl Render for Luma {
                     this.stage_open_chooser_focused(window, cx);
                 }),
             )
-            .on_action(cx.listener(|this, _: &keymap::UndoStage, _, cx| this.stage_undo(cx)))
-            .on_action(cx.listener(|this, _: &keymap::RedoStage, _, cx| this.stage_redo(cx)))
             .on_action(cx.listener(|this, _: &keymap::ZoomStageIn, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     state.zoom(crate::visualizer::ZOOM_IN, None);
@@ -587,8 +596,6 @@ impl Render for Luma {
             .on_action(
                 cx.listener(|this, _: &keymap::FollowPlayhead, _, cx| this.toggle_follow(cx)),
             )
-            .on_action(cx.listener(|this, _: &keymap::UndoClips, _, cx| this.undo_clips(cx)))
-            .on_action(cx.listener(|this, _: &keymap::RedoClips, _, cx| this.redo_clips(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleLoopRegion, _, cx| {
                     this.toggle_loop_region(cx)
@@ -596,9 +603,30 @@ impl Render for Luma {
             )
             .on_action(cx.listener(|this, _: &keymap::DeleteClips, _, cx| this.delete_clips(cx)))
             .on_action(cx.listener(|this, _: &keymap::SplitClips, _, cx| this.split_clips(cx)))
-            .on_action(cx.listener(|this, _: &keymap::CopyClips, _, cx| this.copy_clips(cx)))
-            .on_action(cx.listener(|this, _: &keymap::CutClips, _, cx| this.cut_clips(cx)))
-            .on_action(cx.listener(|this, _: &keymap::PasteClips, _, cx| this.paste_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::Undo, window, cx| {
+                this.edit(edit::Verb::Undo, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::Redo, window, cx| {
+                this.edit(edit::Verb::Redo, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::Cut, window, cx| {
+                this.edit(edit::Verb::Cut, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::Copy, window, cx| {
+                this.edit(edit::Verb::Copy, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::Paste, window, cx| {
+                this.edit(edit::Verb::Paste, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::SelectAll, window, cx| {
+                this.edit(edit::Verb::SelectAll, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::About, _, cx| this.open_about(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::CheckForUpdates, _, cx| this.check_for_updates(cx)),
+            )
+            .on_action(cx.listener(|this, _: &keymap::AddSongs, _, cx| this.show_add_tracks(cx)))
+            .on_action(cx.listener(|this, _: &keymap::NewScore, _, cx| this.new_score(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::DuplicateClips, _, cx| this.duplicate_clips(cx)),
             )

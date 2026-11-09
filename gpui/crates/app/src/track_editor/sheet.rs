@@ -983,6 +983,31 @@ impl Luma {
         .detach();
     }
 
+    /// Write every sheet's owed trailing commit now, in every venue, rather
+    /// than when its debounce would have: the shell is going away.
+    pub(crate) fn flush_owed_sheets(&mut self, cx: &mut Context<Self>) {
+        let owed: Vec<Target> = self
+            .venues
+            .slots(&self.workspace)
+            .filter(|slot| match &slot.body {
+                Body::TrackEditor(editor) => editor.sheet.owes_write(),
+                Body::Perform(perform) => perform
+                    .pattern_sheet
+                    .as_ref()
+                    .is_some_and(|open| open.sheet.owes_write()),
+                Body::Patch(_) => false,
+            })
+            .map(|slot| slot.target.clone())
+            .collect();
+        for target in owed {
+            if let Some(sheet) = self.sheet_at(&target) {
+                sheet.burst = false;
+                sheet.flush_gen += 1;
+            }
+            self.flush_sheet(&target, cx);
+        }
+    }
+
     /// Write what the live edits of tab `target`'s sheet owe its host: the
     /// score, or the Perform pattern.
     pub(crate) fn flush_sheet(&mut self, target: &Target, cx: &mut Context<Self>) {

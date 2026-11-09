@@ -451,6 +451,16 @@ impl Luma {
         self.open_minted_score(track_id, pending, "Could not create the score", cx);
     }
 
+    /// The menu's "New Score": a new, empty score of the song open in
+    /// Arrange, opened. Nothing without one.
+    pub(crate) fn new_score(&mut self, cx: &mut Context<Self>) {
+        let Some(crate::shell::Body::TrackEditor(editor)) = self.workspace.active_body() else {
+            return;
+        };
+        let track_id = editor.track_id().to_owned();
+        self.create_listed_score(&track_id, cx);
+    }
+
     /// Copy `score_id` of `track_id`, clips and all, into a new score here
     /// named `<title> copy`, and open it — the song list's menu and the score
     /// crumb's both.

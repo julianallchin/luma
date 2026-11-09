@@ -122,8 +122,10 @@ impl Luma {
                     }
                 };
                 if changed {
+                    this.quit_sync_changed(cx);
                     cx.notify();
                 }
+                let state = &this.sync_status;
                 let busy = state.status.uploading
                     || state.status.downloading
                     || state.status.media.is_some();

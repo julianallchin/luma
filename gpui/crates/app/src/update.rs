@@ -118,6 +118,13 @@ impl Luma {
         }
     }
 
+    /// The menu's "Check for Updates…": ask now, and show the answer where
+    /// the About section says it.
+    pub(crate) fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        self.update.updater.check(true);
+        self.open_about(cx);
+    }
+
     /// Raise the ready dialog the first time a version is on disk. A dialog
     /// already up is left alone: the status bar's item still offers the restart.
     fn announce_update(&mut self, cx: &mut Context<Self>) {
@@ -167,8 +174,8 @@ pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
 }
 
 /// What the About section says about updates, and the restart button once
-/// one is installed. There is no "Check for Updates": checking and downloading
-/// happen on their own.
+/// one is installed. Checking and downloading happen on their own; the
+/// menu's "Check for Updates…" only asks sooner.
 pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Option<String>) {
     let status = &shell.update.status;
     let help = match (shell.update.updater.unavailable(), status) {

@@ -80,6 +80,8 @@ pub(crate) enum Overlay {
     /// A downloaded update: relaunch into it now, or let the next launch run
     /// it — see [`crate::update`].
     UpdateReady(crate::update::Ready),
+    /// Quitting with changes not yet on the server — see [`crate::quit`].
+    QuitSync(crate::quit::QuitSync),
     GroupRepair(patch::groups::Repair),
     /// Rendering the open score to a video file. Boxed like the rest: it
     /// carries paths, names and the running export.
@@ -99,6 +101,7 @@ impl Overlay {
             Self::InsertPattern(_) => keymap::context::PATTERN_INSERT,
             Self::Confirm(_) => keymap::context::CONFIRM,
             Self::UpdateReady(_) => keymap::context::UPDATE_READY,
+            Self::QuitSync(_) => keymap::context::QUIT_SYNC,
             Self::GroupRepair(_) => keymap::context::ROOT,
             Self::ShowExport(_) => keymap::context::SHOW_EXPORT,
         }
@@ -1491,6 +1494,18 @@ fn overlay_layer(
                 app.dialog_last_focus.is_focused(window),
             ),
             "Update ready dialog",
+        ),
+        Overlay::QuitSync(state) => (
+            crate::quit::render(
+                state,
+                &app.sync_status.status,
+                entity,
+                &app.dialog_first_focus,
+                app.dialog_first_focus.is_focused(window),
+                &app.dialog_last_focus,
+                app.dialog_last_focus.is_focused(window),
+            ),
+            "Quit sync dialog",
         ),
     };
     // A running export is closed by its own Cancel, never by a stray click.
