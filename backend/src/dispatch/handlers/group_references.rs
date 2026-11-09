@@ -38,9 +38,9 @@ fn selectors(
     Ok(())
 }
 /// Every score of this venue, with its owner — the uid a rewrite writes under.
-async fn score_ids(access: &mut impl AuthorizedVenue) -> Result<Vec<(String, String)>, String> {
+async fn score_ids(access: &mut impl AuthorizedVenue) -> Result<Vec<String>, String> {
     let venue = access.venue_id().to_owned();
-    sqlx::query_as("SELECT id, COALESCE(uid, '') FROM scores WHERE venue_id = ? ORDER BY id")
+    sqlx::query_scalar("SELECT id FROM scores WHERE venue_id = ? ORDER BY id")
         .bind(&venue)
         .fetch_all(&mut *access.connection())
         .await
@@ -67,7 +67,7 @@ pub async fn missing_venue_groups(
         });
         add(entry);
     };
-    for (score_id, _) in score_ids(&mut access).await? {
+    for score_id in score_ids(&mut access).await? {
         let score = rows::load_score(access.connection(), &score_id).await?;
         let mut value = serde_json::to_value(&score).map_err(|e| e.to_string())?;
         selectors(&mut value, &mut |expression| {
@@ -161,7 +161,7 @@ pub async fn resolve_venue_group(
     if set_changed {
         services.perform.set_changed(&venue_id).await;
     }
-    for (score_id, uid) in scores {
+    for score_id in scores {
         let mut access =
             VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
         let score = rows::load_score(access.connection(), &score_id).await?;
@@ -171,7 +171,7 @@ pub async fn resolve_venue_group(
         }
         let candidate: luma_patterns::Score =
             serde_json::from_value(value).map_err(|e| CommandError::Invalid(e.to_string()))?;
-        rows::save_score(access.connection(), &score_id, &uid, &candidate).await?;
+        rows::save_score(access.connection(), &score_id, &candidate).await?;
         access.commit().await?;
     }
     Ok(())
