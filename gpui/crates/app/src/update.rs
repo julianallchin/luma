@@ -8,6 +8,10 @@
 //! later. The install has already replaced the old tree, so "later" means the
 //! next launch runs the new version. The app is never restarted under someone
 //! mid-show; only the button restarts it.
+//!
+//! The dialog lists what the new version brings, from the manifest's
+//! changelog ([`luma_update::manifest::Manifest::changes_since`]): every
+//! release since the running one, so a skipped release is not lost.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +23,7 @@ use luma_ui::glass;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::Enabled;
+use luma_update::manifest::Change;
 use luma_update::{Status, Updater};
 
 use crate::Luma;
@@ -43,8 +48,12 @@ pub(crate) struct AutoUpdate {
 
 /// The "update ready" dialog's state, in [`crate::shell::Overlay::UpdateReady`].
 pub(crate) struct Ready {
-    version: SharedString,
+    /// By release, newest first: see `Manifest::changes_since`.
+    changes: Vec<Change>,
 }
+
+/// The most changelog lines the dialog lists before "and N more".
+const SHOWN_CHANGES: usize = 8;
 
 impl AutoUpdate {
     pub(crate) fn new() -> Self {
@@ -126,22 +135,53 @@ impl Luma {
     }
 
     /// Raise the ready dialog the first time a version is on disk. A dialog
-    /// already up is left alone: the status bar's item still offers the restart.
-    fn announce_update(&mut self, cx: &mut Context<Self>) {
-        let Status::Updated { version, .. } = &self.update.status else {
+    /// already up (or still playing its exit) is left alone; the shell calls
+    /// this again each frame, so the ready dialog follows once it has gone.
+    /// The venue picker is up at every launch, and an update that landed
+    /// under it would otherwise never be announced.
+    pub(crate) fn announce_update(&mut self, cx: &mut Context<Self>) {
+        let Status::Updated {
+            version, changes, ..
+        } = &self.update.status
+        else {
             return;
         };
-        if self.update.announced.as_ref() == Some(version) || self.overlay.as_open().is_some() {
+        if self.update.announced.as_ref() == Some(version) || self.overlay.get().is_some() {
             return;
         }
         self.update.announced = Some(version.clone());
-        let version = version.clone().into();
+        let changes = changes.clone();
         self.overlay
-            .open(crate::shell::Overlay::UpdateReady(Ready { version }));
+            .open(crate::shell::Overlay::UpdateReady(Ready { changes }));
         cx.notify();
     }
 
-    /// The dialog's "Relaunch now".
+    /// Behave as if `version` had just installed, bringing `changes` (each
+    /// release's version and lines, newest first): the harness's way to the
+    /// ready dialog, since a source build never updates.
+    pub fn update_ready_fixture(
+        &mut self,
+        version: String,
+        changes: Vec<(String, Vec<String>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let changes = changes
+            .into_iter()
+            .map(|(version, lines)| Change {
+                version,
+                commit: None,
+                lines,
+            })
+            .collect();
+        self.update.status = Status::Updated {
+            version,
+            restart: std::path::PathBuf::new(),
+            changes,
+        };
+        self.announce_update(cx);
+    }
+
+    /// The dialog's "Relaunch".
     fn relaunch_from_dialog(&mut self, cx: &mut Context<Self>) {
         self.close_overlay(cx);
         self.restart_to_update(cx);
@@ -202,7 +242,8 @@ pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Op
     (button, help)
 }
 
-/// The ready dialog: what is ready, and the two answers.
+/// The ready dialog: the prompt, what the update brings by release, and the
+/// two answers.
 pub(crate) fn render(
     state: &Ready,
     app: &Entity<Luma>,
@@ -211,10 +252,12 @@ pub(crate) fn render(
     relaunch_focus: &FocusHandle,
     relaunch_focused: bool,
 ) -> AnyElement {
-    let title: SharedString = format!("Luma {} is ready", state.version).into();
-    let body: SharedString =
-        "The update has downloaded. Relaunch to use it now, or it starts the next time you open Luma."
-            .into();
+    let title: SharedString = "New version ready".into();
+    let (groups, more) = shown(&state.changes);
+    let more: Option<SharedString> = (more > 0).then(|| format!("and {more} more").into());
+    let lines =
+        groups.iter().map(|(_, lines)| lines.len()).sum::<usize>() + usize::from(more.is_some());
+    let size = MorphSize::new(WIDTH, height(groups.len(), lines));
     let later = app.clone();
     let relaunch = app.clone();
     let card = div()
@@ -228,21 +271,30 @@ pub(crate) fn render(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(8.))
+                .gap(px(LIST_GAP))
                 .child(
                     div()
                         .text_size(px(15.))
+                        .line_height(px(TITLE_LINE))
                         .text_color(glass::ink(0.95))
                         .child(title.clone())
                         .agent_node(Role::Text, title),
                 )
-                .child(
+                .children(groups.into_iter().flat_map(|(version, lines)| {
+                    std::iter::once(header(version).into_any_element()).chain(
+                        lines
+                            .into_iter()
+                            .map(|line| change(line).into_any_element()),
+                    )
+                }))
+                .children(more.map(|more| {
                     div()
                         .text_size(px(13.))
-                        .text_color(glass::ink(0.6))
-                        .child(body.clone())
-                        .agent_node(Role::Text, body),
-                ),
+                        .line_height(px(LINE))
+                        .text_color(glass::ink(0.45))
+                        .child(more.clone())
+                        .agent_node(Role::Text, more)
+                })),
         )
         .child(
             div()
@@ -262,20 +314,96 @@ pub(crate) fn render(
                         .agent_focused(later_focused),
                 )
                 .child(
-                    float::btn_primary("Relaunch now")
+                    float::btn_primary("Relaunch")
                         .id("update-relaunch")
                         .track_focus(relaunch_focus)
                         .tab_stop(true)
                         .on_click(move |_, _, cx| {
                             relaunch.update(cx, |this, cx| this.relaunch_from_dialog(cx));
                         })
-                        .agent_node(Role::Button, "Relaunch now")
+                        .agent_node(Role::Button, "Relaunch")
                         .agent_focused(relaunch_focused),
                 ),
         );
-    morph::fixed_card(
-        "Update ready dialog",
-        MorphSize::new(400.0, 176.0),
-        card.into_any_element(),
-    )
+    morph::fixed_card("Update ready dialog", size, card.into_any_element())
+}
+
+/// The releases' lines, [`SHOWN_CHANGES`] in all, each release's under its
+/// version; and how many lines did not fit.
+fn shown(changes: &[Change]) -> (Vec<(SharedString, Vec<SharedString>)>, usize) {
+    let mut room = SHOWN_CHANGES;
+    let mut more = 0;
+    let mut groups = Vec::new();
+    for change in changes {
+        let take = change.lines.len().min(room);
+        room -= take;
+        more += change.lines.len() - take;
+        if take > 0 {
+            let lines = change.lines[..take]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect();
+            groups.push((SharedString::from(change.label().to_string()), lines));
+        }
+    }
+    (groups, more)
+}
+
+/// A release's version, small, above its lines.
+fn header(version: SharedString) -> impl IntoElement {
+    div()
+        .pt(px(HEADER_GAP))
+        .text_size(px(11.))
+        .line_height(px(LINE))
+        .text_color(glass::ink(0.45))
+        .child(version.clone())
+        .agent_node(Role::Text, version)
+}
+
+/// One changelog line: a dot and the words, on one line. The lines are at
+/// most eight words, so the ellipsis is a guard rather than the rule.
+fn change(line: SharedString) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(BULLET_INDENT - BULLET))
+        .child(
+            div()
+                .flex_none()
+                .size(px(BULLET))
+                .rounded_full()
+                .bg(glass::ink(0.4)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(13.))
+                .line_height(px(LINE))
+                .text_color(glass::ink(0.7))
+                .child(line.clone()),
+        )
+        .agent_node(Role::Text, line)
+}
+
+const WIDTH: f32 = 400.0;
+const TITLE_LINE: f32 = 20.0;
+/// Every row under the title is one line this tall.
+const LINE: f32 = 18.0;
+const LIST_GAP: f32 = 4.0;
+/// Extra room above a version, so it reads as the start of a group.
+const HEADER_GAP: f32 = 6.0;
+const BULLET: f32 = 4.0;
+const BULLET_INDENT: f32 = 14.0;
+
+/// The card's height for `headers` versions and `lines` rows of text under
+/// them, which it fits exactly: every row is one line.
+fn height(headers: usize, lines: usize) -> f32 {
+    // Padding, the title, the gap above the buttons, and the buttons.
+    const PROMPT: f32 = 20.0 + TITLE_LINE + 16.0 + 32.0 + 20.0;
+    let rows = (headers + lines) as f32;
+    PROMPT + rows * (LIST_GAP + LINE) + headers as f32 * HEADER_GAP
 }

@@ -165,6 +165,10 @@ pub struct Fixture {
     source_search_responses: Vec<luma_app::SourceSearchFixtureResponse>,
     #[serde(rename = "source_import_fixture_delay_ms", deserialize_with = "millis")]
     source_import_fixture_delay: Option<Duration>,
+    /// Hold the venue catalogue at launch, so the startup splash stays up
+    /// long enough to be looked at — see `luma_app::NavigationFixture`.
+    #[serde(rename = "venues_delay_ms", deserialize_with = "millis")]
+    venues_delay: Option<Duration>,
     equal_timestamp_track: bool,
     second_track_seconds: Option<u32>,
     /// Authored motion forced on, for a test that measures a transition.
@@ -218,6 +222,27 @@ pub struct Fixture {
     /// The agent's tools instead of its kind's own set: shipped ones by name,
     /// scripted ones as objects.
     tools: Option<Vec<agent::ToolEntry>>,
+    /// An update installed as the app opens, which raises the ready dialog
+    /// once the launch's venue picker has gone: what no source build reaches
+    /// by itself.
+    update_ready: Option<UpdateReady>,
+}
+
+/// `update_ready`: the version installed and what it brings, as the
+/// manifest's `changes` spells it: `[{ version, lines }]`, newest first.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateReady {
+    version: String,
+    #[serde(default)]
+    changes: Vec<UpdateChange>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateChange {
+    version: String,
+    lines: Vec<String>,
 }
 
 impl Default for Fixture {
@@ -237,6 +262,7 @@ impl Default for Fixture {
             source_fixture_delay: None,
             source_search_responses: Vec::new(),
             source_import_fixture_delay: None,
+            venues_delay: None,
             equal_timestamp_track: false,
             second_track_seconds: None,
             force_motion: false,
@@ -254,6 +280,7 @@ impl Default for Fixture {
             model: None,
             model_cadence: None,
             tools: None,
+            update_ready: None,
         }
     }
 }
@@ -327,9 +354,11 @@ impl Fixture {
         let source_fixture_delay = self.source_fixture_delay;
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
+        let venues_delay = self.venues_delay;
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
+        let update_ready = self.update_ready.clone();
         let outside_score_edit = (!self.outside_clips.is_empty()).then(|| {
             serde_json::from_value::<luma_patterns::ScoreEdit>(Self::timeline(&self.outside_clips))
                 .expect("a score edit")
@@ -366,13 +395,24 @@ impl Fixture {
                     library
                         .set_agent_tools(agent::registry(tools, &storage).expect("fixture tools"));
                 }
-                if let Some(edit) = outside_score_edit.clone() {
+                if outside_score_edit.is_some() || venues_delay.is_some() {
                     library.set_navigation_fixture(luma_app::NavigationFixture {
-                        outside_score_edit: Some(edit),
+                        outside_score_edit: outside_score_edit.clone(),
+                        venues_delay: venues_delay.unwrap_or_default(),
                         ..Default::default()
                     });
                 }
                 let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
+                if let Some(ready) = update_ready.clone() {
+                    luma.update(cx, |luma, cx| {
+                        let changes = ready
+                            .changes
+                            .into_iter()
+                            .map(|change| (change.version, change.lines))
+                            .collect();
+                        luma.update_ready_fixture(ready.version, changes, cx);
+                    });
+                }
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
                     .into()
             });

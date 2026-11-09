@@ -102,6 +102,9 @@ pub enum Status {
     Updated {
         version: String,
         restart: PathBuf,
+        /// What it brings over the running build, by release, newest first:
+        /// see [`Manifest::changes_since`].
+        changes: Vec<manifest::Change>,
     },
     /// A check someone asked for found nothing newer.
     UpToDate,
@@ -267,6 +270,7 @@ impl Updater {
             .asset(platform)
             .ok_or_else(|| format!("Release {} has no build for {platform}.", manifest.version))?;
         let version = manifest.version.clone();
+        let changes = manifest.changes_since(&self.current);
 
         self.status.send_replace(Status::Downloading {
             version: version.clone(),
@@ -297,7 +301,11 @@ impl Updater {
         });
         let restart = target.install.replace(archive.path())?;
         log::info!("installed Luma {version}; it runs at the next launch");
-        Ok(Status::Updated { version, restart })
+        Ok(Status::Updated {
+            version,
+            restart,
+            changes,
+        })
     }
 }
 
@@ -367,6 +375,10 @@ mod tests {
         let (key, signature) = signature_of(&archive);
         let manifest = serde_json::json!({
             "version": "1.0.0",
+            "changes": [
+                { "version": "1.0.0", "commit": "c1", "lines": ["Clearer sync status"] },
+                { "version": "0.9.0", "commit": "c0", "lines": ["Already running"] }
+            ],
             "platforms": {
                 manifest::platform().unwrap(): { "url": "PLACEHOLDER", "signature": signature }
             }
@@ -414,10 +426,17 @@ mod tests {
     fn a_signed_release_installs_and_asks_for_a_restart() {
         let (_dir, updater, install) = release(verify::tests::sign);
         updater.check(true);
-        let Status::Updated { version, restart } = settled(&updater) else {
+        let Status::Updated {
+            version,
+            restart,
+            changes,
+        } = settled(&updater)
+        else {
             panic!("expected an installed update, got {:?}", updater.status());
         };
         assert_eq!(version, "1.0.0");
+        let lines: Vec<_> = changes.iter().map(|change| &change.lines).collect();
+        assert_eq!(lines, [&["Clearer sync status"]], "only what 0.9.0 lacks");
         assert_eq!(restart, install.restart_path());
         assert_eq!(std::fs::read_to_string(restart).unwrap(), "new");
     }

@@ -1,4 +1,4 @@
-//! Luma's mark, drawn rather than loaded.
+//! Luma's mark, drawn rather than loaded — and its lit form, loaded.
 //!
 //! The app icon is an **L made of light**: a fan of beams leaving one bright
 //! point, the longest reaching up for the stem and the widest lying right for
@@ -101,3 +101,23 @@ pub fn luma(edge: f32) -> AnyElement {
         ))
         .into_any_element()
 }
+
+/// The lit mark — the beams with their glow — as shipped in
+/// `assets/luma/mark.svg`.
+///
+/// White on transparent, and its gradients, opacities and blurs differ only in
+/// alpha, so gpui's single-colour SVG mask keeps all of it: the caller's
+/// `text_color` is the whole tint, and its alpha the mark's strength. The
+/// viewBox is trimmed to the drawing, so the box centres the mark itself
+/// rather than an empty canvas around it.
+#[must_use]
+pub fn lit(width: f32) -> gpui::Svg {
+    gpui::svg()
+        .path("luma/mark.svg")
+        .w(px(width))
+        .h(px(width * LIT_ASPECT))
+        .flex_none()
+}
+
+/// Height over width of the trimmed viewBox (644 × 552).
+const LIT_ASPECT: f32 = 552.0 / 644.0;

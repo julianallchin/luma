@@ -56,6 +56,13 @@ const CODE_LENGTH: usize = 6;
 const MARK_SIZE: f32 = 44.0;
 const MARK_GAP: f32 = 20.0;
 
+/// The splash mark's width: big enough to be the screen, small enough to read
+/// as a wait rather than a title card.
+const SPLASH_MARK_WIDTH: f32 = 96.0;
+/// The splash breath's two ends, as the mark's alpha.
+const SPLASH_DIM: f32 = 0.55;
+const SPLASH_LIT: f32 = 0.9;
+
 /// The one heading. Large and regular rather than small and bold: it is the
 /// only sentence on the screen, so it does not have to shout to be found.
 const TITLE_SIZE: f32 = 28.0;
@@ -470,25 +477,32 @@ pub(crate) fn refresh_error(window: &Window, cx: &Context<Luma>) -> AnyElement {
     .into_any_element()
 }
 
-pub(crate) fn splash(window: &Window, line: &'static str) -> AnyElement {
+/// What the window shows while it waits — on the session at launch, then on
+/// the library: the lit mark alone, breathing, centred on the ground.
+///
+/// No line under it. The wait is a beat or two, and a sentence there is read
+/// as a status to watch. `label` is what scripts find the mark by.
+///
+/// The breath starts at full strength, so under reduced motion — where the
+/// shared pulse clock holds phase 0 and schedules nothing — the mark rests lit
+/// rather than dimmed.
+pub(crate) fn splash(window: &Window, label: &'static str, cx: &mut Context<Luma>) -> AnyElement {
+    let phase = luma_ui::motion::pulse_delta(&luma_ui::motion::BREATHE, cx.entity_id(), cx);
+    let breath = 1.0 - luma_ui::motion::pulse_wave(phase);
+    let alpha = SPLASH_DIM + (SPLASH_LIT - SPLASH_DIM) * breath;
     ground(
         window,
         div()
             .flex_1()
             .min_h_0()
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(MARK_GAP))
             .pb(px(luma_ui::dialog::TITLEBAR_CLEARANCE))
-            .child(mark::luma(MARK_SIZE))
             .child(
-                div()
-                    .text_size(px(13.0))
-                    .text_color(ladder::muted_foreground())
-                    .child(line)
-                    .agent_node(Role::Text, line),
+                mark::lit(SPLASH_MARK_WIDTH)
+                    .text_color(white().opacity(alpha))
+                    .agent_node(Role::Text, label),
             ),
     )
     .into_any_element()

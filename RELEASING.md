@@ -37,6 +37,20 @@ poll `releases/download/nightly/latest.json` and update whenever its commit
 differs from their own. Install one on Linux with
 `LUMA_CHANNEL=nightly sh install.sh`.
 
+## What's new
+
+When an install offers an update, it lists what changed. The lines come from
+`Changelog:` commit trailers (see "Changelog lines" in
+[AGENTS.md](AGENTS.md)). `scripts/release/changelog.py` collects them: since
+the previous stable tag for a stable release, and since the commit the
+previous nightly's `latest.json` names for a nightly. They go into the
+release body and into `latest.json`, whose `changes` keeps the lines of the
+last ten releases of that channel, carried forward from the manifest it
+replaces, so an install that skipped some sees all of them, each under its
+version. Check what a
+release will say with
+`python3 scripts/release/changelog.py --commit HEAD --tag v0.7.0`.
+
 ## Secrets and variables
 
 Set these under Settings → Secrets and variables → Actions.

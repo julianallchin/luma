@@ -178,7 +178,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     let out = browse.run(
         &support::script(r#"
         const initial = app.snapshot();
-        const loading = initial.find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = initial.find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const dialog = until("the venue catalogue", (s) =>
             s.find({ role: "card", label: "Alpha Hall" }) !== undefined
                 && s.find({ role: "card", label: "Beta Room" }) !== undefined
@@ -366,7 +366,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = restored.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         let pickerSeen = false;
         const shot = until("the restored Beta venue", (s) => {
             pickerSeen ||= s.find({ role: "card", label: "Venue dialog" }) !== undefined;
@@ -405,7 +405,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = stale.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const shot = until("the stale preference fallback", (s) =>
             s.find({ role: "card", label: "Present Venue" }) !== undefined);
         app.frames(4, { waitMs: 50 });
@@ -433,7 +433,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = empty.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const create = until("first venue onboarding", (s) =>
             s.find({ role: "input", label: "Venue name" })?.focused === true);
         const input = create.find({ role: "input", label: "Venue name" });
@@ -469,9 +469,15 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     let out = created_restore.run(
         &support::script(
             r#"
-        const shot = until("the created venue restore", (s) =>
-            s.find({ role: "button", label: "Morning Room" }) !== undefined);
-        shot.find({ role: "card", label: "Morning Room" }) === undefined
+        // Restored, not picked: the picker never opens on the way in. (Its
+        // dialog, not a card named after the venue — the venue's own pages
+        // carry its name too.)
+        let pickerSeen = false;
+        until("the created venue restore", (s) => {
+            pickerSeen ||= s.find({ role: "card", label: "Venue dialog" }) !== undefined;
+            return s.find({ role: "button", label: "Morning Room" }) !== undefined;
+        });
+        !pickerSeen
     "#,
         ),
         Duration::from_secs(90),
@@ -524,7 +530,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = fifo_restore.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const shot = until("the FIFO final selection restore", (s) =>
             s.find({ role: "button", label: "Beta Room" }) !== undefined);
         ({ loading,
@@ -551,7 +557,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     let out = failed.run(
         &support::script(r#"
-        const loading = app.snapshot().find(n => n.role === "text" && ["Opening your library…", "Syncing your library…"].includes(n.label)) !== undefined;
+        const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
         const shot = until("the venue error", (s) =>
             s.find({ role: "text", label: "Could not load your venues" }) !== undefined);
         ({ loading,
@@ -587,11 +593,12 @@ fn delete_score(dir: &Path, id: &str) {
         });
 }
 
-/// `docs/specs/comet-shell.md`: a launch reopens the last venue, and each
-/// venue comes back in the mode it was left in with the score it had open —
-/// unless that score is gone, when Arrange is the song list again.
+/// `docs/specs/comet-shell.md`: a launch reopens the last venue in the mode it
+/// was left in, with the score it had open — unless that score is gone, when
+/// Arrange is the song list again. (A venue switch carries the page instead,
+/// so only the last venue's saved state is a launch's to restore.)
 #[test]
-fn each_venue_keeps_its_mode_and_score_across_a_relaunch() {
+fn the_last_venue_comes_back_in_its_mode_with_its_score_across_a_relaunch() {
     let dir = fixture_dir(
         "modes",
         &[("alpha", "Alpha Hall"), ("beta", "Beta Room")],
@@ -606,10 +613,10 @@ fn each_venue_keeps_its_mode_and_score_across_a_relaunch() {
         nav.venue("Alpha Hall");
         nav.track("Alpha Hall Track");
         until("Alpha's score", (s) => titled(s, "Alpha Hall Track · #1"));
-        nav.mode("Rig");
         nav.switchVenue("Beta Room");
         nav.track("Beta Room Track");
         until("Beta's score", (s) => titled(s, "Beta Room Track · #1"));
+        nav.mode("Rig");
         // Long enough for the debounced save to land.
         app.frames(30, { waitMs: 50 });
         true
@@ -618,33 +625,48 @@ fn each_venue_keeps_its_mode_and_score_across_a_relaunch() {
         Duration::from_secs(90),
     );
     drop(first);
-    delete_score(&dir, "score-beta");
 
+    // Beta was the last venue, left in Rig with its score open in Arrange.
     let mut second = harness(&dir, luma_app::NavigationFixture::default());
     let out = second.run(
         &support::script(
             r#"
         const titled = (s, label) => s.find({ role: "button", label }) !== undefined;
-        // Beta was the last venue, in Arrange; its score is gone.
+        const beta = until("Beta, restored in Rig", (s) =>
+            s.find({ role: "button", label: "Beta Room" })?.bounds.y < 44
+              && s.find({ role: "card", label: "Beta Room Venue" }) !== undefined ? s : undefined);
+        const rig = nav.shownMode(beta) === "Rig";
+        nav.mode("Arrange");
+        const score = until("Beta's score, restored", (s) =>
+            titled(s, "Beta Room Track · #1") && s.find({ role: "card", label: "Song list" }) === undefined);
+        // Long enough for the debounced save to land.
+        app.frames(30, { waitMs: 50 });
+        ({ rig, score: !!score })
+        "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(out["rig"], true);
+    assert_eq!(out["score"], true);
+    drop(second);
+    delete_score(&dir, "score-beta");
+
+    // Its score gone, Arrange is the song list again.
+    let mut third = harness(&dir, luma_app::NavigationFixture::default());
+    let out = third.run(
+        &support::script(
+            r#"
+        const titled = (s, label) => s.find({ role: "button", label }) !== undefined;
         until("Beta, restored", (s) => s.find({ role: "button", label: "Beta Room" })?.bounds.y < 44
             && s.find({ role: "card", label: "Song list" }) !== undefined);
         // Long enough for a restore that wrongly kept the score to open it.
         app.frames(20, { waitMs: 50 });
-        const betaScore = titled(app.snapshot(), "Beta Room Track · #1");
-        nav.switchVenue("Alpha Hall");
-        const alpha = until("Alpha, restored in Rig", (s) =>
-            s.find({ role: "card", label: "Alpha Hall Venue" }) !== undefined ? s : undefined);
-        nav.mode("Arrange");
-        const score = until("Alpha's score, restored", (s) =>
-            titled(s, "Alpha Hall Track · #1") && s.find({ role: "card", label: "Song list" }) === undefined);
-        ({ betaScore, rig: nav.shownMode(alpha) === "Rig", score: !!score })
+        ({ betaScore: titled(app.snapshot(), "Beta Room Track · #1") })
         "#,
         ),
         Duration::from_secs(90),
     );
     assert_eq!(out["betaScore"], false);
-    assert_eq!(out["rig"], true);
-    assert_eq!(out["score"], true);
 }
 
 /// A page changed just before quitting is the page the next launch opens on:
@@ -769,7 +791,10 @@ fn a_rebound_shortcut_survives_a_relaunch() {
         nav.step("the Shortcuts section", "toggle", "Shortcuts");
         until("the stored rebind", (s) => s.find({ role: "button", label: "Reset View: Show or hide the agent panel" }));
         nav.dismiss();
-        const start = up(until("the shell", (s) => up(s) !== undefined ? s : undefined));
+        // Rig: a page with the agent panel (the song list has none to toggle).
+        app.action("luma::ShowRig");
+        const start = up(until("the shell", (s) => up(s) !== undefined
+          && s.find({ role: "card", label: "Alpha Hall Venue" }) ? s : undefined));
         app.key("secondary-shift-k");
         until("the new key, after a relaunch", (s) => up(s) === !start);
         app.key("secondary-shift-k");

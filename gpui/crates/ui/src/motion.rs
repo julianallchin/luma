@@ -13,8 +13,8 @@
 //! Durations come from the ladder — [`SNAP`], [`QUICK`], [`BASE`], [`SWEEP`], [`SLOW`] —
 //! for the same reason the greys do: a new animation picks a rung rather than
 //! inventing a number, and another rung is a design decision, not a literal.
-//! Loader *periods* ([`PULSE`], [`GRADIENT_SPIN`]) are not on the ladder — they
-//! are the length of a loop, not of a transition.
+//! Loader *periods* ([`PULSE`], [`BREATHE`], [`GRADIENT_SPIN`]) are not on the
+//! ladder — they are the length of a loop, not of a transition.
 //!
 //! The normalized spring is evaluated through gpui's `Fn(f32) -> f32` easing
 //! closure. Every duration preserves its gentle start and settling shape.
@@ -263,6 +263,9 @@ pub const COLLAPSE: MotionSpec = MotionSpec::new(BASE, ROOT);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Loader pulse period (a loop length, not a transition — see the module docs).
 pub const PULSE: MotionSpec = MotionSpec::new(2400, ROOT);
+/// The startup mark's breath — slower than [`PULSE`], because it is the
+/// only thing on the screen and a quick beat there reads as urgency.
+pub const BREATHE: MotionSpec = MotionSpec::new(3000, ROOT);
 /// Gradient matrix spinner wave period.
 pub const GRADIENT_SPIN: MotionSpec = MotionSpec::new(750, ROOT);
 

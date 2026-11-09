@@ -51,6 +51,7 @@ Run from the repository root:
 | One native crate | `cargo test --manifest-path gpui/Cargo.toml -p luma-render` |
 | Agent Python executor | `python3 backend/python/luma_exec/tests/run_tests.py` |
 | Analysis workers (Python) | `python3 -m unittest discover -s backend/python/tests` |
+| Release scripts (Python) | `python3 -m unittest discover -s scripts/release` |
 | Sync against a live stack (Docker) | `python3 deploy/test-stack/run.py --test sync::two_device_tests` |
 
 ## License
