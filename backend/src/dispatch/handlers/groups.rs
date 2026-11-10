@@ -165,7 +165,7 @@ mod tests {
             &services.fixtures_root,
             &mut access,
             "head-set",
-            &[fixture.clone()],
+            &[(fixture.clone(), groups_db::WHOLE_FIXTURE)],
             true,
         )
         .await
@@ -184,7 +184,10 @@ mod tests {
             &services.fixtures_root,
             &mut access,
             "head_set",
-            &[fixture.clone(), fixture],
+            &[
+                (fixture.clone(), groups_db::WHOLE_FIXTURE),
+                (fixture, groups_db::WHOLE_FIXTURE),
+            ],
             true,
         )
         .await
@@ -200,6 +203,65 @@ mod tests {
                 .unwrap();
         assert_eq!(after_id, member_id);
         access.commit().await.unwrap();
+    }
+
+    /// A named group can hold single cells, a replacement moves only the rows
+    /// that changed, and a cell past the fixture's last is refused.
+    #[tokio::test]
+    async fn a_named_group_holds_cells() {
+        use super::{groups_db, groups_service, VenueAccess, VenueResource, Write};
+        let (_dir, services, venue) = rig().await;
+        let nodes = tree(&services, &venue).await;
+        let fixture = nodes[0]["fixtures"][0].as_str().unwrap().to_string();
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+            .await
+            .unwrap();
+        let rows = |members: Vec<groups_db::Membership>, group: &str| {
+            let mut heads: Vec<i64> = members
+                .into_iter()
+                .filter(|m| m.group_id == group)
+                .map(|m| m.head_index)
+                .collect();
+            heads.sort();
+            heads
+        };
+        let saved = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "first_cell",
+            &[(fixture.clone(), 0)],
+            false,
+        )
+        .await
+        .unwrap();
+        let members = groups_db::venue_memberships(&mut access).await.unwrap();
+        assert_eq!(rows(members, &saved.id), vec![0]);
+
+        let whole = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "first_cell",
+            &[
+                (fixture.clone(), 0),
+                (fixture.clone(), groups_db::WHOLE_FIXTURE),
+            ],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(whole.id, saved.id);
+        let members = groups_db::venue_memberships(&mut access).await.unwrap();
+        assert_eq!(rows(members, &saved.id), vec![groups_db::WHOLE_FIXTURE]);
+
+        let refused = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "too_far",
+            &[(fixture, 999)],
+            false,
+        )
+        .await;
+        assert!(refused.unwrap_err().contains("no cell 999"));
     }
 
     #[tokio::test]

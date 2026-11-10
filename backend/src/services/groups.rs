@@ -1052,19 +1052,36 @@ pub async fn save_group_changes(
     Ok(group)
 }
 
-/// Create a named whole-fixture collection, or explicitly replace its members.
-/// Resolve existing names under the same write lock as the edit; a retry keeps
-/// the group's identity, and an invalid member cannot leave a partial change.
+/// Create a named collection, or explicitly replace its members.
+/// `members` are `(fixture, head)` rows, `head` a cell index or
+/// [`groups_db::WHOLE_FIXTURE`]. Resolve existing names under the same write
+/// lock as the edit; a retry keeps the group's identity and the rows it
+/// already had, and an invalid member cannot leave a partial change.
 pub async fn set_named_group(
     resource_path: &Path,
     access: &mut VenueAccess<'_, Write>,
     name: &str,
-    fixtures: &[String],
+    members: &[(String, i64)],
     replace: bool,
 ) -> Result<FixtureGroupNode, String> {
     let normalized = normalize_group_name(name);
     crate::models::groups::validate_group_name(&normalized)?;
     let sources = GroupSources::read(resource_path, access).await?;
+    for (fixture_id, head) in members {
+        if *head == groups_db::WHOLE_FIXTURE {
+            continue;
+        }
+        let Some(fixture) = sources.solved.fixtures.iter().find(|f| &f.id == fixture_id) else {
+            continue;
+        };
+        let cells = head_count_with_path(resource_path, fixture);
+        if !(0..cells as i64).contains(head) {
+            return Err(format!(
+                "`{fixture_id}` has {cells} cell{}, numbered from 0; there is no cell {head}",
+                if cells == 1 { "" } else { "s" }
+            ));
+        }
+    }
     let tree = sources.tree();
     let existing = node_answering_to(&tree, &normalized, "");
     let id = if replace {
@@ -1078,17 +1095,32 @@ pub async fn set_named_group(
     } else {
         None
     };
-    let removed: Vec<String> = sources
+    // A whole fixture takes in its cells: those rows are not separate members.
+    let wanted: HashSet<(String, i64)> = members
+        .iter()
+        .filter(|(fixture, head)| {
+            *head == groups_db::WHOLE_FIXTURE
+                || !members.contains(&(fixture.clone(), groups_db::WHOLE_FIXTURE))
+        })
+        .cloned()
+        .collect();
+    let removed: Vec<(String, i64)> = sources
         .members
         .iter()
-        .filter(|member| {
-            Some(member.group_id.as_str()) == id && !fixtures.contains(&member.fixture_id)
-        })
-        .map(|member| member.fixture_id.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
+        .filter(|member| Some(member.group_id.as_str()) == id)
+        .map(|member| (member.fixture_id.clone(), member.head_index))
+        .filter(|row| !wanted.contains(row))
         .collect();
-    let group = save_group_changes(resource_path, access, id, name, fixtures, &removed).await?;
+    let group = save_group_changes(resource_path, access, id, name, &[], &[]).await?;
+    for (fixture, head) in &removed {
+        groups_db::remove_member_from_group(access, fixture, &group.id, Some(*head)).await?;
+    }
+    let mut seen = HashSet::new();
+    for (fixture, head) in members {
+        if wanted.contains(&(fixture.clone(), *head)) && seen.insert((fixture, *head)) {
+            groups_db::add_member_to_group(access, fixture, &group.id, *head).await?;
+        }
+    }
     GroupSources::read(resource_path, access)
         .await?
         .hierarchy()

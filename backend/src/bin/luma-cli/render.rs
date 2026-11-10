@@ -84,7 +84,7 @@ pub async fn run(mut args: super::Args) -> Result<(), String> {
         })
         .transpose()?;
     let shot = Shot {
-        view,
+        aim: luma_lib::stage_render::Aim::View(view),
         booth: geometry.booth(),
         state,
         time: 0.,

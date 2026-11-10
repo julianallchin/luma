@@ -161,6 +161,62 @@ class VenueRefreshTests(unittest.TestCase):
             v.render()
 
 
+class CameraTests(unittest.TestCase):
+    """A camera moved round its target keeps what it looks at."""
+
+    def front(self):
+        from luma_exec.venue import Camera
+        return Camera((0.0, 10.0, 3.0), (0.0, 0.0, 3.0), 50.0)
+
+    def distance(self, camera) -> float:
+        return math.dist(camera.eye, camera.target)
+
+    def test_orbit_keeps_the_target_and_the_distance(self) -> None:
+        start = self.front()
+        moved = start.orbit(right=70, up=20)
+        self.assertEqual(moved.target, start.target)
+        self.assertAlmostEqual(self.distance(moved), self.distance(start), places=6)
+        self.assertGreater(moved.eye[2], start.eye[2])
+
+    def test_orbit_right_moves_toward_the_pictures_right(self) -> None:
+        # From the audience the picture's right is stage left, -u.
+        self.assertLess(self.front().orbit(right=30).eye[0], 0.0)
+        self.assertGreater(self.front().orbit(right=-30).eye[0], 0.0)
+
+    def test_orbits_undo_each_other(self) -> None:
+        there = self.front().orbit(right=50).orbit(right=-50)
+        for a, b in zip(there.eye, self.front().eye):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_zoom_scales_the_distance(self) -> None:
+        start = self.front()
+        self.assertAlmostEqual(self.distance(start.zoom(0.5)), self.distance(start) / 2, places=6)
+        with self.assertRaises(ValueError):
+            start.zoom(0)
+
+    def test_render_sends_a_camera_and_targets(self) -> None:
+        calls = []
+
+        def host(method, payload):
+            calls.append(payload)
+            return {"view": "camera", "t": 0.0, "width": 10, "height": 10,
+                    "artifactRel": "outputs/x.png",
+                    "camera": {"eye": [0, 10, 3], "target": [0, 0, 3], "fov": 50,
+                               "looking": "from the audience"}}
+
+        venue = Venue(record(), host_call=host, workspace=Path(tempfile.mkdtemp()))
+        with redirect_stdout(io.StringIO()) as said:
+            shot = venue.render(camera=self.front(), highlight=[("f1", 2), "f2"])
+        self.assertEqual(calls[-1]["camera"], {"eye": [0.0, 10.0, 3.0], "target": [0.0, 0.0, 3.0], "fov": 50.0})
+        self.assertEqual(calls[-1]["highlight"], ["f1:2", "f2"])
+        self.assertIn("from the audience", said.getvalue())
+        self.assertEqual(shot.camera.target, (0.0, 0.0, 3.0))
+        venue.render(focus="back_movers")
+        self.assertEqual(calls[-1]["focus"], "back_movers")
+        with self.assertRaises(ValueError):
+            venue.render(camera=self.front(), focus="back_movers")
+
+
 class VenueGroupTests(unittest.TestCase):
     def test_collections_accept_distribution_group_fixtures_and_return_host_name(self) -> None:
         from luma_exec.venue import Group
@@ -185,6 +241,8 @@ class VenueGroupTests(unittest.TestCase):
         self.assertEqual(calls[-1][1]["fixtures"], ["f1"])
         venue.group("empty", [])
         self.assertEqual(calls[-1][1]["fixtures"], [])
+        venue.group("cells", [("f1", 0), "f2:3", ("f1", 0)])
+        self.assertEqual(calls[-1][1]["fixtures"], ["f1:0", "f2:3"])
         self.assertEqual(venue.generate_groups().names(), ("back_movers",))
         self.assertEqual(calls[-1], ("venue.generate_groups", {}))
 
@@ -247,6 +305,8 @@ class VenueRenderTests(unittest.TestCase):
                         "highlight": None,
                         "house": None,
                         "sun": None,
+                        "camera": None,
+                        "focus": None,
                     },
                 )
             ],

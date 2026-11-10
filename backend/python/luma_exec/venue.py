@@ -192,10 +192,113 @@ class VenueHostUnavailableError(RuntimeError):
     """`render()` was called on a venue with no host capability."""
 
 
+class Camera:
+    """Where a render was seen from, in stage metres `(u, v, z)`.
+
+    Every `StageImage` carries the camera it was taken with. Pass it back,
+    moved, to look again from nearby:
+
+        shot = v.render(focus="back_movers")
+        v.render(camera=shot.camera.orbit(right=30).zoom(0.7))
+
+    `looking` says where the camera stands and which way the picture is
+    turned ("from the audience, looking down 20°; image right is stage left
+    (-u), image up is up").
+    """
+
+    __slots__ = ("eye", "target", "fov", "looking")
+
+    def __init__(
+        self,
+        eye: Sequence[float],
+        target: Sequence[float],
+        fov: float = 50.0,
+        looking: str = "",
+    ) -> None:
+        self.eye = tuple(_finite("eye", c) for c in eye)
+        self.target = tuple(_finite("target", c) for c in target)
+        if len(self.eye) != 3 or len(self.target) != 3:
+            raise ValueError("a camera's eye and target are (u, v, z) points")
+        self.fov = _finite("fov", fov)
+        self.looking = looking
+
+    def orbit(self, *, right: float = 0.0, up: float = 0.0) -> "Camera":
+        """This camera swung round its target: `right` degrees toward the
+        picture's right (about the vertical), `up` degrees higher. The
+        distance stays."""
+        ex, ey, ez = (e - t for e, t in zip(self.eye, self.target))
+        flat = math.hypot(ex, ey)
+        distance = math.hypot(flat, ez)
+        azimuth = math.atan2(ey, ex) + math.radians(right)
+        elevation = math.atan2(ez, flat) + math.radians(up)
+        elevation = max(-math.pi / 2 + 0.01, min(math.pi / 2 - 0.01, elevation))
+        tu, tv, tz = self.target
+        return Camera(
+            (
+                tu + distance * math.cos(elevation) * math.cos(azimuth),
+                tv + distance * math.cos(elevation) * math.sin(azimuth),
+                tz + distance * math.sin(elevation),
+            ),
+            self.target,
+            self.fov,
+        )
+
+    def zoom(self, factor: float) -> "Camera":
+        """This camera `factor` times as far from its target: under 1 is
+        closer, over 1 further."""
+        factor = _finite("factor", factor)
+        if factor <= 0:
+            raise ValueError("zoom factor must be positive")
+        eye = tuple(t + (e - t) * factor for e, t in zip(self.eye, self.target))
+        return Camera(eye, self.target, self.fov)
+
+    def _payload(self) -> dict[str, Any]:
+        return {"eye": list(self.eye), "target": list(self.target), "fov": self.fov}
+
+    def __repr__(self) -> str:
+        eye = ", ".join(f"{c:.2f}" for c in self.eye)
+        target = ", ".join(f"{c:.2f}" for c in self.target)
+        said = f" {self.looking}" if self.looking else ""
+        return f"<Camera eye=({eye}) target=({target}) fov={self.fov:g}{said}>"
+
+
+def _camera(value: Any) -> dict[str, Any]:
+    """A `camera=` argument as the host takes it."""
+    if isinstance(value, Camera):
+        return value._payload()
+    if isinstance(value, Mapping):
+        unknown = set(value) - {"eye", "target", "fov"}
+        if unknown or "eye" not in value or "target" not in value:
+            raise ValueError("camera= is a Camera or {'eye': (u, v, z), 'target': (u, v, z), 'fov': deg}")
+        return Camera(value["eye"], value["target"], value.get("fov", 50.0))._payload()
+    raise TypeError("camera= must be a Camera (a render's .camera) or a dict with eye and target")
+
+
+def _targets(name: str, value: Any) -> Any:
+    """A `highlight=` or `focus=` argument as the host takes it: a selection
+    expression, or a list of fixture ids and `"<fixture>:<cell>"` cells."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Group):
+        return value.name
+    items = [value] if hasattr(value, "id") else list(value)
+    out = []
+    for item in items:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, tuple) and len(item) == 2:
+            out.append(f"{_node(item[0])}:{int(item[1])}")
+        else:
+            out.append(_node(item))
+    if not out:
+        raise ValueError(f"{name}= names nothing")
+    return out
+
+
 class StageImage:
     """One rendered frame of the stage, on disk in the workspace."""
 
-    __slots__ = ("view", "t", "width", "height", "artifact_rel", "_workspace")
+    __slots__ = ("view", "t", "width", "height", "artifact_rel", "camera", "visible", "_workspace")
 
     def __init__(
         self,
@@ -206,12 +309,19 @@ class StageImage:
         height: int,
         artifact_rel: str,
         workspace: Path,
+        camera: Camera | None = None,
+        visible: float | None = None,
     ) -> None:
         self.view = view
         self.t = t
         self.width = width
         self.height = height
         self.artifact_rel = artifact_rel
+        #: The camera it was taken with; pass it back as `render(camera=...)`.
+        self.camera = camera
+        #: For a `focus=` render, the share of what it frames that the camera
+        #: sees past truss and other pieces, 0 to 1.
+        self.visible = visible
         self._workspace = Path(workspace)
 
     @property
@@ -823,17 +933,28 @@ class Haze:
 class LibraryMode:
     """One mode of a library fixture — the string `distribute` takes as `mode`."""
 
-    __slots__ = ("name", "channels", "moves", "role")
+    __slots__ = ("name", "channels", "moves", "role", "cells", "colours", "supported")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
         self.name = str(row["name"])
         self.channels = int(row["channels"])
         self.moves = bool(row["moves"])
         self.role = str(row["role"])
+        #: Cells, numbered from 0: `"<fixture>:<cell>"` in `group`,
+        #: `highlight` and `focus` names one.
+        self.cells = int(row.get("cells", 1))
+        #: The LED colours this mode drives (`red`, `warm_white`, `uv`, ...).
+        self.colours = tuple(str(c) for c in row.get("colours") or ())
+        #: False for a mode Luma cannot light (its colour only through
+        #: presets of unknown colour); patch another mode.
+        self.supported = bool(row.get("supported", True))
 
     def __repr__(self) -> str:
         aims = ", moves" if self.moves else ""
-        return f"<{self.name} {self.channels}ch {self.role}{aims}>"
+        cells = f", {self.cells} cells" if self.cells > 1 else ""
+        colours = f" {'+'.join(self.colours)}" if self.colours else ""
+        unsupported = ", unsupported" if not self.supported else ""
+        return f"<{self.name} {self.channels}ch {self.role}{colours}{cells}{aims}{unsupported}>"
 
 
 class LibraryFixture:
@@ -1297,11 +1418,13 @@ class Venue:
         t: float = 0.0,
         width: int = DEFAULT_WIDTH,
         height: int = DEFAULT_HEIGHT,
-        highlight: str | None = None,
+        highlight: Any = None,
         edit: Any = None,
         only: Any = None,
         house: float | None = None,
         sun: float | None = None,
+        camera: Any = None,
+        focus: Any = None,
     ) -> StageImage:
         """Render the stage at `t` seconds and return the resulting figure.
 
@@ -1328,11 +1451,20 @@ class Venue:
         to change the room itself.
 
         `highlight` is a group selection expression (`"moving_spots"`,
-        `"~back_wash & left"`). It *replaces* the lighting: every head it
-        resolves to comes on open and white and every other head goes dark, so
-        the picture is the answer to "which fixtures is this?". The score at `t`
-        is not drawn; `t` still only picks the moment, and the view still picks
-        the camera.
+        `"~back_wash & left"`), or a list of fixtures and cells: ids, fixture
+        handles, `"bar_1:3"` or `(bar, 3)` for cell 3 of `bar_1`. It
+        *replaces* the lighting: every cell it names comes on open and white
+        and every other goes dark, so the picture is the answer to "which
+        lights is this?". The score at `t` is not drawn; `t` still only picks
+        the moment.
+
+        The camera: `view` names a side to look from. `focus=` (the same
+        things `highlight` takes) frames just those fixtures from that side,
+        close up, and swings round as far as it must to see them past truss
+        and other pieces. `camera=` places it outright, as a `Camera` (every
+        image's `.camera`, which `.orbit(right=, up=)` and `.zoom()` move) or
+        `{"eye": (u, v, z), "target": (u, v, z), "fov": 50}`. Each render
+        prints where it looked from and which way the picture is turned.
 
         Raises `LumaHostCallError` for a value that is not finite or is out of
         range: `t`, `house`, `sun`, or a frame side outside 1 to 2000 pixels.
@@ -1350,14 +1482,18 @@ class Venue:
             raise ValueError("only= needs edit= so the preview has a score to isolate")
         if edit is not None and highlight is not None:
             raise ValueError("choose edit= or highlight=, not both")
+        if camera is not None and focus is not None:
+            raise ValueError("choose camera= to place the camera or focus= to frame something, not both")
         payload = {
             "view": str(view),
             "t": t,
             "width": width,
             "height": height,
-            "highlight": None if highlight is None else str(highlight),
+            "highlight": None if highlight is None else _targets("highlight", highlight),
             "house": None if house is None else _finite("house", house),
             "sun": None if sun is None else _finite("sun", sun),
+            "camera": None if camera is None else _camera(camera),
+            "focus": None if focus is None else _targets("focus", focus),
         }
         if edit is not None:
             from .score import Edit
@@ -1368,6 +1504,7 @@ class Venue:
             "venue.render",
             payload,
         )
+        seen = response.get("camera")
         shot = StageImage(
             view=str(response["view"]),
             t=float(response["t"]),
@@ -1375,7 +1512,18 @@ class Venue:
             height=int(response["height"]),
             artifact_rel=str(response["artifactRel"]),
             workspace=object.__getattribute__(self, "_workspace"),
+            camera=None
+            if seen is None
+            else Camera(seen["eye"], seen["target"], seen["fov"], str(seen.get("looking", ""))),
+            visible=None if response.get("visible") is None else float(response["visible"]),
         )
+        if shot.camera is not None:
+            print(f"render: {shot.camera.looking}")
+        if shot.visible is not None and shot.visible < 0.999:
+            print(
+                f"render: the camera sees {shot.visible:.0%} of what it frames; "
+                "something stands in front from every side tried"
+            )
         if shot.t < float(t) - 1e-3:
             print(f"render: clamped to the end of the track: {shot.t:.3f} s")
         figures = object.__getattribute__(self, "_figures")
@@ -1581,8 +1729,10 @@ class Venue:
             v.render(highlight=back.name)
 
         `fixtures` accepts a Distribution, Group, one fixture handle/id, or an
-        iterable of fixture handles/ids (including GroupFixture). Membership
-        always includes every head of each fixture. Duplicate ids count once.
+        iterable of fixture handles/ids (including GroupFixture). A fixture
+        joins whole; to take single cells name them `"<fixture>:<cell>"` or
+        `(fixture, cell)`, cells numbered from 0 (see a library mode's
+        `cells`). Duplicates count once.
         Names use the native group's normalization and collision rules.
         An existing name refuses unless `replace=True`, which replaces all
         members atomically while keeping that collection's identity. An empty
@@ -1594,7 +1744,12 @@ class Venue:
             fixtures = fixtures.fixtures
         elif isinstance(fixtures, (str, Mapping)) or hasattr(fixtures, "id"):
             fixtures = (fixtures,)
-        ids = list(dict.fromkeys(_node(fixture) for fixture in fixtures))
+        ids = list(dict.fromkeys(
+            f"{_node(fixture[0])}:{int(fixture[1])}"
+            if isinstance(fixture, tuple) and len(fixture) == 2
+            else _node(fixture)
+            for fixture in fixtures
+        ))
         return Group(self._verb("venue.group", {
             "name": str(name), "fixtures": ids, "replace": bool(replace),
         })["group"])

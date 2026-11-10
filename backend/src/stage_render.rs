@@ -239,17 +239,26 @@ impl VenueGeometry {
         (scene, definitions)
     }
 
-    /// World position of the DJ booth, if this room has one.
-    ///
-    /// A `cdj` beats a `mixer` because a booth with decks in it is where the
-    /// operator stands; a mixer alone is the fallback. Returned in render-world
-    /// space (Z-up), which is the space [`Camera::for_view`] works in.
+    /// How many cells (heads) `fixture` has: what `"<id>:<cell>"` counts.
+    #[must_use]
+    pub fn cells(&self, fixture: &PatchedFixture) -> usize {
+        self.definitions
+            .get(&fixture.fixture_path)
+            .and_then(|def| def.modes.iter().find(|m| m.name == fixture.mode_name))
+            .map_or(1, |mode| mode.heads.len().max(1))
+    }
+
     /// The light the rig's fixtures make ([`StageLights`]).
     #[must_use]
     pub fn lights(&self) -> StageLights {
         StageLights::new(&self.fixtures, &self.definitions)
     }
 
+    /// World position of the DJ booth, if this room has one.
+    ///
+    /// A `cdj` beats a `mixer` because a booth with decks in it is where the
+    /// operator stands; a mixer alone is the fallback. Returned in render-world
+    /// space (Z-up), which is the space [`Camera::for_view`] works in.
     #[must_use]
     pub fn booth(&self) -> Option<Vec3> {
         BOOTH_KINDS.iter().find_map(|kind| {
@@ -472,15 +481,35 @@ const MARKED: PrimitiveState = PrimitiveState {
 /// no state is drawn dark.
 #[must_use]
 fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
+    let members: Vec<Marked> = resolved
+        .iter()
+        .map(|entry| Marked {
+            fixture: entry.fixture.id.clone(),
+            heads: entry.heads.clone(),
+        })
+        .collect();
+    highlight_members(&members)
+}
+
+/// One fixture of a highlight: every head of it, or just `heads`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marked {
+    pub fixture: String,
+    pub heads: Option<Vec<usize>>,
+}
+
+/// [`highlight_state`] of fixtures and heads named outright.
+#[must_use]
+pub fn highlight_members(members: &[Marked]) -> UniverseState {
     let mut primitives = HashMap::new();
-    for entry in resolved {
+    for entry in members {
         match &entry.heads {
             None => {
-                primitives.insert(entry.fixture.id.clone(), MARKED);
+                primitives.insert(entry.fixture.clone(), MARKED);
             }
             Some(heads) => {
                 for head in heads {
-                    primitives.insert(format!("{}:{head}", entry.fixture.id), MARKED);
+                    primitives.insert(format!("{}:{head}", entry.fixture), MARKED);
                 }
             }
         }
@@ -496,8 +525,8 @@ fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
 /// Owned rather than borrowed because the frame is built and rendered on the
 /// renderer's own thread — see [`render_png`].
 pub struct Shot {
-    /// Named camera position.
-    pub view: View,
+    /// Where the frame is seen from.
+    pub aim: Aim,
     /// World position of the DJ booth; only [`View::Dj`] reads it.
     pub booth: Option<Vec3>,
     /// Evaluated light state. `None` draws the rig unlit.
@@ -535,7 +564,7 @@ pub fn render_rgba(
         shot.lasers,
         shot.lights,
         meshes_root,
-        Aim::View(shot.view),
+        shot.aim,
         shot.booth,
         (
             shot.size.0.clamp(1, MAX_DIMENSION),
@@ -597,6 +626,15 @@ pub enum Aim {
     Camera(Camera),
 }
 
+/// The lens of a headless `size` frame of `scene`. No chrome covers it, so a
+/// fit gets the whole frame, except outdoors, where its top belongs to the
+/// sky.
+#[must_use]
+pub fn viewfinder(scene: &scene_desc::Scene, size: (u32, u32)) -> Viewfinder {
+    Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1.max(1) as f32)
+        .open_air(scene.render.sky.is_some())
+}
+
 impl Aim {
     /// The camera this aim sees `scene` through in a `size` frame. `booth` is
     /// where the DJ stands; only [`View::Dj`] reads it.
@@ -609,14 +647,12 @@ impl Aim {
         size: (u32, u32),
     ) -> Camera {
         match self {
-            Self::View(view) => {
-                // No chrome over a headless frame, so the fit gets the whole
-                // of it — except outdoors, where the top of the frame belongs
-                // to the sky.
-                let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1.max(1) as f32)
-                    .open_air(scene.render.sky.is_some());
-                Camera::for_view(view, &scene.framing(definitions), booth, &viewfinder)
-            }
+            Self::View(view) => Camera::for_view(
+                view,
+                &scene.framing(definitions),
+                booth,
+                &viewfinder(scene, size),
+            ),
             Self::Camera(camera) => camera,
         }
     }

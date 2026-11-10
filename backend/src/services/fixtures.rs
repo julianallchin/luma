@@ -187,6 +187,14 @@ pub struct LibraryMode {
     /// What the derivation will file this mode under: `wash`, `spot`, `beam`,
     /// `strobe`, `blinder`, `pixel`, `fx`, `other`.
     pub role: String,
+    /// How many cells it has: what `"<fixture>:<cell>"` counts, from 0.
+    pub cells: usize,
+    /// The emitter colours its channels drive (`red`, `warm_white`, `uv`,
+    /// ...), in channel order. Empty for a mode whose colour comes from a
+    /// lamp, flags or a wheel, and for a QLC+ file.
+    pub colours: Vec<String>,
+    /// Whether Luma can light it in this mode.
+    pub supported: bool,
 }
 
 /// A library fixture resolved far enough to be named in a `distribute` call.
@@ -237,6 +245,43 @@ pub fn library(root: &Path, query: &str, limit: usize) -> Result<Vec<LibraryFixt
         .collect())
 }
 
+/// The emitter colours `mode`'s channels drive, each once, in channel order.
+fn emitter_colours(
+    definition: &crate::models::fixtures::FixtureDefinition,
+    mode: &crate::models::fixtures::Mode,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for channel in &mode.channels {
+        let Some(lowered) = definition
+            .channels
+            .iter()
+            .find(|c| c.name == channel.name)
+            .and_then(|c| c.lowered.as_deref())
+        else {
+            continue;
+        };
+        if let Some(colour) = luma_fixture::EmitterColour::of(lowered.param.attr) {
+            let name = snake(&format!("{colour:?}"));
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// `WarmWhite` as `warm_white`.
+fn snake(camel: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in camel.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
 /// One library entry with its definition read, or `None` if it will not parse.
 fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
     let definition = crate::fixtures::definition(root, &entry.path).ok()?;
@@ -250,6 +295,9 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
             role: crate::models::groups::FixtureRole::of(&definition, mode)
                 .as_str()
                 .to_string(),
+            cells: mode.heads.len().max(1),
+            colours: emitter_colours(&definition, mode),
+            supported: definition.supports_mode(&mode.name),
         })
         .collect();
     let lens = definition

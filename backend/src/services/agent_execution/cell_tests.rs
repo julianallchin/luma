@@ -1167,6 +1167,13 @@ async fn venue_usability_run() {
         let code = std::fs::read_to_string(cell).unwrap();
         let name = cell.file_name().unwrap().to_string_lossy().to_string();
         let out = f.run_in_venue(&thread, &venue_id, &code).await;
+        for figure in &out.figures {
+            let file = std::path::Path::new(&figure.artifact_rel)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "figure.png".into());
+            std::fs::write(out_dir.join(format!("{file}.b64")), &figure.base64_png).unwrap();
+        }
         transcript.push_str(&format!(
             "===== {name} =====\n{code}\n----- status: {} -----\nstdout:\n{}\n\
              stderr:\n{}\nrepr: {:?}\ntraceback: {:?}\nnotices: {:?}\nfigures: {:?}\n\n",

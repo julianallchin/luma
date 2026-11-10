@@ -37,6 +37,7 @@ pub mod definition;
 pub mod distribute;
 pub mod environment;
 pub mod face;
+pub mod focus;
 pub mod framing;
 pub mod gesture;
 pub mod gizmo;

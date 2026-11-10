@@ -1318,6 +1318,17 @@ impl Scene {
         )
     }
 
+    /// What can stand between a camera and a light, in world space: every
+    /// piece but the floor, as its framing box.
+    #[must_use]
+    pub fn obstacles(&self) -> Vec<luma_scene::Aabb> {
+        self.pieces
+            .iter()
+            .filter(|piece| !piece.is_floor())
+            .map(piece_box)
+            .collect()
+    }
+
     /// The room a house rig hangs over, in world space.
     ///
     /// Every head and every rig-bearing piece, and nothing else: unlike
