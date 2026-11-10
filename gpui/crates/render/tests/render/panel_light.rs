@@ -117,7 +117,7 @@ fn frame(target: Vec3, flip: bool, lit: Lit) -> Frame {
                 Vec3::X,
                 (-half, half),
                 0.06,
-                &cells,
+                (&cells, cells.len()),
                 Footprint::of(cone.cos_beam, cone.cos_field),
             )];
         }

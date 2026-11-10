@@ -1134,7 +1134,7 @@ pub fn build_at(
                     right,
                     (whole.0 - middle, whole.1 - middle),
                     finest,
-                    &cells,
+                    (&cells, face.cells.len()),
                     footprint.clone(),
                 ));
                 fixture_cones.push(FixtureCone {

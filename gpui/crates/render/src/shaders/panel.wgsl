@@ -8,20 +8,23 @@
 // light is taken a part of the lit cells at a time, each scattered from
 // where on the face it is (`panel_scatter`).
 //
+// A face of few cells has no texture: close to, its light is its lit cells'
+// own, summed, a part a cell; far off it is the same quarters as any face.
+//
 // The consumer declares `panel_data`, the packed panels, and prepends
 // `fixture_light.wgsl` for the beam's profile and `haze_phase.wgsl`. Each
 // panel is a header (the face's right and one texel's side; the texture's
-// middle, its side in texels and the field's edge as an angle; the beam's
-// weight, the blur's width and half the lit cells' extent; the lit cells'
-// centre and spread; the same for each quarter of them; each quarter's light,
-// in its colour and in white; then each part of the lit rectangle, its bounds
-// and its share of the light), then the kernel's table, then the pattern
-// and its blurred levels.
+// middle, its side in texels, zero for a face of few cells, and the field's
+// edge as an angle; the beam's weight, the blur's width and half the lit
+// cells' extent; the lit cells' centre and spread; the same for each quarter
+// of them; each quarter's light, in its colour and in white; how many parts
+// the lit cells are in), then each part's bounds and its share of the light,
+// then for a face with a texture the kernel's table, the pattern and its
+// blurred levels.
 
-// Parts of the lit rectangle, words in a panel's header, and cells along
-// each side of its kernel table.
-const PANEL_PARTS: u32 = 9u;
-const PANEL_HEAD: u32 = 12u + 2u * PANEL_PARTS;
+// Words in a panel's header before its parts, and cells along each side of
+// its kernel table.
+const PANEL_HEAD: u32 = 13u;
 const PANEL_KERNEL: u32 = 32u;
 // Samples of margin on each side of a blurred level (`MARGIN` in `panel.rs`).
 const PANEL_MARGIN: i32 = 3;
@@ -107,18 +110,24 @@ fn panel_phase(right: vec3<f32>, up: vec3<f32>, seat: vec2<f32>, q: vec3<f32>, r
     return haze_phase(dot(normalize(right * seat.x + up * seat.y - q), ray));
 }
 
-/// The haze's phase toward the light close to the face: toward each part of
-/// the lit cells, weighed by what the part sends the point. `kernel` is the
-/// beam's weight and `whole` the phase where no part sends anything.
-fn panel_phases(start: u32, right: vec3<f32>, up: vec3<f32>, at: vec2<f32>, height: f32, blur2: f32, cos_beam: f32, cos_field: f32, kernel: f32, q: vec3<f32>, ray: vec3<f32>, whole: f32) -> vec4<f32> {
-    var sum = vec4<f32>(0.0);
-    var weight = vec4<f32>(0.0);
-    for (var part = 0u; part < PANEL_PARTS; part += 1u) {
-        let bounds = panel_data[start + 12u + 2u * part];
+struct PanelParts {
+    // What the parts of the lit cells send the point between them.
+    light: vec4<f32>,
+    // The same with each part's times the haze's phase toward it.
+    scattered: vec4<f32>,
+}
+
+/// What each part of the lit cells sends the point, summed: a point of
+/// light through the beam's profile far off, and close to no brighter than a
+/// face lit as evenly as the part is. `kernel` is the beam's weight.
+fn panel_parts(start: u32, right: vec3<f32>, up: vec3<f32>, at: vec2<f32>, height: f32, blur2: f32, cos_beam: f32, cos_field: f32, kernel: f32, q: vec3<f32>, ray: vec3<f32>, scatter: bool) -> PanelParts {
+    var out: PanelParts;
+    out.light = vec4<f32>(0.0);
+    out.scattered = vec4<f32>(0.0);
+    let count = u32(panel_data[start + 12u].x);
+    for (var part = 0u; part < count; part += 1u) {
+        let bounds = panel_data[start + PANEL_HEAD + 2u * part];
         let size = bounds.zw - bounds.xy;
-        if size.x <= 0.0 {
-            continue;
-        }
         // Close to, the part's light comes from its nearest place to the
         // point; further off, from nearer its middle.
         let centre = 0.5 * (bounds.xy + bounds.zw);
@@ -131,13 +140,13 @@ fn panel_phases(start: u32, right: vec3<f32>, up: vec3<f32>, at: vec2<f32>, heig
         if reaches <= 0.0 {
             continue;
         }
-        // Far off the part is a point of light there; close to, it is no
-        // brighter than a face lit as evenly as it is.
-        let sends = panel_data[start + 13u + 2u * part] * (reaches / (height * height + size.x * size.y * reaches / kernel));
-        sum += sends * panel_phase(right, up, seat, q, ray);
-        weight += sends;
+        let sends = panel_data[start + PANEL_HEAD + 2u * part + 1u] * (reaches / (height * height + size.x * size.y * reaches / kernel));
+        out.light += sends;
+        if scatter {
+            out.scattered += sends * panel_phase(right, up, seat, q, ray);
+        }
     }
-    return select(vec4<f32>(whole), sum / max(weight, vec4<f32>(1e-30)), weight > vec4<f32>(0.0));
+    return out;
 }
 
 /// The light the panel at `panel` in `panel_data` sends to the point `q`
@@ -156,10 +165,11 @@ fn panel_scatter(panel: f32, direction: vec3<f32>, cos_beam: f32, cos_field: f32
 /// times the haze's phase toward `ray`.
 ///
 /// Close to the face it is the lit cells' rectangle under the beam's kernel,
-/// times the pattern the texture makes inside it. Once the beam is a few
-/// times wider than the lit cells themselves it is the light of each quarter
-/// of them from its own centre, through the beam's profile widened by its
-/// spread: one cone, far off.
+/// times the pattern the texture makes inside it; or, for a face of few
+/// cells, those cells' own light summed. Once the beam is a few times wider
+/// than the lit cells themselves it is the light of each quarter of them
+/// from its own centre, through the beam's profile widened by its spread:
+/// one cone, far off.
 fn panel_lit(panel: f32, direction: vec3<f32>, cos_beam: f32, cos_field: f32, q: vec3<f32>, ray: vec3<f32>, scatter: bool) -> PanelLight {
     let start = u32(panel);
     let head = panel_data[start];
@@ -183,7 +193,17 @@ fn panel_lit(panel: f32, direction: vec3<f32>, cos_beam: f32, cos_field: f32, q:
     let share = vec2<f32>(blur2) / (vec2<f32>(blur2) + lit.zw);
     let seat = lit.xy + (clamp(at, -beam.zw, beam.zw) - lit.xy) * (vec2<f32>(1.0) - share);
     out.source = head.xyz * seat.x + up * seat.y;
-    let far = smoothstep(2.0, 4.0, blur / sqrt(max(lit.z, lit.w)));
+    var far = smoothstep(2.0, 4.0, blur / sqrt(max(lit.z, lit.w)));
+    let few = shape.z < 1.0;
+    if few && scatter {
+        // A face of few cells can always be its cells summed. For the haze
+        // it is its quarters only where one direction a quarter will do:
+        // where the haze's phase barely changes across the lit cells as the
+        // point sees them.
+        let to = head.xyz * lit.x + up * lit.y - q;
+        let seen = max(lit.z, lit.w) / dot(to, to);
+        far *= 1.0 - smoothstep(0.02, 0.06, haze_phase_spread(dot(normalize(to), ray), seen));
+    }
     if far > 0.0 {
         // One cone a quarter, from that quarter's own centre.
         for (var quarter = 0u; quarter < 4u; quarter += 1u) {
@@ -199,7 +219,11 @@ fn panel_lit(panel: f32, direction: vec3<f32>, cos_beam: f32, cos_field: f32, q:
             }
         }
     }
-    if far < 1.0 {
+    if far < 1.0 && few {
+        // Its lit cells' own light, summed.
+        let parts = panel_parts(start, head.xyz, up, at, height, blur2, cos_beam, cos_field, beam.x, q, ray, scatter);
+        out.light += select(parts.light, parts.scattered, scatter) * (1.0 - far);
+    } else if far < 1.0 {
         // The blur and the texture's own grain together, in half texels,
         // squared: one for the texture, and doubling a level. The two levels
         // that bracket this blur are mixed to give a lone cell the
@@ -213,18 +237,22 @@ fn panel_lit(panel: f32, direction: vec3<f32>, cos_beam: f32, cos_field: f32, q:
         // The pattern, read inside the lit rectangle: past its edge it is
         // as it was at the edge.
         let inside = clamp(at, -beam.zw, beam.zw) - shape.xy;
-        let stack = start + PANEL_HEAD + PANEL_KERNEL * PANEL_KERNEL;
+        let table = start + PANEL_HEAD + 2u * u32(panel_data[start + 12u].x);
+        let stack = table + PANEL_KERNEL * PANEL_KERNEL;
         let pattern = mix(
             panel_level(stack, side, head.w, level, inside),
             panel_level(stack, side, head.w, level + 1u, inside),
             mixing,
         );
         // The rectangle, evenly lit, under the beam's own kernel.
-        let rectangle = panel_rectangle(start + PANEL_HEAD, shape.w, (-beam.zw - at) / height, (beam.zw - at) / height)
+        let rectangle = panel_rectangle(table, shape.w, (-beam.zw - at) / height, (beam.zw - at) / height)
             / (4.0 * beam.z * beam.w);
         var near = pattern * (rectangle * (1.0 - far));
         if scatter {
-            near *= panel_phases(start, head.xyz, up, at, height, blur2, cos_beam, cos_field, beam.x, q, ray, panel_phase(head.xyz, up, seat, q, ray));
+            // The haze's phase toward each part, weighed by what the part
+            // sends; toward the whole where no part sends anything.
+            let parts = panel_parts(start, head.xyz, up, at, height, blur2, cos_beam, cos_field, beam.x, q, ray, true);
+            near *= select(vec4<f32>(panel_phase(head.xyz, up, seat, q, ray)), parts.scattered / max(parts.light, vec4<f32>(1e-30)), parts.light > vec4<f32>(0.0));
         }
         out.light += near;
     }
@@ -250,7 +278,7 @@ fn panel_pieces(panel: f32, direction: vec3<f32>, qa: vec3<f32>, qb: vec3<f32>) 
     let along = qb - qa;
     let up = cross(direction, head.xyz);
     let across = length(vec2<f32>(dot(along, head.xyz), dot(along, up)));
-    // Only the stretch that passes the face has cells to resolve.
-    let passing = min(across, shape.z * head.w + 8.0 * spread);
+    // Only the stretch that passes the lit cells has cells to resolve.
+    let passing = min(across, 2.0 * max(beam.z, beam.w) + 8.0 * spread);
     return clamp(u32(ceil(passing / max(2.0 * head.w, 2.0 * blur))), 1u, 32u);
 }

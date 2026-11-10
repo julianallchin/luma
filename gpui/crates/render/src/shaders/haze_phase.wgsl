@@ -14,6 +14,16 @@ fn haze_phase(cos_t: f32) -> f32 {
     return mix(peak, bulk, HAZE_PHASE_W_D);
 }
 
+/// How far, as a share, the forward peak for light from a spread of
+/// directions is from the peak at their middle: `cos_t` the middle's cosine,
+/// `spread` the directions' variance about it in radians squared. The second
+/// term of the mean, so it holds while it is small.
+fn haze_phase_spread(cos_t: f32, spread: f32) -> f32 {
+    let g = HAZE_PHASE_G_HG;
+    let d = 1.0 + g * g - 2.0 * g * cos_t;
+    return 0.5 * spread * abs(15.0 * g * g * (1.0 - cos_t * cos_t) - 3.0 * g * cos_t * d) / (d * d);
+}
+
 /// Henyey-Greenstein relative to isotropic.
 fn haze_phase_lobe(cos_t: f32, g: f32) -> f32 {
     let g2 = g * g;

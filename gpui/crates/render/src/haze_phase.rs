@@ -64,6 +64,17 @@ impl Lobes {
     }
 }
 
+/// `haze_phase_spread` in `shaders/haze_phase.wgsl`: how far, as a share,
+/// the forward peak for light from a spread of directions is from the peak
+/// at their middle. `cos_t` is the middle's cosine and `spread` the
+/// directions' variance about it, radians squared; this is the second term
+/// of the mean, so it holds while it is small.
+pub(crate) fn spread(cos_t: f32, spread: f32) -> f32 {
+    let g = Lobes::for_droplet(DROPLET_UM).g_hg;
+    let d = 1.0 + g * g - 2.0 * g * cos_t;
+    0.5 * spread * (15.0 * g * g * (1.0 - cos_t * cos_t) - 3.0 * g * cos_t * d).abs() / (d * d)
+}
+
 /// The phase constants and `haze_phase`, for any module that scatters light
 /// in the haze.
 pub(crate) fn prelude() -> String {
