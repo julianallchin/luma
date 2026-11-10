@@ -95,7 +95,7 @@ pub(crate) struct Subagents {
 impl Subagents {
     fn new(rows: Vec<SubagentSnapshot>, cx: &mut Context<Luma>) -> Self {
         let mut state = Self {
-            morph: MorphDialog::new(Route::List.descriptor(), CARD_SIZE),
+            morph: MorphDialog::new(Route::List.descriptor()),
             rows: Vec::new(),
             reader: None,
             row_focuses: HashMap::new(),
