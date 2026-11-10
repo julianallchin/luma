@@ -8,12 +8,15 @@
 //! whole contract is local (two hashes over exact bytes, plus the claims
 //! parsed out of them), so writing one directly is faithful.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::Digest as _;
+use sqlx::SqlitePool;
 
 /// Must match `config::SUPABASE_URL`; the issuer claim is compared against it.
 pub const ISSUER: &str = "https://smuuycypmsutwrkpctws.supabase.co/auth/v1";
@@ -90,7 +93,14 @@ async fn seed_as(dir: &Path, stored: Stored, principal: &str) {
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await
         .expect("failed to open the fixture state database");
+    write(&state.0, stored, principal)
+        .await
+        .expect("failed to seed the session");
+    state.0.close().await;
+}
 
+/// The session, and for a proven one its proof, as rows of `state`.
+async fn write(state: &SqlitePool, stored: Stored, principal: &str) -> Result<(), sqlx::Error> {
     let (expires_at, refresh_token) = match stored {
         // A refresh token Supabase has already spent. Reaching for it is the
         // failure the sign-in suite exists to keep out of boot.
@@ -108,9 +118,8 @@ async fn seed_as(dir: &Path, stored: Stored, principal: &str) {
 
     sqlx::query("INSERT INTO auth_session (key, value) VALUES ('supabase_session', ?)")
         .bind(&session)
-        .execute(&state.0)
-        .await
-        .expect("failed to seed the session");
+        .execute(state)
+        .await?;
 
     if let Stored::Proven { .. } = stored {
         let envelope: Value = serde_json::from_str(&session).expect("session parses");
@@ -130,10 +139,54 @@ async fn seed_as(dir: &Path, stored: Stored, principal: &str) {
         .bind(expires_at)
         .bind(now())
         .bind("fixture-proof-generation")
-        .execute(&state.0)
-        .await
-        .expect("failed to seed the principal proof");
+        .execute(state)
+        .await?;
     }
+    Ok(())
+}
 
-    state.0.close().await;
+/// The sign-in screen's far end, for a library that is already open: each
+/// address in `accounts` signs in as the principal it names, and any other is
+/// refused. No code is mailed and none is checked.
+///
+/// What a redeemed code does in the app is `set_session_item`, which asks
+/// Supabase who the token belongs to. This writes the same rows without
+/// asking, and keeps that command's rule about whose session may replace
+/// whose: with nobody signed in the account is admitted; the account already
+/// signed in — its session revoked, say — only has its credentials renewed;
+/// and any other account is refused until that one has signed out.
+#[must_use]
+pub fn accounts(accounts: HashMap<String, String>) -> luma_app::SignInFixture {
+    Arc::new(move |services, email| {
+        let principal = accounts.get(email.trim()).cloned();
+        Box::pin(async move {
+            let principal = principal.ok_or("The fixture has no account with this address")?;
+            let state = services.state_pool();
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT user_id FROM auth_principal_proof")
+                    .fetch_optional(state)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            match stored {
+                Some(stored) if stored == principal => {}
+                Some(_) => {
+                    return Err(
+                        "A different authenticated account must complete durable sign-out before replacement"
+                            .into(),
+                    )
+                }
+                None => {
+                    write(state, Stored::Proven { expires_in: 3600 }, &principal)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    luma_lib::database::local::auth::arm_write_admission(
+                        &services.db().0,
+                        Some(&principal),
+                    )
+                    .await?;
+                }
+            }
+            Ok(principal)
+        })
+    })
 }

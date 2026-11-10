@@ -80,7 +80,9 @@ pub use account::Account;
 #[cfg(feature = "agent")]
 use fixtures::FixtureTrackSources;
 #[cfg(feature = "agent")]
-pub use fixtures::{NavigationFixture, SourceAdapterFixture, SourceSearchFixtureResponse};
+pub use fixtures::{
+    NavigationFixture, SignInFixture, SourceAdapterFixture, SourceSearchFixtureResponse,
+};
 pub use patch::Patch;
 pub(crate) use scores::ScoreContents;
 pub use sources::{SourceLibrary, SourcePlaylist, SourceTrack, TrackSource};
@@ -217,6 +219,9 @@ pub struct Library {
     sync_status_fixture: Option<Arc<Mutex<luma_lib::models::sync::SyncStatus>>>,
     #[cfg(feature = "agent")]
     background_work_fixture: Option<Arc<Mutex<luma_lib::models::background::BackgroundWork>>>,
+    /// Redeems login codes in Supabase's place — see [`SignInFixture`].
+    #[cfg(feature = "agent")]
+    sign_in_fixture: Option<SignInFixture>,
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
@@ -461,6 +466,8 @@ impl Library {
             sync_status_fixture: None,
             #[cfg(feature = "agent")]
             background_work_fixture: None,
+            #[cfg(feature = "agent")]
+            sign_in_fixture: None,
             session_revoked,
             replica_changed,
             sync_shutdown,
