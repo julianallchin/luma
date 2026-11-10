@@ -48,6 +48,10 @@ const INSET: f32 = 4.;
 /// on one edge with the rows' text.
 const TEXT_INSET: f32 = 8.;
 const SLIDER_WIDTH: f32 = CARD_WIDTH - 2. * (INSET + TEXT_INSET);
+/// The slider's knob, and the thinner track it rides.
+const KNOB: f32 = 24.;
+const TRACK: f32 = 18.;
+const TRACK_TOP: f32 = (KNOB - TRACK) / 2.;
 /// The panel's title block: the level over the model, or the model alone.
 const TITLE_HEIGHT: f32 = 48.;
 const TITLE_HEIGHT_SINGLE: f32 = 36.;
@@ -903,12 +907,13 @@ impl ModelPicker {
                     &motion::TAB_SLIDE,
                     window,
                 );
-                el.child(div().px(px(TEXT_INSET)).pt(px(2.)).pb(px(4.)).child(slider(
-                    shown,
-                    levels.len(),
-                    disabled,
-                    &cx.entity(),
-                )))
+                el.child(
+                    div()
+                        .px(px(TEXT_INSET))
+                        .pt(px(8.))
+                        .pb(px(10.))
+                        .child(slider(shown, levels.len(), disabled, &cx.entity())),
+                )
             })
             .into_any_element()
     }
@@ -1192,24 +1197,77 @@ fn square(id: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
         .cursor_pointer()
 }
 
+/// The reasoning slider, as it was before the picker followed Zeron: a thin
+/// track, a notch per level, a round white knob, and the fill in the effort's
+/// colour (blue, turning to a violet gradient at the top levels).
 fn slider(fraction: f32, count: usize, disabled: bool, this: &Entity<ModelPicker>) -> AnyElement {
+    let travel = SLIDER_WIDTH - KNOB;
+    let left = fraction * travel;
     let (bounds, probe) = luma_ui::arg::bounds_probe();
     let down = this.clone();
     let up = this.clone();
     let outside = this.clone();
     let moving = this.clone();
-    let at = move |x: Pixels, bounds: Bounds<Pixels>| {
-        float::step_slider_fraction(
-            f32::from(x - bounds.left()),
-            f32::from(bounds.size.width),
-            count,
+    let fill = if fraction > 0.75 {
+        gpui::linear_gradient(
+            90.,
+            gpui::linear_color_stop(rgb(0x4244df), 0.),
+            gpui::linear_color_stop(rgb(0xab79ef), 1.),
         )
+    } else {
+        gpui::Background::from(effort_color(fraction))
     };
-    float::step_slider(SLIDER_WIDTH, fraction, count)
+    div()
         .id("effort-slider")
+        .relative()
+        .w(px(SLIDER_WIDTH))
+        .h(px(KNOB))
         .cursor_pointer()
-        .when(disabled, |el| el.opacity(0.5))
         .child(probe)
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(TRACK_TOP))
+                .h(px(TRACK))
+                .rounded_full()
+                .bg(ladder::foreground_alpha(0.12)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(px(TRACK_TOP))
+                // At least the track's height, so the fill's rounded end is
+                // the track's own and stays inside the knob. Narrower, its
+                // corners tightened and peeked out past the knob's curve at
+                // the lowest level.
+                .w(px((left + KNOB / 2.).max(TRACK)))
+                .h(px(TRACK))
+                .rounded_full()
+                .bg(fill),
+        )
+        .children((0..count).map(|index| {
+            div()
+                .absolute()
+                .left(px(
+                    KNOB / 2. + travel * index as f32 / (count - 1) as f32 - 2.
+                ))
+                .top(px(KNOB / 2. - 2.))
+                .size(px(4.))
+                .rounded_full()
+                .bg(ladder::foreground_alpha(0.3))
+        }))
+        .child(
+            div()
+                .absolute()
+                .left(px(left))
+                .top_0()
+                .size(px(KNOB))
+                .rounded_full()
+                .bg(rgb(0xffffff)),
+        )
         .child(
             gpui::canvas(
                 |_, _, _| (),
@@ -1219,7 +1277,11 @@ fn slider(fraction: f32, count: usize, disabled: bool, this: &Entity<ModelPicker
                         if phase == gpui::DispatchPhase::Bubble {
                             moving.update(cx, |picker, cx| {
                                 if picker.dragging {
-                                    picker.preview = Some(at(event.position.x, bounds));
+                                    picker.preview = Some(snapped_fraction(
+                                        f32::from(event.position.x - bounds.left()),
+                                        f32::from(bounds.size.width),
+                                        count,
+                                    ));
                                     cx.notify();
                                 }
                             });
@@ -1237,7 +1299,11 @@ fn slider(fraction: f32, count: usize, disabled: bool, this: &Entity<ModelPicker
             if let Some(bounds) = bounds.get() {
                 down.update(cx, |picker, cx| {
                     picker.dragging = true;
-                    picker.preview = Some(at(event.position.x, bounds));
+                    picker.preview = Some(snapped_fraction(
+                        f32::from(event.position.x - bounds.left()),
+                        f32::from(bounds.size.width),
+                        count,
+                    ));
                     cx.notify();
                 });
             }
@@ -1252,6 +1318,22 @@ fn slider(fraction: f32, count: usize, disabled: bool, this: &Entity<ModelPicker
         .agent_node(Role::Slider, "Reasoning effort")
         .agent_disabled(disabled)
         .into_any_element()
+}
+
+/// The level a pointer `x` across the slider's `width` asks for, as the
+/// fraction that level sits at: the notches and the pointer share the knob's
+/// centre inset, so a press on a notch takes that notch.
+fn snapped_fraction(x: f32, width: f32, count: usize) -> f32 {
+    let fraction = ((x - KNOB / 2.) / (width - KNOB).max(1.)).clamp(0., 1.);
+    effort_index(fraction, count) as f32 / count.saturating_sub(1).max(1) as f32
+}
+
+fn effort_color(fraction: f32) -> gpui::Hsla {
+    if fraction > 0.75 {
+        rgb(0xb57bff).into()
+    } else {
+        rgb(0x3784fb).into()
+    }
 }
 
 /// The text a key types, when it types any: no command or control chord, and
@@ -1504,6 +1586,20 @@ mod tests {
         assert!(matches(&row(model(None)), "openai/"));
         assert!(matches(&row(model(None)), "openrouter sol"));
         assert!(!matches(&row(model(None)), "kimi"));
+    }
+
+    #[test]
+    fn pointer_selects_discrete_ticks_and_clamps_outside_track() {
+        for count in 2..8 {
+            for x in -20..260 {
+                let value = snapped_fraction(x as f32, SLIDER_WIDTH, count);
+                let tick = value * (count - 1) as f32;
+                assert!((tick - tick.round()).abs() < 0.0001);
+                assert!((0.0..=1.0).contains(&value));
+            }
+        }
+        assert_eq!(snapped_fraction(-20., SLIDER_WIDTH, 4), 0.);
+        assert_eq!(snapped_fraction(260., SLIDER_WIDTH, 4), 1.);
     }
 
     #[test]
