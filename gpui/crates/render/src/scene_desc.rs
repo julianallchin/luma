@@ -375,6 +375,13 @@ impl Quality {
     pub fn pixel_budget(self) -> Option<f64> {
         crate::quality::QualityBudget::of(self).pixel_budget
     }
+
+    /// Frames a second a live viewport holds at this level, rendering fewer
+    /// pixels when it has to.
+    #[must_use]
+    pub fn frame_rate(self) -> f32 {
+        crate::quality::QualityBudget::of(self).frame_rate
+    }
 }
 
 /// Runtime-selectable renderer diagnostic output.

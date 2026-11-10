@@ -322,13 +322,10 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
             // downstream — the idle key, the renderer, the trace — sees this.
             // `from_env` caches in a `OnceLock`, so the live percent cannot go
             // through it and is threaded in instead.
-            let limit = key_controls
-                .quality
-                .pixel_budget()
-                .map(|pixels| pixels * stage.borrow().dynamic.factor());
             let (width, height) = RenderScale::from_env().size(
                 key_controls.render_scale_percent,
-                limit,
+                key_controls.quality.pixel_budget(),
+                stage.borrow().dynamic.factor(),
                 (
                     (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
                     (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
@@ -548,12 +545,21 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                                 completed.size,
                                             );
                                             stage.last_draw_ms = Some(completed.draw_ms);
+                                            // A window in the background is
+                                            // throttled by the system: its
+                                            // frames say nothing about what
+                                            // this level can hold.
+                                            if window_active {
+                                                stage.dynamic.observe(
+                                                    completed.draw_ms,
+                                                    key_controls.quality.frame_rate(),
+                                                );
+                                            }
                                             if let Some(timings) = &completed.timings {
                                                 stage.last_cpu_ms =
                                                     Some(timings.cpu_encode_submit_ms as f32);
                                                 stage.last_gpu_ms =
                                                     Some(timings.gpu_total_ms as f32);
-                                                stage.dynamic.observe(timings.gpu_total_ms as f32);
                                                 stage.last_cluster_ms =
                                                     Some(timings.cpu_cluster_ms as f32);
                                             }

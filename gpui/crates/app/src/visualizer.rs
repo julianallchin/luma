@@ -323,7 +323,7 @@ struct Stage {
     /// Fixture shadow maps redrawn by the previous frame. Zero is the healthy
     /// steady state; a sustained non-zero run is tenancy churning.
     last_shadow_maps: Option<u32>,
-    /// Low quality's frame-time-driven share of its pixel budget.
+    /// The share of its pixels the quality level's frame rate leaves it.
     dynamic: DynamicBudget,
     /// When the stage last asked for another frame, and when its prepaint last
     /// ran. Together these separate the two ways a frame can be late: the UI
