@@ -422,6 +422,28 @@ pub fn should_unpin(distance: f32, previous: f32) -> bool {
     distance > previous + theme::AT_BOTTOM_PX
 }
 
+/// Whether this wheel event breaks the pin on arrival: a notch toward the top
+/// over a list that can scroll. Precise (trackpad) input is left to the
+/// distance test, because its tiny deltas are indistinguishable from the
+/// spring's own chase.
+#[must_use]
+pub fn wheel_breaks_pin(delta: gpui::ScrollDelta, can_scroll: bool) -> bool {
+    can_scroll && matches!(delta, gpui::ScrollDelta::Lines(lines) if lines.y > 0.0)
+}
+
+/// The pin after one reader scroll. `escaped` is a wheel that already broke
+/// it: nothing the deferred distance test sees may re-engage it.
+#[must_use]
+pub fn pin_after_scroll(pinned: bool, escaped: bool, distance: f32, previous: f32) -> bool {
+    if escaped {
+        false
+    } else if pinned {
+        !should_unpin(distance, previous)
+    } else {
+        should_restick(distance, previous)
+    }
+}
+
 // -- per-turn render state ---------------------------------------------------
 
 /// One part's parse, and the tree that part currently renders as.
@@ -1154,6 +1176,50 @@ mod tests {
         assert!(!should_unpin(theme::AT_BOTTOM_PX, 0.0));
         assert!(should_unpin(40.0, 0.0));
         assert!(!should_unpin(0.0, 40.0), "scrolling down never unpins");
+    }
+
+    /// A wheel-up breaks the pin on the event itself, even when the spring has
+    /// already pulled the view back to where the distance test sees no
+    /// movement; and nothing in that same event may re-engage it.
+    #[test]
+    fn wheel_up_unpins_on_the_same_event() {
+        let up = gpui::ScrollDelta::Lines(gpui::point(0.0, 1.0));
+        let down = gpui::ScrollDelta::Lines(gpui::point(0.0, -1.0));
+        assert!(wheel_breaks_pin(up, true));
+        assert!(!wheel_breaks_pin(down, true));
+        assert!(!wheel_breaks_pin(up, false), "nothing to scroll");
+        assert!(!wheel_breaks_pin(
+            gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(5.0))),
+            true
+        ));
+        // Back at distance 0 (spring undid the notch) and inside the band:
+        // the distance test alone would keep the pin or re-engage it.
+        assert!(!pin_after_scroll(true, true, 0.0, 0.0));
+        assert!(!pin_after_scroll(
+            false,
+            true,
+            theme::STICK_THRESHOLD_PX - 1.0,
+            40.0
+        ));
+    }
+
+    #[test]
+    fn returning_to_the_bottom_resticks() {
+        assert!(pin_after_scroll(false, false, 0.0, 200.0));
+        assert!(pin_after_scroll(
+            false,
+            false,
+            theme::STICK_THRESHOLD_PX - 1.0,
+            200.0
+        ));
+        assert!(
+            !pin_after_scroll(false, false, 300.0, 200.0),
+            "still adrift"
+        );
+        assert!(
+            pin_after_scroll(true, false, 0.0, 0.0),
+            "a pinned view stays pinned"
+        );
     }
 
     /// A row's gap comes from the pair it sits between. The one that matters

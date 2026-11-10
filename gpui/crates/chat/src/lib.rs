@@ -391,6 +391,14 @@ pub struct AgentChat {
     /// are separate because a pin can be held while the spring is parked (a
     /// settled transcript resting at the bottom schedules no frames at all).
     pinned: bool,
+    /// Wheel input headed for the top of a scrollable list broke the pin as it
+    /// arrived ([`Self::on_wheel`]); the deferred decision in
+    /// [`Self::watch_scrolling`] must not re-engage it.
+    input_escaped: bool,
+    /// The list took the wheel event in flight: its handler runs first, so a
+    /// wheel an overlay above the list let bubble (and the list never saw)
+    /// cannot break the pin.
+    list_took_input: bool,
     spring: transcript::StickSpring,
     send_motion: send_motion::SendMotion,
     composer_bounds: Rc<Cell<gpui::Bounds<gpui::Pixels>>>,
@@ -526,6 +534,8 @@ impl AgentChat {
             // A fresh thread opens at the bottom, which is where a conversation
             // is read from.
             pinned: true,
+            input_escaped: false,
+            list_took_input: false,
             spring: transcript::StickSpring::default(),
             send_motion: send_motion::SendMotion::default(),
             composer_bounds: Rc::default(),
@@ -941,28 +951,49 @@ impl AgentChat {
         let list = self.list.clone();
         let chat = cx.weak_entity();
         list.set_scroll_handler(move |_, _, cx| {
-            // The list holds its own `RefCell` borrow while dispatching, so
-            // reading the state back synchronously panics. Defer to after it
+            // Synchronously: only the chat's own flag is touched, not the
+            // list, whose `RefCell` borrow is still held here.
+            chat.update(cx, |this, _| this.list_took_input = true).ok();
+            // Reading the list back is another matter: defer that to after it
             // has let go.
             let chat = chat.clone();
             cx.defer(move |cx| {
                 chat.update(cx, |this, cx| {
+                    this.list_took_input = false;
+                    let escaped = std::mem::take(&mut this.input_escaped);
                     // A deliberate reader scroll ends the send flight.
                     this.send_motion.flight = None;
                     let distance = this.distance_from_bottom();
                     let previous = std::mem::replace(&mut this.distance, distance);
-                    if this.pinned && transcript::should_unpin(distance, previous) {
-                        this.pinned = false;
+                    let pinned =
+                        transcript::pin_after_scroll(this.pinned, escaped, distance, previous);
+                    if this.pinned && !pinned {
                         this.spring.reset();
                         this.spring_tick = None;
-                    } else if !this.pinned && transcript::should_restick(distance, previous) {
-                        this.pinned = true;
                     }
+                    this.pinned = pinned;
                     cx.notify();
                 })
                 .ok();
             });
         });
+    }
+
+    /// Wheel input headed for the top breaks the pin as it arrives, however
+    /// little it moved, as use-stick-to-bottom's wheel handler does. The
+    /// distance test in [`Self::watch_scrolling`] cannot see that alone: a
+    /// small notch up while the spring chases a growing tail is pulled back
+    /// down by the spring before the deferred check measures it. Bubbles after
+    /// the list, which has applied the input by now, or never saw it.
+    fn on_wheel(&mut self, event: &gpui::ScrollWheelEvent) {
+        let can_scroll = self.list.max_offset_for_scrollbar().y > px(0.0);
+        self.input_escaped = std::mem::take(&mut self.list_took_input)
+            && transcript::wheel_breaks_pin(event.delta, can_scroll);
+        if self.input_escaped {
+            self.pinned = false;
+            self.spring.reset();
+            self.spring_tick = None;
+        }
     }
 
     /// One spring frame: observe the target, step, apply the delta, and park
@@ -1954,6 +1985,7 @@ impl AgentChat {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .on_scroll_wheel(cx.listener(|this, event, _, _| this.on_wheel(event)))
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
