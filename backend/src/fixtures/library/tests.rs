@@ -861,3 +861,30 @@ fn a_mode_that_can_colour_tells_colours_apart() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// A mode whose only colour control is a preset channel with no known
+/// colours cannot be lit, and says so; the same fixture's colour-mixing
+/// mode can.
+#[test]
+fn a_mode_luma_cannot_light_is_unsupported() {
+    let def = definition("elation/eled-qa-strip");
+    assert!(!def.supports_mode("1ch"));
+    let mixing = def
+        .modes
+        .iter()
+        .find(|m| m.name != "1ch")
+        .expect("another mode");
+    assert!(def.supports_mode(&mixing.name), "{}", mixing.name);
+    let unlit = dmx(
+        "elation/eled-qa-strip",
+        "1ch",
+        &uniform(&def, lit(1.0, [1.0; 3])),
+    );
+    let lit_mode = dmx(
+        "elation/eled-qa-strip",
+        &mixing.name,
+        &uniform(&def, lit(1.0, [1.0; 3])),
+    );
+    assert!(lit_mode.iter().any(|&b| b > 0));
+    assert!(unlit.iter().all(|&b| b == 0));
+}

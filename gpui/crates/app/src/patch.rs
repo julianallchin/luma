@@ -252,17 +252,30 @@ impl Patch {
     }
 
     /// The modes the fixture's definition offers, with each one's width.
-    pub(crate) fn modes(&self, row: &PatchedFixture) -> Vec<(String, usize)> {
+    /// Every mode the row's definition offers: name, width, and whether
+    /// Luma can light the fixture in it.
+    pub(crate) fn modes(&self, row: &PatchedFixture) -> Vec<(String, usize, bool)> {
         self.data
             .as_ref()
             .and_then(|data| data.definitions.get(&row.fixture_path))
             .map(|def| {
                 def.modes
                     .iter()
-                    .map(|mode| (mode.name.clone(), mode.channels.len()))
+                    .map(|mode| {
+                        let supported = def.supports_mode(&mode.name);
+                        (mode.name.clone(), mode.channels.len(), supported)
+                    })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Whether Luma can light `row` in its patched mode.
+    pub(crate) fn supported(&self, row: &PatchedFixture) -> bool {
+        self.data
+            .as_ref()
+            .and_then(|data| data.definitions.get(&row.fixture_path))
+            .is_none_or(|def| def.supports_mode(&row.mode_name))
     }
 
     pub(crate) fn any_pinned(&self) -> bool {

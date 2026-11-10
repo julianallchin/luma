@@ -321,6 +321,28 @@ impl ModeLight {
         self.cells.len()
     }
 
+    /// Whether Luma can light the fixture in this mode: asked for full
+    /// white, some cell gives light. A mode whose only colour control is a
+    /// preset channel with no known colours cannot.
+    #[must_use]
+    pub fn lights(&self) -> bool {
+        let white = PrimitiveState {
+            dimmer: 1.0,
+            color: [1.0; 3],
+            strobe: 0.0,
+            position: [0.0; 2],
+            speed: 0.0,
+            aim: None,
+        };
+        let still = Slice {
+            open: 0.0,
+            length: 0.0,
+        };
+        self.emit(&self.realize(&[white], 1.0, still))
+            .iter()
+            .any(|cell| cell.rgb.iter().any(|&v| v > 1e-4))
+    }
+
     /// The values that make `requests` (one per cell, in the working colour
     /// space) as nearly as the fixture can, over `slice` of the strobe clock.
     /// `max_dimmer` is the grand master. The DMX engine passes a slice of no

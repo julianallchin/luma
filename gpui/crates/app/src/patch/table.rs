@@ -189,9 +189,9 @@ fn compact_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             .child(
                 cell(COMPACT_MODE)
                     .text_size(px(12.0))
-                    .text_color(ladder::foreground_alpha(0.85))
+                    .text_color(mode_colour(state, row))
                     .truncate()
-                    .child(row.mode_name.clone()),
+                    .child(mode_text(state, row)),
             )
             .child(reading(COMPACT_NUMBER, row.universe.to_string()))
             .child(reading(COMPACT_NUMBER, row.address.to_string()));
@@ -564,6 +564,23 @@ fn number_cell(
         .into_any_element()
 }
 
+/// The row's mode, marked when Luma cannot light the fixture in it.
+fn mode_text(state: &Patch, row: &PatchedFixture) -> String {
+    if state.supported(row) {
+        row.mode_name.clone()
+    } else {
+        format!("{} · unsupported", row.mode_name)
+    }
+}
+
+fn mode_colour(state: &Patch, row: &PatchedFixture) -> gpui::Hsla {
+    if state.supported(row) {
+        ladder::foreground_alpha(0.85)
+    } else {
+        ladder::danger().into()
+    }
+}
+
 fn mode_cell(
     state: &Patch,
     row: &PatchedFixture,
@@ -574,11 +591,11 @@ fn mode_cell(
     let opened = app.clone();
     let venue = state.venue_id.clone();
     let id = row.id.clone();
-    let mode = row.mode_name.clone();
+    let mode = mode_text(state, row);
     cell(width)
         .id(SharedString::from(format!("patch-mode-{}", row.id)))
         .text_size(px(12.0))
-        .text_color(ladder::foreground_alpha(0.85))
+        .text_color(mode_colour(state, row))
         .truncate()
         .child(mode.clone())
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
@@ -666,12 +683,17 @@ pub(super) fn mode_menu(
     };
     let venue = state.venue_id.clone();
     let mut menu = ContextMenu::new("patch-mode-menu", at);
-    for (mode, channels) in state.modes(row) {
+    for (mode, channels, supported) in state.modes(row) {
         let picked = app.clone();
         let venue = venue.clone();
         let id = row.id.clone();
         let chosen = mode.clone();
-        menu = menu.item(format!("{mode} · {channels} ch"), move |_, cx| {
+        let label = if supported {
+            format!("{mode} · {channels} ch")
+        } else {
+            format!("{mode} · {channels} ch · unsupported")
+        };
+        menu = menu.item(label, move |_, cx| {
             let venue = venue.clone();
             let id = id.clone();
             let chosen = chosen.clone();

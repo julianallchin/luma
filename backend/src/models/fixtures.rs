@@ -56,6 +56,16 @@ pub struct FixtureDefinition {
 pub const LASER_PROJECTOR: &str = "Laser Projector";
 
 impl FixtureDefinition {
+    /// Whether Luma can drive `mode`'s light: false for a library mode it
+    /// cannot light (its colour only through presets of unknown colour).
+    /// QLC+ definitions are taken as they come.
+    pub fn supports_mode(&self, mode: &str) -> bool {
+        self.library
+            .as_ref()
+            .and_then(|source| source.light.get(mode))
+            .is_none_or(|light| light.lights())
+    }
+
     /// Whether this is an ILDA laser projector ([`LASER_PROJECTOR`]).
     pub fn is_laser_projector(&self) -> bool {
         self.type_ == LASER_PROJECTOR
