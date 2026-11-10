@@ -175,6 +175,11 @@ impl VenueHost {
             bare,
         } = shot;
         let (mut scene, definitions) = geometry.scene();
+        // The look the operator's stage uses, so a still is what they see:
+        // the same metered exposure, curve and glare.
+        if let Ok(settings) = crate::settings::load_settings(&self.pool).await {
+            scene.render.look = luma_render::scene_desc::Look::stored(&settings.stage_look);
+        }
         if bare {
             // A draft is looked at for its shape. The floor and its grid are
             // the *room's* furniture, and a component being previewed is not in

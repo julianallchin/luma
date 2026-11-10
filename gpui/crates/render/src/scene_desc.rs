@@ -253,7 +253,7 @@ pub struct RenderSettings {
     pub debug_view: DebugView,
     /// The camera: exposure, tone curve and glare. Every constructor starts at
     /// [`Look::NEUTRAL`], the picture the tracked images were captured with;
-    /// the live stage sets its own.
+    /// the live stage, and an agent's stills of it, set the stage's own.
     pub look: Look,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
     pub fixture_surface_lighting: bool,
@@ -452,17 +452,15 @@ impl Look {
         exposure: Exposure {
             auto: false,
             ev: 0.0,
-            min_ev: Exposure::STAGE.min_ev,
-            max_ev: Exposure::STAGE.max_ev,
         },
         glare: Glare::OFF,
         footage: Footage::OFF,
     };
 
-    /// The live stage's default: the fixed photometric exposure
-    /// ([`crate::photometry`]), a punchier curve and a strong glare, so a
-    /// light at full reads as blinding. Fixed, so the house dimmer and the
-    /// show's own levels change the picture the way they change the room.
+    /// The live stage's default: an exposure that
+    /// adapts as an eye or a camera does, over the photometric range in
+    /// [`crate::photometry::ADAPT_EV`], a punchier curve and a strong glare,
+    /// so a light at full reads as blinding.
     pub const STAGE: Self = Self {
         tone: ToneCurve::AgxPunchy,
         exposure: Exposure::STAGE,
@@ -516,10 +514,12 @@ impl ToneCurve {
     }
 }
 
-/// Exposure in stops. With `auto` the renderer meters each frame and `ev` is
-/// the compensation added to the metered value; without it `ev` is the
-/// exposure itself, where 0 is the photometric exposure for a room lit to
-/// [`crate::photometry::METER_LUX`].
+/// Exposure in stops, where 0 is the photometric exposure for a room lit to
+/// [`crate::photometry::METER_LUX`]. With `auto` the renderer meters each
+/// frame, within [`crate::photometry::ADAPT_EV`], and `ev` is the
+/// compensation added to the metered value; without it `ev` is the exposure
+/// itself. A look stored with metering clamps of its own still loads; the
+/// clamps are the renderer's now, in real units, and those keys are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Exposure {
@@ -527,23 +527,13 @@ pub struct Exposure {
     pub auto: bool,
     /// Compensation (auto) or exposure (manual), in stops.
     pub ev: f32,
-    /// Lowest metered exposure, in stops. A frame full of blinders cannot
-    /// push the rest of the stage below this.
-    pub min_ev: f32,
-    /// Highest metered exposure, in stops. A dark room with a few beams
-    /// cannot lift the room above this.
-    pub max_ev: f32,
 }
 
 impl Exposure {
-    /// The fixed photometric exposure. The clamps are what metering would
-    /// use if a stored look turns it on: two and a half stops down and one
-    /// up, which keeps a dim cue dim.
+    /// Metered, no compensation.
     pub const STAGE: Self = Self {
-        auto: false,
+        auto: true,
         ev: 0.0,
-        min_ev: -2.5,
-        max_ev: 1.0,
     };
     /// The range the exposure control offers, in stops.
     pub const RANGE: std::ops::RangeInclusive<f32> = -4.0..=4.0;
