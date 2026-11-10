@@ -39,6 +39,7 @@ mod gpu;
 mod haze_compact;
 mod haze_field;
 mod haze_glow;
+mod haze_phase;
 pub mod house;
 pub mod image_out;
 pub mod interval_cache;

@@ -67,7 +67,7 @@ struct Haze {
     // x: frame index (jitter walk), y: accumulation weight (1/subframes),
     // z: near clamp, w: beam gain.
     tuning: vec4<f32>,
-    // x: white leak, y: phase g, zw: this target's height and width in px.
+    // x: white leak, y: unused, zw: this target's height and width in px.
     transport: vec4<f32>,
     // xy: this pass's pixel → full-resolution pixel scale (the light index is
     // defined in full-res space), z: 2 on the first grid pass, 1 otherwise;
@@ -248,16 +248,6 @@ fn linear_view_depth(raw_depth: f32) -> f32 {
     let far = haze.depth.y;
     // The scene attachment is reverse-Z: near is one, infinity approaches zero.
     return near * far / max(near + raw_depth * (far - near), 1e-5);
-}
-
-/// Henyey-Greenstein, normalised so isotropic (g=0) == 1 rather than 1/4pi:
-/// the "intensity" here is a 0..1 dimmer, not radiance in watts, so the
-/// absolute scale lives in the beam gain and only the angular shape matters.
-fn henyey_greenstein(cos_t: f32, g: f32) -> f32 {
-    let g2 = g * g;
-    let denom = 1.0 + g2 - 2.0 * g * cos_t;
-    let inverse = inverseSqrt(max(denom, 1e-4));
-    return (1.0 - g2) * inverse * inverse * inverse;
 }
 
 // Progressive best-candidate rank tile. Ranks are visited in a toroidal
@@ -501,7 +491,6 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     let th_b = atan((t_b - delta) / h);
     let d_th = th_b - th_a;
 
-    let g = haze.transport.y;
     var acc = vec3<f32>(0.0);
 
     // Emitted spectrum: the saturated colour plus a small broadband leak —
@@ -568,7 +557,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         }
         let nz = haze_density_at(sample_world);
         // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
-        let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
+        let phase = haze_phase(-(b + t) / max(dist, 1e-4));
         acc += tint * (radiance * phase * nz * transport_transmittance(ray, li, t, haze.camera_pos.xyz + ray.dir * t) * mis_w);
     }
 
@@ -662,7 +651,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             let d2 = dot(q, q);
             let distance = sqrt(d2);
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
-            let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
+            let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
             let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
             let world = haze.camera_pos.xyz + ray.dir * t;
             let field = mix(left_field, right_field, nodes[j] * 0.5 + 0.5);

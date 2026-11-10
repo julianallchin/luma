@@ -348,9 +348,10 @@ impl Pipelines {
             immediate_size: 0,
         });
         let source = format!(
-            "const PIECES: u32 = {BEAM_PIECES}u;\n{}{}{}",
+            "const PIECES: u32 = {BEAM_PIECES}u;\n{}{}{}{}",
             crate::haze_field::prelude(),
             include_str!("shaders/medium.wgsl"),
+            crate::haze_phase::prelude(),
             include_str!("shaders/laser.wgsl"),
         );
         let module = crate::gpu::shader(device, "laser", &source);

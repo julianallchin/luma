@@ -7,13 +7,14 @@ use std::borrow::Cow;
 /// see `scene_bindings.wgsl`.
 pub(super) fn scene_bindings_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("../shaders/medium.wgsl"),
         include_str!("../shaders/scene_bindings.wgsl"),
         include_str!("../shaders/haze_glow_sample.wgsl"),
         crate::atmosphere::surface_prelude(),
         include_str!("../shaders/horizon.wgsl"),
+        crate::haze_phase::prelude(),
         include_str!("../shaders/haze_daylight.wgsl"),
         include_str!("../shaders/shaft_upsample.wgsl"),
         include_str!("../shaders/outdoor_surface.wgsl"),
@@ -24,8 +25,9 @@ pub(super) fn scene_bindings_wgsl() -> String {
 /// group-0 layout) that both volumetric passes prepend.
 pub(super) fn beam_transport_wgsl() -> String {
     format!(
-        "{}{}const CACHE_K: u32 = {}u;\n{}",
+        "{}{}{}const CACHE_K: u32 = {}u;\n{}",
         include_str!("../shaders/medium.wgsl"),
+        crate::haze_phase::prelude(),
         crate::fog_grid::prelude(),
         crate::interval_cache::CACHE_K,
         include_str!("../shaders/beam_transport.wgsl")
@@ -35,10 +37,11 @@ pub(super) fn beam_transport_wgsl() -> String {
 /// The composite module's source.
 pub(super) fn composite_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("../shaders/medium.wgsl"),
         crate::atmosphere::composite_prelude(),
+        crate::haze_phase::prelude(),
         include_str!("../shaders/haze_daylight.wgsl"),
         include_str!("../shaders/shaft_upsample.wgsl"),
         include_str!("../shaders/tone.wgsl"),
