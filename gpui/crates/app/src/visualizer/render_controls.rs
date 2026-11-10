@@ -61,7 +61,7 @@ pub(super) struct RenderControls {
     pub(super) look: scene_desc::Look,
     /// The renderer's cost level — the `stage_quality` device setting.
     /// Below high it lowers the haze resolution and gobo samples here, the
-    /// pixel budget in [`RenderScale::size`], and the rest inside the
+    /// pixel budget in [`render_size`], and the rest inside the
     /// renderer.
     pub(super) quality: scene_desc::Quality,
     /// The local reflection probes and their debug balls: a session view

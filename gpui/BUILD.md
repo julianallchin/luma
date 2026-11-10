@@ -77,6 +77,12 @@ This is a full restart: playback and editing state are lost. Close other Luma
 instances first; the watcher only manages the process it starts. Ctrl-C stops
 the watcher and its app. The watcher uses Cargo's target-directory setting.
 
+Three switches change what a launched app does, for a one-off run:
+`LUMA_CLOUD=off` keeps the library off the network (no sync), `LUMA_STAGE_GPU=off`
+opens the stage pane without building a GPU device, and `LUMA_MOTION=off` snaps
+every animation to its end. They are read once in `luma_ui::runtime`; a test
+sets the same things on its fixture instead.
+
 ## Build profiles
 
 `gpui/Cargo.toml` sets these profiles:

@@ -61,11 +61,7 @@ impl Default for Runtime {
             config_dir: None,
             fixtures_root: None,
             reduced_motion: std::env::var("LUMA_MOTION").as_deref() == Ok("off"),
-            motion_scale: std::env::var("LUMA_MOTION_SCALE")
-                .ok()
-                .and_then(|value| value.parse::<f32>().ok())
-                .filter(|scale| scale.is_finite())
-                .map_or(1.0, |scale| scale.clamp(0.01, 100.0)),
+            motion_scale: 1.0,
             stage_gpu: std::env::var("LUMA_STAGE_GPU")
                 .ok()
                 .map(|value| !matches!(value.as_str(), "off" | "0")),
