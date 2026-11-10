@@ -348,9 +348,10 @@ impl Pipelines {
             immediate_size: 0,
         });
         let source = format!(
-            "const PIECES: u32 = {BEAM_PIECES}u;\n{}{}{}",
+            "const PIECES: u32 = {BEAM_PIECES}u;\n{}{}{}{}",
             crate::haze_field::prelude(),
             include_str!("shaders/medium.wgsl"),
+            crate::haze_phase::prelude(),
             include_str!("shaders/laser.wgsl"),
         );
         let module = crate::gpu::shader(device, "laser", &source);
@@ -531,9 +532,9 @@ impl Pipelines {
 /// follows its distance from the camera and from the projector.
 const BEAM_PIECES: u32 = 16;
 
-/// Radiance per unit of a projector's light: puts a full-white beam on the
-/// same scale as a stage beam in the same haze.
-pub(crate) const GAIN: f32 = 80.0;
+/// Radiance per unit of a projector's light, in real terms
+/// ([`crate::photometry::LASER_GAIN`]).
+pub(crate) const GAIN: f32 = crate::photometry::LASER_GAIN;
 
 #[cfg(test)]
 mod tests {

@@ -15,9 +15,13 @@ const BLOCK_WORDS: usize = 2 * crate::light_index::MASK_WORDS;
 /// near-source pass hands its beam to the shared grid. At 3/4 m a view full of
 /// Sunstrip cells behind truss spent 11.8 ms in that pass; at 1.5/2 m the
 /// frame took 4.6 ms and close-ups of the bars and strobes showed no visible
-/// change (largest mean difference 0.06 of 256 levels).
-pub(crate) const SOURCE_INNER: f32 = 1.5;
-pub(crate) const SOURCE_OUTER: f32 = 2.0;
+/// change (largest mean difference 0.06 of 256 levels). The haze's forward
+/// peak (`haze_phase.rs`) then put the brightest light near a source — a
+/// truss silhouette or shadow shaft against a wash seen toward its lens —
+/// in the grid's 8-pixel cells: the truss-shadow suite's oblique view was
+/// 2.8 RMSE from the converged tracer; at 1.75/2.5 m it is 1.8, the suite 0.8 to 2.0.
+pub(crate) const SOURCE_INNER: f32 = 1.75;
+pub(crate) const SOURCE_OUTER: f32 = 2.5;
 pub(crate) const BROAD_WASH: f32 = 0.65;
 
 /// Conservative shared-volume light counts from an explicit diagnostic readback.

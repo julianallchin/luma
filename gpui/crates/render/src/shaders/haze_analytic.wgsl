@@ -40,7 +40,7 @@ fn analytic_beam(li: u32, ray: SceneRay) -> vec3<f32> {
         let q = oc + ray.dir * t;
         let distance = length(q);
         let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
-        let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
+        let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
         let density = medium_envelope(haze.medium, haze.camera_pos.xyz + ray.dir * t);
         // Camera path and light path, both at the mean extinction.
         let transmittance = exp(-sigma * (t + distance));

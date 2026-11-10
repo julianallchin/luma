@@ -7,7 +7,7 @@ struct Composite {
     inv_view_proj: mat4x4<f32>,
     // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
-    // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: haze phase g.
+    // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: unused.
     depth: vec4<f32>,
     // rgb: the frame's clear colour, i.e. what a pixel with no geometry and no
     // visible environment shows.

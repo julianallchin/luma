@@ -53,7 +53,11 @@ pub async fn run(mut args: super::Args) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", db.display()))?;
     let fixtures_root = luma_lib::resources::fixtures_root()?;
     let geometry = VenueGeometry::load(&pool, &fixtures_root, &venue).await?;
-    let (scene, definitions) = geometry.scene();
+    let (mut scene, definitions) = geometry.scene();
+    // The stage's own look, as an agent's stills take it.
+    if let Ok(settings) = luma_lib::settings::load_settings(&pool).await {
+        scene.render.look = luma_render::scene_desc::Look::stored(&settings.stage_look);
+    }
     if format == "catalogue" {
         let catalogue = luma_render::scene_desc::Catalogue {
             warmup_frames: 30,

@@ -209,9 +209,13 @@ fn the_post_chain_at_rest_is_the_composite_picture() {
             1.0,
             0.3,
             Look {
-                exposure: Exposure {
-                    min_ev: -3.0,
-                    ..Look::NEUTRAL.exposure
+                // A camera with no grain and a still hand: the chain's own
+                // picture of the same light.
+                footage: luma_render::scene_desc::Footage {
+                    enabled: true,
+                    noise: 0.0,
+                    handheld: 0.0,
+                    bass: 0.0,
                 },
                 ..Look::NEUTRAL
             },
@@ -231,13 +235,17 @@ fn the_post_chain_at_rest_is_the_composite_picture() {
 }
 
 /// A lit room follows the light: four times the light meters about two stops
-/// down. A dark room with one thin beam is exposed for what is lit and held
+/// down. A dark room with one dim beam is exposed for what is lit and held
 /// at the top clamp rather than lifted until the room is grey.
 #[test]
 fn auto_exposure_meters_the_lit_part_of_the_frame() {
     let mut renderer = Renderer::new().unwrap();
     let auto = Look {
         glare: Glare::OFF,
+        exposure: Exposure {
+            auto: true,
+            ..Exposure::STAGE
+        },
         ..Look::STAGE
     };
     let mut metered = |intensity: f32, haze: f32, look: Look| {
@@ -251,16 +259,17 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
         "four times the light meters about two stops down: {dim} then {bright}"
     );
 
-    let dark_room = metered(1.0, 0.05, auto);
+    // A dim cue: the beam at a quarter, in light haze.
+    let dark_room = metered(0.25, 0.05, auto);
     assert_eq!(
         dark_room,
-        Exposure::STAGE.max_ev,
+        *luma_render::photometry::ADAPT_EV.end(),
         "a dark room stops at the clamp"
     );
 
     // Compensation is added after the clamp, so it still moves a dark room.
     let lifted = metered(
-        1.0,
+        0.25,
         0.05,
         Look {
             exposure: Exposure {
@@ -270,7 +279,7 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
             ..auto
         },
     );
-    assert_eq!(lifted, Exposure::STAGE.max_ev + 1.0);
+    assert_eq!(lifted, luma_render::photometry::ADAPT_EV.end() + 1.0);
 
     // Manual exposure is the number itself.
     let half_stop = Look {
@@ -292,6 +301,10 @@ fn live_exposure_adapts_rather_than_jumps() {
     let mut renderer = Renderer::new().unwrap();
     let auto = Look {
         glare: Glare::OFF,
+        exposure: Exposure {
+            auto: true,
+            ..Exposure::STAGE
+        },
         ..Look::STAGE
     };
     // A standalone frame snaps.

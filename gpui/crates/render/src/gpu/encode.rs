@@ -409,7 +409,7 @@ impl Renderer {
         let outdoor_sun = frame
             .sky
             .map_or(Vec3::ZERO, |sky| sky.sun_radiance)
-            .extend(Transport::PHASE_G)
+            .extend(0.0)
             .to_array();
         // The compute kernels draw the haze, except for the exhaustive
         // reference's per-ray fragment pass.
@@ -1800,7 +1800,7 @@ impl Renderer {
                     ],
                     transport: [
                         Transport::WHITE_LEAK,
-                        Transport::PHASE_G,
+                        0.0,
                         haze_size.1 as f32,
                         haze_size.0 as f32,
                     ],
@@ -2283,7 +2283,7 @@ impl Renderer {
                     CAMERA_NEAR,
                     camera_far,
                     haze_density * Transport::EXTINCTION,
-                    Transport::PHASE_G,
+                    0.0,
                 ],
                 background: frame.clear_color.extend(1.0).to_array(),
                 display: [

@@ -1443,10 +1443,11 @@ import matplotlib.image as image
 edit = luma.track.edit()
 edit.add_clip(laser(figure(count=5, size=1)), name="Fan", seconds=(0, 4), selection="lasers")
 def light(shot):
-    return float(image.imread(io.BytesIO(shot.read_bytes()))[..., :3].sum())
+    pixels = image.imread(io.BytesIO(shot.read_bytes()))[..., :3]
+    return int((pixels.max(axis=-1) > 0.95).sum())
 v = luma.venue
 lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
-(lit > dark * 1.01, lit, dark)
+(lit > dark + 100, lit, dark)
 "#
         .into(),
         scope,

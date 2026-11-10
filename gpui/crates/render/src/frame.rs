@@ -16,7 +16,7 @@ use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_
 use luma_scene::definition::Definition;
 use luma_scene::luminaire::{
     beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
-    pixel_lens, Lens, ModelKind, PIXEL,
+    output_lumens, pixel_lens, Lens, Luminaire, ModelKind, PIXEL_FIELD_DEG,
 };
 use luma_scene::mesh::{Glb, Image, Material, MeshData, Vertex};
 
@@ -1057,9 +1057,9 @@ pub fn build_at(
                     direction: base.transform_vector3(dir).normalize_or_zero(),
                     cos_beam: cone.cos_beam,
                     color: Vec3::from(head_state.color),
-                    // Overlapping cones sum in the haze, so a many-celled
-                    // fixture shares its light out as a bar's pixels do.
-                    intensity: intensity * cone.gain / count.sqrt(),
+                    // Each cell carries its share of the fixture's lumens:
+                    // the cells together are the fixture, no more.
+                    intensity: intensity * cone.gain / count,
                     cos_field: cone.cos_field,
                     wash: cone.wash,
                     gobo: head_state.gobo.min(2),
@@ -1123,8 +1123,14 @@ pub fn build_at(
             }
 
             // One haze cone per *head* (not per pixel), fired from the middle
-            // pixel of that head's run.
-            let cone = cone_from_opening(PIXEL);
+            // pixel of that head's run, each with its share of the bar's
+            // light: the heads together are the bar, no more.
+            let cone = cone_from_opening(Luminaire {
+                field_angle_deg: PIXEL_FIELD_DEG,
+                lumens: output_lumens(def, model_kind(def))
+                    / luma_scene::luminaire::LUMENS_PER_UNIT
+                    / head_count as f32,
+            });
             // Each pixel is its own emitter behind its own optic.
             let lens = pixel_lens(def, dims[0] / layout_w as f32, dims[1] / layout_h as f32);
             let dir = beam_direction(Some(def), fixture.rot, None);
@@ -1146,9 +1152,7 @@ pub fn build_at(
                     direction: dir,
                     cos_beam: cone.cos_beam,
                     color: Vec3::from(head_state.color),
-                    // Normalise by sqrt(emitter count) so a 16-pixel bar isn't
-                    // 16x a spot: overlapping pixel cones sum in the haze.
-                    intensity: intensity * cone.gain / (head_count as f32).sqrt(),
+                    intensity: intensity * cone.gain,
                     cos_field: cone.cos_field,
                     wash: cone.wash,
                     gobo: head_state.gobo.min(2),
@@ -1683,6 +1687,7 @@ mod tests {
             }),
             layout: None,
             lens: None,
+            bulb: None,
         });
         let mut library = library();
         let glb = library.get("qlc/moving_head.glb").unwrap();
