@@ -46,6 +46,19 @@ impl Library {
         })
     }
 
+    /// Stop showing a closed score: drop its scene from the render engine, so
+    /// the rig is not left holding it. Does nothing when another score has
+    /// been installed since.
+    pub(crate) fn leave_score(
+        &self,
+        score_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let score_id = score_id.to_owned();
+        self.call("leave_track", |services| async move {
+            handlers::compositor::leave_track(&services, score_id).await
+        })
+    }
+
     /// The installed scene evaluated at one absolute track time, or `None`
     /// when no scene is installed.
     ///

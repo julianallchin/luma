@@ -306,13 +306,19 @@ impl Luma {
     pub(crate) fn teardown(&mut self, body: Body, cx: &mut Context<Self>) {
         match body {
             Body::TrackEditor(state) => {
-                if let Some(session) = state.playback_session() {
-                    let pause = self.library.pause(session);
-                    cx.background_spawn(async move {
-                        pause.await.ok();
-                    })
-                    .detach();
-                }
+                // The song stops and its decoded audio is freed, and the rig
+                // lets go of the score: nothing on screen is about it now.
+                let release = state
+                    .playback_session()
+                    .map(|session| self.library.release_audio(session));
+                let leave = self.library.leave_score(&state.lit().score);
+                cx.background_spawn(async move {
+                    if let Some(release) = release {
+                        release.await.ok();
+                    }
+                    leave.await.ok();
+                })
+                .detach();
             }
             Body::Patch(_) => {}
             Body::Perform(state) => self.close_perform(&state, cx),

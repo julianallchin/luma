@@ -32,18 +32,9 @@ pub async fn composite_track(
     Ok(())
 }
 
-/// Leave the track editor: abort any in-flight composite, drop the active
-/// scene, and unload host audio.
-///
-/// Takes the *score* id — the track is resolved under the score's venue
-/// authorization, so this must be called before the score row is deleted.
+/// Close a score: abort any in-flight composite of it and drop its scene from
+/// the render engine. Does nothing when another score is the one showing.
 pub async fn leave_track(services: &AppServices, score_id: String) -> Result<(), CommandError> {
-    compositor::leave_track(
-        &services.db.0,
-        &services.render_engine,
-        &services.host_audio,
-        &score_id,
-    )
-    .await?;
+    compositor::leave_track(&services.render_engine, &score_id);
     Ok(())
 }
