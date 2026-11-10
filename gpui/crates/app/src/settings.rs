@@ -317,9 +317,7 @@ impl Luma {
         });
     }
 
-    /// Sign out. Nothing is dismissed on success: sign-out is a long
-    /// durability boundary, and the account reading "Working locally" is the
-    /// only honest proof it landed.
+    /// Sign out, and land at the sign-in screen.
     ///
     /// Hangs off the app rather than the settings screen because both doors to
     /// it — the venue menu's account row and the settings row — press the same
@@ -526,18 +524,6 @@ impl Luma {
         self.set_update_channel(values.update_channel.as_deref());
     }
 
-    /// The one gesture that changes who this library belongs to, in whichever
-    /// direction it currently points. The venue menu's account row, and the
-    /// settings screen's account button — one path, so the in-flight guard
-    /// cannot be walked around by pressing the other door.
-    pub(crate) fn switch_identity(&mut self, cx: &mut Context<Self>) {
-        if self.library.user_id().is_some() {
-            self.sign_out(cx);
-        } else {
-            self.show_sign_in(false, cx);
-        }
-    }
-
     /// Listen for `row`'s next keystroke. Every key goes to the recorder
     /// while it listens — ⌘P records as ⌘P rather than opening the song
     /// list — and nothing does once it stops.
@@ -628,10 +614,6 @@ impl Luma {
 // title over a description, then sections, each a small title over a card of
 // rows. A row is the setting's name and help on the left and its control at
 // the end.
-
-/// What the account row says when nobody is signed in — the guest namespace,
-/// which is a working library and not a failure.
-pub(crate) const GUEST_ACCOUNT: &str = "Working locally";
 
 /// The nav's width, divided from the page by an inner hairline: zeron's 200.
 const NAV_WIDTH: f32 = 200.;
@@ -1121,38 +1103,33 @@ fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
     ]
 }
 
-/// Who this library belongs to, and the one gesture that changes it.
+/// Who is signed in, and the way out.
 fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Section> {
-    let account = shell.library.account();
-    let signed_in = account.is_some();
-    // The address where the session carries one, the principal where it does
-    // not — one spelling of "who this is", shared with the venue menu.
-    let identity = account.as_ref().map_or_else(
-        || GUEST_ACCOUNT.to_string(),
-        |account| account.label().to_string(),
-    );
-    let label = if shell.account_action.signing_out {
+    // The address where the session carries one — see `Account::label`. The
+    // page is part of the shell, which is only drawn for a signed-in account.
+    let identity = shell
+        .library
+        .account()
+        .map(|account| account.label().to_string())
+        .unwrap_or_default();
+    let signing_out = shell.account_action.signing_out;
+    let label = if signing_out {
         "Signing out…"
-    } else if signed_in {
-        "Sign out"
     } else {
-        "Sign in"
+        "Sign out"
     };
-    let pressable = !shell.account_action.signing_out;
     let act = app.clone();
     let rows = vec![
         row("Signed in as", None, readonly_value(&identity, "")),
         row(
-            if signed_in { "Sign out" } else { "Sign in" },
-            Some(if signed_in {
-                "Signing out flushes this library to the cloud, then removes the signed-in copy. Guest work stays."
-            } else {
-                "Signing in claims the rows you write from here; work already done as a guest stays a guest's."
-            }),
-            luma_ui::button(label, Enabled::from(pressable))
-                .id("settings-account-action")
+            "Sign out",
+            Some(
+                "Signing out syncs this library to the cloud, then removes it from this computer.",
+            ),
+            luma_ui::button(label, Enabled::from(!signing_out))
+                .id("settings-sign-out")
                 .on_click(move |_, _, cx| {
-                    act.update(cx, |this, cx| this.switch_identity(cx));
+                    act.update(cx, |this, cx| this.sign_out(cx));
                 })
                 .agent_node(Role::Button, label)
                 .into_any_element(),

@@ -63,15 +63,6 @@ fn access_token(principal: &str, expires_at: i64) -> String {
     format!("{header}.{payload}.signature")
 }
 
-/// The `uid` rows must carry to be visible to this fixture's launch, or `None`
-/// for a launch that proves nobody and so sees no rows.
-pub fn owner(stored: Stored) -> Option<&'static str> {
-    match stored {
-        Stored::Proven { .. } => Some(PRINCIPAL),
-        Stored::Unproven => None,
-    }
-}
-
 /// Sign the fixture at `dir` in as [`PRINCIPAL`], the way every harness that
 /// is not testing the gate itself launches: nothing in Luma opens without a
 /// principal, so a fixture that skipped this would open on the sign-in screen.

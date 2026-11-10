@@ -248,3 +248,17 @@ test("Escape empties the search before it leaves settings", () => {
   app.key("escape");
   until("the shell again", (s) => !settingsPage(s));
 });
+
+// The Account section's one gesture. The sign-in screen that follows is the
+// whole window, so the page it was pressed on goes with the rest of the shell.
+test("the Account section signs out to the sign-in screen", () => {
+  nav.venue("Test Venue");
+  app.action("luma::OpenSettings");
+  nav.step("the Account section", "toggle", "Account");
+  const account = until("the account rows", (s) =>
+    s.find({ role: "button", label: "Sign out" }) ? s : undefined);
+  app.click(account.find({ role: "button", label: "Sign out" }));
+  const gate = until("the sign-in screen", (s) =>
+    s.find({ role: "text", label: "Sign in to Luma" }) ? s : undefined, { timeoutMs: 15000 });
+  assert(!settingsPage(gate), "the settings page stayed up behind the sign-in screen");
+});
