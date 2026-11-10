@@ -52,7 +52,7 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             }
             if visibility <= 0.0 { continue; }
             let phase = haze_phase(-dot(q, ray_dir) / max(dist, 1e-4));
-            let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+            let tint = mix(panel_colour(rest.panel, rest.color, rest.direction, rest.cos_beam, q, 0.0), vec3<f32>(1.0), haze.transport.x);
             radiance += tint * (rest.intensity * rest.haze_gain * haze.tuning.w
                 * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) * angular * beam_range_falloff(dist, core.range) * phase * visibility
                 * exp(-light_optical_depth(li, world)) / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z));

@@ -46,7 +46,7 @@ fn analytic_beam(li: u32, ray: SceneRay) -> vec3<f32> {
         let transmittance = exp(-sigma * (t + distance));
         sum += weights[j] * angular * phase * beam_range_falloff(distance, core.range) * density * transmittance;
     }
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li, ray.dir, span.x, span.y);
     return tint * (sum * half / h * rest.intensity * rest.haze_gain * haze.tuning.w * sigma);
 }
 

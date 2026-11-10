@@ -11,12 +11,13 @@ use glam::{Mat4, Vec3};
 
 use crate::assets::{HdrImage, Library};
 use crate::overlay::Overlay;
+use crate::panel::Panel;
 use crate::scene_desc::{Geometry, PrimitiveState, Scene};
 use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use luma_scene::definition::Definition;
 use luma_scene::luminaire::{
     beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
-    output_lumens, pixel_lens, Lens, Luminaire, ModelKind, PIXEL_FIELD_DEG,
+    output_lumens, patch_reach, pixel_lens, Lens, Luminaire, ModelKind, PIXEL_FIELD_DEG,
 };
 use luma_scene::mesh::{Glb, Image, Material, MeshData, Vertex};
 
@@ -249,6 +250,9 @@ pub struct Frame {
     pub gizmo_pivot: Option<Vec3>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
     pub fixture_cones: Vec<FixtureCone>,
+    /// The cells behind the cones that a face of cells casts, for the light
+    /// close to the face ([`crate::panel`]).
+    pub panels: Vec<Panel>,
     /// Each laser projector's scan this frame (`crate::laser`). Drawn only
     /// through the camera's post chain, into the HDR scene.
     pub lasers: Vec<crate::laser::LaserScan>,
@@ -889,6 +893,7 @@ pub fn build_at(
     let mut bank = Bank::default();
     let mut draws = Vec::new();
     let mut fixture_cones = Vec::new();
+    let mut panels = Vec::new();
     let mut fixture_shadow_capacity_hint: usize = 0;
 
     // --- sky ---------------------------------------------------------------
@@ -995,14 +1000,21 @@ pub fn build_at(
                     Vec3::from(s.color) * exposed(s) * 5.0
                 },
             ));
+            // Every cone shares the fixture's own output and beam angle, the
+            // library's measurement of the whole fixture: a cell of a strobe
+            // is a sixteenth of a strobe, not one pixel of a QLC+ bar.
+            let luminaire = cone_from_opening(luminaire_for(def, model_kind(def)));
             // One cone per lens, lit by the cell on the lens's node, when
             // every cell has a lens of its own (a mover, a spot, a lensed
             // array). A face of many cells (an LED panel, a bar, a strobe)
             // is one "lens" the size of the face, and lighting it from one
             // cell left the rest dark and drew a lens the size of the
-            // fixture; it casts one cone per cell from the cell's own patch
-            // instead, as a procedural bar does.
-            let mut beams: Vec<(Vec3, Vec3, usize, Lens)> = Vec::new();
+            // fixture; it casts one cone per patch of cells instead, from
+            // the patch's own place, lit by every cell in it.
+            let mut beams: Vec<(Vec3, Vec3, Lens, Vec<usize>)> = Vec::new();
+            // A patch of more than one cell: its right, its extent, its grid
+            // and each cell's place in it, by the beam's index.
+            let mut faces = Vec::new();
             if built.cells.len() <= built.heads.len() {
                 for (i, head) in built.heads.iter().enumerate() {
                     let Some((at, dir)) = luma_scene::library::beam(built, &worlds, i) else {
@@ -1016,47 +1028,83 @@ pub fn build_at(
                     let lens = Lens {
                         radius: head.size[0].max(head.size[1]) / 2.0,
                     };
-                    beams.push((at, dir, cell, lens));
+                    beams.push((at, dir, lens, vec![cell]));
                 }
             }
             if beams.is_empty() {
-                for (i, c) in built.cells.iter().enumerate() {
-                    let Some(node) = c.node else { continue };
+                for patch in luma_scene::library::patches(built, patch_reach(luminaire)) {
+                    let world = worlds[patch.node];
                     let lens = Lens {
-                        radius: c.size[0].min(c.size[1]).max(0.005) / 2.0,
+                        radius: patch.size[0].min(patch.size[1]).max(0.005) / 2.0,
                     };
+                    if patch.cells.len() > 1 {
+                        let right = world.transform_vector3(patch.right);
+                        faces.push((beams.len(), right, patch.size, patch.grid, patch.places));
+                    }
                     beams.push((
-                        worlds[node].transform_point3(c.centre),
-                        worlds[node].transform_vector3(c.normal).normalize_or_zero(),
-                        i,
+                        world.transform_point3(patch.centre),
+                        world.transform_vector3(patch.normal).normalize_or_zero(),
                         lens,
+                        patch.cells,
                     ));
                 }
             }
-            // Every cone shares the fixture's own output and beam angle, the
-            // library's measurement of the whole fixture: a cell of a strobe
-            // is a sixteenth of a strobe, not one pixel of a QLC+ bar.
-            let luminaire = cone_from_opening(luminaire_for(def, model_kind(def)));
-            let count = beams.len().max(1) as f32;
+            let count = beams.iter().map(|beam| beam.3.len()).sum::<usize>().max(1) as f32;
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(beams.len())
                 .min(MAX_FIXTURE_CONES);
-            for (at, dir, cell, lens) in beams {
+            let mut faces = faces.into_iter().peekable();
+            for (index, (at, dir, lens, cells)) in beams.into_iter().enumerate() {
+                let face = faces.next_if(|face| face.0 == index);
                 if fixture_cones.len() >= MAX_FIXTURE_CONES {
                     break;
                 }
-                let head_state = cell_state(cell);
-                let intensity = exposed(head_state);
-                if intensity < 0.01 {
+                // The patch's light is its lit cells' together: their summed
+                // intensity, in their mean colour by intensity.
+                let states: Vec<(PrimitiveState, f32)> = cells
+                    .into_iter()
+                    .map(cell_state)
+                    .map(|state| (state, exposed(state)))
+                    .collect();
+                let mut lit = states.iter().filter(|(_, intensity)| *intensity >= 0.01);
+                let Some(&(head_state, mut intensity)) = lit.next() else {
                     continue;
+                };
+                let mut color = Vec3::from(head_state.color);
+                for (state, more) in lit {
+                    intensity += more;
+                    color += (Vec3::from(state.color) - color) * (more / intensity);
+                }
+                let direction = base.transform_vector3(dir).normalize_or_zero();
+                if let Some((_, right, size, grid, places)) = face {
+                    // Each cell's light against the mean cell's, so the
+                    // cells' mean is the cone's colour.
+                    let mut light = vec![Vec3::ZERO; grid[0] * grid[1]];
+                    let scale = light.len() as f32 / intensity;
+                    for ((state, cell), place) in states.iter().zip(&places) {
+                        if *cell >= 0.01 {
+                            light[place[1] * grid[0] + place[0]] =
+                                Vec3::from(state.color) * (cell * scale);
+                        }
+                    }
+                    let right = base.transform_vector3(right);
+                    panels.push(Panel {
+                        cone: fixture_cones.len(),
+                        // Square to the beam, whatever a skewed pose did.
+                        right: (right - direction * right.dot(direction)).normalize_or_zero(),
+                        half: size.map(|side| side / 2.0),
+                        optic: (size[0] / grid[0] as f32).min(size[1] / grid[1] as f32) / 2.0,
+                        grid: grid.map(|n| n as u32),
+                        cells: light,
+                    });
                 }
                 let cone = luminaire;
                 fixture_cones.push(FixtureCone {
                     position: base.transform_point3(at),
                     range: cone.range,
-                    direction: base.transform_vector3(dir).normalize_or_zero(),
+                    direction,
                     cos_beam: cone.cos_beam,
-                    color: Vec3::from(head_state.color),
+                    color,
                     // Each cell carries its share of the fixture's lumens:
                     // the cells together are the fixture, no more.
                     intensity: intensity * cone.gain / count,
@@ -1363,6 +1411,7 @@ pub fn build_at(
         transparent,
         gizmo_pivot,
         fixture_cones,
+        panels,
         lasers: Vec::new(),
         fixture_shadow_capacity_hint,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,

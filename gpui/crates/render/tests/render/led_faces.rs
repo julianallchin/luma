@@ -371,3 +371,57 @@ fn dense_panels_close_mid_and_far() {
         }
     }
 }
+
+/// The face lights the room as a few cones, not one a cell: together they
+/// carry all the light its cells have, and each keeps its own cells behind
+/// it, whose mean is the cone's colour.
+#[test]
+fn a_face_lights_the_room_as_a_few_cones_that_keep_their_cells() {
+    let built = build(&spec(HYT));
+    let light = |frame: &Frame| {
+        frame
+            .fixture_cones
+            .iter()
+            .map(|cone| cone.color * cone.intensity)
+            .sum::<Vec3>()
+    };
+    let white = frame("lib:cones-white", &built, 1.0, &|_| [1.0; 3], 3.0, 0.0);
+    // Every other cell red, the rest dark.
+    let red = |k: usize| {
+        if k % 2 == 0 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0; 3]
+        }
+    };
+    let half = frame("lib:cones-half", &built, 1.0, &red, 3.0, 0.0);
+    for frame in [&white, &half] {
+        assert!(
+            frame.fixture_cones.len() * 8 <= built.cells.len(),
+            "{} cones for {} cells",
+            frame.fixture_cones.len(),
+            built.cells.len()
+        );
+        assert_eq!(frame.panels.len(), frame.fixture_cones.len());
+        let mut cells = 0;
+        for panel in &frame.panels {
+            let cone = frame.fixture_cones[panel.cone];
+            assert_eq!(panel.cells.len(), (panel.grid[0] * panel.grid[1]) as usize);
+            assert!(panel.right.dot(cone.direction).abs() < 1e-4);
+            assert!((panel.right.length() - 1.0).abs() < 1e-4);
+            let mean = panel.cells.iter().sum::<Vec3>() / panel.cells.len() as f32;
+            assert!(
+                mean.abs_diff_eq(cone.color, 1e-4),
+                "{mean} against {}",
+                cone.color
+            );
+            cells += panel.cells.len();
+        }
+        assert_eq!(cells, built.cells.len());
+    }
+    let (all, lit) = (light(&white), light(&half));
+    assert!(
+        (lit.x / all.x - 0.5).abs() < 1e-3 && lit.y == 0.0 && lit.z == 0.0,
+        "half the cells in red give {lit} of {all}"
+    );
+}

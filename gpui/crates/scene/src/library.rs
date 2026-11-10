@@ -151,6 +151,138 @@ pub fn beam(built: &Built, worlds: &[Mat4], index: usize) -> Option<(Vec3, Vec3)
     ))
 }
 
+/// Cells of one face that light the room as one source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Patch {
+    /// The node the cells sit on.
+    pub node: usize,
+    /// Mean of the cells' centres, in `node`'s frame.
+    pub centre: Vec3,
+    /// The way the cells face.
+    pub normal: Vec3,
+    /// The face's right, in `node`'s frame; its up is `normal × right`.
+    pub right: Vec3,
+    /// Extent of the cells across the face, along right and up, metres.
+    pub size: [f32; 2],
+    /// Columns and rows of cells in the patch.
+    pub grid: [usize; 2],
+    /// Indices into [`Built::cells`], ascending.
+    pub cells: Vec<usize>,
+    /// Each of `cells`' column and row in the patch, from its left and its
+    /// bottom.
+    pub places: Vec<[usize; 2]>,
+}
+
+/// A face's cells as the patches that light the room: neighbours whose
+/// centres are no more than `reach` metres to either side of their patch's
+/// middle are one patch.
+///
+/// Two cells a few centimetres apart behind a wide optic light a wall
+/// metres away as one source would: their pools differ by the gap between
+/// them, against a beam metres across. `reach` is how much of that the caller
+/// lets go (see [`crate::luminaire::patch_reach`]); under half a cell's
+/// pitch every cell is its own patch. Each face's rows and columns are
+/// dealt into patches as evenly as they divide, so the split depends on the
+/// build alone and not on which cells are lit.
+#[must_use]
+pub fn patches(built: &Built, reach: f32) -> Vec<Patch> {
+    // Faces: cells on one node that face one way.
+    let mut faces: Vec<(usize, Vec3, Vec<usize>)> = Vec::new();
+    for (index, cell) in built.cells.iter().enumerate() {
+        let Some(node) = cell.node else { continue };
+        match faces
+            .iter_mut()
+            .find(|(n, normal, _)| *n == node && normal.dot(cell.normal) > 0.999)
+        {
+            Some((_, _, cells)) => cells.push(index),
+            None => faces.push((node, cell.normal, vec![index])),
+        }
+    }
+    let mut patches = Vec::new();
+    for (node, normal, cells) in faces {
+        let u = built.cells[cells[0]]
+            .emitters
+            .first()
+            .map_or_else(|| normal.any_orthonormal_vector(), |emitter| emitter.u);
+        let axes = [u, normal.cross(u)];
+        let along = |cell: usize, axis: usize| built.cells[cell].centre.dot(axes[axis]);
+        // Along each axis: the cells' distinct places in order (its columns,
+        // or its rows), and how many patches they are dealt into.
+        let lines: [(Vec<f32>, usize); 2] = [0, 1].map(|axis| {
+            let mut places: Vec<f32> = cells.iter().map(|&cell| along(cell, axis)).collect();
+            places.sort_by(f32::total_cmp);
+            places.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+            let count = places.len();
+            let pitch = (places[count - 1] - places[0]) / (count.max(2) - 1) as f32;
+            let each = if pitch > 0.0 {
+                ((2.0 * reach / pitch) as usize).clamp(1, count)
+            } else {
+                count
+            };
+            (places, count.div_ceil(each))
+        });
+        // A cell's column (or row) on the face, and the patch that takes it.
+        let line_of = |cell: usize, axis: usize| {
+            let places = &lines[axis].0;
+            let at = along(cell, axis);
+            places
+                .partition_point(|place| *place < at - 1e-4)
+                .min(places.len() - 1)
+        };
+        let patch_of =
+            |cell: usize, axis: usize| line_of(cell, axis) * lines[axis].1 / lines[axis].0.len();
+        let mut dealt: std::collections::BTreeMap<(usize, usize), Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for &cell in &cells {
+            dealt
+                .entry((patch_of(cell, 1), patch_of(cell, 0)))
+                .or_default()
+                .push(cell);
+        }
+        for cells in dealt.into_values() {
+            let centre = cells
+                .iter()
+                .map(|&cell| built.cells[cell].centre)
+                .sum::<Vec3>()
+                / cells.len() as f32;
+            let size = [0, 1].map(|axis| {
+                let (lo, hi) = cells
+                    .iter()
+                    .map(|&cell| (along(cell, axis), built.cells[cell].size[axis] / 2.0))
+                    .fold(
+                        (f32::INFINITY, f32::NEG_INFINITY),
+                        |(lo, hi), (at, half)| (lo.min(at - half), hi.max(at + half)),
+                    );
+                hi - lo
+            });
+            let first = [0, 1].map(|axis| {
+                cells
+                    .iter()
+                    .map(|&cell| line_of(cell, axis))
+                    .min()
+                    .unwrap_or(0)
+            });
+            let places: Vec<[usize; 2]> = cells
+                .iter()
+                .map(|&cell| [0, 1].map(|axis| line_of(cell, axis) - first[axis]))
+                .collect();
+            let grid =
+                [0, 1].map(|axis| places.iter().map(|place| place[axis]).max().unwrap_or(0) + 1);
+            patches.push(Patch {
+                node,
+                centre,
+                normal,
+                right: axes[0],
+                size,
+                grid,
+                cells,
+                places,
+            });
+        }
+    }
+    patches
+}
+
 /// How far the housing reaches above its pivot: where the clamp goes.
 #[must_use]
 pub fn clamp_height(built: &Built) -> f32 {
@@ -240,6 +372,82 @@ mod tests {
         let parent = b.nodes[mount].parent.unwrap();
         let rest = worlds(&b, [0.0, 0.0]);
         assert!((whole * back * frames[parent]).abs_diff_eq(rest[parent], 1e-5));
+    }
+
+    fn hyt() -> Built {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../harness/fixture-specs/oppsk/hyt-006-384sl.luma.json"),
+        )
+        .unwrap();
+        luma_fixture::build(&luma_fixture::Fixture::from_json(&text).unwrap()).unwrap()
+    }
+
+    /// Whatever the reach, the patches are the face's cells, each once, and
+    /// no patch's cells sit further than the reach from its middle.
+    #[test]
+    fn patches_deal_every_cell_once_and_stay_within_reach() {
+        let b = hyt();
+        let lit: Vec<usize> = (0..b.cells.len())
+            .filter(|&cell| b.cells[cell].node.is_some())
+            .collect();
+        let mut fewest = usize::MAX;
+        for reach in [0.0, 0.005, 0.02, 0.05, 0.1, 1.0] {
+            let patches = patches(&b, reach);
+            let mut dealt: Vec<usize> = patches.iter().flat_map(|p| p.cells.clone()).collect();
+            dealt.sort_unstable();
+            assert_eq!(dealt, lit, "reach {reach}");
+            for patch in &patches {
+                for &cell in &patch.cells {
+                    let off = b.cells[cell].centre - patch.centre;
+                    let across = (off - patch.normal * off.dot(patch.normal)).abs();
+                    assert!(
+                        across.max_element() <= reach + 1e-4,
+                        "reach {reach}: a cell {across} from its patch's middle"
+                    );
+                }
+            }
+            assert!(patches.len() <= fewest, "a longer reach made more patches");
+            fewest = patches.len();
+        }
+    }
+
+    /// A reach under half a pitch leaves every cell its own patch, the cell's
+    /// own size and place; a reach past the face makes the face one patch.
+    #[test]
+    fn a_short_reach_keeps_cells_apart_and_a_long_one_joins_the_face() {
+        let b = hyt();
+        let apart = patches(&b, 0.0);
+        assert_eq!(apart.len(), b.cells.len());
+        for patch in &apart {
+            let cell = &b.cells[patch.cells[0]];
+            assert_eq!(patch.cells.len(), 1);
+            assert!(patch.centre.abs_diff_eq(cell.centre, 1e-6));
+            assert!((patch.size[0] - cell.size[0]).abs() < 1e-6);
+            assert!((patch.size[1] - cell.size[1]).abs() < 1e-6);
+        }
+        let joined = patches(&b, 1.0);
+        assert_eq!(joined.len(), 1);
+        assert_eq!(joined[0].cells.len(), b.cells.len());
+        // Sixteen columns of three rows, each place taken once, and a cell
+        // further along the face's right in a later column.
+        let face = &joined[0];
+        assert_eq!(face.grid, [16, 3]);
+        let mut places = face.places.clone();
+        places.sort_unstable();
+        places.dedup();
+        assert_eq!(places.len(), b.cells.len());
+        for (a, pa) in face.cells.iter().zip(&face.places) {
+            for (c, pc) in face.cells.iter().zip(&face.places) {
+                let ahead = (b.cells[*c].centre - b.cells[*a].centre).dot(face.right);
+                if ahead > 1e-3 {
+                    assert!(pc[0] > pa[0], "{pa:?} then {pc:?} at {ahead} m");
+                }
+            }
+        }
+        // The whole face: wider than any one cell both ways.
+        assert!(joined[0].size[0] > 10.0 * apart[0].size[0]);
+        assert!(joined[0].size[1] > 2.0 * apart[0].size[1]);
     }
 
     #[test]

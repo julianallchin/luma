@@ -258,16 +258,16 @@ fn quad_interpolate_scalar(sum: f32) -> f32 {
     return (w_o * sum + w_h * sh + w_v * sv + w_d * sd) / (w_o + w_h + w_v + w_d);
 }
 
-fn quad_scale_shared(li: u32, sum: f32) -> vec3<f32> {
+fn quad_scale_shared(li: u32, ray: SceneRay, span: vec2<f32>, sum: f32) -> vec3<f32> {
     let rest = light_rest[li];
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li, ray.dir, span.x, span.y);
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
 // The shared quadrature plus this pixel's own remainder behind the quad's
 // nearest hit.
 fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
-    var result = quad_scale_shared(li, quad_interpolate_scalar(quad_shared_scalar(li, span)));
+    var result = quad_scale_shared(li, ray, span, quad_interpolate_scalar(quad_shared_scalar(li, span)));
     if ray.hit_dist - quad_hit_min > max(QUAD_GATE_M, quad_hit_min * QUAD_GATE_FRAC) && span.y > quad_hit_min {
         result += lit_interval(li, ray, max(span.x, quad_hit_min), span.y);
     }

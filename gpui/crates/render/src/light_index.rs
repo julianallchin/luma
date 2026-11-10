@@ -362,9 +362,13 @@ pub(crate) struct LightRest {
     /// [`FixtureCone::lens_distance`](crate::frame::FixtureCone::lens_distance).
     /// Zero for a point source. `LightCore::position` stays the lens centre.
     pub lens_distance: f32,
+    /// Where this cone's cells start in the panel buffer
+    /// ([`crate::panel::pack`]), or zero when it has none. Like the shadow
+    /// slot, it rides through this module's reorder untouched.
+    pub panel: f32,
     /// Tail padding to the WGSL stride (the struct aligns to 16 bytes). A
     /// focus-dependent lens profile (beam waist) would take these words.
-    pub lens_reserved: [f32; 3],
+    pub lens_reserved: [f32; 2],
 }
 
 #[repr(C)]

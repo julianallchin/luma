@@ -27,6 +27,7 @@ mod led_faces;
 mod lens_footprint;
 mod library_fixture;
 mod outdoor_haze;
+mod panel_light;
 mod post_look;
 mod procedural_haze;
 mod reflection_probes;

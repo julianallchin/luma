@@ -781,8 +781,9 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             // radiance; the beam gain is the absolute scale, and it is the
             // same one the haze march applies to the same cone.
             let beam_gain = surface_clusters.shadow.z;
+            let color = panel_colour(rest.panel, rest.color, rest.direction, rest.cos_beam, q, 0.0);
             let irradiance =
-                dot_nl * rest.color * rest.intensity * beam_gain * profile * visibility;
+                dot_nl * color * rest.intensity * beam_gain * profile * visibility;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness) * masking;
         }

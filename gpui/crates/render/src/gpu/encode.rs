@@ -156,13 +156,16 @@ impl Renderer {
 
         // A cone that emits nothing visible (a black colour at any dimmer)
         // gets no shadow map, no light-index entry and no beam work.
-        let fixture_cones: Vec<_> = frame
+        // Each kept cone with its index in the frame, which its panel names.
+        let (kept, fixture_cones): (Vec<usize>, Vec<_>) = frame
             .fixture_cones
             .iter()
             .map(sanitize_fixture_cone)
-            .filter(|cone| cone.intensity * cone.color.max_element() > DARK_CONE)
+            .enumerate()
+            .filter(|(_, cone)| cone.intensity * cone.color.max_element() > DARK_CONE)
             .take(crate::frame::MAX_FIXTURE_CONES)
-            .collect();
+            .unzip();
+        let (panel_words, panel_of) = crate::panel::pack(&frame.panels, &kept);
         let camera_bits = [
             frame.camera.eye.x,
             frame.camera.eye.y,
@@ -284,7 +287,8 @@ impl Renderer {
                     inverse_right_length: direction.cross(helper).length().recip(),
                     field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
                     lens_distance: light.lens_distance(),
-                    lens_reserved: [0.0; 3],
+                    panel: panel_of[index],
+                    lens_reserved: [0.0; 2],
                 }
             })
             .collect();
@@ -924,6 +928,12 @@ impl Renderer {
         self.haze_glow
             .prepare(&self.gpu.device, &self.gpu.queue, &medium, frame);
         let glow_bindings = self.haze_glow.bindings(17);
+        let panel_buf = self.storage(
+            &mut encoder,
+            &panel_words,
+            wgpu::BufferUsages::STORAGE,
+            "panels",
+        );
         let cluster_group = |label: &str, core: &wgpu::Buffer, rest: &wgpu::Buffer| {
             self.gpu
                 .device
@@ -955,6 +965,7 @@ impl Renderer {
                         binding(14, index_bindings.surface_splits.as_entire_binding()),
                         binding(15, wgpu::BindingResource::TextureView(&ambient_visibility)),
                         binding(16, wgpu::BindingResource::TextureView(&shaft_view)),
+                        binding(20, panel_buf.as_entire_binding()),
                     ],
                 })
         };
@@ -1878,6 +1889,7 @@ impl Renderer {
                                     wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
                                 ),
                                 binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
+                                binding(13, panel_buf.as_entire_binding()),
                                 binding(
                                     7,
                                     wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
@@ -1963,6 +1975,7 @@ impl Renderer {
                                     wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
                                 ),
                                 binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
+                                binding(13, panel_buf.as_entire_binding()),
                                 binding(
                                     7,
                                     wgpu::BindingResource::TextureView(&self.fixture_shadow_map),

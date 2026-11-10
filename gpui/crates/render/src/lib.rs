@@ -50,6 +50,7 @@ pub mod materials;
 mod medium;
 pub mod metrics;
 pub mod overlay;
+pub mod panel;
 mod pass_profile;
 pub mod photometry;
 mod post;

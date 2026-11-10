@@ -53,8 +53,9 @@ struct LightRest {
     // Virtual apex to lens plane, metres; zero for a point source. The core's
     // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
     lens_distance: f32,
+    // Where this cone's cells start in `panel_data`, or zero (`panel.wgsl`).
+    panel: f32,
     // Tail padding to the 80-byte stride; a beam-waist profile would take it.
-    lens_reserved0: f32,
     lens_reserved1: f32,
     lens_reserved2: f32,
 };
@@ -110,6 +111,8 @@ struct FixtureShadowMatrix {
 @group(0) @binding(10) var medium_cache: texture_3d<f32>;
 @group(0) @binding(11) var shadow_ranges: texture_2d_array<f32>;
 @group(0) @binding(12) var shadow_ranges_extra: texture_2d_array<f32>;
+// The cells behind the cones that a face of cells casts (`panel.rs`).
+@group(0) @binding(13) var<storage, read> panel_data: array<vec4<f32>>;
 
 @group(3) @binding(0) var camera_fog: texture_3d<f32>;
 
@@ -445,6 +448,31 @@ fn clip_to_lens_plane(t_a: ptr<function, f32>, t_b: ptr<function, f32>, axial: f
     return true;
 }
 
+/// The colour light `li` scatters along the ray toward `dir`, between `a`
+/// and `b` metres out. A beam's integral carries one colour, so a face of
+/// cells gives the colour of the cells facing the point where that stretch
+/// of the ray passes nearest the lens (`panel.wgsl`): the lit cells show in
+/// the haze in front of them, as seen from the camera. Half of what the ray
+/// gathers from a source it passes `h` metres from comes from the `h` metres
+/// of it either side of that point, so the cells are taken that much wider.
+/// Then the emitted
+/// spectrum: the saturated colour plus a small broadband leak — a real
+/// fixture is a white source behind an imperfect filter, plus lens glare.
+/// White-hot is EMERGENT from this: near the source the leak's absolute
+/// radiance is enormous, all channels blow out, and AgX rolls the core to
+/// white; mid-beam the leak is invisible and the true colour shows. No
+/// radiance gate, no white mix.
+fn beam_tint(li: u32, dir: vec3<f32>, a: f32, b: f32) -> vec3<f32> {
+    let rest = light_rest[li];
+    var color = rest.color;
+    if rest.panel > 0.5 {
+        let oc = haze.camera_pos.xyz - light_core[li].position;
+        let q = oc + dir * clamp(-dot(oc, dir), a, b);
+        color = panel_colour(rest.panel, rest.color, rest.direction, rest.cos_beam, q, length(q));
+    }
+    return mix(color, vec3<f32>(1.0), haze.transport.x);
+}
+
 /// Single-scattering radiance this ray receives from light `li`, already
 /// multiplied by sigma. Returns zero when the ray misses the light's
 /// cone∩ball, or the span it does cross is occluded by geometry.
@@ -493,13 +521,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
 
     var acc = vec3<f32>(0.0);
 
-    // Emitted spectrum: the saturated colour plus a small broadband leak —
-    // a real fixture is a white source behind an imperfect filter, plus
-    // lens glare. White-hot is EMERGENT from this: near the source the
-    // leak's absolute radiance is enormous, all channels blow out, and AgX
-    // rolls the core to white; mid-beam the leak is invisible and the true
-    // colour shows. No radiance gate, no white mix.
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li, ray_dir, t_a, t_b);
 
     // Decorrelate jitter across lights so overlapping cones dither
     // independently — correlated jitter turns overlaps into stripes.
@@ -623,7 +645,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
     let pieces = max(quadrature_pieces(a, b, th0, th1), gobo_pieces(li, ray, a, b));
     let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li, ray.dir, a, b);
     var sum = 0.0;
     let width = (th1 - th0) / f32(pieces);
     // The two extinction terms — camera transmittance and source optical depth —
