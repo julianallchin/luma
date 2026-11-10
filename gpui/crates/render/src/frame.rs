@@ -1573,9 +1573,13 @@ mod tests {
         for state in scene.state.values_mut() {
             state.strobe = 1.0;
         }
-        // At 20 Hz the gate is off for the second half of each 50 ms period;
-        // the 1/60 s frame ending at 0.1 s lies wholly inside one.
-        let strobed = build(&scene, &definitions, 0.1, &mut library).unwrap();
+        // A display frame that lies wholly in the gate's off time draws no
+        // cone: find one at the fastest strobe rather than assume the clock.
+        let off = (1..2000_u16)
+            .map(|k| f32::from(k) * 0.001)
+            .find(|&t| luma_scene::strobe::gain(1.0, Moment::at(f64::from(t)).slice) == 0.0)
+            .expect("the fastest strobe has a frame wholly off");
+        let strobed = build(&scene, &definitions, off, &mut library).unwrap();
         assert!(strobed.fixture_cones.is_empty());
         assert_eq!(
             strobed.fixture_shadow_capacity_hint,
