@@ -1129,7 +1129,7 @@ pub struct Piece {
     pub geometry: Geometry,
     /// The venue's own vocabulary for what this is: `truss`, `stand`, `floor`,
     /// `guardrail`, `speaker`, `cdj`, `mixer`. Read only by
-    /// [`Piece::is_rig_bearing`]; the renderer draws every piece the same way.
+    /// [`Piece::is_floor`]; the renderer draws every piece the same way.
     /// Absent in the golden catalogue, which predates it.
     #[serde(default)]
     pub kind: String,
@@ -1142,17 +1142,6 @@ pub struct Piece {
 }
 
 impl Piece {
-    /// Whether this piece is part of the *rig* — something fixtures hang on —
-    /// rather than part of the room around it.
-    ///
-    /// This selects the room bounds used for house lighting. Camera framing
-    /// includes every authored piece, so decks and speakers stay visible too.
-    /// An unknown kind — including the empty one the goldens carry — is room.
-    #[must_use]
-    pub fn is_rig_bearing(&self) -> bool {
-        matches!(self.kind.as_str(), "truss" | "stand")
-    }
-
     /// Whether this piece is floor the rig stands on — a deck — rather than
     /// something on it. The stage camera pivots on the rig before a floor.
     #[must_use]
@@ -1324,12 +1313,14 @@ impl Scene {
 
     /// The room a house rig hangs over, in world space.
     ///
-    /// Every head and every rig-bearing piece, and nothing else: unlike
-    /// [`Self::framing`] this does not follow the beams out, because where the
-    /// light *goes* is not where the room is. A venue with nothing in it
-    /// returns [`luma_scene::Aabb::EMPTY`]; [`crate::house::lamps`] turns that
-    /// into a minimum room rather than refusing, since an empty venue is
-    /// exactly the one an operator is about to start building in.
+    /// Every head and every piece — truss, decks, speakers, barriers — and
+    /// nothing else: the room is everything the venue has put in it, so the
+    /// house lights all of it. Unlike [`Self::framing`] this does not follow
+    /// the beams out, because where the light *goes* is not where the room
+    /// is. A venue with nothing in it returns [`luma_scene::Aabb::EMPTY`];
+    /// [`crate::house::lamps`] turns that into a minimum room rather than
+    /// refusing, since an empty venue is exactly the one an operator is about
+    /// to start building in.
     #[must_use]
     pub fn room_bounds(&self) -> luma_scene::Aabb {
         let mut bounds = luma_scene::Aabb::from_points(
@@ -1337,7 +1328,7 @@ impl Scene {
                 .iter()
                 .map(|f| luma_scene::coords::world_from_data(glam::Vec3::from(f.pos))),
         );
-        for piece in self.pieces.iter().filter(|p| p.is_rig_bearing()) {
+        for piece in &self.pieces {
             bounds.union(&piece_box(piece));
         }
         bounds
