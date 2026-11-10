@@ -123,6 +123,9 @@ after it. A new migration adds its line here.
 - `20261108140000_keep_authored_rows.sql` — any time; no client depends on
   it. From then on deleting an auth user who authored anything another
   account can read is refused instead of cascading through shared venues
+- `20261110120000_qlc_fixtures_to_library.sql` — with the first nightly that
+  reads `lib:` fixtures. A 0.6.2 or older install cannot draw or drive the
+  fixtures it moves until it updates
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an
