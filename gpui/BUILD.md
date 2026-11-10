@@ -194,8 +194,7 @@ full zoom-out), `visualizer_capture` (the 3D view's shots and orbit frame
 cost, into `$LUMA_SHOTS/visualizer`), and, against a copy of a real library
 (`LUMA_REAL_CONFIG`), `track_editor_real_budget` and
 `visualizer_real_score_window` (a real score through the renderer, second by
-second). The dialog frame-cost tests in `app_pixel` and `ui_pixel` are still
-`#[ignore]` tests.
+second).
 
 `luma-render` has one binary, `--test render`, plus four that change
 process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
@@ -204,11 +203,6 @@ the venue-graph goldens (`venue_poses`) and the build-against-real-geometry test
 (`venue_build`); it needs no GPU. `luma-ui` has one, `--test ui`.
 Set `LUMA_RENDER_CAPTURE_DIR=dir` to save the pictures the `render` tests look
 at, one subdirectory per test file.
-The `luma-render` GPU timing instruments are examples, not tests, because a
-timing on a shared machine is not a gate: `--example stall_probe` (frame latency on a lit, hazed stage),
-`--example timestamp_lie` (pass timestamps against the wall clock; run on an
-idle machine) and `--example resize_probe` (what a per-frame viewport size
-change costs). Run them with `cargo run -p luma-render --release`.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,
@@ -306,7 +300,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
 - `cargo test` stops at the first failing test binary. Pass `--no-fail-fast`
   when a run should report every failure, as a golden run should.
 - An integration test build also builds the crate's binaries, so
-  `cargo test -p luma-render` relinks `target/debug/render-goldens`. Copy a binary
+  `cargo test -p luma-render` relinks `target/debug/render-contract-goldens`. Copy a binary
   you are comparing against before running tests.
 - Cargo rebuilds by mtime. A file restored from a backup keeps its old mtime,
   and the build silently keeps the stale artifact. `touch` it.

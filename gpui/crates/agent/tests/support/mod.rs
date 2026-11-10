@@ -112,38 +112,3 @@ pub fn runtime(config_dir: impl Into<PathBuf>) -> Runtime {
 
 #[cfg(feature = "pixel")]
 pub mod image;
-
-/// Reading `app.timings()`.
-///
-/// These are the CPU half of a frame (scene build), never the GPU: see
-/// `app.timings()` in `api.d.ts`.
-pub mod cost {
-    use gpui_agent::percentile;
-    use serde_json::Value;
-
-    /// Print what the frames in `(from, to]` cost, and hand back the median.
-    ///
-    /// Half-open on purpose: callers mark a stretch with the frame number a
-    /// command returned, and that frame belongs to the stretch before it.
-    pub fn summarize(frames: &[Value], from: u64, to: u64, label: &str) -> f64 {
-        let mut draw: Vec<f64> = Vec::new();
-        let mut parked: Vec<f64> = Vec::new();
-        for frame in frames {
-            let number = frame["frame"].as_u64().unwrap();
-            if number > from && number <= to {
-                draw.push(frame["drawMs"].as_f64().unwrap());
-                parked.push(frame["parkedMs"].as_f64().unwrap());
-            }
-        }
-        let count = draw.len();
-        let mean = draw.iter().sum::<f64>() / count.max(1) as f64;
-        let p50 = percentile(&draw, 0.50);
-        let p95 = percentile(&draw, 0.95);
-        println!(
-            "{label:<26} n={count:<4} drawMs mean={mean:6.2} p50={p50:6.2} p95={p95:6.2}  \
-             parkedMs p50={:5.2}",
-            percentile(&parked, 0.50)
-        );
-        p50
-    }
-}

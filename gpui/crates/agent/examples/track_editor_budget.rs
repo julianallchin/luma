@@ -23,10 +23,7 @@
 //!
 //! # Why it is in Rust
 //!
-//! The width-tween measurement is
-//! `tests/js/pixel/track_editor_budget.test.js`, because it is a ratio against
-//! the same run. This one asserts an absolute frame budget, which `.test.js`
-//! files do not do.
+//! It asserts an absolute frame budget, which `.test.js` files do not do.
 //!
 //! # An example, not a test
 //!

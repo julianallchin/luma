@@ -4592,10 +4592,8 @@ dependencies = [
  "luma-scene",
  "luma-ui",
  "luma-update",
- "png 0.17.16",
  "serde",
  "serde_json",
- "sqlx",
  "tokio",
  "uuid",
 ]
