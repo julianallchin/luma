@@ -44,8 +44,9 @@ const rows = (s) => {
 const SERVICES = ["Claude Code", "Codex", "OpenRouter", "Vercel AI Gateway"];
 const allListed = (s) => SERVICES.every((service) =>
   s.find({ role: "button", label: service }) || s.find((n) => n.role === "text" && n.label.startsWith(`${service}: `)));
-const name = (row) => row.label.split(" · ").slice(0, -1).join(" · ");
-const chosenName = (s) => chip(s).label.split(" · ").slice(1).join(" · ");
+// A row is labelled "name · service"; the chip "service · name".
+const name = (row) => row.label.split(" · ")[0];
+const chosenName = (s) => chip(s).label.split(" · ")[1];
 
 // The card's height is tweened as it turns between pages, so what is in it
 // moves; act on a node once it holds still on screen.
@@ -91,6 +92,34 @@ test("the chip opens a panel titled by the model's level, and Escape closes it",
   assert(title.length > 0, "the panel has no level");
   app.key("escape");
   until("the card closed", (s) => !panel(s));
+});
+
+// A service's default is its first row, under the model's own name: no row
+// stands in for "whatever the service picks", and the chip names a model the
+// list holds.
+test("each service's first row names a model, and the chip names a listed one", () => {
+  openChat();
+  open();
+  const chosen = chosenName(app.snapshot());
+  app.click(panel(app.snapshot()));
+  // The models open on the chosen one.
+  until(`a row for ${chosen}`, (s) => rows(s).some((r) => name(r) === chosen));
+  until("every service's list", allListed);
+  const tabs = (s) => s.findAll((n) => n.role === "button" && SERVICES.includes(n.label));
+  const services = still("the tabs", (s) => tabs(s).at(-1)) && tabs(app.snapshot()).map((t) => t.label);
+  assert(services.length > 0, "no service listed its models");
+  for (const service of services) {
+    app.click(still(`the ${service} tab`, (s) => tabs(s).find((t) => t.label === service)));
+    const top = (s) => {
+      const first = rows(s)[0];
+      return first && first.label.endsWith(` · ${service}`) ? first : undefined;
+    };
+    const first = top(until(`${service}'s models at the top`, top));
+    assert(!/^default\b/i.test(name(first)), `${service}'s first row names no model: ${first.label}`);
+  }
+  app.key("escape");
+  app.key("escape");
+  until("closed", (s) => !panel(s));
 });
 
 test("the arrows on the panel step the level", () => {

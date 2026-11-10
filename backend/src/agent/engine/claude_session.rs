@@ -271,7 +271,7 @@ fn assistant_entry(
 }
 
 /// `CLAUDE_CONFIG_DIR`, defaulting to `~/.claude` exactly as the CLI does.
-fn config_dir() -> PathBuf {
+pub(super) fn config_dir() -> PathBuf {
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"))

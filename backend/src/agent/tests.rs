@@ -1501,11 +1501,13 @@ async fn native_parallel_children_do_not_block_parent_tools() {
         }
     }
     let fixture = fixture().await;
-    sqlx::query("UPDATE agent_threads SET engine='codex', model=NULL, effort=NULL WHERE id=?")
-        .bind(&fixture.thread_id)
-        .execute(fixture.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE agent_threads SET engine='codex', model='gpt-6-astra', effort=NULL WHERE id=?",
+    )
+    .bind(&fixture.thread_id)
+    .execute(fixture.pool())
+    .await
+    .unwrap();
     let executable = fixture._dir.path().join("scripted-codex");
     std::fs::write(&executable, r#"#!/usr/bin/env python3
 import json,sys,uuid,os,pathlib
@@ -2043,7 +2045,8 @@ async fn the_context_gauge_moves_at_every_step() {
 
 /// A stand-in `claude` for a whole turn: it calls `echo`, takes the steer the
 /// test sends while the call runs, reports the request's usage, replays the
-/// steer where it took it, and answers.
+/// steer where it took it, and answers. Started without `--model` it is only
+/// asked for its models, so a turn that ran no named model never gets one.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
 import json,sys
 if 'auth' in sys.argv:
@@ -2051,6 +2054,11 @@ if 'auth' in sys.argv:
 read=lambda: json.loads(sys.stdin.readline())
 def send(x): print(json.dumps(x),flush=True)
 assert read()['request']['subtype']=='initialize'
+if '--model' not in sys.argv:
+    send({'type':'control_response','response':{'request_id':'initialize','subtype':'success','response':{'models':[{'value':'default','resolvedModel':'claude-sonnet-5','displayName':'Default (recommended)'},{'value':'claude-sonnet-5','resolvedModel':'claude-sonnet-5','displayName':'Sonnet 5'}]}}})
+    sys.exit(0)
+import pathlib
+pathlib.Path(__file__).with_name('model').write_text(sys.argv[sys.argv.index('--model')+1])
 send({'type':'control_response','response':{'request_id':'initialize','subtype':'success','response':{}}})
 assert read()['type']=='user'
 send({'type':'system','subtype':'init','session_id':'native','model':'claude-sonnet-5'})
@@ -2074,6 +2082,8 @@ send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_t
 sys.stdin.readline()
 "#;
 
+/// The thread names no model, as one saved when the picker had a "Default"
+/// row does: the turn runs a named one all the same.
 #[tokio::test]
 async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() {
     let fixture = fixture().await;
@@ -2142,7 +2152,10 @@ async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() 
     assert_eq!(prompts, vec![9010, 9510]);
     assert!(!transcript.unfinished(), "{transcript:#?}");
 
-    // The native session is continuable from the head the turn left.
+    // The native session is continuable from the head the turn left, under
+    // the model the turn named.
+    let ran = std::fs::read_to_string(fixture._dir.path().join("model")).expect("a named model");
+    assert!(!ran.is_empty());
     let lease = super::engine::state::RunLease::acquire(
         fixture.services.storage().path(),
         &fixture.thread_id,
@@ -2152,7 +2165,7 @@ async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() 
     let resumed = lease
         .resume(
             super::engine::Engine::Claude,
-            &None,
+            &Some(ran),
             transcript.head_message_id().as_deref(),
         )
         .expect("checkpoint read")
