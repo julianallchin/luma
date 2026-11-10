@@ -65,6 +65,7 @@ fn definition(built: Arc<luma_fixture::Built>) -> Definition {
                 radius_m: None,
                 offset_m: None,
             }),
+            bulb: None,
         }),
     }
 }
