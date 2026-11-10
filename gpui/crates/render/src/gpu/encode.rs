@@ -2296,7 +2296,11 @@ impl Renderer {
                     CAMERA_NEAR,
                     camera_far,
                     haze_density * Transport::EXTINCTION,
-                    0.0,
+                    fixture_cones
+                        .iter()
+                        .filter(|cone| cone.haze_gain > 0.0)
+                        .map(|cone| cone.position.distance(frame.camera.eye) + cone.range)
+                        .fold(0.0, f32::max),
                 ],
                 background: frame.clear_color.extend(1.0).to_array(),
                 display: [
