@@ -536,3 +536,283 @@ fn every_head_aims_where_its_cell_asks() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Every shipped fixture's every mode, with its rank-0 channels as
+/// `(slot, lowered)`.
+fn every_mode() -> Vec<(
+    String,
+    Arc<FixtureDefinition>,
+    String,
+    Vec<(usize, Lowered)>,
+)> {
+    let library = crate::resources::fixture_library_root(Some(&root())).unwrap();
+    let mut out = Vec::new();
+    for entry in &index(&library).unwrap().fixtures {
+        let def = definition(&entry.id);
+        for mode in &def.modes {
+            let slots = mode
+                .channels
+                .iter()
+                .filter_map(|mc| {
+                    let lowered = def
+                        .channels
+                        .iter()
+                        .find(|c| c.name == mc.name)?
+                        .lowered
+                        .as_deref()?;
+                    (lowered.rank == 0).then(|| (mc.number as usize, lowered.clone()))
+                })
+                .collect();
+            out.push((entry.id.clone(), def.clone(), mode.name.clone(), slots));
+        }
+    }
+    out
+}
+
+/// `p` asked of every cell of `def`.
+fn uniform(def: &FixtureDefinition, p: PrimitiveState) -> Vec<(String, PrimitiveState)> {
+    let n = def.library.as_ref().unwrap().built.cells.len();
+    if n > 1 {
+        cells((0..n).map(|c| (c, p.clone())))
+    } else {
+        fixture_level(p)
+    }
+}
+
+const COLOURS: [[f32; 3]; 3] = [[1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [1.0, 0.5, 0.2]];
+
+/// Two dimmer or emitter channels with the same attribute over the same
+/// cells (a second dimmer) are two controls of one light: they always send
+/// the same byte.
+#[test]
+fn copies_of_a_channel_send_the_same_byte() {
+    let mut failures = Vec::new();
+    for (id, def, mode, slots) in every_mode() {
+        for colour in COLOURS {
+            for dimmer in [1.0, 0.5] {
+                let b = dmx(&id, &mode, &uniform(&def, lit(dimmer, colour)));
+                for (i, (a, la)) in slots.iter().enumerate() {
+                    for (z, lz) in &slots[i + 1..] {
+                        let light = la.param.attr == Attr::Dimmer
+                            || luma_fixture::EmitterColour::of(la.param.attr).is_some();
+                        let same = light
+                            && la.param.attr == lz.param.attr
+                            && la.param.cell == lz.param.cell;
+                        // A 16-bit channel's coarse byte truncates where an
+                        // 8-bit copy rounds: the same light to a step.
+                        if same && b[*a].abs_diff(b[*z]) > 1 {
+                            failures.push(format!(
+                                "{id} {mode} {:?} slots {a},{z}: {} vs {}",
+                                la.param.attr, b[*a], b[*z]
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    failures.dedup();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// On a fixture with a master dimmer, dimming a colour moves only the
+/// dimmer: the colour channels send what they sent at full, and the master
+/// halves. A saved show's colours stay where they were.
+#[test]
+fn a_master_dimmer_dims_and_the_colour_stays() {
+    let mut failures = Vec::new();
+    for (id, def, mode, slots) in every_mode() {
+        let masters: Vec<usize> = slots
+            .iter()
+            .filter(|(_, l)| l.param.attr == Attr::Dimmer && l.param.cell.is_none())
+            .map(|(s, _)| *s)
+            .collect();
+        if masters.is_empty() {
+            continue;
+        }
+        let colours: Vec<usize> = slots
+            .iter()
+            .filter(|(_, l)| {
+                luma_fixture::EmitterColour::of(l.param.attr).is_some()
+                    || matches!(
+                        l.param.attr,
+                        Attr::CmyCyan | Attr::CmyMagenta | Attr::CmyYellow
+                    )
+            })
+            .map(|(s, _)| *s)
+            .collect();
+        for colour in COLOURS {
+            let full = dmx(&id, &mode, &uniform(&def, lit(1.0, colour)));
+            let half = dmx(&id, &mode, &uniform(&def, lit(0.5, colour)));
+            for &s in &colours {
+                if full[s] != half[s] {
+                    failures.push(format!(
+                        "{id} {mode} colour slot {s}: {} at full, {} at half",
+                        full[s], half[s]
+                    ));
+                }
+            }
+            for &s in &masters {
+                if (i32::from(full[s]) - 2 * i32::from(half[s])).abs() > 2 {
+                    failures.push(format!(
+                        "{id} {mode} master slot {s}: {} at full, {} at half",
+                        full[s], half[s]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Every white channel over the same cells (white, warm, cool) carries the
+/// same white: a warm-and-cool fixture asked for white sends both.
+#[test]
+fn every_white_channel_carries_the_white() {
+    use luma_fixture::EmitterColour as E;
+    let mut failures = Vec::new();
+    for (id, def, mode, slots) in every_mode() {
+        let whites: Vec<&(usize, Lowered)> = slots
+            .iter()
+            .filter(|(_, l)| {
+                matches!(
+                    luma_fixture::EmitterColour::of(l.param.attr),
+                    Some(E::White | E::WarmWhite | E::CoolWhite)
+                )
+            })
+            .collect();
+        let b = dmx(&id, &mode, &uniform(&def, lit(1.0, [1.0; 3])));
+        for (i, (a, la)) in whites.iter().enumerate() {
+            for (z, lz) in &whites[i + 1..] {
+                if la.param.cell == lz.param.cell && b[*a] != b[*z] {
+                    failures.push(format!("{id} {mode} slots {a},{z}: {} vs {}", b[*a], b[*z]));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The stage shows a cell lit exactly when the bytes on the wire light it,
+/// read from the channels and the geometry alone: every dimmer over the cell
+/// is up, and a colour channel lights one of its dies (or flags or a wheel
+/// colour it), or nothing but a dimmer reaches it.
+#[test]
+fn a_cell_the_wire_lights_is_lit_on_the_stage() {
+    use crate::stage_render::StageLights;
+    use luma_fixture::{CellEmitters, EmitterColour};
+    let mut failures = Vec::new();
+    for (id, def, mode, slots) in every_mode() {
+        let built = &def.library.as_ref().unwrap().built;
+        let n = built.cells.len().max(1);
+        let path = fixture_path(&id);
+        let fixture = PatchedFixture {
+            id: "fx".into(),
+            uid: None,
+            venue_id: "v".into(),
+            universe: 1,
+            address: 1,
+            num_channels: 0,
+            manufacturer: String::new(),
+            model: String::new(),
+            mode_name: mode.clone(),
+            fixture_path: path.clone(),
+            label: None,
+            address_pinned: false,
+        };
+        let lights = StageLights::new(&[fixture], &HashMap::from([(path, (*def).clone())]));
+        for colour in COLOURS {
+            let asked = uniform(&def, lit(1.0, colour));
+            let b = dmx(&id, &mode, &asked);
+            let state = UniverseState {
+                primitives: asked
+                    .iter()
+                    .map(|(k, p)| (format!("fx{k}"), p.clone()))
+                    .collect(),
+                lasers: Vec::new(),
+            };
+            let still = luma_scene::strobe::Slice {
+                open: 0.0,
+                length: 0.0,
+            };
+            let frame = lights.frame(Some(&state), still);
+            for c in 0..n {
+                let covers = |l: &Lowered| {
+                    l.param.cell.is_none_or(|cell| {
+                        let [a, z] = cell.span();
+                        (a as usize..=z as usize).contains(&c)
+                    })
+                };
+                let dies = match built.cell_emitters(c) {
+                    CellEmitters::Known(set) => Some(set),
+                    _ => None,
+                };
+                let has_emitters = slots
+                    .iter()
+                    .any(|(_, l)| covers(l) && EmitterColour::of(l.param.attr).is_some());
+                let mut dimmers = 0;
+                let mut dimmers_up = true;
+                let mut colours = 0;
+                let mut colour_lit = false;
+                for (s, l) in slots.iter().filter(|(_, l)| covers(l)) {
+                    let on = b[*s] > 0;
+                    match l.param.attr {
+                        Attr::Dimmer => {
+                            dimmers += 1;
+                            dimmers_up &= on;
+                        }
+                        Attr::CmyCyan | Attr::CmyMagenta | Attr::CmyYellow => {
+                            colours += 1;
+                            colour_lit = true;
+                        }
+                        // A wheel or preset colours the cell when its byte
+                        // sits on a slot or a colour; black is dark, and a
+                        // byte on neither (no function) leaves it alone. A
+                        // wheel filters: over emitters it lights nothing.
+                        Attr::ColourWheel | Attr::ColourMacro
+                            if l.param.attr == Attr::ColourMacro || !has_emitters =>
+                        {
+                            let range = l
+                                .param
+                                .ranges
+                                .iter()
+                                .find(|r| (r.dmx[0]..=r.dmx[1]).contains(&b[*s]));
+                            if let Some(r) = range.filter(|r| r.slot.is_some() || r.rgb.is_some()) {
+                                colours += 1;
+                                colour_lit |= r
+                                    .rgb
+                                    .as_deref()
+                                    .is_none_or(|hex| !hex.eq_ignore_ascii_case("#000000"));
+                            }
+                        }
+                        a => {
+                            if let Some(e) = EmitterColour::of(a) {
+                                let has = l.param.emulated || dies.is_none_or(|d| d.lit_by(e));
+                                if has {
+                                    colours += 1;
+                                    colour_lit |= on;
+                                }
+                            }
+                        }
+                    }
+                }
+                if dimmers == 0 && colours == 0 {
+                    continue;
+                }
+                let wire = dimmers_up && (colour_lit || colours == 0);
+                let stage = frame.primitive("fx", c).is_some_and(|p| p.dimmer > 1e-4);
+                if wire != stage {
+                    failures.push(format!(
+                        "{id} {mode} cell {c} asked {colour:?}: wire {wire}, stage {stage}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{}\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

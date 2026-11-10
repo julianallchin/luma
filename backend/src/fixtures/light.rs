@@ -116,8 +116,14 @@ struct Cell {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModeLight {
     cells: Vec<Cell>,
-    /// One per resolved param, in the mode's order.
+    /// One per resolved param, in the mode's order. A copy (below) is
+    /// [`Role::Other`] here.
     roles: Vec<Role>,
+    /// `(copy, original)`: a param with the same attribute over the same
+    /// cells as an earlier one (`n: 1` and `n: 2` of one colour, two
+    /// dimmers). A copy is a second control of the same light, so it takes
+    /// its original's value and adds nothing to the light.
+    copies: Vec<(usize, usize)>,
 }
 
 /// What `realize` decided for one param.
@@ -223,6 +229,16 @@ impl ModeLight {
                 }
             })
             .collect();
+        let mut copies = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let original = params[..i].iter().position(|q| {
+                q.attr == p.attr && q.wheel == p.wheel && covered(q, n) == covered(p, n)
+            });
+            if let Some(j) = original.filter(|_| !matches!(roles[i], Role::Other)) {
+                copies.push((i, j));
+                roles[i] = Role::Other;
+            }
+        }
         // Where channels of one colour overlap (a master colour over pixel
         // colours), each cell is the narrowest one's: a wider one carries
         // only the cells no narrower one reaches.
@@ -291,7 +307,11 @@ impl ModeLight {
                 }
             })
             .collect();
-        Self { cells, roles }
+        Self {
+            cells,
+            roles,
+            copies,
+        }
     }
 
     /// How many cells the fixture has (at least one).
@@ -447,6 +467,9 @@ impl ModeLight {
                 Role::Dimmer { .. } | Role::Shutter { .. } | Role::Other => {}
             }
         }
+        for &(copy, original) in &self.copies {
+            values[copy] = values[original];
+        }
         Realized { values, own_strobe }
     }
 
@@ -492,11 +515,24 @@ impl ModeLight {
         (0..n)
             .map(|c| {
                 let cell = &self.cells[c];
-                let rgb = EmitterColour::ALL.iter().fold([0.0; 3], |sum, &e| {
-                    let light = emitter_light(e);
-                    let level = emitters[c][e as usize];
-                    std::array::from_fn(|k| sum[k] + level * light[k])
-                });
+                // A cell's white channels (white, warm, cool) all carry its
+                // white, as a console sends them, and light as one white.
+                let white = [
+                    EmitterColour::White,
+                    EmitterColour::WarmWhite,
+                    EmitterColour::CoolWhite,
+                ]
+                .iter()
+                .map(|&e| emitters[c][e as usize])
+                .fold(0.0, f64::max);
+                let rgb = EmitterColour::ALL.iter().filter(|&&e| !is_white(e)).fold(
+                    WHITE_EMITTER.map(|v| v * white),
+                    |sum, &e| {
+                        let light = emitter_light(e);
+                        let level = emitters[c][e as usize];
+                        std::array::from_fn(|k| sum[k] + level * light[k])
+                    },
+                );
                 let colour = if let Some(lamp) = cell.lamp {
                     lamp
                 } else if cell.subtractive {
@@ -515,11 +551,18 @@ impl ModeLight {
     }
 }
 
-/// The colour a cell with `dies` shines in when no channel sets it: its dies'
-/// light together at a peak of 1, or white where the geometry names none.
+/// The colour a cell with `dies` shines in when no channel sets it: white if
+/// its dies make white (red, green and blue, or a white) or the geometry
+/// names none, else its dies' light together at a peak of 1 (a UV bar's
+/// violet, an amber's amber).
 /// A die set the stage shows no light for is dark.
 fn lamp(dies: EmitterSet) -> [f64; 3] {
-    if dies.is_empty() {
+    use EmitterColour::{Blue, Green, Red};
+    let mixes_white = (dies.contains(Red) && dies.contains(Green) && dies.contains(Blue))
+        || dies.iter().any(is_white);
+    if dies.is_empty() || mixes_white {
+        // A dimmer-only mode of a fixture that can make white is its
+        // calibrated white.
         return WHITE_EMITTER;
     }
     let sum = dies.iter().fold([0.0; 3], |sum, e| {
@@ -585,9 +628,8 @@ struct Mix {
     red: f64,
     green: f64,
     blue: f64,
-    /// Shared equally by the white channels that reach the cell.
+    /// Every white channel that reaches the cell carries it.
     white: f64,
-    whites: u32,
     amber: f64,
     lime: f64,
 }
@@ -613,8 +655,7 @@ impl Mix {
             }
             share
         };
-        let whites = mix.iter().filter(|&e| is_white(e)).count() as u32;
-        let white = take(whites > 0, WHITE_EMITTER);
+        let white = take(mix.iter().any(is_white), WHITE_EMITTER);
         let amber = take(mix.contains(EmitterColour::Amber), AMBER_EMITTER);
         let lime = take(mix.contains(EmitterColour::Lime), LIME_EMITTER);
         let has = |e| if mix.contains(e) { 1.0 } else { 0.0 };
@@ -623,7 +664,6 @@ impl Mix {
             green: rest[1] * has(EmitterColour::Green),
             blue: rest[2] * has(EmitterColour::Blue),
             white,
-            whites,
             amber,
             lime,
         }
@@ -635,7 +675,7 @@ impl Mix {
             EmitterColour::Green => self.green,
             EmitterColour::Blue => self.blue,
             EmitterColour::White | EmitterColour::WarmWhite | EmitterColour::CoolWhite => {
-                self.white / f64::from(self.whites.max(1))
+                self.white
             }
             EmitterColour::Amber => self.amber,
             EmitterColour::Lime => self.lime,
@@ -769,55 +809,6 @@ mod tests {
             "{}\n{}",
             failures.len(),
             failures[..failures.len().min(20)].join("\n")
-        );
-    }
-
-    /// The stage shows a cell lit exactly when its channels light it: every
-    /// dimmer over it is up, and something sets its light (an emitter the
-    /// stage can show, flags, a wheel, or a lamp under its dimmer).
-    #[test]
-    fn a_cell_lit_on_the_wire_is_lit_on_the_stage() {
-        let mut failures = Vec::new();
-        for (id, mode, light) in every_mode() {
-            for colour in [[1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [0.2, 0.4, 1.0]] {
-                let requests = vec![lit(1.0, colour); light.cells()];
-                let realized = light.realize(&requests, 1.0, STILL);
-                let out = light.emit(&realized);
-                let level = |i: usize| match realized.values[i] {
-                    Value::Level(v) => v,
-                    _ => 0.0,
-                };
-                for (c, cell) in light.cells.iter().enumerate() {
-                    let mut dimmers_up = true;
-                    let mut set = cell.lamp.is_some() || cell.subtractive || cell.wheel;
-                    for (i, role) in light.roles.iter().enumerate() {
-                        match role {
-                            Role::Dimmer { cells } if cells.contains(&c) => {
-                                dimmers_up &= level(i) > 0.0;
-                            }
-                            Role::Emitter { colour, cells } if cells.contains(&c) => {
-                                let shown = emitter_light(*colour).iter().any(|&v| v > 0.0);
-                                set |= shown && level(i) > 0.0;
-                            }
-                            _ => {}
-                        }
-                    }
-                    let wire = dimmers_up && set;
-                    let stage = out[c].rgb.iter().any(|&v| v > 1e-4);
-                    if wire != stage {
-                        failures.push(format!(
-                            "{id} {mode} cell {c} asked {colour:?}: wire {wire}, stage {:?}",
-                            out[c].rgb
-                        ));
-                    }
-                }
-            }
-        }
-        assert!(
-            failures.is_empty(),
-            "{}\n{}",
-            failures.len(),
-            failures[..failures.len().min(30)].join("\n")
         );
     }
 
