@@ -119,8 +119,8 @@ pub struct ModeLight {
     /// One per resolved param, in the mode's order. A copy (below) is
     /// [`Role::Other`] here.
     roles: Vec<Role>,
-    /// `(copy, original)`: a param with the same attribute over the same
-    /// cells as an earlier one (`n: 1` and `n: 2` of one colour, two
+    /// `(copy, original)`: a dimmer or emitter param with the same
+    /// attribute over the same cells as an earlier one (`n: 1` and `n: 2` of one colour, two
     /// dimmers). A copy is a second control of the same light, so it takes
     /// its original's value and adds nothing to the light.
     copies: Vec<(usize, usize)>,
@@ -234,7 +234,8 @@ impl ModeLight {
             let original = params[..i].iter().position(|q| {
                 q.attr == p.attr && q.wheel == p.wheel && covered(q, n) == covered(p, n)
             });
-            if let Some(j) = original.filter(|_| !matches!(roles[i], Role::Other)) {
+            let light = |r: &Role| matches!(r, Role::Dimmer { .. } | Role::Emitter { .. });
+            if let Some(j) = original.filter(|&j| light(&roles[i]) && light(&roles[j])) {
                 copies.push((i, j));
                 roles[i] = Role::Other;
             }
@@ -450,6 +451,12 @@ impl ModeLight {
                 }
                 Role::Wheel { slots, cells } => {
                     let Some(&c) = cells.first() else { continue };
+                    if !self.cells[c].mix.is_empty() {
+                        // The emitters make the colour; a wheel or preset
+                        // over them would override the mix, so it rests.
+                        values[i] = Value::Other;
+                        continue;
+                    }
                     if self.cells[c].subtractive {
                         // The flags make the colour; the wheel stays out of
                         // the beam on its whitest slot.

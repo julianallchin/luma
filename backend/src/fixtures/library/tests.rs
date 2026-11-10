@@ -816,3 +816,48 @@ fn a_cell_the_wire_lights_is_lit_on_the_stage() {
         failures.join("\n")
     );
 }
+
+/// A mode that can colour its light (two kinds of emitter, CMY flags, or a
+/// wheel or preset with two colours) sends a different light for white, red
+/// and blue: no colour request collapses to one set of bytes.
+#[test]
+fn a_mode_that_can_colour_tells_colours_apart() {
+    use std::collections::HashSet;
+    let mut failures = Vec::new();
+    for (id, def, mode, slots) in every_mode() {
+        let emitters: HashSet<_> = slots
+            .iter()
+            .filter_map(|(_, l)| luma_fixture::EmitterColour::of(l.param.attr))
+            .collect();
+        let cmy = slots.iter().any(|(_, l)| {
+            matches!(
+                l.param.attr,
+                Attr::CmyCyan | Attr::CmyMagenta | Attr::CmyYellow
+            )
+        });
+        let presets = slots.iter().any(|(_, l)| {
+            let colours: HashSet<String> = l
+                .param
+                .ranges
+                .iter()
+                .filter_map(|r| match (l.param.attr, &r.rgb, r.slot) {
+                    (Attr::ColourMacro, Some(rgb), _) => Some(rgb.to_ascii_lowercase()),
+                    (Attr::ColourWheel, _, Some(slot)) => Some(format!("{slot:?}")),
+                    _ => None,
+                })
+                .collect();
+            colours.len() >= 2
+        });
+        if emitters.len() < 2 && !cmy && !presets {
+            continue;
+        }
+        let sent: HashSet<[u8; 512]> = [[1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+            .into_iter()
+            .map(|c| dmx(&id, &mode, &uniform(&def, lit(1.0, c))))
+            .collect();
+        if sent.len() < 2 {
+            failures.push(format!("{id} {mode}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
