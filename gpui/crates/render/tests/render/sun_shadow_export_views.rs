@@ -7,8 +7,9 @@
 //!
 //! The files carry the camera, the sun and the bounding spheres of the deck,
 //! the subs and the crowd barriers, cut down from the app's export of the
-//! whole venue. Those casters are rebuilt as boxes on their spheres, and each view must shadow the ground in front of the deck exactly
-//! where a ray to the sun hits one of them.
+//! whole venue. Those casters are rebuilt as boxes on their spheres, and each
+//! view must shadow the ground in front of the deck exactly where a ray to the
+//! sun hits one of them.
 use std::collections::BTreeMap;
 use std::path::Path;
 
