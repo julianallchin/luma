@@ -627,7 +627,13 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
         0,
     );
     let occlusion = ao * visibility.r;
-    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
+    let reflected = reflect(-v, n);
+    let local = probe_light(in.world, n, reflected, roughness);
+    // The ambient is the house's bounce off the floor (`house.rs`). Where
+    // the local probes reach they have seen the lit floor and the lit stage
+    // themselves, so their diffuse light is the bounce and this gives way.
+    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion
+        * (1.0 - local.weight);
     // The light the haze scatters (`haze_glow_sample.wgsl`) comes from every
     // side: a quarter of its fluence lands on a surface. Read a little off
     // the surface, in the air that lights it.
@@ -640,8 +646,6 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     // absolute, the sky probe's radiance scaled by its intensity, and it
     // lights a room that has no sky probe at all.
     let sky_probe = environment_params.enabled > 0.5 && environment_params.intensity > 0.0;
-    let reflected = reflect(-v, n);
-    let local = probe_light(in.world, n, reflected, roughness);
     if sky_probe || local.weight > 0.0 {
         let dot_nv = saturate(dot(n, v));
         let fresnel = f_schlick(f0, 1.0, dot_nv);
