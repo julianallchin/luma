@@ -23,6 +23,7 @@ mod gizmo_pivot;
 mod golden_descriptors;
 mod horizon_seam;
 mod laser;
+mod led_faces;
 mod lens_footprint;
 mod library_fixture;
 mod outdoor_haze;

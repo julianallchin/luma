@@ -121,6 +121,68 @@ fn specular_aa(n: vec3<f32>, roughness: f32) -> f32 {
     return sqrt(sqrt(saturate(alpha2 + kernel)));
 }
 
+/// The lit share of `[x - w/2, x + w/2]` along a row of LEDs, each `fill`
+/// of its unit pitch and centred in it: the pulse train box-filtered over the
+/// pixel exactly, through its running integral.
+fn led_run(x: f32, w: f32, fill: f32) -> f32 {
+    return (led_run_integral(x + 0.5 * w, fill) - led_run_integral(x - 0.5 * w, fill)) / w;
+}
+
+fn led_run_integral(x: f32, fill: f32) -> f32 {
+    let whole = floor(x);
+    return whole * fill + clamp(x - whole - 0.5 * (1.0 - fill), 0.0, fill);
+}
+
+/// How much of this pixel an LED panel's LEDs cover, 0..1, at `uv` (in LED
+/// pitches) with the pixel's footprint `dx`, `dy` there. Up close it is the
+/// LED's own antialiased outline; as the LEDs near a pixel it becomes their
+/// area share, so the face is their average colour rather than bands where
+/// the pattern beats against the pixels. The same filtering as the floor
+/// grid (`grid.wgsl`), in the panel's own space.
+fn led_coverage(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, inst: Instance) -> f32 {
+    let code = u32(inst.flags.w + 0.5);
+    let shape = code & 3u;
+    let fill = inst.led.xy;
+    let cols = inst.led.z;
+    // The pixel's width in pitches along each axis.
+    let w = max(abs(dx) + abs(dy), vec2<f32>(1e-5));
+    var p = uv;
+    if code >= 4u && (i32(floor(p.y)) & 1) == 1 {
+        p.x -= 0.5;
+    }
+    // A pitch of two pixels still shows its LEDs; by one it is their average.
+    let average = smoothstep(vec2<f32>(0.4), vec2<f32>(0.9), w);
+    if shape == 1u {
+        // A rectangle is a row of runs times a column of them, each axis
+        // averaged on its own: a face seen edge on blurs its columns and
+        // keeps its rows. Clamping the run to the row keeps a staggered
+        // row's empty half pitch empty.
+        let x0 = clamp(p.x - 0.5 * w.x, 0.0, cols);
+        let x1 = clamp(p.x + 0.5 * w.x, 0.0, cols);
+        let across = (led_run_integral(x1, fill.x) - led_run_integral(x0, fill.x)) / w.x;
+        let down = led_run(p.y, w.y, fill.y);
+        return mix(across, fill.x, average.x) * mix(down, fill.y, average.y);
+    }
+    // The LED's outline in units of its own half size, where it is a unit
+    // circle or a unit hexagon with corners along u.
+    let q = abs(fract(p) - 0.5) / (0.5 * fill);
+    var d: f32;
+    var share: f32;
+    if shape == 2u {
+        d = length(q) - 1.0;
+        share = 0.785398 * fill.x * fill.y;
+    } else {
+        d = (max(q.y, 0.866025 * q.x + 0.5 * q.y) - 0.866025) / 0.866025;
+        share = 0.649519 * fill.x * fill.y;
+    }
+    let pixel = max(w.x / (0.5 * fill.x), w.y / (0.5 * fill.y));
+    var sharp = saturate(0.5 - d / pixel);
+    if p.x < 0.0 || p.x >= cols {
+        sharp = 0.0;
+    }
+    return mix(sharp, share, max(average.x, average.y));
+}
+
 fn brdf_ggx(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, f0: vec3<f32>, roughness: f32) -> vec3<f32> {
     let alpha = roughness * roughness;
     let half_vector = l + v;
@@ -456,14 +518,24 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     n = normalize(t * mapped.x + b * mapped.y + n * mapped.z);
 
     let mr = textureSample(metallic_roughness_map, material_sampler, in.uv);
+    // An LED panel paints its LEDs over its gap colour (`led_coverage`).
+    let uv_dx = dpdx(in.uv);
+    let uv_dy = dpdy(in.uv);
+    var lit = 1.0;
+    if inst.flags.w > 0.5 {
+        lit = led_coverage(in.uv, uv_dx, uv_dy, inst);
+    }
     var surface: Surface;
-    surface.base_color = inst.base_color.rgb
-        * textureSample(base_color_map, material_sampler, in.uv).rgb;
-    surface.metallic = inst.base_color.a * mr.b;
+    surface.base_color = mix(
+        inst.gap.rgb,
+        inst.base_color.rgb * textureSample(base_color_map, material_sampler, in.uv).rgb,
+        lit,
+    );
+    surface.metallic = mix(inst.gap.a, inst.base_color.a * mr.b, lit);
     // three clamps roughness to 0.0525 before squaring.
-    surface.roughness = specular_aa(n, max(inst.emissive.a * mr.g, 0.0525));
+    surface.roughness = specular_aa(n, max(mix(inst.led.w, inst.emissive.a * mr.g, lit), 0.0525));
     surface.ao = mix(1.0, textureSample(occlusion_map, material_sampler, in.uv).r, inst.flags.z);
-    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
+    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb * lit;
     surface.n = n;
     surface.unevenness = 0.0;
     return shade(in, surface, dpdx(in.world), dpdy(in.world));

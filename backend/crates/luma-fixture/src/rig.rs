@@ -12,7 +12,7 @@ use glam::{DMat4, DQuat, DVec3};
 
 use crate::mesh::{self, Mesh, Sec};
 use crate::spec::MaterialSlot;
-use crate::{EmitterShape, JointKind};
+use crate::{EmitterShape, JointKind, LedPattern};
 
 /// A build failure the reference builder would have answered with its
 /// fallback box.
@@ -97,6 +97,16 @@ pub(crate) struct Item {
     pub mat: MaterialSlot,
     pub mesh: Mesh,
     pub emit: Option<EmitRec>,
+    pub panel: Option<PanelRec>,
+}
+
+/// A flat LED panel's face: the cell it lights, its pattern, and each mesh
+/// vertex's place on the pattern.
+#[derive(Debug, Clone)]
+pub(crate) struct PanelRec {
+    pub cell: u32,
+    pub pattern: LedPattern,
+    pub uv: Vec<[f32; 2]>,
 }
 
 #[derive(Debug, Clone)]
@@ -273,6 +283,7 @@ impl Rig {
             mat,
             mesh,
             emit: None,
+            panel: None,
         });
     }
 
@@ -285,6 +296,7 @@ impl Rig {
             mat,
             mesh,
             emit: None,
+            panel: None,
         });
     }
 
@@ -416,44 +428,79 @@ impl Rig {
         depth: f64,
         mat: MaterialSlot,
     ) {
-        let (m, wh, outline) = if shape == "square" {
-            let (w, h) = match size {
-                Size::D(d) => (d, d),
-                Size::Wh(w, h) => (w, h),
-            };
-            (
-                mesh::cuboid(DVec3::new(w.max(1e-4), h.max(1e-4), depth)),
-                [w, h],
-                EmitterShape::Rect,
-            )
-        } else {
-            let d = match size {
-                Size::D(d) | Size::Wh(d, _) => d,
-            };
-            let hex = shape == "hex";
-            let m = mesh::cylinder((d / 2.0).max(1e-4), depth, if hex { 6 } else { 12 });
-            (
-                m,
-                [d, d],
-                if hex {
-                    EmitterShape::Hex
-                } else {
-                    EmitterShape::Circle
-                },
-            )
+        let (m, wh, outline) = emitter_mesh(shape, size, depth);
+        self.emit(k, Some(m), c, mat, wh, outline);
+    }
+
+    /// An LED of cell `k` that the cell's [`Self::led_panel`] draws: listed
+    /// among the cell's emitters as [`Self::emit_cell`] would list it, with
+    /// no mesh of its own.
+    pub fn panel_emitter(
+        &mut self,
+        k: u32,
+        c: [f64; 3],
+        shape: &str,
+        size: Size,
+        mat: MaterialSlot,
+    ) {
+        let (wh, outline) = emitter_outline(shape, size);
+        self.emit(k, None, c, mat, wh, outline);
+    }
+
+    /// The face of a flat LED panel of cell `k`: `w x h` centred at `c`,
+    /// facing `+Z`, painted with `pattern` from `uv[0]` at its top left
+    /// corner to `uv[1]` at its bottom right.
+    #[allow(clippy::too_many_arguments)]
+    pub fn led_panel(
+        &mut self,
+        k: u32,
+        c: [f64; 3],
+        w: f64,
+        h: f64,
+        uv: [[f64; 2]; 2],
+        pattern: LedPattern,
+        mat: MaterialSlot,
+    ) {
+        let (x, y) = (w / 2.0, h / 2.0);
+        let mut mesh = Mesh {
+            v: vec![
+                DVec3::new(-x, y, 0.0),
+                DVec3::new(x, y, 0.0),
+                DVec3::new(x, -y, 0.0),
+                DVec3::new(-x, -y, 0.0),
+            ],
+            f: vec![[0, 3, 2], [0, 2, 1]],
         };
-        self.emit(k, m, c, mat, wh, outline);
+        let [[u0, v0], [u1, v1]] = uv.map(|p| p.map(|t| t as f32));
+        self.add_named(
+            "led_panel",
+            &mut mesh,
+            mat,
+            DMat4::from_translation(DVec3::from(c)),
+        );
+        self.items.push(Item {
+            name: "led_panel",
+            node: self.cur,
+            mat,
+            mesh,
+            emit: None,
+            panel: Some(PanelRec {
+                cell: k,
+                pattern,
+                uv: vec![[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+            }),
+        });
     }
 
     /// An emitter of cell `k` with its own mesh (a tube).
     pub fn emit_mesh(&mut self, k: u32, m: Mesh, c: [f64; 3], mat: MaterialSlot, dims: [f64; 2]) {
-        self.emit(k, m, c, mat, dims, EmitterShape::Tube);
+        self.emit(k, Some(m), c, mat, dims, EmitterShape::Tube);
     }
 
     fn emit(
         &mut self,
         k: u32,
-        mut m: Mesh,
+        m: Option<Mesh>,
         c: [f64; 3],
         mat: MaterialSlot,
         size: [f64; 2],
@@ -472,6 +519,7 @@ impl Rig {
             shape,
             colour: self.colour.clone(),
         };
+        let mut m = m.unwrap_or_default();
         self.add_named(&name, &mut m, mat, DMat4::from_translation(c));
         self.items.push(Item {
             name: "cell_",
@@ -479,6 +527,28 @@ impl Rig {
             mat,
             mesh: m,
             emit: Some(rec),
+            panel: None,
         });
     }
+}
+
+/// An emitter's `[w, h]` and outline.
+fn emitter_outline(shape: &str, size: Size) -> ([f64; 2], EmitterShape) {
+    match (shape, size) {
+        ("square", Size::D(d)) => ([d, d], EmitterShape::Rect),
+        ("square", Size::Wh(w, h)) => ([w, h], EmitterShape::Rect),
+        (_, Size::D(d) | Size::Wh(d, _)) if shape == "hex" => ([d, d], EmitterShape::Hex),
+        (_, Size::D(d) | Size::Wh(d, _)) => ([d, d], EmitterShape::Circle),
+    }
+}
+
+/// An emitter's mesh, `depth` deep and facing `+Z`, its `[w, h]` and outline.
+fn emitter_mesh(shape: &str, size: Size, depth: f64) -> (Mesh, [f64; 2], EmitterShape) {
+    let (wh, outline) = emitter_outline(shape, size);
+    let m = match outline {
+        EmitterShape::Rect => mesh::cuboid(DVec3::new(wh[0].max(1e-4), wh[1].max(1e-4), depth)),
+        EmitterShape::Hex => mesh::cylinder((wh[0] / 2.0).max(1e-4), depth, 6),
+        _ => mesh::cylinder((wh[0] / 2.0).max(1e-4), depth, 12),
+    };
+    (m, wh, outline)
 }

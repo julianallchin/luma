@@ -50,8 +50,14 @@ struct Instance {
     base_color: vec4<f32>,
     // rgb: emissive radiance, a: roughness.
     emissive: vec4<f32>,
-    // x: unused, y: normal-map scale, z: occlusion strength.
+    // x: ground, y: normal-map scale, z: occlusion strength, w: an LED
+    // panel's LED shape (0 none, 1 rect, 2 circle, 3 hex) + 4 if staggered.
     flags: vec4<f32>,
+    // An LED panel's LED size as a share of its pitch (xy), LEDs per row,
+    // and gap roughness.
+    led: vec4<f32>,
+    // An LED panel's gap colour (linear) and metalness.
+    gap: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;

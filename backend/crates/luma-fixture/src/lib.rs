@@ -89,8 +89,8 @@ mod rig;
 pub mod spec;
 
 pub use built::{
-    bounds_at, Built, Cell, Emitter, EmitterShape, Head, Joint, JointKind, Material, Mesh, Node,
-    Source,
+    bounds_at, Built, Cell, Emitter, EmitterShape, Head, Joint, JointKind, LedPattern, Material,
+    Mesh, Node, Source,
 };
 pub use light::{CellEmitters, EmitterColour, EmitterSet, Mismatch};
 pub use rig::BuildError;

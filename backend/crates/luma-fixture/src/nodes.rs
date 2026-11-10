@@ -13,6 +13,7 @@ use crate::spec::{
     CellFlag, Diffuser, Dir, EmitterKind, LayoutKind, MaterialSlot as M, Node, NodeEmitter,
     NodeOutline,
 };
+use crate::{EmitterShape, LedPattern};
 
 /// A child slot: centre and size, relative to the node centre.
 type Slot = (f64, f64, f64, f64);
@@ -301,13 +302,7 @@ fn build(
         .as_ref()
         .filter(|e| emitter_set(e))
         .filter(|_| node.layout.is_none());
-    let default_fill = if leaf.is_some() { 0.9 } else { 1.0 };
-    let (fx, fy) = match &node.fill {
-        None => (default_fill, default_fill),
-        Some(crate::spec::NumOrList::Num(f)) => (*f, *f),
-        Some(crate::spec::NumOrList::List(f)) if f.len() >= 2 => (f[0], f[1]),
-        Some(_) => return fail("node fill is not a number or [fx, fy]"),
-    };
+    let (fx, fy) = fill(node, leaf.is_some())?;
     let (mut w, mut h) = (w * fx, h * fy);
     if node.outline == Some(NodeOutline::Circle) {
         w = w.min(h);
@@ -409,13 +404,16 @@ fn build(
         }
     }
     let kids = node.children.as_ref().filter(|k| !k.is_empty());
-    let old = ctx.each;
-    ctx.each = each;
     let clip = node.outline == Some(NodeOutline::Circle)
         && matches!(
             node.layout.as_ref().map(|l| l.kind),
             Some(LayoutKind::Grid | LayoutKind::Line)
         );
+    if let (Some(k), Some(led), false, false) = (cell, panel_led(node), each, clip) {
+        return led_panel(b, node, led, x, y, w, h, ctx.z, k);
+    }
+    let old = ctx.each;
+    ctx.each = each;
     for (i, (sx, sy, sw, sh)) in slots(node, w, h).into_iter().enumerate() {
         let child = match kids {
             Some(k) => Some(&k[i % k.len()]),
@@ -431,6 +429,141 @@ fn build(
         r?;
     }
     ctx.each = old;
+    Ok(())
+}
+
+/// A node's `fill`, `(fx, fy)`.
+fn fill(node: &Node, leaf: bool) -> Res<(f64, f64)> {
+    let default = if leaf { 0.9 } else { 1.0 };
+    match &node.fill {
+        None => Ok((default, default)),
+        Some(crate::spec::NumOrList::Num(f)) => Ok((*f, *f)),
+        Some(crate::spec::NumOrList::List(f)) if f.len() >= 2 => Ok((f[0], f[1])),
+        Some(_) => fail("node fill is not a number or [fx, fy]"),
+    }
+}
+
+/// Fewest LEDs a flat panel is drawn as one face for.
+const PANEL_LEDS: usize = 4;
+
+/// The one LED every slot of `node` holds, when `node` is a flat LED panel:
+/// a grid or line of at least [`PANEL_LEDS`] identical flat LEDs that light
+/// one cell. A lens has relief (a bezel, a raised dome), and so does an LED
+/// tilted, raised or framed; those stay meshes.
+fn panel_led(node: &Node) -> Option<&Node> {
+    let layout = node.layout.as_ref()?;
+    if !matches!(layout.kind, LayoutKind::Grid | LayoutKind::Line) {
+        return None;
+    }
+    let led = match node.children.as_ref().filter(|k| !k.is_empty()) {
+        Some(kids) => kids.iter().all(|k| *k == kids[0]).then(|| &kids[0])?,
+        None => node.child.as_deref()?,
+    };
+    let e = led.emitter.as_ref().filter(|e| emitter_set(e))?;
+    let flat = led.layout.is_none()
+        && e.kind != Some(EmitterKind::Lens)
+        && e.colours.as_ref().is_none_or(Vec::is_empty)
+        && led.tilt.as_ref().is_none_or(Vec::is_empty)
+        && led.z.is_none_or(|z| z == 0.0)
+        && led.frame.is_none()
+        && !has_cells(led);
+    let count = match layout.kind {
+        LayoutKind::Grid => {
+            int(layout.rows.unwrap_or(1.0)).max(1) * int(layout.cols.unwrap_or(1.0)).max(1)
+        }
+        _ => int(layout.n.unwrap_or(1.0)).max(1),
+    };
+    (flat && count as usize >= PANEL_LEDS).then_some(led)
+}
+
+/// A flat LED panel of cell `k` filling `w x h` at `(x, y)`: one face with
+/// the pattern of its LEDs, and every LED listed among the cell's emitters
+/// exactly where a mesh per LED would put it.
+#[allow(clippy::too_many_arguments)]
+fn led_panel(
+    b: &mut Rig,
+    node: &Node,
+    led: &Node,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    z: f64,
+    k: u32,
+) -> Res {
+    let l = node.layout.as_ref().expect("a panel has a layout");
+    let stagger = l.kind == LayoutKind::Grid && l.stagger.unwrap_or(false);
+    let (rows, cols) = match l.kind {
+        LayoutKind::Grid => (
+            int(l.rows.unwrap_or(1.0)).max(1),
+            int(l.cols.unwrap_or(1.0)).max(1),
+        ),
+        _ => {
+            let n = int(l.n.unwrap_or(1.0)).max(1);
+            match l.dir.unwrap_or(if w >= h { Dir::X } else { Dir::Y }) {
+                Dir::X => (1, n),
+                Dir::Y => (n, 1),
+            }
+        }
+    };
+    let span = [cols as f64 + if stagger { 0.5 } else { 0.0 }, rows as f64];
+    let (px, py) = (w / span[0], h / span[1]);
+    let slots = slots(node, w, h);
+    let (fx, fy) = fill(led, true)?;
+    let (lw, lh) = (slots[0].2 * fx, slots[0].3 * fy);
+    let d = lw.min(lh);
+    let e = led.emitter.as_ref().expect("a panel LED emits");
+    let strip = matches!(e.kind, Some(EmitterKind::Strip | EmitterKind::Tube));
+    let default = if strip {
+        NodeOutline::Rect
+    } else {
+        NodeOutline::Circle
+    };
+    let (shape, size, outline, [ew, eh]) = match led.outline.unwrap_or(default) {
+        NodeOutline::Rect | NodeOutline::Rounded => {
+            ("square", Size::Wh(lw, lh), EmitterShape::Rect, [lw, lh])
+        }
+        NodeOutline::Hex => ("hex", Size::D(d), EmitterShape::Hex, [d, d]),
+        NodeOutline::Circle => ("circle", Size::D(d), EmitterShape::Circle, [d, d]),
+    };
+    let colour = e.colour.clone().unwrap_or_else(|| "rgb".into());
+    let mat = colour_material(&colour);
+    b.colour = Some(colour);
+    let zz = z + 0.0015;
+    for (sx, sy, _, _) in slots {
+        b.panel_emitter(k, [x + sx, y + sy, zz], shape, size, mat);
+    }
+    b.colour = None;
+    let share = [(ew / px).min(1.0), (eh / py).min(1.0)];
+    let pattern = LedPattern {
+        shape: outline,
+        fill: share.map(|f| f as f32),
+        cols: cols as u32,
+        stagger,
+        gap: M::Body,
+    };
+    // The face reaches half a gap past the outermost LEDs, so neighbouring
+    // panels meet with no seam. Along a single row (or column) the slot can
+    // be far taller than its LEDs; there it reaches the row's half gap.
+    let half_gap = [(1.0 - share[0]) / 2.0 * px, (1.0 - share[1]) / 2.0 * py];
+    let reach = |axis: usize, leds: i64| {
+        if leds > 1 {
+            half_gap[axis]
+        } else {
+            half_gap[0].min(half_gap[1])
+        }
+    };
+    let trim = [half_gap[0] - reach(0, cols), half_gap[1] - reach(1, rows)];
+    let uv0 = [trim[0] / px, trim[1] / py];
+    b.led_panel(
+        k,
+        [x, y, zz + 0.0015],
+        w - 2.0 * trim[0],
+        h - 2.0 * trim[1],
+        [uv0, [span[0] - uv0[0], span[1] - uv0[1]]],
+        pattern,
+        mat,
+    );
     Ok(())
 }
 

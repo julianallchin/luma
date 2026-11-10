@@ -134,6 +134,7 @@ const PLAIN: Material = Material {
     emissive: Vec3::ZERO,
     normal_scale: 1.0,
     occlusion_strength: 1.0,
+    led: None,
 };
 
 /// What each bundled mesh's glTF materials become, by material name.
