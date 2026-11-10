@@ -1,4 +1,5 @@
 pub const SUPABASE_URL: &str = "https://smuuycypmsutwrkpctws.supabase.co";
+/// The anon key Supabase wants in `apikey`.
 pub const SUPABASE_ANON_KEY: &str = "sb_publishable_V8JRQkGliRYDAiGghjUrmQ_w8fpfjRb";
 
 /// The PowerSync Cloud instance URL, e.g. `https://<id>.powersync.journeyapps.com`.
@@ -11,7 +12,7 @@ const POWERSYNC_URL: &str = "https://6aa483d7a77ca1231d276892.powersync.journeya
 /// The PowerSync endpoint this build connects to.
 #[must_use]
 pub fn powersync_url() -> String {
-    std::env::var("LUMA_POWERSYNC_URL").unwrap_or_else(|_| POWERSYNC_URL.to_owned())
+    POWERSYNC_URL.to_owned()
 }
 
 /// Where uploads go. Supabase exposes PostgREST under `/rest/v1`, so this is
@@ -19,12 +20,5 @@ pub fn powersync_url() -> String {
 /// with `SUPABASE_URL`.
 #[must_use]
 pub fn postgrest_url() -> String {
-    std::env::var("LUMA_POSTGREST_URL")
-        .unwrap_or_else(|_| format!("{}/rest/v1", SUPABASE_URL.trim_end_matches('/')))
-}
-
-/// The anon key PostgREST wants in `apikey`.
-#[must_use]
-pub fn supabase_anon_key() -> String {
-    std::env::var("LUMA_SUPABASE_ANON_KEY").unwrap_or_else(|_| SUPABASE_ANON_KEY.to_owned())
+    format!("{}/rest/v1", SUPABASE_URL.trim_end_matches('/'))
 }
