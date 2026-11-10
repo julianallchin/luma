@@ -50,6 +50,7 @@ mod medium;
 pub mod metrics;
 pub mod overlay;
 mod pass_profile;
+pub mod photometry;
 mod post;
 mod probes;
 mod psf;

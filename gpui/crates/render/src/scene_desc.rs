@@ -459,8 +459,10 @@ impl Look {
         footage: Footage::OFF,
     };
 
-    /// The live stage's default: metered exposure, a punchier curve and a
-    /// strong glare, so a light at full reads as blinding.
+    /// The live stage's default: the fixed photometric exposure
+    /// ([`crate::photometry`]), a punchier curve and a strong glare, so a
+    /// light at full reads as blinding. Fixed, so the house dimmer and the
+    /// show's own levels change the picture the way they change the room.
     pub const STAGE: Self = Self {
         tone: ToneCurve::AgxPunchy,
         exposure: Exposure::STAGE,
@@ -516,7 +518,8 @@ impl ToneCurve {
 
 /// Exposure in stops. With `auto` the renderer meters each frame and `ev` is
 /// the compensation added to the metered value; without it `ev` is the
-/// exposure itself (0 = the fixed exposure the transport was tuned at).
+/// exposure itself, where 0 is the photometric exposure for a room lit to
+/// [`crate::photometry::METER_LUX`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Exposure {
@@ -533,10 +536,11 @@ pub struct Exposure {
 }
 
 impl Exposure {
-    /// Metered, no compensation, two and a half stops down and one up. One
-    /// up is what keeps a dim cue dim: a dark room meters at this clamp.
+    /// The fixed photometric exposure. The clamps are what metering would
+    /// use if a stored look turns it on: two and a half stops down and one
+    /// up, which keeps a dim cue dim.
     pub const STAGE: Self = Self {
-        auto: true,
+        auto: false,
         ev: 0.0,
         min_ev: -2.5,
         max_ev: 1.0,

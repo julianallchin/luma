@@ -15,9 +15,21 @@ use glam::Vec3;
 pub struct Luminaire {
     /// Full field angle (deg) — the fixture's opening.
     pub field_angle_deg: f32,
-    /// Relative lumen output; 1 = a stock moving-head lamp.
+    /// Relative lumen output; 1 = a stock moving-head lamp, which is
+    /// [`LUMENS_PER_UNIT`] real lumens.
     pub lumens: f32,
 }
+
+/// Real lumens in one unit of [`Luminaire::lumens`]: what a stock moving-head
+/// lamp puts out of its front lens.
+///
+/// A current mid-size LED spot head: Chauvet Rogue R2X Spot, 11,000 output
+/// lumens at a 16.5 degree beam (Chauvet datasheet); Robe MegaPointe, 12,800
+/// to 16,000 lumens measured on a goniophotometer (Robe photometric report,
+/// 2024). Ten thousand is the round figure below both. This is the anchor
+/// that ties the renderer's relative scale to real photometry
+/// (`luma_render::photometry`).
+pub const LUMENS_PER_UNIT: f32 = 10_000.0;
 
 /// Per-pixel emitter of a procedural LED bar / matrix — not a lensed fixture.
 pub const PIXEL: Luminaire = Luminaire {

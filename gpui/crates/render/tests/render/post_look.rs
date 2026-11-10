@@ -238,6 +238,10 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
     let mut renderer = Renderer::new().unwrap();
     let auto = Look {
         glare: Glare::OFF,
+        exposure: Exposure {
+            auto: true,
+            ..Exposure::STAGE
+        },
         ..Look::STAGE
     };
     let mut metered = |intensity: f32, haze: f32, look: Look| {
@@ -292,6 +296,10 @@ fn live_exposure_adapts_rather_than_jumps() {
     let mut renderer = Renderer::new().unwrap();
     let auto = Look {
         glare: Glare::OFF,
+        exposure: Exposure {
+            auto: true,
+            ..Exposure::STAGE
+        },
         ..Look::STAGE
     };
     // A standalone frame snaps.
