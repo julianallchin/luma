@@ -44,6 +44,20 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             let d2 = dot(q, q);
             let dist = sqrt(d2);
             if dist >= core.range || dist <= FOG_SOURCE_INNER { continue; }
+            if rest.panel > 0.5 {
+                // A face of cells: the panel's light here (`panel.wgsl`).
+                let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
+                if cells.light.a <= 0.0 { continue; }
+                var lit = 1.0;
+                if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u {
+                    lit = segment_shadow_visibility(ray_dir, start, end, li);
+                }
+                radiance += panel_tint(cells.light) * (rest.intensity * rest.haze_gain * haze.tuning.w
+                    * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) * beam_range_falloff(dist, core.range)
+                    * haze_phase(dot(normalize(cells.source - q), ray_dir)) * lit
+                    * exp(-light_optical_depth(li, world)));
+                continue;
+            }
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
             if angular <= 0.0 { continue; }
             var visibility = 1.0;
@@ -52,7 +66,7 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             }
             if visibility <= 0.0 { continue; }
             let phase = haze_phase(-dot(q, ray_dir) / max(dist, 1e-4));
-            let tint = mix(panel_colour(rest.panel, rest.color, rest.direction, rest.cos_beam, q, 0.0), vec3<f32>(1.0), haze.transport.x);
+            let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
             radiance += tint * (rest.intensity * rest.haze_gain * haze.tuning.w
                 * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) * angular * beam_range_falloff(dist, core.range) * phase * visibility
                 * exp(-light_optical_depth(li, world)) / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z));

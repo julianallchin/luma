@@ -1,17 +1,17 @@
 //! A face of cells lights what is close to it in each cell's own colour, and
 //! what is far from it in their mean.
 //!
-//! One cone lies along the floor, as a wall washer grazes a wall, with a
-//! panel of eight cells behind it: red on one half, blue on the other. Set
+//! One light lies along the floor, as a wall washer grazes a wall: a panel
+//! of eight cells, red on one half and blue on the other. Set
 //! `LUMA_RENDER_CAPTURE_DIR` to write the renders beside the assertions.
 use std::collections::BTreeMap;
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use luma_render::{
     assets::Library,
     build_frame_with,
     frame::FixtureCone,
-    panel::Panel,
+    panel::{Cell, Footprint, Panel},
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene},
     Frame, Renderer,
 };
@@ -25,10 +25,20 @@ use crate::common::capture;
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
 
-/// The floor seen from above `target`, lit by the cone alone. `flip` swaps
-/// the panel's halves; `cells` leaves the panel off, for the cone's own
-/// colour everywhere.
-fn frame(target: Vec3, flip: bool, cells: bool) -> Frame {
+/// How the eight cells light the floor.
+#[derive(Clone, Copy, PartialEq)]
+enum Lit {
+    /// One light: the panel, with the cells as its texture.
+    Panel,
+    /// One cone of the cells' mean colour, and no cells.
+    Cone,
+    /// A cone a cell: what the panel stands for.
+    Cells,
+}
+
+/// The floor seen from above `target`. `flip` swaps the red half and the
+/// blue.
+fn frame(target: Vec3, flip: bool, lit: Lit) -> Frame {
     let mut render = RenderSettings::room(
         VenueEnvironment::outdoor(-12.0),
         VenueHaze::default(),
@@ -88,20 +98,42 @@ fn frame(target: Vec3, flip: bool, cells: bool) -> Frame {
         lens: Lens { radius: 0.03 },
     }];
     let (red, blue) = (Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 2.0));
-    frame.panels = if cells {
-        vec![Panel {
-            cone: 0,
-            right: Vec3::X,
-            half: [0.3, 0.03],
-            optic: 0.03,
-            grid: [8, 1],
-            cells: (0..8)
-                .map(|column| if (column < 4) != flip { red } else { blue })
-                .collect(),
-        }]
-    } else {
-        Vec::new()
-    };
+    let half = Vec2::new(0.3, 0.03);
+    let cells: Vec<Cell> = (0..8)
+        .map(|column| Cell {
+            at: Vec2::new((column as f32 - 3.5) * 0.075, 0.0),
+            size: Vec2::new(0.075, 0.06),
+            colour: if (column < 4) != flip { red } else { blue },
+            intensity: 1.0,
+        })
+        .collect();
+    match lit {
+        Lit::Cone => {}
+        Lit::Panel => {
+            // Eight cells in a row, 60 cm across and 6 cm tall.
+            frame.fixture_cones[0].lens = Lens { radius: 0.31 };
+            frame.panels = vec![Panel::new(
+                0,
+                Vec3::X,
+                (-half, half),
+                0.06,
+                &cells,
+                Footprint::of(cone.cos_beam, cone.cos_field),
+            )];
+        }
+        Lit::Cells => {
+            let whole = frame.fixture_cones[0];
+            frame.fixture_cones = cells
+                .iter()
+                .map(|cell| FixtureCone {
+                    position: whole.position + Vec3::X * cell.at.x,
+                    color: cell.colour,
+                    intensity: whole.intensity / 8.0,
+                    ..whole
+                })
+                .collect();
+        }
+    }
     frame
 }
 
@@ -131,9 +163,13 @@ fn lean(renderer: &mut Renderer, frame: &Frame, name: &str) -> f32 {
 fn the_floor_before_the_face_takes_each_cells_colour() {
     let mut renderer = Renderer::new().unwrap();
     let near = Vec3::new(0.0, 0.12, 0.0);
-    let one_way = lean(&mut renderer, &frame(near, false, true), "near");
-    let other_way = lean(&mut renderer, &frame(near, true, true), "near-flipped");
-    let plain = lean(&mut renderer, &frame(near, false, false), "near-plain");
+    let one_way = lean(&mut renderer, &frame(near, false, Lit::Panel), "near");
+    let other_way = lean(
+        &mut renderer,
+        &frame(near, true, Lit::Panel),
+        "near-flipped",
+    );
+    let plain = lean(&mut renderer, &frame(near, false, Lit::Cone), "near-plain");
     // A lean of two is one half all red and the other all blue. The picture
     // takes in the floor past the cells' reach too, so it leans less; a
     // tenth of the way is still a difference anyone would see.
@@ -147,19 +183,20 @@ fn the_floor_before_the_face_takes_each_cells_colour() {
     );
 }
 
-/// Metres off, the floor is lit by the whole face: the cells' mean, the same
-/// across, and the picture the cone alone gives.
+/// Metres off, the floor is lit by the whole face: nearly the cells' mean,
+/// and what a cone a cell gives. The two halves are 30 cm apart, so their
+/// colours still lean a little each way, as theirs do.
 #[test]
-fn the_floor_far_from_the_face_takes_the_cells_mean() {
+fn the_floor_far_from_the_face_is_lit_as_a_cone_a_cell_lights_it() {
     let mut renderer = Renderer::new().unwrap();
     let far = Vec3::new(0.0, 3.0, 0.0);
     let near = Vec3::new(0.0, 0.12, 0.0);
-    let close = lean(&mut renderer, &frame(near, false, true), "close");
-    let cells = lean(&mut renderer, &frame(far, false, true), "far");
-    let plain = lean(&mut renderer, &frame(far, false, false), "far-plain");
+    let close = lean(&mut renderer, &frame(near, false, Lit::Panel), "close");
+    let panel = lean(&mut renderer, &frame(far, false, Lit::Panel), "far");
+    let cells = lean(&mut renderer, &frame(far, false, Lit::Cells), "far-cells");
     assert!(
-        cells.abs() < 0.05 * close.abs(),
-        "the far floor leans {cells}, the near floor {close}"
+        panel.abs() < 0.3 * close.abs(),
+        "the far floor leans {panel}, the near floor {close}"
     );
-    assert!((cells - plain).abs() < 0.01, "cells {cells}, cone {plain}");
+    assert!((panel - cells).abs() < 0.01, "panel {panel}, cells {cells}");
 }

@@ -372,67 +372,67 @@ fn dense_panels_close_mid_and_far() {
     }
 }
 
-/// The face lights the room as a few cones, not one a cell: together they
-/// carry all the light its cells have, and each keeps the cells of its lit
-/// part behind it, whose mean is the cone's colour.
+/// The face lights the room as one light, not one a cell: it carries all
+/// the light its cells have, in their mean colour, and keeps every lit cell
+/// in its texture.
 #[test]
-fn a_face_lights_the_room_as_a_few_cones_that_keep_their_cells() {
+fn a_face_is_one_light_that_keeps_its_cells() {
     let built = build(&spec(HYT));
     let light = |frame: &Frame| {
-        frame
-            .fixture_cones
+        assert_eq!(frame.fixture_cones.len(), 1);
+        assert_eq!(frame.panels.len(), 1);
+        let (cone, panel) = (frame.fixture_cones[0], &frame.panels[0]);
+        assert_eq!(panel.cone, 0);
+        assert!(panel.right.dot(cone.direction).abs() < 1e-4);
+        assert!((panel.right.length() - 1.0).abs() < 1e-4);
+        // The quarters hold the cone's light, all of it, in its colour.
+        let held = panel
+            .quarters
             .iter()
-            .map(|cone| cone.color * cone.intensity)
-            .sum::<Vec3>()
-    };
-    // The cells a frame's cones keep between them: a cone of one cell is
-    // that cell, with nothing behind it.
-    let kept = |frame: &Frame| {
+            .map(|(_, light)| *light)
+            .sum::<glam::Vec4>();
         assert!(
-            frame.fixture_cones.len() * 2 <= built.cells.len(),
-            "{} cones for {} cells",
-            frame.fixture_cones.len(),
-            built.cells.len()
+            held.abs_diff_eq(cone.color.extend(1.0), 1e-3),
+            "{held} against {}",
+            cone.color
         );
-        let mut cells = frame.fixture_cones.len() - frame.panels.len();
-        for panel in &frame.panels {
-            let cone = frame.fixture_cones[panel.cone];
-            assert_eq!(panel.cells.len(), (panel.grid[0] * panel.grid[1]) as usize);
-            assert!(panel.right.dot(cone.direction).abs() < 1e-4);
-            assert!((panel.right.length() - 1.0).abs() < 1e-4);
-            let mean = panel.cells.iter().sum::<Vec3>() / panel.cells.len() as f32;
-            assert!(
-                mean.abs_diff_eq(cone.color, 1e-4),
-                "{mean} against {}",
-                cone.color
-            );
-            cells += panel.cells.len();
-        }
-        cells
+        cone.color * cone.intensity
     };
     let white = frame("lib:cones-white", &built, 1.0, &|_| [1.0; 3], 3.0, 0.0);
-    assert_eq!(kept(&white), built.cells.len());
-    // Every other cell red, the rest dark: the lit ones are all kept, and
-    // dark ones only where they lie among them.
+    // Every other cell red, the rest dark.
     let red = |k: usize| {
-        if k % 2 == 0 {
+        if k.is_multiple_of(2) {
             [1.0, 0.0, 0.0]
         } else {
             [0.0; 3]
         }
     };
     let half = frame("lib:cones-half", &built, 1.0, &red, 3.0, 0.0);
-    assert!((built.cells.len() / 2..=built.cells.len()).contains(&kept(&half)));
     let (all, lit) = (light(&white), light(&half));
     assert!(
         (lit.x / all.x - 0.5).abs() < 1e-3 && lit.y == 0.0 && lit.z == 0.0,
         "half the cells in red give {lit} of {all}"
     );
+    // The dark cells are dark in the texture: more of it is black than with
+    // every cell lit.
+    let black = |frame: &Frame| {
+        let panel = &frame.panels[0];
+        panel.stack[..(panel.side * panel.side) as usize]
+            .iter()
+            .filter(|texel| texel.w == 0.0)
+            .count()
+    };
+    assert!(
+        black(&half) > black(&white),
+        "{} black with half lit, {} with all",
+        black(&half),
+        black(&white)
+    );
 }
 
 /// One lit cell lights the room from its own place, through its own
-/// opening, and not from the middle of the cells it is grouped with: the
-/// beam of a chase moves with the chase.
+/// opening, and not from the middle of the face: the beam of a chase moves
+/// with the chase.
 #[test]
 fn a_lone_lit_cell_lights_the_room_from_its_own_place() {
     let built = build(&spec(HYT));
@@ -447,8 +447,10 @@ fn a_lone_lit_cell_lights_the_room_from_its_own_place() {
         let only = |k: usize| if k == lit { WHITE } else { [0.0; 3] };
         let lone = frame("lib:lone", &built, 1.0, &only, 3.0, 0.0);
         assert_eq!(lone.fixture_cones.len(), 1, "cell {lit}");
-        assert!(lone.panels.is_empty(), "cell {lit} keeps no other cell");
         let cone = lone.fixture_cones[0];
+        // The light's centre is the cell's own middle, where the cone is.
+        let centre = lone.panels[0].lit.truncate().truncate();
+        assert!(centre.length() < 1e-4, "cell {lit}");
         assert!(
             cone.lens.radius < 0.5 * widest,
             "cell {lit} shines through {} m, the lit face through {widest} m",

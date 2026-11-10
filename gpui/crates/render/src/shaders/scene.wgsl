@@ -746,6 +746,24 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             if distance <= 1e-4 || distance >= core.range || rest.intensity <= 0.0 {
                 continue;
             }
+            if rest.panel > 0.5 {
+                // A face of cells: its light and where on it that comes
+                // from are the panel's, not a cone's (`panel.wgsl`).
+                let lit = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
+                let l = normalize(lit.source - q);
+                let dot_nl = saturate(dot(n, l));
+                if dot_nl <= 0.0 || lit.light.a <= 0.0 {
+                    continue;
+                }
+                // The range taper alone: the panel's light already falls
+                // with distance.
+                let taper = distance_attenuation(distance, core.range) * max(distance * distance, 0.01);
+                let irradiance = dot_nl * lit.light.rgb * rest.intensity * surface_clusters.shadow.z
+                    * taper * fixture_shadow_visibility(in.world, n, light_index);
+                out += irradiance * diffuse_color * RECIPROCAL_PI;
+                out += irradiance * brdf_ggx(n, v, l, f0, roughness) * masking;
+                continue;
+            }
             let from_light = q / distance;
             // Seen from the virtual apex behind the lens, so the lit pool is
             // the beam's own footprint; falloff below stays from the lens.
@@ -781,9 +799,8 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             // radiance; the beam gain is the absolute scale, and it is the
             // same one the haze march applies to the same cone.
             let beam_gain = surface_clusters.shadow.z;
-            let color = panel_colour(rest.panel, rest.color, rest.direction, rest.cos_beam, q, 0.0);
             let irradiance =
-                dot_nl * color * rest.intensity * beam_gain * profile * visibility;
+                dot_nl * rest.color * rest.intensity * beam_gain * profile * visibility;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness) * masking;
         }

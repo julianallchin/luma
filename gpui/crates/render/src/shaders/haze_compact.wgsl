@@ -180,7 +180,7 @@ fn classify_light(li: u32, pixel_index: u32) {
         }
     }
     if block_one_subgroup {
-        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && quad_apex_clear(li, ray);
+        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && light_rest[li].panel < 0.5 && quad_apex_clear(li, ray);
         if subgroupBallot(whole).x == 0xFFFFFFFFu {
             if cache_lane == 0u {
                 resid_planes[plane] = 0u;

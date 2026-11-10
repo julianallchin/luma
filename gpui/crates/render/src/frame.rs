@@ -7,18 +7,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
 use crate::assets::{HdrImage, Library};
 use crate::overlay::Overlay;
-use crate::panel::Panel;
-use crate::quality::QualityBudget;
+use crate::panel::{Footprint, Panel};
 use crate::scene_desc::{Geometry, PrimitiveState, Scene};
 use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use luma_scene::definition::Definition;
 use luma_scene::luminaire::{
     beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
-    output_lumens, patch_reach, pixel_lens, Lens, Luminaire, ModelKind, PIXEL_FIELD_DEG,
+    output_lumens, pixel_lens, Lens, Luminaire, ModelKind, PIXEL_FIELD_DEG,
 };
 use luma_scene::mesh::{Glb, Image, Material, MeshData, Vertex};
 
@@ -251,8 +250,8 @@ pub struct Frame {
     pub gizmo_pivot: Option<Vec3>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
     pub fixture_cones: Vec<FixtureCone>,
-    /// The cells behind the cones that a face of cells casts, for the light
-    /// close to the face ([`crate::panel`]).
+    /// The faces of cells among `fixture_cones`, each one light with its
+    /// cells as its texture ([`crate::panel`]).
     pub panels: Vec<Panel>,
     /// Each laser projector's scan this frame (`crate::laser`). Drawn only
     /// through the camera's post chain, into the HDR scene.
@@ -1007,15 +1006,8 @@ pub fn build_at(
             let luminaire = cone_from_opening(luminaire_for(def, model_kind(def)));
             // One cone per lens, lit by the cell on the lens's node, when
             // every cell has a lens of its own (a mover, a spot, a lensed
-            // array). A face of many cells (an LED panel, a bar, a strobe)
-            // is one "lens" the size of the face, and lighting it from one
-            // cell left the rest dark and drew a lens the size of the
-            // fixture; it casts one cone per patch of cells instead, from
-            // the patch's own place, lit by every cell in it.
-            let mut beams: Vec<(Vec3, Vec3, Lens, Vec<usize>)> = Vec::new();
-            // A patch of more than one cell: its right, its extent, its grid
-            // and each cell's place in it, by the beam's index.
-            let mut faces = Vec::new();
+            // array).
+            let mut beams: Vec<(Vec3, Vec3, Lens, usize)> = Vec::new();
             if built.cells.len() <= built.heads.len() {
                 for (i, head) in built.heads.iter().enumerate() {
                     let Some((at, dir)) = luma_scene::library::beam(built, &worlds, i) else {
@@ -1029,108 +1021,137 @@ pub fn build_at(
                     let lens = Lens {
                         radius: head.size[0].max(head.size[1]) / 2.0,
                     };
-                    beams.push((at, dir, lens, vec![cell]));
+                    beams.push((at, dir, lens, cell));
                 }
             }
-            // Each cell carries its share of the fixture's lumens, lit or
-            // not: the cells together are the fixture, no more.
-            let mut count = beams.len();
-            if beams.is_empty() {
-                let reach = patch_reach(
-                    luminaire,
-                    QualityBudget::of(scene.render.quality).patch_share,
-                );
-                for patch in luma_scene::library::patches(built, reach) {
-                    count += patch.cells.len();
-                    // The patch lights the room from the part of it that is
-                    // lit, so one lit cell's beam leaves that cell. A cell
-                    // driven black is as dark as one dimmed out.
-                    let lit = |cell: usize| {
-                        let state = cell_state(cell);
-                        exposed(state) * Vec3::from(state.color).max_element() >= 0.01
-                    };
-                    let Some(patch) = patch.lit(built, lit) else {
-                        continue;
-                    };
-                    let world = worlds[patch.node];
-                    let lens = Lens {
-                        radius: patch.size[0].min(patch.size[1]).max(0.005) / 2.0,
-                    };
-                    if patch.cells.len() > 1 {
-                        let right = world.transform_vector3(patch.right);
-                        faces.push((beams.len(), right, patch.size, patch.grid, patch.places));
-                    }
-                    beams.push((
-                        world.transform_point3(patch.centre),
-                        world.transform_vector3(patch.normal).normalize_or_zero(),
-                        lens,
-                        patch.cells,
-                    ));
-                }
-            }
-            let count = count.max(1) as f32;
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(beams.len())
                 .min(MAX_FIXTURE_CONES);
-            let mut faces = faces.into_iter().peekable();
-            for (index, (at, dir, lens, cells)) in beams.into_iter().enumerate() {
-                let face = faces.next_if(|face| face.0 == index);
+            let lensed = !beams.is_empty();
+            // Each cell carries its share of the fixture's lumens, lit or
+            // not: the cells together are the fixture, no more.
+            let count = beams.len().max(1) as f32;
+            for (at, dir, lens, cell) in beams {
                 if fixture_cones.len() >= MAX_FIXTURE_CONES {
                     break;
                 }
-                // The patch's light is its lit cells' together: their summed
-                // intensity, in their mean colour by intensity.
-                let states: Vec<(PrimitiveState, f32)> = cells
-                    .into_iter()
-                    .map(cell_state)
-                    .map(|state| (state, exposed(state)))
-                    .collect();
-                let mut lit = states.iter().filter(|(_, intensity)| *intensity >= 0.01);
-                let Some(&(head_state, mut intensity)) = lit.next() else {
+                let state = cell_state(cell);
+                let intensity = exposed(state);
+                if intensity < 0.01 {
                     continue;
-                };
-                let mut color = Vec3::from(head_state.color);
-                for (state, more) in lit {
-                    intensity += more;
-                    color += (Vec3::from(state.color) - color) * (more / intensity);
                 }
-                let direction = base.transform_vector3(dir).normalize_or_zero();
-                if let Some((_, right, size, grid, places)) = face {
-                    // Each cell's light against the mean cell's, so the
-                    // cells' mean is the cone's colour.
-                    let mut light = vec![Vec3::ZERO; grid[0] * grid[1]];
-                    let scale = light.len() as f32 / intensity;
-                    for ((state, cell), place) in states.iter().zip(&places) {
-                        if *cell >= 0.01 {
-                            light[place[1] * grid[0] + place[0]] =
-                                Vec3::from(state.color) * (cell * scale);
-                        }
-                    }
-                    let right = base.transform_vector3(right);
-                    panels.push(Panel {
-                        cone: fixture_cones.len(),
-                        // Square to the beam, whatever a skewed pose did.
-                        right: (right - direction * right.dot(direction)).normalize_or_zero(),
-                        half: size.map(|side| side / 2.0),
-                        optic: (size[0] / grid[0] as f32).min(size[1] / grid[1] as f32) / 2.0,
-                        grid: grid.map(|n| n as u32),
-                        cells: light,
-                    });
-                }
-                let cone = luminaire;
                 fixture_cones.push(FixtureCone {
                     position: base.transform_point3(at),
-                    range: cone.range,
+                    range: luminaire.range,
+                    direction: base.transform_vector3(dir).normalize_or_zero(),
+                    cos_beam: luminaire.cos_beam,
+                    color: Vec3::from(state.color),
+                    intensity: intensity * luminaire.gain / count,
+                    cos_field: luminaire.cos_field,
+                    wash: luminaire.wash,
+                    gobo: state.gobo.min(2),
+                    gobo_rotation: state.gobo_rotation,
+                    haze_gain: 1.0,
+                    lens,
+                });
+            }
+            if lensed {
+                continue;
+            }
+            // A face of many cells (an LED panel, a bar, a strobe) is one
+            // light: the rectangle of the face, with its cells as its
+            // texture ([`crate::panel`]). Its cone is the lit cells' bounds:
+            // it leaves the middle of them, through an opening that holds
+            // them all.
+            let faces = luma_scene::library::faces(built);
+            let footprint = Footprint::of(luminaire.cos_beam, luminaire.cos_field);
+            let count = faces
+                .iter()
+                .map(|face| face.cells.len())
+                .sum::<usize>()
+                .max(1) as f32;
+            fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
+                .saturating_add(faces.len())
+                .min(MAX_FIXTURE_CONES);
+            for face in faces {
+                if fixture_cones.len() >= MAX_FIXTURE_CONES {
+                    break;
+                }
+                // Every cell's rectangle on the face, and the lit ones'
+                // light. A cell driven black is as dark as one dimmed out.
+                let mut whole = (Vec2::INFINITY, Vec2::NEG_INFINITY);
+                let mut lit = whole;
+                let mut finest = f32::INFINITY;
+                let mut cells = Vec::new();
+                let mut head_state = None;
+                for &cell in &face.cells {
+                    let at = Vec2::from(face.across(built.cells[cell].centre));
+                    let size = Vec2::from(built.cells[cell].size);
+                    whole = (whole.0.min(at - size / 2.0), whole.1.max(at + size / 2.0));
+                    finest = finest.min(size.min_element());
+                    let state = cell_state(cell);
+                    let colour = Vec3::from(state.color);
+                    let intensity = exposed(state);
+                    if intensity * colour.max_element() < 0.01 {
+                        continue;
+                    }
+                    lit = (lit.0.min(at - size / 2.0), lit.1.max(at + size / 2.0));
+                    head_state.get_or_insert(state);
+                    cells.push(crate::panel::Cell {
+                        at,
+                        size,
+                        colour,
+                        intensity,
+                    });
+                }
+                let Some(head_state) = head_state else {
+                    continue;
+                };
+                let intensity: f32 = cells.iter().map(|cell| cell.intensity).sum();
+                let color = cells
+                    .iter()
+                    .map(|cell| cell.colour * cell.intensity)
+                    .sum::<Vec3>()
+                    / intensity;
+                // The face's own frame, in the world, and the cone at the
+                // middle of the lit cells in it.
+                let world = base * worlds[face.node];
+                let direction = world.transform_vector3(face.normal).normalize_or_zero();
+                let right = world.transform_vector3(face.right);
+                // Square to the beam, whatever a skewed pose did.
+                let right = (right - direction * right.dot(direction)).normalize_or_zero();
+                let middle = (lit.0 + lit.1) / 2.0;
+                let position = world.transform_point3(
+                    face.right * middle.x
+                        + face.normal.cross(face.right) * middle.y
+                        + face.normal * built.cells[face.cells[0]].centre.dot(face.normal),
+                );
+                for cell in &mut cells {
+                    cell.at -= middle;
+                }
+                panels.push(Panel::new(
+                    fixture_cones.len(),
+                    right,
+                    (whole.0 - middle, whole.1 - middle),
+                    finest,
+                    &cells,
+                    footprint.clone(),
+                ));
+                fixture_cones.push(FixtureCone {
+                    position,
+                    range: luminaire.range,
                     direction,
-                    cos_beam: cone.cos_beam,
+                    cos_beam: luminaire.cos_beam,
                     color,
-                    intensity: intensity * cone.gain / count,
-                    cos_field: cone.cos_field,
-                    wash: cone.wash,
+                    intensity: intensity * luminaire.gain / count,
+                    cos_field: luminaire.cos_field,
+                    wash: luminaire.wash,
                     gobo: head_state.gobo.min(2),
                     gobo_rotation: head_state.gobo_rotation,
                     haze_gain: 1.0,
-                    lens,
+                    lens: Lens {
+                        radius: ((lit.1 - lit.0) / 2.0).length().max(0.0025),
+                    },
                 });
             }
             continue;

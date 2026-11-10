@@ -68,12 +68,6 @@ pub(crate) struct QualityBudget {
     /// Most pixels a live viewport renders before the compositor upscales,
     /// when the level sets its own limit.
     pub pixel_budget: Option<f64>,
-    /// How much of a face of cells lights the room as one cone: the share
-    /// of its beam's radius one metre out that the cells of one cone may sit
-    /// from the cone's middle (`luma_scene::luminaire::patch_reach`). It is
-    /// also how many metres out from the face the cone shows as one beam
-    /// where its cells would show as several.
-    pub patch_share: f32,
 }
 
 impl QualityBudget {
@@ -108,7 +102,6 @@ impl QualityBudget {
                 haze_resolution_cap: None,
                 haze_steps_cap: None,
                 pixel_budget: None,
-                patch_share: 0.2,
             },
             // A laptop budget: twice the shadow walk's footprint allowance
             // and half its steps, and twice again while the camera moves.
@@ -142,7 +135,6 @@ impl QualityBudget {
                 haze_resolution_cap: Some(0.5),
                 haze_steps_cap: Some(4),
                 pixel_budget: Some(1.0e6),
-                patch_share: 0.3,
             },
             Quality::Low => Self {
                 marched: false,
@@ -194,7 +186,6 @@ mod tests {
             assert!(below.ambient_divisor >= above.ambient_divisor);
             assert!(above.marched || !below.marched);
             assert!(above.fixture_shadows || !below.fixture_shadows);
-            assert!(below.patch_share >= above.patch_share);
         }
         for quality in Quality::ALL {
             let still = QualityBudget::of(quality);

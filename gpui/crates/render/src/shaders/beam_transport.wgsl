@@ -448,29 +448,20 @@ fn clip_to_lens_plane(t_a: ptr<function, f32>, t_b: ptr<function, f32>, axial: f
     return true;
 }
 
-/// The colour light `li` scatters along the ray toward `dir`, between `a`
-/// and `b` metres out. A beam's integral carries one colour, so a face of
-/// cells gives the colour of the cells facing the point where that stretch
-/// of the ray passes nearest the lens (`panel.wgsl`): the lit cells show in
-/// the haze in front of them, as seen from the camera. Half of what the ray
-/// gathers from a source it passes `h` metres from comes from the `h` metres
-/// of it either side of that point, so the cells are taken that much wider.
-/// Then the emitted
-/// spectrum: the saturated colour plus a small broadband leak — a real
-/// fixture is a white source behind an imperfect filter, plus lens glare.
-/// White-hot is EMERGENT from this: near the source the leak's absolute
-/// radiance is enormous, all channels blow out, and AgX rolls the core to
-/// white; mid-beam the leak is invisible and the true colour shows. No
-/// radiance gate, no white mix.
-fn beam_tint(li: u32, dir: vec3<f32>, a: f32, b: f32) -> vec3<f32> {
-    let rest = light_rest[li];
-    var color = rest.color;
-    if rest.panel > 0.5 {
-        let oc = haze.camera_pos.xyz - light_core[li].position;
-        let q = oc + dir * clamp(-dot(oc, dir), a, b);
-        color = panel_colour(rest.panel, rest.color, rest.direction, rest.cos_beam, q, length(q));
-    }
-    return mix(color, vec3<f32>(1.0), haze.transport.x);
+/// The emitted spectrum of light `li`: the saturated colour plus a small
+/// broadband leak — a real fixture is a white source behind an imperfect
+/// filter, plus lens glare. White-hot is EMERGENT from this: near the source
+/// the leak's absolute radiance is enormous, all channels blow out, and AgX
+/// rolls the core to white; mid-beam the leak is invisible and the true
+/// colour shows. No radiance gate, no white mix.
+fn beam_tint(li: u32) -> vec3<f32> {
+    return mix(light_rest[li].color, vec3<f32>(1.0), haze.transport.x);
+}
+
+/// The same spectrum for a face of cells, whose light at a point is the
+/// panel's own (`panel.wgsl`): its colour, and how much of it there is.
+fn panel_tint(light: vec4<f32>) -> vec3<f32> {
+    return mix(light.rgb, vec3<f32>(light.a), haze.transport.x);
 }
 
 /// Single-scattering radiance this ray receives from light `li`, already
@@ -521,7 +512,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
 
     var acc = vec3<f32>(0.0);
 
-    let tint = beam_tint(li, ray_dir, t_a, t_b);
+    let tint = beam_tint(li);
 
     // Decorrelate jitter across lights so overlapping cones dither
     // independently — correlated jitter turns overlaps into stripes.
@@ -547,6 +538,23 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         let q = oc + ray_dir * t;
         let d2 = dot(q, q);
         let dist = sqrt(d2);
+        if rest.panel > 0.5 {
+            // A face of cells: the panel's light here, from where on the
+            // face it comes.
+            let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
+            if cells.light.a <= 0.0 {
+                continue;
+            }
+            let world = haze.camera_pos.xyz + ray_dir * t;
+            var radiance = rest.intensity * beam_range_falloff(dist, core.range) * beam_gain;
+            if haze.shadow.x > 0.0 {
+                radiance *= fixture_shadow_visibility(world, li);
+            }
+            let phase = haze_phase(dot(normalize(cells.source - q), ray_dir));
+            acc += panel_tint(cells.light) * (radiance * phase * haze_density_at(world)
+                * transport_transmittance(ray, li, t, world) * mis_w);
+            continue;
+        }
         let cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, dist);
 
         let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
@@ -642,10 +650,17 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
     let h = sqrt(max(dot(oc, oc) - delta * delta, haze.tuning.z));
     let th0 = atan((a - delta) / h);
     let th1 = atan((b - delta) / h);
-    let pieces = max(quadrature_pieces(a, b, th0, th1), gobo_pieces(li, ray, a, b));
+    var pieces = max(quadrature_pieces(a, b, th0, th1), gobo_pieces(li, ray, a, b));
+    // A face of cells is integrated in its own colours, finely enough to
+    // resolve the cells the ray passes.
+    let panel = rest.panel > 0.5;
+    var panel_sum = vec3<f32>(0.0);
+    if panel {
+        pieces = max(pieces, panel_pieces(rest.panel, rest.direction, oc + ray.dir * a, oc + ray.dir * b));
+    }
     let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
-    let tint = beam_tint(li, ray.dir, a, b);
+    let tint = beam_tint(li);
     var sum = 0.0;
     let width = (th1 - th0) / f32(pieces);
     // The two extinction terms — camera transmittance and source optical depth —
@@ -672,6 +687,17 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             let q = oc + ray.dir * t;
             let d2 = dot(q, q);
             let distance = sqrt(d2);
+            if panel {
+                let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
+                let world = haze.camera_pos.xyz + ray.dir * t;
+                var value = haze_phase(dot(normalize(cells.source - q), ray.dir))
+                    * beam_range_falloff(distance, core.range)
+                    * select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5)
+                    * haze_density_at(world) * mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
+                if traced { value *= stage_visibility(world, core.position); }
+                panel_sum += panel_tint(cells.light) * (value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j]);
+                continue;
+            }
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
             let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
             let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
@@ -688,6 +714,9 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j];
         }
         left_field = right_field;
+    }
+    if panel {
+        return panel_sum * (rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
     }
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }

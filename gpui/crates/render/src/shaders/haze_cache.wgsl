@@ -260,7 +260,7 @@ fn quad_interpolate_scalar(sum: f32) -> f32 {
 
 fn quad_scale_shared(li: u32, ray: SceneRay, span: vec2<f32>, sum: f32) -> vec3<f32> {
     let rest = light_rest[li];
-    let tint = beam_tint(li, ray.dir, span.x, span.y);
+    let tint = beam_tint(li);
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
@@ -497,7 +497,7 @@ fn beam_scatter_cached(li: u32, ray: SceneRay) -> vec3<f32> {
         if live && !direct && !walked && cache_count <= CACHE_K { _ = cache_store(cache_block, lookup.key, lookup.gen); }
     }
     if share {
-        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && quad_apex_clear(li, ray);
+        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && light_rest[li].panel < 0.5 && quad_apex_clear(li, ray);
         if subgroupBallot(whole).x == 0xFFFFFFFFu { return quad_scatter(li, ray, span); }
     }
     if !live { return vec3<f32>(0.0); }

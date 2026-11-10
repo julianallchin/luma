@@ -470,22 +470,6 @@ pub fn cone_from_opening(l: Luminaire) -> Cone {
     }
 }
 
-/// How far to either side of a patch's centre its cells may sit and still
-/// light the room as one source, metres ([`crate::library::patches`]):
-/// `share` of the beam's radius one metre out.
-///
-/// A patch that wide moves the edge of its pool by that much, which against
-/// the pool's own radius is `share` one metre out and falls with distance.
-/// Nearer the face than `share` metres its cells' beams have not yet run
-/// together, and there the patch shows as one beam where its cells would
-/// show as several. So a wide wash merges across a whole face, and a narrow
-/// beam merges with its nearest neighbours or not at all.
-#[must_use]
-pub fn patch_reach(cone: Cone, share: f32) -> f32 {
-    let cos = cone.cos_beam.clamp(1e-3, 1.0);
-    share * (1.0 - cos * cos).sqrt() / cos
-}
-
 /// Which bundled mesh (and which fallback cone) a definition resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
