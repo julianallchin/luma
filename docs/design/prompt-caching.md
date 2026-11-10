@@ -45,13 +45,15 @@ Each transport places the markers for its own wire shape:
 
 - The system prompt and tool descriptions are `include_str!` files. They
   contain no date and no catalog.
-- `turn.rs` appends the thread's scope to the system prompt as JSON (track,
-  venue, score, pattern and implementation ids). A thread's scope does not
-  change, so the prefix stays stable for the life of the thread.
+- `turn.rs` sends `agent::system_prompt()` alone as the system block. It is
+  the same for every turn of every thread. What the editor shows travels with
+  each user message instead.
 - The skill listing is sorted by name.
 - Tool order is fixed by `registry_for_context`.
-- `serde_json` is built without `preserve_order`, so maps serialize in key
-  order.
+- `serde_json` is built with `preserve_order` (`backend/Cargo.toml`), so a
+  JSON object serializes in the order its keys were inserted, not in key
+  order. The prefix is stable only where the code that builds it inserts keys
+  in a fixed order.
 - `transcript::to_model_messages` is a pure function of stored rows. A thread
   that is opened again produces the same bytes.
 

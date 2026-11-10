@@ -9,14 +9,10 @@
 use std::path::{Path, PathBuf};
 
 use luma_ui::runtime::Runtime;
-use serde_json::{json, Value};
 
 // Each binary uses a different subset.
 #[allow(unused_imports)]
-pub use gpui_agent::fixture::{
-    config_dir, seeded_prompt, wav, Clip, Fixture, MOVER_PATH, SKEW_DEPTH_M, TRACK, TRACK_NAME,
-    VENUE, VENUE_NAME,
-};
+pub use gpui_agent::fixture::{config_dir, wav, Fixture, TRACK_NAME, VENUE_NAME};
 
 #[allow(unused_imports)] // each binary uses a different subset
 pub use gpui_agent::{NAV, UNTIL};
@@ -114,68 +110,5 @@ pub fn runtime(config_dir: impl Into<PathBuf>) -> Runtime {
     }
 }
 
-/// A whole score document from clips spelled by the caller.
-#[must_use]
-pub fn score(clips: Value) -> Value {
-    json!({ "clips": clips })
-}
-
-/// The score the fixture seeded, read back from its `scores` and `clips` rows
-/// as the `luma_patterns::Score` they load into.
-pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
-    let pool = sqlx::SqlitePool::connect(&format!(
-        "sqlite:{}",
-        gpui_agent::fixture::library_db(dir).display()
-    ))
-    .await
-    .expect("open the fixture library");
-    let id: String = sqlx::query_scalar("SELECT score_id FROM clips LIMIT 1")
-        .fetch_one(&pool)
-        .await
-        .expect("the fixture seeded a score with something in it");
-    let mut connection = pool.acquire().await.expect("a connection");
-    let score = luma_lib::database::local::scores::rows::load_score(&mut connection, &id)
-        .await
-        .expect("load the seeded score");
-    drop(connection);
-    pool.close().await;
-    score
-}
-
 #[cfg(feature = "pixel")]
 pub mod image;
-
-/// Reading `app.timings()`.
-///
-/// These are the CPU half of a frame (scene build), never the GPU: see
-/// `app.timings()` in `api.d.ts`.
-pub mod cost {
-    use gpui_agent::percentile;
-    use serde_json::Value;
-
-    /// Print what the frames in `(from, to]` cost, and hand back the median.
-    ///
-    /// Half-open on purpose: callers mark a stretch with the frame number a
-    /// command returned, and that frame belongs to the stretch before it.
-    pub fn summarize(frames: &[Value], from: u64, to: u64, label: &str) -> f64 {
-        let mut draw: Vec<f64> = Vec::new();
-        let mut parked: Vec<f64> = Vec::new();
-        for frame in frames {
-            let number = frame["frame"].as_u64().unwrap();
-            if number > from && number <= to {
-                draw.push(frame["drawMs"].as_f64().unwrap());
-                parked.push(frame["parkedMs"].as_f64().unwrap());
-            }
-        }
-        let count = draw.len();
-        let mean = draw.iter().sum::<f64>() / count.max(1) as f64;
-        let p50 = percentile(&draw, 0.50);
-        let p95 = percentile(&draw, 0.95);
-        println!(
-            "{label:<26} n={count:<4} drawMs mean={mean:6.2} p50={p50:6.2} p95={p95:6.2}  \
-             parkedMs p50={:5.2}",
-            percentile(&parked, 0.50)
-        );
-        p50
-    }
-}

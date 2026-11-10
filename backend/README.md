@@ -22,9 +22,6 @@ headless tools.
   [docs/design/lasers.md](../docs/design/lasers.md).
 - `src/bin/luma-cli/`: Luma without a window. `luma-cli rpc`, `agent`, `mcp`,
   `record`, `render` and `profile`; `luma-cli --help` lists them.
-- `examples/`: measuring instruments rather than tests. `profile_score_window`
-  prints a real score's per-frame eval cost across a time window, against a
-  copy of a library (its header lists the variables).
 - `crates/`: pattern evaluation (`patterns`), fixture kinematics, the DJ
   protocols (`stagelinq`, `prodjlink`) and PowerSync SDK glue (`sync`).
 - `python/`: analysis workers and their dependencies.

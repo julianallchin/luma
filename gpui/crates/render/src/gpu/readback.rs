@@ -286,14 +286,7 @@ impl PendingFrame {
         /// genuinely slow, and a false positive here would look like a driver
         /// bug.
         const DEADLINE: Duration = Duration::from_secs(30);
-        // Exhaustive offline references can exceed the live watchdog on a
-        // laptop. Explicit diagnostic override; live asynchronous rendering
-        // does not use this blocking readback path.
-        let timeout = std::env::var("LUMA_READBACK_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .map_or(DEADLINE, |v| Duration::from_secs(v.clamp(30, 600)));
-        let deadline = Instant::now() + timeout;
+        let deadline = Instant::now() + DEADLINE;
         loop {
             device.poll(wgpu::PollType::Poll)?;
             if let Some(frame) = self.try_complete()? {
@@ -301,7 +294,7 @@ impl PendingFrame {
             }
             anyhow::ensure!(
                 Instant::now() < deadline,
-                "the GPU did not return a frame within {timeout:?}"
+                "the GPU did not return a frame within {DEADLINE:?}"
             );
             std::thread::sleep(Duration::from_millis(1));
         }

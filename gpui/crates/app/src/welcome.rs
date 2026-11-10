@@ -242,7 +242,7 @@ impl VenuePicker {
             loaded: false,
             load_failed: false,
             query: String::new(),
-            morph: MorphDialog::new(Route::Browse.descriptor(), PICKER_SIZE),
+            morph: MorphDialog::new(Route::Browse.descriptor()),
             create_name: String::new(),
             create_failed: false,
             creating: false,

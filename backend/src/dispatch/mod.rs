@@ -107,8 +107,7 @@ use crate::host_audio::HostAudioSnapshot;
 use crate::inputs::{Binding, InputState, Mode};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
-    CreateAgentThreadInput,
+    AgentThread, AgentThreadMessage, AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
 use crate::models::background::BackgroundWork;
 use crate::models::beat_grid::BeatGrid;
@@ -123,8 +122,7 @@ use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
 use crate::models::sync::SyncStatus;
 use crate::models::tracks::{
-    BeatValidation, BeatValidationReason, BeatValidationVerdict, TrackBrowserRow,
-    TrackImportResult, TrackSummary,
+    BeatValidation, BeatValidationReason, BeatValidationVerdict, TrackBrowserRow, TrackImportResult,
 };
 use crate::models::universe::UniverseState;
 use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
@@ -155,7 +153,6 @@ commands! {
     ) -> Vec<AgentThreadMessage>;
     agent_threads::agent_thread_set_model(thread_id: String, selection: crate::agent::engine::catalog::Selection) -> AgentThread;
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
-    agent_threads::agent_thread_record_usage(usage: AgentThreadUsage) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
 
     agent_execution::run_python_cell(
@@ -203,11 +200,6 @@ commands! {
     groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
     groups::delete_group(id: String) -> ();
     groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
-    groups::preview_selection_query(
-        venue_id: String,
-        query: String,
-        seed: Option<u64>,
-    ) -> Vec<PatchedFixture>;
     groups::highlight_selection(
         venue_id: String,
         selection: Selection,
@@ -232,7 +224,6 @@ commands! {
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 
-    tracks::list_tracks() -> Vec<TrackSummary>;
     tracks::list_tracks_enriched(venue_id: Option<String>) -> Vec<TrackBrowserRow>;
     tracks::get_track_beats(track_id: String) -> Option<BeatGrid>;
     tracks::get_track_beat_validation(track_id: String) -> Option<BeatValidation>;
@@ -542,8 +533,8 @@ mod tests {
         }
     }
 
-    /// `docs/specs/ipc-manifest.{json,md}` are the command surface written
-    /// down. Rebuilding them here is what keeps the two from drifting.
+    /// `docs/specs/ipc-manifest.md` is the command surface written down.
+    /// Rebuilding it here is what keeps the two from drifting.
     #[test]
     fn ipc_manifest_matches_the_command_table() {
         manifest::check(TABLE);

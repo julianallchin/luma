@@ -75,6 +75,9 @@ pub(crate) struct RenderEngineInner {
     pending_scenes: HashMap<SceneTarget, u64>,
     /// Active scene for track editor / pattern editor (composited per frame).
     active_scene: Option<Scene>,
+    /// The score the active slot was last asked to show, installed or still
+    /// compiling. Leaving a score clears the slot only while it is this one.
+    active_score: Option<String>,
     /// Per-deck scenes for perform mode (the track's full composite per deck).
     perform_layers: HashMap<u8, Scene>,
     /// Per-deck clocks and blend weights, set by live follow.
@@ -94,6 +97,7 @@ impl Default for RenderEngine {
                 scene_generation: 0,
                 pending_scenes: HashMap::new(),
                 active_scene: None,
+                active_score: None,
                 perform_layers: HashMap::new(),
                 perform_deck_states: Vec::new(),
                 perform_latency: 0.0,
@@ -108,6 +112,7 @@ impl RenderEngine {
     pub fn reset_for_identity_switch(&self) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.active_scene = None;
+        guard.active_score = None;
         guard.pending_scenes.clear();
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
@@ -179,6 +184,33 @@ impl RenderEngine {
         let generation = guard.scene_generation;
         guard.pending_scenes.insert(target, generation);
         SceneUpdate { target, generation }
+    }
+
+    /// Begin showing `score_id` in the active slot: a [`Self::begin_scene_update`]
+    /// that also records whose scene the slot now holds.
+    pub(crate) fn begin_score_update(&self, score_id: &str) -> SceneUpdate {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        guard.active_score = Some(score_id.to_owned());
+        guard.scene_generation += 1;
+        let generation = guard.scene_generation;
+        guard.pending_scenes.insert(SceneTarget::Active, generation);
+        SceneUpdate {
+            target: SceneTarget::Active,
+            generation,
+        }
+    }
+
+    /// Stop showing `score_id`: drop its scene and any build of it still
+    /// compiling. Does nothing when another score has taken the slot since, so
+    /// a close that arrives after the next score opened cannot blank it.
+    pub(crate) fn leave_score(&self, score_id: &str) {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        if guard.active_score.as_deref() != Some(score_id) {
+            return;
+        }
+        guard.active_score = None;
+        guard.active_scene = None;
+        guard.pending_scenes.remove(&SceneTarget::Active);
     }
 
     /// Check and install under the same lock, unless a newer update for the
@@ -389,6 +421,39 @@ mod tests {
         engine.finish_update(pending, Built::Scene(Scene::default()));
         assert!(engine.sample(0.0).is_some());
         assert!(engine.inner.lock().unwrap().pending_scenes.is_empty());
+    }
+
+    #[test]
+    fn leaving_a_score_clears_its_scene_and_no_other() {
+        use super::{Built, RenderEngine};
+        use crate::eval::Scene;
+        let installed = |engine: &RenderEngine| {
+            engine.inner.lock().unwrap().active_scene = Some(Scene::default());
+        };
+        // An empty build clears the slot when it installs, so "still lit"
+        // after one means the build was turned away.
+        let engine = RenderEngine::default();
+
+        // The score on show closes: its scene goes, and a build of it that
+        // was still compiling cannot bring it back.
+        let compiling = engine.begin_score_update("a");
+        installed(&engine);
+        engine.leave_score("a");
+        assert!(engine.sample(0.0).is_none(), "the closed score went dark");
+        installed(&engine);
+        engine.finish_update(compiling, Built::Scene(Scene::default()));
+        assert!(
+            engine.sample(0.0).is_some(),
+            "its late build was turned away"
+        );
+
+        // A close that arrives after the next score opened touches nothing:
+        // neither that score's scene nor the build of it in flight.
+        let next = engine.begin_score_update("b");
+        engine.leave_score("a");
+        assert!(engine.sample(0.0).is_some(), "the next score stayed lit");
+        engine.finish_update(next, Built::Scene(Scene::default()));
+        assert!(engine.sample(0.0).is_none(), "and its build still landed");
     }
 
     #[test]

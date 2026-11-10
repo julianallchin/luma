@@ -97,16 +97,6 @@ impl SyntaxPalette {
 pub struct Theme {
     /// The transcript's plane: the deepest surface in the panel.
     pub bg: Hsla,
-    /// Shell around the transcript — header, composer gutter.
-    pub surface: Hsla,
-    /// Raised pills and chips that sit proud of the panel.
-    pub surface_raised: Hsla,
-    /// A floating card: menu, popover.
-    pub surface_overlay: Hsla,
-    /// Hover wash for interactive rows and buttons.
-    pub element_hover: Hsla,
-    /// Active / pressed wash.
-    pub element_active: Hsla,
     /// Hairline border.
     pub border: Hsla,
     /// Stronger border for focused or raised edges.
@@ -134,16 +124,12 @@ pub struct Theme {
     pub input_bg: Hsla,
     /// Accent — indigo. Bullets, quote rails, selection.
     pub accent: Hsla,
-    /// Stronger accent for fills that carry a label.
-    pub accent_strong: Hsla,
     /// Errors, and the stop button.
     pub danger: Hsla,
     /// Amber: a tool call still running.
     pub warning: Hsla,
     /// Emerald: a tool call that succeeded.
     pub success: Hsla,
-    /// Pink: the working indicator.
-    pub busy: Hsla,
     /// Inline-code and code-block text.
     pub code_text: Hsla,
     /// The wash behind an inline-code pill.
@@ -166,11 +152,6 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             bg: panel(),
-            surface: glass(),
-            surface_raised: neutral(0.235),
-            surface_overlay: overlay(),
-            element_hover: wash(0.11),
-            element_active: wash(0.16),
             border: hairline(0.08),
             border_strong: hairline(0.14),
             text: ladder::foreground().into(),
@@ -179,11 +160,9 @@ impl Theme {
             knockout: ladder::background().into(),
             input_bg: ink(0.03),
             accent: oklch(0.673, 0.182, 276.935),
-            accent_strong: oklch(0.585, 0.233, 277.117),
             danger: oklch(0.704, 0.191, 22.216),
             warning: oklch(0.828, 0.189, 84.429),
             success: oklch(0.765, 0.177, 163.223),
-            busy: oklch(0.718, 0.202, 349.761),
             code_text: oklch(0.811, 0.111, 293.571),
             code_wash: oklch(0.702, 0.183, 293.541).opacity(0.12),
             syntax: SyntaxPalette::dark(),

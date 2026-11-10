@@ -27,8 +27,9 @@
 //! `changes` holds the changelog of the channel's last releases, newest
 //! first, so an install that skipped some can say everything it gains
 //! ([`Manifest::changes_since`]). `notes` is the newest release's lines as
-//! one string, for installs from before `changes`; this app ignores it.
-//! `scripts/release/manifest.py` writes both.
+//! one string, for installs from before `changes`; [`Manifest`] has no field
+//! for it, so this app never reads it. `scripts/release/manifest.py` writes
+//! both.
 
 use std::collections::HashMap;
 
@@ -39,8 +40,6 @@ use crate::Channel;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub version: String,
-    #[serde(default)]
-    pub notes: Option<String>,
     #[serde(default)]
     pub changes: Vec<Change>,
     #[serde(default)]

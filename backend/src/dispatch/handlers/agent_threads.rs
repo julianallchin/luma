@@ -3,8 +3,8 @@ use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::actor::Actor;
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadAppendOutcome, AgentThreadMessage, AgentThreadUsage,
-    AppendAgentThreadMessagesInput, CreateAgentThreadInput,
+    AgentThread, AgentThreadAppendOutcome, AgentThreadMessage, AppendAgentThreadMessagesInput,
+    CreateAgentThreadInput,
 };
 
 pub async fn agent_thread_create(
@@ -74,23 +74,6 @@ pub async fn agent_thread_delete(
         services.workspaces.retire_thread(&child).await?;
     }
     services.workspaces.retire_thread(&thread_id).await?;
-    Ok(())
-}
-
-/// Record what a run against this thread cost.
-///
-/// The record is absolute — the thread's totals so far — so a writer that
-/// reports twice leaves one row, and a writer that accumulates seeds itself
-/// from the stored row first. Admitted like every other write, but
-/// deliberately not gated on the thread still existing: the MCP host retires
-/// its thread when the client disconnects, and the harness only learns the
-/// price after that.
-pub async fn agent_thread_record_usage(
-    services: &AppServices,
-    usage: AgentThreadUsage,
-) -> Result<(), CommandError> {
-    services.admitted_principal().await?;
-    db::record_thread_usage(&services.db.0, &usage).await?;
     Ok(())
 }
 

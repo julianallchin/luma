@@ -91,8 +91,10 @@ diff is complete by construction. What the diff currently holds:
   `wasm-bindgen`). The one file a unit test reads, the EXIF-rotated JPEG in
   `platform.rs`'s `image_tests`, moved to `gpui/tests/fixtures/`. A refresh
   deletes the directory and those manifest entries again and repoints that
-  `include_bytes!`. `gpui_web` and `gpui_windows` themselves stay: Windows
-  support is planned, and a WASM visualizer may need the web platform.
+  `include_bytes!`.
+- **No `gpui_windows` or `gpui_web`.** Luma ships for macOS and Linux, so the
+  two platform crates and their entries in `gpui_platform` are deleted. A
+  refresh deletes them again.
 
 The workspace keeps its upstream Git dependency declarations so
 `gpui-component` and Luma resolve one GPUI type identity; `[patch]` redirects

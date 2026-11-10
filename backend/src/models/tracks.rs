@@ -199,12 +199,6 @@ pub struct TrackBrowserRow {
     #[sqlx(skip)]
     pub venue_annotation_coverage_seconds: f64,
     pub has_storage: bool,
-    pub has_beats: bool,
-    pub has_stems: bool,
-    pub has_roots: bool,
-    pub has_drum_onsets: bool,
-    pub has_bar_classifications: bool,
-    pub has_genres: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]

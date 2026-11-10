@@ -257,7 +257,7 @@ impl AddTracks {
             instance_id: uuid::Uuid::new_v4(),
             venue_id,
             purpose,
-            morph: MorphDialog::new(route.descriptor(), PALETTE_SIZE),
+            morph: MorphDialog::new(route.descriptor()),
             browser_rows: Rc::from(Vec::new()),
             browser_shown: Rc::from(Vec::new()),
             browser_loaded: false,

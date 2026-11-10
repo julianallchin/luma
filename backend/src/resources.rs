@@ -107,8 +107,7 @@ pub fn fixture_library_root(fixtures_root: Option<&Path>) -> Option<PathBuf> {
 
 /// Where the stage GLBs live.
 ///
-/// `LUMA_MESHES_ROOT` wins, so a test or a fixture can supply its own tree.
-/// Otherwise the meshes are found *through* the fixtures root rather than by a
+/// The meshes are found *through* the fixtures root rather than by a
 /// second search: a fixtures root is always `<resources>/fixtures/<version>`,
 /// so its grandparent's `meshes/` is the sibling tree, in the repo and in a
 /// bundle alike: `resources/fixtures` and `resources/meshes` are siblings.
@@ -116,9 +115,6 @@ pub fn fixture_library_root(fixtures_root: Option<&Path>) -> Option<PathBuf> {
 /// bundle's copy, and the repo's own copy is the last resort.
 #[must_use]
 pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
-    if let Some(path) = std::env::var_os("LUMA_MESHES_ROOT") {
-        return PathBuf::from(path);
-    }
     let sibling = fixtures_root
         .and_then(Path::parent)
         .and_then(Path::parent)

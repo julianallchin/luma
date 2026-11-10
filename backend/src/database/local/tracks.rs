@@ -27,54 +27,22 @@ pub struct TrackDeletionPlan {
 // Track records
 // -----------------------------------------------------------------------------
 
-pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
-    sqlx::query_as::<_, TrackSummary>(
-        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
-                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
-                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
-                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
-         FROM tracks t
-         JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         ORDER BY t.created_at DESC, t.id DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list tracks: {}", e))
-}
-
-/// Per-artifact-table preprocessor versions, used to gate `has_X` flags so a
-/// version bump correctly flips a track back to "needs reprocessing" in the
-/// UI. Sourced from `crate::preprocessing::registry::current_artifact_versions`.
-#[derive(Debug, Clone, Copy)]
-pub struct ArtifactVersions {
-    pub beats: i64,
-    pub stems: i64,
-    pub roots: i64,
-    pub drum_onsets: i64,
-    pub bar_classifications: i64,
-    pub genres: i64,
-}
-
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,
-    versions: ArtifactVersions,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let mut connection = pool
         .acquire()
         .await
         .map_err(|error| format!("Failed to open enriched track read: {error}"))?;
-    list_tracks_enriched_for_connection(&mut connection, venue_id, versions).await
+    list_tracks_enriched_for_connection(&mut connection, venue_id).await
 }
 
 pub async fn list_tracks_enriched_for_connection(
     connection: &mut SqliteConnection,
     venue_id: Option<&str>,
-    versions: ArtifactVersions,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let vid = venue_id.unwrap_or("");
-    // `track_stems` has 4 rows per track (one per stem), so we count rather
-    // than EXISTS to require all four at the current version.
     let mut rows = sqlx::query_as::<_, TrackBrowserRow>(
         "SELECT
             t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
@@ -84,13 +52,7 @@ pub async fn list_tracks_enriched_for_connection(
             COALESCE(vac.cnt, 0) AS venue_annotation_count,
             COALESCE(vsc.cnt, 0) AS venue_score_count,
             COALESCE(vsc.cnt, 0) > 0 AS is_in_venue,
-            (t.storage_path IS NOT NULL) AS has_storage,
-            EXISTS(SELECT 1 FROM track_beats x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_beats,
-            (SELECT COUNT(*) FROM track_stems x WHERE x.track_id = t.id AND x.processor_version >= ?) >= 4 AS has_stems,
-            EXISTS(SELECT 1 FROM track_roots x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_roots,
-            EXISTS(SELECT 1 FROM track_drum_onsets x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_drum_onsets,
-            EXISTS(SELECT 1 FROM track_bar_classifications x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_bar_classifications,
-            EXISTS(SELECT 1 FROM track_genres x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_genres
+            (t.storage_path IS NOT NULL) AS has_storage
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
@@ -118,12 +80,6 @@ pub async fn list_tracks_enriched_for_connection(
          ) vsc ON vsc.track_id = t.id
          ORDER BY t.created_at DESC, t.id DESC",
     )
-    .bind(versions.beats)
-    .bind(versions.stems)
-    .bind(versions.roots)
-    .bind(versions.drum_onsets)
-    .bind(versions.bar_classifications)
-    .bind(versions.genres)
     .bind(vid)
     .bind(vid)
     .fetch_all(&mut *connection)
@@ -1263,20 +1219,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_tracks_enriched(
-            &pool,
-            Some("venue"),
-            ArtifactVersions {
-                beats: 0,
-                stems: 0,
-                roots: 0,
-                drum_onsets: 0,
-                bar_classifications: 0,
-                genres: 0,
-            },
-        )
-        .await
-        .unwrap();
+        let rows = list_tracks_enriched(&pool, Some("venue")).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].venue_annotation_count, 0);
         assert_eq!(rows[0].venue_score_count, 1);
@@ -1289,20 +1232,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let rows = list_tracks_enriched(
-            &pool,
-            Some("venue"),
-            ArtifactVersions {
-                beats: 0,
-                stems: 0,
-                roots: 0,
-                drum_onsets: 0,
-                bar_classifications: 0,
-                genres: 0,
-            },
-        )
-        .await
-        .unwrap();
+        let rows = list_tracks_enriched(&pool, Some("venue")).await.unwrap();
         assert_eq!(rows[0].venue_score_count, 2);
         assert!(rows[0].is_in_venue);
     }
@@ -1347,20 +1277,9 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = list_tracks_enriched(
-            &pool,
-            Some("bob-venue"),
-            ArtifactVersions {
-                beats: 0,
-                stems: 0,
-                roots: 0,
-                drum_onsets: 0,
-                bar_classifications: 0,
-                genres: 0,
-            },
-        )
-        .await
-        .unwrap();
+        let rows = list_tracks_enriched(&pool, Some("bob-venue"))
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1, "Alice's own track remains visible");
         assert_eq!(rows[0].venue_score_count, 0);
         assert_eq!(rows[0].venue_annotation_count, 0);

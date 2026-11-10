@@ -45,7 +45,6 @@
 //! carries the identity and the event carries the box — see its module docs.
 
 pub mod arg;
-pub mod combo;
 pub mod dialog;
 pub mod float;
 pub mod fonts;

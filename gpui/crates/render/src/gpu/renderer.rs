@@ -5,8 +5,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use glam::Vec3;
-
 use crate::viewport::DisplayRange;
 
 use crate::atmosphere::AtmosphereCache;
@@ -440,31 +438,6 @@ impl Renderer {
     #[must_use]
     pub fn reflection_probes_pending(&self) -> u32 {
         self.probes.pending()
-    }
-
-    /// One reflection probe's six faces, side by side, as linear RGBA: `what`
-    /// 0 its relit change to the sky probe at `mip` above its base, 1 its
-    /// captured albedo, 2 its captured normal, metal and distance. For
-    /// diagnosis.
-    ///
-    /// # Errors
-    /// Fails when no probes are placed or the readback cannot be mapped.
-    #[doc(hidden)]
-    pub fn read_reflection_probe(
-        &self,
-        probe: u32,
-        what: u32,
-        mip: u32,
-    ) -> anyhow::Result<(u32, u32, Vec<[f32; 4]>)> {
-        self.probes
-            .read_back(&self.gpu.device, &self.gpu.queue, probe, what, mip)
-    }
-
-    /// Where the reflection probes stand, world metres.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn reflection_probe_positions(&self) -> Vec<Vec3> {
-        self.probes.positions()
     }
 
     /// Number of fixtures with resident shadow maps on the last frame.

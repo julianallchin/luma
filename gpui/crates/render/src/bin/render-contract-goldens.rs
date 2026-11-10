@@ -85,9 +85,8 @@ fn main() -> anyhow::Result<()> {
     // being rendered. `one-beam` and `single-mover` are the same scene at two
     // resolutions, and so are `overlapping-beams` and `mover-fan`;
     // `par-occlusion` is rendered three times over and `single-mover` three
-    // times over. Counting contract goldens and `scenes-wgpu` images together
-    // therefore overstates scene coverage — a review set that lists both names
-    // is claiming evidence it does not have. Confirmed by pixels: downscaled
+    // times over. Counting a contract golden and its source scene as two
+    // therefore overstates scene coverage. Confirmed by pixels: downscaled
     // 2x the pairs agree to meanAbs 0.37/255.
     for (source_id, id, edit, fixture_shadows) in [
         ("single-mover", "one-beam", None, false),

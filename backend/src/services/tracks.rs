@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::database::local::tracks as tracks_db;
-use crate::database::local::tracks::ArtifactVersions;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read as VenueRead, VenueAccess, VenueResource,
 };
@@ -25,9 +24,7 @@ use crate::models::tracks::{
     TrackImportResult, TrackSummary,
 };
 use crate::preprocessing::concurrency::{analysis_worker_count, run_bounded_track_jobs};
-use crate::preprocessing::{
-    registry, scheduler, AnalysisGuard, AnalysisTaskGroup, WorkerEnvironment,
-};
+use crate::preprocessing::{scheduler, AnalysisGuard, AnalysisTaskGroup, WorkerEnvironment};
 use crate::storage::StorageRoot;
 
 /// Maximum track duration allowed for import (10 minutes).
@@ -81,35 +78,14 @@ pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
-    let versions = current_artifact_versions();
     match venue_id {
         Some(venue_id) => {
             let mut access =
                 VenueAccess::<VenueRead>::read(pool, VenueResource::Venue(venue_id)).await?;
-            tracks_db::list_tracks_enriched_for_connection(
-                access.connection(),
-                Some(venue_id),
-                versions,
-            )
-            .await
+            tracks_db::list_tracks_enriched_for_connection(access.connection(), Some(venue_id))
+                .await
         }
-        None => tracks_db::list_tracks_enriched(pool, None, versions).await,
-    }
-}
-
-/// Resolve current preprocessor versions for the artifact tables surfaced in
-/// the track browser. A missing entry means "no registered preprocessor for
-/// that table"; we fall back to 0 so the EXISTS check matches any row.
-fn current_artifact_versions() -> ArtifactVersions {
-    let map = registry::current_artifact_versions();
-    let v = |table: &'static str| map.get(table).copied().unwrap_or(0) as i64;
-    ArtifactVersions {
-        beats: v("track_beats"),
-        stems: v("track_stems"),
-        roots: v("track_roots"),
-        drum_onsets: v("track_drum_onsets"),
-        bar_classifications: v("track_bar_classifications"),
-        genres: v("track_genres"),
+        None => tracks_db::list_tracks_enriched(pool, None).await,
     }
 }
 

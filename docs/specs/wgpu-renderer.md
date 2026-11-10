@@ -76,8 +76,6 @@ Future work: an app dialog, a Python binding, and recording many scores in one r
 
 ## 7. Verification
 
-- `render-goldens` writes `harness/goldens/scenes-wgpu/`. `--check` writes nothing
-  and exits non-zero on drift.
 - `render-contract-goldens` writes `gpui/crates/render/goldens/contracts/`. Each PNG
   has a sidecar with its full scene.
 

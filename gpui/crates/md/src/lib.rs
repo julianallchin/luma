@@ -82,12 +82,3 @@ pub trait Highlighter {
     /// not.
     fn highlight(&self, language: Option<&str>, code: &str) -> Option<Arc<HighlightedCode>>;
 }
-
-/// The default: code paints in the body color on the mono face.
-pub struct NoHighlight;
-
-impl Highlighter for NoHighlight {
-    fn highlight(&self, _language: Option<&str>, _code: &str) -> Option<Arc<HighlightedCode>> {
-        None
-    }
-}
