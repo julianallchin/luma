@@ -173,6 +173,96 @@ pub struct Patch {
     pub places: Vec<[usize; 2]>,
 }
 
+impl Patch {
+    /// The patch `cells` make, each at its column and row in `places`,
+    /// counted from anywhere: the patch counts them from its own first.
+    fn of(
+        built: &Built,
+        node: usize,
+        normal: Vec3,
+        right: Vec3,
+        cells: Vec<usize>,
+        places: Vec<[usize; 2]>,
+    ) -> Self {
+        let axes = [right, normal.cross(right)];
+        let centre = cells
+            .iter()
+            .map(|&cell| built.cells[cell].centre)
+            .sum::<Vec3>()
+            / cells.len() as f32;
+        let size = [0, 1].map(|axis| {
+            let (lo, hi) = cells
+                .iter()
+                .map(|&cell| {
+                    let cell = &built.cells[cell];
+                    (cell.centre.dot(axes[axis]), cell.size[axis] / 2.0)
+                })
+                .fold(
+                    (f32::INFINITY, f32::NEG_INFINITY),
+                    |(lo, hi), (at, half)| (lo.min(at - half), hi.max(at + half)),
+                );
+            hi - lo
+        });
+        let first = [0, 1].map(|axis| places.iter().map(|place| place[axis]).min().unwrap_or(0));
+        let places: Vec<[usize; 2]> = places
+            .iter()
+            .map(|place| [0, 1].map(|axis| place[axis] - first[axis]))
+            .collect();
+        let grid = [0, 1].map(|axis| places.iter().map(|place| place[axis]).max().unwrap_or(0) + 1);
+        Self {
+            node,
+            centre,
+            normal,
+            right,
+            size,
+            grid,
+            cells,
+            places,
+        }
+    }
+
+    /// The part of this patch that is lit: the smallest rectangle of its
+    /// columns and rows that holds every cell `lit` picks, or none when it
+    /// picks none.
+    ///
+    /// A patch lights the room from its middle, through an opening its own
+    /// size. With one cell of it lit that is the wrong place and the wrong
+    /// size, by up to the patch's own: the beam of a chase would stand still
+    /// while the chase crossed the patch, then jump. Its lit part is the lit
+    /// cell itself, and the beam leaves from there.
+    #[must_use]
+    pub fn lit(&self, built: &Built, lit: impl Fn(usize) -> bool) -> Option<Self> {
+        let held = self
+            .cells
+            .iter()
+            .zip(&self.places)
+            .filter(|(cell, _)| lit(**cell))
+            .map(|(_, place)| (*place, *place))
+            .reduce(|(lo, hi), (place, _)| {
+                (
+                    [lo[0].min(place[0]), lo[1].min(place[1])],
+                    [hi[0].max(place[0]), hi[1].max(place[1])],
+                )
+            });
+        let (lo, hi) = held?;
+        let (cells, places) = self
+            .cells
+            .iter()
+            .zip(&self.places)
+            .filter(|(_, place)| (0..2).all(|axis| (lo[axis]..=hi[axis]).contains(&place[axis])))
+            .map(|(cell, place)| (*cell, *place))
+            .unzip();
+        Some(Self::of(
+            built,
+            self.node,
+            self.normal,
+            self.right,
+            cells,
+            places,
+        ))
+    }
+}
+
 /// A face's cells as the patches that light the room: neighbours whose
 /// centres are no more than `reach` metres to either side of their patch's
 /// middle are one patch.
@@ -183,7 +273,8 @@ pub struct Patch {
 /// lets go (see [`crate::luminaire::patch_reach`]); under half a cell's
 /// pitch every cell is its own patch. Each face's rows and columns are
 /// dealt into patches as evenly as they divide, so the split depends on the
-/// build alone and not on which cells are lit.
+/// build alone and not on which cells are lit; [`Patch::lit`] is the part of
+/// one that is.
 #[must_use]
 pub fn patches(built: &Built, reach: f32) -> Vec<Patch> {
     // Faces: cells on one node that face one way.
@@ -240,44 +331,11 @@ pub fn patches(built: &Built, reach: f32) -> Vec<Patch> {
                 .push(cell);
         }
         for cells in dealt.into_values() {
-            let centre = cells
+            let places = cells
                 .iter()
-                .map(|&cell| built.cells[cell].centre)
-                .sum::<Vec3>()
-                / cells.len() as f32;
-            let size = [0, 1].map(|axis| {
-                let (lo, hi) = cells
-                    .iter()
-                    .map(|&cell| (along(cell, axis), built.cells[cell].size[axis] / 2.0))
-                    .fold(
-                        (f32::INFINITY, f32::NEG_INFINITY),
-                        |(lo, hi), (at, half)| (lo.min(at - half), hi.max(at + half)),
-                    );
-                hi - lo
-            });
-            let first = [0, 1].map(|axis| {
-                cells
-                    .iter()
-                    .map(|&cell| line_of(cell, axis))
-                    .min()
-                    .unwrap_or(0)
-            });
-            let places: Vec<[usize; 2]> = cells
-                .iter()
-                .map(|&cell| [0, 1].map(|axis| line_of(cell, axis) - first[axis]))
+                .map(|&cell| [0, 1].map(|axis| line_of(cell, axis)))
                 .collect();
-            let grid =
-                [0, 1].map(|axis| places.iter().map(|place| place[axis]).max().unwrap_or(0) + 1);
-            patches.push(Patch {
-                node,
-                centre,
-                normal,
-                right: axes[0],
-                size,
-                grid,
-                cells,
-                places,
-            });
+            patches.push(Patch::of(built, node, normal, axes[0], cells, places));
         }
     }
     patches
@@ -410,6 +468,43 @@ mod tests {
             assert!(patches.len() <= fewest, "a longer reach made more patches");
             fewest = patches.len();
         }
+    }
+
+    /// A patch's lit part is the rectangle of its cells round the lit ones:
+    /// one lit cell is that cell alone, at its own place and size, and two
+    /// at opposite corners are the whole patch again.
+    #[test]
+    fn a_patchs_lit_part_is_the_rectangle_round_its_lit_cells() {
+        let b = hyt();
+        let face = &patches(&b, 1.0)[0];
+        assert_eq!(face.lit(&b, |_| false), None);
+        assert_eq!(face.lit(&b, |_| true).as_ref(), Some(face));
+        for &cell in &face.cells {
+            let lone = face.lit(&b, |c| c == cell).unwrap();
+            assert_eq!(lone.cells, vec![cell]);
+            assert_eq!(lone.grid, [1, 1]);
+            assert!(lone.centre.abs_diff_eq(b.cells[cell].centre, 1e-6));
+            assert!((lone.size[0] - b.cells[cell].size[0]).abs() < 1e-6);
+        }
+        let at =
+            |place: [usize; 2]| face.cells[face.places.iter().position(|p| *p == place).unwrap()];
+        let (first, last) = (at([0, 0]), at([15, 2]));
+        assert_eq!(
+            face.lit(&b, |c| c == first || c == last).as_ref(),
+            Some(face)
+        );
+        // Two cells of one row: the cells between them too, and no other row.
+        let (left, right) = (at([3, 1]), at([6, 1]));
+        let run = face.lit(&b, |c| c == left || c == right).unwrap();
+        assert_eq!(run.grid, [4, 1]);
+        assert_eq!(run.cells.len(), 4);
+        let middle = (b.cells[left].centre + b.cells[right].centre) / 2.0;
+        assert!(
+            run.centre.abs_diff_eq(middle, 1e-5),
+            "{} against {middle}",
+            run.centre
+        );
+        assert!(run.size[0] < face.size[0] * 0.3 && run.size[1] < face.size[1] * 0.5);
     }
 
     /// A reach under half a pitch leaves every cell its own patch, the cell's

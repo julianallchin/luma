@@ -12,6 +12,7 @@ use glam::{Mat4, Vec3};
 use crate::assets::{HdrImage, Library};
 use crate::overlay::Overlay;
 use crate::panel::Panel;
+use crate::quality::QualityBudget;
 use crate::scene_desc::{Geometry, PrimitiveState, Scene};
 use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use luma_scene::definition::Definition;
@@ -1031,8 +1032,26 @@ pub fn build_at(
                     beams.push((at, dir, lens, vec![cell]));
                 }
             }
+            // Each cell carries its share of the fixture's lumens, lit or
+            // not: the cells together are the fixture, no more.
+            let mut count = beams.len();
             if beams.is_empty() {
-                for patch in luma_scene::library::patches(built, patch_reach(luminaire)) {
+                let reach = patch_reach(
+                    luminaire,
+                    QualityBudget::of(scene.render.quality).patch_share,
+                );
+                for patch in luma_scene::library::patches(built, reach) {
+                    count += patch.cells.len();
+                    // The patch lights the room from the part of it that is
+                    // lit, so one lit cell's beam leaves that cell. A cell
+                    // driven black is as dark as one dimmed out.
+                    let lit = |cell: usize| {
+                        let state = cell_state(cell);
+                        exposed(state) * Vec3::from(state.color).max_element() >= 0.01
+                    };
+                    let Some(patch) = patch.lit(built, lit) else {
+                        continue;
+                    };
                     let world = worlds[patch.node];
                     let lens = Lens {
                         radius: patch.size[0].min(patch.size[1]).max(0.005) / 2.0,
@@ -1049,7 +1068,7 @@ pub fn build_at(
                     ));
                 }
             }
-            let count = beams.iter().map(|beam| beam.3.len()).sum::<usize>().max(1) as f32;
+            let count = count.max(1) as f32;
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(beams.len())
                 .min(MAX_FIXTURE_CONES);
@@ -1105,8 +1124,6 @@ pub fn build_at(
                     direction,
                     cos_beam: cone.cos_beam,
                     color,
-                    // Each cell carries its share of the fixture's lumens:
-                    // the cells together are the fixture, no more.
                     intensity: intensity * cone.gain / count,
                     cos_field: cone.cos_field,
                     wash: cone.wash,
