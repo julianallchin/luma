@@ -41,11 +41,10 @@ fn analytic_panel(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
             let t = delta + h * tangent;
             let q = oc + ray.dir * t;
             let distance = length(q);
-            let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
-            let phase = haze_phase(dot(normalize(cells.source - q), ray.dir));
+            let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray.dir);
             let density = medium_envelope(haze.medium, haze.camera_pos.xyz + ray.dir * t);
             let transmittance = exp(-sigma * (t + distance));
-            sum += panel_tint(cells.light) * (weights[j] * phase * beam_range_falloff(distance, core.range)
+            sum += panel_tint(cells) * (weights[j] * beam_range_falloff(distance, core.range)
                 * density * transmittance * (1.0 + tangent * tangent));
         }
     }

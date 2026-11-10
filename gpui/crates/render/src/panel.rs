@@ -31,10 +31,22 @@
 //! from its own centre of light, through the beam's profile widened by that
 //! quarter's spread. Far off that is exactly one cone.
 //!
+//! Haze scatters most of its light nearly straight on, so what a ray picks
+//! up at a point depends on where on the face the light there came from, and
+//! the lit cells may be in several places. The lit rectangle is cut into
+//! [`PARTS`] by [`PARTS`] parts, each the bounds of the cells lit in it, and
+//! the light at the point is shared among the parts as each sends it: a
+//! point of light through the beam's profile far off, and close to no
+//! brighter than a face lit as evenly as the part is. The haze's phase is
+//! taken toward each part and weighed by its share ([`Panel::scatter`]). Far off, each quarter is its own cone and
+//! has its own direction. A part's light is still taken to come from one
+//! place in it, so within a part's own width of a lit part the haze right
+//! before it is too bright seen head on and too dim seen from the side.
+//!
 //! The cone the panel names ([`Panel::cone`]) is its bounds, its shadow and
 //! its far-field light for the passes that do not read the texture (the glow
 //! and the bounce). `shaders/panel.wgsl` reads the buffer; [`Panel::light`]
-//! is the same arithmetic, for the tests.
+//! and [`Panel::scatter`] are the same arithmetic, for the tests.
 
 use std::sync::Arc;
 
@@ -48,6 +60,9 @@ const MAX_SIDE: u32 = 32;
 /// Texels of margin on each side of a blurred level: three of its own
 /// widths, past which a Gaussian has nothing left.
 const MARGIN: u32 = 3;
+
+/// Parts along each side of the lit rectangle, for the haze's phase.
+const PARTS: usize = 3;
 
 /// One lit cell of a face.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -210,6 +225,12 @@ pub struct Panel {
     /// the light: `xyz` in its colour, `w` in white. Far off, the face is
     /// these four cones, so two halves of two colours keep their own.
     pub quarters: [(Vec4, Vec4); 4],
+    /// The lit rectangle in [`PARTS`] by [`PARTS`] parts, row by row from
+    /// the bottom left: the bounds of the cells lit in each (`xy` its low
+    /// corner, `zw` its high, right and up of the cone's position), and their
+    /// share of the light (`xyz` in colour, `w` in white). A part with no lit
+    /// cell has no light.
+    pub parts: [(Vec4, Vec4); PARTS * PARTS],
     /// Half the lit cells' extent along right and up, metres: the cone sits
     /// at their middle.
     pub reach: Vec2,
@@ -300,6 +321,24 @@ impl Panel {
         let quarter = |right: bool, up: bool| {
             moments(&|cell| (cell.at.x >= 0.0) == right && (cell.at.y >= 0.0) == up)
         };
+        // The cells lit in each part of the lit rectangle, by their middles.
+        let mut parts = [(Vec4::ZERO, Vec4::ZERO); PARTS * PARTS];
+        let mut bounds = [(Vec2::INFINITY, Vec2::NEG_INFINITY); PARTS * PARTS];
+        for cell in cells {
+            let place = ((cell.at + reach) / (2.0 * reach).max(Vec2::splat(1e-6)) * PARTS as f32)
+                .floor()
+                .clamp(Vec2::ZERO, Vec2::splat(PARTS as f32 - 1.0));
+            let part = place.y as usize * PARTS + place.x as usize;
+            let (lo, hi) = &mut bounds[part];
+            *lo = lo.min(cell.at - cell.size / 2.0);
+            *hi = hi.max(cell.at + cell.size / 2.0);
+            parts[part].1 += cell.colour.extend(1.0) * (cell.intensity / total);
+        }
+        for ((lo, hi), part) in bounds.into_iter().zip(&mut parts) {
+            if part.1.w > 0.0 {
+                part.0 = lo.extend(hi.x).extend(hi.y);
+            }
+        }
         Self {
             cone,
             right,
@@ -318,6 +357,7 @@ impl Panel {
                 quarter(false, true),
                 quarter(true, true),
             ],
+            parts,
             reach,
             footprint,
         }
@@ -363,10 +403,87 @@ impl Panel {
     }
 
     /// The light `cone` sends to the point `q` metres from its position:
-    /// `panel_light` in `shaders/panel.wgsl`, term for term.
+    /// `panel_light` in `shaders/panel.wgsl`.
     #[must_use]
     pub fn light(&self, cone: &FixtureCone, q: Vec3) -> Light {
+        self.lit(cone, q, None)
+    }
+
+    /// The light haze at `q` scatters along `ray`, a unit vector, where
+    /// `phase` is the haze's phase function of the cosine between the way
+    /// light arrives from and the ray: `panel_scatter` in
+    /// `shaders/panel.wgsl`. Each part of the lit cells is scattered from
+    /// where it is.
+    #[must_use]
+    pub fn scatter(
+        &self,
+        cone: &FixtureCone,
+        q: Vec3,
+        ray: Vec3,
+        phase: &dyn Fn(f32) -> f32,
+    ) -> Light {
+        self.lit(cone, q, Some((ray, phase)))
+    }
+
+    /// `panel_phases` in `shaders/panel.wgsl`: the haze's phase toward the
+    /// light close to the face, each part of the lit cells weighed by what
+    /// it sends the point. `toward` is the phase toward a place on the face,
+    /// and `whole` the phase where no part sends anything.
+    fn phases(
+        &self,
+        cone: &FixtureCone,
+        (at, height, blur2): (Vec2, f32, f32),
+        toward: &dyn Fn(Vec2) -> f32,
+        whole: f32,
+    ) -> Vec4 {
+        let (mut sum, mut weight) = (Vec4::ZERO, Vec4::ZERO);
+        for (bounds, light) in self.parts {
+            let (lo, hi) = (bounds.xy(), bounds.zw());
+            let (centre, size) = ((lo + hi) / 2.0, hi - lo);
+            if size.x <= 0.0 {
+                continue;
+            }
+            // Close to, the part's light comes from its nearest place to the
+            // point; further off, from nearer its middle.
+            let spread = size * size / 12.0;
+            let seat =
+                centre + (at.clamp(lo, hi) - centre) * (spread / (Vec2::splat(blur2) + spread));
+            // What the beam passes from there to the point.
+            let cos2 = 1.0 / (1.0 + ((seat - at) / height).length_squared());
+            let reaches = angular_profile(cos2.sqrt(), cone.cos_beam, cone.cos_field) * cos2;
+            if reaches <= 0.0 {
+                continue;
+            }
+            // Far off the part is a point of light there; close to, it is
+            // no brighter than a face lit as evenly as it is.
+            let sends = light
+                * (reaches / (height * height + size.x * size.y * reaches / self.footprint.weight));
+            sum += sends * toward(seat);
+            weight += sends;
+        }
+        Vec4::select(
+            weight.cmpgt(Vec4::ZERO),
+            sum / weight.max(Vec4::splat(1e-30)),
+            Vec4::splat(whole),
+        )
+    }
+
+    /// `panel_lit` in `shaders/panel.wgsl`, term for term: the light at
+    /// `q`, and with `scatter` (a ray and the haze's phase) each part of it
+    /// times the phase from where it comes toward the ray.
+    fn lit(
+        &self,
+        cone: &FixtureCone,
+        q: Vec3,
+        scatter: Option<(Vec3, &dyn Fn(f32) -> f32)>,
+    ) -> Light {
         let up = cone.direction.cross(self.right);
+        // The haze's phase toward a place on the face; one for plain light.
+        let toward = |seat: Vec2| {
+            scatter.map_or(1.0, |(ray, phase)| {
+                phase((self.right * seat.x + up * seat.y - q).normalize().dot(ray))
+            })
+        };
         let height = q.dot(cone.direction);
         let mut out = Light {
             colour: Vec3::ZERO,
@@ -381,10 +498,11 @@ impl Panel {
         let blur2 = blur * blur;
         // How much of the light's spread at this distance is the beam's and
         // not the cells' own: the light comes from that much nearer the
-        // cells' centre than the point is.
+        // cells' centre than the point is, and never from outside the lit
+        // rectangle.
         let (centre, spread) = (self.lit.xy(), self.lit.zw());
         let share = Vec2::splat(blur2) / (Vec2::splat(blur2) + spread);
-        let from = centre + (at - centre) * (Vec2::ONE - share);
+        let from = centre + (at.clamp(-self.reach, self.reach) - centre) * (Vec2::ONE - share);
         out.source = self.right * from.x + up * from.y;
         let far = smoothstep(2.0, 4.0, blur / spread.max_element().sqrt());
         if far > 0.0 {
@@ -393,11 +511,13 @@ impl Panel {
                 let share = Vec2::splat(blur2) / (Vec2::splat(blur2) + lit.zw());
                 let t = (at - lit.xy()) * Vec2::new(share.x.sqrt(), share.y.sqrt()) / height;
                 let cos2 = 1.0 / (1.0 + t.length_squared());
+                let seat = lit.xy() + (at - lit.xy()) * (Vec2::ONE - share);
                 let one = far
                     * (share.x * share.y).sqrt()
                     * angular_profile(cos2.sqrt(), cone.cos_beam, cone.cos_field)
                     * cos2
-                    / (height * height);
+                    / (height * height)
+                    * toward(seat);
                 out.colour += light.truncate() * one;
                 out.white += light.w * one;
             }
@@ -422,7 +542,10 @@ impl Panel {
                 .footprint
                 .rectangle((-self.reach - at) / height, (self.reach - at) / height)
                 / (4.0 * self.reach.x * self.reach.y);
-            let near = pattern * (rectangle * (1.0 - far));
+            let mut near = pattern * (rectangle * (1.0 - far));
+            if scatter.is_some() {
+                near *= self.phases(cone, (at, height, blur2), &toward, toward(from));
+            }
             out.colour += near.truncate();
             out.white += near.w;
         }
@@ -578,6 +701,9 @@ pub(crate) fn pack(panels: &[Panel], kept: &[usize]) -> (Vec<[f32; 4]>, Vec<f32>
             words.push(panel.lit.to_array());
             words.extend(panel.quarters.iter().map(|(lit, _)| lit.to_array()));
             words.extend(panel.quarters.iter().map(|(_, light)| light.to_array()));
+            for (bounds, light) in panel.parts {
+                words.extend([bounds.to_array(), light.to_array()]);
+            }
             words.extend(panel.footprint.kernel.iter().map(Vec4::to_array));
             words.extend(panel.stack.iter().map(Vec4::to_array));
             start as f32
@@ -588,7 +714,7 @@ pub(crate) fn pack(panels: &[Panel], kept: &[usize]) -> (Vec<[f32; 4]>, Vec<f32>
 
 #[cfg(test)]
 mod tests {
-    use super::{Cell, Footprint, Panel, KERNEL_SIDE};
+    use super::{Cell, Footprint, Panel, KERNEL_SIDE, PARTS};
     use crate::frame::FixtureCone;
     use glam::{Vec2, Vec3};
     use luma_scene::luminaire::{angular_profile, Lens};
@@ -776,6 +902,107 @@ mod tests {
         }
     }
 
+    /// Henyey-Greenstein's forward peak, about what haze droplets have.
+    fn forward(cos: f32) -> f32 {
+        let g = 0.855_f32;
+        (1.0 - g * g) / (1.0 + g * g - 2.0 * g * cos).powf(1.5)
+    }
+
+    /// What haze at `q` scatters along `ray` from each cell's own beam.
+    fn cells_scatter(cells: &[Cell], cone: &FixtureCone, q: Vec3, ray: Vec3) -> f32 {
+        // Each cell as a grid of small sources across its face.
+        let fine = 12;
+        cells
+            .iter()
+            .flat_map(|cell| {
+                (0..fine * fine).map(move |k| {
+                    let across = Vec2::new((k % fine) as f32 + 0.5, (k / fine) as f32 + 0.5)
+                        / fine as f32
+                        - 0.5;
+                    cell.at + across * cell.size
+                })
+            })
+            .map(|at| {
+                let from = q - point(at, 0.0);
+                let cos = from.normalize().dot(cone.direction);
+                angular_profile(cos, cone.cos_beam, cone.cos_field) / from.length_squared()
+                    * forward(-from.normalize().dot(ray))
+            })
+            .sum::<f32>()
+            / (cells.len() * fine * fine) as f32
+    }
+
+    /// A wide beam over two blocks of cells at the ends of the face, with
+    /// the middle four columns dark.
+    fn two_blocks() -> (Panel, FixtureCone, Vec<Cell>) {
+        let mut cone = cone(Vec3::ONE);
+        cone.cos_beam = 50.0_f32.to_radians().cos();
+        cone.cos_field = 70.0_f32.to_radians().cos();
+        let cells: Vec<Cell> = (0..32)
+            .filter(|k| !(2..6).contains(&(k % 8)))
+            .map(|k| Cell {
+                at: Vec2::new((k % 8) as f32 - 3.5, (k / 8) as f32 - 1.5) * PITCH,
+                size: Vec2::splat(PITCH),
+                colour: Vec3::ONE,
+                intensity: 1.0,
+            })
+            .collect();
+        let half = Vec2::new(4.0, 2.0) * PITCH;
+        let footprint = Footprint::of(cone.cos_beam, cone.cos_field);
+        let panel = Panel::new(0, Vec3::X, (-half, half), PITCH, &cells, footprint);
+        (panel, cone, cells)
+    }
+
+    /// Haze that scattered evenly every way would pick up the light itself:
+    /// taking the light a part at a time loses none and adds none.
+    #[test]
+    fn haze_that_scatters_evenly_picks_up_the_light_itself() {
+        let (panel, cone, _) = two_blocks();
+        for height in [0.01_f32, 0.05, 0.2, 0.6, 2.0, 8.0] {
+            for across in [Vec2::ZERO, Vec2::new(0.13, 0.02), Vec2::new(0.3, -0.1)] {
+                let q = point(across, height);
+                let (light, scattered) = (
+                    panel.light(&cone, q),
+                    panel.scatter(&cone, q, Vec3::Y, &|_| 1.0),
+                );
+                assert!(
+                    (scattered.white - light.white).abs() <= 1e-4 * light.white,
+                    "{height} m off, {across} across: {} against {}",
+                    scattered.white,
+                    light.white
+                );
+            }
+        }
+    }
+
+    /// Looking straight into the face between two lit blocks, the haze
+    /// there is lit from the blocks to either side, not from the dark cells
+    /// behind it: it scatters what the cells' own beams would, far less
+    /// than light from straight behind.
+    #[test]
+    fn haze_between_two_lit_blocks_is_lit_from_the_blocks() {
+        let (panel, cone, cells) = two_blocks();
+        let ray = -cone.direction;
+        for height in [0.1_f32, 0.2, 0.5, 1.0, 3.0] {
+            for across in [0.0_f32, 0.02] {
+                let q = point(Vec2::new(across, 0.01), height);
+                let (panel, cells) = (
+                    panel.scatter(&cone, q, ray, &forward).white,
+                    cells_scatter(&cells, &cone, q, ray),
+                );
+                assert!(
+                    (panel / cells - 1.0).abs() < 0.15,
+                    "{height} m off, {across} m across: {panel} against {cells}"
+                );
+            }
+        }
+        // A hand's width off, light from straight behind would scatter
+        // many times as much.
+        let q = point(Vec2::ZERO, 0.1);
+        let behind = panel.light(&cone, q).white * forward(1.0);
+        assert!(panel.scatter(&cone, q, ray, &forward).white < 0.1 * behind);
+    }
+
     /// A face lit evenly all over has no pattern: every level of its stack
     /// reads one, wherever on the face. The buffer holds the header, the
     /// kernel's table and that stack, and a panel follows its cone to the
@@ -809,7 +1036,7 @@ mod tests {
         assert_eq!(starts, vec![1.0, 0.0]);
         assert_eq!(
             words.len(),
-            1 + 12 + KERNEL_SIDE * KERNEL_SIDE + panel.stack.len()
+            1 + 12 + 2 * PARTS * PARTS + KERNEL_SIDE * KERNEL_SIDE + panel.stack.len()
         );
     }
 

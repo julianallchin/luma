@@ -45,16 +45,17 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             let dist = sqrt(d2);
             if dist >= core.range || dist <= FOG_SOURCE_INNER { continue; }
             if rest.panel > 0.5 {
-                // A face of cells: the panel's light here (`panel.wgsl`).
-                let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
-                if cells.light.a <= 0.0 { continue; }
+                // A face of cells: the panel's light here, scattered from
+                // where on the face it comes (`panel.wgsl`).
+                let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray_dir);
+                if cells.a <= 0.0 { continue; }
                 var lit = 1.0;
                 if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u {
                     lit = segment_shadow_visibility(ray_dir, start, end, li);
                 }
-                radiance += panel_tint(cells.light) * (rest.intensity * rest.haze_gain * haze.tuning.w
+                radiance += panel_tint(cells) * (rest.intensity * rest.haze_gain * haze.tuning.w
                     * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) * beam_range_falloff(dist, core.range)
-                    * haze_phase(dot(normalize(cells.source - q), ray_dir)) * lit
+                    * lit
                     * exp(-light_optical_depth(li, world)));
                 continue;
             }

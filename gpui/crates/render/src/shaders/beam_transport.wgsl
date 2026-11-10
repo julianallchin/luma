@@ -539,10 +539,10 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         let d2 = dot(q, q);
         let dist = sqrt(d2);
         if rest.panel > 0.5 {
-            // A face of cells: the panel's light here, from where on the
-            // face it comes.
-            let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
-            if cells.light.a <= 0.0 {
+            // A face of cells: the panel's light here, scattered from
+            // where on the face it comes.
+            let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray_dir);
+            if cells.a <= 0.0 {
                 continue;
             }
             let world = haze.camera_pos.xyz + ray_dir * t;
@@ -550,8 +550,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
             if haze.shadow.x > 0.0 {
                 radiance *= fixture_shadow_visibility(world, li);
             }
-            let phase = haze_phase(dot(normalize(cells.source - q), ray_dir));
-            acc += panel_tint(cells.light) * (radiance * phase * haze_density_at(world)
+            acc += panel_tint(cells) * (radiance * haze_density_at(world)
                 * transport_transmittance(ray, li, t, world) * mis_w);
             continue;
         }
@@ -688,14 +687,13 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             let d2 = dot(q, q);
             let distance = sqrt(d2);
             if panel {
-                let cells = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
+                let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray.dir);
                 let world = haze.camera_pos.xyz + ray.dir * t;
-                var value = haze_phase(dot(normalize(cells.source - q), ray.dir))
-                    * beam_range_falloff(distance, core.range)
+                var value = beam_range_falloff(distance, core.range)
                     * select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5)
                     * haze_density_at(world) * mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
                 if traced { value *= stage_visibility(world, core.position); }
-                panel_sum += panel_tint(cells.light) * (value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j]);
+                panel_sum += panel_tint(cells) * (value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j]);
                 continue;
             }
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
