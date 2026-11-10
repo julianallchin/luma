@@ -55,6 +55,73 @@ pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    /// Set on a flat LED panel: the mesh is the panel's flat face, and its
+    /// LEDs are this pattern drawn on it (see [`LedPattern`]).
+    pub pattern: Option<LedPattern>,
+    /// Per vertex, with a `pattern`: where the vertex sits on it, in LED
+    /// pitches, `u` along a row from the panel's left edge and `v` down from
+    /// its top row. Empty otherwise.
+    pub uvs: Vec<[f32; 2]>,
+}
+
+/// A flat panel of identical LEDs on a regular grid, drawn as one face that
+/// the renderer paints the LEDs onto, rather than as a mesh per LED.
+///
+/// Many small LEDs with dark gaps between them, each its own mesh, beat
+/// against the pixels once an LED and its gap are smaller than one: the face
+/// breaks into bands. One face with the layout lets the renderer draw sharp
+/// LEDs up close and their average colour once they are too small to see.
+/// The cell's [`Emitter`]s still list every LED.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LedPattern {
+    /// [`EmitterShape::Rect`], [`EmitterShape::Circle`], or
+    /// [`EmitterShape::Hex`] (corners along `u`).
+    pub shape: EmitterShape,
+    /// Each LED's width and height as a share of the pitch along `u` and
+    /// `v`, centred in its pitch. A circle or hex fills its share as an
+    /// ellipse would in pattern space, which is round on the face.
+    pub fill: [f32; 2],
+    /// LEDs in a row.
+    pub cols: u32,
+    /// Odd rows (`v` in 1..2, 3..4, ...) sit half a pitch along `u`.
+    pub stagger: bool,
+    /// What shows between the LEDs.
+    pub gap: MaterialSlot,
+}
+
+impl LedPattern {
+    /// The share of the face its LEDs cover.
+    #[must_use]
+    pub fn lit_share(&self) -> f32 {
+        let box_share = self.fill[0] * self.fill[1];
+        match self.shape {
+            EmitterShape::Circle => box_share * std::f32::consts::FRAC_PI_4,
+            EmitterShape::Hex => box_share * 3.0 * 3f32.sqrt() / 8.0,
+            EmitterShape::Rect | EmitterShape::Tube => box_share,
+        }
+    }
+
+    /// Whether the point `uv` (in pitches) is on an LED.
+    #[must_use]
+    pub fn lit(&self, [u, v]: [f32; 2]) -> bool {
+        let row = v.floor();
+        let u = if self.stagger && row.rem_euclid(2.0) == 1.0 {
+            u - 0.5
+        } else {
+            u
+        };
+        if u < 0.0 || u >= self.cols as f32 {
+            return false;
+        }
+        let x = (u - u.floor() - 0.5) / (0.5 * self.fill[0]);
+        let y = (v - row - 0.5) / (0.5 * self.fill[1]);
+        let (x, y) = (x.abs(), y.abs());
+        match self.shape {
+            EmitterShape::Circle => x * x + y * y <= 1.0,
+            EmitterShape::Hex => y.max(0.866_025_4 * x + 0.5 * y) <= 0.866_025_4,
+            EmitterShape::Rect | EmitterShape::Tube => x <= 1.0 && y <= 1.0,
+        }
+    }
 }
 
 /// What a joint does to its node.
@@ -350,11 +417,31 @@ fn shade(m: &Raw, into: &mut MeshBuf) {
     }
 }
 
+/// A flat mesh as it is, one normal for all of it, with its pattern
+/// coordinates.
+fn flat(m: &Raw, uv: &[[f32; 2]], into: &mut MeshBuf) {
+    let [a, b, c] = m.f[0].map(|i| m.v[i as usize]);
+    let n = (b - a)
+        .cross(c - a)
+        .normalize_or_zero()
+        .as_vec3()
+        .to_array();
+    let base = into.positions.len() as u32;
+    for (p, uv) in m.v.iter().zip(uv) {
+        into.positions.push(p.as_vec3().to_array());
+        into.normals.push(n);
+        into.uvs.push(*uv);
+    }
+    into.indices
+        .extend(m.f.iter().flat_map(|t| t.map(|i| base + i)));
+}
+
 #[derive(Default)]
 struct MeshBuf {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     indices: Vec<u32>,
+    uvs: Vec<[f32; 2]>,
 }
 
 fn v3(v: DVec3) -> Vec3 {
@@ -436,24 +523,46 @@ pub(crate) fn assemble(f: &Fixture, mut b: Rig) -> Built {
         }
     }
 
-    // Meshes: per node, the parts in one material, and each cell's emitters
-    // in one material.
-    let mut bufs: BTreeMap<(usize, MaterialSlot, Option<u32>), MeshBuf> = BTreeMap::new();
+    // Meshes: per node, the parts in one material, each cell's emitters in
+    // one material, and each cell's LED panels of one pattern.
+    let mut patterns: Vec<LedPattern> = Vec::new();
+    let mut bufs: BTreeMap<(usize, MaterialSlot, Option<u32>, Option<usize>), MeshBuf> =
+        BTreeMap::new();
     let mut emitters: BTreeMap<u32, Vec<(usize, &Item)>> = BTreeMap::new();
     for it in &b.items {
-        let cell = it.emit.as_ref().map(|e| e.cell);
-        shade(&it.mesh, bufs.entry((it.node, it.mat, cell)).or_default());
         if let Some(e) = &it.emit {
             emitters.entry(e.cell).or_default().push((it.node, it));
         }
+        if it.mesh.f.is_empty() {
+            continue;
+        }
+        let Some(panel) = &it.panel else {
+            let cell = it.emit.as_ref().map(|e| e.cell);
+            shade(
+                &it.mesh,
+                bufs.entry((it.node, it.mat, cell, None)).or_default(),
+            );
+            continue;
+        };
+        let pattern = match patterns.iter().position(|p| *p == panel.pattern) {
+            Some(i) => i,
+            None => {
+                patterns.push(panel.pattern);
+                patterns.len() - 1
+            }
+        };
+        let key = (it.node, it.mat, Some(panel.cell), Some(pattern));
+        flat(&it.mesh, &panel.uv, bufs.entry(key).or_default());
     }
-    for ((node, material, cell), buf) in bufs {
+    for ((node, material, cell, pattern), buf) in bufs {
         nodes[node].meshes.push(Mesh {
             material,
             cell,
             positions: buf.positions,
             normals: buf.normals,
             indices: buf.indices,
+            pattern: pattern.map(|i| patterns[i]),
+            uvs: buf.uvs,
         });
     }
 
