@@ -1216,6 +1216,45 @@ async fn venue_usability_run() {
     f.service.shutdown_all();
 }
 
+/// A nudge reads in the frame a placement does: `trim(u=, v=)` puts the
+/// footprint centre where `place(at=)` would, on a deck whose own surface axes
+/// run the other way; a rename reaches the patch; one light is named as asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_nudge_lands_where_a_placement_would() {
+    let Some(f) = Fixture::new("venue nudge").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+deck = v.place("deck", at=(2.0, 1.0))
+tower = v.place("truss", on=deck, at=(0.2, -0.25), length=1.5, direction=(0, 0, 1), label="Totem L")
+placed = v.nodes(label="Totem")[0].at
+v.trim(tower, u=-0.3, v=0.25)
+nudged = v.nodes(label="Totem")[0].at
+head = v.fixture_library("rogue r2 spot")[0]
+bar = v.place("truss", at=(0.0, 4.0), length=6.0, direction=(1, 0, 0), trim=4.0)
+v.distribute(head, 1, on=bar, face=(0, 0, -1), mode=head.mode(18), label="solo")
+v.trim(v.fixtures[-1].id, label="Solo Spot")
+(tuple(round(c, 3) for c in placed), tuple(round(c, 3) for c in nudged),
+ [x.label for x in v.fixtures])
+"#,
+        )
+        .await;
+    expect_ok(&out, "nudge");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((2.2, 0.75), (1.7, 1.25), ['Solo Spot'])",
+        "{}",
+        out.stdout
+    );
+    f.service.shutdown_all();
+}
+
 /// The library is searchable and its answer is what `distribute` is named out
 /// of, and an aim written in degrees comes back as a degree.
 ///

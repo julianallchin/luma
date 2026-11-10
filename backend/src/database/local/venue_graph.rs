@@ -406,6 +406,15 @@ pub async fn set_label(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename venue node: {e}"))?;
+    // A light's node and its patch row are one fixture with one name.
+    let venue_id = access.venue_id().to_owned();
+    sqlx::query("UPDATE fixtures SET label = ? WHERE id = ? AND venue_id = ?")
+        .bind(label)
+        .bind(node_id)
+        .bind(venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to rename the patched fixture: {e}"))?;
     rig_changed();
     Ok(())
 }

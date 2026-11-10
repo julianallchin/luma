@@ -559,6 +559,51 @@ impl VenueHost {
         Ok(json!({ "group": rows.into_iter().next() }))
     }
 
+    /// The patch, read now: what `luma.venue.fixtures` shows, after this
+    /// cell's own edits.
+    async fn fixtures(&self) -> Result<Value, HostCallError> {
+        let mut access = self.read_access().await?;
+        let invalid = |error: String| HostCallError::new("invalid_venue", error);
+        let venue = crate::venue_graph::resolved(&mut access, &self.resource_root)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        let rows = crate::database::local::fixtures::get_patched_fixtures(&mut access)
+            .await
+            .map_err(invalid)?;
+        Ok(json!({
+            "fixtures": crate::agent_execution::bindings::providers::venue::fixture_rows(
+                &rows, &venue,
+            ),
+        }))
+    }
+
+    /// Set one fixture's DMX universe and address by hand, and pin it there.
+    /// Either left out keeps where the fixture stands. Refused, with the
+    /// reason, when it runs off the universe or lands on another fixture.
+    async fn patch(&self, request: PatchRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_patch", error);
+        let mut access = self.write_access().await.map_err(invalid)?;
+        let rows = crate::database::local::fixtures::get_patched_fixtures(&mut access)
+            .await
+            .map_err(invalid)?;
+        let row = rows
+            .iter()
+            .find(|row| row.id == request.fixture)
+            .ok_or_else(|| invalid(format!("no fixture `{}` in this venue", request.fixture)))?;
+        let universe = request
+            .universe
+            .unwrap_or(u16::try_from(row.universe).unwrap_or(1));
+        let address = request
+            .address
+            .unwrap_or(u16::try_from(row.address).unwrap_or(1));
+        crate::services::patch::set_address(&mut access, &request.fixture, universe, address)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        access.commit().await.map_err(invalid)?;
+        crate::database::local::venue_graph::rig_changed();
+        Ok(json!({ "universe": universe, "address": address, "pinned": true }))
+    }
+
     async fn generate_groups(&self) -> Result<Value, HostCallError> {
         let mut access = self
             .write_access()
@@ -1144,6 +1189,8 @@ impl HostCallHandler for VenueHost {
                     "venue.open" => self.open().await,
                     "venue.groups" => self.groups().await,
                     "venue.group" => self.group(decode(payload)?).await,
+                    "venue.fixtures" => self.fixtures().await,
+                    "venue.patch" => self.patch(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
                     "venue.laser_zones" => self.laser_zones().await,
                     "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
@@ -1341,6 +1388,15 @@ struct LaserZoneRequest {
     name: String,
     turn: [f64; 2],
     tilt: [f64; 2],
+}
+
+/// One fixture's DMX address, set by hand.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatchRequest {
+    fixture: String,
+    universe: Option<u16>,
+    address: Option<u16>,
 }
 
 /// Create a named collection, or explicitly replace its fixture membership.

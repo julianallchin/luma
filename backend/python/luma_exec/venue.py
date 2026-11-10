@@ -978,20 +978,24 @@ class LibraryFixture:
         self.beam_deg = None if beam is None else (float(beam[0]), float(beam[1]))
         self.modes = tuple(LibraryMode(m) for m in row.get("modes") or ())
 
-    def mode(self, channels: int) -> str:
-        """The name of this fixture's mode with `channels` channels.
+    def mode(self, channels: int | str) -> str:
+        """The name of this fixture's mode with `channels` channels, or the
+        mode named `channels`.
 
         The lookup a caller otherwise writes as a comprehension over `modes`,
         and the one that raises with the choices in the message rather than an
         `IndexError` twenty lines later.
         """
         for mode in self.modes:
-            if mode.channels == channels:
+            if mode.name == str(channels) or (
+                not isinstance(channels, str) and mode.channels == channels
+            ):
                 return mode.name
-        offered = ", ".join(f"{m.name} ({m.channels})" for m in self.modes)
+        offered = ", ".join(f"'{m.name}' ({m.channels} channels)" for m in self.modes)
+        asked = f"mode {channels!r}" if isinstance(channels, str) else f"{channels}-channel mode"
         raise LumaHostCallError(
             "invalid_argument",
-            f"{self.model} has no {channels}-channel mode; it has {offered}",
+            f"{self.model} has no {asked}; pass a channel count or a mode name: {offered}",
         )
 
     def __repr__(self) -> str:
@@ -1390,6 +1394,32 @@ class Venue:
 
     def keys(self) -> list[str]:
         return list(object.__getattribute__(self, "_values").keys())
+
+    @property
+    def fixtures(self) -> list[Any]:
+        """The patch, read now: every fixture with its id, label, mode,
+        universe, address and where it is. Read again after a change and it
+        shows the change."""
+        host_call = object.__getattribute__(self, "_host_call")
+        if host_call is None or not object.__getattribute__(self, "_active"):
+            return object.__getattribute__(self, "_values")["fixtures"]
+        from .bindings import LumaRecord
+        rows = host_call("venue.fixtures", {})["fixtures"]
+        return [LumaRecord(row, f"luma.venue.fixtures[{i}]") for i, row in enumerate(rows)]
+
+    def patch(
+        self, fixture: Any, *, universe: int | None = None, address: int | None = None
+    ) -> dict[str, Any]:
+        """Put `fixture` at a DMX `universe` and `address` (1 to 512) and pin
+        it there, so later placements work round it. Either left out keeps
+        where it stands. Refused, with the reason, if it runs off the end of
+        the universe or lands on another fixture."""
+        self._require_active()
+        return dict(self._verb("venue.patch", {
+            "fixture": _node(fixture),
+            "universe": None if universe is None else int(universe),
+            "address": None if address is None else int(address),
+        }))
 
     @property
     def views(self) -> tuple[str, ...]:
@@ -2272,8 +2302,8 @@ class Venue:
         )
 
     def remove(self, node: Any) -> str:
-        """Delete nodes and everything structural under them, and return the
-        tree that is left.
+        """Delete nodes and everything structural under them, and say how
+        many were asked for; `describe()` shows the room that is left.
 
         `node` is one node or a selection of them — a list, or anything
         `nodes()` returned. An id that is already gone (a subtree cascaded away
@@ -2284,11 +2314,9 @@ class Venue:
         every fixture under it too, patch rows included.
         """
         items = node if isinstance(node, (list, tuple, set)) else [node]
-        return str(
-            self._verb("venue.remove", {"nodeIds": [_node(item) for item in items]})[
-                "describe"
-            ]
-        )
+        ids = [_node(item) for item in items]
+        self._verb("venue.remove", {"nodeIds": ids})
+        return f"removed {len(ids)} node{'' if len(ids) == 1 else 's'} and what hung on them"
 
     def trim(self, node: Any, *, label: str | None = None, **params: Any) -> Placement:
         """Edit a node's parameters, and optionally rename it.
@@ -2299,7 +2327,8 @@ class Venue:
         because it is one.
 
         The vocabulary is the graph's: `trim` (how high it flies, metres),
-        `u`/`v` (across the surface it sits on), `span` and `count` on a
+        `u`/`v` (where its footprint centre sits, in stage metres from the
+        centre of what it is on — what `place`'s `at=` means), `span` and `count` on a
         generated piece or an array, `yaw` about the joint and `pan`/`tilt` off
         a head's rest direction — every angle in **degrees**, as `aim` takes
         them. Everything bolted to the node comes along.

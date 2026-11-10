@@ -140,16 +140,16 @@ class VenueRefreshTests(unittest.TestCase):
         cached_a = snapshot("room", [], "a")
         cached_b = snapshot("room", [{"id": "fixture"}], "b")
         first = reconcile_facades(cached_a, None)
-        v, fx = first.venue, first.venue.fixtures
+        v, fx = first.venue, first.venue["fixtures"]
         v._cache["library"] = "previous cell"
         second = reconcile_facades(cached_b, first)
         self.assertIs(second.venue, v)
-        self.assertEqual((len(v.fixtures), len(fx)), (1, 0))
+        self.assertEqual((len(v["fixtures"]), len(fx)), (1, 0))
         self.assertEqual(v._cache, {})
         undone = reconcile_facades(cached_a, second)
         self.assertIs(undone.venue, v)
-        self.assertEqual(len(v.fixtures), 0)
-        self.assertEqual(len(cached_b.venue.fixtures), 1)
+        self.assertEqual(len(v["fixtures"]), 0)
+        self.assertEqual(len(cached_b.venue["fixtures"]), 1)
         elsewhere = reconcile_facades(snapshot("other", [], "other"), undone)
         for operation in (v.render, v.tiles, v.describe):
             with self.assertRaisesRegex(VenueHostUnavailableError, "no longer in scope"):
@@ -626,6 +626,8 @@ class BuildHost:
             }
         if method == "venue.describe":
             return {"text": "root  venue\n"}
+        if method == "venue.fixtures":
+            return {"fixtures": [{"id": "f1", "label": "Mover 1"}]}
         if method == "venue.chain":
             self.built += 1
             return chained(f"n-{self.built}", payload)
@@ -839,8 +841,10 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(payload["nodeId"], "wing-1")
         self.assertTrue(payload["flip"])
 
-    def test_remove_answers_with_the_tree_that_is_left(self) -> None:
-        self.assertIn("venue", self.venue.remove("wing-1"))
+    def test_remove_says_what_it_removed_and_not_the_room(self) -> None:
+        said = self.venue.remove("wing-1")
+        self.assertIn("removed 1", said)
+        self.assertNotIn("root", said)
         self.assertEqual(self.host.last("venue.remove")["nodeIds"], ["wing-1"])
 
     def test_remove_takes_a_selection(self) -> None:
@@ -1132,6 +1136,23 @@ class BuildTests(unittest.TestCase):
         self.venue.fixture_library("robe")
         self.assertFalse(callable(self.venue.fixtures))
 
+    def test_fixtures_are_read_now(self) -> None:
+        """The patch is read when it is asked for, not when the cell began."""
+        self.assertEqual(self.venue.fixtures[0].label, "Mover 1")
+        self.assertEqual(self.host.last("venue.fixtures"), {})
+
+    def test_a_mode_is_found_by_name_or_channel_count(self) -> None:
+        [head] = self.venue.fixture_library("robe")
+        self.assertEqual(head.mode("Basic"), "Basic")
+        self.assertEqual(head.mode(39), "Mode 1")
+
+    def test_patch_pins_an_address(self) -> None:
+        self.venue.patch("f1", universe=1, address=129)
+        self.assertEqual(
+            self.host.last("venue.patch"),
+            {"fixture": "f1", "universe": 1, "address": 129},
+        )
+
     def test_attachment_accepts_the_same_catalog_name_as_place(self) -> None:
         self.venue.attach("truss", to="deck-1", socket="corner_fl")
         self.assertEqual(self.host.last("venue.attach")["catalogRef"], "truss/straight")
@@ -1168,8 +1189,8 @@ class BuildTests(unittest.TestCase):
         head = self.venue.fixture_library()[0]
         with self.assertRaises(LumaHostCallError) as caught:
             head.mode(7)
-        self.assertIn("Mode 1 (39)", str(caught.exception))
-        self.assertIn("Basic (12)", str(caught.exception))
+        for offered in ("Mode 1", "39", "Basic", "12"):
+            self.assertIn(offered, str(caught.exception))
 
     # -- aim -------------------------------------------------------------
 
