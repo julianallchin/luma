@@ -62,7 +62,7 @@ impl TrackAudio {
         let mut access = VisibleTrackAccess::<Read>::read(&self.pool, track_id)
             .await
             .map_err(SyncError::Local)?;
-        let principal = access.principal().map(str::to_owned);
+        let principal = access.principal().to_owned();
         let source: AudioSource = sqlx::query_as(
             "SELECT uid, file_path, track_hash, storage_path FROM tracks WHERE id = ?",
         )
@@ -84,7 +84,7 @@ impl TrackAudio {
         let auth = auth::get_current_auth(&self.state_pool)
             .await?
             .ok_or(SyncError::AuthRequired)?;
-        if principal.as_deref() != Some(auth.principal.user_id.as_str()) {
+        if principal != auth.principal.user_id {
             return Err(SyncError::AuthRequired);
         }
         // Synced metadata must stay a filename inside the managed tracks directory.
@@ -129,7 +129,7 @@ impl TrackAudio {
         let mut access = VisibleTrackAccess::<Operate>::operate(&self.pool, track_id)
             .await
             .map_err(SyncError::Local)?;
-        if access.principal() != principal.as_deref() {
+        if access.principal() != principal {
             return Err(SyncError::AuthRequired);
         }
         let current: AudioSource = sqlx::query_as(

@@ -241,14 +241,14 @@ pub(super) async fn delegate(
     let services = ctx.services();
     let pool = services.db().0.clone();
     let principal = services
-        .admitted_principal()
+        .require_session()
         .await
         .map_err(|error| error.to_string())?;
 
-    let parent = super::context::execution_thread(&pool, ctx.thread_id, principal.as_deref())
+    let parent = super::context::execution_thread(&pool, ctx.thread_id, &principal)
         .await
         .map_err(|error| format!("this thread is not available: {error}"))?;
-    if depth_of(&pool, principal.as_deref(), &parent).await? + 1 > MAX_DEPTH {
+    if depth_of(&pool, &principal, &parent).await? + 1 > MAX_DEPTH {
         return Err(format!(
             "subagents may be nested {MAX_DEPTH} deep; do this work yourself"
         ));
@@ -258,7 +258,7 @@ pub(super) async fn delegate(
     let child = db::create_thread(
         &pool,
         child_thread_input(&parent, ctx.call_id, &delegation.description),
-        principal.as_deref(),
+        &principal,
     )
     .await
     .map_err(|error| format!("could not open a thread for this subagent: {error}"))?;
@@ -269,13 +269,7 @@ pub(super) async fn delegate(
             .acquire()
             .await
             .map_err(|error| format!("could not open the subagent's draft: {error}"))?;
-        drafts::create(
-            &mut connection,
-            score_id,
-            &child.id,
-            principal.as_deref().unwrap_or_default(),
-        )
-        .await?;
+        drafts::create(&mut connection, score_id, &child.id, &principal).await?;
     }
 
     let mut snapshot = SubagentSnapshot {
@@ -439,7 +433,7 @@ async fn discard(ctx: &ToolContext<'_>, child_thread_id: &str) {
 /// walk is two reads at worst and needs no recursive statement of its own.
 async fn depth_of(
     pool: &sqlx::SqlitePool,
-    principal: Option<&str>,
+    principal: &str,
     thread: &AgentThread,
 ) -> Result<usize, String> {
     let mut depth = 0;

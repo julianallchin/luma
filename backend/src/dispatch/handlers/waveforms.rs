@@ -109,11 +109,12 @@ mod tests {
         let audio = directory.join("gated.wav");
         std::fs::write(&audio, wav()).unwrap();
 
-        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
+        let services = crate::test_support::signed_in(directory, directory.to_path_buf()).await;
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path)
-             VALUES ('track', NULL, 'gated-hash', 'Gated', ?, ?)",
+             VALUES ('track', ?, 'gated-hash', 'Gated', ?, ?)",
         )
+        .bind(crate::test_support::TEST_OWNER)
         .bind(f64::from(SECONDS))
         .bind(audio.to_string_lossy().to_string())
         .execute(&services.db.0)

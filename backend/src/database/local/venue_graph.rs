@@ -197,7 +197,7 @@ pub async fn insert_node_with_id(
     placement: Option<&NodePlacement>,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_string();
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     sqlx::query(
         "INSERT INTO venue_nodes
              (id, uid, venue_id, kind, catalog_ref, label,
@@ -316,7 +316,7 @@ pub async fn upsert_constraint(
     target_node: &str,
     target_socket: &str,
 ) -> Result<(), String> {
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let venue_id = access.venue_id().to_owned();
     sqlx::query(
         "INSERT INTO venue_constraints
@@ -351,7 +351,7 @@ pub async fn set_params(
     node_id: &str,
     params: &BTreeMap<String, Option<f64>>,
 ) -> Result<(), String> {
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let venue_id = access.venue_id().to_owned();
     for (key, value) in params {
         match value {

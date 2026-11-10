@@ -64,7 +64,7 @@ fn access_token(principal: &str, expires_at: i64) -> String {
 }
 
 /// The `uid` rows must carry to be visible to this fixture's launch, or `None`
-/// for the guest namespace.
+/// for a launch that proves nobody and so sees no rows.
 pub fn owner(stored: Stored) -> Option<&'static str> {
     match stored {
         Stored::Proven { .. } => Some(PRINCIPAL),

@@ -22,10 +22,10 @@
 //!
 //! Nothing in Luma opens without a principal: every row a person makes is
 //! owned, and the cloud — sync, shared venues — is what the app is for. So
-//! this screen has no way past it: no guest capsule, and Escape only steps
-//! back a route. The guest namespace still exists in the database, as the
-//! admission the host arms between a sign-out and the next sign-in, but it
-//! is an interval, not a place a person can work in.
+//! this screen has no way past it, and Escape only steps back a route.
+//! Signed out is the admission the host arms between a sign-out and the next
+//! sign-in: an interval in which the library's commands refuse, not a place
+//! a person can work in.
 //!
 //! A stored session that still proves a principal never sees this screen;
 //! one that no longer does is asked online whether it can be made to (see

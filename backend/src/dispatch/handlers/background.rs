@@ -180,12 +180,13 @@ mod tests {
 
     /// A library holding tracks `t1` (titled) and `t2` (untitled).
     async fn library(directory: &std::path::Path) -> AppServices {
-        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
+        let services = crate::test_support::signed_in(directory, directory.to_path_buf()).await;
         sqlx::query(
-            "INSERT INTO tracks (id, track_hash, title, duration_seconds, file_path) VALUES
-               ('t1', 'h1', 'Aurora', 1.0, '/music/aurora.wav'),
-               ('t2', 'h2', NULL, 1.0, '/music/borealis.flac')",
+            "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path) VALUES
+               ('t1', ?1, 'h1', 'Aurora', 1.0, '/music/aurora.wav'),
+               ('t2', ?1, 'h2', NULL, 1.0, '/music/borealis.flac')",
         )
+        .bind(crate::test_support::TEST_OWNER)
         .execute(&services.db.0)
         .await
         .unwrap();

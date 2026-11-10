@@ -11,8 +11,8 @@ pub async fn agent_thread_create(
     services: &AppServices,
     input: CreateAgentThreadInput,
 ) -> Result<AgentThread, CommandError> {
-    let owner_user_id = Some(services.require_session().await?);
-    Ok(db::create_thread(&services.db.0, input, owner_user_id.as_deref()).await?)
+    let owner_user_id = services.require_session().await?;
+    Ok(db::create_thread(&services.db.0, input, &owner_user_id).await?)
 }
 
 /// Each filter is an independent `AND`; `None` is a wildcard for that field.
@@ -24,13 +24,13 @@ pub async fn agent_thread_list(
     subject_kind: Option<String>,
     subject_id: Option<String>,
 ) -> Result<Vec<AgentThread>, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = services.require_session().await?;
     Ok(db::list_threads(
         &services.db.0,
         agent_kind.as_deref(),
         subject_kind.as_deref(),
         subject_id.as_deref(),
-        owner_user_id.as_deref(),
+        &owner_user_id,
     )
     .await?)
 }
@@ -43,10 +43,8 @@ pub async fn agent_thread_append_messages(
     thread_id: String,
     input: AppendAgentThreadMessagesInput,
 ) -> Result<Vec<AgentThreadMessage>, CommandError> {
-    let owner_user_id = Some(services.require_session().await?);
-    match db::append_messages_at_head(&services.db.0, &thread_id, input, owner_user_id.as_deref())
-        .await?
-    {
+    let owner_user_id = services.require_session().await?;
+    match db::append_messages_at_head(&services.db.0, &thread_id, input, &owner_user_id).await? {
         AgentThreadAppendOutcome::Appended { messages, .. } => Ok(messages),
         AgentThreadAppendOutcome::HeadMoved {
             expected_head_message_id,
@@ -68,8 +66,8 @@ pub async fn agent_thread_delete(
     services: &AppServices,
     thread_id: String,
 ) -> Result<(), CommandError> {
-    let owner_user_id = Some(services.require_session().await?);
-    let children = db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
+    let owner_user_id = services.require_session().await?;
+    let children = db::delete_thread(&services.db.0, &thread_id, &owner_user_id).await?;
     for child in children {
         services.workspaces.retire_thread(&child).await?;
     }
@@ -87,9 +85,9 @@ pub async fn agent_thread_set_actor(
     thread_id: String,
     actor: String,
 ) -> Result<(), CommandError> {
-    let owner_user_id = Some(services.require_session().await?);
+    let owner_user_id = services.require_session().await?;
     Actor::parse(&actor).map_err(CommandError::Invalid)?;
-    db::set_thread_actor(&services.db.0, &thread_id, &actor, owner_user_id.as_deref()).await?;
+    db::set_thread_actor(&services.db.0, &thread_id, &actor, &owner_user_id).await?;
     Ok(())
 }
 
@@ -98,6 +96,6 @@ pub async fn agent_thread_set_model(
     thread_id: String,
     selection: crate::agent::engine::catalog::Selection,
 ) -> Result<AgentThread, CommandError> {
-    let owner = services.admitted_principal().await?;
-    Ok(db::set_thread_selection(&services.db.0, &thread_id, &selection, owner.as_deref()).await?)
+    let owner = services.require_session().await?;
+    Ok(db::set_thread_selection(&services.db.0, &thread_id, &selection, &owner).await?)
 }

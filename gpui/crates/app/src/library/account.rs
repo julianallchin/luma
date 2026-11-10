@@ -53,16 +53,16 @@ impl Library {
     /// one to verify.
     ///
     /// Distinct from `user_id().is_none()`, and the distinction is the whole
-    /// point: a library nobody has signed into is a guest library, which is a
-    /// working library and owes the user nothing. A library holding
-    /// credentials that no longer prove anyone has lost something the user
-    /// had, and only signing in again gets it back — so that is the one state
-    /// that raises the sign-in gate unasked.
+    /// point: a library nobody has signed into owes the user nothing but the
+    /// sign-in screen. A library holding credentials that no longer prove
+    /// anyone has lost something the user had, and only signing in again gets
+    /// it back — so that is the one state that is first asked online whether
+    /// the session can be renewed.
     pub fn lapsed(&self) -> Option<&str> {
         self.lapsed.as_deref()
     }
 
-    /// The signed-in principal, or `None` for the guest namespace.
+    /// The signed-in principal, or `None` while nobody is signed in.
     pub fn user_id(&self) -> Option<String> {
         self.account.lock().unwrap().as_ref().map(|a| a.id.clone())
     }
