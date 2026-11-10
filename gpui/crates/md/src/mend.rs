@@ -56,6 +56,52 @@ struct OpenDelim {
     pos: usize,
 }
 
+/// The open delimiter runs in open order, plus a per-character index of the
+/// latest of each, so closing against the innermost same-character opener
+/// costs O(1) instead of a scan past other characters' runs. Without it a
+/// long `*a _a *a _a …` followed by closers is quadratic.
+#[derive(Default)]
+struct Delims {
+    list: Vec<OpenDelim>,
+    /// Indices into `list` per delimiter character (`*`, `_`, `~`), ascending.
+    by: [Vec<usize>; 3],
+}
+
+impl Delims {
+    fn slot(c: char) -> usize {
+        match c {
+            '*' => 0,
+            '_' => 1,
+            _ => 2,
+        }
+    }
+
+    fn push(&mut self, delim: OpenDelim) {
+        self.by[Self::slot(delim.ch)].push(self.list.len());
+        self.list.push(delim);
+    }
+
+    fn last_of(&self, c: char) -> Option<usize> {
+        self.by[Self::slot(c)].last().copied()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.list.truncate(len);
+        for by in &mut self.by {
+            while by.last().is_some_and(|&i| i >= len) {
+                by.pop();
+            }
+        }
+    }
+
+    /// Drop the runs opened at or after char index `pos` (`list` is in
+    /// ascending `pos` order).
+    fn retain_before(&mut self, pos: usize) {
+        let keep = self.list.partition_point(|d| d.pos < pos);
+        self.truncate(keep);
+    }
+}
+
 /// Repair hanging inline markers in a streaming block's source. Returns
 /// `None` when the text needs no repair (the overwhelmingly common case).
 pub fn close_hanging(text: &str) -> Option<String> {
@@ -63,7 +109,7 @@ pub fn close_hanging(text: &str) -> Option<String> {
     let n = cs.len();
     let at = |i: usize| cs.get(i).map(|&(_, c)| c);
 
-    let mut delims: Vec<OpenDelim> = Vec::new();
+    let mut delims = Delims::default();
     // Char indices of unmatched `[`.
     let mut brackets: Vec<usize> = Vec::new();
     // Open inline code span: (backtick run length, content char index).
@@ -116,7 +162,7 @@ pub fn close_hanging(text: &str) -> Option<String> {
                     // Emphasis opened inside a completed `[…]` and never
                     // closed there stays literal — as the final parse will
                     // decide too.
-                    delims.retain(|d| d.pos < open);
+                    delims.retain_before(open);
                     if at(i + 1) == Some('(') {
                         // Consume the URL through its balanced `)`.
                         let mut j = i + 2;
@@ -167,7 +213,7 @@ pub fn close_hanging(text: &str) -> Option<String> {
     {
         pending.push((cpos, "`".repeat(ticks)));
     }
-    for d in &delims {
+    for d in &delims.list {
         if last_content.is_some_and(|lc| lc >= d.pos) {
             pending.push((d.pos, d.ch.to_string().repeat(d.len)));
         }
@@ -217,7 +263,7 @@ fn run_len(cs: &[(usize, char)], i: usize) -> usize {
 /// opened after a consumed opener were inside the closed span and stay
 /// literal, exactly as the final parse treats them.
 fn delim(
-    delims: &mut Vec<OpenDelim>,
+    delims: &mut Delims,
     cs: &[(usize, char)],
     c: char,
     run: usize,
@@ -244,14 +290,11 @@ fn delim(
     let can_close = prev.is_some_and(|c| !c.is_whitespace());
     let can_open = next.is_some_and(|c| !c.is_whitespace());
     let mut rest = run;
-    if let Some(k) = can_close
-        .then(|| delims.iter().rposition(|d| d.ch == c))
-        .flatten()
-    {
-        let take = rest.min(delims[k].len);
-        delims[k].len -= take;
+    if let Some(k) = can_close.then(|| delims.last_of(c)).flatten() {
+        let take = rest.min(delims.list[k].len);
+        delims.list[k].len -= take;
         rest -= take;
-        let keep = if delims[k].len == 0 { k } else { k + 1 };
+        let keep = if delims.list[k].len == 0 { k } else { k + 1 };
         delims.truncate(keep);
     }
     if rest > 0 {
@@ -298,6 +341,25 @@ mod tests {
     #[track_caller]
     fn stays(input: &str) {
         assert_eq!(close_hanging(input), None, "{input:?}");
+    }
+
+    /// Thousands of openers followed by their closers: every one pairs with
+    /// the opener right before it, so the result is the input with each
+    /// emphasis closed in order — and the scan stays one pass.
+    #[test]
+    fn a_long_run_of_openers_then_closers_mends_linearly() {
+        let n = 20_000;
+        let input = format!("{}{}", "_a ".repeat(n), "a_ ".repeat(n - 1));
+        // Every opener but the first is closed by the matching `a_`; the
+        // first still hangs and gets its closer before the trailing space.
+        let mended = close_hanging(&input).expect("the outermost opener hangs");
+        assert_eq!(mended, format!("{}_ ", input.trim_end()));
+
+        // Alternating characters used to scan past the other character's
+        // runs; here the first `*` and `_` hang, closed innermost-first.
+        let alt = format!("{}{}", "*a _a ".repeat(n), "a_ a* ".repeat(n - 1));
+        let mended = close_hanging(&alt).expect("the outermost openers hang");
+        assert_eq!(mended, format!("{}_* ", alt.trim_end()));
     }
 
     #[test]
