@@ -581,7 +581,8 @@ test("a light's tilt drags, sticks and undoes", () => {
   nav.stage("Test Venue");
   nav.agentOff();
   until("the fixture inventory", (s) => s.findAll({ role: "row" }).some((n) => n.label === "Mover 0"));
-  nav.step("a light", "row", "Mover 0");
+  // By its name: the middle of a row is its address cells, which edit.
+  nav.step("a light", "text", "Mover 0 label = Mover 0");
   until("the aim rows", (s) => s.findAll({ role: "slider" }).some((n) => n.label.startsWith("stage-tilt = ")));
   valueBox("stage-pan");
   const before = settled("stage-tilt");

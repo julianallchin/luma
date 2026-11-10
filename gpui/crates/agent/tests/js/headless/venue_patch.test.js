@@ -42,8 +42,7 @@ const lastButton = (label) => app.snapshot().findAll({ role: "button", label }).
 
 function openPatch() {
   nav.patch("Test Venue");
-  nav.step("patch details", "button", "Patch details");
-  // Takeover, and the stage off: the table is nine columns beside a rail.
+  // The stage off: the table is seven columns beside the groups.
   nav.agentOff();
   nav.stageOff();
   until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
@@ -248,35 +247,54 @@ test("a wider mode asks before it moves the fixture", { fixture: { files: { "fix
   assert(reading("Mover 0 address = ") !== before, "it repatched without moving");
 });
 
-test("venue groups are editable in the narrow panel", { fixture: { window: [1100, 900] } }, () => {
-  const included = () => app.snapshot().findAll({ role: "checkbox" }).filter((n) => n.focused).map((n) => n.label);
+const picked = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.focused).map((n) => n.label);
+const groupOf = (row) => reading(`${row} group = `);
+
+// The panel has no edit mode: a group takes the selection when it is made,
+// its box puts fixtures in and takes them out at once, and its row selects
+// what it holds.
+test("groups write as they are ticked and select what they hold", { fixture: { window: [1100, 900] } }, () => {
   nav.patch("Test Venue");
   until("the lights", (s) => s.find({ role: "row", label: "Mover 0" }));
   nav.step("a light", "row", "Mover 0");
-  nav.step("make a group", "button", "Group selected lights");
-  app.key("f r o n t space w a s h");
-  nav.step("save the group", "button", "Save group");
-  until("the saved group", (s) => s.find({ role: "row", label: "Group front wash" }));
-  nav.step("edit the group", "button", "Edit group front wash");
-  expect(included()).toEqual(["Include Mover 0"]);
-  nav.step("include another", "checkbox", "Include Mover 1");
-  nav.step("save the membership", "button", "Save group");
-  until("saved", (s) => s.find({ role: "button", label: "Edit group front wash" }));
-  nav.step("rename the group", "button", "Edit group front wash");
-  app.key("secondary-a b a c k space w a s h");
-  nav.step("save the rename", "button", "Save group");
+  nav.step("make a group", "button", "New group");
+  app.key("f r o n t space w a s h enter");
+  until("the new group", (s) => s.find({ role: "row", label: "Group front wash" }));
+  until("the group on its fixture", () => groupOf("Mover 0").includes("front wash"));
+  assert(!groupOf("Mover 1").includes("front wash"), "the group took a fixture nobody selected");
+
+  nav.step("another light", "row", "Mover 1");
+  nav.step("put it in", "checkbox", "Put 1 selected fixture in front wash");
+  until("the second member", () => groupOf("Mover 1").includes("front wash"));
+
+  // A fixture's row stayed a row the whole time.
+  nav.step("the group", "button", "Select group front wash");
+  until("the group's fixtures", () => picked().length === 2);
+  expect(picked()).toEqual(["Mover 0", "Mover 1"]);
+
+  app.click(app.snapshot().find({ role: "row", label: "Group front wash" }), { button: "right" });
+  until("the group menu", (s) => s.find({ role: "button", label: "Rename" }) !== undefined);
+  app.click(app.snapshot().find({ role: "button", label: "Rename" }));
+  until("the name field", (s) => s.find({ role: "input", label: "Group name" }) !== undefined);
+  app.key("secondary-a b a c k space w a s h enter");
   until("renamed", (s) => s.find({ role: "row", label: "Group back wash" }));
-  nav.step("verify", "button", "Edit group back wash");
-  expect(included()).toEqual(["Include Mover 0", "Include Mover 1"]);
-  nav.step("cancel", "button", "Cancel group edit");
-  until("the builder", (s) => s.find({ role: "button", label: "Add element" }));
+  until("the new name on its fixtures", () => groupOf("Mover 1").includes("back wash"));
+
+  nav.step("one light", "row", "Mover 0");
+  nav.step("take it out", "checkbox", "Take 1 selected fixture out of back wash");
+  until("one member fewer", () => !groupOf("Mover 0").includes("back wash"));
+  assert(groupOf("Mover 1").includes("back wash"), "the other member left with it");
 });
 
-test("fixture table edits and scene controls share selection", () => {
+test("the table, the groups and the stage share one selection", () => {
   nav.patch("Test Venue");
-  // The old per-kind tabs are gone.
+  // The old per-kind tabs are gone, and so is the second table.
   expect(app.snapshot().findAll({ role: "toggle" }).filter((n) => ["Stage", "Fixtures", "Groups"].includes(n.label)).length).toBe(0);
-  nav.step("a fixture", "row", "Mover 0");
+  expect(app.snapshot().find({ role: "button", label: "Patch details" })).toBe(undefined);
+  // The first click on a name selects its row; the second edits the name.
+  nav.step("a fixture", "text", "Mover 0 label = Mover 0");
+  until("the row picked", () => picked().includes("Mover 0"));
+  expect(picked()).toEqual(["Mover 0"]);
   nav.step("rename it", "text", "Mover 0 label = Mover 0");
   app.key("secondary-a w a s h space 1 enter");
   until("renamed", (s) => s.find({ role: "row", label: "wash 1" }));
@@ -286,19 +304,18 @@ test("fixture table edits and scene controls share selection", () => {
   nav.step("edit the address", "text", "wash 1 address = 1");
   app.key("secondary-a 6 5 enter");
   until("the address saved", (s) => s.find({ role: "text", label: "wash 1 address = 65" }));
-  nav.step("edit a group", "button", "Edit group right movers");
-  nav.step("include the fixture", "checkbox", "Include wash 1");
-  nav.step("save the membership", "button", "Save group");
-  nav.step("patch details", "button", "Patch details");
-  nav.agentOff();
-  nav.stageOff();
-  until("the same address in the patch", (s) => s.find({ role: "text", label: "wash 1 address = 65" }));
-  nav.step("close the patch", "button", "Close patch details");
-  nav.step("another fixture", "row", "Mover 1");
-  nav.step("back to the fixture", "row", "wash 1");
-  nav.step("verify the group", "button", "Edit group right movers");
-  expect(app.snapshot().find({ role: "checkbox", label: "Include wash 1" }).focused).toBe(true);
-  nav.step("cancel", "button", "Cancel group edit");
+  // The edits left the row selected, so the group box is about it.
+  nav.step("put it in a group", "checkbox", "Put 1 selected fixture in right movers");
+  until("the group on its row", () => groupOf("wash 1").includes("right movers"));
+
+  // Shift takes the run between two rows, read down the table.
+  nav.step("the first row", "text", "Mover 1 label = Mover 1");
+  app.click(app.snapshot().find({ role: "text", label: "Mover 3 label = Mover 3" }), { modifiers: ["shift"] });
+  until("the run", () => picked().length === 3);
+  expect(picked()).toEqual(["Mover 1", "Mover 2", "Mover 3"]);
+
+  nav.step("the group", "button", "Select group right movers");
+  until("the group's fixtures", () => picked().includes("wash 1"));
   expect(reading("wash 1 address = ")).toBe("65");
 });
 
@@ -317,14 +334,13 @@ test("render settings follow the venue across a score and a reopen", () => {
   assert(changed !== before, "the drag did not change the time of day");
   app.key("escape");
   until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
-  // Escape closes the popover above a draft first, then the draft.
-  nav.step("draft a group", "button", "Create group");
-  nav.step("the view over the draft", "toggle", "Render settings");
-  until("the view open", (s) => s.find({ role: "card", label: "Render settings" }));
-  app.key("escape");
-  until("the view closed above the draft", (s) => !s.find({ role: "card", label: "Render settings" }) && s.find({ role: "button", label: "Save group" }));
-  app.key("escape");
-  until("the draft closed", (s) => !s.find({ role: "button", label: "Save group" }));
+  // Escape puts away a group name being typed, and makes no group.
+  nav.step("name a group", "button", "New group");
+  until("the name field", (s) => s.find({ role: "input", label: "Group name" }));
+  app.key("d r a f t escape");
+  until("the field closed", (s) => !s.find({ role: "input", label: "Group name" }));
+  app.frames(4);
+  expect(app.snapshot().find({ role: "row", label: "Group draft" })).toBe(undefined);
   nav.track("Aurora");
   nav.step("the score's view settings", "toggle", "Render settings");
   until("the score's sun", () => sun() !== undefined);
@@ -350,20 +366,27 @@ test(
   () => {
     const texts = () => app.snapshot().findAll({ role: "text" }).map((n) => n.label);
     nav.patch("Test Venue");
-    nav.step("edit the group", "button", "Edit group left movers");
-    app.key("secondary-a h o u s e space l e f t");
-    nav.step("save the name", "button", "Save group");
-    until("the renamed group", (s) => s.find({ role: "button", label: "Edit group house left" }));
+    const groupMenu = (name, item) => {
+      until("the group", (s) => s.find({ role: "row", label: `Group ${name}` }));
+      app.click(app.snapshot().find({ role: "row", label: `Group ${name}` }), { button: "right" });
+      until("the group menu", (s) => s.find({ role: "button", label: item }) !== undefined);
+      app.click(app.snapshot().find({ role: "button", label: item }));
+    };
+    // The row says the group is used before anyone asks to delete it.
+    until("the group's use", (s) => s.find({ role: "row", label: "Group left movers" }));
+    groupMenu("left movers", "Rename");
+    until("the name field", (s) => s.find({ role: "input", label: "Group name" }));
+    app.key("secondary-a h o u s e space l e f t enter");
+    until("the renamed group", (s) => s.find({ role: "row", label: "Group house left" }));
     expect(library.score().clips.a.selection).toEqual({ groups: ["group-left"] });
 
-    nav.step("edit it again", "button", "Edit group house left");
-    nav.step("delete it", "button", "Delete group");
+    groupMenu("house left", "Delete group");
     until("the question", () => texts().includes("Delete group?"));
     const asked = texts().find((label) => label.startsWith("It is used"));
     expect(asked).toContain("1 time across 1 score");
     expect(asked).toContain("Deleting this group will break them");
     app.click(app.snapshot().findAll({ role: "button", label: "Delete group" }).at(-1));
-    until("the group gone", (s) => !s.find({ role: "button", label: "Edit group house left" }));
+    until("the group gone", (s) => !s.find({ role: "row", label: "Group house left" }));
     expect(library.score().clips.a.selection).toEqual({ groups: ["group-left"] });
   },
 );

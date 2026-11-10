@@ -1,5 +1,11 @@
 //! The venue page: lights, placement and groups share one body.
 //!
+//! # One selection
+//!
+//! The stage, the fixture table, the footprint and the groups panel read and
+//! write [`Patch::selected`]. Nothing on the page has a mode that changes what
+//! a click on a fixture means.
+//!
 //! # One allocator, and it is not here
 //!
 //! Every address on this page came from the backend: `next_addresses` for a
@@ -16,7 +22,7 @@
 //! frame — which would take the caret with them mid-edit. A venue's patch is
 //! tens to hundreds of rows and this is a page, not a timeline.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use gpui::prelude::*;
 use gpui::Focusable as _;
@@ -41,9 +47,7 @@ mod outputs;
 mod table;
 mod venue;
 
-/// What the header's chips hang.
-///
-/// Optional address-map and output-routing details.
+/// What the header's chips hang: the address map and the output routing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Panel {
     Footprint,
@@ -71,6 +75,17 @@ pub(crate) enum Column {
     Label,
     Universe,
     Address,
+}
+
+/// What a click on a fixture's row does to the selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Pick {
+    /// Select this row and no other.
+    Only,
+    /// Add this row, or take it out.
+    Toggle,
+    /// Select the run from the last row clicked through this one.
+    Through,
 }
 
 /// The one cell being edited, and the live field in it.
@@ -124,12 +139,15 @@ pub(crate) struct Patch {
     pub(crate) venue_id: String,
     pub(crate) venue_name: String,
     pub(crate) stage: crate::stage::StagePage,
-    pub(crate) details_open: bool,
-    pub(crate) group_editor: Option<groups::Editor>,
-    /// Why the group being edited was refused — a name the backend will not
-    /// take — under its field until the next save or cancel.
+    /// The group name being typed, if one is.
+    pub(crate) naming: Option<groups::Naming>,
+    /// Why the name being typed was refused — one the backend will not take —
+    /// under its field until the next commit.
     pub(crate) group_refusal: Option<SharedString>,
+    /// A group write is on its way; the panel's controls wait for it.
     pub(crate) group_busy: bool,
+    /// A group's menu, and the point it hangs from.
+    pub(crate) group_menu: Option<(String, Point<gpui::Pixels>)>,
     pub(crate) data: Option<PatchData>,
     /// The patch could not be read. The cause is in the log.
     pub(crate) load_failed: bool,
@@ -155,6 +173,8 @@ pub(crate) struct Patch {
     pub(crate) universe_menu: bool,
 
     pub(crate) selected: HashSet<String>,
+    /// The row a shift-click runs from: the last one clicked on its own.
+    pub(crate) anchor: Option<String>,
     pub(crate) editing: Option<Editing>,
     pub(crate) refusal: Option<Refusal>,
     /// The row menu, and the point it hangs from.
@@ -178,10 +198,10 @@ impl Patch {
             chat,
             venue_id,
             stage: crate::stage::StagePage::new(cx),
-            details_open: false,
-            group_editor: None,
+            naming: None,
             group_refusal: None,
             group_busy: false,
+            group_menu: None,
             venue_name,
             data: None,
             load_failed: false,
@@ -195,6 +215,7 @@ impl Patch {
             panel: None,
             universe_menu: false,
             selected: HashSet::new(),
+            anchor: None,
             editing: None,
             refusal: None,
             menu: None,
@@ -212,41 +233,14 @@ impl Patch {
         self.rows().iter().find(|row| row.id == id)
     }
 
-    /// The group path a fixture sits on, deepest node first joined by ` / `.
-    ///
-    /// Read out of `list_group_tree` rather than derived: the derivation is the
-    /// backend's, and a second walk of the same facts here would be the second
-    /// grouping rule the gauntlet forbids.
-    pub(crate) fn group_path(&self, id: &str) -> Option<String> {
-        let data = self.data.as_ref()?;
-        let authored: Vec<_> = data
-            .groups
-            .iter()
-            .filter(|node| node.role.is_none() && node.fixtures.iter().any(|fixture| fixture == id))
-            .map(|node| node.label.as_str())
-            .collect();
-        if !authored.is_empty() {
-            return Some(authored.join(" · "));
-        }
-        let by_id: BTreeMap<&str, &luma_lib::models::groups::GroupTreeNode> =
-            data.groups.iter().map(|n| (n.id.as_str(), n)).collect();
-        // The deepest node holding it — the tree is parents-first, so the last
-        // match down the list is the leaf.
-        let leaf = data
-            .groups
-            .iter()
-            .rfind(|node| node.fixtures.iter().any(|f| f == id))?;
-        let mut path = vec![leaf.label.clone()];
-        let mut parent = leaf.parent_id.clone();
-        while let Some(id) = parent {
-            let Some(node) = by_id.get(id.as_str()) else {
-                break;
-            };
-            path.push(node.label.clone());
-            parent = node.parent_id.clone();
-        }
-        path.reverse();
-        Some(path.join(" / "))
+    /// The groups a fixture is in, in the panel's order.
+    pub(crate) fn groups_of(&self, id: &str) -> Vec<&luma_lib::models::groups::GroupTreeNode> {
+        self.data.as_ref().map_or_else(Vec::new, |data| {
+            data.groups
+                .iter()
+                .filter(|group| group.fixtures.iter().any(|fixture| fixture == id))
+                .collect()
+        })
     }
 
     /// The modes the fixture's definition offers, with each one's width.
@@ -282,6 +276,16 @@ impl Patch {
 
     fn clear_edit(&mut self) {
         self.editing = None;
+    }
+
+    /// An edit to a cell is about its row, so a row outside the selection
+    /// becomes it. A row already in a larger selection leaves it alone.
+    fn select_edited(&mut self, fixture: &str) {
+        if !self.selected.contains(fixture) {
+            self.selected.clear();
+            self.selected.insert(fixture.to_string());
+            self.anchor = Some(fixture.to_string());
+        }
     }
 
     /// Park a sentence under the title for the reload this act is about to
@@ -431,6 +435,13 @@ impl Patch {
                 }
                 self.selected
                     .retain(|id| data.fixtures.iter().any(|f| &f.id == id));
+                if self
+                    .anchor
+                    .as_ref()
+                    .is_some_and(|anchor| !data.fixtures.iter().any(|f| &f.id == anchor))
+                {
+                    self.anchor = None;
+                }
                 self.data = Some(data);
                 self.load_failed = false;
             }
@@ -499,6 +510,7 @@ impl Luma {
         if state.refusal.as_ref().is_some_and(|r| r.fixture == fixture) {
             state.refusal = None;
         }
+        state.select_edited(&fixture);
         state.clear_edit();
         let name = row.label.clone().unwrap_or_else(|| row.model.clone());
         let editing = match column {
@@ -934,21 +946,45 @@ impl Luma {
         &mut self,
         venue_id: String,
         fixture: String,
-        extend: bool,
+        pick: Pick,
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
             state.clear_edit();
-            if !state.group_busy {
-                state.group_editor = None;
-            }
-            if extend {
-                if !state.selected.remove(&fixture) {
-                    state.selected.insert(fixture);
+            match pick {
+                Pick::Only => {
+                    state.selected.clear();
+                    state.selected.insert(fixture.clone());
+                    state.anchor = Some(fixture);
                 }
-            } else {
-                state.selected.clear();
-                state.selected.insert(fixture);
+                Pick::Toggle => {
+                    if !state.selected.remove(&fixture) {
+                        state.selected.insert(fixture.clone());
+                    }
+                    state.anchor = Some(fixture);
+                }
+                // The run is read down the table as it is drawn, from the
+                // anchor, which stays where it was so a second shift-click
+                // re-aims the same run.
+                Pick::Through => {
+                    let rows = state.rows();
+                    let end = rows.iter().position(|row| row.id == fixture);
+                    let start = state
+                        .anchor
+                        .as_ref()
+                        .and_then(|anchor| rows.iter().position(|row| &row.id == anchor))
+                        .or(end);
+                    if let (Some(start), Some(end)) = (start, end) {
+                        let run: HashSet<String> = rows[start.min(end)..=start.max(end)]
+                            .iter()
+                            .map(|row| row.id.clone())
+                            .collect();
+                        state.selected = run;
+                        if state.anchor.is_none() {
+                            state.anchor = Some(fixture);
+                        }
+                    }
+                }
             }
         }
         let selected = self
@@ -987,9 +1023,14 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
+            state.select_edited(&fixture);
             state.mode_menu = Some((fixture, at));
         }
-        cx.notify();
+        let selected = self
+            .patch_mut(&venue_id)
+            .map(|state| state.selected.clone())
+            .unwrap_or_default();
+        self.highlight_venue_lights(selected, cx);
     }
 
     pub(crate) fn close_patch_menus(&mut self, venue_id: String, cx: &mut Context<Self>) {
@@ -997,6 +1038,7 @@ impl Luma {
             state.menu = None;
             state.mode_menu = None;
             state.bind_menu = None;
+            state.group_menu = None;
         }
         cx.notify();
     }
@@ -1028,6 +1070,7 @@ impl Luma {
         };
         state.selected.clear();
         state.selected.insert(fixture.clone());
+        state.anchor = Some(fixture.clone());
         state.drag = Some(StripDrag {
             fixture,
             grabbed_channel: cell.channel,
@@ -1202,68 +1245,33 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // The page
 // ---------------------------------------------------------------------------
 
-/// Render the active task in the narrow venue panel.
+/// The venue page beneath the stage: the fixture table and the groups panel.
 pub(crate) fn patch(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     venue::render(state, app)
 }
 
-pub(super) fn details(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .child(band(state, app))
-        .child(table::table(state, app))
-        .children(
-            state
-                .menu
-                .as_ref()
-                .map(|(fixture, at)| table::row_menu(state, fixture, *at, app)),
-        )
-        .children(
-            state
-                .mode_menu
-                .as_ref()
-                .map(|(fixture, at)| table::mode_menu(state, fixture, *at, app)),
-        )
-        .into_any_element()
-}
-
-/// Title, what the patch holds, and the things a person came here to do.
+/// What the table holds, what was just done, and the page's own acts.
 fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
     let auto = app.clone();
     let for_auto = state.venue_id.clone();
     div()
         .flex_shrink_0()
         .h(px(BAND_HEIGHT))
-        .px(px(20.0))
+        .px(px(12.0))
         .flex()
         .items_center()
         .gap(px(8.0))
-        .border_b_1()
-        .border_color(luma_ui::glass::hairline(0.07))
+        .child(div().flex_none().text_size(px(12.5)).child("Fixtures"))
         .child(
             div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .mr(px(12.0))
-                .child(
-                    div()
-                        .text_size(px(15.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(ladder::foreground())
-                        .child("Patch"),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(ladder::foreground_alpha(0.55))
-                        .child(subtitle(state))
-                        .agent_node(Role::Text, subtitle(state)),
-                ),
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(11.5))
+                .text_color(ladder::foreground_alpha(0.55))
+                .child(subtitle(state))
+                .agent_node(Role::Text, subtitle(state)),
         )
-        .child(div().flex_1().min_w_0())
         .children(Panel::ALL.map(|panel| panel_chip(state, panel, app)))
         .child(
             luma_ui::float::btn("Auto patch", "patch-auto")
@@ -1338,12 +1346,15 @@ fn subtitle(state: &Patch) -> SharedString {
     let Some(data) = state.data.as_ref() else {
         return "Reading the patch…".into();
     };
-    format!(
+    let mut line = format!(
         "{} · {}",
         plural(data.fixtures.len(), "fixture"),
         plural(data.universes.len(), "universe"),
-    )
-    .into()
+    );
+    if !state.selected.is_empty() {
+        line.push_str(&format!(" · {} selected", state.selected.len()));
+    }
+    line.into()
 }
 
 /// `n thing`, `n things`. One helper rather than an `s` at each call site,
@@ -1356,9 +1367,9 @@ pub(crate) fn plural(count: usize, noun: &str) -> String {
     }
 }
 
-/// One row of chrome, a shade taller than a dialog's band because it carries a
-/// title and a subtitle rather than one line of controls.
-const BAND_HEIGHT: f32 = 62.0;
+/// The row of chrome over the table, and over the groups beside it, so the
+/// two lists start on one line.
+pub(crate) const BAND_HEIGHT: f32 = 44.0;
 
 /// Wide enough for a 32-column footprint grid at 8 px a cell plus the card's
 /// own inset — the widest of the three panels, and they share a width so

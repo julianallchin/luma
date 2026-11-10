@@ -391,21 +391,16 @@ impl Luma {
                     cx.notify();
                     return;
                 }
-                if page.details_open {
-                    if page.mode_menu.take().is_some() || page.menu.take().is_some() {
-                        cx.notify();
-                        return;
-                    }
-                    if page.panel.take().is_some() {
-                        cx.notify();
-                        return;
-                    }
-                    page.details_open = false;
+                if page.mode_menu.take().is_some()
+                    || page.menu.take().is_some()
+                    || page.group_menu.take().is_some()
+                    || page.panel.take().is_some()
+                {
                     cx.notify();
                     return;
                 }
-                if page.group_editor.is_some() && !page.group_busy {
-                    page.group_editor = None;
+                if page.naming.is_some() && !page.group_busy {
+                    page.naming = None;
                     page.group_refusal = None;
                     cx.notify();
                     return;

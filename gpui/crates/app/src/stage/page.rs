@@ -129,7 +129,7 @@ impl Luma {
         self.stage_escape(cx);
         if let Some(crate::shell::Body::Patch(page)) = self.workspace.active_body_mut() {
             page.selected.clear();
-            page.group_editor = None;
+            page.anchor = None;
             page.stage.objects_open = false;
         }
         if let Some(state) = self.visualizer_mut() {

@@ -1,14 +1,18 @@
-//! The inventory table: one row per fixture, and the four facts about it a
-//! human is allowed to change here.
+//! The fixture table: one row per fixture, the facts about it a person may
+//! change here, and the groups it is in.
 //!
-//! Label, universe, address and mode. Not position — there is no cell for one,
-//! which is the point (gauntlet AF8): the columns *are* the closed list of what
-//! the patch page writes.
+//! Label, universe, address and mode are the cells that write. Not position —
+//! there is no cell for one, which is the point (gauntlet AF8): the columns
+//! *are* the closed list of what the patch page writes.
 //!
 //! A refused address does not move its row. The edited cell reverts to the
 //! stored value the instant the allocator says no, and the sentence it said sits
 //! under the row until the next edit on it — so "what did I type" and "what is
 //! stored" are never the same pixel telling two stories.
+//!
+//! A click on a row selects it and nothing else: command toggles one row,
+//! shift takes the run from the last one clicked. The stage, the footprint and
+//! the groups panel read and write the same selection.
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Div, Entity, Point, SharedString};
@@ -20,93 +24,46 @@ use luma_ui::menu::ContextMenu;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{float, glass};
 
-use super::{Column, Patch};
+use super::{Column, Patch, Pick};
 use crate::Luma;
 
 /// Column widths. Fixed for the numbers so a table of forty rows reads as a
 /// column of numbers rather than forty independently-sized cells; flexible for
-/// the two that hold names.
-const W_MODEL: f32 = 168.0;
-const W_MODE: f32 = 116.0;
-const W_UNIVERSE: f32 = 64.0;
-const W_ADDRESS: f32 = 64.0;
-const W_RANGE: f32 = 90.0;
-const ROW_HEIGHT: f32 = 38.0;
+/// the name and the groups.
+const W_MODEL: f32 = 132.0;
+const W_MODE: f32 = 96.0;
+const W_NUMBER: f32 = 56.0;
+const W_RANGE: f32 = 72.0;
+const ROW_HEIGHT: f32 = 34.0;
 
-/// The narrowest the seven columns fit in: the fixed widths, both name columns
-/// at their minimum, the gaps between them and the page's own inset. Below
-/// this the table scrolls sideways rather than squeezing — a column of
+/// The narrowest the seven columns fit in: the fixed widths, both flexible
+/// columns at their minimum, the gaps between them and the row's own inset.
+/// Below this the table scrolls sideways rather than squeezing — a column of
 /// addresses that has been compressed into an ellipsis is a column that lies.
 const MIN_WIDTH: f32 = W_MODEL
     + W_MODE
-    + W_UNIVERSE
-    + W_ADDRESS
+    + 2.0 * W_NUMBER
     + W_RANGE
     + 2.0 * NAME_MIN_WIDTH
     + 6.0 * COLUMN_GAP
     + 2.0 * ROW_INSET;
 const NAME_MIN_WIDTH: f32 = 120.0;
 const COLUMN_GAP: f32 = 10.0;
-const ROW_INSET: f32 = 20.0;
+const ROW_INSET: f32 = 12.0;
 
-const COMPACT_MODEL: f32 = 120.0;
-const COMPACT_MODE: f32 = 80.0;
-const COMPACT_NUMBER: f32 = 56.0;
-const COMPACT_PICK: f32 = 16.0;
-const COMPACT_GAP: f32 = 8.0;
-const COMPACT_INSET: f32 = 12.0;
-const COMPACT_MIN: f32 = NAME_MIN_WIDTH
-    + COMPACT_MODEL
-    + COMPACT_MODE
-    + 2.0 * COMPACT_NUMBER
-    + COMPACT_PICK
-    + 5.0 * COMPACT_GAP
-    + 2.0 * COMPACT_INSET;
-
-fn compact_line() -> Div {
-    div()
-        .min_w(px(COMPACT_MIN))
-        .w_full()
-        .flex()
-        .items_center()
-        .gap(px(COMPACT_GAP))
-        .px(px(COMPACT_INSET))
-        .border_b_1()
-        .border_color(glass::hairline(HAIRLINE))
-}
-
-/// The everyday patch: aligned rows, with advanced routing and occupancy in
-/// Patch details. Reuse its editors and allocator so both views write alike.
-pub(super) fn compact(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let header = compact_line()
-        .h(px(30.0))
-        .flex_none()
-        .child(cell(COMPACT_PICK))
-        .child(cell_flex().child(float::label("Fixture")))
-        .child(cell(COMPACT_MODEL).child(float::label("Model")))
-        .child(cell(COMPACT_MODE).child(float::label("Mode")))
-        .child(cell(COMPACT_NUMBER).child(float::label("Universe")))
-        .child(cell(COMPACT_NUMBER).child(float::label("Address")));
-    let mut rows = div()
-        .id("venue-fixture-rows")
-        .flex_1()
-        .min_h_0()
-        .min_w(px(COMPACT_MIN))
-        .overflow_y_scroll()
-        .flex()
-        .flex_col();
-    if state.load_failed {
-        rows = rows.child(luma_ui::plate(
+pub(super) fn table(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+    let body: AnyElement = match (state.load_failed, state.data.as_ref()) {
+        (true, _) => luma_ui::plate(
             "Could not read the fixtures".to_string(),
             ladder::muted_foreground(),
-        ));
-    } else if state.data.is_none() {
-        rows = rows.child(float::empty_row("Loading fixtures…"));
-    } else if state.rows().is_empty() {
-        rows = rows.child(float::empty_row("No fixtures yet."));
-    } else {
-        rows = rows.children(state.rows().iter().map(|row| compact_row(state, row, app)));
-    }
+        )
+        .into_any_element(),
+        (false, None) => float::empty_row("Loading fixtures…").into_any_element(),
+        (false, Some(data)) if data.fixtures.is_empty() => {
+            float::empty_row("No fixtures yet.").into_any_element()
+        }
+        (false, Some(_)) => rows(state, app),
+    };
     div()
         .id("venue-fixture-table")
         .flex_1()
@@ -115,177 +72,9 @@ pub(super) fn compact(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .overflow_x_scroll()
         .flex()
         .flex_col()
-        .child(header)
-        .child(rows)
-        .agent_node(Role::Card, "Fixture table")
-        .into_any_element()
-}
-
-fn compact_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyElement {
-    let name: SharedString = row
-        .label
-        .clone()
-        .unwrap_or_else(|| row.model.clone())
-        .into();
-    let selected = state.selected.contains(&row.id);
-    let editing_members = state.group_editor.is_some();
-    let editing = state.editing.as_ref().filter(|edit| edit.fixture == row.id);
-    let picked = app.clone();
-    let venue = state.venue_id.clone();
-    let id = row.id.clone();
-    let mut line = compact_line()
-        .id(SharedString::from(format!("venue-light-{}", row.id)))
-        .h(px(34.0))
-        .flex_none()
-        .cursor_pointer()
-        .bg(if selected {
-            glass::card_selected_bg()
-        } else {
-            glass::wash(0.0)
-        })
-        .when(!selected, |line| {
-            line.hover(|style| style.bg(glass::glass_hover()))
-                .fade_hover()
-        })
-        .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
-            picked.update(cx, |this, cx| {
-                if editing_members {
-                    this.toggle_venue_group_member(&id, cx);
-                } else {
-                    this.pick_patch_row(
-                        venue.clone(),
-                        id.clone(),
-                        event.modifiers.secondary() || event.modifiers.shift,
-                        cx,
-                    );
-                }
-            });
-        })
-        .child(
-            cell(COMPACT_PICK)
-                .text_size(px(12.0))
-                .text_color(ladder::accent())
-                .when(selected, |cell| {
-                    cell.child(
-                        gpui_component::Icon::new(luma_ui::icons::IconName::Check).size(px(12.)),
-                    )
-                }),
-        );
-    if editing_members {
-        line = line
-            .child(
-                cell_flex()
-                    .text_size(px(13.0))
-                    .truncate()
-                    .child(name.clone()),
-            )
-            .child(
-                cell(COMPACT_MODEL)
-                    .text_size(px(12.0))
-                    .text_color(ladder::foreground_alpha(0.62))
-                    .truncate()
-                    .child(row.model.clone()),
-            )
-            .child(
-                cell(COMPACT_MODE)
-                    .text_size(px(12.0))
-                    .text_color(mode_colour(state, row))
-                    .truncate()
-                    .child(mode_text(state, row)),
-            )
-            .child(reading(COMPACT_NUMBER, row.universe.to_string()))
-            .child(reading(COMPACT_NUMBER, row.address.to_string()));
-    } else {
-        let label = if selected || editing.is_some() {
-            label_cell(state, row, &name, editing, app)
-        } else {
-            cell_flex()
-                .text_size(px(13.0))
-                .truncate()
-                .child(name.clone())
-                .agent_node(Role::Text, format!("{name} label = {name}"))
-                .into_any_element()
-        };
-        line = line
-            .child(label)
-            .child(
-                cell(COMPACT_MODEL)
-                    .text_size(px(12.0))
-                    .text_color(ladder::foreground_alpha(0.62))
-                    .truncate()
-                    .child(row.model.clone()),
-            )
-            .child(mode_cell(state, row, &name, app, COMPACT_MODE))
-            .child(cell(COMPACT_NUMBER).child(number_cell(
-                state,
-                row,
-                &name,
-                Column::Universe,
-                row.universe,
-                COMPACT_NUMBER,
-                editing,
-                app,
-            )))
-            .child(cell(COMPACT_NUMBER).child(number_cell(
-                state,
-                row,
-                &name,
-                Column::Address,
-                row.address,
-                COMPACT_NUMBER,
-                editing,
-                app,
-            )));
-    }
-    let line = if editing_members {
-        line.agent_node(Role::Checkbox, format!("Include {name}"))
-            .agent_focused(selected)
-            .agent_disabled(state.group_busy)
-            .into_any_element()
-    } else {
-        line.into_any_element()
-    };
-    let mut item = div().flex_none().child(line);
-    if let Some(refusal) = state.refusal.as_ref().filter(|r| r.fixture == row.id) {
-        item = item.child(
-            div()
-                .px(px(COMPACT_INSET))
-                .py(px(6.0))
-                .child(luma_ui::notice::line(refusal.message.clone())),
-        );
-    }
-    item.agent_node(Role::Row, name)
-        .agent_focused(selected)
-        .into_any_element()
-}
-
-pub(super) fn table(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let body: AnyElement = match (state.load_failed, state.data.as_ref()) {
-        (true, _) => luma_ui::plate(
-            "Could not read the patch".to_string(),
-            ladder::muted_foreground(),
-        )
-        .into_any_element(),
-        (false, None) => {
-            luma_ui::plate("Reading the patch…".to_string(), ladder::muted_foreground())
-                .into_any_element()
-        }
-        (false, Some(data)) if data.fixtures.is_empty() => luma_ui::plate(
-            "Nothing is patched in this venue yet.".to_string(),
-            ladder::muted_foreground(),
-        )
-        .into_any_element(),
-        (false, Some(_)) => rows(state, app),
-    };
-    div()
-        .id("patch-table")
-        .flex_1()
-        .min_w_0()
-        .overflow_x_scroll()
-        .flex()
-        .flex_col()
         .child(head())
         .child(body)
+        .agent_node(Role::Card, "Fixture table")
         .into_any_element()
 }
 
@@ -306,10 +95,10 @@ fn head() -> impl IntoElement {
         .child(cell_flex().child(float::label("Fixture")))
         .child(cell(W_MODEL).child(float::label("Model")))
         .child(cell(W_MODE).child(float::label("Mode")))
-        .child(cell(W_UNIVERSE).child(float::label("Universe")))
-        .child(cell(W_ADDRESS).child(float::label("Address")))
+        .child(cell(W_NUMBER).child(float::label("Universe")))
+        .child(cell(W_NUMBER).child(float::label("Address")))
         .child(cell(W_RANGE).child(float::label("Channels")))
-        .child(cell_flex().child(float::label("Group")))
+        .child(cell_flex().child(float::label("Groups")))
 }
 
 fn cell(width: f32) -> Div {
@@ -327,9 +116,10 @@ const HAIRLINE: f32 = 0.10;
 
 fn rows(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     div()
-        .id("patch-rows")
+        .id("venue-fixture-rows")
         .flex_1()
         .min_h_0()
+        .min_w(px(MIN_WIDTH))
         .overflow_y_scroll()
         .children(state.rows().iter().map(|row| fixture_row(state, row, app)))
         .into_any_element()
@@ -343,12 +133,6 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
         .into();
     let selected = state.selected.contains(&row.id);
     let last = row.address + row.num_channels - 1;
-    // A group's name is snake_case because a selection is typed by name; a
-    // table is read. Underscores become spaces for the eye only — the name a
-    // score would name is unchanged.
-    let group = state
-        .group_path(&row.id)
-        .map_or_else(|| "—".to_string(), |path| path.replace('_', " "));
     let editing = state.editing.as_ref().filter(|edit| edit.fixture == row.id);
 
     let picked = app.clone();
@@ -358,9 +142,8 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
     let id_pick = row.id.clone();
     let id_menu = row.id.clone();
 
-    let fade_key = SharedString::from(format!("patch-row-{}", row.id));
-    let mut line = div()
-        .id(fade_key.clone())
+    let line = div()
+        .id(SharedString::from(format!("venue-light-{}", row.id)))
         .h(px(ROW_HEIGHT))
         .px(px(ROW_INSET))
         .min_w(px(MIN_WIDTH))
@@ -382,19 +165,23 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
                 .fade_hover()
         })
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
-            let extend = event.modifiers.secondary() || event.modifiers.shift;
+            let pick = if event.modifiers.shift {
+                Pick::Through
+            } else if event.modifiers.secondary() {
+                Pick::Toggle
+            } else {
+                Pick::Only
+            };
             let venue = venue_pick.clone();
             let id = id_pick.clone();
-            picked.update(cx, |this, cx| this.pick_patch_row(venue, id, extend, cx));
+            picked.update(cx, |this, cx| this.pick_patch_row(venue, id, pick, cx));
         })
         .on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
             let venue = venue_menu.clone();
             let id = id_menu.clone();
             let at = event.position;
             menued.update(cx, |this, cx| this.open_patch_menu(venue, id, at, cx));
-        });
-
-    line = line
+        })
         .child(label_cell(state, row, &name, editing, app))
         .child(
             cell(W_MODEL)
@@ -410,7 +197,7 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             &name,
             Column::Universe,
             row.universe,
-            W_UNIVERSE,
+            W_NUMBER,
             editing,
             app,
         ))
@@ -420,7 +207,7 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             &name,
             Column::Address,
             row.address,
-            W_ADDRESS,
+            W_NUMBER,
             editing,
             app,
         ))
@@ -428,16 +215,7 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             reading(W_RANGE, format!("{}–{last}", row.address))
                 .agent_node(Role::Text, format!("{name} range = {}–{last}", row.address)),
         )
-        .child(
-            cell_flex()
-                .text_size(px(12.0))
-                .text_color(ladder::foreground_alpha(0.62))
-                .truncate()
-                .child(group.clone())
-                .agent_node(Role::Text, format!("{name} group = {group}")),
-        );
-
-    let line = line
+        .child(groups_cell(state, row, &name, app))
         .agent_node(Role::Row, name.clone())
         .agent_focused(selected);
 
@@ -451,12 +229,62 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             .child(line)
             .child(
                 div()
-                    .px(px(20.0))
-                    .pb(px(8.0))
+                    .px(px(ROW_INSET))
+                    .py(px(6.0))
                     .child(luma_ui::notice::line(refusal.message.clone())),
             )
             .into_any_element(),
     }
+}
+
+/// The groups a fixture is in, each one a way to select the rest of it.
+fn groups_cell(
+    state: &Patch,
+    row: &PatchedFixture,
+    name: &SharedString,
+    app: &Entity<Luma>,
+) -> AnyElement {
+    let groups = state.groups_of(&row.id);
+    // A group's name is snake_case because a selection is typed by name; a
+    // table is read. Underscores become spaces for the eye only.
+    let names: Vec<String> = groups
+        .iter()
+        .map(|group| group.name.replace('_', " "))
+        .collect();
+    let said = if names.is_empty() {
+        "—".to_string()
+    } else {
+        names.join(" · ")
+    };
+    let mut cell = cell_flex().flex().items_center().gap(px(4.0));
+    if groups.is_empty() {
+        cell = cell.child(
+            div()
+                .text_size(px(12.0))
+                .text_color(ladder::foreground_alpha(0.35))
+                .child("—"),
+        );
+    }
+    for (group, shown) in groups.iter().zip(names) {
+        let picked = app.clone();
+        let id = group.id.clone();
+        cell = cell.child(
+            float::tag(shown)
+                .id(SharedString::from(format!(
+                    "fixture-group-{}-{}",
+                    row.id, group.id
+                )))
+                .cursor_pointer()
+                .hover(|style| style.bg(glass::glass_hover()))
+                .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+                    let extend = event.modifiers.secondary() || event.modifiers.shift;
+                    picked.update(cx, |this, cx| this.select_venue_group(&id, extend, cx));
+                    cx.stop_propagation();
+                }),
+        );
+    }
+    cell.agent_node(Role::Text, format!("{name} group = {said}"))
+        .into_any_element()
 }
 
 /// A numeric cell. Mono, because a column of addresses is a column of numbers
@@ -504,6 +332,7 @@ fn label_cell(
     let opened = app.clone();
     let venue = state.venue_id.clone();
     let id = row.id.clone();
+    let sole = state.selected.len() == 1 && state.selected.contains(&row.id);
     cell_flex()
         .id(SharedString::from(format!("patch-label-{}", row.id)))
         .text_size(px(13.0))
@@ -511,13 +340,21 @@ fn label_cell(
         .truncate()
         .child(name.clone())
         .when(row.address_pinned, |cell| cell.text_color(ladder::accent()))
-        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-            let venue = venue.clone();
-            let id = id.clone();
-            opened.update(cx, |this, cx| {
-                this.edit_patch_cell(venue, id, Column::Label, window, cx);
-            });
-            cx.stop_propagation();
+        // The first click on a row selects it; a click on the name of the one
+        // selected row edits it. A name that opened under every click would
+        // make a row impossible to pick up by its widest cell.
+        .when(sole, |cell| {
+            cell.on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                if event.modifiers.shift || event.modifiers.secondary() {
+                    return;
+                }
+                let venue = venue.clone();
+                let id = id.clone();
+                opened.update(cx, |this, cx| {
+                    this.edit_patch_cell(venue, id, Column::Label, window, cx);
+                });
+                cx.stop_propagation();
+            })
         })
         .agent_node(Role::Text, format!("{name} label = {name}"))
         .into_any_element()

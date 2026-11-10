@@ -28,7 +28,6 @@ const card = (label) => app.snapshot().find({ role: "card", label });
 
 test("a collision is red and a clean universe is not", { timeoutMs: 120000 }, () => {
   nav.patch("Test Venue");
-  nav.step("patch details", "button", "Patch details");
   nav.agentOff();
   nav.stageOff();
   until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
