@@ -203,6 +203,10 @@ the venue-graph goldens (`venue_poses`) and the build-against-real-geometry test
 (`venue_build`); it needs no GPU. `luma-ui` has one, `--test ui`.
 Set `LUMA_RENDER_CAPTURE_DIR=dir` to save the pictures the `render` tests look
 at, one subdirectory per test file.
+`luma-render`'s `--example resize_probe` measures what a per-frame viewport size
+change costs: it fails when the median frame of a drag costs over 1.3× a still
+one, and `LUMA_RESIZE_PASSES=1` shows which passes and CPU spans a drag grows.
+Run it with `cargo run -p luma-render --release --example resize_probe`.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,

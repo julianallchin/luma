@@ -28,6 +28,8 @@ const USAGE = [
 ];
 
 fixture({
+  // These tests read a finished turn's tool rows, which compact turns fold away.
+  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('compact_turns', 'false')"],
   window: [1400, 900],
   motion: true,
   model_cadence_ms: 25,
@@ -226,13 +228,15 @@ test("a model choice is kept per conversation and carried into new chats", () =>
   const original = until("the engine picker", select).findAll({ role: "select" })[0].label;
   app.click(select(app.snapshot()));
   nav.step("the model menu", "button", "Choose model");
-  // Any model but the current one. A row is labelled by its name first.
-  const current = original.split(" · ").at(-1);
+  // Any model but the current one. A row is labelled by its name, then its
+  // service; the chip by its service, then the name.
+  const current = original.split(" · ")[1];
+  const rowName = (n) => n.label.split(" · ")[0];
   const other = (s) => {
     const search = s.find({ role: "input", label: "Search models…" });
     return search && s.findAll({ role: "button" }).find((n) =>
       n.bounds.y > search.bounds.y && n.bounds.height > 0 && n.label.includes(" · ")
-        && n.label.split(" · ")[0] !== current);
+        && rowName(n) !== current);
   };
   // The menu slides in; a row is clicked once it has stopped moving.
   let last;
@@ -243,20 +247,26 @@ test("a model choice is kept per conversation and carried into new chats", () =>
     return settled;
   };
   const pick = other(until("another model in the list, at rest", still));
-  const name = pick.label.split(" · ")[0];
+  const name = rowName(pick);
   app.click(pick);
   const CHOSEN = until(`the saved engine ${pick.label}`, (s) => select(s)?.label.endsWith(` · ${name}`))
     .findAll({ role: "select" })[0].label;
 
-  const slider = until("the effort slider", (s) => s.find({ role: "slider", label: "Reasoning effort" }))
-    .find({ role: "slider", label: "Reasoning effort" });
-  app.drag(slider, { dx: 170, dy: 0 }, { steps: 8 });
-  until("dragged high effort", (s) => s.find({ role: "text", label: "Effort · High" }));
+  // The pick runs at one of its own levels; the keys and the slider move it.
+  const effort = (s) => s.find((n) => n.role === "text" && n.label.startsWith("Effort · "))?.label;
+  const settled = (s) => s.find({ role: "slider", label: "Reasoning effort" })?.enabled;
+  const initial = effort(until("the effort slider", (s) => settled(s) && effort(s)));
   app.key("home");
-  until("auto effort", (s) => s.find({ role: "text", label: "Effort · Auto" }));
+  const lowest = effort(until("the lowest effort", (s) => effort(s) !== initial && effort(s)));
+  until("effort persisted", settled);
+  const slider = app.snapshot().find({ role: "slider", label: "Reasoning effort" });
+  app.drag(slider, { dx: slider.bounds.width, dy: 0 }, { steps: 8 });
+  until("dragged to a higher effort", (s) => settled(s) && effort(s) !== lowest);
+  app.key("home");
+  until("the lowest effort again", (s) => effort(s) === lowest);
   app.key("right");
-  until("the next effort", (s) => s.find({ role: "text", label: "Effort · Low" }));
-  until("effort persisted", (s) => s.find({ role: "slider", label: "Reasoning effort" })?.enabled);
+  const next = effort(until("the next effort", (s) => effort(s) && effort(s) !== lowest));
+  until("effort persisted", settled);
   app.key("escape");
   until("picker dismissed", (s) => !s.find({ role: "slider", label: "Reasoning effort" }));
 
@@ -277,7 +287,7 @@ test("a model choice is kept per conversation and carried into new chats", () =>
     app.click(rows()[index]);
     until("the reopened picker", (s) => s.find({ role: "select", label: CHOSEN }));
     nav.step("the reopened picker", "select", CHOSEN);
-    until("the reopened effort", (s) => s.find({ role: "text", label: "Effort · Low" }));
+    until("the reopened effort", (s) => effort(s) === next);
     app.key("escape");
     until("picker dismissed", (s) => !s.find({ role: "slider", label: "Reasoning effort" }));
   }

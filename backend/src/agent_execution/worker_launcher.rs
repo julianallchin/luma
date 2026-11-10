@@ -55,6 +55,19 @@ impl SandboxPolicy {
     pub fn scratch_dir(&self) -> PathBuf {
         self.workspace_dir.join(SCRATCH_DIR)
     }
+
+    /// Where numba caches the kernels librosa compiles at preload. Named
+    /// rather than left to numba, so the host knows where to seed it
+    /// (`Workspace::spawn_kernel`): numba only caches in a directory it can
+    /// write, and under the sandbox that is scratch alone.
+    pub fn numba_cache_dir(&self) -> PathBuf {
+        numba_cache_dir(&self.workspace_dir)
+    }
+}
+
+/// [`SandboxPolicy::numba_cache_dir`] of the workspace at `workspace_dir`.
+pub fn numba_cache_dir(workspace_dir: &Path) -> PathBuf {
+    workspace_dir.join(SCRATCH_DIR).join(".numba")
 }
 
 /// Starts one worker process under some capability policy.
@@ -113,6 +126,7 @@ pub fn base_command(
         .env("HOME", &scratch)
         .env("TMPDIR", &scratch)
         .env("MPLCONFIGDIR", scratch.join(".matplotlib"))
+        .env("NUMBA_CACHE_DIR", policy.numba_cache_dir())
         .env("LC_ALL", "en_US.UTF-8")
         // One BLAS thread. NumPy and SciPy each bundle an OpenBLAS that starts
         // a thread per core and spins it while idle: two pools of 32 busy
@@ -201,6 +215,10 @@ mod tests {
         assert!(envs
             .iter()
             .any(|(k, v)| k == "LUMA_TEST" && v.as_deref() == Some("1")));
+        // numba's kernel cache is the worker's to write, so it lives in scratch.
+        assert!(envs.iter().any(|(k, v)| k == "NUMBA_CACHE_DIR"
+            && v.as_deref()
+                .is_some_and(|v| Path::new(v).starts_with(p.scratch_dir()))));
         // env_clear() means nothing else leaks in.
         assert!(!envs.iter().any(|(k, _)| k == "PYTHONPATH"));
     }

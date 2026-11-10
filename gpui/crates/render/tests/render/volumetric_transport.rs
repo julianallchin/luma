@@ -46,15 +46,21 @@ fn scene(pieces: Vec<Piece>) -> Scene {
     }
 }
 
+/// A stock moving head's light through a 43-degree field.
 fn light(gobo: u32) -> FixtureCone {
+    let (cos_beam, cos_field) = (0.975, 0.93);
     FixtureCone {
         position: Vec3::new(0.0, 0.0, 0.15),
         range: 8.0,
         direction: Vec3::Z,
-        cos_beam: 0.975,
+        cos_beam,
         color: Vec3::new(0.2, 0.55, 1.0),
-        intensity: 0.08,
-        cos_field: 0.93,
+        intensity: luma_render::photometry::cone_intensity(
+            luma_scene::luminaire::LensClass::Spot.output_lumens(),
+            cos_beam,
+            cos_field,
+        ),
+        cos_field,
         wash: 0.0,
         gobo,
         gobo_rotation: 0.31,
@@ -788,7 +794,8 @@ fn live_shadow_intervals_agree_with_converged_transport() {
         let p99 = errors[errors.len() * 99 / 100];
         // 0.79-0.85 with a 3/4 m near-source radius; 0.87-2.04 at 1.5/2 m
         // (2026-09-25), where the grid takes more of each broad wash. The
-        // user compared close-ups and saw no difference.
+        // user compared close-ups and saw no difference. Under the fog phase
+        // function, 0.80-2.01 at 1.75/2.5 m (2026-11-09).
         assert!(
             rmse < 2.3 && p99 <= 6.0,
             "{} lost shadow precision: RMSE {rmse:.3}, p99 {p99}",

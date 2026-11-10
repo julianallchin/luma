@@ -2,9 +2,12 @@
 //!
 //! One thread watches the bus for supported devices; each one found gets a
 //! thread of its own, because a bulk write blocks and a dongle that stalls
-//! must stall only itself. A device thread sends the start-up packets, then a
-//! frame every 25 ms until the device goes away or output turns off, and
-//! blacks the device out as it stops.
+//! must stall only itself. A device thread sends the start-up packets, then
+//! each frame as the engine publishes it (the newest again if none comes for
+//! 25 ms, since a dongle needs a steady stream) until the device goes away or
+//! output turns off, and blacks the device out as it stops. Sending on
+//! publish, not on a timer of its own, is what keeps every output frame,
+//! and so every frame of a strobe, on the wire.
 //!
 //! The SoundSwitch protocol is from the Apache-2.0 QLC+ integration at
 //! <https://github.com/jloops412/qlcplus-soundswitch-integration>
@@ -23,7 +26,8 @@ use super::{OutputDriver, Shared};
 use crate::models::patch::{DeviceKind, OutputDevice, OutputPort};
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
-const FRAME_INTERVAL: Duration = Duration::from_millis(25);
+/// The longest a dongle goes without a frame: the newest is sent again.
+const KEEPALIVE: Duration = Duration::from_millis(25);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// A dongle this driver knows how to speak to.
@@ -315,9 +319,13 @@ fn drive(
     log::info!("[USB DMX] driving {} ({id})", model.name);
 
     let blank = [0u8; 512];
+    let mut seen = 0;
     while shared.running() && !stop.load(Ordering::Relaxed) {
-        let started = Instant::now();
-        let (_, frame) = shared.frames.latest();
+        let (sequence, frame) = shared
+            .frames
+            .newer_than(seen, KEEPALIVE)
+            .unwrap_or_else(|| shared.frames.latest());
+        seen = sequence;
         let routes = shared.routes();
         for port in 0..model.outputs {
             // A dongle needs a steady stream, so an unrouted output gets
@@ -336,9 +344,6 @@ fn drive(
                 return Ok(());
             }
         }
-        if let Some(rest) = FRAME_INTERVAL.checked_sub(started.elapsed()) {
-            std::thread::sleep(rest);
-        }
     }
     // Black out on the way out, a few times over, so a dropped write does not
     // leave the rig lit.
@@ -348,7 +353,7 @@ fn drive(
                 return Ok(());
             }
         }
-        std::thread::sleep(FRAME_INTERVAL);
+        std::thread::sleep(KEEPALIVE);
     }
     Ok(())
 }

@@ -153,6 +153,7 @@ impl Renderer {
                 environments: 0,
             },
             targets: None,
+            target_memory: super::target_memory::TargetMemory::new(),
             medium_cache,
             shadow_hierarchy,
             last_live_camera: None,

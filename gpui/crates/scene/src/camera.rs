@@ -219,7 +219,7 @@ impl Camera {
     ///
     /// Only bites on a rig whose framed target is itself near the floor and
     /// whose fitted direction is shallow; the ordinary case is metres clear.
-    fn above_floor(mut self, floor_z: f32) -> Self {
+    pub(crate) fn above_floor(mut self, floor_z: f32) -> Self {
         let lowest = (floor_z + MIN_EYE_Z - self.target.z) / self.radius;
         if lowest < 1.0 {
             self.polar = self.polar.min(lowest.max(-1.0).acos());
@@ -753,5 +753,117 @@ mod tests {
         let ray = c.ray(ndc.truncate(), aspect);
         let t = ray.t_of(world);
         assert!(ray.at(t).abs_diff_eq(world, 1e-3));
+    }
+}
+
+impl Camera {
+    /// Where this camera stands and which way the picture is turned, in the
+    /// facade's words (`+u` stage right, `+v` toward the audience, `+z` up):
+    /// "from the audience, stage right side, looking down 30°; image right is
+    /// stage left (-u), image up is up".
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let eye = self.position();
+        let offset = eye - self.target;
+        let bearing = offset.x.atan2(offset.y).to_degrees();
+        let side = if bearing > 0.0 {
+            "stage right"
+        } else {
+            "stage left"
+        };
+        let from = match bearing.abs() {
+            b if b < 22.5 => "from the audience".to_string(),
+            b if b < 67.5 => format!("from the audience, {side} side"),
+            b if b < 112.5 => format!("from {side}"),
+            b if b < 157.5 => format!("from upstage, {side} side"),
+            _ => "from upstage, behind the stage".to_string(),
+        };
+        let flat = offset.truncate().length();
+        let down = offset.z.atan2(flat).to_degrees();
+        let pitch = if down > 80.0 {
+            "looking straight down".to_string()
+        } else if down.abs() < 3.0 {
+            "looking level".to_string()
+        } else if down > 0.0 {
+            format!("looking down {down:.0}°")
+        } else {
+            format!("looking up {:.0}°", -down)
+        };
+        let forward = (self.target - eye).normalize_or(Vec3::NEG_Y);
+        let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
+        let up = right.cross(forward);
+        let from = if down > 80.0 {
+            "from overhead".to_string()
+        } else {
+            from
+        };
+        format!(
+            "{from}, {pitch}; image right is {}, image up is {}",
+            facade_word(right),
+            facade_word(up)
+        )
+    }
+}
+
+/// The facade direction nearest `v`, named.
+fn facade_word(v: Vec3) -> &'static str {
+    let a = v.abs();
+    if a.z >= a.x && a.z >= a.y {
+        if v.z > 0.0 {
+            "up"
+        } else {
+            "down"
+        }
+    } else if a.x >= a.y {
+        if v.x > 0.0 {
+            "stage right (+u)"
+        } else {
+            "stage left (-u)"
+        }
+    } else if v.y > 0.0 {
+        "toward the audience (+v)"
+    } else {
+        "upstage (-v)"
+    }
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+
+    fn from(eye: Vec3) -> String {
+        Camera::looking_from(eye, Vec3::new(0.0, 0.0, 3.0), 50.0).describe()
+    }
+
+    /// From the audience, the audience's right is stage left: the picture's
+    /// right is -u.
+    #[test]
+    fn the_front_says_where_stage_right_is() {
+        let said = from(Vec3::new(0.0, 10.0, 6.0));
+        assert!(
+            said.starts_with("from the audience, looking down"),
+            "{said}"
+        );
+        assert!(said.contains("image right is stage left (-u)"), "{said}");
+        assert!(said.contains("image up is up"), "{said}");
+    }
+
+    #[test]
+    fn every_side_is_named() {
+        assert!(from(Vec3::new(10.0, 0.0, 3.0)).starts_with("from stage right, looking level"));
+        assert!(from(Vec3::new(-10.0, 0.0, 3.0)).starts_with("from stage left"));
+        assert!(from(Vec3::new(0.0, -10.0, 3.0)).starts_with("from upstage, behind"));
+        assert!(from(Vec3::new(7.0, 7.0, 3.0)).starts_with("from the audience, stage right side"));
+        assert!(from(Vec3::new(0.0, 10.0, 1.0)).contains("looking up"));
+    }
+
+    #[test]
+    fn an_overhead_says_which_way_the_audience_is() {
+        let said = from(Vec3::new(0.0, 1.0, 20.0));
+        assert!(
+            said.starts_with("from overhead, looking straight down"),
+            "{said}"
+        );
+        assert!(said.contains("image up is upstage (-v)"), "{said}");
     }
 }

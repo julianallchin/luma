@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod layout;
 pub mod library;
+pub mod light;
 pub mod parser;
 
 use std::collections::HashMap;

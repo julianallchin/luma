@@ -8,7 +8,7 @@
 //! 1. **Metering** (`post_exposure.wgsl`). A 128-bin log-luminance histogram
 //!    of a quarter of the pixels, centre-weighted. The mean of the band
 //!    between two percentiles of the lit pixels sets the target exposure,
-//!    clamped to `[min_ev, max_ev]`; the compensation is added after the
+//!    clamped to [`crate::photometry::ADAPT_EV`]; the compensation is added after the
 //!    clamp. Near-black pixels are not metered, so a dark room with a few
 //!    beams is exposed for what is lit, and the clamps stop it lifting the
 //!    room further. A frame with almost nothing lit holds the last exposure.
@@ -59,10 +59,6 @@ const HISTOGRAM_SLOTS: u64 = 129;
 /// lenses and beam cores.
 const METER_LOW: f32 = 0.60;
 const METER_HIGH: f32 = 0.98;
-/// log2 of the scene-linear value the band's mean is exposed to. Set so an
-/// ordinary lit frame meters close to 0 EV, the exposure the transport was
-/// tuned at.
-const METER_KEY_LOG2: f32 = -1.0;
 /// Stops per second of the exposure's approach to its target, per stop of
 /// difference: opening up (a darker scene) and closing down (a brighter one).
 const ADAPT_UP: f32 = 1.2;
@@ -655,26 +651,30 @@ impl Post {
     pub(crate) fn scene_target(
         &mut self,
         device: &wgpu::Device,
+        memory: &mut crate::gpu::target_memory::TargetMemory,
         width: u32,
         height: u32,
     ) -> wgpu::TextureView {
         let size = [width.max(1), height.max(1)];
         if self.targets.as_ref().is_none_or(|t| t.size != size) {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("post-scene"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
+            let texture = memory.texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some("post-scene"),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: SCENE_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: SCENE_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
+            );
             self.targets = Some(Targets {
                 size,
                 scene: texture.create_view(&wgpu::TextureViewDescriptor::default()),
@@ -721,11 +721,19 @@ impl Post {
                 exposure: [
                     f32::from(u8::from(auto)),
                     look.exposure.ev,
-                    look.exposure.min_ev,
-                    look.exposure.max_ev.max(look.exposure.min_ev),
+                    *crate::photometry::ADAPT_EV.start(),
+                    *crate::photometry::ADAPT_EV.end(),
                 ],
                 adapt: [dt, f32::from(u8::from(snap)), ADAPT_UP, ADAPT_DOWN],
-                meter: [METER_LOW, METER_HIGH, METER_KEY_LOG2, 1.0],
+                // A reflected meter puts the luminance it reads on middle
+                // grey (ISO 2720), the same grey the incident reading for 0
+                // EV does (`photometry.rs`); the band is what it reads.
+                meter: [
+                    METER_LOW,
+                    METER_HIGH,
+                    crate::photometry::MIDDLE_GREY.log2(),
+                    1.0,
+                ],
             }),
         );
         let exposure_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

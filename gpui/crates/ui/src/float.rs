@@ -1168,6 +1168,36 @@ pub fn anchored_above(
     hang(id, Side::Above, trigger, content, Phase::Open(dismiss))
 }
 
+/// [`anchored_above`] for a trigger another view draws: hung from the
+/// window-space box `trigger` — written by the trigger as it painted —
+/// rather than from a parent element. A popover that is a view of its own,
+/// mounted apart from its trigger so that redrawing one never redraws the
+/// other, hangs this way.
+pub fn anchored_above_box(
+    id: impl Into<SharedString>,
+    trigger: gpui::Bounds<gpui::Pixels>,
+    dismiss: Dismiss,
+    content: AnyElement,
+) -> AnyElement {
+    let gap = rpx(MENU_GAP);
+    let (card, closing) = card(content, Phase::Open(dismiss));
+    lift(
+        id.into(),
+        gpui::anchored()
+            .position(trigger.top_right())
+            .anchor(gpui::Anchor::BottomRight)
+            .child(
+                // The trigger's height reserved above the card, as in
+                // [`anchored_above`], so a flip clears the trigger.
+                div()
+                    .pt(trigger.size.height)
+                    .child(div().pb(gap).pt(gap).child(card)),
+            ),
+        gpui::Axis::Vertical,
+        closing,
+    )
+}
+
 /// [`anchored_above`] while its exit plays, `progress` from 0 to 1.
 pub fn anchored_above_closing(
     id: impl Into<SharedString>,
@@ -1548,6 +1578,15 @@ impl<T> Picker<T> {
         }
         self.cursor = (self.cursor as isize + delta).rem_euclid(count) as usize;
         Some(self.cursor)
+    }
+
+    /// Put the cursor on the first shown row `is` picks out — a list that opens
+    /// on the value already chosen. Returns its position for a
+    /// `scroll_to_item`; with no such row the cursor stays where it was.
+    pub fn seek(&mut self, is: impl Fn(&T) -> bool) -> Option<usize> {
+        let at = self.shown.iter().position(|&row| is(&self.rows[row]))?;
+        self.cursor = at;
+        Some(at)
     }
 
     /// Put the cursor back on the first row without touching the query — for

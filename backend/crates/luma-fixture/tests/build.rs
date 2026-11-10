@@ -4,7 +4,7 @@
 
 mod common;
 
-use glam::{Vec3, Vec4Swizzles};
+use glam::{Vec2, Vec3, Vec4Swizzles};
 use luma_fixture::{build, Built, Fixture, JointKind};
 use serde_json::Value;
 
@@ -191,4 +191,56 @@ fn a_spec_that_is_not_luma_fixture_0_is_refused() {
         Fixture::from_json(&text),
         Err(luma_fixture::Error::Format(_))
     ));
+}
+
+/// A dense flat LED panel is one face with its LEDs painted on: every LED
+/// its cell lists sits on a lit spot of the face's pattern with gap just past
+/// its edge, and the face holds exactly its rows times its columns of them.
+#[test]
+fn a_flat_led_panel_paints_the_leds_its_cell_lists() {
+    let mut panels = 0;
+    for (id, text) in common::sample() {
+        let b = build(&Fixture::from_json(&text).unwrap()).unwrap();
+        let worlds = b.world_matrices(&[]);
+        for (n, node) in b.nodes.iter().enumerate() {
+            for m in &node.meshes {
+                let Some(pattern) = m.pattern else { continue };
+                assert_eq!(m.uvs.len(), m.positions.len(), "{id}");
+                let cell = &b.cells[m.cell.expect("a panel lights a cell") as usize];
+                let into = worlds[n].inverse() * worlds[cell.node.unwrap()];
+                // Each face is a quad: top left, top right, bottom right,
+                // bottom left.
+                for q in 0..m.positions.len() / 4 {
+                    panels += 1;
+                    let p = |i: usize| Vec3::from(m.positions[4 * q + i]);
+                    let t = |i: usize| Vec2::from(m.uvs[4 * q + i]);
+                    let (eu, ev) = (p(1) - p(0), p(3) - p(0));
+                    let span = t(2) - t(0);
+                    let pitch_u = eu.length() / span.x;
+                    let mut on = 0;
+                    for e in &cell.emitters {
+                        let at = into.transform_point3(e.centre) - p(0);
+                        let (a, c) = (
+                            at.dot(eu) / eu.length_squared(),
+                            at.dot(ev) / ev.length_squared(),
+                        );
+                        if !(-0.01..=1.01).contains(&a) || !(-0.01..=1.01).contains(&c) {
+                            continue;
+                        }
+                        on += 1;
+                        let uv = t(0) + span * Vec2::new(a, c);
+                        assert!(pattern.lit(uv.into()), "{id}: an LED at {uv} is dark");
+                        if pattern.fill[0] < 0.95 {
+                            let past = uv + Vec2::new(0.525 * e.size[0] / pitch_u, 0.0);
+                            assert!(!pattern.lit(past.into()), "{id}: no gap at {past}");
+                        }
+                    }
+                    // Rows whose LED centres (half a pitch into each row) it holds.
+                    let rows = ((t(2).y - 0.5).floor() - (t(0).y - 0.5).ceil() + 1.0) as u32;
+                    assert_eq!(on, rows * pattern.cols, "{id}: LEDs on face {q}");
+                }
+            }
+        }
+    }
+    assert!(panels > 0, "no sample fixture has a flat LED panel");
 }

@@ -236,7 +236,11 @@ pub async fn distribute(
                 fixture_path: request.fixture_path,
                 footprint: *footprint,
                 pinned: false,
-                name: Naming::Minted(request.label_prefix),
+                // One light takes the label as given; a row numbers it.
+                name: match request.label_prefix {
+                    Some(label) if stations.len() == 1 => Naming::Given(label.to_string()),
+                    prefix => Naming::Minted(prefix),
+                },
                 placement: (&edge).into(),
             },
         )

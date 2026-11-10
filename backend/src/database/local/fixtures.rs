@@ -212,10 +212,18 @@ pub async fn update_fixture_label(
     let result = sqlx::query("UPDATE fixtures SET label = ? WHERE id = ? AND venue_id = ?")
         .bind(label)
         .bind(id)
-        .bind(venue_id)
+        .bind(&venue_id)
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename patched fixture: {}", e))?;
+    // A light's patch row and its node are one fixture with one name.
+    sqlx::query("UPDATE venue_nodes SET label = ? WHERE id = ? AND venue_id = ?")
+        .bind(label)
+        .bind(id)
+        .bind(&venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to rename the fixture's node: {}", e))?;
     Ok(result.rows_affected())
 }
 

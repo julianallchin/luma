@@ -370,11 +370,12 @@ impl Turn {
         let mut resuming = prompt.is_none();
         loop {
             self.spend.turns += 1;
+            let opened = std::time::Instant::now();
             let (stop_reason, usage, assistant_id) = self
                 .assistant_row(&setup, &turn_message_id, resume_row.take(), resuming)
                 .await?;
             resuming = false;
-            self.close_row(&setup, &assistant_id, stop_reason, usage)
+            self.close_row(&setup, &assistant_id, stop_reason, usage, opened.elapsed())
                 .await?;
             if let Some(session) = self.native_session.take() {
                 setup.resume = Some(session);
@@ -757,11 +758,13 @@ impl Turn {
         assistant_id: &str,
         stop_reason: StopReason,
         usage: Usage,
+        worked: std::time::Duration,
     ) -> Result<(), AgentError> {
         let ended = TurnEvent::MessageEnded {
             id: assistant_id.to_string(),
             stop_reason,
             usage,
+            worked_ms: u64::try_from(worked.as_millis()).unwrap_or(u64::MAX),
         };
         // Folded before the commit, sent after it: the host hears the row
         // closed once it is.
@@ -856,16 +859,20 @@ impl Turn {
             settings.insert(key, model.clone());
         }
         if engine != Engine::Api {
-            let model = self
-                .service
-                .model_name
-                .as_ref()
-                .or(thread.model.as_ref())
-                .cloned();
+            let mut selection = engine::catalog::Selection::from_thread(thread)?;
+            if let Some(model) = &self.service.model_name {
+                selection.model = Some(model.clone());
+            }
+            // A thread that names no model runs the one its picker shows
+            // first, never whatever the CLI falls back to.
+            if selection.model.is_none() {
+                let models = self.service.models(selection.service).await?;
+                selection = selection.resolve(&models);
+            }
             return Ok(Execution::External {
                 engine,
-                model,
-                effort: thread.effort.clone(),
+                model: selection.model,
+                effort: selection.effort,
             });
         }
         let (client, model, reasoning) = if let Some(client) = &self.service.client {

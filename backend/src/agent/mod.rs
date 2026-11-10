@@ -540,10 +540,10 @@ pub enum TurnEvent {
         thread_id: String,
         event: Box<TurnEvent>,
     },
-    /// A running `python` call started (`waiting`) or stopped waiting for the
-    /// host's Python setup, which takes minutes on a first launch. Never
-    /// persisted: like a subagent milestone it is live state, and the reducer
-    /// drops it on sight.
+    /// A running `python` call started (`waiting`) or stopped waiting for
+    /// Python: the host's setup, which takes minutes on a first launch, or its
+    /// kernel starting. Never persisted: like a subagent milestone it is live
+    /// state, and the reducer drops it on sight.
     PythonSetupWait {
         call_id: String,
         waiting: bool,
@@ -568,6 +568,11 @@ pub enum TurnEvent {
         id: String,
         stop_reason: StopReason,
         usage: Usage,
+        /// Wall time from the row opening to its closing, tool runs included.
+        /// Stamped onto the row (`workedMs`) so a reopened thread can say how
+        /// long the turn worked.
+        #[serde(default)]
+        worked_ms: u64,
     },
     TurnEnded {
         outcome: TurnOutcome,

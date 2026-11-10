@@ -84,6 +84,10 @@ pub enum RowKind {
     /// A run of consecutive tool calls, as one group. `count` is the span of
     /// parts it covers, which can include parts that paint nothing.
     Tools { part: usize, count: usize },
+    /// The one header a compact turn's work folds behind: thinking, tool calls
+    /// and narration are the rows between it and the final reply, present
+    /// only while it is open.
+    Work,
 }
 
 /// A row's whole identity: which turn, which block of it, and a hash of what
@@ -130,7 +134,12 @@ fn version(hash: u64, streaming: bool) -> u64 {
 /// `live` is the message a turn is currently writing into, if any — the only
 /// one whose rows carry the streaming bit.
 #[must_use]
-pub fn rows_for(transcript: &Transcript, entries: &[Entry], live: Option<usize>) -> Vec<RowKey> {
+pub fn rows_for(
+    transcript: &Transcript,
+    entries: &[Entry],
+    live: Option<usize>,
+    compact: Compact,
+) -> Vec<RowKey> {
     let mut rows = Vec::new();
     for (ix, message) in transcript.messages.iter().enumerate() {
         let streaming = live == Some(ix);
@@ -146,7 +155,9 @@ pub fn rows_for(transcript: &Transcript, entries: &[Entry], live: Option<usize>)
                     streaming,
                 ),
             }),
-            Role::Assistant => push_assistant_rows(&mut rows, ix, message, turn, streaming),
+            Role::Assistant => {
+                push_assistant_rows(&mut rows, ix, message, turn, streaming, compact)
+            }
             Role::Session => rows.push(RowKey {
                 turn: ix,
                 kind: RowKind::Session,
@@ -160,15 +171,72 @@ pub fn rows_for(transcript: &Transcript, entries: &[Entry], live: Option<usize>)
     rows
 }
 
+/// How a transcript lays out its assistant turns.
+#[derive(Clone, Copy)]
+pub struct Compact<'a> {
+    /// Fold each turn's work behind one header.
+    pub on: bool,
+    /// The messages whose header the reader has opened, by message id.
+    pub open: &'a HashSet<SharedString>,
+}
+
+/// The part that is the turn's final reply: its last painting part, when that
+/// is prose. Anything before it is work; a turn that ends on a tool call or on
+/// thinking has no reply yet, and all of it is work.
+fn final_reply(message: &AgentChatMessage, turn: &Entry) -> Option<usize> {
+    let last = (0..message.parts.len())
+        .rev()
+        .find(|&part| !paints_nothing(message, turn, part))?;
+    matches!(message.parts[last], AgentChatPart::Text { .. }).then_some(last)
+}
+
 fn push_assistant_rows(
     rows: &mut Vec<RowKey>,
     ix: usize,
     message: &AgentChatMessage,
     turn: &Entry,
     streaming: bool,
+    compact: Compact,
+) {
+    let all = 0..message.parts.len();
+    if !compact.on {
+        return push_part_rows(rows, ix, message, turn, streaming, all);
+    }
+    let reply = final_reply(message, turn);
+    let work = 0..reply.unwrap_or(message.parts.len());
+    if work.clone().all(|part| paints_nothing(message, turn, part)) {
+        return push_part_rows(rows, ix, message, turn, streaming, all);
+    }
+    let open = compact.open.contains(message.id.as_str());
+    let seed = fnv1a(FNV_OFFSET, &[u8::from(open)]);
+    let hash = fnv1a(seed, &message.worked_ms().unwrap_or(0).to_le_bytes());
+    rows.push(RowKey {
+        turn: ix,
+        kind: RowKind::Work,
+        version: version(hash, streaming),
+    });
+    if open {
+        push_part_rows(rows, ix, message, turn, streaming, work);
+    }
+    if let Some(reply) = reply {
+        push_part_rows(rows, ix, message, turn, streaming, reply..reply + 1);
+    }
+}
+
+/// The rows of the parts in `range`, in order.
+fn push_part_rows(
+    rows: &mut Vec<RowKey>,
+    ix: usize,
+    message: &AgentChatMessage,
+    turn: &Entry,
+    streaming: bool,
+    range: Range<usize>,
 ) {
     let mut parts = message.parts.iter().enumerate().peekable();
     while let Some((part, item)) = parts.next() {
+        if !range.contains(&part) {
+            continue;
+        }
         if let AgentChatPart::Tool(_) = item {
             // Consecutive calls are one group. The run is measured here, where
             // the sequence is visible, so the rail only ever draws what it is
@@ -287,8 +355,8 @@ pub fn top_gap_for(previous: Option<&RowKey>, row: &RowKey) -> f32 {
         // were one element a moment ago and will be again on the next reparse,
         // so the split cannot be allowed to move anything.
         theme::GAP_TOOL
-    } else if matches!(previous.kind, RowKind::Tools { .. })
-        || matches!(row.kind, RowKind::Tools { .. })
+    } else if matches!(previous.kind, RowKind::Tools { .. } | RowKind::Work)
+        || matches!(row.kind, RowKind::Tools { .. } | RowKind::Work)
     {
         theme::GAP_TOOL
     } else {
@@ -420,6 +488,28 @@ pub fn should_restick(distance: f32, previous: f32) -> bool {
 #[must_use]
 pub fn should_unpin(distance: f32, previous: f32) -> bool {
     distance > previous + theme::AT_BOTTOM_PX
+}
+
+/// Whether this wheel event breaks the pin on arrival: a notch toward the top
+/// over a list that can scroll. Precise (trackpad) input is left to the
+/// distance test, because its tiny deltas are indistinguishable from the
+/// spring's own chase.
+#[must_use]
+pub fn wheel_breaks_pin(delta: gpui::ScrollDelta, can_scroll: bool) -> bool {
+    can_scroll && matches!(delta, gpui::ScrollDelta::Lines(lines) if lines.y > 0.0)
+}
+
+/// The pin after one reader scroll. `escaped` is a wheel that already broke
+/// it: nothing the deferred distance test sees may re-engage it.
+#[must_use]
+pub fn pin_after_scroll(pinned: bool, escaped: bool, distance: f32, previous: f32) -> bool {
+    if escaped {
+        false
+    } else if pinned {
+        !should_unpin(distance, previous)
+    } else {
+        should_restick(distance, previous)
+    }
 }
 
 // -- per-turn render state ---------------------------------------------------
@@ -583,6 +673,54 @@ fn part_key(turn: &SharedString, part: usize) -> String {
     format!("{turn}:{part}")
 }
 
+/// The markdown rows the list has laid out since the last trim.
+///
+/// The list renders only its viewport and overdraw, so what it asked for in a
+/// frame is exactly what deserves to stay cached. Interior-mutable because
+/// rows note themselves during the panel's own render, when the panel entity
+/// is already borrowed.
+#[derive(Default)]
+pub struct Viewed(RefCell<HashSet<SharedString>>);
+
+impl Viewed {
+    fn note(&self, row: &SharedString) {
+        self.0.borrow_mut().insert(row.clone());
+    }
+
+    /// What was laid out since the last call, and start a fresh set.
+    fn take(&self) -> HashSet<SharedString> {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+}
+
+/// Drop the cached layout of every row the list did not lay out since the last
+/// trim. Run at the top of a render, so it judges the previous frame's list.
+/// Does nothing when no row was laid out: a panel that was not painted has no
+/// opinion about what is visible.
+pub fn trim_caches(entries: &[Entry], viewed: &Viewed) {
+    let rows = viewed.take();
+    if rows.is_empty() {
+        return;
+    }
+    for entry in entries {
+        entry.cache.borrow_mut().retain_rows(&rows);
+    }
+}
+
+/// What a compact turn's header says once the turn has settled.
+#[must_use]
+pub fn worked_label(worked_ms: Option<u64>) -> String {
+    let Some(ms) = worked_ms else {
+        return "Worked".to_string();
+    };
+    let seconds = (ms + 500) / 1000;
+    match (seconds / 60, seconds % 60) {
+        (0, 0) => "Worked for 1s".to_string(),
+        (0, seconds) => format!("Worked for {seconds}s"),
+        (minutes, seconds) => format!("Worked for {minutes}m {seconds}s"),
+    }
+}
+
 /// The markdown a part carries, if it carries any.
 fn markdown_of(part: &AgentChatPart) -> Option<&str> {
     match part {
@@ -684,11 +822,15 @@ pub struct RowCtx<'a> {
     pub trailer: Option<crate::working::Trailer>,
     /// Tool calls the reader has opened, by call id.
     pub expanded: &'a HashSet<SharedString>,
+    /// Compact turns the reader has opened, by message id.
+    pub open_work: &'a HashSet<SharedString>,
     /// Python calls, read. Interior-mutable because a row reads its call
     /// *during* the panel's own render, when the panel entity is already
     /// borrowed — see [`crate::python_cell`] for why the reading is cached at
     /// all.
     pub cells: &'a RefCell<crate::python_cell::Cells>,
+    /// Where a markdown row notes that it was laid out, for the cache trim.
+    pub viewed: &'a Viewed,
     /// What a python card loads its figures through.
     pub agent: &'a crate::Agent,
     /// The one fold in flight, if any: which call, and how far through its
@@ -779,6 +921,15 @@ pub fn row(
                 .join("\n");
             (chip::rail(&tools, ctx, window, cx), plain)
         }
+        RowKind::Work => {
+            let label = if ctx.live {
+                "Working".to_string()
+            } else {
+                worked_label(message.worked_ms())
+            };
+            let open = ctx.open_work.contains(message.id.as_str());
+            (chip::work_header(&label, open, message, ctx, cx), label)
+        }
         RowKind::Block {
             part,
             block,
@@ -796,9 +947,12 @@ pub fn row(
         }
     };
     let view = ctx.chat.entity_id();
+    // The header already says the turn is working: a trailer under it would
+    // say it twice.
     let trailer = ctx
         .trailer
         .as_ref()
+        .filter(|_| !matches!(key.kind, RowKind::Work))
         .map(|state| crate::working::trailer(state, theme, view, cx));
     // A settled assistant turn is signed with when it arrived — comet's faint
     // line under the reply, revealed on hover. A live turn is not signed at
@@ -931,8 +1085,10 @@ fn markdown(
 ) -> Option<(AnyElement, String)> {
     let state = turn.parts.get(part)?.as_ref()?;
     let top = state.tree.blocks.get(block)?;
+    let row_key = SharedString::from(part_key(&turn.key, part));
+    ctx.viewed.note(&row_key);
     let opts = RenderOptions {
-        row_key: SharedString::from(part_key(&turn.key, part)),
+        row_key,
         veil: ctx.live.then(|| Rc::clone(&turn.veil)),
         cache: Some(Rc::clone(&turn.cache)),
         now: Instant::now(),
@@ -1026,9 +1182,13 @@ mod tests {
             parts: vec![
                 tool("1"),
                 AgentChatPart::StepStart,
-                AgentChatPart::Text { text: String::new() },
+                AgentChatPart::Text {
+                    text: String::new(),
+                },
                 tool("2"),
-                AgentChatPart::Text { text: "done".into() },
+                AgentChatPart::Text {
+                    text: "done".into(),
+                },
             ],
         };
         let mut entry = Entry::restored("a");
@@ -1036,9 +1196,134 @@ mod tests {
         let transcript = Transcript {
             messages: vec![message],
         };
-        let rows = rows_for(&transcript, &[entry], None);
+        let open = HashSet::new();
+        let rows = rows_for(
+            &transcript,
+            &[entry],
+            None,
+            Compact {
+                on: false,
+                open: &open,
+            },
+        );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].kind, RowKind::Tools { part: 0, count: 4 });
+    }
+
+    /// Compact: the work folds behind one header and the final reply stays;
+    /// opening the header shows the work as ordinary rows between the two.
+    #[test]
+    fn a_compact_turn_folds_its_work_behind_one_header() {
+        let message = AgentChatMessage {
+            id: "a".into(),
+            role: Role::Assistant,
+            parts: vec![
+                AgentChatPart::Reasoning {
+                    text: "thinking".into(),
+                    started_at: None,
+                    last_delta_at: None,
+                },
+                AgentChatPart::Tool(ToolPart {
+                    name: Some("probe".into()),
+                    dynamic: false,
+                    call_id: "1".into(),
+                    state: luma_lib::agent::ToolState::InputAvailable,
+                    input: None,
+                    output: None,
+                    error_text: None,
+                }),
+                AgentChatPart::Text {
+                    text: "narration".into(),
+                },
+                AgentChatPart::Text {
+                    text: "the answer".into(),
+                },
+            ],
+        };
+        let mut entry = Entry::restored("a");
+        entry.sync(&message, false);
+        let entries = [entry];
+        let transcript = Transcript {
+            messages: vec![message],
+        };
+        let none = HashSet::new();
+        let open = HashSet::from([SharedString::from("a")]);
+        let rows = |open: &HashSet<SharedString>, on| {
+            rows_for(&transcript, &entries, None, Compact { on, open })
+        };
+        let kinds = |rows: &[RowKey]| rows.iter().map(|row| row.kind).collect::<Vec<_>>();
+
+        let folded = rows(&none, true);
+        assert_eq!(folded.len(), 2);
+        assert_eq!(folded[0].kind, RowKind::Work);
+        assert!(matches!(
+            folded[1].kind,
+            RowKind::Block {
+                part: 3,
+                reasoning: false,
+                ..
+            }
+        ));
+
+        let shown = rows(&open, true);
+        assert!(shown.len() > folded.len());
+        assert_eq!(shown[0].kind, RowKind::Work);
+        assert_ne!(
+            shown[0].version, folded[0].version,
+            "opening remeasures the header"
+        );
+        assert_eq!(kinds(&shown[shown.len() - 1..]), kinds(&folded[1..]));
+        assert!(shown
+            .iter()
+            .any(|row| matches!(row.kind, RowKind::Tools { .. })));
+        assert!(shown.iter().any(|row| matches!(
+            row.kind,
+            RowKind::Block {
+                reasoning: true,
+                ..
+            }
+        )));
+
+        // Off, the same turn is the ordinary transcript, with no header.
+        assert!(rows(&none, false)
+            .iter()
+            .all(|row| row.kind != RowKind::Work));
+    }
+
+    /// A turn with nothing but a reply has no work to fold.
+    #[test]
+    fn a_reply_alone_gets_no_header() {
+        let message = AgentChatMessage {
+            id: "a".into(),
+            role: Role::Assistant,
+            parts: vec![AgentChatPart::Text {
+                text: "hello".into(),
+            }],
+        };
+        let mut entry = Entry::restored("a");
+        entry.sync(&message, false);
+        let transcript = Transcript {
+            messages: vec![message],
+        };
+        let none = HashSet::new();
+        let rows = rows_for(
+            &transcript,
+            &[entry],
+            None,
+            Compact {
+                on: true,
+                open: &none,
+            },
+        );
+        assert!(rows.iter().all(|row| row.kind != RowKind::Work));
+    }
+
+    #[test]
+    fn the_header_reads_the_stamped_duration() {
+        assert_eq!(worked_label(None), "Worked");
+        assert_eq!(worked_label(Some(12_000)), "Worked for 12s");
+        assert_eq!(worked_label(Some(72_000)), "Worked for 1m 12s");
+        assert_eq!(worked_label(Some(120_000)), "Worked for 2m 0s");
     }
 
     /// The end-of-turn case: every version moves (the streaming bit) while
@@ -1154,6 +1439,69 @@ mod tests {
         assert!(!should_unpin(theme::AT_BOTTOM_PX, 0.0));
         assert!(should_unpin(40.0, 0.0));
         assert!(!should_unpin(0.0, 40.0), "scrolling down never unpins");
+    }
+
+    /// A wheel-up breaks the pin on the event itself, even when the spring has
+    /// already pulled the view back to where the distance test sees no
+    /// movement; and nothing in that same event may re-engage it.
+    #[test]
+    fn wheel_up_unpins_on_the_same_event() {
+        let up = gpui::ScrollDelta::Lines(gpui::point(0.0, 1.0));
+        let down = gpui::ScrollDelta::Lines(gpui::point(0.0, -1.0));
+        assert!(wheel_breaks_pin(up, true));
+        assert!(!wheel_breaks_pin(down, true));
+        assert!(!wheel_breaks_pin(up, false), "nothing to scroll");
+        assert!(!wheel_breaks_pin(
+            gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(5.0))),
+            true
+        ));
+        // Back at distance 0 (spring undid the notch) and inside the band:
+        // the distance test alone would keep the pin or re-engage it.
+        assert!(!pin_after_scroll(true, true, 0.0, 0.0));
+        assert!(!pin_after_scroll(
+            false,
+            true,
+            theme::STICK_THRESHOLD_PX - 1.0,
+            40.0
+        ));
+    }
+
+    #[test]
+    fn returning_to_the_bottom_resticks() {
+        assert!(pin_after_scroll(false, false, 0.0, 200.0));
+        assert!(pin_after_scroll(
+            false,
+            false,
+            theme::STICK_THRESHOLD_PX - 1.0,
+            200.0
+        ));
+        assert!(
+            !pin_after_scroll(false, false, 300.0, 200.0),
+            "still adrift"
+        );
+        assert!(
+            pin_after_scroll(true, false, 0.0, 0.0),
+            "a pinned view stays pinned"
+        );
+    }
+
+    /// What the trim keeps is what the last frame laid out: a row that
+    /// scrolled out of the list is absent from the next set, a visible one is
+    /// present, and a frame that laid out nothing keeps everything.
+    #[test]
+    fn the_trim_keeps_what_the_last_frame_laid_out() {
+        let viewed = Viewed::default();
+        let (a, b) = (SharedString::from("t:0"), SharedString::from("t:1"));
+        viewed.note(&a);
+        viewed.note(&b);
+        assert_eq!(viewed.take(), HashSet::from([a.clone(), b.clone()]));
+        // `b` scrolled out; only `a` is laid out the next frame.
+        viewed.note(&a);
+        let kept = viewed.take();
+        assert!(kept.contains(&a) && !kept.contains(&b));
+        // An unpainted frame: empty, so the trim must not wipe anything.
+        assert!(viewed.take().is_empty());
+        trim_caches(&[Entry::restored("t")], &viewed);
     }
 
     /// A row's gap comes from the pair it sits between. The one that matters

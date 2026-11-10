@@ -98,8 +98,8 @@ impl ToolProgress {
         }
     }
 
-    /// Say whether the `python` call `call_id` is waiting for the host's Python
-    /// setup. Also dropped by the reducer.
+    /// Say whether the `python` call `call_id` is waiting for Python: the
+    /// host's setup or its kernel starting. Also dropped by the reducer.
     pub fn python_setup_wait(&self, call_id: &str, waiting: bool) {
         let _ = self.0.send(TurnEvent::PythonSetupWait {
             call_id: call_id.to_owned(),

@@ -501,12 +501,17 @@ pub(crate) struct LightIndexBindings {
     pub fragment_counters: wgpu::Buffer,
 }
 
-/// The viewport-sized half of the buffers, recreated only on resize.
+/// The viewport-sized half of the buffers, recreated only when a resize
+/// outgrows them (or leaves them more than twice too big).
 /// `tile_masks` is retained directly for consumers that compose their own
 /// bind group, and for the validation test's readback.
 struct SizedBuffers {
+    /// This frame's tile grid. The shaders index by it, never by the buffer
+    /// lengths, so buffers sized for a larger grid serve a smaller one.
     columns: u32,
     rows: u32,
+    /// Tiles and big tiles the buffers have room for.
+    capacity: (u64, u64),
     tile_masks: wgpu::Buffer,
     /// One f32 per tile: the depth `surface_fill` split the tile's buckets
     /// at, or a large sentinel for an unsplit tile.
@@ -878,14 +883,34 @@ impl LightIndex {
             self.source_to_sorted[*source as usize] = Some(sorted as u32);
         }
 
+        // A resize drag changes the grid every few frames. Growing with a
+        // sixteenth's headroom each way reallocates once per sixteenth of the
+        // viewport instead of once per tile crossed.
+        let need = (
+            u64::from(columns) * u64::from(rows),
+            u64::from(big_columns) * u64::from(big_rows),
+        );
+        let fits = |capacity: (u64, u64)| {
+            need.0 <= capacity.0 && need.1 <= capacity.1 && capacity.0 <= 2 * need.0
+        };
         if self
             .sized
             .as_ref()
-            .is_none_or(|sized| (sized.columns, sized.rows) != (columns, rows))
+            .is_none_or(|sized| !fits(sized.capacity))
         {
-            self.sized =
-                Some(self.allocate(pipelines, device, columns, rows, big_columns, big_rows));
+            let room = |n: u32| n + n.div_ceil(16);
+            self.sized = Some(self.allocate(
+                pipelines,
+                device,
+                room(columns),
+                room(rows),
+                room(columns).div_ceil(BIG_FACTOR),
+                room(rows).div_ceil(BIG_FACTOR),
+            ));
         }
+        let sized = self.sized.as_mut().expect("allocated above");
+        sized.columns = columns;
+        sized.rows = rows;
 
         let view = &prepared.view;
         let params = IndexParams {
@@ -1060,6 +1085,10 @@ impl LightIndex {
         SizedBuffers {
             columns,
             rows,
+            capacity: (
+                u64::from(columns) * u64::from(rows),
+                u64::from(big_columns) * u64::from(big_rows),
+            ),
             build_bind_group: bind(
                 &pipelines.build_layout,
                 "light-index-build",
@@ -1940,7 +1969,9 @@ mod tests {
                 None,
             );
             let sized = index.sized.as_ref().expect("sized buffers");
-            let size = sized.tile_masks.size();
+            // This frame's planes; the buffer may have room for a larger grid.
+            let size =
+                MASK_PLANES as u64 * u64::from(sized.columns * sized.rows) * MASK_WORDS as u64 * 4;
             let readback = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("light-index-readback"),
                 size,

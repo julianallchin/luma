@@ -312,28 +312,30 @@ const CDJ_W_M: f64 = 0.343;
 const CDJ_INNER_M: f64 = (MIXER_W_M + CDJ_W_M) / 2.0 + BOOTH_GAP_M;
 const CDJ_OUTER_M: f64 = CDJ_INNER_M + CDJ_W_M + BOOTH_GAP_M;
 
-/// The quarter-turn that lays a unit's control face along the booth's run.
+/// The quarter-turn that lays the deck's 2 m run across the booth.
 ///
-/// The deck is modelled with its 2 m axis on `Z` and the players with their
-/// width on `X`, so one of the two has to turn for a row of players to run the
-/// length of the deck. Turning the *players* rather than the deck is what
-/// keeps the booth landing in a room exactly as the bare deck it is made of
-/// lands — the assembly introduces no orientation of its own.
-const BOOTH_UNIT_TURN: i8 = 1;
+/// The deck is modelled with its 2 m axis on `Z`; turning it puts the run on
+/// `X`, so the players stand in a row along it.
+const BOOTH_DECK_TURN: i8 = 1;
+
+/// The half-turn that puts each unit's control face (its modelled `+Z`, where
+/// the DJ stands) on the booth's `-Z`. The booth's `+Z` is then its back, the
+/// side the crowd sees, which is the side every booth already placed in a
+/// room was turned to meet the house with.
+const BOOTH_UNIT_TURN: i8 = 2;
 
 /// The DJ booth: a 2 x 1 m deck — already a metre tall as modelled, which is
-/// standing height — wearing a mixer and four players.
+/// standing height — wearing a mixer and four players in a row.
 ///
 /// Authored centred on the origin in plan, so the piece's footprint centre
-/// *is* its origin and its footing socket is symmetric: the booth is
-/// indifferent to which way a room calls upstage.
+/// *is* its origin and its footing socket is symmetric.
 static DJ_BOOTH_PARTS: &[Part] = &[
-    Part::new(DECK_2X1, DVec2::ZERO, Rest::Ground),
+    Part::new(DECK_2X1, DVec2::ZERO, Rest::Ground).turned(BOOTH_DECK_TURN),
     Part::new(MIXER, DVec2::ZERO, Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, -CDJ_INNER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, CDJ_INNER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, -CDJ_OUTER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, CDJ_OUTER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(-CDJ_INNER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(CDJ_INNER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(-CDJ_OUTER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(CDJ_OUTER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
 ];
 
 const DECK_2X1: &str = "stage_lab/stage_praticavel_2x1x1.glb";
@@ -1229,6 +1231,7 @@ impl StatedHousing {
                 }),
                 layout: None,
                 lens: None,
+                bulb: None,
             }),
         })
     }

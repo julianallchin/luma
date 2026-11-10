@@ -452,6 +452,19 @@ impl<'a> Stage<'a> {
         let mut access = self.write().await?;
         require_in_venue(&mut access, &[node_id]).await?;
         let graph = venue_graph::graph(&mut access).await?;
+        parameter_edit(&graph, node_id, &params)?;
+        if params.contains_key("u") || params.contains_key("v") {
+            let supply = venue_graph::sockets(self.fixtures_root)?;
+            let (u, v) = surface_offset(
+                &graph,
+                supply,
+                node_id,
+                params.get("u").copied(),
+                params.get("v").copied(),
+            )?;
+            params.insert("u".into(), u);
+            params.insert("v".into(), v);
+        }
         let (_, edge) = parameter_edit(&graph, node_id, &params)?;
         if params.remove("yaw").is_some() {
             let edge = edge.expect("parameter_edit validated the yaw edge");
@@ -1302,8 +1315,8 @@ pub struct Filter {
     pub ids: Option<Vec<String>>,
     pub kind: Option<String>,
     /// A glob against the label: `*`, `?`, and literals. A bare name with no
-    /// metacharacter also matches the numbered children a `distribute` mints
-    /// from it — `"wash"` finds `wash 1` … `wash 8`.
+    /// metacharacter also matches every label it begins as a word —
+    /// `"wash"` finds `wash 1` … `wash 8`, `"Totem"` finds `Totem L`.
     pub label: Option<String>,
     /// Only what hangs off this node, at any depth.
     pub on: Option<String>,
@@ -1347,10 +1360,11 @@ impl Filter {
 
 /// A label filter against one label.
 ///
-/// A glob is a glob. A **bare** name — no metacharacter — also matches the
-/// numbered children a row mints from it, because `distribute(label="wash")`
-/// names eight fixtures `wash 1` … `wash 8` and nobody who asked for "wash"
-/// meant the one node that is spelled exactly that and does not exist.
+/// A glob is a glob. A **bare** name — no metacharacter — also matches every
+/// label it begins as a whole word: `distribute(label="wash")` names eight
+/// fixtures `wash 1` … `wash 8`, a pair is `Totem L` and `Totem R`, and nobody
+/// who asked for "wash" or "Totem" meant only the node spelled exactly that.
+/// `"wash"` does not match `"washer"`.
 fn label_matches(pattern: &str, label: &str) -> bool {
     if glob_matches(pattern, label) {
         return true;
@@ -1362,8 +1376,8 @@ fn label_matches(pattern: &str, label: &str) -> bool {
     let Some(rest) = rest.strip_prefix(&pattern.to_lowercase()) else {
         return false;
     };
-    let rest = rest.trim_start_matches([' ', '_', '-']);
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    rest.starts_with([' ', '_', '-'])
+        || (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// `*` and `?` against a label. Written here rather than pulled in because a
@@ -2540,6 +2554,84 @@ fn keep(params: BTreeMap<String, f64>) -> BTreeMap<String, Option<f64>> {
 }
 
 /// Validate the whole edit before changing either the live graph or a draft.
+/// The host-surface `(u, v)` parameters that centre `node_id` at `(u, v)`
+/// facade metres from its host's footprint centre — what `place`'s `at=`
+/// means — so a nudge reads in the frame the piece was placed in rather than
+/// in the host's own surface axes, which on a deck run the other way. `None`
+/// keeps the node where it stands on that axis.
+///
+/// The surface parameters move the footprint rigidly in the host's plane, so
+/// three solves (where it is, and one step along each parameter) give the
+/// map exactly.
+fn surface_offset(
+    graph: &VenueGraph,
+    supply: &VenueSockets,
+    node_id: &str,
+    u: Option<f64>,
+    v: Option<f64>,
+) -> Result<(f64, f64)> {
+    let parent = graph
+        .edge(node_id)
+        .map(|edge| edge.parent.clone())
+        .ok_or_else(|| StageError::Refused(format!("`{node_id}` is not placed on anything")))?;
+    let node = graph
+        .node(node_id)
+        .cloned()
+        .ok_or_else(|| StageError::NotFound(format!("node `{node_id}` does not exist")))?;
+    let centre = |graph: &VenueGraph, id: &str| {
+        let solved = luma_scene::venue::resolve(graph, supply);
+        let filter = Filter {
+            ids: Some(vec![id.to_string()]),
+            ..Filter::default()
+        };
+        views(graph, &solved, supply, &filter)
+            .into_iter()
+            .find(|view| view.id == id)
+            .map(|view| view.at.at)
+    };
+    let (u0, v0) = (node.params.get("u", 0.0), node.params.get("v", 0.0));
+    let at = |du: f64, dv: f64| {
+        let mut moved = graph.clone();
+        let mut node = node.clone();
+        node.params.set("u".to_string(), u0 + du);
+        node.params.set("v".to_string(), v0 + dv);
+        moved.insert(node);
+        centre(&moved, node_id)
+            .ok_or_else(|| StageError::Refused(format!("`{node_id}` does not solve on its host")))
+    };
+    let here = at(0.0, 0.0)?;
+    let along_u = at(1.0, 0.0)?;
+    let along_v = at(0.0, 1.0)?;
+    let mark = centre(graph, &parent).unwrap_or([0.0, 0.0]);
+    let target = [
+        u.map_or(here[0], |u| mark[0] + u),
+        v.map_or(here[1], |v| mark[1] + v),
+    ];
+    let (a, b) = (
+        [along_u[0] - here[0], along_u[1] - here[1]],
+        [along_v[0] - here[0], along_v[1] - here[1]],
+    );
+    let want = [target[0] - here[0], target[1] - here[1]];
+    let det = a[0] * b[1] - a[1] * b[0];
+    if det.abs() > 1e-9 {
+        let du = (want[0] * b[1] - want[1] * b[0]) / det;
+        let dv = (a[0] * want[1] - a[1] * want[0]) / det;
+        return Ok((u0 + du, v0 + dv));
+    }
+    // A host that slides one way only (a truss): the nearest the node can get.
+    let nearest = |axis: [f64; 2]| {
+        let length = axis[0] * axis[0] + axis[1] * axis[1];
+        (length > 1e-12).then(|| (want[0] * axis[0] + want[1] * axis[1]) / length)
+    };
+    match (nearest(a), nearest(b)) {
+        (Some(du), _) => Ok((u0 + du, v0)),
+        (None, Some(dv)) => Ok((u0, v0 + dv)),
+        (None, None) => Err(StageError::Refused(format!(
+            "`{node_id}` cannot slide on what it is mounted to; turn it with `yaw` or place it again"
+        ))),
+    }
+}
+
 fn parameter_edit(
     graph: &VenueGraph,
     node_id: &str,
@@ -2578,6 +2670,18 @@ fn parameter_edit(
 
 #[cfg(test)]
 mod tests {
+
+    /// A bare name finds every label it begins as a word, and no more.
+    #[test]
+    fn a_bare_label_finds_what_it_begins() {
+        for label in ["Totem L", "totem_r", "Totem", "totem 2", "TOTEM-3"] {
+            assert!(super::label_matches("Totem", label), "{label}");
+        }
+        for label in ["Totems", "Totemic", "Front Totem"] {
+            assert!(!super::label_matches("Totem", label), "{label}");
+        }
+        assert!(super::label_matches("tot*", "Totems"));
+    }
     use super::{mirror_socket, quantize, quantize_down};
 
     #[test]

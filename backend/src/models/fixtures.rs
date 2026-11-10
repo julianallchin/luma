@@ -56,6 +56,16 @@ pub struct FixtureDefinition {
 pub const LASER_PROJECTOR: &str = "Laser Projector";
 
 impl FixtureDefinition {
+    /// Whether Luma can drive `mode`'s light: false for a library mode it
+    /// cannot light (its colour only through presets of unknown colour).
+    /// QLC+ definitions are taken as they come.
+    pub fn supports_mode(&self, mode: &str) -> bool {
+        self.library
+            .as_ref()
+            .and_then(|source| source.light.get(mode))
+            .is_none_or(|light| light.lights())
+    }
+
     /// Whether this is an ILDA laser projector ([`LASER_PROJECTOR`]).
     pub fn is_laser_projector(&self) -> bool {
         self.type_ == LASER_PROJECTOR
@@ -360,6 +370,14 @@ pub struct Bulb {
     pub type_: Option<String>,
     #[serde(rename = "@Lumens")]
     pub lumens: Option<u32>,
+    /// Lumens out of the whole fixture, from a datasheet. Not QLC+'s: a
+    /// library fixture lowers its `optics.lumens` here.
+    #[serde(
+        rename = "@OutputLumens",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_lumens: Option<f32>,
     #[serde(rename = "@ColourTemperature")]
     pub colour_temperature: Option<u32>,
 }
@@ -496,6 +514,10 @@ impl From<&FixtureDefinition> for luma_scene::definition::Definition {
                         // go here when the library carries them.
                         radius_m: None,
                         offset_m: None,
+                    }),
+                    bulb: p.bulb.as_ref().map(|b| luma_scene::definition::Bulb {
+                        lumens: b.lumens.map(|l| l as f32),
+                        output_lumens: b.output_lumens,
                     }),
                 }),
         }

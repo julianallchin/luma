@@ -140,16 +140,16 @@ class VenueRefreshTests(unittest.TestCase):
         cached_a = snapshot("room", [], "a")
         cached_b = snapshot("room", [{"id": "fixture"}], "b")
         first = reconcile_facades(cached_a, None)
-        v, fx = first.venue, first.venue.fixtures
+        v, fx = first.venue, first.venue["fixtures"]
         v._cache["library"] = "previous cell"
         second = reconcile_facades(cached_b, first)
         self.assertIs(second.venue, v)
-        self.assertEqual((len(v.fixtures), len(fx)), (1, 0))
+        self.assertEqual((len(v["fixtures"]), len(fx)), (1, 0))
         self.assertEqual(v._cache, {})
         undone = reconcile_facades(cached_a, second)
         self.assertIs(undone.venue, v)
-        self.assertEqual(len(v.fixtures), 0)
-        self.assertEqual(len(cached_b.venue.fixtures), 1)
+        self.assertEqual(len(v["fixtures"]), 0)
+        self.assertEqual(len(cached_b.venue["fixtures"]), 1)
         elsewhere = reconcile_facades(snapshot("other", [], "other"), undone)
         for operation in (v.render, v.tiles, v.describe):
             with self.assertRaisesRegex(VenueHostUnavailableError, "no longer in scope"):
@@ -159,6 +159,62 @@ class VenueRefreshTests(unittest.TestCase):
         self.assertIsNot(returned.venue, v)
         with self.assertRaises(VenueHostUnavailableError):
             v.render()
+
+
+class CameraTests(unittest.TestCase):
+    """A camera moved round its target keeps what it looks at."""
+
+    def front(self):
+        from luma_exec.venue import Camera
+        return Camera((0.0, 10.0, 3.0), (0.0, 0.0, 3.0), 50.0)
+
+    def distance(self, camera) -> float:
+        return math.dist(camera.eye, camera.target)
+
+    def test_orbit_keeps_the_target_and_the_distance(self) -> None:
+        start = self.front()
+        moved = start.orbit(right=70, up=20)
+        self.assertEqual(moved.target, start.target)
+        self.assertAlmostEqual(self.distance(moved), self.distance(start), places=6)
+        self.assertGreater(moved.eye[2], start.eye[2])
+
+    def test_orbit_right_moves_toward_the_pictures_right(self) -> None:
+        # From the audience the picture's right is stage left, -u.
+        self.assertLess(self.front().orbit(right=30).eye[0], 0.0)
+        self.assertGreater(self.front().orbit(right=-30).eye[0], 0.0)
+
+    def test_orbits_undo_each_other(self) -> None:
+        there = self.front().orbit(right=50).orbit(right=-50)
+        for a, b in zip(there.eye, self.front().eye):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_zoom_scales_the_distance(self) -> None:
+        start = self.front()
+        self.assertAlmostEqual(self.distance(start.zoom(0.5)), self.distance(start) / 2, places=6)
+        with self.assertRaises(ValueError):
+            start.zoom(0)
+
+    def test_render_sends_a_camera_and_targets(self) -> None:
+        calls = []
+
+        def host(method, payload):
+            calls.append(payload)
+            return {"view": "camera", "t": 0.0, "width": 10, "height": 10,
+                    "artifactRel": "outputs/x.png",
+                    "camera": {"eye": [0, 10, 3], "target": [0, 0, 3], "fov": 50,
+                               "looking": "from the audience"}}
+
+        venue = Venue(record(), host_call=host, workspace=Path(tempfile.mkdtemp()))
+        with redirect_stdout(io.StringIO()) as said:
+            shot = venue.render(camera=self.front(), highlight=[("f1", 2), "f2"])
+        self.assertEqual(calls[-1]["camera"], {"eye": [0.0, 10.0, 3.0], "target": [0.0, 0.0, 3.0], "fov": 50.0})
+        self.assertEqual(calls[-1]["highlight"], ["f1:2", "f2"])
+        self.assertIn("from the audience", said.getvalue())
+        self.assertEqual(shot.camera.target, (0.0, 0.0, 3.0))
+        venue.render(focus="back_movers")
+        self.assertEqual(calls[-1]["focus"], "back_movers")
+        with self.assertRaises(ValueError):
+            venue.render(camera=self.front(), focus="back_movers")
 
 
 class VenueGroupTests(unittest.TestCase):
@@ -185,6 +241,8 @@ class VenueGroupTests(unittest.TestCase):
         self.assertEqual(calls[-1][1]["fixtures"], ["f1"])
         venue.group("empty", [])
         self.assertEqual(calls[-1][1]["fixtures"], [])
+        venue.group("cells", [("f1", 0), "f2:3", ("f1", 0)])
+        self.assertEqual(calls[-1][1]["fixtures"], ["f1:0", "f2:3"])
         self.assertEqual(venue.generate_groups().names(), ("back_movers",))
         self.assertEqual(calls[-1], ("venue.generate_groups", {}))
 
@@ -247,6 +305,8 @@ class VenueRenderTests(unittest.TestCase):
                         "highlight": None,
                         "house": None,
                         "sun": None,
+                        "camera": None,
+                        "focus": None,
                     },
                 )
             ],
@@ -566,6 +626,8 @@ class BuildHost:
             }
         if method == "venue.describe":
             return {"text": "root  venue\n"}
+        if method == "venue.fixtures":
+            return {"fixtures": [{"id": "f1", "label": "Mover 1"}]}
         if method == "venue.chain":
             self.built += 1
             return chained(f"n-{self.built}", payload)
@@ -779,8 +841,10 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(payload["nodeId"], "wing-1")
         self.assertTrue(payload["flip"])
 
-    def test_remove_answers_with_the_tree_that_is_left(self) -> None:
-        self.assertIn("venue", self.venue.remove("wing-1"))
+    def test_remove_says_what_it_removed_and_not_the_room(self) -> None:
+        said = self.venue.remove("wing-1")
+        self.assertIn("removed 1", said)
+        self.assertNotIn("root", said)
         self.assertEqual(self.host.last("venue.remove")["nodeIds"], ["wing-1"])
 
     def test_remove_takes_a_selection(self) -> None:
@@ -1072,6 +1136,33 @@ class BuildTests(unittest.TestCase):
         self.venue.fixture_library("robe")
         self.assertFalse(callable(self.venue.fixtures))
 
+    def test_fixtures_are_read_now(self) -> None:
+        """The patch is read when it is asked for, not when the cell began."""
+        self.assertEqual(self.venue.fixtures[0].label, "Mover 1")
+        self.assertEqual(self.host.last("venue.fixtures"), {})
+
+    def test_cells_are_picked_by_the_colour_they_make(self) -> None:
+        from luma_exec.venue import LibraryMode
+        mode = LibraryMode({"name": "64ch", "channels": 64, "moves": False, "role": "strobe",
+                            "cells": 6, "colours": ["red", "green", "blue", "white"],
+                            "cellColours": {"red+green+blue": [0, 1, 3, 4], "white": [2, 5]}})
+        self.assertEqual(mode.cells_with("white"), (2, 5))
+        self.assertEqual(mode.cells_with("red"), (0, 1, 3, 4))
+        self.assertEqual(mode.cells_with("uv"), ())
+        self.assertIn("2 white", repr(mode))
+
+    def test_a_mode_is_found_by_name_or_channel_count(self) -> None:
+        [head] = self.venue.fixture_library("robe")
+        self.assertEqual(head.mode("Basic"), "Basic")
+        self.assertEqual(head.mode(39), "Mode 1")
+
+    def test_patch_pins_an_address(self) -> None:
+        self.venue.patch("f1", universe=1, address=129)
+        self.assertEqual(
+            self.host.last("venue.patch"),
+            {"fixture": "f1", "universe": 1, "address": 129},
+        )
+
     def test_attachment_accepts_the_same_catalog_name_as_place(self) -> None:
         self.venue.attach("truss", to="deck-1", socket="corner_fl")
         self.assertEqual(self.host.last("venue.attach")["catalogRef"], "truss/straight")
@@ -1108,8 +1199,8 @@ class BuildTests(unittest.TestCase):
         head = self.venue.fixture_library()[0]
         with self.assertRaises(LumaHostCallError) as caught:
             head.mode(7)
-        self.assertIn("Mode 1 (39)", str(caught.exception))
-        self.assertIn("Basic (12)", str(caught.exception))
+        for offered in ("Mode 1", "39", "Basic", "12"):
+            self.assertIn(offered, str(caught.exception))
 
     # -- aim -------------------------------------------------------------
 

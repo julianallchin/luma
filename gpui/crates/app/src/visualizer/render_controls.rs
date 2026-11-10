@@ -296,8 +296,9 @@ impl RenderControls {
                 let exposure = &mut self.look.exposure;
                 exposure.auto = !exposure.auto;
                 // The one number means compensation in one mode and the
-                // exposure itself in the other; zero is the tuned exposure in
-                // both, so it is the only value that means the same thing.
+                // exposure itself in the other; zero is the photometric
+                // exposure in both, so it is the only value that means the
+                // same thing.
                 exposure.ev = 0.0;
             }
             ViewToggle::ReflectionProbes => self.probes.enabled = !self.probes.enabled,
@@ -483,8 +484,9 @@ mod view_tests {
         assert_eq!(controls.settings(50.0).look.glare.star, 0.25);
         assert_eq!(controls.haze, haze);
 
+        let metered = controls.look.exposure.auto;
         controls.toggle(ViewToggle::AutoExposure);
-        assert!(!controls.look.exposure.auto);
+        assert_eq!(controls.look.exposure.auto, !metered);
         assert_eq!(controls.look.exposure.ev, 0.0);
     }
 

@@ -8,6 +8,8 @@
 const PURPOSE = "ramp bounds";
 
 fixture({
+  // These tests read a turn's tool chips, which compact turns fold away.
+  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('compact_turns', 'false')"],
   window: [1280, 900],
   model_cadence_ms: 25,
   model: [
@@ -28,7 +30,7 @@ fixture({
   ],
 });
 
-const waiting = (s) => chips(s).some((c) => c.includes("Python setup") && c.includes(PURPOSE));
+const waiting = (s) => chips(s).some((c) => c.includes("Starting Python") && c.includes(PURPOSE));
 
 test("a python call waiting for setup says so on its chip", () => {
   nav.trackEditor("Test Venue", "Aurora");

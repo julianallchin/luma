@@ -56,6 +56,7 @@ pub mod key {
     pub const STAGE_GIZMOS: &str = "stage_gizmos";
     pub const RENDER_SCALE: &str = "render_scale";
     pub const HDR_OUTPUT: &str = "hdr_output";
+    pub const COMPACT_TURNS: &str = "compact_turns";
     pub const STAGE_FRAME_RATE: &str = "stage_frame_rate";
     pub const STAGE_LOOK: &str = "stage_look";
     pub const STAGE_QUALITY: &str = "stage_quality";
@@ -125,6 +126,10 @@ pub struct AppSettings {
     /// Whether the window may present HDR where the display supports it.
     /// Device-global: it is a fact about this machine's display.
     pub hdr_output: bool,
+    /// Whether a finished agent turn folds its work (thinking, tool calls,
+    /// narration) behind one header, leaving the final reply showing.
+    /// Device-global: it is how this machine's chat is read.
+    pub compact_turns: bool,
     /// Whether the stage shows its frame rate in a corner, and the frame stats
     /// it opens. Device-global: it is about this machine's renderer.
     pub stage_frame_rate: bool,
@@ -254,6 +259,7 @@ impl Default for AppSettings {
             stage_gizmos: true,
             render_scale: *RENDER_SCALE_RANGE.end(),
             hdr_output: true,
+            compact_turns: true,
             stage_frame_rate: true,
             stage_look: String::new(),
             stage_quality: high_quality(),
@@ -305,6 +311,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
         stage_gizmos: flag(key::STAGE_GIZMOS, defaults.stage_gizmos),
         render_scale: percent(key::RENDER_SCALE, RENDER_SCALE_RANGE, defaults.render_scale),
         hdr_output: flag(key::HDR_OUTPUT, defaults.hdr_output),
+        compact_turns: flag(key::COMPACT_TURNS, defaults.compact_turns),
         stage_frame_rate: flag(key::STAGE_FRAME_RATE, defaults.stage_frame_rate),
         stage_look: map
             .get(key::STAGE_LOOK)

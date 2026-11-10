@@ -10,6 +10,8 @@
 const LINE = "A softly lit stage.";
 
 fixture({
+  // These tests read a finished turn's tool rows, which compact turns fold away.
+  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('compact_turns', 'false')"],
   window: [1280, 720],
   motion: true,
   model_cadence_ms: 10,

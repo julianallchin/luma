@@ -238,8 +238,17 @@ async fn fixtures(
             )
         }
     };
-    let bindings: Vec<FixtureBinding> = rows
-        .iter()
+    inline(b, "venue.fixtures", fixture_rows(&rows, venue))
+}
+
+/// The patch as `luma.venue.fixtures` shows it: each row with where it is
+/// and which way it faces. Also what the host answers a live re-read with,
+/// so the snapshot and the re-read cannot disagree.
+pub(crate) fn fixture_rows(
+    rows: &[crate::models::fixtures::PatchedFixture],
+    venue: &ResolvedVenue,
+) -> Vec<serde_json::Value> {
+    rows.iter()
         .map(|f| {
             let placed = venue.pose(&f.id);
             let position = placed.map(|pose| {
@@ -250,7 +259,7 @@ async fn fixtures(
                 let (_, basis) = pose.data_basis();
                 basis * DVec3::NEG_Z
             });
-            FixtureBinding {
+            serde_json::to_value(FixtureBinding {
                 id: f.id.clone(),
                 label: f.label.clone(),
                 manufacturer: f.manufacturer.clone(),
@@ -267,10 +276,10 @@ async fn fixtures(
                         .map(f64::from)
                 }),
                 facing_word: facing.map(|v| StageDirection::of(v.as_vec3()).label()),
-            }
+            })
+            .expect("a fixture row serializes")
         })
-        .collect();
-    inline(b, "venue.fixtures", &bindings)
+        .collect()
 }
 
 /// The camera names `luma.venue.render(view=...)` accepts.

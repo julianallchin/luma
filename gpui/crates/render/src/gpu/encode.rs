@@ -409,7 +409,7 @@ impl Renderer {
         let outdoor_sun = frame
             .sky
             .map_or(Vec3::ZERO, |sky| sky.sun_radiance)
-            .extend(Transport::PHASE_G)
+            .extend(0.0)
             .to_array();
         // The compute kernels draw the haze, except for the exhaustive
         // reference's per-ray fragment pass.
@@ -869,8 +869,9 @@ impl Renderer {
                 surface_depth_cull,
                 fog_tile,
                 budget.msaa,
+                slot,
             );
-            let presentation = &t.presentations[slot];
+            let presentation = t.presentation(slot);
             let finish = match presentation {
                 PresentationTarget::Staged {
                     output, readback, ..
@@ -896,6 +897,7 @@ impl Renderer {
                 t.bytes_per_row,
             )
         };
+        self.target_memory.clear(&mut encoder);
         let targets_done = Instant::now();
         let ambient_visibility =
             self.sky_visibility
@@ -1459,9 +1461,15 @@ impl Renderer {
                         // Premultiplied radiance and coverage, including each
                         // surface's horizon fade. Transparent draws blend over
                         // them before the composite supplies the background.
+                        // Multisampled, only the resolve outlives the pass:
+                        // the samples are transient (`targets.rs`).
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
+                            store: if msaa_color.is_some() {
+                                wgpu::StoreOp::Discard
+                            } else {
+                                wgpu::StoreOp::Store
+                            },
                         },
                     })],
                     depth_stencil_attachment: Some(depth_attachment_transient(&msaa_depth)),
@@ -1792,7 +1800,7 @@ impl Renderer {
                     ],
                     transport: [
                         Transport::WHITE_LEAK,
-                        Transport::PHASE_G,
+                        0.0,
                         haze_size.1 as f32,
                         haze_size.0 as f32,
                     ],
@@ -2275,7 +2283,7 @@ impl Renderer {
                     CAMERA_NEAR,
                     camera_far,
                     haze_density * Transport::EXTINCTION,
-                    Transport::PHASE_G,
+                    0.0,
                 ],
                 background: frame.clear_color.extend(1.0).to_array(),
                 display: [
@@ -2335,7 +2343,16 @@ impl Renderer {
                 let post = ((frame.look.needs_post() || !frame.lasers.is_empty())
                     && frame.debug_view == crate::scene_desc::DebugView::Pbr
                     && !frame.cluster_debug)
-                    .then(|| self.post.scene_target(&self.gpu.device, t_width, t_height));
+                    .then(|| {
+                        let scene = self.post.scene_target(
+                            &self.gpu.device,
+                            &mut self.target_memory,
+                            t_width,
+                            t_height,
+                        );
+                        self.target_memory.clear(&mut encoder);
+                        scene
+                    });
                 {
                     let (target, pipeline, timestamps) = match &post {
                         Some(scene) => (

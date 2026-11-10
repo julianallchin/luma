@@ -72,6 +72,22 @@ pub struct Material {
     pub normal_scale: f32,
     /// Strength of the occlusion map's red channel on ambient contribution.
     pub occlusion_strength: f32,
+    /// Set on a flat LED panel's face: the fields above are its LEDs', and
+    /// the shader paints them on with the gap between them.
+    pub led: Option<LedFace>,
+}
+
+/// A flat LED panel's face, which the shader paints from its layout (see
+/// [`luma_fixture::LedPattern`]): sharp LEDs with dark gaps while they are
+/// larger than a pixel, and their area-weighted average colour once they
+/// are not. The mesh's `uv` is the place on the pattern, in LED pitches.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LedFace {
+    pub pattern: luma_fixture::LedPattern,
+    /// What shows between the LEDs, linear.
+    pub gap_color: Vec3,
+    pub gap_metallic: f32,
+    pub gap_roughness: f32,
 }
 
 impl Default for Material {
@@ -85,6 +101,7 @@ impl Default for Material {
             emissive: Vec3::ZERO,
             normal_scale: 1.0,
             occlusion_strength: 1.0,
+            led: None,
         }
     }
 }
@@ -513,6 +530,7 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
             emissive: Vec3::from(emissive),
             normal_scale: normal.map_or(1.0, |texture| texture.scale()),
             occlusion_strength: occlusion.map_or(1.0, |texture| texture.strength()),
+            led: None,
         },
     })
 }

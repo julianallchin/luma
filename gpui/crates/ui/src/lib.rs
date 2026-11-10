@@ -65,6 +65,7 @@ pub mod runtime;
 pub mod scrub_number;
 pub mod sheet;
 pub mod shortcut;
+pub mod smooth_scroll;
 pub mod split;
 pub mod text_input;
 

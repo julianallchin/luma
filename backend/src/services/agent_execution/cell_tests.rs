@@ -338,8 +338,24 @@ impl Fixture {
 
     /// A cell in a [`Self::thread`], attached to its session.
     async fn run(&self, thread_id: &str, code: &str) -> PythonCellResult {
-        self.run_scoped(thread_id, code, self.scope(), Some(session_turn(thread_id)))
-            .await
+        self.run_telling(thread_id, code, &|_| {}).await
+    }
+
+    /// [`Self::run`], telling `waiting` what the cell waits for.
+    async fn run_telling(
+        &self,
+        thread_id: &str,
+        code: &str,
+        waiting: &(dyn Fn(bool) + Sync),
+    ) -> PythonCellResult {
+        self.run_scoped(
+            thread_id,
+            code,
+            self.scope(),
+            Some(session_turn(thread_id)),
+            waiting,
+        )
+        .await
     }
 
     async fn run_scoped(
@@ -348,6 +364,7 @@ impl Fixture {
         code: &str,
         scope: PythonScopeInput,
         turn: Option<String>,
+        waiting: &(dyn Fn(bool) + Sync),
     ) -> PythonCellResult {
         run_python_cell_inner(
             &self.pool,
@@ -362,6 +379,7 @@ impl Fixture {
             Some("owner".into()),
             None,
             None,
+            waiting,
         )
         .await
         .expect("run_python_cell")
@@ -489,6 +507,38 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
 }
 
 #[tokio::test]
+async fn a_cold_kernel_says_python_is_starting_and_a_warm_one_does_not() {
+    let Some(f) =
+        Fixture::new("a_cold_kernel_says_python_is_starting_and_a_warm_one_does_not").await
+    else {
+        return;
+    };
+    let thread = f.thread().await;
+    let told = std::sync::Mutex::new(Vec::new());
+    let waiting = |waiting: bool| told.lock().unwrap().push(waiting);
+
+    expect_ok(
+        &f.run_telling(&thread, "1 + 1", &waiting).await,
+        "cold cell",
+    );
+    assert_eq!(
+        *told.lock().unwrap(),
+        [true, false],
+        "the first cell starts the kernel"
+    );
+
+    expect_ok(
+        &f.run_telling(&thread, "2 + 2", &waiting).await,
+        "warm cell",
+    );
+    assert_eq!(
+        *told.lock().unwrap(),
+        [true, false],
+        "a cell on a running kernel waits for nothing"
+    );
+}
+
+#[tokio::test]
 async fn python_execution_rejects_a_thread_owned_by_another_principal() {
     let Some(f) =
         Fixture::new("python_execution_rejects_a_thread_owned_by_another_principal").await
@@ -512,6 +562,7 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         Some("another-user".into()),
         None,
         None,
+        &|_| {},
     )
     .await
     .unwrap_err();
@@ -565,6 +616,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
             Some("owner".into()),
             None,
             None,
+            &|_| {},
         )
         .await
         .unwrap_err();
@@ -586,6 +638,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         Some("owner".into()),
         None,
         None,
+        &|_| {},
     )
     .await
     .unwrap_err();
@@ -632,6 +685,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         Some("owner".into()),
         None,
         None,
+        &|_| {},
     )
     .await
     .expect("an editable cell attaches to a session turn");
@@ -767,6 +821,7 @@ impl Fixture {
                 ..Default::default()
             },
             None,
+            &|_| {},
         )
         .await
     }
@@ -1131,6 +1186,45 @@ except luma.PerformRefused as error:
     f.service.shutdown_all();
 }
 
+/// A nudge reads in the frame a placement does: `trim(u=, v=)` puts the
+/// footprint centre where `place(at=)` would, on a deck whose own surface axes
+/// run the other way; a rename reaches the patch; one light is named as asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_nudge_lands_where_a_placement_would() {
+    let Some(f) = Fixture::new("venue nudge").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+deck = v.place("deck", at=(2.0, 1.0))
+tower = v.place("truss", on=deck, at=(0.2, -0.25), length=1.5, direction=(0, 0, 1), label="Totem L")
+placed = v.nodes(label="Totem")[0].at
+v.trim(tower, u=-0.3, v=0.25)
+nudged = v.nodes(label="Totem")[0].at
+head = v.fixture_library("rogue r2 spot")[0]
+bar = v.place("truss", at=(0.0, 4.0), length=6.0, direction=(1, 0, 0), trim=4.0)
+v.distribute(head, 1, on=bar, face=(0, 0, -1), mode=head.mode(18), label="solo")
+v.trim(v.fixtures[-1].id, label="Solo Spot")
+(tuple(round(c, 3) for c in placed), tuple(round(c, 3) for c in nudged),
+ [x.label for x in v.fixtures])
+"#,
+        )
+        .await;
+    expect_ok(&out, "nudge");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((2.2, 0.75), (1.7, 1.25), ['Solo Spot'])",
+        "{}",
+        out.stdout
+    );
+    f.service.shutdown_all();
+}
+
 /// The library is searchable and its answer is what `distribute` is named out
 /// of, and an aim written in degrees comes back as a degree.
 ///
@@ -1264,10 +1358,11 @@ import matplotlib.image as image
 edit = luma.track.edit()
 edit.add_clip(laser(figure(count=5, size=1)), name="Fan", seconds=(0, 4), selection="lasers")
 def light(shot):
-    return float(image.imread(io.BytesIO(shot.read_bytes()))[..., :3].sum())
+    pixels = image.imread(io.BytesIO(shot.read_bytes()))[..., :3]
+    return int((pixels.max(axis=-1) > 0.95).sum())
 v = luma.venue
 lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
-(lit > dark * 1.01, lit, dark)
+(lit > dark + 100, lit, dark)
 "#
         .into(),
         scope,
@@ -1275,6 +1370,7 @@ lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
         Some("owner".into()),
         None,
         None,
+        &|_| {},
     )
     .await
     .expect("run_python_cell");

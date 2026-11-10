@@ -40,6 +40,7 @@ pub async fn run_python_cell(
         current_user_id,
         None,
         None,
+        &|_| {},
     )
     .await?)
 }

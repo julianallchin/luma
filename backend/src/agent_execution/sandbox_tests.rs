@@ -48,6 +48,7 @@ const ALLOWED_ENV: &[&str] = &[
     "MKL_NUM_THREADS",
     "MPLBACKEND",
     "MPLCONFIGDIR",
+    "NUMBA_CACHE_DIR",
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "PATH",

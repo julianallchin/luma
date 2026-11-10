@@ -15,9 +15,13 @@ const BLOCK_WORDS: usize = 2 * crate::light_index::MASK_WORDS;
 /// near-source pass hands its beam to the shared grid. At 3/4 m a view full of
 /// Sunstrip cells behind truss spent 11.8 ms in that pass; at 1.5/2 m the
 /// frame took 4.6 ms and close-ups of the bars and strobes showed no visible
-/// change (largest mean difference 0.06 of 256 levels).
-pub(crate) const SOURCE_INNER: f32 = 1.5;
-pub(crate) const SOURCE_OUTER: f32 = 2.0;
+/// change (largest mean difference 0.06 of 256 levels). The haze's forward
+/// peak (`haze_phase.rs`) then put the brightest light near a source — a
+/// truss silhouette or shadow shaft against a wash seen toward its lens —
+/// in the grid's 8-pixel cells: the truss-shadow suite's oblique view was
+/// 2.8 RMSE from the converged tracer; at 1.75/2.5 m it is 1.8, the suite 0.8 to 2.0.
+pub(crate) const SOURCE_INNER: f32 = 1.75;
+pub(crate) const SOURCE_OUTER: f32 = 2.5;
 pub(crate) const BROAD_WASH: f32 = 0.65;
 
 /// Conservative shared-volume light counts from an explicit diagnostic readback.
@@ -42,6 +46,8 @@ pub(crate) fn prelude() -> String {
     )
 }
 
+use crate::gpu::target_memory::TargetMemory;
+
 /// Retained across blackouts; allocated at viewport size only on first use.
 pub(crate) struct Targets {
     size: [u32; 2],
@@ -60,51 +66,55 @@ pub(crate) struct Targets {
 }
 
 impl Targets {
-    pub(crate) fn new(device: &wgpu::Device, viewport: Option<[u32; 2]>, tile: u32) -> Self {
+    /// The grid for a `viewport` (or a placeholder before the first use),
+    /// one cell per `tile` pixels.
+    ///
+    /// Its volumes and columns are placed in reused memory without a clear
+    /// (`TargetMemory::written_texture`): on every frame that uses the grid,
+    /// the pass producing each of them stores every texel before any pass
+    /// reads it, one invocation per cell.
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        memory: &mut TargetMemory,
+        viewport: Option<[u32; 2]>,
+        tile: u32,
+    ) -> Self {
         let size = viewport.unwrap_or([0, 0]);
         let columns = size[0].div_ceil(tile).max(1);
         let rows = size[1].div_ceil(tile).max(1);
         let slices = if viewport.is_some() { SLICES } else { 1 };
-        let typed_texture = |label, depth, format| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: columns,
-                        height: rows,
-                        depth_or_array_layers: depth,
+        let mut typed_texture = |label, (dimension, depth), format| {
+            memory
+                .written_texture(
+                    device,
+                    &wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size: wgpu::Extent3d {
+                            width: columns,
+                            height: rows,
+                            depth_or_array_layers: depth,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension,
+                        format,
+                        usage: wgpu::TextureUsages::STORAGE_BINDING
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
                     },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D3,
-                    format,
-                    usage: wgpu::TextureUsages::STORAGE_BINDING
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
+                )
                 .create_view(&wgpu::TextureViewDescriptor::default())
         };
-        let texture = |label, depth| typed_texture(label, depth, wgpu::TextureFormat::Rgba16Float);
-        let column_info = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("fog-columns"),
-                size: wgpu::Extent3d {
-                    width: columns,
-                    height: rows,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba32Float,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let volume = |depth| (wgpu::TextureDimension::D3, depth);
+        let half = wgpu::TextureFormat::Rgba16Float;
         Self {
             size,
             tile,
-            columns: column_info,
+            columns: typed_texture(
+                "fog-columns",
+                (wgpu::TextureDimension::D2, 1),
+                wgpu::TextureFormat::Rgba32Float,
+            ),
             candidates: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("fog-block-candidates"),
                 size: u64::from(
@@ -116,17 +126,28 @@ impl Targets {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
-            incident: texture("fog-segments", slices),
-            integral: texture("fog-integral", slices + 1),
-            transmittance: texture("fog-transmittance", slices + 1),
-            tau: typed_texture("fog-tau", slices + 1, wgpu::TextureFormat::R32Float),
+            incident: typed_texture("fog-segments", volume(slices), half),
+            integral: typed_texture("fog-integral", volume(slices + 1), half),
+            transmittance: typed_texture("fog-transmittance", volume(slices + 1), half),
+            tau: typed_texture("fog-tau", volume(slices + 1), wgpu::TextureFormat::R32Float),
         }
     }
 
-    pub(crate) fn ensure(&mut self, device: &wgpu::Device, viewport: [u32; 2], tile: u32) {
-        if self.size != viewport || self.tile != tile {
-            *self = Self::new(device, Some(viewport), tile);
+    /// Size the grid for `viewport`. A viewport that moves by less than a
+    /// cell keeps the grid it has: the passes divide the viewport by the cell
+    /// count, so the grid is the same either way.
+    pub(crate) fn ensure(
+        &mut self,
+        device: &wgpu::Device,
+        memory: &mut TargetMemory,
+        viewport: [u32; 2],
+        tile: u32,
+    ) {
+        let cells = |size: [u32; 2]| size.map(|side| side.div_ceil(tile).max(1));
+        if self.size == [0, 0] || self.tile != tile || cells(self.size) != cells(viewport) {
+            *self = Self::new(device, memory, Some(viewport), tile);
         }
+        self.size = viewport;
     }
 
     pub(crate) fn block_stats(

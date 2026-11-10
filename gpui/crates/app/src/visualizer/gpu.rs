@@ -151,6 +151,8 @@ pub(super) struct Submission {
 pub(super) struct LiveFrameInputs<'a> {
     pub(super) scene: &'a scene_desc::Scene,
     pub(super) definitions: &'a BTreeMap<String, luma_scene::definition::Definition>,
+    /// The light the rig's fixtures make of `state`.
+    pub(super) lights: &'a stage_render::StageLights,
     /// Fixtures that strobe on their own clock, advanced by this frame.
     pub(super) strobes: &'a mut FixtureStrobes,
     /// The frame's moment on the stage clock.
@@ -286,6 +288,7 @@ impl Gpu {
         let LiveFrameInputs {
             scene,
             definitions,
+            lights,
             strobes,
             moment,
             state,
@@ -297,11 +300,12 @@ impl Gpu {
         } = input;
         let built = std::time::Instant::now();
         let strobes = RefCell::new(strobes);
+        let lights = lights.frame(state, moment.slice);
         let mut frame = build_frame_at(
             scene,
             definitions,
             &|id, head| {
-                let primitive = stage_render::primitive_state(state, id, head)?;
+                let primitive = lights.primitive(id, head)?;
                 Some(
                     strobes
                         .borrow_mut()

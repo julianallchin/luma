@@ -116,7 +116,8 @@ For each moment, warm-up then span, `Session::run`:
    (`Scene::try_render(&[t], Scope::Composite, &mut arena)`);
 2. steps the motors (`luma_lib::motors`, the stage's own preview motor lag);
 3. builds the frame with `luma_render::build_frame_at`, reading each head's
-   state through `stage_render::primitive_state`, and adds the laser scans;
+   light through `StageLights::frame(state, slice).primitive(id, head)`, as the
+   rig makes it, and adds the laser scans;
 4. pushes it to a `luma_render::Recorder`.
 
 `Recorder` (`gpui/crates/render/src/viewport.rs`) draws live-quality frames for
