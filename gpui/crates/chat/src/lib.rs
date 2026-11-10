@@ -1973,7 +1973,9 @@ impl AgentChat {
                     // optional: the registry is a thread-local that every
                     // painted text element pushes into, and nothing else
                     // empties it.
-                    .child(luma_md::render::selection_frame_reset())
+                    .child(luma_md::render::selection_frame_reset_for(
+                        cx.entity_id().as_u64(),
+                    ))
                     // Only over a conversation that has *landed* empty. A read
                     // in flight has an empty transcript too, and the opening
                     // painted over that is a conversation with history being
