@@ -568,6 +568,11 @@ pub enum TurnEvent {
         id: String,
         stop_reason: StopReason,
         usage: Usage,
+        /// Wall time from the row opening to its closing, tool runs included.
+        /// Stamped onto the row (`workedMs`) so a reopened thread can say how
+        /// long the turn worked.
+        #[serde(default)]
+        worked_ms: u64,
     },
     TurnEnded {
         outcome: TurnOutcome,

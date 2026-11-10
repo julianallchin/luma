@@ -309,6 +309,29 @@ impl AgentChatMessage {
         }
     }
 
+    /// Record how long this row worked, on the row's last provider message —
+    /// the one [`end_row`] closed — so it persists with the parts and needs no
+    /// column of its own.
+    pub(crate) fn stamp_worked(&mut self, worked_ms: u64) {
+        let last = self.parts.iter_mut().rev().find_map(|part| match part {
+            AgentChatPart::ProviderMessage { data } => data.as_object_mut(),
+            _ => None,
+        });
+        if let Some(data) = last {
+            data.insert("workedMs".into(), worked_ms.into());
+        }
+    }
+
+    /// How long this row worked, when it was stamped ([`Self::stamp_worked`]).
+    /// `None` for rows written before the stamp existed or never closed.
+    #[must_use]
+    pub fn worked_ms(&self) -> Option<u64> {
+        self.parts.iter().rev().find_map(|part| match part {
+            AgentChatPart::ProviderMessage { data } => data.get("workedMs")?.as_u64(),
+            _ => None,
+        })
+    }
+
     /// The `parts` column value for this row.
     #[must_use]
     pub fn parts_json(&self) -> Value {
@@ -659,7 +682,10 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
             }
         }
         TurnEvent::MessageEnded {
-            id, stop_reason, ..
+            id,
+            stop_reason,
+            worked_ms,
+            ..
         } => {
             let Some(row) = transcript
                 .messages
@@ -669,6 +695,7 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
                 return Applied::default();
             };
             end_row(&mut transcript.messages[row], *stop_reason);
+            transcript.messages[row].stamp_worked(*worked_ms);
             Applied {
                 row: Some(row),
                 ..Applied::default()
@@ -1450,9 +1477,18 @@ mod tests {
                 id: "a1".into(),
                 stop_reason: StopReason::EndTurn,
                 usage: Usage::default(),
+                worked_ms: 4200,
             },
         );
         assert!(!transcript.unfinished(), "{transcript:#?}");
+        assert_eq!(transcript.messages[0].worked_ms(), Some(4200));
+        // It rides in the parts column, so a reopened thread reads it back.
+        let reread = AgentChatMessage::parse_parts(&transcript.messages[0].parts_json()).unwrap();
+        let reread = AgentChatMessage {
+            parts: reread,
+            ..transcript.messages[0].clone()
+        };
+        assert_eq!(reread.worked_ms(), Some(4200));
         assert_eq!(transcript.requests().count(), 1, "no step was added");
     }
 

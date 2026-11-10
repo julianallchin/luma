@@ -468,6 +468,11 @@ pub struct AgentChat {
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
     expanded: HashSet<SharedString>,
+    /// Compact turns the reader has opened, by message id.
+    open_work: HashSet<SharedString>,
+    /// Whether finished turns fold their work behind a header, as of the last
+    /// frame; a change re-splits the rows. See [`set_compact_turns`].
+    compact: bool,
     /// Python calls, read once each — see [`python_cell`]. Lives on the panel
     /// rather than on a turn because a call is named by its id, and a `RefCell`
     /// because a row reads its call while the panel is mid-render.
@@ -564,6 +569,8 @@ impl AgentChat {
             trailer_row: None,
             error: None,
             expanded: HashSet::new(),
+            open_work: HashSet::new(),
+            compact: false,
             cells: RefCell::default(),
             viewed: transcript::Viewed::default(),
             fold: None,
@@ -756,7 +763,7 @@ impl AgentChat {
         self.subagents.clear();
         self.turn = None;
         self.live = None;
-        self.rows = transcript::rows_for(&self.transcript, &self.entries, None);
+        self.rows = self.rows_for(None);
         self.list = ListState::new(
             self.rows.len() + 1,
             ListAlignment::Top,
@@ -777,6 +784,31 @@ impl AgentChat {
         self.distance = 0.0;
     }
 
+    /// The rows the transcript renders as, under the current layout.
+    fn rows_for(&self, live: Option<usize>) -> Vec<transcript::RowKey> {
+        let compact = transcript::Compact {
+            on: self.compact,
+            open: &self.open_work,
+        };
+        transcript::rows_for(&self.transcript, &self.entries, live, compact)
+    }
+
+    /// Open or close one compact turn's work.
+    ///
+    /// The header's top is held where the reader clicked it, as for a chip's
+    /// fold: the rows that appear or vanish are below it.
+    pub fn toggle_work(&mut self, message_id: SharedString, row: usize, cx: &mut Context<Self>) {
+        if !self.open_work.remove(&message_id) {
+            self.open_work.insert(message_id);
+        }
+        self.fold_hold = self
+            .list
+            .bounds_for_item(row)
+            .map(|bounds| (row, f32::from(bounds.top())));
+        self.reconcile_rows();
+        cx.notify();
+    }
+
     /// Rebuild the row list and tell the list exactly what moved.
     ///
     /// The remeasure-vs-splice choice is the whole reason this is one function
@@ -787,7 +819,7 @@ impl AgentChat {
     /// identity stays — that is a visible jump at the end of every turn.
     /// `remeasure_items` keeps the old heights as hints and holds the anchor.
     fn reconcile_rows(&mut self) {
-        let next = transcript::rows_for(&self.transcript, &self.entries, self.live);
+        let next = self.rows_for(self.live);
         let pending = self.send_motion.pending.len();
         let changed = transcript::diff_rows(&self.rows, &next);
         if changed.is_none() && pending == self.send_motion.rendered_pending {
@@ -1704,9 +1736,34 @@ impl Render for AgentChat {
     }
 }
 
+/// The `compact_turns` setting, shared by every chat panel in the app.
+#[derive(Default)]
+struct CompactTurns(bool);
+
+impl gpui::Global for CompactTurns {}
+
+/// Whether finished turns fold their work behind one header.
+#[must_use]
+pub fn compact_turns(cx: &App) -> bool {
+    cx.try_global::<CompactTurns>().is_some_and(|flag| flag.0)
+}
+
+/// Adopt the setting. Panels re-split their rows on their next frame.
+pub fn set_compact_turns(on: bool, cx: &mut App) {
+    if compact_turns(cx) != on {
+        cx.set_global(CompactTurns(on));
+        cx.refresh_windows();
+    }
+}
+
 impl AgentChat {
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         transcript::trim_caches(&self.entries, &self.viewed);
+        let compact = compact_turns(cx);
+        if compact != self.compact {
+            self.compact = compact;
+            self.reconcile_rows();
+        }
         if self.usage.tick_close(luma_ui::motion::reduced_motion(cx)) {
             window.request_animation_frame();
         }
@@ -1938,6 +1995,7 @@ impl AgentChat {
                             .is_some_and(|flight| flight.id.as_ref() == message.id),
                         trailer: (last_item == Some(ix)).then_some(trailer).flatten(),
                         expanded: &state.expanded,
+                        open_work: &state.open_work,
                         cells: &state.cells,
                         viewed: &state.viewed,
                         agent: &state.agent,

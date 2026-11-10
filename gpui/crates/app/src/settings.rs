@@ -504,6 +504,7 @@ impl Luma {
     }
 
     fn apply_display_settings(&mut self, values: &AppSettings, cx: &mut Context<Self>) {
+        luma_chat::set_compact_turns(values.compact_turns, cx);
         if self.hdr_output_allowed != values.hdr_output {
             self.hdr_output_allowed = values.hdr_output;
             cx.notify();
@@ -912,6 +913,17 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
                     Some("The frames per second in the stage's corner. Click it for the frame stats."),
                 ),
             ],
+            None,
+        ),
+        section(
+            "Chat",
+            vec![checkbox(
+                app,
+                key::COMPACT_TURNS,
+                "Compact turns",
+                values.compact_turns,
+                Some("Fold a finished turn's thinking, tool calls and narration behind one \"Worked for\" header. The final reply stays visible."),
+            )],
             None,
         ),
     ]

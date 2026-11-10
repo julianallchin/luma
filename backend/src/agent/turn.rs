@@ -370,11 +370,12 @@ impl Turn {
         let mut resuming = prompt.is_none();
         loop {
             self.spend.turns += 1;
+            let opened = std::time::Instant::now();
             let (stop_reason, usage, assistant_id) = self
                 .assistant_row(&setup, &turn_message_id, resume_row.take(), resuming)
                 .await?;
             resuming = false;
-            self.close_row(&setup, &assistant_id, stop_reason, usage)
+            self.close_row(&setup, &assistant_id, stop_reason, usage, opened.elapsed())
                 .await?;
             if let Some(session) = self.native_session.take() {
                 setup.resume = Some(session);
@@ -757,11 +758,13 @@ impl Turn {
         assistant_id: &str,
         stop_reason: StopReason,
         usage: Usage,
+        worked: std::time::Duration,
     ) -> Result<(), AgentError> {
         let ended = TurnEvent::MessageEnded {
             id: assistant_id.to_string(),
             stop_reason,
             usage,
+            worked_ms: u64::try_from(worked.as_millis()).unwrap_or(u64::MAX),
         };
         // Folded before the commit, sent after it: the host hears the row
         // closed once it is.

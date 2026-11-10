@@ -542,6 +542,74 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
         .into_any_element()
 }
 
+/// The header a compact turn's work folds behind: a chip-height row with the
+/// turn's state and a chevron, whose click opens or closes the work.
+///
+/// Shaped like a tool chip — the same height, hover and chevron — because it
+/// is the same kind of control: a summary line that opens what it summarises.
+pub fn work_header(
+    label: &str,
+    open: bool,
+    message: &luma_lib::agent::AgentChatMessage,
+    ctx: &RowCtx,
+    cx: &mut gpui::App,
+) -> AnyElement {
+    let theme = ctx.theme;
+    let chat = ctx.chat.clone();
+    let id = SharedString::from(message.id.clone());
+    let row_ix = ctx.ix;
+    let phase = ctx
+        .live
+        .then(|| luma_ui::motion::pulse_delta(&SHIMMER, ctx.chat.entity_id(), cx));
+    let parts = Label {
+        verb: label.to_string(),
+        detail: None,
+        failed: false,
+        running: ctx.live,
+    };
+    div()
+        .id(SharedString::from(format!("chat-work-{id}")))
+        .h(px(theme::CHIP_HEIGHT))
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(theme::SPACE_SM))
+        .rounded(px(luma_ui::radius::CONTROL))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::wash(0.04)))
+        .on_click(move |_, _, cx| {
+            chat.update(cx, |this, cx| this.toggle_work(id.clone(), row_ix, cx));
+        })
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(13.0))
+                .text_color(theme.text_muted)
+                .child(two_tone(&parts, phase, theme)),
+        )
+        .child(
+            div()
+                .size(px(theme::CHIP_CHEVRON))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .size(px(theme::CHIP_CHEVRON - 2.0))
+                    .text_color(theme.text_faint),
+                ),
+        )
+        .agent_node(NodeRole::Chip, label.to_string())
+        .into_any_element()
+}
+
 /// The red dot beside a failed call's label.
 const FAILED_DOT: f32 = 6.0;
 
