@@ -19,7 +19,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use crate::agent_execution::artifacts::ArtifactStore;
 use crate::agent_execution::bindings::manifest::BindingManifest;
-use crate::agent_execution::worker_launcher::WorkerLauncher;
+use crate::agent_execution::worker_launcher::{numba_cache_dir, WorkerLauncher};
 use crate::agent_execution::worker_process::{
     CancelToken, ExecOutcome, ExecStatus, FigureRef, HostCallHandler, HostOperationScope,
     Truncation, WorkerConfig, WorkerHandle,
@@ -42,6 +42,12 @@ pub struct WorkerEnv {
     pub python_bin: PathBuf,
     pub worker_script: PathBuf,
     pub launcher_factory: LauncherFactory,
+    /// A numba cache holding the kernels the preload compiles, built by a
+    /// worker that ran no cell ([`super::headless_env::warm_kernel_cache`]).
+    /// Copied into each workspace that has no cache yet: compiling them is
+    /// seconds of CPU idle and minutes on a loaded machine, and a sandboxed
+    /// worker can only cache into its own scratch.
+    pub numba_seed: Option<PathBuf>,
 }
 
 impl WorkerEnv {
@@ -54,7 +60,14 @@ impl WorkerEnv {
             python_bin,
             worker_script,
             launcher_factory,
+            numba_seed: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_numba_seed(mut self, seed: PathBuf) -> Self {
+        self.numba_seed = Some(seed);
+        self
     }
 }
 
@@ -258,55 +271,10 @@ impl Workspace {
         operation_scope: Option<&HostOperationScope>,
     ) -> CellOutcome {
         let mut state = self.kernel.lock().unwrap();
-        let mut notices = std::mem::take(&mut state.pending_notices);
-
-        // Stop can arrive while the command is still assembling bindings. Do
-        // not launch or touch Python for a cell that was already cancelled.
-        if cancel.is_cancelled() {
-            let generation = state.generation;
-            return CellOutcome::from_exec(
-                ExecOutcome::interrupted_before_start(std::time::Instant::now()),
-                notices,
-                generation,
-            );
+        if let Err(outcome) = self.ensure_kernel(&mut state, cancel) {
+            return outcome;
         }
-
-        // A kernel that died between cells is indistinguishable from no kernel.
-        if state.handle.as_ref().is_some_and(|h| !h.is_alive()) {
-            state.handle = None;
-            state.installed_rel = None;
-            notices.push(LOSS_NOTICE.to_string());
-        }
-
-        if state.handle.is_none() {
-            match self.spawn_kernel() {
-                Ok(handle) => {
-                    state.generation += 1;
-                    state.installed_rel = None;
-                    let startup = handle.ready();
-                    for warning in &startup.warnings {
-                        notices.push(format!("Python worker warning: {warning}"));
-                    }
-                    state.handle = Some(Arc::new(handle));
-                }
-                Err(e) => {
-                    let generation = state.generation;
-                    return CellOutcome::infra_failure(e, notices, generation);
-                }
-            }
-        }
-
-        // Kernel startup can be slow on a cold thread. A cancellation requested
-        // during startup still prevents the cell from entering user code while
-        // preserving the freshly started namespace for the next turn.
-        if cancel.is_cancelled() {
-            let generation = state.generation;
-            return CellOutcome::from_exec(
-                ExecOutcome::interrupted_before_start(std::time::Instant::now()),
-                notices,
-                generation,
-            );
-        }
+        let notices = std::mem::take(&mut state.pending_notices);
 
         let handle = state.handle.clone().expect("kernel spawned above");
         let manifest_rel = match (&state.pending_rel, &state.installed_rel) {
@@ -342,6 +310,74 @@ impl Workspace {
         CellOutcome::from_exec(outcome, notices, generation)
     }
 
+    /// Start the kernel now if there is none, so the caller can say Python is
+    /// starting while it does; [`Self::run_cell`] then finds it running. `Err`
+    /// is the cell's outcome: the start failed or was cancelled.
+    pub fn start_kernel(&self, cancel: &CancelToken) -> Result<(), CellOutcome> {
+        let mut state = self.kernel.lock().unwrap();
+        self.ensure_kernel(&mut state, cancel)
+    }
+
+    /// Make sure a live kernel is in `state`, spawning one on first use and
+    /// after a crash. What the next cell must be told (a lost namespace,
+    /// startup warnings) goes to `pending_notices`; `Err` is the cell's
+    /// outcome, with those notices.
+    fn ensure_kernel(
+        &self,
+        state: &mut KernelState,
+        cancel: &CancelToken,
+    ) -> Result<(), CellOutcome> {
+        // Stop can arrive while the command is still assembling bindings, or
+        // while the kernel starts. Either way the cell never enters user code,
+        // and a kernel that did start keeps its namespace for the next turn.
+        let interrupted = |state: &mut KernelState| {
+            CellOutcome::from_exec(
+                ExecOutcome::interrupted_before_start(std::time::Instant::now()),
+                std::mem::take(&mut state.pending_notices),
+                state.generation,
+            )
+        };
+        if cancel.is_cancelled() {
+            return Err(interrupted(state));
+        }
+
+        // A kernel that died between cells is indistinguishable from no kernel.
+        if state.handle.as_ref().is_some_and(|h| !h.is_alive()) {
+            state.handle = None;
+            state.installed_rel = None;
+            state.pending_notices.push(LOSS_NOTICE.to_string());
+        }
+
+        if state.handle.is_none() {
+            match self.spawn_kernel(cancel) {
+                Ok(handle) => {
+                    state.generation += 1;
+                    state.installed_rel = None;
+                    for warning in &handle.ready().warnings {
+                        state
+                            .pending_notices
+                            .push(format!("Python worker warning: {warning}"));
+                    }
+                    state.handle = Some(Arc::new(handle));
+                }
+                Err(_) if cancel.is_cancelled() => return Err(interrupted(state)),
+                Err(e) => {
+                    log::warn!("[agent-exec] python worker did not start: {e}");
+                    return Err(CellOutcome::infra_failure(
+                        e,
+                        std::mem::take(&mut state.pending_notices),
+                        state.generation,
+                    ));
+                }
+            }
+        }
+
+        if cancel.is_cancelled() {
+            return Err(interrupted(state));
+        }
+        Ok(())
+    }
+
     /// Stop the kernel and leave the directory alone.
     pub fn shutdown(&self) {
         let mut state = self.kernel.lock().unwrap();
@@ -351,16 +387,69 @@ impl Workspace {
         state.installed_rel = None;
     }
 
-    fn spawn_kernel(&self) -> Result<WorkerHandle, String> {
+    fn spawn_kernel(&self, cancel: &CancelToken) -> Result<WorkerHandle, String> {
         let env = self.env.get()?;
+        if let Some(seed) = &env.numba_seed {
+            seed_numba_cache(seed, &self.dir);
+        }
         let launcher = (env.launcher_factory)()?;
-        WorkerHandle::spawn(WorkerConfig {
-            python_bin: env.python_bin,
-            worker_script: env.worker_script,
-            workspace_dir: self.dir.clone(),
-            launcher,
-        })
+        WorkerHandle::spawn(
+            WorkerConfig {
+                python_bin: env.python_bin,
+                worker_script: env.worker_script,
+                workspace_dir: self.dir.clone(),
+                launcher,
+            },
+            cancel,
+        )
     }
+}
+
+/// Copy `seed` into the numba cache of the workspace at `workspace_dir`, when
+/// it has none yet. Best effort: without it the kernel compiles what it needs.
+///
+/// The worker can write its scratch, so this only ever writes into a
+/// directory it has just created itself, never through a link a worker left.
+fn seed_numba_cache(seed: &Path, workspace_dir: &Path) {
+    let dest = numba_cache_dir(workspace_dir);
+    let Some(scratch) = dest.parent() else {
+        return;
+    };
+    if !seed.is_dir() || fs::create_dir_all(scratch).is_err() {
+        return;
+    }
+    if !fs::symlink_metadata(scratch).is_ok_and(|meta| meta.is_dir()) {
+        return;
+    }
+    match fs::create_dir(&dest) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return,
+        Err(e) => {
+            log::warn!("[agent-exec] cannot create {}: {e}", dest.display());
+            return;
+        }
+    }
+    if let Err(e) = copy_tree(seed, &dest) {
+        log::warn!(
+            "[agent-exec] seeding the numba cache from {} failed: {e}",
+            seed.display()
+        );
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            fs::create_dir(&target)?;
+            copy_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +812,43 @@ mod tests {
 
     use super::*;
     use crate::runtime::python::PythonSetup;
+
+    #[test]
+    fn a_new_workspace_is_seeded_and_an_existing_cache_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed = dir.path().join("seed");
+        fs::create_dir_all(seed.join("librosa_abc")).unwrap();
+        fs::write(seed.join("librosa_abc").join("f.nbi"), "index").unwrap();
+
+        let fresh = dir.path().join("fresh");
+        seed_numba_cache(&seed, &fresh);
+        let copied = numba_cache_dir(&fresh).join("librosa_abc").join("f.nbi");
+        assert_eq!(fs::read_to_string(copied).unwrap(), "index");
+
+        // A workspace that has a cache keeps it: the worker owns that directory.
+        let used = dir.path().join("used");
+        fs::create_dir_all(numba_cache_dir(&used)).unwrap();
+        seed_numba_cache(&seed, &used);
+        assert_eq!(fs::read_dir(numba_cache_dir(&used)).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seeding_never_writes_through_a_link_the_worker_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed = dir.path().join("seed");
+        fs::create_dir_all(&seed).unwrap();
+        fs::write(seed.join("f.nbi"), "index").unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+
+        let workspace = dir.path().join("ws");
+        let cache = numba_cache_dir(&workspace);
+        fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &cache).unwrap();
+        seed_numba_cache(&seed, &workspace);
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+    }
 
     fn service(root: PathBuf) -> PythonWorkspaceService {
         PythonWorkspaceService::new(

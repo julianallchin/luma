@@ -36,8 +36,10 @@ use serde_json::{json, Value};
 
 use crate::agent_execution::worker_launcher::{SandboxPolicy, WorkerLauncher};
 
-/// How long a cold worker gets to import the analysis stack and say `ready`.
-pub const READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// How often a worker that is still starting says so in the log. Startup has
+/// no deadline: a cold start on a loaded machine is slow, not broken, and the
+/// cell waits for it until it is cancelled or the worker exits.
+const STARTING_LOG_INTERVAL: Duration = Duration::from_secs(30);
 /// Grace period between `SIGINT` and `SIGKILL` (design §16.2 step 2).
 pub const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 /// How long a graceful `shutdown` may take before the group is killed.
@@ -409,8 +411,9 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    /// Launch a worker and block until it reports `ready`.
-    pub fn spawn(config: WorkerConfig) -> Result<Self, String> {
+    /// Launch a worker and block until it reports `ready`, it exits, or
+    /// `cancel` is requested, which kills it.
+    pub fn spawn(config: WorkerConfig, cancel: &CancelToken) -> Result<Self, String> {
         let WorkerConfig {
             python_bin,
             worker_script,
@@ -460,7 +463,7 @@ impl WorkerHandle {
                 .map_err(|e| format!("failed to start stderr drain: {e}"))?;
         }
 
-        let ready = match await_ready(&rx, pid, &tail) {
+        let ready = match await_ready(&rx, pid, &tail, cancel) {
             Ok(ready) => ready,
             Err(e) => {
                 signal_pid_group(pid, SIG_KILL);
@@ -984,20 +987,40 @@ enum Escalation {
 // Reader threads
 // ---------------------------------------------------------------------------
 
-/// Block until the worker announces itself, or until the cold-start budget runs
-/// out. Runs before the handle exists, so it takes the pieces directly.
+/// Block until the worker announces itself, exits, or is cancelled. Runs
+/// before the handle exists, so it takes the pieces directly.
+///
+/// There is no deadline. The preload imports the analysis stack, which takes
+/// seconds idle and minutes beside a stem separation, and a worker killed while
+/// it is still importing only makes the next cell start over.
 fn await_ready(
     events: &Receiver<Event>,
     pid: i32,
     tail: &Arc<Mutex<Tail>>,
+    cancel: &CancelToken,
 ) -> Result<ReadyInfo, String> {
-    let deadline = Instant::now() + READY_TIMEOUT;
+    let started = Instant::now();
+    let mut next_log = started + STARTING_LOG_INTERVAL;
     loop {
-        match wait_event(events, deadline) {
-            Wait::Idle => continue,
+        if cancel.is_cancelled() {
+            log::info!(
+                "[agent-exec] python worker {pid} stopped while starting, after {}s",
+                started.elapsed().as_secs()
+            );
+            return Err("python worker start was cancelled".to_string());
+        }
+        if Instant::now() >= next_log {
+            log::warn!(
+                "[agent-exec] python worker {pid} still starting after {}s",
+                started.elapsed().as_secs()
+            );
+            next_log += STARTING_LOG_INTERVAL;
+        }
+        match wait_event(events, next_log) {
+            Wait::Idle | Wait::Deadline => continue,
             Wait::Event(Event::Frame(frame)) => match frame.get("type").and_then(Value::as_str) {
                 Some("ready") => {
-                    return Ok(ReadyInfo {
+                    let ready = ReadyInfo {
                         pid: frame
                             .get("pid")
                             .and_then(Value::as_i64)
@@ -1008,20 +1031,20 @@ fn await_ready(
                             .get("startup_ms")
                             .and_then(Value::as_u64)
                             .unwrap_or_default(),
-                    })
+                    };
+                    log::info!(
+                        "[agent-exec] python worker {pid} ready in {}ms (worker {}ms: {})",
+                        started.elapsed().as_millis(),
+                        ready.startup_ms,
+                        frame.get("phases").unwrap_or(&Value::Null)
+                    );
+                    return Ok(ready);
                 }
                 _ => log::warn!("[agent-exec] frame before ready: {frame}"),
             },
             Wait::Event(Event::Eof) => {
                 return Err(format!(
                     "python worker exited during startup: {}",
-                    tail.lock().unwrap()
-                ))
-            }
-            Wait::Deadline => {
-                return Err(format!(
-                    "python worker did not become ready within {}s: {}",
-                    READY_TIMEOUT.as_secs(),
                     tail.lock().unwrap()
                 ))
             }

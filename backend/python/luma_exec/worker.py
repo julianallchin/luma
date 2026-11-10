@@ -30,7 +30,8 @@ Requests (stdin, one JSON object per line):
     {"id":"c-3","op":"shutdown"}
 
 Frames (protocol fd, one JSON object per line):
-    {"type":"ready","pid":123,"python":"3.12.13","warnings":[...],"startup_ms":900}
+    {"type":"ready","pid":123,"python":"3.12.13","warnings":[...],"startup_ms":900,
+     "phases":{"luma_exec":40,"matplotlib":150,"numpy":0,"scipy":340,"librosa":1500}}
     {"id":"c-1","type":"started"}
     {"id":"c-1","type":"stream","stream":"stdout"|"stderr","text":"..."}
     {"id":"c-1","type":"result","status":"ok"|"error"|"interrupted",
@@ -78,6 +79,10 @@ import time
 import traceback
 from pathlib import Path
 from typing import Any
+
+#: Process start, as near as Python can see it: `startup_ms` counts the module
+#: imports below as well as the preload.
+_STARTED = time.perf_counter()
 
 MAX_HOST_CALL_BYTES = 8 * 1024 * 1024
 
@@ -277,9 +282,20 @@ class Worker:
 
     # -- startup --------------------------------------------------------
 
-    def preload(self) -> list[str]:
-        """Import the analysis stack into the user namespace (design §7.2)."""
+    def preload(self, phases: dict[str, int]) -> list[str]:
+        """Import the analysis stack into the user namespace (design §7.2).
+
+        Records each library's milliseconds in `phases`, which the `ready`
+        frame carries so the host can log where a slow start went.
+        """
         warnings: list[str] = []
+        mark = time.perf_counter()
+
+        def phase(name: str) -> None:
+            nonlocal mark
+            now = time.perf_counter()
+            phases[name] = int((now - mark) * 1000)
+            mark = now
 
         try:
             import matplotlib
@@ -293,6 +309,7 @@ class Worker:
             self.namespace["plt"] = plt
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"matplotlib unavailable: {exc}")
+        phase("matplotlib")
 
         try:
             import numpy as np
@@ -301,6 +318,7 @@ class Worker:
             self.namespace["numpy"] = np
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"numpy unavailable: {exc}")
+        phase("numpy")
 
         try:
             import scipy
@@ -309,17 +327,23 @@ class Worker:
             self.namespace["scipy"] = scipy
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"scipy unavailable: {exc}")
+        phase("scipy")
 
         try:
             import librosa
 
             self.namespace["librosa"] = librosa
             # librosa uses lazy_loader; touch the submodules an agent is likely
-            # to reach for so the import cost lands here, not in cell 1.
+            # to reach for so the import cost lands here, not in cell 1. These
+            # compile librosa's numba kernels unless the cache in
+            # NUMBA_CACHE_DIR already holds them, which is why the host seeds
+            # that cache (`Workspace::spawn_kernel`): compiling them takes
+            # seconds of CPU, minutes on a loaded machine.
             for attr in ("onset", "feature", "beat", "util", "effects", "core"):
                 getattr(librosa, attr, None)
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"librosa unavailable: {exc}")
+        phase("librosa")
 
         self.namespace["LumaUnavailableError"] = bindings.LumaUnavailableError
         self.namespace["LumaHostCallError"] = LumaHostCallError
@@ -585,7 +609,7 @@ class Worker:
 
     # -- loop -----------------------------------------------------------
 
-    def serve(self, startup_ms: int, warnings: list[str]) -> int:
+    def serve(self, startup_ms: int, phases: dict[str, int], warnings: list[str]) -> int:
         self._install_sigint()
         self.send(
             {
@@ -594,6 +618,7 @@ class Worker:
                 "python": "%d.%d.%d" % sys.version_info[:3],
                 "warnings": warnings,
                 "startup_ms": startup_ms,
+                "phases": phases,
             }
         )
 
@@ -708,13 +733,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", required=True, help="absolute workspace dir")
     args = parser.parse_args(argv)
 
-    started = time.perf_counter()
     worker = Worker(Path(args.workspace))
-    warnings = worker.preload()
+    phases = {"luma_exec": int((time.perf_counter() - _STARTED) * 1000)}
+    warnings = worker.preload(phases)
     # Preload chatter (e.g. library deprecation warnings) belongs to nobody.
     worker.discard_streams()
-    startup_ms = int((time.perf_counter() - started) * 1000)
-    return worker.serve(startup_ms, warnings)
+    startup_ms = int((time.perf_counter() - _STARTED) * 1000)
+    return worker.serve(startup_ms, phases, warnings)
 
 
 if __name__ == "__main__":

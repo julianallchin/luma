@@ -30,7 +30,7 @@ fixture({
   ],
 });
 
-const waiting = (s) => chips(s).some((c) => c.includes("Python setup") && c.includes(PURPOSE));
+const waiting = (s) => chips(s).some((c) => c.includes("Starting Python") && c.includes(PURPOSE));
 
 test("a python call waiting for setup says so on its chip", () => {
   nav.trackEditor("Test Venue", "Aurora");

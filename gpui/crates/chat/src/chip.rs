@@ -112,8 +112,8 @@ pub fn label(tool: &ToolPart, awaits_setup: bool) -> SharedString {
 /// The phrasing lives in this one function rather than being assembled at the
 /// element, so the painted chip and the automation tree cannot drift.
 ///
-/// `awaits_setup` is a `python` call waiting for the host's Python setup
-/// ([`crate::transcript::RowCtx::awaits_setup`]).
+/// `awaits_setup` is a `python` call waiting for Python: the host's setup, or
+/// its kernel starting ([`crate::transcript::RowCtx::awaits_setup`]).
 pub fn label_parts(tool: &ToolPart, awaits_setup: bool) -> Label {
     let running = matches!(
         tool.state,
@@ -146,11 +146,11 @@ pub fn label_parts(tool: &ToolPart, awaits_setup: bool) -> Label {
             tense.to_string()
         });
         let detail = detail(tool).unwrap_or_else(|| "analysis".into());
-        // On a first launch setup takes minutes, and the model's verb would
-        // claim work that has not begun.
+        // On a first launch setup takes minutes, and a cold kernel seconds to
+        // minutes; the model's verb would claim work that has not begun.
         if running && awaits_setup {
             return Label {
-                verb: "Waiting for Python setup".into(),
+                verb: "Starting Python".into(),
                 detail: Some(format!(" · {detail}")),
                 failed,
                 running,
@@ -928,9 +928,8 @@ mod tests {
 
     /// The chip is titled by the model's own verb, in the tense of the call's
     /// state, followed by its purpose.
-    /// A cell waiting for the host's Python setup says so instead of claiming
-    /// the model's verb, keeps its purpose, and stops saying so once it
-    /// settles.
+    /// A cell waiting for Python to start says so instead of claiming the
+    /// model's verb, keeps its purpose, and stops saying so once it settles.
     #[test]
     fn a_python_chip_waiting_for_setup_says_so() {
         let mut tool = part(
@@ -944,7 +943,7 @@ mod tests {
             })),
         );
         let waiting = label(&tool, true);
-        assert!(waiting.contains("Python setup"), "{waiting}");
+        assert!(waiting.contains("Starting Python"), "{waiting}");
         assert!(waiting.contains("section boundaries"), "{waiting}");
         assert!(!waiting.contains("Finding"), "{waiting}");
         assert!(label_parts(&tool, true).running);
