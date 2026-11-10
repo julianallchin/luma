@@ -11,26 +11,25 @@ default-members = ["crates/ui", "crates/md", "crates/chat", "crates/app", "crate
 # The backend and native UI keep separate workspaces and build profiles.
 # Shared crates use path dependencies across this boundary.
 [workspace.dependencies]
-# These must stay *branch* specs, not rev pins. `gpui-component` depends on
-# zed's `gpui` unpinned, and cargo unifies two git dependencies only when their
-# source specs match exactly — pinning a rev here forks gpui into two crates
-# and every `Icon` stops being an `IntoElement`. So the pin lives in
-# `Cargo.lock` (rev 32a0e81 today), which is checked in for exactly this
-# reason: a `cargo update` here moves the renderer under three crates at once.
+# These must stay unpinned specs of zed's repository, exactly as
+# `gpui-component` names it: cargo unifies two git dependencies only when their
+# source specs match, and two gpuis would make every `Icon` stop being an
+# `IntoElement`. The `[patch]` below then swaps in Luma's gpui for both.
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ddba2ef356d637392c08ef773fe1bbf3dd536deb" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ddba2ef356d637392c08ef773fe1bbf3dd536deb" }
 luma-ui = { path = "crates/ui" }
 
-# Repository-contained snapshot of Zed 32a0e813 plus Comet's a6c1ad5
-# BackdropBlur, 9b672fa bounded scratch work, and Luma's isolated
-# content-filter layer. The snapshot is normalized with `cargo vendor` so its
-# internal crates remain a closed, reproducible path dependency graph.
+# Luma's gpui: https://github.com/lumashow/gpui, branch `luma`. It is Zed's
+# history filtered to gpui and the crates it builds from (branch `upstream`,
+# Zed 32a0e813 today), plus Luma's changes as commits; its LUMA.md lists them.
+# To change gpui, commit to `luma` there and bump this rev. To move to a newer
+# Zed, filter it, rebase `luma` onto it as LUMA.md says, and bump this rev.
 [patch."https://github.com/zed-industries/zed"]
-gpui = { path = "vendor/zed/crates/gpui", version = "=0.2.2" }
-gpui_macros = { path = "vendor/zed/crates/gpui_macros", version = "=0.1.0" }
-gpui_platform = { path = "vendor/zed/crates/gpui_platform", version = "=0.1.0" }
+gpui = { git = "https://github.com/lumashow/gpui", rev = "0d8b0925ed9080ec064c067b4727bce2e04aba43" }
+gpui_macros = { git = "https://github.com/lumashow/gpui", rev = "0d8b0925ed9080ec064c067b4727bce2e04aba43" }
+gpui_platform = { git = "https://github.com/lumashow/gpui", rev = "0d8b0925ed9080ec064c067b4727bce2e04aba43" }
 
 # wgpu 30.0.1 plus two fixes, both for another thread submitting during
 # `configure_surface`. The stage thread submits on gpui's device.

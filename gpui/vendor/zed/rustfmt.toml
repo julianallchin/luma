@@ -1,2 +1,0 @@
-# The vendored zed crates are edition 2024; see the repository's rustfmt.toml.
-edition = "2024"

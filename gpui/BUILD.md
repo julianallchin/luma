@@ -25,8 +25,11 @@ workers (beats, stems, chords) in the background.
   download fails, the build continues with a warning, and analysis that needs
   that runtime does not work.
 - **Python 3** for the watcher `gpui/dev.py`.
-- **macOS:** Xcode. The vendored gpui compiles its Metal shaders with
-  `xcrun metal` at build time.
+- **Network on the first build of gpui.** gpui is a git dependency on
+  [lumashow/gpui](https://github.com/lumashow/gpui) (see "gpui" below), which
+  cargo fetches into `~/.cargo/git` once and reuses after that.
+- **macOS:** Xcode. gpui compiles its Metal shaders with `xcrun metal` at
+  build time.
 - **Linux:** the system libraries below.
 
 ## Linux system libraries
@@ -56,6 +59,24 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Unplug and replug the dongle. Without the rule, the Outputs panel shows the
 dongle with a permission message.
+
+## gpui
+
+Luma builds against its own gpui,
+[lumashow/gpui](https://github.com/lumashow/gpui), pinned by `rev` in the
+`[patch]` block of `gpui/Cargo.toml`. That repository is Zed's history
+filtered to gpui and the crates it builds from (branch `upstream`), with
+Luma's changes as commits on branch `luma`. Its `LUMA.md` lists the changes:
+zero-copy surfaces, HDR output, backdrop blur, wgpu 30 and the rest.
+
+- **To change gpui**, commit to `luma` there, run `cargo test -p gpui_wgpu`
+  and `cargo check -p gpui -p gpui_platform -p gpui_macros` in it, push, and
+  bump the three `rev`s here.
+- **To move to a newer Zed**, filter it and rebase `luma` onto it, as
+  `LUMA.md` describes, then bump the `rev`s.
+- **To work on both at once**, point the three `[patch]` entries at a local
+  checkout (`path = "<checkout>/crates/gpui"` and so on) and put the `rev`s
+  back before you commit.
 
 ## Rebuild on save
 
@@ -200,7 +221,7 @@ second).
 process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
 `shared_presentation` and `waveform`. `luma-scene` has one, `--test scene`, with
 the venue-graph goldens (`venue_poses`) and the build-against-real-geometry tests
-(`venue_build`); it needs no GPU. `luma-ui` has one, `--test ui`.
+(`venue_build`); it needs no GPU.
 Set `LUMA_RENDER_CAPTURE_DIR=dir` to save the pictures the `render` tests look
 at, one subdirectory per test file.
 `luma-render`'s `--example resize_probe` measures what a per-frame viewport size
@@ -285,7 +306,7 @@ alongside others, and more often in serial runs, points here; changing
 - `app.frames()` builds scenes but does not rasterize. Only `app.screenshot()`
   reaches the GPU. Wall time around a frame pump does not measure the renderer.
 - On macOS, `LUMA_FILTER_PROFILE=1` prints per-frame GPU times for content
-  filter passes (`vendor/zed/crates/gpui_apple/src/metal_renderer.rs`).
+  filter passes (`crates/gpui_apple/src/metal_renderer.rs` in lumashow/gpui).
 - A route's content is built again on every frame the window draws. A settled
   dialog draws no frames, but a route morph, a scrim fade or a hover fade does.
   `float::menu_row` puts a hover fade on every row.
