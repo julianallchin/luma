@@ -90,6 +90,16 @@ fn fs_capture(in: CaptureVertex) -> CaptureTargets {
         albedo = inst.base_color.rgb * base.rgb;
         roughness = clamp(inst.emissive.a * mr.g, 0.05, 1.0);
         metallic = saturate(inst.base_color.a * mr.b);
+        if inst.flags.w > 0.5 {
+            // An LED panel: its LEDs' area share over its gap, as a far
+            // camera sees it. A probe is far too coarse for the LEDs.
+            let shape = u32(inst.flags.w + 0.5) & 3u;
+            let share = inst.led.x * inst.led.y
+                * select(select(0.649519, 0.785398, shape == 2u), 1.0, shape == 1u);
+            albedo = mix(inst.gap.rgb, albedo, share);
+            roughness = clamp(mix(inst.led.w, roughness, share), 0.05, 1.0);
+            metallic = mix(inst.gap.a, metallic, share);
+        }
     }
     var out: CaptureTargets;
     out.albedo = vec4<f32>(albedo, roughness);

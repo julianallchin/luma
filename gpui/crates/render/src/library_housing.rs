@@ -8,7 +8,7 @@
 
 use glam::{Mat4, Vec3};
 use luma_fixture::{Built, MaterialSlot};
-use luma_scene::mesh::{Material, MeshData, Vertex};
+use luma_scene::mesh::{LedFace, Material, MeshData, Vertex};
 
 use crate::assets::Library;
 use crate::frame::{Bank, Draw, EditorObject, MaterialTextures};
@@ -39,6 +39,15 @@ pub(crate) fn draws(
                 // the colour it makes; on, it is the light it gives.
                 material.base_color *= 0.15;
                 material.emissive = emissive(cell);
+            }
+            if let Some(pattern) = mesh.pattern {
+                let gap = self::material(built, pattern.gap);
+                material.led = Some(LedFace {
+                    pattern,
+                    gap_color: gap.base_color,
+                    gap_metallic: gap.metallic,
+                    gap_roughness: gap.roughness,
+                });
             }
             out.push(Draw {
                 mesh: index,
@@ -74,13 +83,15 @@ fn material(built: &Built, slot: MaterialSlot) -> Material {
 }
 
 /// One build mesh as an uploadable triangle list. The build has no texture
-/// coordinates, so the tangent is any unit vector across the normal.
+/// coordinates but an LED panel's place on its pattern, so the tangent is
+/// any unit vector across the normal.
 fn mesh_data(mesh: &luma_fixture::Mesh) -> MeshData {
     let vertices: Vec<Vertex> = mesh
         .positions
         .iter()
         .zip(&mesh.normals)
-        .map(|(p, n)| {
+        .enumerate()
+        .map(|(i, (p, n))| {
             let normal = Vec3::from(*n);
             let across = if normal.x.abs() < 0.9 {
                 Vec3::X
@@ -91,7 +102,7 @@ fn mesh_data(mesh: &luma_fixture::Mesh) -> MeshData {
             Vertex {
                 position: *p,
                 normal: *n,
-                uv: [0.0, 0.0],
+                uv: mesh.uvs.get(i).copied().unwrap_or_default(),
                 tangent: tangent.extend(1.0).to_array(),
             }
         })
